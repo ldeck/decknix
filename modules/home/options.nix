@@ -18,6 +18,13 @@ let
           jq
           nodejs
         ];
+
+        #home.sessionVariables = {
+        #  EDITOR = "nano"; # override default 'vim' 
+        #};
+
+        # This overrides the upstream Starship symbol
+        #programs.starship.settings.character.success_symbol = "[⚡](bold yellow)";
       }
     '';
 

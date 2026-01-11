@@ -1,81 +1,82 @@
 { config, lib, pkgs, ... }:
 
 {
-  # 1. IMPORT THE LOGIC
-  # We separate the complex logic (roles/templates) into options.nix
-  imports = [
-    ./options.nix
-  ];
+  imports = [ ./options.nix ];
 
-  # 2. SHARED TEAM CONFIGURATION
-  # These settings apply to EVERYONE on the team, regardless of role.
-  programs.home-manager.enable = true;
+  # 1. BOILERPLATE
+  # Even 'enable' flags should be defaults, in case a user wants to
+  # temporarily disable something locally for debugging.
+  programs.home-manager.enable = lib.mkDefault true;
 
-  # Standard Environment Variables
+  # 2. SESSION VARIABLES
+  # By using mkDefault, if the user sets EDITOR in their local config,
+  # their value takes precedence.
   home.sessionVariables = {
-    EDITOR = "vim";
-    # PAGER = "less"; 
+    EDITOR = lib.mkDefault "vim";
+    # PAGER = lib.mkDefault "less"; 
   };
 
-  # Common Tools (The "Base Layer")
+  # 3. PACKAGES (Lists are special!)
+  # Lists in Nix modules MERGE by default. 
+  # If you add [ curl ] here and the user adds [ wget ], they get BOTH.
+  # You generally don't need mkDefault for packages unless you want the 
+  # user to be able to completely wipe this list.
   home.packages = with pkgs; [
-    # Core Utilities
     coreutils
     curl
     wget
     tree
     jq
     ripgrep
-    fd
-    bat
-    
-    # Team Connectivity
-    gh # GitHub CLI
+    gh 
   ];
 
-  # Common Git Configuration 
-  # (Users override specific email/name in their local config)
+  # 4. GIT CONFIGURATION
   programs.git = {
-    enable = true;
-    lfs.enable = true;
+    enable = lib.mkDefault true;
+    lfs.enable = lib.mkDefault true;
+    
     extraConfig = {
-      init.defaultBranch = "main";
-      pull.rebase = true;
-      push.autoSetupRemote = true;
+      # Use mkDefault on the specific leaves you want overridable
+      init.defaultBranch = lib.mkDefault "main";
+      pull.rebase = lib.mkDefault true;
+      push.autoSetupRemote = lib.mkDefault true;
     };
-    # Delta: A syntax-highlighting pager for git
+
     delta = {
-      enable = true;
+      enable = lib.mkDefault true;
       options = {
-        navigate = true;
-        line-numbers = true;
-        syntax-theme = "Dracula";
+        # Note: You can't use mkDefault on a whole attribute set if you want 
+        # to merge it. Apply it to the values.
+        navigate = lib.mkDefault true;
+        line-numbers = lib.mkDefault true;
+        syntax-theme = lib.mkDefault "Dracula";
       };
     };
   };
 
-  # Shell Configuration (e.g., Zsh)
+  # 5. SHELL CONFIGURATION
   programs.zsh = {
-    enable = true;
-    enableCompletion = true;
-    autosuggestion.enable = true;
-    syntaxHighlighting.enable = true;
+    enable = lib.mkDefault true;
+    enableCompletion = lib.mkDefault true;
+    autosuggestion.enable = lib.mkDefault true;
+    syntaxHighlighting.enable = lib.mkDefault true;
     
+    # Aliases merge, so no conflict here usually.
     shellAliases = {
-      ll = "ls -l";
-      # Helper alias to rebuild the system quickly
-      update = "darwin-rebuild switch --flake ~/.config/nix-darwin#default --impure";
+      ll = lib.mkDefault "ls -l";
+      update = lib.mkDefault "darwin-rebuild switch --flake ~/.config/nix-darwin#default --impure";
     };
   };
   
-  # Starship Prompt (Uniform terminal look for the team)
   programs.starship = {
-    enable = true;
+    enable = lib.mkDefault true;
     settings = {
-      add_newline = false;
+      add_newline = lib.mkDefault false;
+      # To allow overriding deeper keys easily:
       character = {
-        success_symbol = "[➜](bold green)";
-        error_symbol = "[➜](bold red)";
+        success_symbol = lib.mkDefault "[➜](bold green)";
+        error_symbol = lib.mkDefault "[➜](bold red)";
       };
     };
   };
