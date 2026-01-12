@@ -5,22 +5,24 @@
     # Point to the shared repo
     decknix.url = "github:ldeck/decknix";
 
-    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-25.11";
     nix-darwin.url = "github:LnL7/nix-darwin";
     nix-darwin.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs = inputs@{ self, decknix, nix-darwin, ... }:
   let
-    # ==========================================
-    # USER CONFIGURATION - EDIT THESE
-    # ==========================================
-    username = "james"; # change this to <your username>
-    hostname = "james-macbook"; # change this to the output of `hostname -s`
-    system   = "aarch64-darwin"; # or x86_64-darwin if on intel. Switch 'darwin' for 'linux' if on linux. 
-    # ==========================================
+    # 1. required settings path
+    settingsPath = ./settings.nix;
 
-    # Path to purely local, untracked customizations
+    # If the file is missing (e.g. deleted), use defaults that trigger the error below
+    settings = if builtins.pathExists settingsPath 
+               then import settingsPath 
+               else { username = "setup-required"; hostname = "setup-required"; system = "aarch64-darwin"; };
+
+    inherit (settings) username hostname system;
+
+    # 2. Path to external customizations
     externalConfig = "/Users/${username}/.local/decknix/config.nix";
   in
   {
@@ -31,9 +33,19 @@
         decknix.darwinModules.default
 
         # 2. Local User Config
-        ({ pkgs, ... }: {
-          users.users.${username}.home = "/Users/${username}";
+        ({ pkgs, lib, ... }: {
+          # --- VALIDATION ---
+          # This assertion runs at EVALUATION time (fastest feedback loop)
+          assertions = [
+            {
+              assertion = username != "REPLACE_ME" && username != "setup-required";
+              message = "Decknix Setup: You must edit 'settings.nix' and set your 'username' before building.";
+            }
+          ];
+
+          # --- SYSTEM CONFIG ---
           networking.hostName = hostname;
+          users.users.${username}.home = "/Users/${username}";
 
           home-manager.users.${username} = { pkgs, ... }: {
             imports = [
@@ -43,9 +55,12 @@
             ];
 
             # --- CONFIGURATION ---
+            # Inject the email from settings.nix as a default
+            programs.git.userEmail = lib.mkDefault (if settings ? email then settings.email else "user@example.com");
+
             # Select the role here. This determines which template is
             # generated if the local config is missing.
-            decknix.role = "developer";
+            decknix.role = lib.mkDefault (if settings ? role then settings.role else "developer");
             
             home.stateVersion = "24.05";
           };
