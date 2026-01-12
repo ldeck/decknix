@@ -37,6 +37,7 @@
     vim
     git
     curl
+    skim
   ];
 
   # 4. FONTS
