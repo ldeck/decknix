@@ -31,27 +31,28 @@
     gh 
   ];
 
-  # 4. GIT CONFIGURATION
+  # 4. GIT and diffing CONFIGURATION
+  programs.delta = {
+    enable = true;
+    enableGitIntegration = true; # Needed to auto-configure git to use delta
+    options = {
+      # Note: You can't use mkDefault on a whole attribute set if you want
+      #       to merge it. Apply it to the values.
+      navigate = lib.mkDefault true;
+      line-numbers = lib.mkDefault true;
+      syntax-theme = lib.mkDefault "Dracula";
+    };
+  };
+
   programs.git = {
     enable = lib.mkDefault true;
     lfs.enable = lib.mkDefault true;
     
-    extraConfig = {
+    settings = {
       # Use mkDefault on the specific leaves you want overridable
       init.defaultBranch = lib.mkDefault "main";
       pull.rebase = lib.mkDefault true;
       push.autoSetupRemote = lib.mkDefault true;
-    };
-
-    delta = {
-      enable = lib.mkDefault true;
-      options = {
-        # Note: You can't use mkDefault on a whole attribute set if you want 
-        # to merge it. Apply it to the values.
-        navigate = lib.mkDefault true;
-        line-numbers = lib.mkDefault true;
-        syntax-theme = lib.mkDefault "Dracula";
-      };
     };
   };
 
