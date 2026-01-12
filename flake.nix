@@ -25,7 +25,11 @@
       };
 
       flake = {
-        # EXPOSED MODULES
+        # 1. EXPOSE DECKNIX LIBS HERE
+        # This allows downstream flakes to use e.g., inputs.decknix.lib.configLoader
+        lib = import ./lib;
+
+        # 2. EXPOSED MODULES
         # These are what the user's local flake will import.
         darwinModules = {
           default = { config, pkgs, ... }: {
@@ -35,22 +39,24 @@
             ];
           };
         };
-        
+
         homeModules = {
           default = ./modules/home/default.nix;
         };
 
+        # 3. TEMPLATES
+        # (This is where you'd define flake template for each "role")
         templates = {
           default = {
             path = ./templates/default;
             description = "Standard Decknix User Configuration";
             welcomeText = ''
               # Welcome to Decknix!
-  
+
               To finish setup:
               1. Edit 'flake.nix' and update 'username' and 'hostname'.
               2. Run 'nix run nix-darwin -- switch --flake .#default --impure'
-  
+
               Enjoy!
             '';
           };
