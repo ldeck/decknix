@@ -2,8 +2,19 @@
   description = "Decknix Local Configuration";
 
   inputs = {
-    # Point to the shared repo
-    decknix.url = "github:ldeck/decknix"; # or "path:/<abs>/<path/<to>/<decknix>"
+    # --- DECKNIX SOURCE (Uncomment one) ---
+
+    # 1. Standard Production (Default)
+    decknix.url = "github:ldeck/decknix";
+
+    # 2. Local Development (For testing local changes to the framework)
+    # decknix.url = "path:/Users/ldeck/tools/decknix";
+
+    # 3. Specific Branch
+    # decknix.url = "github:ldeck/decknix/feature-branch";
+
+    # 4. Specific Tag/Commit (Immutable/Stable)
+    # decknix.url = "github:ldeck/decknix?rev=a1b2c3d4...";
 
     # follow decknix inputs by default
     nixpkgs.follows = "decknix/nixpkgs";
