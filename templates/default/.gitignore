@@ -1,0 +1,6 @@
+# Ignore build results
+result
+result-*
+
+# Ignore personal settings
+settings.nix
