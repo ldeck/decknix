@@ -5,12 +5,12 @@
     # Point to the shared repo
     decknix.url = "github:ldeck/decknix";
 
-    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-25.11";
-    nix-darwin.url = "github:LnL7/nix-darwin";
-    nix-darwin.inputs.nixpkgs.follows = "nixpkgs";
+    # follow decknix inputs by default
+    nixpkgs.follows = "decknix/nixpkgs";
+    nix-darwin.follows = "decknix/nix-darwin";
   };
 
-  outputs = inputs@{ self, decknix, nix-darwin, ... }:
+  outputs = inputs@{ self, decknix, nixpkgs, nix-darwin, ... }:
   let
     # 1. required settings path
     settingsPath = ./settings.nix;
