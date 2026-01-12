@@ -17,7 +17,19 @@
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
 
+      # make 'pkgs.decknix' available to any module that uses this overlay.
+      flake.overlays.default = final: prev: {
+        decknix = final.callPackage ./pkgs/decknix-cli/default.nix { };
+      };
+
       perSystem = { config, self', inputs', pkgs, system, ... }: {
+        # --- Expose the Decknix CLI Package ---
+        # This allows you to run 'nix run .#decknix' or 'nix build'
+        packages.decknix = pkgs.callPackage ./pkgs/decknix-cli/default.nix { };
+
+        # Set it as the default so 'nix run' works without arguments
+        packages.default = config.packages.decknix;
+
         # Devshell for working on decknix itself
         devShells.default = pkgs.mkShell {
           packages = [ pkgs.nixpkgs-fmt ];
