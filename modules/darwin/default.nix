@@ -1,4 +1,7 @@
 { pkgs, lib, ... }: {
+  # set and forget
+  system.stateVersion = 6;
+
   # 1. SYSTEM DEFAULTS
   # Using mkDefault allows a user to say "I hate autohiding" in their local config
   # and set it to false without a conflict error.
@@ -20,7 +23,7 @@
   };
 
   # 2. NIX SETTINGS
-  services.nix-daemon.enable = true;
+  #services.nix-daemon.enable = true; # deprecated
 
   # Lists (like this one) merge automatically. 
   # You generally do NOT need mkDefault here unless you want to allow 
