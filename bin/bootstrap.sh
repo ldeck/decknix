@@ -3,6 +3,7 @@ set -e
 
 # --- Configuration ---
 REPO_URL="github:ldeck/decknix"
+DEFAULT_REF="main"
 TARGET_DIR="$HOME/decknix"
 BACKUP_SUFFIX=".before-decknix"
 
@@ -16,6 +17,17 @@ NC='\033[0m' # No Color
 function step() { echo -e "\n${BLUE}${BOLD}==>${NC} ${BOLD}$1${NC}"; }
 function info() { echo -e "${GREEN}  ->${NC} $1"; }
 function warn() { echo -e "${RED}  !!${NC} $1"; }
+
+# --- 0. Version Selection ---
+step "🚀 Decknix Bootstrap..."
+step "Which version of Decknix would you like to install?"
+info "  [Enter] for Default ($DEFAULT_REF)"
+info "  Or type a branch name / tag (e.g., 'v0.1.0', 'develop')"
+read -p "Ref: " USER_REF
+TARGET_REF=${USER_REF:-$DEFAULT_REF}
+REPO_URL="${REPO_URL}/tree/${TARGET_REF}"
+
+info "⬇️  Installing from reference: $TARGET_REF"
 
 # --- 1. Install Nix ---
 step "Phase 1: Checking Nix Installation"
