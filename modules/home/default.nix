@@ -1,7 +1,23 @@
 { config, lib, pkgs, ... }:
 
+let
+  # 1. Define the recursive loading function
+  loadAll = dir:
+    let
+      # Get a list of all files recursively (returns paths)
+      files = lib.filesystem.listFilesRecursive dir;
+
+      # Filter for files ending in .nix
+      nixFiles = lib.filter
+        (file: lib.hasSuffix ".nix" (toString file))
+        files;
+    in
+      nixFiles;
+in
 {
-  imports = [ ./options.nix ];
+  imports = [
+    ./options.nix
+  ] ++ (loadAll ./options);
 
   # 1. BOILERPLATE
   # Even 'enable' flags should be defaults, in case a user wants to
@@ -13,13 +29,13 @@
   # their value takes precedence.
   home.sessionVariables = {
     EDITOR = lib.mkDefault "vim";
-    # PAGER = lib.mkDefault "less"; 
+    # PAGER = lib.mkDefault "less";
   };
 
   # 3. PACKAGES (Lists are special!)
-  # Lists in Nix modules MERGE by default. 
+  # Lists in Nix modules MERGE by default.
   # If you add [ curl ] here and the user adds [ wget ], they get BOTH.
-  # You generally don't need mkDefault for packages unless you want the 
+  # You generally don't need mkDefault for packages unless you want the
   # user to be able to completely wipe this list.
   home.packages = with pkgs; [
     coreutils
@@ -28,7 +44,7 @@
     tree
     jq
     ripgrep
-    gh 
+    gh
   ];
 
   # 4. GIT and diffing CONFIGURATION
@@ -47,7 +63,7 @@
   programs.git = {
     enable = lib.mkDefault true;
     lfs.enable = lib.mkDefault true;
-    
+
     settings = {
       # Use mkDefault on the specific leaves you want overridable
       init.defaultBranch = lib.mkDefault "main";
@@ -62,14 +78,14 @@
     enableCompletion = lib.mkDefault true;
     autosuggestion.enable = lib.mkDefault true;
     syntaxHighlighting.enable = lib.mkDefault true;
-    
+
     # Aliases merge, so no conflict here usually.
     shellAliases = {
       ll = lib.mkDefault "ls -l";
       update = lib.mkDefault "darwin-rebuild switch --flake ~/.config/nix-darwin#default --impure";
     };
   };
-  
+
   programs.starship = {
     enable = lib.mkDefault true;
     settings = {
@@ -80,5 +96,16 @@
         error_symbol = lib.mkDefault "[➜](bold red)";
       };
     };
+  };
+
+  programs.vim = {
+    enable = lib.mkDefault true;
+
+    extraConfig = ''
+      set exrc   " Look for .exrc or .nvimrc in current directory
+      set number " show line numbers
+      set relativenumber " show line numbers relative to the cursor position.
+      set secure " Disallow shell commands in local files (security)
+    '';
   };
 }
