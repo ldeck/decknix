@@ -3,7 +3,7 @@
 
   inputs = {
     # Point to the shared repo
-    decknix.url = "github:ldeck/decknix";
+    decknix.url = "github:ldeck/decknix"; # or "path:/<abs>/<path/<to>/<decknix>"
 
     # follow decknix inputs by default
     nixpkgs.follows = "decknix/nixpkgs";
@@ -45,6 +45,7 @@
 
           # --- SYSTEM CONFIG ---
           networking.hostName = hostname;
+          system.primaryUser = username;
           users.users.${username}.home = "/Users/${username}";
 
           home-manager.users.${username} = { pkgs, ... }: {
