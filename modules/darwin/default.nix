@@ -2,6 +2,22 @@
   # set and forget
   system.stateVersion = 6;
 
+  # 0. overlay custom decknix cli, enabled by default
+  imports = [
+    ../cli/default.nix
+  ];
+
+  nixpkgs.overlays = [
+    # Assuming we are inside the decknix repo, we can import the overlay directly
+    # OR rely on the user's flake to pass it.
+    # Safe fallback:
+    (final: prev: {
+      decknix = prev.callPackage ../../pkgs/decknix-cli/default.nix { };
+    })
+  ];
+
+  programs.decknix.enable = lib.mkDefault true;
+
   # 1. SYSTEM DEFAULTS
   # Using mkDefault allows a user to say "I hate autohiding" in their local config
   # and set it to false without a conflict error.
