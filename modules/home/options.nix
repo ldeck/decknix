@@ -10,9 +10,13 @@ let
     developer = ''
       { pkgs, ... }: {
         # -- DEVELOPER LOCAL CONFIG --
-        programs.git.userName = "Dev Name";
-        programs.git.userEmail = "dev@company.com";
-        
+        programs.git = {
+          settings = {
+            user.email = "dev@example.com";
+            user.name = "Your Name";
+          };
+        };
+
         home.packages = with pkgs; [
           ripgrep
           jq

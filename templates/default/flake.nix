@@ -56,9 +56,6 @@
             ];
 
             # --- CONFIGURATION ---
-            # Inject the email from settings.nix as a default
-            programs.git.userEmail = lib.mkDefault (if settings ? email then settings.email else "user@example.com");
-
             # Select the role here. This determines which template is
             # generated if the local config is missing.
             decknix.role = lib.mkDefault (if settings ? role then settings.role else "developer");
