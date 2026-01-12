@@ -19,16 +19,16 @@
 
       # make 'pkgs.decknix' available to any module that uses this overlay.
       flake.overlays.default = final: prev: {
-        decknix = final.callPackage ./pkgs/decknix-cli/default.nix { };
+        decknix-cli = final.callPackage ./pkgs/decknix-cli/default.nix { };
       };
 
       perSystem = { config, self', inputs', pkgs, system, ... }: {
         # --- Expose the Decknix CLI Package ---
         # This allows you to run 'nix run .#decknix' or 'nix build'
-        packages.decknix = pkgs.callPackage ./pkgs/decknix-cli/default.nix { };
+        packages.decknix-cli = pkgs.callPackage ./pkgs/decknix-cli/default.nix { };
 
         # Set it as the default so 'nix run' works without arguments
-        packages.default = config.packages.decknix;
+        packages.default = config.packages.decknix-cli;
 
         # Devshell for working on decknix itself
         devShells.default = pkgs.mkShell {

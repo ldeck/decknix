@@ -12,11 +12,11 @@
     # OR rely on the user's flake to pass it.
     # Safe fallback:
     (final: prev: {
-      decknix = prev.callPackage ../../pkgs/decknix-cli/default.nix { };
+      decknix-cli = prev.callPackage ../../pkgs/decknix-cli/default.nix { };
     })
   ];
 
-  programs.decknix.enable = lib.mkDefault true;
+  programs.decknix-cli.enable = lib.mkDefault true;
 
   # 1. SYSTEM DEFAULTS
   # Using mkDefault allows a user to say "I hate autohiding" in their local config
