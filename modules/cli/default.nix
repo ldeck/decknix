@@ -3,7 +3,7 @@
 with lib;
 
 let
-  cfg = config.programs.decknix;
+  cfg = config.programs.decknix-cli;
 
   # Type definition for subtasks
   subtaskType = types.submodule {
@@ -14,7 +14,7 @@ let
     };
   };
 in {
-  options.programs.decknix = {
+  options.programs.decknix-cli = {
     enable = mkEnableOption "Decknix CLI";
 
     subtasks = mkOption {
@@ -50,8 +50,5 @@ in {
     environment.etc."decknix/extensions.json".text = builtins.toJSON (
       mapAttrs (n: v: { inherit (v) description command; }) cfg.subtasks
     );
-
-    # NOTE: The Rust binary needs to know where to look.
-    # You might patch the binary to look in /etc/decknix/extensions.json
   };
 }
