@@ -104,7 +104,6 @@ in
     extraConfig = ''
       set exrc   " Look for .exrc or .nvimrc in current directory
       set number " show line numbers
-      set relativenumber " show line numbers relative to the cursor position.
       set secure " Disallow shell commands in local files (security)
     '';
   };
