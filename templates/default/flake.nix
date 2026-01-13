@@ -76,8 +76,6 @@
           home-manager.users.${username} = { pkgs, ... }: {
             imports = [
               decknix.homeModules.default
-              # Import external config if it exists
-              (if builtins.pathExists externalConfig then externalConfig else {})
             ]
             # 4. Inject Dynamic Home-Level Configuration
             #    (Loads ~/.local/decknix/<org>/home.nix for enabled orgs)
