@@ -1,19 +1,23 @@
 { lib, rustPlatform, ... }:
 
+let
+  manifest = (lib.importTOML ../../cli/Cargo.toml).package;
+
+in
 rustPlatform.buildRustPackage {
-  pname = "decknix";
-  version = "0.1.0";
+  pname = manifest.name;
+  version = manifest.version;
 
   # Point to your actual Rust source directory
   src = ../../cli;
 
   # This hash locks dependencies.
   # Set to lib.fakeHash initially; Nix will error and give you the real one.
-  cargoHash = "sha256-o+XIfc26NMIdnC7SAn3QMXIq78CME6cyotOm18VMCD4="; # use lib.fakeHash for discovery
+  cargoHash = "sha256-GneLSXFzZLK2tFOXWBeTcLgOapIokA/J/dTzPDgcAwM="; # use lib.fakeHash for discovery
 
   meta = with lib; {
     description = "The Decknix CLI Manager";
-    mainProgram = "decknix";
+    mainProgram = manifest.name;
     maintainers = [ "ldeck" ];
   };
 }
