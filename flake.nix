@@ -32,7 +32,15 @@
 
         # Devshell for working on decknix itself
         devShells.default = pkgs.mkShell {
-          packages = [ pkgs.nixpkgs-fmt ];
+          packages = [
+            # nix
+            pkgs.nixpkgs-fmt
+
+            # rust
+            pkgs.cargo
+            pkgs.rustc
+            pkgs.rustfmt
+          ];
         };
       };
 

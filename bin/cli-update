@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -e
+
+# Setup
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+CLI_DIR="$REPO_ROOT/cli"
+PKG_FILE="$REPO_ROOT/pkgs/decknix-cli/default.nix"
+
+echo "🦀 Updating Cargo Lockfile (using pinned tools)..."
+
+# 1. Update Cargo.lock
+if ! command -v cargo &> /dev/null; then
+    echo "   (Entering Nix devshell to run cargo...)"
+    nix develop "$REPO_ROOT" --command bash -c "cd $CLI_DIR && cargo generate-lockfile"
+else
+    (cd "$CLI_DIR" && cargo generate-lockfile)
+fi
+
+echo "📝 Staging lockfile..."
+git add "$CLI_DIR/Cargo.lock"
+
+# 2. Invalidate Hash (Robust Regex)
+# Check if 'lib.fakeHash' is already in the file
+if grep -q "cargoHash[[:space:]]*=[[:space:]]*lib.fakeHash;" "$PKG_FILE"; then
+    echo "ℹ️  Hash is already set to lib.fakeHash. Skipping invalidation."
+else
+    echo "🔄 Invalidating old hash..."
+    # Regex explanation:
+    # cargoHash     Match literal
+    # [[:space:]]* Match 0 or more spaces/tabs
+    # =             Match equals
+    # .* Match anything (the old hash)
+    # ;             Match semicolon
+    sed -i.bak 's/cargoHash[[:space:]]*=[[:space:]]*.*;/cargoHash = lib.fakeHash;/' "$PKG_FILE"
+    rm "$PKG_FILE.bak"
+fi
+
+echo "🏗️  Running build to calculate new hash..."
+# We expect this to fail. We capture stderr to grab the new hash.
+BUILD_OUT=$(nix build "$REPO_ROOT#decknix-cli" 2>&1 || true)
+
+# Extract the "got: sha256-..." line
+NEW_HASH=$(echo "$BUILD_OUT" | grep "got:.*sha256-" | awk '{print $2}')
+
+if [ -z "$NEW_HASH" ]; then
+    echo "❌ Failed to extract new hash. Build output:"
+    echo "$BUILD_OUT"
+    exit 1
+fi
+
+echo "✅ Found new hash: $NEW_HASH"
+
+echo "wm  Updating default.nix..."
+# Replace lib.fakeHash with the new real hash
+sed -i.bak "s|cargoHash = lib.fakeHash;|cargoHash = \"$NEW_HASH\";|" "$PKG_FILE"
+rm "$PKG_FILE.bak"
+
+echo "🚀 Verifying build..."
+nix build "$REPO_ROOT#decknix-cli"
+
+echo "✨ Done! decknix-cli is updated."
