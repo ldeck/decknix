@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, Args, CommandFactory, FromArgMatches};
+use clap::{Parser, Subcommand, CommandFactory};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::process::Command;
@@ -9,6 +9,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "decknix")]
 #[command(about = "The Decknix Framework CLI", long_about = None)]
+#[command(disable_help_subcommand = true)] // we take over 'help'
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -26,6 +27,10 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    Help {
+        /// The command to look up
+        subcommand: Option<String>,
+    },
     // This variant catches unknown commands to check extensions
     #[command(external_subcommand)]
     External(Vec<String>),
@@ -40,103 +45,127 @@ struct ExtensionConfig {
 
 type ExtensionMap = HashMap<String, ExtensionConfig>;
 
-// Helper: Cascading Config Lookup
-fn get_config_path() -> Option<PathBuf> {
-    // 1. Check Env Var (Highest Priority for Dev/Test)
-    if let Ok(env_path) = std::env::var("DECKNIX_CONFIG") {
-        return Some(PathBuf::from(env_path));
-    }
+// Merge configs from decknix, and custom system and home extensions
+fn load_merged_extensions() -> ExtensionMap {
+    let mut map = HashMap::new();
 
-    // 2. Check User Home (~/.config/decknix/extensions.json)
-    if let Some(home) = dirs::home_dir() {
-        let user_path = home.join(".config/decknix/extensions.json");
-        if user_path.exists() {
-            return Some(user_path);
+    let paths = vec![
+        PathBuf::from("/etc/decknix/extensions.json"),
+        dirs::home_dir().unwrap_or_default().join(".config/decknix/extensions.json"),
+    ];
+
+    for path in paths {
+        if let Ok(file) = fs::File::open(&path) {
+            if let Ok(m) = serde_json::from_reader::<_, ExtensionMap>(file) {
+                map.extend(m);
+            }
         }
     }
 
-    // 3. Check System Global (/etc/decknix/extensions.json)
-    let system_path = PathBuf::from("/etc/decknix/extensions.json");
-    if system_path.exists() {
-        return Some(system_path);
+    if let Ok(env_path) = std::env::var("DECKNIX_CONFIG") {
+        if let Ok(file) = fs::File::open(env_path) {
+            if let Ok(env_map) = serde_json::from_reader::<_, ExtensionMap>(file) {
+                map.extend(env_map);
+            }
+        }
     }
 
-    None
+    map
+}
+
+// Help Printer
+fn print_extended_help(extensions: &ExtensionMap) {
+    // Print standard built-in help first
+    let _ = Cli::command().print_help();
+
+    if !extensions.is_empty() {
+        println!("\n\nUser Extensions:");
+
+        let mut keys: Vec<&String> = extensions.keys().collect();
+        keys.sort(); // sort keys for consistent output
+
+        for key in keys {
+            let ext = extensions.get(key).unwrap();
+            println!("  {:<12} {}", key, ext.description);
+        }
+    } else {
+        println!();
+    }
 }
 
 fn main() -> anyhow::Result<()> {
-    // A. Load Extensions using the cascade
-    let extensions: ExtensionMap = match get_config_path() {
-        Some(path) => {
-            // Uncomment to debug path resolution:
-            // println!("DEBUG: Loading config from {:?}", path);
-            let file = fs::File::open(path)?;
-            serde_json::from_reader(file).unwrap_or_else(|_| HashMap::new())
-        },
-        None => HashMap::new(),
-    };
+    let extensions = load_merged_extensions();
 
-    // B. Parse Args
+    // parse args
     let cli = Cli::parse();
 
     match cli.command {
         Some(Commands::Switch { dry_run }) => {
-          println!("🔄 Switching...");
-
-          // Construct the darwin-rebuild command
-          let mut cmd = Command::new("sudo");
-          cmd.arg("darwin-rebuild")
-             .arg("switch")
-             .arg("--flake")
-             .arg(".#default")
-             .arg("--impure");
-
-          if dry_run {
-              cmd.arg("--dry-run");
-          }
-
-          let status = cmd.status()?;
-          std::process::exit(status.code().unwrap_or(1));
+            println!("🔄 Switching...");
+            let mut cmd = Command::new("sudo");
+            cmd.arg("darwin-rebuild").arg("switch").arg("--flake").arg(".#default").arg("--impure");
+            if dry_run { cmd.arg("--dry-run"); }
+            let status = cmd.status()?;
+            std::process::exit(status.code().unwrap_or(1));
         }
         Some(Commands::Update { input }) => {
-          println!("⬇️ Updating...");
-
-          // Call nix flake update...
-          let mut cmd = Command::new("nix");
-          cmd.arg("flake").arg("update");
-
-          if let Some(inp) = input {
-              cmd.arg(inp);
-          }
-
-          let status = cmd.status()?;
-          std::process::exit(status.code().unwrap_or(1));
+            println!("⬇️  Updating...");
+            let mut cmd = Command::new("nix");
+            cmd.arg("flake").arg("update");
+            if let Some(inp) = input { cmd.arg(inp); }
+            let status = cmd.status()?;
+            std::process::exit(status.code().unwrap_or(1));
+        }
+        // Handle: decknix help [cmd]
+        Some(Commands::Help { subcommand }) => {
+            match subcommand {
+                Some(cmd) => {
+                    // Check extensions first
+                    if let Some(ext) = extensions.get(&cmd) {
+                        println!("Extension:    {}", cmd);
+                        println!("Description:  {}", ext.description);
+                        println!("Command:      {}", ext.command);
+                    }
+                    // Fallback to Clap help for built-ins
+                    else {
+                        let _ = Cli::command().print_help();
+                    }
+                }
+                None => print_extended_help(&extensions),
+            }
         }
         Some(Commands::External(args)) => {
-          // C. Handle Dynamic Commands
-          let cmd_name = &args[0];
-          if let Some(ext) = extensions.get(cmd_name) {
-            // Execute the command defined in JSON
-            let status = Command::new("sh")
-                .arg("-c")
-                .arg(&ext.command)
-                .status()?;
-            std::process::exit(status.code().unwrap_or(1));
-          } else {
-            println!("Unknown command: {}", cmd_name);
-            // Print available custom commands to be helpful
-            if !extensions.is_empty() {
-                eprintln!("\nAvailable extensions:");
-                for (name, conf) in &extensions {
-                    eprintln!("  {} - {}", name, conf.description);
+            let cmd_name = &args[0];
+
+            // Handle: decknix <cmd> --help
+            if args.contains(&String::from("--help")) || args.contains(&String::from("-h")) {
+                if  let Some(ext) = extensions.get(cmd_name) {
+                    println!("Extension:      {}", cmd_name);
+                    println!("Description:    {}", ext.description);
+                    println!("Command:        {}", ext.command);
+                    return Ok(());
                 }
             }
-            std::process::exit(1);
-          }
+
+            if let Some(ext) = extensions.get(cmd_name) {
+                // Pass remaining arguments to the script
+                let remaining_args = &args[1..];
+
+                let mut shell_cmd = Command::new("sh");
+                shell_cmd.arg("-c").arg(&ext.command).arg(cmd_name); // $0 is name
+                shell_cmd.args(remaining_args); // $1.. are args
+
+                let status = shell_cmd.status()?;
+                std::process::exit(status.code().unwrap_or(1));
+            } else {
+                eprintln!("Unknown command: {}", cmd_name);
+                eprintln!("Run 'decknix help' to see available commands.");
+                std::process::exit(1);
+            }
         }
         None => {
-            // Print help if no args
-            Cli::command().print_help()?;
+            // Override default help to show dynamic commands
+            print_extended_help(&extensions);
         }
     }
     Ok(())
