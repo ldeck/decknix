@@ -44,6 +44,7 @@
     #    We pass all context variables so the lib can use them if needed
     loader = decknix.lib.configLoader {
       inherit username hostname system role;
+      lib = nixpkgs.lib;
     };
   in
   {
