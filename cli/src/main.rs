@@ -73,20 +73,40 @@ fn load_merged_extensions() -> ExtensionMap {
     map
 }
 
+// 1. Define the styles
+enum Style {
+    B, // bold
+    U, // underline
+    I, // Italic
+}
+
+fn styled_str(text: &str, styles: &[Style]) -> String {
+    let mut codes = String::new();
+    for style in styles {
+        match style {
+            Style::B => codes.push_str("\x1b[1m"),
+            Style::U => codes.push_str("\x1b[4m"),
+            Style::I => codes.push_str("\x1b[3m"),
+        }
+    }
+    // apply codes, then text, then reset everything at the end
+    format!("{}{}\x1b[0m", codes, text)
+}
+
 // Help Printer
 fn print_extended_help(extensions: &ExtensionMap) {
     // Print standard built-in help first
     let _ = Cli::command().print_help();
 
     if !extensions.is_empty() {
-        println!("\n\nUser Extensions:");
+        println!("\n\n{}", styled_str("User Extensions:", &[Style::B, Style::U]));
 
         let mut keys: Vec<&String> = extensions.keys().collect();
         keys.sort(); // sort keys for consistent output
 
         for key in keys {
             let ext = extensions.get(key).unwrap();
-            println!("  {:<12} {}", key, ext.description);
+            println!("  {:<12} {}", styled_str(key, &[Style::B]), ext.description);
         }
     } else {
         println!();
@@ -122,9 +142,9 @@ fn main() -> anyhow::Result<()> {
                 Some(cmd) => {
                     // Check extensions first
                     if let Some(ext) = extensions.get(&cmd) {
-                        println!("Extension:    {}", cmd);
-                        println!("Description:  {}", ext.description);
-                        println!("Command:      {}", ext.command);
+                        println!("Extension:   {}", cmd);
+                        println!("Description: {}", ext.description);
+                        println!("Command:     {}", ext.command);
                     }
                     // Fallback to Clap help for built-ins
                     else {
@@ -140,9 +160,9 @@ fn main() -> anyhow::Result<()> {
             // Handle: decknix <cmd> --help
             if args.contains(&String::from("--help")) || args.contains(&String::from("-h")) {
                 if  let Some(ext) = extensions.get(cmd_name) {
-                    println!("Extension:      {}", cmd_name);
-                    println!("Description:    {}", ext.description);
-                    println!("Command:        {}", ext.command);
+                    println!("Extension:   {}", cmd_name);
+                    println!("Description: {}", ext.description);
+                    println!("Command:     {}", ext.command);
                     return Ok(());
                 }
             }
