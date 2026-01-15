@@ -17,6 +17,7 @@ in
 {
   imports = [
     ./options.nix
+    ../common/unfree.nix
   ] ++ (loadAll ./options);
 
   # 1. BOILERPLATE

@@ -5,6 +5,7 @@
   # 0. overlay custom decknix cli, enabled by default
   imports = [
     ../cli/default.nix
+    ../common/unfree.nix
   ];
 
   nixpkgs.overlays = [
