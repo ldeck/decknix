@@ -19,6 +19,7 @@
     # follow decknix inputs by default
     nixpkgs.follows = "decknix/nixpkgs";
     nix-darwin.follows = "decknix/nix-darwin";
+    nix-casks.follows = "decknix/nix-casks";
   };
 
   outputs = inputs@{ self, decknix, nixpkgs, nix-darwin, ... }:
@@ -50,6 +51,9 @@
   {
     darwinConfigurations."default" = nix-darwin.lib.darwinSystem {
       inherit system;
+
+      specialArgs = { inherit inputs; };
+
       modules = [
         # 1. Import Shared Team Config
         decknix.darwinModules.default
@@ -74,6 +78,7 @@
           system.primaryUser = username;
           users.users.${username}.home = "/Users/${username}";
 
+          home-manager.extraSpecialArgs = { inherit inputs; };
           home-manager.users.${username} = { pkgs, ... }: {
             imports = [
               decknix.homeModules.default
