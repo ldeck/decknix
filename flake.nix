@@ -22,7 +22,7 @@
     nix-parts.url = "github:hercules-ci/flake-parts";
   };
 
-  outputs = inputs@{ self, flake-parts, ... }:
+  outputs = inputs@{ self, nixpkgs, flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
 
@@ -61,11 +61,17 @@
         # 2. EXPOSED MODULES
         # These are what the user's local flake will import.
         darwinModules = {
-          default = { config, pkgs, ... }: {
-            imports = [
-              ./modules/darwin/default.nix
+          default = { config, ... }: let
+            find = import ./lib/find.nix { lib = nixpkgs.lib; };
+          in
+          {
+            imports =
+              (find.nixFiles ./modules/darwin) ++ [
               inputs.home-manager.darwinModules.home-manager
             ];
+
+            # expose 'lib.find' globally
+            config.lib.find = find;
           };
         };
 
