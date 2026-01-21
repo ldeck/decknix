@@ -29,7 +29,10 @@ in
         ;; Basic Emacs configuration
         (setq inhibit-startup-message t)
         (setq initial-scratch-message nil)
-        
+
+        ;; Use visual bell instead of audible beep
+        (setq visible-bell t)
+
         ;; Show line numbers
         (global-display-line-numbers-mode 1)
         
