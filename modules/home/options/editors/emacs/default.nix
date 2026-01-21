@@ -25,6 +25,11 @@ in
       enable = true;
       package = cfg.package;
 
+      extraPackages = epkgs: with epkgs; [
+        # Popular dark themes
+        modus-themes  # Built-in high-contrast themes
+      ];
+
       extraConfig = ''
         ;; Basic Emacs configuration
         (setq inhibit-startup-message t)
@@ -33,22 +38,31 @@ in
         ;; Use visual bell instead of audible beep
         (setq visible-bell t)
 
+        ;; Load modus-vivendi theme (high-contrast dark theme)
+        ;; This provides consistent colors across all modes
+        (load-theme 'modus-vivendi t)
+
         ;; Show line numbers
         (global-display-line-numbers-mode 1)
-        
+
         ;; Disable line numbers for some modes
         (dolist (mode '(org-mode-hook
                        term-mode-hook
                        shell-mode-hook
                        eshell-mode-hook))
           (add-hook mode (lambda () (display-line-numbers-mode 0))))
-        
+
         ;; Enable column number mode
         (column-number-mode 1)
-        
-        ;; Highlight current line
+
+        ;; Highlight current line - enable AFTER theme is loaded
         (global-hl-line-mode 1)
-        
+
+        ;; Customize the highlight line to be more subtle (after theme and mode are loaded)
+        (set-face-attribute 'hl-line nil
+                            :background "#1c1c1c"
+                            :inherit nil)
+
         ;; Show matching parentheses
         (show-paren-mode 1)
         
