@@ -61,6 +61,17 @@ in
         ;; Load modus-vivendi (high-contrast dark theme)
         (load-theme 'modus-vivendi t)
 
+        ;; Fix face attribute warnings (nil should be 'unspecified)
+        (with-eval-after-load 'modus-themes
+          (when (facep 'modus-themes-button)
+            (set-face-attribute 'modus-themes-button nil
+                                :background 'unspecified
+                                :foreground 'unspecified)))
+        (when (facep 'widget-inactive)
+          (set-face-attribute 'widget-inactive nil
+                              :background 'unspecified
+                              :foreground 'unspecified))
+
         ;; == Line numbers ==
         (global-display-line-numbers-mode 1)
 
