@@ -50,11 +50,13 @@
   in
   {
     darwinConfigurations."default" = nix-darwin.lib.darwinSystem {
-      inherit system;
-
+      # Use nixpkgs.hostPlatform instead of deprecated 'system' argument
       specialArgs = { inherit inputs; };
 
       modules = [
+        # Set the system via module (modern approach)
+        { nixpkgs.hostPlatform = system; }
+
         # 1. Import Shared Team Config
         decknix.darwinModules.default
 
