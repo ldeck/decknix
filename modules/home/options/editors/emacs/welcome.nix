@@ -661,19 +661,15 @@ in
         (setq inhibit-startup-message t)
         (setq inhibit-startup-echo-area-message user-login-name)
 
-        ;; Show welcome screen on startup (unless files are passed)
-        (add-hook 'emacs-startup-hook
-                  (lambda ()
-                    (when (and (not (member "-q" command-line-args))
-                               (not (member "--no-splash" command-line-args))
-                               ;; Only show if no file buffers are open
-                               (<= (length (seq-filter
-                                            (lambda (b)
-                                              (and (buffer-file-name b)
-                                                   (not (string-prefix-p " " (buffer-name b)))))
-                                            (buffer-list)))
-                                   0))
-                      (decknix-welcome-open))))
+        ;; Use initial-buffer-choice to show our welcome screen
+        (setq initial-buffer-choice
+              (lambda ()
+                (let ((buf (get-buffer-create decknix-welcome-buffer-name)))
+                  (with-current-buffer buf
+                    (unless (eq major-mode 'decknix-welcome-mode)
+                      (decknix-welcome-mode))
+                    (decknix-welcome-render))
+                  buf)))
 
         ;; Keybinding to open welcome screen
         (global-set-key (kbd "C-c w") 'decknix-welcome-open)
