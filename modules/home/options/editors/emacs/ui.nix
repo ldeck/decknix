@@ -18,6 +18,38 @@ in
       default = true;
       description = "Enable nerd-icons for file icons in completion and dired.";
     };
+
+    frame = {
+      centerOnStartup = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Center the Emacs frame on screen at startup.";
+      };
+
+      width = mkOption {
+        type = types.int;
+        default = 120;
+        description = "Default frame width in columns.";
+      };
+
+      height = mkOption {
+        type = types.int;
+        default = 50;
+        description = "Default frame height in lines.";
+      };
+
+      maxWidthPercent = mkOption {
+        type = types.int;
+        default = 85;
+        description = "Maximum frame width as percentage of screen width.";
+      };
+
+      maxHeightPercent = mkOption {
+        type = types.int;
+        default = 85;
+        description = "Maximum frame height as percentage of screen height.";
+      };
+    };
   };
 
   config = mkIf cfg.enable {
@@ -58,6 +90,37 @@ in
             (setq ns-option-modifier 'meta)
             (setq ns-control-modifier 'control)))
 
+        ${optionalString cfg.frame.centerOnStartup ''
+        ;; == Frame sizing and centering ==
+        (defun decknix-center-frame ()
+          "Center the frame on screen with appropriate size for the welcome screen."
+          (let* ((screen-width (display-pixel-width))
+                 (screen-height (display-pixel-height))
+                 ;; Calculate max dimensions based on screen percentage
+                 (max-width-px (/ (* screen-width ${toString cfg.frame.maxWidthPercent}) 100))
+                 (max-height-px (/ (* screen-height ${toString cfg.frame.maxHeightPercent}) 100))
+                 ;; Get character dimensions
+                 (char-width (frame-char-width))
+                 (char-height (frame-char-height))
+                 ;; Calculate desired size in pixels
+                 (desired-width-px (* ${toString cfg.frame.width} char-width))
+                 (desired-height-px (* ${toString cfg.frame.height} char-height))
+                 ;; Use smaller of desired or max
+                 (frame-width-px (min desired-width-px max-width-px))
+                 (frame-height-px (min desired-height-px max-height-px))
+                 ;; Convert back to characters for set-frame-size
+                 (frame-cols (/ frame-width-px char-width))
+                 (frame-rows (/ frame-height-px char-height))
+                 ;; Calculate centered position
+                 (left (/ (- screen-width frame-width-px) 2))
+                 (top (/ (- screen-height frame-height-px) 2)))
+            ;; Apply size and position
+            (set-frame-size (selected-frame) frame-cols frame-rows)
+            (set-frame-position (selected-frame) left top)))
+
+        ;; Center frame on startup
+        (add-hook 'emacs-startup-hook #'decknix-center-frame)
+        ''}
         ;; == Which-key: Show available keybindings ==
         (which-key-mode 1)
         (setq which-key-idle-delay 0.5
