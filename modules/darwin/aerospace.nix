@@ -3,10 +3,11 @@
 with lib;
 
 let
-  cfg = config.services.aerospace;
+  # Use decknix namespace to avoid conflict with upstream nix-darwin aerospace module
+  cfg = config.decknix.services.aerospace;
 in
 {
-  options.services.aerospace = {
+  options.decknix.services.aerospace = {
     enable = mkOption {
       type = types.bool;
       default = false;
