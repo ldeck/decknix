@@ -4,6 +4,7 @@ with lib;
 
 let
   cfg = config.programs.emacs.decknix;
+  isDarwin = pkgs.stdenv.isDarwin;
 in
 {
   options.programs.emacs.decknix = {
@@ -15,8 +16,20 @@ in
 
     package = mkOption {
       type = types.package;
-      default = pkgs.emacs;
-      description = "The Emacs package to use.";
+      # Use emacs-macport on Darwin for better macOS integration
+      # (Stage Manager shortcuts, system shortcuts passthrough, etc.)
+      default = if isDarwin then pkgs.emacs-macport else pkgs.emacs;
+      defaultText = literalExpression "pkgs.emacs-macport (Darwin) or pkgs.emacs (Linux)";
+      description = ''
+        The Emacs package to use.
+
+        On macOS, defaults to emacs-macport which provides:
+        - Proper macOS system shortcut passthrough (Stage Manager, etc.)
+        - Native macOS features (pixel scrolling, etc.)
+        - Better integration with macOS input methods
+
+        Set to pkgs.emacs for standard GNU Emacs if preferred.
+      '';
     };
   };
 
@@ -26,69 +39,106 @@ in
       package = cfg.package;
 
       extraPackages = epkgs: with epkgs; [
-        # Popular dark themes
-        modus-themes  # Built-in high-contrast themes
+        modus-themes  # High-contrast accessible themes
       ];
 
       extraConfig = ''
-        ;; Basic Emacs configuration
-        (setq inhibit-startup-message t)
-        (setq initial-scratch-message nil)
+        ;;; Decknix Core Emacs Configuration
 
-        ;; Use visual bell instead of audible beep
-        (setq visible-bell t)
+        ;; == Startup ==
+        (setq inhibit-startup-message t
+              initial-scratch-message nil
+              initial-major-mode 'fundamental-mode)
 
-        ;; Load modus-vivendi theme (high-contrast dark theme)
-        ;; This provides consistent colors across all modes
+        ;; Disable all bells (audible and visual) - no beeps or flashes
+        ;; Visual feedback is provided by UI elements instead
+        (setq ring-bell-function 'ignore)
+
+        ;; Don't blink the cursor
+        (blink-cursor-mode -1)
+
+        ;; == Theme ==
+        ;; Load modus-vivendi (high-contrast dark theme)
         (load-theme 'modus-vivendi t)
 
-        ;; Show line numbers
+        ;; == Line numbers ==
         (global-display-line-numbers-mode 1)
 
-        ;; Disable line numbers for some modes
+        ;; Disable line numbers in specific modes
         (dolist (mode '(org-mode-hook
-                       term-mode-hook
-                       shell-mode-hook
-                       eshell-mode-hook))
+                        term-mode-hook
+                        vterm-mode-hook
+                        shell-mode-hook
+                        eshell-mode-hook
+                        treemacs-mode-hook))
           (add-hook mode (lambda () (display-line-numbers-mode 0))))
 
-        ;; Enable column number mode
+        ;; == Mode line ==
+        (line-number-mode 1)
         (column-number-mode 1)
 
-        ;; Highlight current line - enable AFTER theme is loaded
+        ;; == Visual feedback ==
         (global-hl-line-mode 1)
-
-        ;; Customize the highlight line to be more subtle (after theme and mode are loaded)
-        (set-face-attribute 'hl-line nil
-                            :background "#1c1c1c"
-                            :inherit nil)
-
-        ;; Show matching parentheses
         (show-paren-mode 1)
-        
-        ;; Enable recent files
+        (setq show-paren-delay 0
+              show-paren-style 'parenthesis)
+
+        ;; == Recent files ==
         (recentf-mode 1)
-        
-        ;; Save place in files
+        (setq recentf-max-menu-items 25
+              recentf-max-saved-items 100
+              recentf-exclude '("COMMIT_EDITMSG" "COMMIT_MSG" "\\.git"))
+
+        ;; == Save place ==
         (save-place-mode 1)
-        
-        ;; Better scrolling
-        (setq scroll-conservatively 101)
-        (setq scroll-margin 3)
-        
-        ;; Use spaces instead of tabs
-        (setq-default indent-tabs-mode nil)
-        (setq-default tab-width 2)
-        
-        ;; Auto-refresh buffers when files change on disk
+
+        ;; == Scrolling ==
+        (setq scroll-conservatively 101
+              scroll-margin 3
+              scroll-preserve-screen-position t)
+
+        ;; == Indentation ==
+        (setq-default indent-tabs-mode nil
+                      tab-width 2)
+
+        ;; == Auto-revert ==
         (global-auto-revert-mode 1)
-        
-        ;; Make backup files less intrusive
-        (setq backup-directory-alist '(("." . "~/.emacs.d/backups")))
-        (setq auto-save-file-name-transforms '((".*" "~/.emacs.d/auto-save-list/" t)))
-        
-        ;; Enable winner mode for window configuration undo/redo
+        (setq global-auto-revert-non-file-buffers t)
+
+        ;; == Backups and autosave ==
+        (let ((backup-dir (expand-file-name "backups" user-emacs-directory))
+              (autosave-dir (expand-file-name "auto-save-list" user-emacs-directory)))
+          (unless (file-exists-p backup-dir) (make-directory backup-dir t))
+          (unless (file-exists-p autosave-dir) (make-directory autosave-dir t))
+          (setq backup-directory-alist `(("." . ,backup-dir))
+                auto-save-file-name-transforms `((".*" ,autosave-dir t))))
+
+        ;; Don't create lock files
+        (setq create-lockfiles nil)
+
+        ;; == Window management ==
         (winner-mode 1)
+
+        ;; == Yes/No prompts ==
+        (setq use-short-answers t)  ; 'y' or 'n' instead of 'yes' or 'no'
+
+        ;; == Clipboard ==
+        (setq select-enable-clipboard t
+              select-enable-primary nil
+              save-interprogram-paste-before-kill t
+              mouse-yank-at-point t)
+
+        ;; == Performance ==
+        ;; Increase garbage collection threshold
+        (setq gc-cons-threshold (* 100 1024 1024)  ; 100MB
+              gc-cons-percentage 0.2)
+
+        ;; Increase process output buffer (important for LSP)
+        (setq read-process-output-max (* 1024 1024))  ; 1MB
+
+        ;; == Misc ==
+        (setq uniquify-buffer-name-style 'forward)  ; Better buffer naming
+        (setq-default fill-column 80)               ; Default fill column
       '';
     };
   };
