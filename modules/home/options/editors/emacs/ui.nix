@@ -16,7 +16,18 @@ in
     icons.enable = mkOption {
       type = types.bool;
       default = true;
-      description = "Enable nerd-icons for file icons in completion and dired.";
+      description = "Enable all-the-icons for file icons in completion and dired.";
+    };
+
+    macosShortcuts = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Enable standard macOS keyboard shortcuts (Cmd+C/V/X/W/Q/A/S/Z).
+          Makes Emacs more accessible for newcomers from other macOS apps.
+        '';
+      };
     };
 
     frame = {
@@ -58,10 +69,9 @@ in
         which-key         # Show available keybindings
         helpful           # Better *help* buffers
       ] ++ (optionals cfg.icons.enable [
-        nerd-icons                # Icons using Nerd Fonts
-        nerd-icons-completion     # Icons in minibuffer completion
-        nerd-icons-dired          # Icons in dired
-        nerd-icons-corfu          # Icons in corfu completions
+        all-the-icons             # Icons (auto-installs fonts)
+        all-the-icons-completion  # Icons in minibuffer completion
+        all-the-icons-dired       # Icons in dired
       ]);
 
       extraConfig = ''
@@ -162,19 +172,56 @@ in
       ''
       + optionalString cfg.icons.enable ''
 
-        ;; == Nerd Icons: Icons using Nerd Fonts ==
-        ;; Note: Requires a Nerd Font to be installed (e.g., JetBrains Mono Nerd Font)
+        ;; == All The Icons ==
+        ;; Auto-install fonts if not present (first run only)
+        (when (and (display-graphic-p)
+                   (not (member "all-the-icons" (font-family-list))))
+          (all-the-icons-install-fonts t))
 
         ;; Enable icons in minibuffer completion (Vertico/Marginalia)
-        (add-hook 'marginalia-mode-hook #'nerd-icons-completion-marginalia-setup)
-        (nerd-icons-completion-mode 1)
+        (add-hook 'marginalia-mode-hook #'all-the-icons-completion-marginalia-setup)
+        (all-the-icons-completion-mode 1)
 
         ;; Enable icons in dired
-        (add-hook 'dired-mode-hook #'nerd-icons-dired-mode)
+        (add-hook 'dired-mode-hook #'all-the-icons-dired-mode)
+      ''
+      + optionalString (cfg.macosShortcuts.enable && pkgs.stdenv.isDarwin) ''
 
-        ;; Enable icons in corfu completion popup
-        (with-eval-after-load 'corfu
-          (add-to-list 'corfu-margin-formatters #'nerd-icons-corfu-formatter))
+        ;; == Standard macOS Keyboard Shortcuts ==
+        ;; Makes Emacs more accessible for users coming from other macOS apps
+        ;; Command key is mapped to 'super' (s-)
+
+        ;; Editing shortcuts
+        (global-set-key (kbd "s-c") 'kill-ring-save)        ; Cmd+C = Copy
+        (global-set-key (kbd "s-v") 'yank)                   ; Cmd+V = Paste
+        (global-set-key (kbd "s-x") 'kill-region)            ; Cmd+X = Cut
+        (global-set-key (kbd "s-z") 'undo-fu-only-undo)      ; Cmd+Z = Undo
+        (global-set-key (kbd "s-Z") 'undo-fu-only-redo)      ; Cmd+Shift+Z = Redo
+        (global-set-key (kbd "s-a") 'mark-whole-buffer)      ; Cmd+A = Select All
+        (global-set-key (kbd "s-s") 'save-buffer)            ; Cmd+S = Save
+        (global-set-key (kbd "s-S") 'write-file)             ; Cmd+Shift+S = Save As
+
+        ;; Window/frame management
+        (global-set-key (kbd "s-w") 'delete-window)          ; Cmd+W = Close window
+        (global-set-key (kbd "s-W") 'delete-frame)           ; Cmd+Shift+W = Close frame
+        (global-set-key (kbd "s-q") 'save-buffers-kill-emacs) ; Cmd+Q = Quit
+        (global-set-key (kbd "s-n") 'make-frame-command)     ; Cmd+N = New frame
+
+        ;; Search/Find
+        (global-set-key (kbd "s-f") 'consult-line)           ; Cmd+F = Find (in buffer)
+        (global-set-key (kbd "s-F") 'consult-ripgrep)        ; Cmd+Shift+F = Find in project
+        (global-set-key (kbd "s-g") 'consult-line)           ; Cmd+G = Find next (same as find)
+
+        ;; Open/Navigation
+        (global-set-key (kbd "s-o") 'find-file)              ; Cmd+O = Open file
+        (global-set-key (kbd "s-p") 'project-find-file)      ; Cmd+P = Quick open (project file)
+        (global-set-key (kbd "s-b") 'consult-buffer)         ; Cmd+B = Switch buffer
+        (global-set-key (kbd "s-,") 'customize)              ; Cmd+, = Preferences
+
+        ;; Font size (zoom)
+        (global-set-key (kbd "s-=") 'text-scale-increase)    ; Cmd+= = Zoom in
+        (global-set-key (kbd "s--") 'text-scale-decrease)    ; Cmd+- = Zoom out
+        (global-set-key (kbd "s-0") 'text-scale-adjust)      ; Cmd+0 = Reset zoom
       '';
     };
   };
