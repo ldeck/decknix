@@ -99,13 +99,13 @@ in
           "Name of the welcome buffer.")
 
         ;; === Logo ===
+        ;; Using ASCII art for predictable width across all fonts/terminals
         (defvar decknix-welcome-logo
-          '("      ██████╗ ███████╗ ██████╗██╗  ██╗███╗   ██╗██╗██╗  ██╗"
-            "      ██╔══██╗██╔════╝██╔════╝██║ ██╔╝████╗  ██║██║╚██╗██╔╝"
-            "      ██║  ██║█████╗  ██║     █████╔╝ ██╔██╗ ██║██║ ╚███╔╝ "
-            "      ██║  ██║██╔══╝  ██║     ██╔═██╗ ██║╚██╗██║██║ ██╔██╗ "
-            "      ██████╔╝███████╗╚██████╗██║  ██╗██║ ╚████║██║██╔╝ ██╗"
-            "      ╚═════╝ ╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝")
+          '("     _            _          _       "
+            "  __| | ___  ____| | __ __  (_)_  __ "
+            " / _` |/ _ \\/ __|| |/ //  \\ | \\ \\/ / "
+            "| (_| |  __/ (__ |   <| () || |>  <  "
+            " \\__,_|\\___|\\___||_|\\_\\\\__/ |_/_/\\_\\ ")
           "ASCII art logo for decknix.")
 
         ;; === Features ===
@@ -246,9 +246,10 @@ in
 
         ;; === Helper functions ===
         (defun decknix-welcome-center-line (text)
-          "Return TEXT centered for the current window width."
+          "Return TEXT centered for the current window width.
+Uses `string-width' to handle Unicode characters correctly."
           (let* ((width (window-width))
-                 (text-width (length text))
+                 (text-width (string-width text))
                  (padding (max 0 (/ (- width text-width) 2))))
             (concat (make-string padding ?\s) text)))
 
@@ -336,10 +337,45 @@ in
                               "\n"))))
             result))
 
+        ;; === Layout configuration ===
+        (defvar decknix-welcome-min-width-for-two-cols 100
+          "Minimum window width to use two-column layout.")
+
+        (defvar decknix-welcome-col-width 44
+          "Width of each column in two-column layout.")
+
+        (defun decknix-welcome-use-two-columns-p ()
+          "Return t if window is wide enough for two columns."
+          (>= (window-width) decknix-welcome-min-width-for-two-cols))
+
+        ;; === Render single category (for single-column layout) ===
+        (defun decknix-welcome-render-category-single (category col-offset)
+          "Render a single CATEGORY at COL-OFFSET for single-column layout."
+          (let* ((name (car category))
+                 (shortcut (plist-get (cdr category) :key))
+                 (quick-bindings (plist-get (cdr category) :quick)))
+            ;; Header
+            (insert (make-string col-offset ?\s))
+            (insert (propertize (format "[%s] " shortcut) 'face 'decknix-welcome-key))
+            (insert-text-button name
+                                'type 'decknix-welcome-category-button
+                                'cat-name name)
+            (insert " ▸\n")
+            ;; Bindings
+            (dolist (binding quick-bindings)
+              (insert (make-string col-offset ?\s))
+              (insert "    ")
+              (insert (propertize (decknix-welcome-pad-right (car binding) 12)
+                                  'face 'decknix-welcome-key))
+              (insert (propertize (cdr binding) 'face 'decknix-welcome-description))
+              (insert "\n"))
+            (insert "\n")))
+
         ;; === Main render function ===
         (defun decknix-welcome-render ()
           "Render the welcome buffer content with interactive elements."
-          (let ((inhibit-read-only t))
+          (let ((inhibit-read-only t)
+                (win-width (window-width)))
             (erase-buffer)
 
             ;; Add some top padding
@@ -365,65 +401,75 @@ in
               (decknix-welcome-insert-centered features-line))
             (insert "\n")
 
-            ;; Render keybindings in 2 columns with clickable headers
-            (let* ((categories decknix-welcome-categories)
-                   (left-cats (seq-take categories 3))
-                   (right-cats (seq-drop categories 3))
-                   (col-width 44)
-                   (window-center (/ (window-width) 2))
-                   (col-offset (max 4 (- window-center 48))))
+            ;; Render keybindings - responsive layout
+            (if (decknix-welcome-use-two-columns-p)
+                ;; Two-column layout for wide windows
+                (let* ((categories decknix-welcome-categories)
+                       (left-cats (seq-take categories 3))
+                       (right-cats (seq-drop categories 3))
+                       (col-width decknix-welcome-col-width)
+                       (total-content-width (+ col-width col-width 4))  ; Two columns + gap
+                       (col-offset (max 2 (/ (- win-width total-content-width) 2))))
 
-              ;; Process each row (pair of left and right categories)
-              (dotimes (row 3)
-                (let ((left-cat (nth row left-cats))
-                      (right-cat (nth row right-cats)))
+                  ;; Process each row (pair of left and right categories)
+                  (dotimes (row 3)
+                    (let ((left-cat (nth row left-cats))
+                          (right-cat (nth row right-cats)))
 
-                  ;; Insert category headers as buttons with shortcut keys
-                  (insert (make-string col-offset ?\s))
-                  (when left-cat
-                    (let ((shortcut (plist-get (cdr left-cat) :key)))
-                      (insert (propertize (format "[%s] " shortcut) 'face 'decknix-welcome-key))
-                      (insert-text-button (car left-cat)
-                                          'type 'decknix-welcome-category-button
-                                          'cat-name (car left-cat))
-                      (insert " ▸")))
-                  (let ((left-header-len (if left-cat (+ 4 (length (car left-cat)) 4) 0)))  ; [n] + name + " ▸"
-                    (insert (make-string (max 1 (- col-width left-header-len)) ?\s)))
-                  (when right-cat
-                    (let ((shortcut (plist-get (cdr right-cat) :key)))
-                      (insert (propertize (format "[%s] " shortcut) 'face 'decknix-welcome-key))
-                      (insert-text-button (car right-cat)
-                                          'type 'decknix-welcome-category-button
-                                          'cat-name (car right-cat))
-                      (insert " ▸")))
-                  (insert "\n")
+                      ;; Insert category headers as buttons with shortcut keys
+                      (insert (make-string col-offset ?\s))
+                      (when left-cat
+                        (let ((shortcut (plist-get (cdr left-cat) :key)))
+                          (insert (propertize (format "[%s] " shortcut) 'face 'decknix-welcome-key))
+                          (insert-text-button (car left-cat)
+                                              'type 'decknix-welcome-category-button
+                                              'cat-name (car left-cat))
+                          (insert " ▸")))
+                      (let ((left-header-len (if left-cat (+ 4 (length (car left-cat)) 4) 0)))
+                        (insert (make-string (max 1 (- col-width left-header-len)) ?\s)))
+                      (when right-cat
+                        (let ((shortcut (plist-get (cdr right-cat) :key)))
+                          (insert (propertize (format "[%s] " shortcut) 'face 'decknix-welcome-key))
+                          (insert-text-button (car right-cat)
+                                              'type 'decknix-welcome-category-button
+                                              'cat-name (car right-cat))
+                          (insert " ▸")))
+                      (insert "\n")
 
-                  ;; Insert quick bindings for each category
-                  (let ((left-bindings (when left-cat (plist-get (cdr left-cat) :quick)))
-                        (right-bindings (when right-cat (plist-get (cdr right-cat) :quick)))
-                        (max-bindings 3))
-                    (dotimes (i max-bindings)
-                      (let ((left-binding (nth i left-bindings))
-                            (right-binding (nth i right-bindings)))
-                        (insert (make-string col-offset ?\s))
-                        ;; Left binding
-                        (if left-binding
-                            (progn
+                      ;; Insert quick bindings for each category
+                      (let ((left-bindings (when left-cat (plist-get (cdr left-cat) :quick)))
+                            (right-bindings (when right-cat (plist-get (cdr right-cat) :quick)))
+                            (max-bindings 3))
+                        (dotimes (i max-bindings)
+                          (let ((left-binding (nth i left-bindings))
+                                (right-binding (nth i right-bindings)))
+                            (insert (make-string col-offset ?\s))
+                            ;; Left binding
+                            (if left-binding
+                                (progn
+                                  (insert "    ")
+                                  (insert (propertize (decknix-welcome-pad-right (car left-binding) 12)
+                                                      'face 'decknix-welcome-key))
+                                  (insert (propertize (cdr left-binding) 'face 'decknix-welcome-description)))
+                              (insert (make-string col-width ?\s)))
+                            (let ((left-content-len (if left-binding
+                                                        (+ 4 12 (length (cdr left-binding)))
+                                                      0)))
+                              (insert (make-string (max 1 (- col-width left-content-len)) ?\s)))
+                            ;; Right binding
+                            (when right-binding
                               (insert "    ")
-                              (insert (propertize (decknix-welcome-pad-right (car left-binding) 12)
+                              (insert (propertize (decknix-welcome-pad-right (car right-binding) 12)
                                                   'face 'decknix-welcome-key))
-                              (insert (propertize (cdr left-binding) 'face 'decknix-welcome-description)))
-                          (insert (make-string col-width ?\s)))
-                        (insert (make-string (max 1 (- col-width
-                                                       (+ 4 12 (length (or (cdr left-binding) ""))))) ?\s))
-                        ;; Right binding
-                        (when right-binding
-                          (insert "    ")
-                          (insert (propertize (decknix-welcome-pad-right (car right-binding) 12)
-                                              'face 'decknix-welcome-key))
-                          (insert (propertize (cdr right-binding) 'face 'decknix-welcome-description)))
-                        (insert "\n"))))
-                  (insert "\n"))))
+                              (insert (propertize (cdr right-binding) 'face 'decknix-welcome-description)))
+                            (insert "\n"))))
+                      (insert "\n"))))
+
+              ;; Single-column layout for narrow windows
+              (let* ((col-width 48)
+                     (col-offset (max 2 (/ (- win-width col-width) 2))))
+                (dolist (category decknix-welcome-categories)
+                  (decknix-welcome-render-category-single category col-offset))))
 
             ;; Recent commands section
             (when (and ${boolToString cfg.showRecentCommands}
@@ -431,12 +477,12 @@ in
               (insert "\n")
               (decknix-welcome-insert-centered "─────────── Recent Commands ───────────" 'decknix-welcome-subtitle)
               (let* ((cmds (seq-take (seq-uniq extended-command-history) ${toString cfg.recentCommandsCount}))
-                     (window-center (/ (window-width) 2))
-                     (col-offset (max 4 (- window-center 25))))
+                     (max-cmd-len (apply #'max (mapcar #'length cmds)))
+                     (content-width (+ 2 max-cmd-len))
+                     (col-offset (max 2 (/ (- win-width content-width) 2))))
                 (dolist (cmd cmds)
                   (let ((sym (intern-soft cmd)))
                     (insert (make-string col-offset ?\s))
-                    (insert "  ")
                     (if (and sym (commandp sym))
                         (insert-text-button cmd
                                             'type 'decknix-welcome-command-button
@@ -449,15 +495,15 @@ in
               (insert "\n")
               (decknix-welcome-insert-centered "─────────── Recent Files ───────────" 'decknix-welcome-subtitle)
               (let* ((files (seq-take recentf-list ${toString cfg.recentFilesCount}))
-                     (window-center (/ (window-width) 2))
-                     (col-offset (max 4 (- window-center 35))))
+                     (max-display-len 65)
+                     (content-width (min max-display-len (- win-width 10)))
+                     (col-offset (max 2 (/ (- win-width content-width) 2))))
                 (dolist (file files)
                   (let* ((short-file (abbreviate-file-name file))
-                         (display (if (> (length short-file) 65)
-                                      (concat "..." (substring short-file -62))
+                         (display (if (> (length short-file) content-width)
+                                      (concat "..." (substring short-file (- 3 content-width)))
                                     short-file)))
                     (insert (make-string col-offset ?\s))
-                    (insert "  ")
                     (insert-text-button display
                                         'type 'decknix-welcome-file-button
                                         'file file)
