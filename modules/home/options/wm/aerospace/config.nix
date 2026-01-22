@@ -3,7 +3,7 @@
 with lib;
 
 let
-  cfg = config.programs.aerospace;
+  cfg = config.decknix.wm.aerospace;
 
   # Sort workspace keys for consistent ordering
   sortedWorkspaceKeys = sort lessThan (attrNames cfg.workspaces);

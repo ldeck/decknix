@@ -3,7 +3,8 @@
 with lib;
 
 let
-  cfg = config.programs.aerospace;
+  # Use decknix namespace to avoid conflict with upstream home-manager aerospace module
+  cfg = config.decknix.wm.aerospace;
 
   # Default project workspaces - can be overridden
   # Letters are used for project workspaces (memorable), numbers for utility
@@ -24,31 +25,8 @@ let
   };
 
 in {
-  options.programs.aerospace = {
-    enable = mkEnableOption "AeroSpace tiling window manager";
-
-    package = mkOption {
-      type = types.package;
-      default = pkgs.aerospace or (throw "aerospace package not found - install via homebrew");
-      description = "The AeroSpace package to use.";
-    };
-
-    # System configuration is handled by the darwin module (services.aerospace)
-    # This option just documents the relationship
-    systemConfigNote = mkOption {
-      type = types.str;
-      default = ''
-        When aerospace is enabled, you should also enable the darwin module:
-        services.aerospace.enable = true;
-
-        This configures:
-        - Stage Manager disabled (conflicts with tiling)
-        - "Displays have separate Spaces" disabled (multi-monitor fix)
-        - Dock auto-hide for more screen space
-      '';
-      description = "Note about darwin system configuration for AeroSpace.";
-      visible = false;
-    };
+  options.decknix.wm.aerospace = {
+    enable = mkEnableOption "AeroSpace tiling window manager (decknix configuration)";
 
     startAtLogin = mkOption {
       type = types.bool;
@@ -133,7 +111,7 @@ in {
         default = true;
         description = ''
           Enable layout mode for rapid layout adjustments.
-          Enter with alt-shift-semicolon, exit with esc.
+          Enter with alt-semicolon, exit with esc.
         '';
       };
     };
