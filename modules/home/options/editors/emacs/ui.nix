@@ -44,10 +44,7 @@ in
             (setq mac-right-option-modifier 'none))
 
           ;; === emacs-mac port specific settings ===
-          ;; These enable proper macOS system shortcut passthrough (Stage Manager, etc.)
-          (when (boundp 'mac-pass-control-to-system)
-            (setq mac-pass-control-to-system t)      ; Pass Ctrl combos to system
-            (setq mac-pass-command-to-system t)      ; Pass Cmd combos to system
+          (when (boundp 'mac-option-modifier)
             (setq mac-option-modifier 'meta)         ; Option = Meta
             (setq mac-command-modifier 'super)       ; Command = Super
             (setq mac-control-modifier 'control)     ; Control = Control
@@ -56,7 +53,7 @@ in
 
           ;; === Standard NS Emacs settings (fallback) ===
           (when (and (boundp 'ns-command-modifier)
-                     (not (boundp 'mac-pass-control-to-system)))
+                     (not (boundp 'mac-option-modifier)))
             (setq ns-command-modifier 'super)
             (setq ns-option-modifier 'meta)
             (setq ns-control-modifier 'control)))
