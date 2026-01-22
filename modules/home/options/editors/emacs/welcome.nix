@@ -55,7 +55,7 @@ in
 
         ;; === Faces ===
         (defface decknix-welcome-title
-          '((t :inherit font-lock-keyword-face :height 1.6 :weight bold))
+          '((t :inherit font-lock-keyword-face :weight bold))
           "Face for the welcome screen title."
           :group 'decknix-welcome)
 
@@ -94,29 +94,109 @@ in
           "Face for clickable links."
           :group 'decknix-welcome)
 
+        ;; Gradient faces for "d ck" (deck minus E) - purple tones, faded to visible
+        (defface decknix-logo-d
+          '((t :foreground "#4a3a6a" :weight bold))
+          "Logo face for 'd' - faded purple."
+          :group 'decknix-welcome)
+        (defface decknix-logo-c
+          '((t :foreground "#6a5a8a" :weight bold))
+          "Logo face for 'c' - medium purple."
+          :group 'decknix-welcome)
+        (defface decknix-logo-k
+          '((t :foreground "#8a7aaa" :weight bold))
+          "Logo face for 'k' - light purple."
+          :group 'decknix-welcome)
+
+        ;; Gradient faces for "EMACS" (E + MACS) - teal/cyan tones
+        (defface decknix-logo-E
+          '((t :foreground "#0d9488" :weight bold))
+          "Logo face for 'E' - deep teal."
+          :group 'decknix-welcome)
+        (defface decknix-logo-M
+          '((t :foreground "#14b8a6" :weight bold))
+          "Logo face for 'M' - teal."
+          :group 'decknix-welcome)
+        (defface decknix-logo-A
+          '((t :foreground "#2dd4bf" :weight bold))
+          "Logo face for 'A' - bright teal."
+          :group 'decknix-welcome)
+        (defface decknix-logo-C
+          '((t :foreground "#5eead4" :weight bold))
+          "Logo face for 'C' - light teal."
+          :group 'decknix-welcome)
+        (defface decknix-logo-S
+          '((t :foreground "#99f6e4" :weight bold))
+          "Logo face for 'S' - pale teal."
+          :group 'decknix-welcome)
+
+        ;; Feature gradient faces - blend from faded purple to teal
+        (defface decknix-feat-1
+          '((t :foreground "#6a5a8a" :weight bold))
+          "Feature face 1 - purple."
+          :group 'decknix-welcome)
+        (defface decknix-feat-2
+          '((t :foreground "#5a7090" :weight bold))
+          "Feature face 2."
+          :group 'decknix-welcome)
+        (defface decknix-feat-3
+          '((t :foreground "#3a9098" :weight bold))
+          "Feature face 3."
+          :group 'decknix-welcome)
+        (defface decknix-feat-4
+          '((t :foreground "#14b8a6" :weight bold))
+          "Feature face 4 - teal."
+          :group 'decknix-welcome)
+        (defface decknix-feat-5
+          '((t :foreground "#2dd4bf" :weight bold))
+          "Feature face 5."
+          :group 'decknix-welcome)
+        (defface decknix-feat-6
+          '((t :foreground "#5eead4" :weight bold))
+          "Feature face 6 - bright teal."
+          :group 'decknix-welcome)
+
         ;; === Buffer names ===
         (defvar decknix-welcome-buffer-name "*decknix*"
           "Name of the welcome buffer.")
 
         ;; === Logo ===
-        ;; Using ASCII art for predictable width across all fonts/terminals
-        (defvar decknix-welcome-logo
-          '("     _            _          _       "
-            "  __| | ___  ____| | __ __  (_)_  __ "
-            " / _` |/ _ \\/ __|| |/ //  \\ | \\ \\/ / "
-            "| (_| |  __/ (__ |   <| () || |>  <  "
-            " \\__,_|\\___|\\___||_|\\_\\\\__/ |_/_/\\_\\ ")
-          "ASCII art logo for decknix.")
+        ;; ASCII art "dEckMACS" logo with gradient coloring
+        (defvar decknix-welcome-logo-raw
+          '("     _  _____      _    __  __    _    ____ ____  "
+            "  __| || ____|___| | _|  \\/  |  / \\  / ___/ ___| "
+            " / _` ||  _| / __| |/ / |\\/| | / _ \\| |   \\___ \\ "
+            "| (_| || |__| (__|   <| |  | |/ ___ \\ |___ ___) |"
+            " \\__,_||_____|\\___|\\_\\\\_|  |_/_/   \\_\\____|____/ ")
+          "ASCII art logo for dEckMACS.")
+
+        (defun decknix-welcome-colorize-logo-line (line)
+          "Apply gradient colors to a logo LINE based on character position."
+          (let ((result "")
+                (len (length line)))
+            (dotimes (i len)
+              (let* ((char (substring line i (1+ i)))
+                     (face (cond
+                            ((< i 7) 'decknix-logo-d)
+                            ((< i 14) 'decknix-logo-E)
+                            ((< i 19) 'decknix-logo-c)
+                            ((< i 24) 'decknix-logo-k)
+                            ((< i 31) 'decknix-logo-M)
+                            ((< i 38) 'decknix-logo-A)
+                            ((< i 44) 'decknix-logo-C)
+                            (t 'decknix-logo-S))))
+                (setq result (concat result (propertize char 'face face)))))
+            result))
 
         ;; === Features ===
         (defvar decknix-welcome-features
-          '(("Vertico"    . "Vertical completion UI")
-            ("Consult"    . "Enhanced search & navigation")
-            ("Marginalia" . "Rich annotations")
-            ("Corfu"      . "In-buffer completion")
-            ("Embark"     . "Context actions (C-.)")
-            ("Magit"      . "Git interface (C-x g)"))
+          '("Vertico" "Consult" "Marginalia" "Corfu" "Embark" "Magit")
           "Key features included in decknix.")
+
+        (defvar decknix-welcome-feature-faces
+          '(decknix-feat-1 decknix-feat-2 decknix-feat-3
+            decknix-feat-4 decknix-feat-5 decknix-feat-6)
+          "Gradient faces for features.")
 
         ;; === Keybinding categories with full details ===
         ;; Each category has :key (shortcut), :quick (main view), :full (detail view)
@@ -245,18 +325,20 @@ in
           'action #'decknix-welcome-run-command)
 
         ;; === Helper functions ===
-        (defun decknix-welcome-center-line (text)
-          "Return TEXT centered for the current window width.
-Uses `string-width' to handle Unicode characters correctly."
-          (let* ((width (window-width))
-                 (text-width (string-width text))
-                 (padding (max 0 (/ (- width text-width) 2))))
-            (concat (make-string padding ?\s) text)))
+        (defun decknix-welcome-insert-centered (text win-width &optional face)
+          "Insert TEXT centered for WIN-WIDTH, with optional FACE."
+          (let* ((text-len (length text))
+                 (padding (max 0 (/ (- win-width text-len) 2))))
+            (insert (make-string padding ?\s))
+            (insert (if face (propertize text 'face face) text))
+            (insert "\n")))
 
-        (defun decknix-welcome-insert-centered (text &optional face)
-          "Insert TEXT centered with optional FACE."
-          (let ((centered (decknix-welcome-center-line text)))
-            (insert (if face (propertize centered 'face face) centered))
+        (defun decknix-welcome-insert-centered-propertized (text win-width)
+          "Insert already-propertized TEXT centered for WIN-WIDTH."
+          (let* ((text-len (length text))
+                 (padding (max 0 (/ (- win-width text-len) 2))))
+            (insert (make-string padding ?\s))
+            (insert text)
             (insert "\n")))
 
         (defun decknix-welcome-pad-right (str width)
@@ -381,24 +463,27 @@ Uses `string-width' to handle Unicode characters correctly."
             ;; Add some top padding
             (insert "\n")
 
-            ;; Insert logo
-            (dolist (line decknix-welcome-logo)
-              (decknix-welcome-insert-centered line 'decknix-welcome-title))
-
-            ;; Title
-            (decknix-welcome-insert-centered "Welcome to Decknix Emacs" 'decknix-welcome-title)
-            (decknix-welcome-insert-centered "A modern, batteries-included configuration" 'decknix-welcome-subtitle)
+            ;; Insert logo with gradient coloring
+            (dolist (line decknix-welcome-logo-raw)
+              (let ((colored-line (decknix-welcome-colorize-logo-line line)))
+                (decknix-welcome-insert-centered-propertized colored-line win-width)))
             (insert "\n")
 
-            ;; Feature highlights
-            (let ((features-line ""))
-              (dolist (feature decknix-welcome-features)
-                (setq features-line
-                      (concat features-line
-                              (propertize (car feature) 'face 'decknix-welcome-feature)
-                              " • ")))
-              (setq features-line (substring features-line 0 -3))  ; Remove trailing " • "
-              (decknix-welcome-insert-centered features-line))
+            ;; Title
+            (decknix-welcome-insert-centered "Welcome to dEckMACS" win-width 'decknix-welcome-title)
+            (decknix-welcome-insert-centered "A modern, batteries-included Emacs configuration" win-width 'decknix-welcome-subtitle)
+            (insert "\n")
+
+            ;; Feature highlights with gradient
+            (let ((parts nil))
+              (dotimes (i (length decknix-welcome-features))
+                (let ((feature (nth i decknix-welcome-features))
+                      (face (nth i decknix-welcome-feature-faces)))
+                  (push (propertize feature 'face face) parts)
+                  (when (< i (1- (length decknix-welcome-features)))
+                    (push (propertize " • " 'face 'decknix-welcome-subtitle) parts))))
+              (decknix-welcome-insert-centered-propertized
+               (apply 'concat (reverse parts)) win-width))
             (insert "\n")
 
             ;; Render keybindings - responsive layout
@@ -475,7 +560,7 @@ Uses `string-width' to handle Unicode characters correctly."
             (when (and ${boolToString cfg.showRecentCommands}
                        (bound-and-true-p extended-command-history))
               (insert "\n")
-              (decknix-welcome-insert-centered "─────────── Recent Commands ───────────" 'decknix-welcome-subtitle)
+              (decknix-welcome-insert-centered "─────────── Recent Commands ───────────" win-width 'decknix-welcome-subtitle)
               (let* ((cmds (seq-take (seq-uniq extended-command-history) ${toString cfg.recentCommandsCount}))
                      (max-cmd-len (apply #'max (mapcar #'length cmds)))
                      (content-width (+ 2 max-cmd-len))
@@ -493,7 +578,7 @@ Uses `string-width' to handle Unicode characters correctly."
             ;; Recent files section
             (when (and ${boolToString cfg.showRecentFiles} (bound-and-true-p recentf-list))
               (insert "\n")
-              (decknix-welcome-insert-centered "─────────── Recent Files ───────────" 'decknix-welcome-subtitle)
+              (decknix-welcome-insert-centered "─────────── Recent Files ───────────" win-width 'decknix-welcome-subtitle)
               (let* ((files (seq-take recentf-list ${toString cfg.recentFilesCount}))
                      (max-display-len 65)
                      (content-width (min max-display-len (- win-width 10)))
@@ -511,10 +596,13 @@ Uses `string-width' to handle Unicode characters correctly."
 
             ;; Footer
             (insert "\n")
-            (decknix-welcome-insert-centered "Press 1-6 for full cheat sheets • r refresh • q quit" 'decknix-welcome-subtitle)
-            (decknix-welcome-insert-centered "C-h ? help • C-x b buffers • C-x C-f files • C-c w this screen" 'decknix-welcome-subtitle)
+            (decknix-welcome-insert-centered "Press 1-6 for full cheat sheets • r refresh • q quit" win-width 'decknix-welcome-subtitle)
+            (decknix-welcome-insert-centered "C-h ? help • C-x b buffers • C-x C-f files • C-c w this screen" win-width 'decknix-welcome-subtitle)
 
-            (goto-char (point-min))))
+            (goto-char (point-min))
+
+            ;; Clear the modified flag so buffer appears as "saved"
+            (set-buffer-modified-p nil)))
 
         ;; === Detail mode for category cheat sheets ===
         (define-derived-mode decknix-welcome-detail-mode special-mode "Decknix-Detail"
