@@ -557,7 +557,7 @@ in
                   (decknix-welcome-render-category-single category col-offset))))
 
             ;; Recent commands section
-            (when (and ${boolToString cfg.showRecentCommands}
+            (when (and ${if cfg.showRecentCommands then "t" else "nil"}
                        (bound-and-true-p extended-command-history))
               (insert "\n")
               (decknix-welcome-insert-centered "─────────── Recent Commands ───────────" win-width 'decknix-welcome-subtitle)
@@ -576,7 +576,7 @@ in
                     (insert "\n")))))
 
             ;; Recent files section
-            (when (and ${boolToString cfg.showRecentFiles} (bound-and-true-p recentf-list))
+            (when (and ${if cfg.showRecentFiles then "t" else "nil"} (bound-and-true-p recentf-list))
               (insert "\n")
               (decknix-welcome-insert-centered "─────────── Recent Files ───────────" win-width 'decknix-welcome-subtitle)
               (let* ((files (seq-take recentf-list ${toString cfg.recentFilesCount}))
