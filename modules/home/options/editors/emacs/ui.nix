@@ -110,7 +110,8 @@ in
         (add-hook 'dired-mode-hook #'nerd-icons-dired-mode)
 
         ;; Enable icons in corfu completion popup
-        (add-to-list 'corfu-margin-formatters #'nerd-icons-corfu-formatter)
+        (with-eval-after-load 'corfu
+          (add-to-list 'corfu-margin-formatters #'nerd-icons-corfu-formatter))
       '';
     };
   };
