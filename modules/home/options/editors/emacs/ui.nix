@@ -202,8 +202,17 @@ in
         (global-set-key (kbd "s-S") 'write-file)             ; Cmd+Shift+S = Save As
 
         ;; Window/frame management
-        (global-set-key (kbd "s-w") 'delete-window)          ; Cmd+W = Close window
-        (global-set-key (kbd "s-W") 'delete-frame)           ; Cmd+Shift+W = Close frame
+        (defun decknix-close-window-or-frame ()
+          "Close the current window if split exists, otherwise close the frame."
+          (interactive)
+          (if (> (count-windows) 1)
+              (delete-window)
+            (delete-frame)))
+
+        (global-set-key (kbd "s-t") 'split-window-right)     ; Cmd+T = Split window right
+        (global-set-key (kbd "s-T") 'split-window-below)     ; Cmd+Shift+T = Split below
+        (global-set-key (kbd "s-w") 'decknix-close-window-or-frame) ; Cmd+W = Close window/frame
+        (global-set-key (kbd "s-W") 'delete-frame)           ; Cmd+Shift+W = Close frame (force)
         (global-set-key (kbd "s-q") 'save-buffers-kill-emacs) ; Cmd+Q = Quit
         (global-set-key (kbd "s-n") 'make-frame-command)     ; Cmd+N = New frame
 
