@@ -6,6 +6,7 @@
   imports = [
     ../cli/default.nix
     ../common/unfree.nix
+    ./aerospace.nix
   ];
 
   nixpkgs.overlays = [
