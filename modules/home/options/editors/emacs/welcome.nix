@@ -293,8 +293,11 @@ in
              :key "6"
              :quick (("C-h f" . "Describe function")
                      ("C-h k" . "Describe key")
-                     ("C-h m" . "Describe mode"))
-             :full  (("C-h f" . "helpful-callable - Describe function")
+                     ("C-h t" . "Emacs tutorial"))
+             :full  (("C-h t" . "help-with-tutorial - Interactive Emacs tutorial")
+                     ("C-h r" . "info-emacs-manual - Emacs manual")
+                     ("C-h C-a" . "about-emacs - About GNU Emacs")
+                     ("C-h f" . "helpful-callable - Describe function")
                      ("C-h v" . "helpful-variable - Describe variable")
                      ("C-h k" . "helpful-key - Describe key binding")
                      ("C-h m" . "describe-mode - Current mode help")
