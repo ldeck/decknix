@@ -376,7 +376,7 @@ in
                     (insert (propertize desc 'face 'decknix-welcome-description))
                     (insert "\n")))
                 (insert "\n")
-                (insert (propertize "  Press 'q' to close, 'w' to return to welcome screen\n"
+                (insert (propertize "  Press 'q' to return to welcome screen\n"
                                     'face 'decknix-welcome-subtitle))
                 (goto-char (point-min)))
               (decknix-welcome-detail-mode))
@@ -615,8 +615,14 @@ in
                 cursor-type nil
                 truncate-lines t))
 
-        (define-key decknix-welcome-detail-mode-map (kbd "q") 'kill-buffer-and-window)
-        (define-key decknix-welcome-detail-mode-map (kbd "w") 'decknix-welcome-open)
+        (defun decknix-welcome-detail-quit ()
+          "Quit the detail buffer and return to welcome screen."
+          (interactive)
+          (let ((buf (current-buffer)))
+            (decknix-welcome-open)
+            (kill-buffer buf)))
+
+        (define-key decknix-welcome-detail-mode-map (kbd "q") 'decknix-welcome-detail-quit)
 
         ;; === Main welcome mode ===
         (define-derived-mode decknix-welcome-mode special-mode "Decknix"
