@@ -12,13 +12,36 @@ in
       default = true;
       description = "Enable Magit for Git integration in Emacs.";
     };
+
+    forge = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Enable Forge for GitHub/GitLab PR and issue management.
+          Provides: create/review PRs, manage issues, browse topics.
+        '';
+      };
+    };
+
+    codeReview = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Enable code-review for reviewing PRs with inline comments.
+          Provides a diff-based PR review interface.
+        '';
+      };
+    };
   };
 
   config = mkIf cfg.enable {
     programs.emacs = {
-      extraPackages = epkgs: with epkgs; [
-        magit
-      ];
+      extraPackages = epkgs: with epkgs;
+        [ magit ]
+        ++ optionals cfg.forge.enable [ forge ]
+        ++ optionals cfg.codeReview.enable [ code-review ];
 
       extraConfig = ''
         ;; Magit configuration
@@ -32,6 +55,37 @@ in
         (with-eval-after-load 'magit
           ;; Show word-granularity differences within diff hunks
           (setq magit-diff-refine-hunk 'all))
+
+      '' + optionalString cfg.forge.enable ''
+        ;; == Forge - GitHub/GitLab Integration ==
+        ;; Provides PR creation, review, issue management within Magit
+        (use-package forge
+          :after magit
+          :config
+          ;; Pull forge data when entering magit-status
+          (setq forge-add-default-bindings t)
+
+          ;; Configure GitHub token auth (uses ~/.authinfo.gpg or auth-source)
+          ;; Format: machine api.github.com login YOUR_USERNAME^forge password YOUR_TOKEN
+          (setq auth-sources '("~/.authinfo.gpg" "~/.authinfo" "~/.netrc")))
+
+        ;; Keybindings in magit-status:
+        ;; @ f f - fetch topics (PRs/issues)
+        ;; @ c p - create pull request
+        ;; @ l p - list pull requests
+        ;; @ l i - list issues
+        ;; RET on PR - view PR details
+
+      '' + optionalString cfg.codeReview.enable ''
+        ;; == Code Review - PR Review Interface ==
+        (use-package code-review
+          :after forge
+          :config
+          ;; Use forge's authentication
+          (setq code-review-auth-login-marker 'forge))
+
+        ;; From a PR in forge, use: M-x code-review-start
+        ;; Or bind it: (define-key forge-topic-mode-map (kbd "C-c r") 'code-review-start)
       '';
     };
   };

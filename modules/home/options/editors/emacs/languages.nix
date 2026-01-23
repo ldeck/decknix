@@ -278,9 +278,13 @@ in
           cmake-mode
           just-mode
           gradle-mode
+          mvn               # Maven commands
           maven-test-mode
           bazel
         ])
+
+        # Cargo for Rust (if rust enabled)
+        ++ (optionals cfg.rust.enable [ cargo ])
 
         # Config Files
         ++ (optionals cfg.config.enable [
@@ -420,6 +424,19 @@ in
           :config
           (setq rust-format-on-save nil))  ; Set to t if you want auto-format
 
+        ;; Cargo - Rust package manager integration
+        ;; M-x cargo-* commands: cargo-build, cargo-run, cargo-test, cargo-bench, etc.
+        (use-package cargo
+          :hook (rust-mode . cargo-minor-mode)
+          :config
+          ;; Cargo.toml is handled by toml-mode for editing
+          ;; cargo-minor-mode adds C-c C-c prefix keybindings:
+          ;; C-c C-c C-b - cargo-build
+          ;; C-c C-c C-r - cargo-run
+          ;; C-c C-c C-t - cargo-test
+          ;; C-c C-c C-c - cargo-clippy
+          (setq cargo-process--command-flags "--color always"))
+
       '' + optionalString cfg.go.enable ''
         ;; == Go ==
         (use-package go-mode
@@ -515,15 +532,32 @@ in
         (use-package just-mode
           :mode ("justfile\\'" "\\.just\\'"))
 
-        ;; Gradle (Kotlin DSL files handled by kotlin-mode)
+        ;; Gradle - only enable in gradle project directories, not globally
+        ;; Use M-x gradle-build, gradle-test, etc. when in a gradle project
         (use-package gradle-mode
-          :hook ((kotlin-mode . gradle-mode)
-                 (groovy-mode . gradle-mode)
-                 (java-mode . gradle-mode)))
+          :commands (gradle-build gradle-test gradle-single-test gradle-execute)
+          :config
+          ;; Don't auto-enable as a minor mode globally
+          ;; Instead, manually enable with M-x gradle-mode in gradle projects
+          (setq gradle-use-gradlew t))  ; Prefer ./gradlew over gradle
 
-        ;; Maven
+        ;; Maven - M-x mvn for running maven commands
+        (use-package mvn
+          :commands (mvn mvn-compile mvn-test mvn-clean mvn-package)
+          :config
+          ;; pom.xml is handled by nxml-mode for editing
+          ;; Use M-x mvn-* commands for running maven
+          (setq mvn-build-command "mvn"))
+
         (use-package maven-test-mode
-          :hook (java-mode . maven-test-mode))
+          :commands (maven-test-mode maven-test-toggle-between-test-and-class)
+          :config
+          ;; Enable in Java files within Maven projects (has pom.xml)
+          (defun decknix--maybe-enable-maven-test-mode ()
+            "Enable maven-test-mode if in a Maven project."
+            (when (locate-dominating-file default-directory "pom.xml")
+              (maven-test-mode 1)))
+          (add-hook 'java-mode-hook #'decknix--maybe-enable-maven-test-mode))
 
         ;; Bazel
         (use-package bazel
