@@ -231,6 +231,119 @@ in
         (global-set-key (kbd "s-=") 'text-scale-increase)    ; Cmd+= = Zoom in
         (global-set-key (kbd "s--") 'text-scale-decrease)    ; Cmd+- = Zoom out
         (global-set-key (kbd "s-0") 'text-scale-adjust)      ; Cmd+0 = Reset zoom
+
+        ;; == Update menu bar to show macOS shortcuts ==
+        ;; == Update menu bar to show both Emacs and macOS shortcuts ==
+        ;; Format: "C-x C-s  │   ⌘ S" (Emacs binding │ Apple logo ⌘ Key)
+
+        (defvar decknix-macos-menu-shortcuts
+          '((menu-bar-file-menu
+             ;; File menu - based on Pages/TextEdit/Xcode conventions
+             (new-file . " ⌘ N")           ; Visit New File...
+             (open-file . " ⌘ O")          ; Open File...
+             (dired . " ⌘ ⇧ O")            ; Open Directory...
+             (save-buffer . " ⌘ S")        ; Save
+             (write-file . " ⌘ ⇧ S")       ; Save As...
+             (revert-buffer . " ⌘ U")      ; Revert Buffer
+             (recover-session . " ⌘ ⇧ R")  ; Recover Crashed Session
+             (insert-file . " ⌘ ⇧ V")      ; Insert File... (like Paste Special)
+             (make-frame . " ⌘ ⇧ N")       ; New Frame (New Window in Xcode)
+             (delete-frame . " ⌘ ⇧ W")     ; Delete Frame (Close Window variant)
+             (delete-this-frame . " ⌘ ⇧ W") ; Delete Frame alternate key
+             (make-tab . " ⌘ T")           ; New Tab (standard macOS)
+             (close-tab . " ⌘ W")          ; Close Tab
+             (print-buffer . " ⌘ P")       ; Print
+             (exit-emacs . " ⌘ Q"))        ; Quit
+            (menu-bar-edit-menu
+             ;; Edit menu - based on Pages/TextEdit/Xcode conventions
+             (undo . " ⌘ Z")               ; Undo
+             (redo . " ⌘ ⇧ Z")             ; Redo
+             (cut . " ⌘ X")                ; Cut
+             (copy . " ⌘ C")               ; Copy
+             (paste . " ⌘ V")              ; Paste
+             (paste-from-menu . " ⌘ ⌥ ⇧ V") ; Paste Special
+             (clear . " ⌫")                ; Delete/Clear
+             (select-all . " ⌘ A")         ; Select All
+             (search . " ⌘ F")             ; Search submenu / Find
+             (replace . " ⌘ ⌥ F")          ; Find and Replace (Xcode style)
+             (goto . " ⌘ L")               ; Go to Line (standard IDE)
+             (fill . " ⌘ ⌥ Q")             ; Fill/Reflow paragraph
+             (spell . " ⌘ ;"))             ; Check Spelling
+            (menu-bar-options-menu
+             ;; Options menu
+             (highlight-paren-mode . " ⌘ ⇧ P")  ; Highlight Matching Parens
+             (blink-cursor-mode . " ⌘ ⌥ C")    ; Blink Cursor Mode
+             (save-place-mode . " ⌘ ⌥ S"))     ; Save Place Mode
+            (menu-bar-buffer-menu
+             ;; Buffer menu
+             (next-buffer . " ⌘ }")        ; Next Buffer (like Pages next tab)
+             (previous-buffer . " ⌘ {")    ; Previous Buffer
+             (select-named-buffer . " ⌘ B") ; Select Buffer
+             (list-all-buffers . " ⌘ ⌥ B")) ; List Buffers
+            (menu-bar-tools-menu
+             ;; Tools menu
+             (compile . " ⌘ B")            ; Build/Compile (Xcode style)
+             (shell . " ⌘ ⌥ T")            ; Terminal/Shell
+             (gdb . " ⌘ ⌥ D")              ; Debugger
+             (eshell . " ⌘ ⌥ E")           ; Eshell
+             (calendar . " ⌘ ⌥ K")         ; Calendar
+             (compose-mail . " ⌘ ⌥ M"))    ; Compose Mail
+            (menu-bar-showhide-menu
+             ;; Show/Hide menu
+             (showhide-tool-bar . " ⌘ ⌥ T")   ; Tool Bar
+             (showhide-scroll-bar . " ⌘ ⌥ R") ; Scroll Bar
+             (showhide-fringe . " ⌘ ⌥ G")))   ; Fringe
+          "Alist mapping menu items to their macOS shortcuts.
+Based on standard macOS conventions from Pages, TextEdit, and Xcode.")
+
+        (defvar decknix-menu-shortcuts-applied nil
+          "Whether macOS shortcuts have been applied to menus.")
+
+        (defun decknix-format-menu-keys (emacs-keys macos-key)
+          "Format keyboard shortcut string with Emacs binding and macOS shortcut.
+Pads the Emacs binding for better alignment."
+          (let* ((emacs-str (or emacs-keys ""))
+                 ;; Pad Emacs keys to ~12 chars for alignment
+                 (padded-emacs (if (< (length emacs-str) 12)
+                                   (concat emacs-str (make-string (- 12 (length emacs-str)) ?\s))
+                                 emacs-str)))
+            (concat padded-emacs " │ " macos-key)))
+
+        (defun decknix-apply-macos-menu-shortcuts ()
+          "Apply macOS shortcuts to menu items by replacing :keys property."
+          (unless decknix-menu-shortcuts-applied
+            (dolist (menu-spec decknix-macos-menu-shortcuts)
+              (when (boundp (car menu-spec))
+                (let ((menu (symbol-value (car menu-spec))))
+                  (when menu
+                    (dolist (item-spec (cdr menu-spec))
+                      (let* ((key (car item-spec))
+                             (macos-key (cdr item-spec))
+                             ;; Use assq instead of lookup-key to get full menu-item form
+                             (item (cdr (assq key menu))))
+                        ;; Only modify full menu-item forms to preserve original labels
+                        (when (and item (consp item) (eq (car item) 'menu-item))
+                          (let* ((label (nth 1 item))
+                                 (command (nth 2 item))
+                                 (binding (where-is-internal command nil t))
+                                 (emacs-keys (when binding (key-description binding)))
+                                 (new-keys (decknix-format-menu-keys emacs-keys macos-key))
+                                 (new-props
+                                  (let ((props (nthcdr 3 item))
+                                        (result nil))
+                                    (while props
+                                      (unless (eq (car props) :keys)
+                                        (push (car props) result)
+                                        (when (cdr props)
+                                          (push (cadr props) result)))
+                                      (setq props (cddr props)))
+                                    (nreverse result))))
+                            (define-key menu (vector key)
+                              `(menu-item ,label ,command :keys ,new-keys ,@new-props))))))))))
+            (setq decknix-menu-shortcuts-applied t)))
+
+        ;; Apply on first menu bar update (ensures menus exist)
+        (add-hook 'menu-bar-update-hook #'decknix-apply-macos-menu-shortcuts)
       '';
     };
   };
