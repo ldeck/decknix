@@ -15,6 +15,7 @@ batteries-included Emacs experience out of the box.
 | `editing.nix` | Editing enhancements (smartparens, crux) | ✓ |
 | `development.nix` | Development tools (Flycheck, Yasnippet) | ✓ |
 | `ui.nix` | UI improvements (which-key, helpful, icons) | ✓ |
+| `org.nix` | Org-mode presentations and modern styling | ✓ |
 
 ## Features by Module
 
@@ -96,6 +97,32 @@ Improved undo/redo replacing undo-tree:
 
 - **Magit**: Full Git interface (`C-x g` for status)
 
+### Org-mode (`org.nix`)
+
+Beautiful org documents and interactive presentations:
+
+- **Org-modern**: Modern styling with pretty bullets, checkboxes, and tables
+- **Org-tree-slide**: Presentation mode showing one heading at a time
+- **Olivetti**: Centered, distraction-free view during presentations
+
+Key bindings:
+- `<F5>` or `C-c p` → Start/stop presentation mode
+- `<right>` or `n` → Next slide (during presentation)
+- `<left>` or `p` → Previous slide (during presentation)
+- `q` → Exit presentation
+
+Features during presentation:
+- Larger text (configurable scale)
+- Centered content with olivetti
+- Line numbers and highlighting hidden
+- Checkboxes remain interactive (`C-c C-c` to toggle)
+
+Options:
+- `programs.emacs.decknix.org.enable` - Enable/disable (default: true)
+- `programs.emacs.decknix.org.presentation.enable` - Enable presentation mode (default: true)
+- `programs.emacs.decknix.org.presentation.textScale` - Text size during presentation (default: 2)
+- `programs.emacs.decknix.org.modern.enable` - Enable org-modern styling (default: true)
+
 ## Disabling Modules
 
 All modules are enabled by default. Disable individually:
@@ -111,6 +138,8 @@ All modules are enabled by default. Disable individually:
   programs.emacs.decknix.development.enable = false;# Disable flycheck/yasnippet
   programs.emacs.decknix.ui.enable = false;         # Disable UI enhancements
   programs.emacs.decknix.ui.icons.enable = false;   # Disable just icons
+  programs.emacs.decknix.org.enable = false;        # Disable org enhancements
+  programs.emacs.decknix.org.presentation.enable = false; # Disable just presentations
 }
 ```
 
