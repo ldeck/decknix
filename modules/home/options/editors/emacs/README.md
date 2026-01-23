@@ -9,13 +9,14 @@ batteries-included Emacs experience out of the box.
 |--------|-------------|-------------------|
 | `default.nix` | Core settings (theme, scrolling, backups) | ✓ |
 | `welcome.nix` | Startup screen with keybinding cheat sheet | ✓ |
-| `magit.nix` | Git integration via Magit | ✓ |
+| `magit.nix` | Git integration via Magit, Forge, code-review | ✓ |
 | `completion.nix` | Modern completion (Vertico, Consult, Corfu) | ✓ |
 | `undo.nix` | Improved undo (undo-fu, vundo) | ✓ |
 | `editing.nix` | Editing enhancements (smartparens, crux) | ✓ |
 | `development.nix` | Development tools (Flycheck, Yasnippet) | ✓ |
 | `ui.nix` | UI improvements (which-key, helpful, icons) | ✓ |
 | `org.nix` | Org-mode presentations and modern styling | ✓ |
+| `languages.nix` | 30+ language modes with syntax highlighting | ✓ |
 
 ## Features by Module
 
@@ -96,6 +97,21 @@ Improved undo/redo replacing undo-tree:
 ### Git (`magit.nix`)
 
 - **Magit**: Full Git interface (`C-x g` for status)
+- **Forge**: GitHub/GitLab PR and issue management
+- **code-review**: Inline PR review with comments
+
+Key bindings (in magit-status after `C-x g`):
+- `@ f f` → Fetch forge topics (PRs, issues)
+- `@ c p` → Create pull request
+- `@ l p` → List pull requests
+- `@ l i` → List issues
+- `RET` on PR → View PR details
+
+**Setup Required:** Forge needs a GitHub token. See [Secrets Guide](../../../../docs/secrets.md).
+
+Options:
+- `programs.emacs.decknix.magit.forge.enable` - Enable Forge (default: true)
+- `programs.emacs.decknix.magit.codeReview.enable` - Enable code-review (default: true)
 
 ### Org-mode (`org.nix`)
 
@@ -122,6 +138,36 @@ Options:
 - `programs.emacs.decknix.org.presentation.enable` - Enable presentation mode (default: true)
 - `programs.emacs.decknix.org.presentation.textScale` - Text size during presentation (default: 2)
 - `programs.emacs.decknix.org.modern.enable` - Enable org-modern styling (default: true)
+
+### Languages (`languages.nix`)
+
+Comprehensive syntax highlighting for 30+ languages and file types:
+
+| Category | Languages |
+|----------|-----------|
+| **Primary** | Kotlin, Java, Scala, SQL, Terraform/HCL, Shell, Nix, Python |
+| **Data** | JSON, YAML, TOML, XML, Markdown |
+| **Web** | HTML, CSS/SCSS/LESS, JavaScript, TypeScript, JSX, Vue, Svelte |
+| **Systems** | Rust (+ Cargo), Go, Protobuf, Thrift, GraphQL, Docker, Lua |
+| **Lisp** | Common Lisp (SLY), Scheme (Geiser), Clojure (CIDER), Racket |
+| **Build** | Makefile, CMake, Just, Gradle, Maven, Bazel |
+| **Config** | EditorConfig, .gitignore, .env, Apache, properties |
+
+Special features:
+- **Cargo integration** for Rust (`C-c C-c C-b` build, `C-c C-c C-t` test)
+- **Maven commands** (`M-x mvn-*`) - only active in Maven projects
+- **Gradle commands** (`M-x gradle-*`) - manual activation
+- **Lisp tools**: paredit (structural editing), rainbow-delimiters
+- **Org source blocks**: Native syntax highlighting via `org-src-fontify-natively`
+
+Options (each language can be disabled individually):
+```nix
+{
+  programs.emacs.decknix.languages.enable = false;     # Disable all languages
+  programs.emacs.decknix.languages.rust.enable = false; # Disable just Rust
+  programs.emacs.decknix.languages.lisp.enable = false; # Disable Lisp family
+}
+```
 
 ## Disabling Modules
 
