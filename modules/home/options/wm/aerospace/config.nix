@@ -316,6 +316,15 @@ $app"
       # Open NEW window in the selected app (not just activate)
       # Each app needs specific handling to create a new window
       case "$selected" in
+        Emacs)
+          # Emacs: use emacsclient to create a new frame on current workspace
+          # This avoids switching to an existing Emacs workspace
+          if command -v emacsclient &> /dev/null; then
+            emacsclient -c -n 2>/dev/null || open -a Emacs
+          else
+            open -a Emacs
+          fi
+          ;;
         Terminal)
           osascript -e 'tell application "Terminal" to do script ""' 2>/dev/null
           ;;
