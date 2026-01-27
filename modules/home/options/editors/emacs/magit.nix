@@ -27,10 +27,15 @@ in
     codeReview = {
       enable = mkOption {
         type = types.bool;
-        default = true;
+        default = false;  # Disabled: code-review is incompatible with current emacsql
         description = ''
           Enable code-review for reviewing PRs with inline comments.
           Provides a diff-based PR review interface.
+
+          NOTE: Currently disabled by default because code-review uses an
+          outdated emacsql API (expects emacsql-sqlite-connection to be a class,
+          but it's now a function). This causes "parent class is not a class" errors.
+          Use Forge's built-in PR review features instead.
         '';
       };
     };
