@@ -4,18 +4,34 @@ with lib;
 
 let
   cfg = config.decknix.wm.aerospace;
+  prefix = cfg.prefixKey;
+
+  # Navigation keys based on style
+  navKeys = if cfg.keyStyle == "emacs" then {
+    left = "left";    # arrow key
+    right = "right";  # arrow key
+    up = "up";        # arrow key
+    down = "down";    # arrow key
+    style = "arrows";
+  } else {
+    left = "h";
+    right = "l";
+    up = "k";
+    down = "j";
+    style = "h/j/k/l";
+  };
 
   # Sort workspace keys for consistent ordering
   sortedWorkspaceKeys = sort lessThan (attrNames cfg.workspaces);
 
-  # Build workspace bindings (alt-<key> to switch)
+  # Build workspace bindings for aerospace mode (single key to switch)
   workspaceBindings = concatMapStringsSep "\n" (key:
-    "    alt-${toLower key} = 'workspace ${key}'"
+    "    ${toLower key} = ['workspace ${key}', 'mode main']"
   ) sortedWorkspaceKeys;
 
-  # Build move-to-workspace bindings (alt-shift-<key> to move window)
+  # Build move-to-workspace bindings (shift-<key> to move window)
   moveBindings = concatMapStringsSep "\n" (key:
-    "    alt-shift-${toLower key} = 'move-node-to-workspace ${key}'"
+    "    shift-${toLower key} = ['move-node-to-workspace ${key}', 'mode main']"
   ) sortedWorkspaceKeys;
 
   # Build persistent workspaces list for TOML
@@ -37,14 +53,79 @@ let
     ${concatStringsSep "\n" (mapAttrsToList (k: v: "    ${k} = '${v.monitor}'") monitorAssignments)}
   '';
 
-  # Fuzzy picker binding (if enabled)
-  fuzzyPickerBinding = optionalString cfg.fuzzyPicker.enable ''
-    # Fuzzy workspace picker (requires fzf + choose-gui or terminal)
-        ${cfg.fuzzyPicker.key} = '''exec-and-forget ${fuzzyPickerScript}/bin/aero-pick'''
+  # Script to show notification when entering a mode
+  # Takes mode name as argument: "aerospace" or "layout"
+  layoutModeNotify = pkgs.writeShellScriptBin "aero-layout-notify" ''
+    case "$1" in
+      aerospace)
+        osascript -e 'display notification "1-5/d/e/m/n/s=workspace  arrows=nav  space=picker  ;=layout  esc=cancel" with title "AeroSpace Mode (${prefix})"'
+        ;;
+      layout)
+        osascript -e 'display notification "h=horiz v=vert t=tile a=accordion f=float space=full b=balance esc=exit" with title "Layout Mode"'
+        ;;
+    esac
   '';
 
-  # Layout mode bindings (if enabled)
-  layoutModeConfig = optionalString cfg.layoutMode.enable ''
+  # Fuzzy layout picker script - for discoverability
+  # Shows layout options in choose-gui with key hints
+  layoutPickerScript = pkgs.writeShellScriptBin "aero-pick-layout" ''
+    #!/usr/bin/env bash
+    # Fuzzy layout picker for AeroSpace
+    # Priority given to single-character keys for quick selection
+
+    CHOOSE="${chooseBin}"
+
+    layouts=(
+      "h — Horizontal tiles"
+      "v — Vertical tiles"
+      "t — Tiles (auto)"
+      "a — Accordion"
+      "b — Balance sizes"
+      "f — Float/Tile toggle"
+      "space — Fullscreen"
+      "← — Join left"
+      "→ — Join right"
+      "↑ — Join up"
+      "↓ — Join down"
+      "- — Shrink"
+      "= — Grow"
+    )
+
+    if [ -x "$CHOOSE" ]; then
+      selected=$(printf '%s\n' "''${layouts[@]}" | "$CHOOSE" -n 15 -c 00bfff -b 1a1a2e)
+    else
+      # Fallback to osascript
+      options=$(printf '%s\n' "''${layouts[@]}" | tr '\n' ',' | sed 's/,$//')
+      selected=$(osascript -e "
+        set layoutList to {$options}
+        set chosen to choose from list layoutList with title \"AeroSpace Layout\" with prompt \"Select layout:\" default items {item 1 of layoutList}
+        if chosen is false then return \"\"
+        return item 1 of chosen
+      ")
+    fi
+
+    if [ -n "$selected" ]; then
+      key=$(echo "$selected" | cut -d' ' -f1)
+      case "$key" in
+        h) aerospace layout tiles horizontal ;;
+        v) aerospace layout tiles vertical ;;
+        t) aerospace layout tiles horizontal vertical ;;
+        a) aerospace layout accordion horizontal vertical ;;
+        b) aerospace balance-sizes ;;
+        f) aerospace layout floating tiling ;;
+        space) aerospace fullscreen ;;
+        "←") aerospace join-with left ;;
+        "→") aerospace join-with right ;;
+        "↑") aerospace join-with up ;;
+        "↓") aerospace join-with down ;;
+        "-") aerospace resize smart -50 ;;
+        "=") aerospace resize smart +50 ;;
+      esac
+    fi
+  '';
+
+  # Layout mode bindings
+  layoutModeConfig = ''
     # Layout mode for rapid layout adjustments
     [mode.layout.binding]
         esc = 'mode main'
@@ -58,7 +139,7 @@ let
         f = ['layout floating tiling', 'mode main']
         # Fullscreen
         space = ['fullscreen', 'mode main']
-        # Join with neighbors
+        # Join with neighbors (arrow keys)
         left = ['join-with left', 'mode main']
         down = ['join-with down', 'mode main']
         up = ['join-with up', 'mode main']
@@ -70,37 +151,245 @@ let
         b = ['balance-sizes', 'mode main']
   '';
 
-  # Fuzzy picker script that shows workspace key + name
+  # Path to choose binary from choose-gui package
+  chooseBin = "${pkgs.choose-gui}/bin/choose";
+
+  # Fuzzy workspace picker script
+  # Uses choose-gui (Spotlight-like) with fallback to osascript
   fuzzyPickerScript = pkgs.writeShellScriptBin "aero-pick" ''
     #!/usr/bin/env bash
     # Fuzzy workspace picker for AeroSpace
-    # Shows: KEY - name (windows count)
 
-    # Build workspace list with names
-    workspaces=$(cat <<'EOF'
-    ${concatMapStringsSep "\n" (key:
-      let ws = cfg.workspaces.${key}; in
-      "${key} - ${ws.name}"
-    ) sortedWorkspaceKeys}
-    EOF
-    )
+    CHOOSE="${chooseBin}"
 
-    # Try choose-gui first (macOS native), fallback to fzf in terminal
-    if command -v choose &> /dev/null; then
-      selected=$(echo "$workspaces" | choose -n 15 -c 00bfff -b 1a1a2e)
-    elif command -v fzf &> /dev/null; then
-      # Use Alacritty/kitty/Terminal for fzf
-      selected=$(echo "$workspaces" | fzf --prompt="Workspace: " --height=15 --reverse)
+    if [ -x "$CHOOSE" ]; then
+      selected=$(printf '%s\n' ${concatMapStringsSep " " (key:
+        let ws = cfg.workspaces.${key}; in
+        ''"${key} - ${ws.name}"''
+      ) sortedWorkspaceKeys} | "$CHOOSE" -n 15 -c 00bfff -b 1a1a2e)
     else
-      # Fallback: just use the first workspace
-      echo "No picker available (install choose-gui or fzf)" >&2
-      exit 1
+      selected=$(osascript <<'APPLESCRIPT'
+set workspaceList to {${concatMapStringsSep ", " (key:
+        let ws = cfg.workspaces.${key}; in
+        ''"${key} - ${ws.name}"''
+      ) sortedWorkspaceKeys}}
+set chosen to choose from list workspaceList with title "AeroSpace" with prompt "Switch to workspace:" default items {item 1 of workspaceList}
+if chosen is false then return ""
+return item 1 of chosen
+APPLESCRIPT
+      )
     fi
 
-    # Extract workspace key (first word before " - ")
     if [ -n "$selected" ]; then
-      ws_key=$(echo "$selected" | cut -d' ' -f1)
+      ws_key=$(echo "$selected" | cut -d' ' -f1 | tr -d ' ')
       aerospace workspace "$ws_key"
+    fi
+  '';
+
+  # Fuzzy window picker script - search all windows by app name, title, workspace
+  # Format: "window-id | workspace | app-name | window-title"
+  windowPickerScript = pkgs.writeShellScriptBin "aero-pick-window" ''
+    #!/usr/bin/env bash
+    # Fuzzy window picker for AeroSpace
+    # Lists all windows across all workspaces for fuzzy selection
+
+    CHOOSE="${chooseBin}"
+
+    # Get all windows with format: id | workspace | app | title
+    windows=$(aerospace list-windows --all --format '%{window-id}|%{workspace}|%{app-name}|%{window-title}' 2>/dev/null)
+
+    # Debug: check if we got any output
+    if [ -z "$windows" ] || [ "$windows" = "" ]; then
+      # Try alternative format
+      windows=$(aerospace list-windows --all 2>/dev/null)
+      if [ -z "$windows" ]; then
+        osascript -e 'display notification "No windows found. Try opening some apps first." with title "AeroSpace"' &
+        exit 0
+      fi
+      # Parse the default format (tab-separated: id app-name window-title)
+      display_list=$(echo "$windows" | while read -r line; do
+        id=$(echo "$line" | awk '{print $1}')
+        app=$(echo "$line" | awk '{print $2}')
+        title=$(echo "$line" | cut -f3-)
+        if [ -n "$id" ]; then
+          echo "$id|$app: $title"
+        fi
+      done)
+    else
+      # Format for display: "[workspace] app: title"
+      display_list=$(echo "$windows" | while IFS='|' read -r id ws app title; do
+        # Truncate long titles
+        if [ ''${#title} -gt 60 ]; then
+          title="''${title:0:57}..."
+        fi
+        echo "$id|[$ws] $app: $title"
+      done)
+    fi
+
+    if [ -z "$display_list" ]; then
+      osascript -e 'display notification "No windows to display" with title "AeroSpace"' &
+      exit 0
+    fi
+
+    if [ -x "$CHOOSE" ]; then
+      # Use choose-gui with just the display part (hide the ID)
+      selected=$(echo "$display_list" | cut -d'|' -f2 | "$CHOOSE" -n 20 -c 00bfff -b 1a1a2e)
+      if [ -n "$selected" ]; then
+        # Find the window ID for the selected line
+        window_id=$(echo "$display_list" | grep -F "|$selected" | head -1 | cut -d'|' -f1)
+      fi
+    else
+      # Fallback to osascript
+      options=$(echo "$display_list" | cut -d'|' -f2 | tr '\n' ',' | sed 's/,$//')
+      selected=$(osascript -e "
+        set windowList to {$options}
+        set chosen to choose from list windowList with title \"AeroSpace\" with prompt \"Switch to window:\"
+        if chosen is false then return \"\"
+        return item 1 of chosen
+      " 2>/dev/null)
+      if [ -n "$selected" ]; then
+        window_id=$(echo "$display_list" | grep -F "|$selected" | head -1 | cut -d'|' -f1)
+      fi
+    fi
+
+    # Focus the selected window
+    if [ -n "$window_id" ]; then
+      aerospace focus --window-id "$window_id"
+    fi
+  '';
+
+  # App launcher script - open new window for selected app
+  # Scans /Applications and ~/Applications for all installed apps
+  appLauncherScript = pkgs.writeShellScriptBin "aero-new-window" ''
+    #!/usr/bin/env bash
+    # App launcher for AeroSpace - open new window for selected app
+    # Shows running apps first (marked with •), then all installed apps
+
+    CHOOSE="${chooseBin}"
+
+    # Get running apps from aerospace
+    running_apps=$(aerospace list-apps 2>/dev/null | sort -u)
+
+    # Get all installed apps from /Applications and ~/Applications
+    installed_apps=$(
+      find /Applications ~/Applications /System/Applications \
+        -maxdepth 2 -name "*.app" -type d 2>/dev/null | \
+      xargs -I{} basename {} .app | \
+      sort -u
+    )
+
+    # Mark running apps with • prefix, then add non-running apps
+    marked_apps=""
+    for app in $running_apps; do
+      marked_apps="$marked_apps
+• $app"
+    done
+
+    # Add non-running apps (without marker)
+    for app in $installed_apps; do
+      if ! echo "$running_apps" | grep -qx "$app"; then
+        marked_apps="$marked_apps
+$app"
+      fi
+    done
+
+    # Clean up and sort (running apps first due to • prefix)
+    all_apps=$(echo "$marked_apps" | grep -v '^$' | sort)
+
+    if [ -x "$CHOOSE" ]; then
+      selected=$(echo "$all_apps" | "$CHOOSE" -n 20 -c 00bfff -b 1a1a2e)
+    else
+      # Fallback to osascript
+      options=$(echo "$all_apps" | tr '\n' ',' | sed 's/,$//')
+      selected=$(osascript -e "
+        set appList to {$options}
+        set chosen to choose from list appList with title \"New Window\" with prompt \"Open new window in:\"
+        if chosen is false then return \"\"
+        return item 1 of chosen
+      " 2>/dev/null)
+    fi
+
+    if [ -n "$selected" ]; then
+      # Strip the • marker if present
+      selected=$(echo "$selected" | sed 's/^• //')
+
+      # Open new window in the selected app
+      osascript -e "
+        tell application \"$selected\"
+          activate
+          try
+            -- Try to create a new window/document
+            if name is \"Finder\" then
+              make new Finder window
+            else if name is \"Safari\" then
+              make new document
+            else if name is \"Terminal\" then
+              do script \"\"
+            else
+              -- Generic: just activate (some apps auto-create window)
+              activate
+            end if
+          on error
+            -- Fallback: just activate the app
+            activate
+          end try
+        end tell
+      " 2>/dev/null
+    fi
+  '';
+
+  # Cheatsheet script - show all keybindings
+  # Uses choose-gui which supports Esc to dismiss
+  cheatsheetScript = pkgs.writeShellScriptBin "aero-cheatsheet" ''
+    #!/usr/bin/env bash
+    # AeroSpace keybinding cheatsheet
+    # Shows all available commands in a fuzzy picker
+    # Press Esc to dismiss (choose-gui supports this natively)
+
+    CHOOSE="${chooseBin}"
+
+    cheatsheet="=== WORKSPACES ===
+1-5         Switch to workspace 1-5
+d/e/m/n/s   Switch to decknix/emacs/music/notes/system
+shift-<key> Move window to workspace
+space       Fuzzy workspace picker
+tab         Previous workspace
+
+=== WINDOWS ===
+←/→/↑/↓     Navigate windows (stays in mode)
+shift-arrows Move window in direction
+enter       Toggle fullscreen
+f           Toggle float/tile
+shift-space Fuzzy window picker (all windows)
+
+=== MONITORS ===
+j           Focus previous monitor (cycles)
+k           Focus built-in display (laptop)
+l           Focus next monitor (cycles)
+shift-j/k/l Move window to monitor
+ctrl-j/k/l  Move workspace to monitor
+
+=== LAYOUTS ===
+;           Layout mode submenu
+shift-;     Fuzzy layout picker
+/           Toggle tiles layout
+,           Toggle accordion layout
+h           Horizontal tiles
+v           Vertical tiles
+b           Balance window sizes
+
+=== APPS ===
+o           Open new window (app picker)
+?           This cheatsheet
+
+=== EXIT ===
+esc         Return to normal mode"
+
+    if [ -x "$CHOOSE" ]; then
+      # choose-gui: Esc dismisses the picker natively
+      echo "$cheatsheet" | "$CHOOSE" -n 30 -c 00bfff -b 1a1a2e
+    else
+      osascript -e "display dialog \"$cheatsheet\" with title \"AeroSpace Cheatsheet\" buttons {\"OK\"}" 2>/dev/null
     fi
   '';
 
@@ -109,18 +398,31 @@ let
     # AeroSpace Configuration - Generated by decknix
     # See: https://nikitabobko.github.io/AeroSpace/guide
     #
-    # Quick reference:
-    #   alt-h/j/k/l     Navigate windows
-    #   alt-shift-h/j/k/l  Move windows
-    #   alt-<key>       Switch to workspace
-    #   alt-shift-<key> Move window to workspace
-    #   alt-space       Fuzzy workspace picker
-    #   alt-/           Toggle tiles layout
-    #   alt-,           Toggle accordion layout
-    #   alt-tab         Switch to previous workspace
-    #   alt-;           Enter layout mode
+    # PREFIX KEY: ${prefix}
+    #
+    # After pressing ${prefix}, you enter AeroSpace mode. Then use:
+    #   1-5, d, e, m, n, s   Switch to workspace
+    #   shift-<key>          Move window to workspace
+    #   ${navKeys.style}              Navigate windows (stays in mode)
+    #   shift-${navKeys.style}        Move windows (stays in mode)
+    #   space                Fuzzy workspace picker
+    #   shift-space          Fuzzy window picker (all windows)
+    #   tab                  Previous workspace
+    #   enter                Toggle fullscreen
+    #   /                    Toggle tiles layout
+    #   ,                    Toggle accordion layout
+    #   ;                    Layout mode (h/v/t/a/b/f/space)
+    #   shift-;              Fuzzy layout picker
+    #   o                    Open new window (app picker)
+    #   ?                    Show cheatsheet (all keybindings)
+    #   j/l                  Focus prev/next monitor (cycles)
+    #   k                    Focus built-in display (laptop)
+    #   shift-j/k/l          Move window to prev/built-in/next monitor
+    #   ctrl-j/k/l           Move workspace to prev/built-in/next monitor
+    #   esc                  Cancel (return to main mode)
 
-    config-version = 2
+    # Note: config-version and persistent-workspaces require AeroSpace v0.20+
+    # nixpkgs currently has v0.19.x, so we omit these for compatibility
     start-at-login = ${boolToString cfg.startAtLogin}
 
     # Normalizations for predictable tiling
@@ -134,9 +436,6 @@ let
 
     # Mouse follows focused monitor (i3 default behavior)
     on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
-
-    # Persistent workspaces (always available in workspace list)
-    persistent-workspaces = [${persistentList}]
 
     [key-mapping]
         preset = 'qwerty'
@@ -155,30 +454,38 @@ let
     # App-to-workspace assignments
     ${appRules}
 
-    # Main binding mode
+    # Main binding mode - only the prefix key is bound here
     [mode.main.binding]
+        ${prefix} = ${if cfg.showModeHints
+          then "['exec-and-forget ${layoutModeNotify}/bin/aero-layout-notify aerospace', 'mode aerospace']"
+          else "'mode aerospace'"}
 
-    # === Navigation (vim-style) ===
-        alt-h = 'focus left'
-        alt-j = 'focus down'
-        alt-k = 'focus up'
-        alt-l = 'focus right'
+    # AeroSpace command mode - entered via prefix key (${prefix})
+    # Navigation/resize keys stay in mode for repeated use; other keys exit to main
+    [mode.aerospace.binding]
+        esc = 'mode main'
 
-    # === Move windows ===
-        alt-shift-h = 'move left'
-        alt-shift-j = 'move down'
-        alt-shift-k = 'move up'
-        alt-shift-l = 'move right'
+    # === Navigation (${navKeys.style}) - stays in mode for repeated navigation ===
+        ${navKeys.left} = 'focus left'
+        ${navKeys.down} = 'focus down'
+        ${navKeys.up} = 'focus up'
+        ${navKeys.right} = 'focus right'
+
+    # === Move windows (shift + nav) - stays in mode ===
+        shift-${navKeys.left} = 'move left'
+        shift-${navKeys.down} = 'move down'
+        shift-${navKeys.up} = 'move up'
+        shift-${navKeys.right} = 'move right'
 
     # === Layout quick toggles ===
-        alt-slash = 'layout tiles horizontal vertical'
-        alt-comma = 'layout accordion horizontal vertical'
-        alt-f = 'fullscreen'
-        alt-shift-f = 'layout floating tiling'
+        slash = ['layout tiles horizontal vertical', 'mode main']
+        comma = ['layout accordion horizontal vertical', 'mode main']
+        enter = ['fullscreen', 'mode main']
+        shift-enter = ['layout floating tiling', 'mode main']
 
-    # === Resize ===
-        alt-minus = 'resize smart -50'
-        alt-equal = 'resize smart +50'
+    # === Resize - stays in mode for continuous resize ===
+        minus = 'resize smart -50'
+        equal = 'resize smart +50'
 
     # === Workspace switching ===
     ${workspaceBindings}
@@ -186,19 +493,41 @@ let
     # === Move window to workspace ===
     ${moveBindings}
 
-    # === Monitor navigation ===
-        alt-tab = 'workspace-back-and-forth'
-        alt-shift-tab = 'move-workspace-to-monitor --wrap-around next'
-        # Focus monitor by direction
-        alt-ctrl-h = 'focus-monitor left'
-        alt-ctrl-l = 'focus-monitor right'
-        alt-ctrl-j = 'focus-monitor down'
-        alt-ctrl-k = 'focus-monitor up'
+    # === Workspace back-and-forth ===
+        tab = ['workspace-back-and-forth', 'mode main']
 
-    # === Enter layout mode for advanced layout operations ===
-        alt-semicolon = 'mode layout'
+    # === Fuzzy pickers ===
+        space = ['exec-and-forget ${fuzzyPickerScript}/bin/aero-pick', 'mode main']
+        shift-space = ['exec-and-forget ${windowPickerScript}/bin/aero-pick-window', 'mode main']
+        o = ['exec-and-forget ${appLauncherScript}/bin/aero-new-window', 'mode main']
 
-    ${fuzzyPickerBinding}
+    # === Help/Cheatsheet ===
+        shift-slash = ['exec-and-forget ${cheatsheetScript}/bin/aero-cheatsheet', 'mode main']
+
+    # === Enter layout mode for more options ===
+    # semicolon (;) = standard layout mode (for users who know the keys)
+    # shift-semicolon = fuzzy layout picker (for discoverability)
+        semicolon = ${if cfg.showModeHints
+          then "['exec-and-forget ${layoutModeNotify}/bin/aero-layout-notify layout', 'mode layout']"
+          else "'mode layout'"}
+        shift-semicolon = ['exec-and-forget ${layoutPickerScript}/bin/aero-pick-layout', 'mode main']
+
+    # === Monitor navigation using j/k/l (home row) ===
+    # j = previous monitor (cycles), l = next monitor (cycles)
+    # k = built-in display (laptop screen) - always available
+    # Uses next/prev --wrap-around for reliable cycling regardless of connection order
+        j = ['focus-monitor --wrap-around prev', 'mode main']
+        k = ['focus-monitor built-in', 'mode main']
+        l = ['focus-monitor --wrap-around next', 'mode main']
+    # === Move window to monitor ===
+        shift-j = ['move-node-to-monitor --wrap-around prev', 'mode main']
+        shift-k = ['move-node-to-monitor built-in', 'mode main']
+        shift-l = ['move-node-to-monitor --wrap-around next', 'mode main']
+    # === Move workspace to monitor ===
+        ctrl-j = ['move-workspace-to-monitor --wrap-around prev', 'mode main']
+        ctrl-k = ['move-workspace-to-monitor built-in', 'mode main']
+        ctrl-l = ['move-workspace-to-monitor --wrap-around next', 'mode main']
+
 
     ${layoutModeConfig}
 
@@ -216,10 +545,16 @@ in {
     # Write the aerospace config file
     xdg.configFile."aerospace/aerospace.toml".text = configFile;
 
-    # Add fuzzy picker script to path
-    home.packages = mkIf cfg.fuzzyPicker.enable [
+    # Install AeroSpace and tools
+    home.packages = [
+      pkgs.aerospace  # The tiling window manager itself
+    ] ++ optionals cfg.fuzzyPicker.enable [
       fuzzyPickerScript
-      pkgs.fzf  # Ensure fzf is available as fallback
+      windowPickerScript  # Window picker for cross-workspace window selection
+      layoutPickerScript  # Layout picker for discoverability
+      appLauncherScript   # App launcher for opening new windows
+      cheatsheetScript    # Keybinding cheatsheet (ctrl-; ?)
+      pkgs.choose-gui     # Native macOS fuzzy finder (Spotlight-like)
     ];
 
     # Add helpful shell aliases
@@ -227,7 +562,9 @@ in {
       aero = "aerospace";
       aerols = "aerospace list-workspaces --all";
       aerowin = "aerospace list-windows --all";
-      aeropick = "aero-pick";
+      aeropick = mkIf cfg.fuzzyPicker.enable "aero-pick";
+      aeropickwin = mkIf cfg.fuzzyPicker.enable "aero-pick-window";
+      aeronew = mkIf cfg.fuzzyPicker.enable "aero-new-window";
     };
   };
 }
