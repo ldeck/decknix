@@ -44,10 +44,15 @@ in
       extraPackages = epkgs: with epkgs;
         [ magit ]
         ++ optionals cfg.forge.enable [
+          emacsql        # Must be first - database abstraction
+          closql         # Must be before forge - SQL object-relational mapping
           forge
-          emacsql        # Forge dependency - database abstraction (includes sqlite backend)
         ]
-        ++ optionals cfg.codeReview.enable [ code-review ];
+        ++ optionals cfg.codeReview.enable [
+          emacsql        # code-review also needs emacsql
+          closql         # code-review also needs closql
+          code-review
+        ];
 
       extraConfig = ''
         ;; Magit configuration
@@ -63,9 +68,11 @@ in
           (setq magit-diff-refine-hunk 'all))
 
       '' + optionalString cfg.forge.enable ''
-        ;; == EmacSQL - Database for Forge ==
-        ;; Ensure emacsql is loaded before forge to avoid class definition errors
+        ;; == EmacSQL/Closql - Database for Forge ==
+        ;; Load emacsql and closql BEFORE forge to ensure EIEIO classes are defined
+        ;; This prevents "parent class X is not a class" errors
         (require 'emacsql)
+        (require 'closql)
 
         ;; == Forge - GitHub/GitLab Integration ==
         ;; Provides PR creation, review, issue management within Magit
@@ -88,6 +95,10 @@ in
 
       '' + optionalString cfg.codeReview.enable ''
         ;; == Code Review - PR Review Interface ==
+        ;; Ensure emacsql/closql classes are defined before code-review loads
+        (require 'emacsql)
+        (require 'closql)
+
         (use-package code-review
           :after forge
           :config
