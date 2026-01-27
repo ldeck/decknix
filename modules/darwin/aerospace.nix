@@ -10,10 +10,14 @@ in
   options.decknix.services.aerospace = {
     enable = mkOption {
       type = types.bool;
-      default = false;
+      default = true;  # Enabled by default for tiling WM experience
       description = ''
         Enable AeroSpace tiling window manager system configuration.
-        This configures macOS system settings for optimal AeroSpace usage.
+        This configures macOS system settings for optimal AeroSpace usage:
+        - Disables Stage Manager (conflicts with tiling)
+        - Disables "Displays have separate Spaces" (better multi-monitor)
+        - Disables Mission Control shortcuts (Ctrl+Left/Right/1/2/3)
+        - Auto-hides Dock (maximize screen real estate)
       '';
     };
 
@@ -48,6 +52,18 @@ in
       type = types.int;
       default = 48;
       description = "Dock icon size in pixels (relevant when dock is shown).";
+    };
+
+    disableMissionControlShortcuts = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Disable Mission Control keyboard shortcuts that conflict with AeroSpace.
+        This includes:
+        - Move left/right a space (Ctrl+Left/Right Arrow)
+        - Switch to Desktop 1/2/3 (Ctrl+1/2/3)
+        AeroSpace provides its own workspace navigation, making these unnecessary.
+      '';
     };
   };
 
@@ -99,6 +115,124 @@ in
           # Note: Requires logout to take effect
           defaults write com.apple.spaces spans-displays -bool true
           echo "  ✓ Displays separate Spaces disabled (logout required for effect)"
+        ''}
+
+        ${optionalString cfg.disableMissionControlShortcuts ''
+          # Disable Mission Control keyboard shortcuts that conflict with AeroSpace
+          # These are stored in com.apple.symbolichotkeys AppleSymbolicHotKeys
+          # Key IDs:
+          #   79, 80 = Move left a space (Ctrl+Left Arrow)
+          #   81, 82 = Move right a space (Ctrl+Right Arrow)
+          #   118 = Switch to Desktop 1 (Ctrl+1)
+          #   119 = Switch to Desktop 2 (Ctrl+2)
+          #   120 = Switch to Desktop 3 (Ctrl+3)
+
+          # Move left a space (Ctrl+Left Arrow) - disable
+          defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 79 "
+            <dict>
+              <key>enabled</key><false/>
+              <key>value</key><dict>
+                <key>type</key><string>standard</string>
+                <key>parameters</key>
+                <array>
+                  <integer>65535</integer>
+                  <integer>123</integer>
+                  <integer>8650752</integer>
+                </array>
+              </dict>
+            </dict>
+          "
+          defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 80 "
+            <dict>
+              <key>enabled</key><false/>
+              <key>value</key><dict>
+                <key>type</key><string>standard</string>
+                <key>parameters</key>
+                <array>
+                  <integer>65535</integer>
+                  <integer>123</integer>
+                  <integer>8781824</integer>
+                </array>
+              </dict>
+            </dict>
+          "
+
+          # Move right a space (Ctrl+Right Arrow) - disable
+          defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 81 "
+            <dict>
+              <key>enabled</key><false/>
+              <key>value</key><dict>
+                <key>type</key><string>standard</string>
+                <key>parameters</key>
+                <array>
+                  <integer>65535</integer>
+                  <integer>124</integer>
+                  <integer>8650752</integer>
+                </array>
+              </dict>
+            </dict>
+          "
+          defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 82 "
+            <dict>
+              <key>enabled</key><false/>
+              <key>value</key><dict>
+                <key>type</key><string>standard</string>
+                <key>parameters</key>
+                <array>
+                  <integer>65535</integer>
+                  <integer>124</integer>
+                  <integer>8781824</integer>
+                </array>
+              </dict>
+            </dict>
+          "
+
+          # Switch to Desktop 1/2/3 (Ctrl+1/2/3) - disable
+          defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 118 "
+            <dict>
+              <key>enabled</key><false/>
+              <key>value</key><dict>
+                <key>type</key><string>standard</string>
+                <key>parameters</key>
+                <array>
+                  <integer>65535</integer>
+                  <integer>18</integer>
+                  <integer>262144</integer>
+                </array>
+              </dict>
+            </dict>
+          "
+          defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 119 "
+            <dict>
+              <key>enabled</key><false/>
+              <key>value</key><dict>
+                <key>type</key><string>standard</string>
+                <key>parameters</key>
+                <array>
+                  <integer>65535</integer>
+                  <integer>19</integer>
+                  <integer>262144</integer>
+                </array>
+              </dict>
+            </dict>
+          "
+          defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 120 "
+            <dict>
+              <key>enabled</key><false/>
+              <key>value</key><dict>
+                <key>type</key><string>standard</string>
+                <key>parameters</key>
+                <array>
+                  <integer>65535</integer>
+                  <integer>20</integer>
+                  <integer>262144</integer>
+                </array>
+              </dict>
+            </dict>
+          "
+
+          echo "  ✓ Mission Control shortcuts disabled (Ctrl+Left/Right/1/2/3)"
+          echo "    Note: You may need to log out and back in for these to take effect"
         ''}
 
         # Ensure window animations are enabled (AeroSpace works with macOS animations)
