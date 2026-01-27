@@ -26,7 +26,11 @@ let
 
 in {
   options.decknix.wm.aerospace = {
-    enable = mkEnableOption "AeroSpace tiling window manager (decknix configuration)";
+    enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Enable AeroSpace tiling window manager (decknix configuration).";
+    };
 
     startAtLogin = mkOption {
       type = types.bool;
@@ -76,6 +80,35 @@ in {
       description = "Rules to automatically assign apps to workspaces.";
     };
 
+    # Key binding configuration
+    prefixKey = mkOption {
+      type = types.str;
+      default = "ctrl-semicolon";
+      description = ''
+        Prefix key to enter AeroSpace command mode (like tmux prefix or Emacs C-x).
+        After pressing this, use single keys for commands:
+          1-5, d, e, m, n, s = switch workspace
+          shift-<key> = move window to workspace
+          arrows = navigate windows
+          shift-arrows = move windows
+          space = fuzzy picker
+          ; = layout mode
+          esc = cancel
+
+        Default: ctrl-; (doesn't conflict with Emacs or macOS)
+      '';
+    };
+
+    keyStyle = mkOption {
+      type = types.enum [ "emacs" "vim" ];
+      default = "emacs";
+      description = ''
+        Navigation key style (used in aerospace mode).
+        - "emacs": arrow keys (avoids conflicts with workspace letters)
+        - "vim": h/j/k/l (left/down/up/right)
+      '';
+    };
+
     gaps = {
       inner = mkOption {
         type = types.int;
@@ -94,26 +127,20 @@ in {
         type = types.bool;
         default = true;
         description = ''
-          Enable fuzzy workspace picker (requires fzf).
-          Bound to alt-space by default.
+          Enable fuzzy workspace picker (bound to 'space' in aerospace mode).
+          Uses choose-gui (Spotlight-like native fuzzy finder).
         '';
-      };
-      key = mkOption {
-        type = types.str;
-        default = "alt-space";
-        description = "Keybinding for fuzzy workspace picker.";
       };
     };
 
-    layoutMode = {
-      enable = mkOption {
-        type = types.bool;
-        default = true;
-        description = ''
-          Enable layout mode for rapid layout adjustments.
-          Enter with alt-semicolon, exit with esc.
-        '';
-      };
+    showModeHints = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Show macOS notifications when entering aerospace/layout modes.
+        Disabled by default as notifications can be noisy.
+        Recommended: Learn the keybindings, then disable.
+      '';
     };
 
     extraConfig = mkOption {
