@@ -355,20 +355,23 @@ $app"
           osascript -e 'tell application "Messages" to activate' 2>/dev/null
           osascript -e 'tell application "System Events" to keystroke "n" using command down' 2>/dev/null
           ;;
+        "IntelliJ IDEA"*|"PyCharm"*|"WebStorm"*|"GoLand"*|"CLion"*|"Rider"*|"RubyMine"*|"PhpStorm"*|"DataGrip"*)
+          # JetBrains IDEs: activate and use Cmd+Shift+N for new project or just activate
+          osascript -e "tell application \"$selected\" to activate" 2>/dev/null
+          ;;
+        "Visual Studio Code"*|"Code"*)
+          # VS Code: open new window
+          open -na "Visual Studio Code" --args -n 2>/dev/null || open -na "Code" --args -n 2>/dev/null
+          ;;
+        Slack|Discord|Spotify|"System Preferences"|"System Settings")
+          # Single-window apps: just activate
+          osascript -e "tell application \"$selected\" to activate" 2>/dev/null
+          ;;
         *)
-          # Generic: try AppleScript first, then fall back to open
-          osascript -e "
-            tell application \"$selected\"
-              activate
-              try
-                make new document
-              end try
-            end tell
-          " 2>/dev/null
-          # If app wasn't running, open it
-          if ! pgrep -xq "$selected"; then
-            open -a "$selected" 2>/dev/null
-          fi
+          # Generic: activate and try Cmd+N for new window/document
+          osascript -e "tell application \"$selected\" to activate" 2>/dev/null
+          sleep 0.3
+          osascript -e 'tell application "System Events" to keystroke "n" using command down' 2>/dev/null
           ;;
       esac
     fi
