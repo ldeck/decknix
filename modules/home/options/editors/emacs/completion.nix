@@ -15,6 +15,9 @@ in
   };
 
   config = mkIf cfg.enable {
+    # Ensure ripgrep is available for consult-ripgrep
+    home.packages = [ pkgs.ripgrep ];
+
     programs.emacs = {
       extraPackages = epkgs: with epkgs; [
         # Minibuffer completion
@@ -90,9 +93,9 @@ in
         ;; Consult preview settings
         (setq consult-preview-key "M-.")
 
-        ;; Use ripgrep for project search
+        ;; Use ripgrep for project search - use full nix store path
         (setq consult-ripgrep-args
-              "rg --null --line-buffered --color=never --max-columns=1000 --path-separator / --smart-case --no-heading --with-filename --line-number --search-zip")
+              "${pkgs.ripgrep}/bin/rg --null --line-buffered --color=never --max-columns=1000 --path-separator / --smart-case --no-heading --with-filename --line-number --search-zip")
 
         ;; == Embark: Context actions ==
         (global-set-key (kbd "C-.") 'embark-act)
