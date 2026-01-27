@@ -319,11 +319,10 @@ $app"
         Emacs)
           # Emacs: use emacsclient to create a new frame on current workspace
           # This avoids switching to an existing Emacs workspace
-          if command -v emacsclient &> /dev/null; then
-            emacsclient -c -n 2>/dev/null || open -a Emacs
-          else
-            open -a Emacs
-          fi
+          # Use the nix store path directly since AeroSpace doesn't have PATH set up
+          ${if config.programs.emacs.enable
+            then ''${config.programs.emacs.finalPackage}/bin/emacsclient -c -n 2>/dev/null || open -a Emacs''
+            else "open -a Emacs"}
           ;;
         Terminal)
           osascript -e 'tell application "Terminal" to do script ""' 2>/dev/null
