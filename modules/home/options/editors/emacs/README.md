@@ -11,6 +11,7 @@ batteries-included Emacs experience out of the box.
 | `welcome.nix` | Startup screen with keybinding cheat sheet | ✓ |
 | `magit.nix` | Git integration via Magit, Forge, code-review | ✓ |
 | `completion.nix` | Modern completion (Vertico, Consult, Corfu) | ✓ |
+| `treemacs.nix` | Project file tree with git integration | ✓ |
 | `undo.nix` | Improved undo (undo-fu, vundo) | ✓ |
 | `editing.nix` | Editing enhancements (smartparens, crux) | ✓ |
 | `development.nix` | Development tools (Flycheck, Yasnippet) | ✓ |
@@ -67,6 +68,31 @@ Key bindings (Consult remaps standard commands):
 - `M-y` → `consult-yank-pop` (browse kill ring)
 - `M-s r` → `consult-ripgrep` (project-wide search)
 - `C-.` → `embark-act` (context actions)
+
+### Treemacs (`treemacs.nix`)
+
+Project file tree for visual navigation:
+
+- **Treemacs**: Full-featured file tree with icons and git integration
+- **treemacs-magit**: Magit integration for git status
+- **treemacs-all-the-icons**: Beautiful icons (when ui.icons enabled)
+
+Key bindings:
+- `C-x t t` → Toggle treemacs
+- `C-x t f` → Find current file in tree
+- `C-x t d` → Select directory to display
+- `C-x p p t` → Open treemacs for project (via project-switch)
+
+Features:
+- Auto-follows current file in tree
+- Git status indicators on files/folders
+- File system watching for auto-refresh
+- Tucks away when selecting a file
+
+Options:
+- `programs.emacs.decknix.treemacs.width` - Tree width (default: 35)
+- `programs.emacs.decknix.treemacs.followMode` - Auto-follow files (default: true)
+- `programs.emacs.decknix.treemacs.gitMode` - Show git status (default: true)
 
 ### Undo (`undo.nix`)
 
