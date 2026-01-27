@@ -68,6 +68,19 @@ in
         (global-set-key [remap bookmark-jump] 'consult-bookmark)
         (global-set-key [remap project-find-regexp] 'consult-ripgrep)
         (global-set-key [remap imenu] 'consult-imenu)
+
+        ;; Customize project-switch-commands to use consult-ripgrep
+        ;; The remap above only works for direct keybindings (C-x p g)
+        ;; but not for the project-switch menu (C-x p p g)
+        (with-eval-after-load 'project
+          (setq project-switch-commands
+                '((project-find-file "Find file" ?f)
+                  (consult-ripgrep "Ripgrep" ?g)
+                  (project-find-dir "Find directory" ?d)
+                  (project-vc-dir "VC-Dir" ?v)
+                  (magit-project-status "Magit" ?m)
+                  (project-eshell "Eshell" ?e)
+                  (project-any-command "Other" ?o))))
         (global-set-key [remap repeat-complex-command] 'consult-complex-command)
 
         ;; Isearch replacement with consult-line
