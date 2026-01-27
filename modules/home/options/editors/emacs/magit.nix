@@ -64,6 +64,12 @@ in
         ;; Autoload magit-status so it's available when called
         (autoload 'magit-status "magit" "Open Magit status buffer" t)
 
+        ;; Load magit-extras for project.el integration
+        ;; This provides magit-project-status for C-x p m (project-switch magit)
+        ;; Must be loaded before project.el tries to use it
+        (with-eval-after-load 'project
+          (require 'magit-extras))
+
         ;; Set default magit keybinding
         (global-set-key (kbd "C-x g") 'magit-status)
 
