@@ -39,11 +39,20 @@ in
       package = cfg.package;
 
       extraPackages = epkgs: with epkgs; [
-        modus-themes  # High-contrast accessible themes
+        modus-themes           # High-contrast accessible themes
+        exec-path-from-shell   # Inherit PATH from shell (critical for tools like rg, git, etc.)
       ];
 
       extraConfig = ''
         ;;; Decknix Core Emacs Configuration
+
+        ;; == PATH from shell ==
+        ;; Critical: Inherit PATH from shell so tools like rg, git, etc. are found
+        ;; This is especially important for GUI Emacs and the Emacs daemon
+        (use-package exec-path-from-shell
+          :config
+          (when (or (daemonp) (memq window-system '(mac ns x)))
+            (exec-path-from-shell-initialize)))
 
         ;; == Startup ==
         (setq inhibit-startup-message t

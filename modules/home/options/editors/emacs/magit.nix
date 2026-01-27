@@ -37,10 +37,16 @@ in
   };
 
   config = mkIf cfg.enable {
+    # Ensure sqlite3 is available for emacsql-sqlite
+    home.packages = mkIf cfg.forge.enable [ pkgs.sqlite ];
+
     programs.emacs = {
       extraPackages = epkgs: with epkgs;
         [ magit ]
-        ++ optionals cfg.forge.enable [ forge ]
+        ++ optionals cfg.forge.enable [
+          forge
+          emacsql        # Forge dependency - database abstraction (includes sqlite backend)
+        ]
         ++ optionals cfg.codeReview.enable [ code-review ];
 
       extraConfig = ''
@@ -57,6 +63,10 @@ in
           (setq magit-diff-refine-hunk 'all))
 
       '' + optionalString cfg.forge.enable ''
+        ;; == EmacSQL - Database for Forge ==
+        ;; Ensure emacsql is loaded before forge to avoid class definition errors
+        (require 'emacsql)
+
         ;; == Forge - GitHub/GitLab Integration ==
         ;; Provides PR creation, review, issue management within Magit
         (use-package forge
