@@ -313,28 +313,64 @@ $app"
       # Strip the • marker if present
       selected=$(echo "$selected" | sed 's/^• //')
 
-      # Open new window in the selected app
-      osascript -e "
-        tell application \"$selected\"
-          activate
-          try
-            -- Try to create a new window/document
-            if name is \"Finder\" then
-              make new Finder window
-            else if name is \"Safari\" then
-              make new document
-            else if name is \"Terminal\" then
-              do script \"\"
-            else
-              -- Generic: just activate (some apps auto-create window)
+      # Open NEW window in the selected app (not just activate)
+      # Each app needs specific handling to create a new window
+      case "$selected" in
+        Terminal)
+          osascript -e 'tell application "Terminal" to do script ""' 2>/dev/null
+          ;;
+        Finder)
+          osascript -e 'tell application "Finder" to make new Finder window' 2>/dev/null
+          osascript -e 'tell application "Finder" to activate' 2>/dev/null
+          ;;
+        Safari)
+          osascript -e 'tell application "Safari" to make new document' 2>/dev/null
+          osascript -e 'tell application "Safari" to activate' 2>/dev/null
+          ;;
+        "Google Chrome")
+          osascript -e 'tell application "Google Chrome" to make new window' 2>/dev/null
+          osascript -e 'tell application "Google Chrome" to activate' 2>/dev/null
+          ;;
+        Firefox)
+          open -na "Firefox" --args -new-window 2>/dev/null
+          ;;
+        Notes)
+          # Notes doesn't support new window via AppleScript well, use Cmd+N simulation
+          osascript -e 'tell application "Notes" to activate' 2>/dev/null
+          osascript -e 'tell application "System Events" to keystroke "n" using command down' 2>/dev/null
+          ;;
+        TextEdit)
+          osascript -e 'tell application "TextEdit" to make new document' 2>/dev/null
+          osascript -e 'tell application "TextEdit" to activate' 2>/dev/null
+          ;;
+        Preview)
+          # Preview needs a file, just activate it
+          osascript -e 'tell application "Preview" to activate' 2>/dev/null
+          ;;
+        Mail)
+          osascript -e 'tell application "Mail" to activate' 2>/dev/null
+          osascript -e 'tell application "System Events" to keystroke "n" using command down' 2>/dev/null
+          ;;
+        Messages)
+          osascript -e 'tell application "Messages" to activate' 2>/dev/null
+          osascript -e 'tell application "System Events" to keystroke "n" using command down' 2>/dev/null
+          ;;
+        *)
+          # Generic: try AppleScript first, then fall back to open
+          osascript -e "
+            tell application \"$selected\"
               activate
-            end if
-          on error
-            -- Fallback: just activate the app
-            activate
-          end try
-        end tell
-      " 2>/dev/null
+              try
+                make new document
+              end try
+            end tell
+          " 2>/dev/null
+          # If app wasn't running, open it
+          if ! pgrep -xq "$selected"; then
+            open -a "$selected" 2>/dev/null
+          fi
+          ;;
+      esac
     fi
   '';
 
