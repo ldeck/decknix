@@ -86,6 +86,43 @@ in
       reload = "unset __HM_SESS_VARS_SOURCED && exec zsh";
       update = lib.mkDefault "darwin-rebuild switch --flake ~/.config/nix-darwin#default --impure";
     };
+
+    # Set terminal tab/window title (macOS zsh doesn't do this by default)
+    # This makes terminal windows searchable in AeroSpace window picker
+    # Using lib.mkOrder 1000 (default order) for general configuration
+    initContent = lib.mkOrder 1000 ''
+      # Set terminal title before each prompt (precmd hook)
+      # Format matches bash: "📁 user@host: ~/path" or "📁 ~/path"
+      function set_terminal_title() {
+        local icon="📁"
+        local path
+        # Use ~ for home directory, otherwise show full path
+        if [[ "$PWD" == "$HOME"* ]]; then
+          path="~''${PWD#$HOME}"
+        else
+          path="$PWD"
+        fi
+        # Format: "📁 ~/path — zsh" (shows icon and full path like bash)
+        echo -ne "\033]0;$icon $path — zsh\007"
+      }
+      precmd_functions+=(set_terminal_title)
+
+      # Set terminal title when running a command (preexec hook)
+      function set_terminal_title_preexec() {
+        local icon="⚙️"
+        local path
+        if [[ "$PWD" == "$HOME"* ]]; then
+          path="~''${PWD#$HOME}"
+        else
+          path="$PWD"
+        fi
+        # Extract first word of command for cleaner display
+        local cmd="''${1%% *}"
+        # Format: "⚙️ command — ~/path" (shows running command with icon)
+        echo -ne "\033]0;$icon $cmd — $path\007"
+      }
+      preexec_functions+=(set_terminal_title_preexec)
+    '';
   };
 
   programs.starship = {
