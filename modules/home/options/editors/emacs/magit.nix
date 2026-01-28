@@ -215,39 +215,38 @@ in
         ;;
         ;; IN MAGIT STATUS (C-x g):
         ;;   ' or N    Open Forge dispatch menu, then:
-        ;;     f f     Fetch forge topics (PRs/issues)
-        ;;     f n     Fetch notifications
-        ;;     c p     Create pull request
-        ;;     l p     List pull requests
-        ;;     l i     List issues
         ;;
-        ;; ON A PR/ISSUE:
-        ;;   RET       View topic details
-        ;;   C-c C-v   Visit topic at point
+        ;;   Fetch:
+        ;;     f f     Fetch all topics (PRs/issues)
+        ;;     f t     Fetch one topic
+        ;;     f n     Fetch notifications
+        ;;
+        ;;   Create:
+        ;;     c p     Create pull-request
+        ;;     c i     Create issue
+        ;;     c d     Create discussion
+        ;;
+        ;;   Visit (in Emacs):
+        ;;     v p     Visit pull-request (select from list)
+        ;;     v i     Visit issue
+        ;;     v t     Visit topic (any)
+        ;;
+        ;;   Browse (in browser):
+        ;;     b p     Browse pull-request
+        ;;     b i     Browse issue
+        ;;     b r     Browse remote
+        ;;
+        ;; ON A PR/ISSUE (in topic buffer):
+        ;;   RET       Follow link / expand section
+        ;;   C-c C-n   Create new comment
         ;;   C-c C-r   Review PR (view diff) [decknix]
         ;;   C-c C-d   Show full PR diff [decknix]
+        ;;   n / p     Navigate sections
+        ;;   TAB       Expand/collapse section
+        ;;   b         Browse in browser
+        ;;   w         Copy URL
         ;;
-        ;; IN PR TOPIC BUFFER:
-        ;;   C-c C-e   Edit title/description
-        ;;   C-c C-k   Close PR
-        ;;   C-c C-o   Reopen PR
-        ;;   C-c C-m   Merge PR
-        ;;   w         Copy PR URL
-        ;;   b         Browse PR in browser
-        ;;
-        ;; IN PR DIFF (reviewing):
-        ;;   C-c C-c   Add review comment at point
-        ;;   C-c C-a   Approve PR
-        ;;   C-c C-r   Request changes
-        ;;   C-c C-s   Submit review
-        ;;
-        ;; ADDING COMMENTS:
-        ;;   Navigate to the line in the diff, then:
-        ;;   C-c C-c   Start a review comment
-        ;;   (Write your comment, then C-c C-c to save)
-        ;;
-        ;; TIP: Use ' (apostrophe) to open Forge menu, then f f to fetch PRs.
-        ;;      Then ' l p to list them. RET on a PR shows details.
+        ;; TIP: Use ' f f to fetch PRs, then ' v p to visit one.
 
       '' + optionalString cfg.codeReview.enable ''
         ;; == Code Review - PR Review Interface ==
