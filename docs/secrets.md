@@ -127,11 +127,11 @@ Once authenticated, in any git repository:
 ```
 C-x g          → Open Magit status
 ' (apostrophe) → Open Forge dispatch menu
-  f f          → Fetch forge topics (PRs, issues)
+  f f          → Fetch all topics (PRs, issues)
   c p          → Create pull request
-  l p          → List pull requests
-  l i          → List issues
-RET on PR      → View PR details
+  v p          → Visit pull request (select from list)
+  v i          → Visit issue
+  b p          → Browse PR in browser
 ```
 
 ## Multi-Account GitHub Setup
@@ -229,23 +229,20 @@ Once set up, use these keybindings to review PRs:
 ```
 ;; In Magit status (C-x g)
 ' (apostrophe) → Open Forge dispatch menu
-  f f          → Fetch PRs and issues
-  l p          → List all PRs
-
-;; On a PR in the list
-RET            → View PR details
-C-c C-r        → Show PR diff for review
-
-;; In PR diff
-C-c C-c        → Add review comment at point
-C-c C-a        → Approve PR
-C-c C-r        → Request changes
-C-c C-s        → Submit review
+  f f          → Fetch all topics (PRs/issues)
+  v p          → Visit pull request (select from list)
 
 ;; In PR topic buffer
-C-c C-m        → Merge PR
+n / p          → Navigate sections
+TAB            → Expand/collapse section
+C-c C-n        → Create new comment
+C-c C-r        → Show PR diff for review [decknix]
 b              → Open in browser
 w              → Copy PR URL
+
+;; Note: Inline code comments require the code-review package
+;; Forge's topic buffer shows existing comments but has limited
+;; inline comment creation. Use 'b' to open in browser for full review.
 ```
 
 ## GitLab Support
