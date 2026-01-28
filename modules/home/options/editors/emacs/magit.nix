@@ -22,6 +22,41 @@ in
           Provides: create/review PRs, manage issues, browse topics.
         '';
       };
+
+      accounts = mkOption {
+        type = types.listOf (types.submodule {
+          options = {
+            host = mkOption {
+              type = types.str;
+              default = "github.com";
+              description = "Git forge host (e.g., github.com, gitlab.com).";
+            };
+            username = mkOption {
+              type = types.str;
+              description = "Username for this account.";
+            };
+            remote = mkOption {
+              type = types.str;
+              default = "origin";
+              description = "Git remote to use for this account.";
+            };
+          };
+        });
+        default = [ ];
+        example = [
+          { host = "github.com"; username = "personal-user"; }
+          { host = "github.com"; username = "work-user"; remote = "origin"; }
+        ];
+        description = ''
+          GitHub/GitLab accounts for Forge. Each account needs a corresponding
+          entry in ~/.authinfo.gpg or ~/.authinfo:
+
+            machine api.github.com login USERNAME^forge password TOKEN
+
+          For multiple accounts on the same host, Forge uses the repository's
+          remote URL to determine which account to use.
+        '';
+      };
     };
 
     codeReview = {
@@ -93,16 +128,120 @@ in
           ;; Pull forge data when entering magit-status
           (setq forge-add-default-bindings t)
 
-          ;; Configure GitHub token auth (uses ~/.authinfo.gpg or auth-source)
-          ;; Format: machine api.github.com login YOUR_USERNAME^forge password YOUR_TOKEN
-          (setq auth-sources '("~/.authinfo.gpg" "~/.authinfo" "~/.netrc")))
+          ;; Configure auth sources (uses ~/.authinfo.gpg or auth-source)
+          ;; For multi-account support, add multiple entries to ~/.authinfo.gpg:
+          ;;
+          ;;   machine api.github.com login PERSONAL_USER^forge password ghp_xxxxx
+          ;;   machine api.github.com login WORK_USER^forge password ghp_yyyyy
+          ;;
+          ;; Forge automatically selects the correct account based on the repository's
+          ;; remote URL and the owner field in ghub's configuration.
+          (setq auth-sources '("~/.authinfo.gpg" "~/.authinfo" "~/.netrc"))
 
-        ;; Keybindings in magit-status:
-        ;; @ f f - fetch topics (PRs/issues)
-        ;; @ c p - create pull request
-        ;; @ l p - list pull requests
-        ;; @ l i - list issues
-        ;; RET on PR - view PR details
+          ;; Enable commit author email in topic views
+          (setq forge-topic-list-columns
+                '(("#" 5 t (:right-align t) number nil)
+                  ("Title" 50 t nil title nil)
+                  ("Author" 15 t nil author nil)
+                  ("State" 8 t nil state nil)
+                  ("Updated" 10 t nil updated nil))))
+
+        ;; ============================================================
+        ;; == Multi-Account GitHub Configuration ==
+        ;; ============================================================
+        ;;
+        ;; Forge uses ghub for API authentication. For multiple GitHub accounts,
+        ;; the workflow is:
+        ;;
+        ;; 1. SETUP AUTHINFO (do once):
+        ;;    Create ~/.authinfo.gpg with entries for each account:
+        ;;
+        ;;    machine api.github.com login ldeck^forge password ghp_personal_token
+        ;;    machine api.github.com login lachlan-nurturecloud^forge password ghp_work_token
+        ;;
+        ;; 2. FIRST TIME PER-REPO:
+        ;;    When you first use Forge in a repo, it will prompt for username.
+        ;;    Enter the appropriate username for that repo's organization.
+        ;;    This is stored in .git/config as:
+        ;;      [github "user"]
+        ;;        username = lachlan-nurturecloud
+        ;;
+        ;; 3. AUTOMATIC THEREAFTER:
+        ;;    Forge uses the stored username to select the correct token.
+        ;;
+        ;; TIP: Use git conditional includes for automatic email switching:
+        ;;   [includeIf "gitdir:~/Code/nurturecloud/"]
+        ;;     path = ~/.gitconfig-nurturecloud
+
+        ;; ============================================================
+        ;; == PR Review Workflow ==
+        ;; ============================================================
+
+        ;; Custom function to start PR review on current topic
+        (defun decknix-forge-review-pr ()
+          "Review the pull request at point or in current buffer.
+        Opens the PR diff and allows adding review comments."
+          (interactive)
+          (if (derived-mode-p 'forge-topic-mode)
+              ;; In a PR buffer, show the diff
+              (forge-visit-pullreq-diff)
+            ;; In list or magit status, visit the PR at point first
+            (when-let ((pullreq (forge-pullreq-at-point)))
+              (forge-visit-topic pullreq))))
+
+        ;; Custom function to view PR diff with full context
+        (defun decknix-forge-pr-diff-full ()
+          "Show the full diff for the PR at point with maximum context."
+          (interactive)
+          (let ((magit-diff-refine-hunk 'all))
+            (forge-visit-pullreq-diff)))
+
+        ;; Add review keybindings to forge topic mode
+        (with-eval-after-load 'forge
+          ;; In PR buffer (forge-topic-mode)
+          (define-key forge-topic-mode-map (kbd "C-c C-r") 'decknix-forge-review-pr)
+          (define-key forge-topic-mode-map (kbd "C-c C-d") 'decknix-forge-pr-diff-full)
+
+          ;; Enable auto-fetch of topics when entering magit
+          (setq forge-pull-notifications t))
+
+        ;; ============================================================
+        ;; == Forge Keybindings Reference ==
+        ;; ============================================================
+        ;;
+        ;; IN MAGIT STATUS (C-x g):
+        ;;   @ f f     Fetch forge topics (PRs/issues)
+        ;;   @ f n     Fetch notifications
+        ;;   @ c p     Create pull request
+        ;;   @ l p     List pull requests
+        ;;   @ l i     List issues
+        ;;
+        ;; ON A PR/ISSUE:
+        ;;   RET       View topic details
+        ;;   C-c C-r   Review PR (view diff)
+        ;;   C-c C-d   Show full PR diff
+        ;;
+        ;; IN PR TOPIC BUFFER:
+        ;;   C-c C-e   Edit title/description
+        ;;   C-c C-k   Close PR
+        ;;   C-c C-o   Reopen PR
+        ;;   C-c C-m   Merge PR
+        ;;   w         Copy PR URL
+        ;;   b         Browse PR in browser
+        ;;
+        ;; IN PR DIFF (reviewing):
+        ;;   C-c C-c   Add review comment at point
+        ;;   C-c C-a   Approve PR
+        ;;   C-c C-r   Request changes
+        ;;   C-c C-s   Submit review
+        ;;
+        ;; ADDING COMMENTS:
+        ;;   Navigate to the line in the diff, then:
+        ;;   C-c C-c   Start a review comment
+        ;;   (Write your comment, then C-c C-c to save)
+        ;;
+        ;; TIP: Use `@ f f` to fetch PRs, then `@ l p` to list them.
+        ;;      RET on a PR shows details. C-c C-r shows the diff for review.
 
       '' + optionalString cfg.codeReview.enable ''
         ;; == Code Review - PR Review Interface ==
