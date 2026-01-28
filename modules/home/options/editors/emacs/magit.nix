@@ -122,10 +122,14 @@ in
 
         ;; == Forge - GitHub/GitLab Integration ==
         ;; Provides PR creation, review, issue management within Magit
-        (use-package forge
-          :after magit
-          :config
-          ;; Pull forge data when entering magit-status
+        ;;
+        ;; IMPORTANT: Forge must be loaded WITH magit, not just after.
+        ;; We use with-eval-after-load to ensure forge loads when magit loads,
+        ;; which sets up the '@' keybinding prefix in magit-mode-map.
+        (with-eval-after-load 'magit
+          (require 'forge)
+
+          ;; Ensure forge bindings are added to magit
           (setq forge-add-default-bindings t)
 
           ;; Configure auth sources (uses ~/.authinfo.gpg or auth-source)
@@ -144,7 +148,10 @@ in
                   ("Title" 50 t nil title nil)
                   ("Author" 15 t nil author nil)
                   ("State" 8 t nil state nil)
-                  ("Updated" 10 t nil updated nil))))
+                  ("Updated" 10 t nil updated nil)))
+
+          ;; Enable notifications fetching
+          (setq forge-pull-notifications t))
 
         ;; ============================================================
         ;; == Multi-Account GitHub Configuration ==
@@ -197,13 +204,10 @@ in
             (forge-visit-pullreq-diff)))
 
         ;; Add review keybindings to forge topic mode
+        ;; (forge is already loaded via with-eval-after-load 'magit above)
         (with-eval-after-load 'forge
-          ;; In PR buffer (forge-topic-mode)
           (define-key forge-topic-mode-map (kbd "C-c C-r") 'decknix-forge-review-pr)
-          (define-key forge-topic-mode-map (kbd "C-c C-d") 'decknix-forge-pr-diff-full)
-
-          ;; Enable auto-fetch of topics when entering magit
-          (setq forge-pull-notifications t))
+          (define-key forge-topic-mode-map (kbd "C-c C-d") 'decknix-forge-pr-diff-full))
 
         ;; ============================================================
         ;; == Forge Keybindings Reference ==
