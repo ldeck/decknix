@@ -214,16 +214,18 @@ in
         ;; ============================================================
         ;;
         ;; IN MAGIT STATUS (C-x g):
-        ;;   @ f f     Fetch forge topics (PRs/issues)
-        ;;   @ f n     Fetch notifications
-        ;;   @ c p     Create pull request
-        ;;   @ l p     List pull requests
-        ;;   @ l i     List issues
+        ;;   ' or N    Open Forge dispatch menu, then:
+        ;;     f f     Fetch forge topics (PRs/issues)
+        ;;     f n     Fetch notifications
+        ;;     c p     Create pull request
+        ;;     l p     List pull requests
+        ;;     l i     List issues
         ;;
         ;; ON A PR/ISSUE:
         ;;   RET       View topic details
-        ;;   C-c C-r   Review PR (view diff)
-        ;;   C-c C-d   Show full PR diff
+        ;;   C-c C-v   Visit topic at point
+        ;;   C-c C-r   Review PR (view diff) [decknix]
+        ;;   C-c C-d   Show full PR diff [decknix]
         ;;
         ;; IN PR TOPIC BUFFER:
         ;;   C-c C-e   Edit title/description
@@ -244,8 +246,8 @@ in
         ;;   C-c C-c   Start a review comment
         ;;   (Write your comment, then C-c C-c to save)
         ;;
-        ;; TIP: Use `@ f f` to fetch PRs, then `@ l p` to list them.
-        ;;      RET on a PR shows details. C-c C-r shows the diff for review.
+        ;; TIP: Use ' (apostrophe) to open Forge menu, then f f to fetch PRs.
+        ;;      Then ' l p to list them. RET on a PR shows details.
 
       '' + optionalString cfg.codeReview.enable ''
         ;; == Code Review - PR Review Interface ==
