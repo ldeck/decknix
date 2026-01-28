@@ -126,10 +126,11 @@ Once authenticated, in any git repository:
 
 ```
 C-x g          → Open Magit status
-@ f f          → Fetch forge topics (PRs, issues)
-@ c p          → Create pull request
-@ l p          → List pull requests
-@ l i          → List issues
+' (apostrophe) → Open Forge dispatch menu
+  f f          → Fetch forge topics (PRs, issues)
+  c p          → Create pull request
+  l p          → List pull requests
+  l i          → List issues
 RET on PR      → View PR details
 ```
 
@@ -172,7 +173,7 @@ Then run `decknix switch` to apply.
 When you first use Forge in a repository:
 
 1. Open the repo in Emacs: `C-x g` (magit-status)
-2. Fetch topics: `@ f f`
+2. Open Forge dispatch: `'` (apostrophe), then `f f` to fetch topics
 3. Forge will prompt: "GitHub username for https://github.com/ORG/REPO:"
 4. Enter the appropriate username (e.g., `lachlan-work` for work repos)
 
@@ -227,8 +228,9 @@ Once set up, use these keybindings to review PRs:
 
 ```
 ;; In Magit status (C-x g)
-@ f f          → Fetch PRs and issues
-@ l p          → List all PRs
+' (apostrophe) → Open Forge dispatch menu
+  f f          → Fetch PRs and issues
+  l p          → List all PRs
 
 ;; On a PR in the list
 RET            → View PR details
