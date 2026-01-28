@@ -78,7 +78,9 @@
           importWithTrace type allNixFiles;
   in {
     modules = {
-      home = load "home";
+      # Load home.nix and secrets.nix together for home-manager
+      # secrets.nix is gitignored and contains sensitive data like auth tokens
+      home = (load "home") ++ (load "secrets");
       system = load "system";
     };
     inherit allOrgs;

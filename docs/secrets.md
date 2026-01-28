@@ -2,15 +2,25 @@
 
 This guide covers setting up authentication for GitHub (Forge), GPG encryption, and other secrets management in decknix.
 
+## How secrets.nix Works
+
+The decknix `configLoader` (see [`lib/default.nix`](../lib/default.nix)) automatically discovers and loads `secrets.nix` files from your org directories alongside `home.nix`. This allows you to keep sensitive configuration separate and gitignored.
+
+**File discovery order:**
+1. `~/.local/decknix/secrets.nix` (root level)
+2. `~/.local/decknix/<org>/secrets.nix` (per-org)
+
+Both are merged into your home-manager configuration.
+
 ## Quick Setup
 
-The recommended approach is using a `secrets.nix` file in your org directory:
+Create a `secrets.nix` file in your org directory:
 
 ```nix
 # ~/.local/decknix/default/secrets.nix
-{ config, lib, pkgs, ... }: {
-
+{ ... }: {
   # GitHub authentication for Forge (PR management in Emacs)
+  # Format: machine HOST login USER^forge password TOKEN
   home.file.".authinfo".text = ''
     machine api.github.com login YOUR_GITHUB_USERNAME^forge password ghp_YOUR_TOKEN
   '';
@@ -22,6 +32,8 @@ The recommended approach is using a `secrets.nix` file in your org directory:
 ```bash
 echo "secrets.nix" >> ~/.local/decknix/.gitignore
 ```
+
+After creating the file, run `decknix switch` to apply.
 
 ## GitHub Token for Forge
 
@@ -37,9 +49,9 @@ Forge requires a GitHub Personal Access Token to manage PRs and issues.
    - `read:user` (read user profile)
 4. Copy the generated token (starts with `ghp_`)
 
-### 2. Configure Authentication
+### 2. Configure Authentication in secrets.nix
 
-#### Option A: Plain Text (Simple)
+Create `~/.local/decknix/<org>/secrets.nix`:
 
 ```nix
 # ~/.local/decknix/default/secrets.nix
@@ -50,7 +62,11 @@ Forge requires a GitHub Personal Access Token to manage PRs and issues.
 }
 ```
 
-#### Option B: GPG Encrypted (Recommended)
+This writes your credentials to `~/.authinfo`, which Emacs reads for Forge authentication.
+
+> **Reference:** The authinfo format is documented in the [Emacs auth-source manual](https://www.gnu.org/software/emacs/manual/html_mono/auth.html) and [Forge documentation](https://magit.vc/manual/forge/Token-Creation.html).
+
+### Alternative: GPG Encrypted (More Secure)
 
 First, create the encrypted file manually:
 
@@ -128,27 +144,28 @@ Create a GitHub Personal Access Token for each account:
 - Personal account: `ghp_personal_xxxxx`
 - Work account: `ghp_work_yyyyy`
 
-### 2. Configure Multiple Accounts in authinfo
+### 2. Configure Multiple Accounts in secrets.nix
 
-Add entries for each account (same host, different logins):
+Add entries for each account in your `secrets.nix` (same host, different logins):
 
-```bash
-# ~/.authinfo.gpg content (before encryption)
-machine api.github.com login ldeck^forge password ghp_personal_xxxxx
-machine api.github.com login lachlan-work^forge password ghp_work_yyyyy
+```nix
+# ~/.local/decknix/default/secrets.nix
+{ ... }: {
+  home.file.".authinfo".text = ''
+    machine api.github.com login ldeck^forge password ghp_personal_xxxxx
+    machine api.github.com login lachlan-work^forge password ghp_work_yyyyy
+  '';
+}
 ```
 
-To create/update encrypted file:
-```bash
-cat > /tmp/authinfo << 'EOF'
-machine api.github.com login ldeck^forge password ghp_personal_xxxxx
-machine api.github.com login lachlan-work^forge password ghp_work_yyyyy
-EOF
+Then run `decknix switch` to apply.
 
-gpg --encrypt --recipient YOUR_GPG_KEY_ID /tmp/authinfo
-mv /tmp/authinfo.gpg ~/.authinfo.gpg
-rm /tmp/authinfo
-```
+> **How it works:** Forge uses the `^forge` suffix to identify credentials for its use.
+> When you have multiple entries for the same host, Forge selects based on the
+> repository's configured username (see step 3 below).
+>
+> **Reference:** See [Forge Token Creation](https://magit.vc/manual/forge/Token-Creation.html)
+> and [ghub Getting Started](https://magit.vc/manual/ghub/Getting-Started.html).
 
 ### 3. First-Time Per-Repository Setup
 
