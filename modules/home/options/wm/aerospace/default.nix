@@ -28,8 +28,16 @@ in {
   options.decknix.wm.aerospace = {
     enable = mkOption {
       type = types.bool;
-      default = true;
-      description = "Enable AeroSpace tiling window manager (decknix configuration).";
+      default = false;
+      description = ''
+        Enable AeroSpace tiling window manager (decknix configuration).
+
+        **DEPRECATED/EXPERIMENTAL**: This module is deprecated in favor of
+        GlideWM (decknix.wm.glide). AeroSpace is retained for users who
+        prefer it, but is no longer enabled by default.
+
+        To re-enable: decknix.wm.aerospace.enable = true;
+      '';
     };
 
     startAtLogin = mkOption {
