@@ -117,6 +117,118 @@ C-x g          → Open Magit status
 RET on PR      → View PR details
 ```
 
+## Multi-Account GitHub Setup
+
+If you work with multiple GitHub accounts (e.g., personal and work), Forge supports
+using different credentials per repository.
+
+### 1. Create Tokens for Each Account
+
+Create a GitHub Personal Access Token for each account:
+- Personal account: `ghp_personal_xxxxx`
+- Work account: `ghp_work_yyyyy`
+
+### 2. Configure Multiple Accounts in authinfo
+
+Add entries for each account (same host, different logins):
+
+```bash
+# ~/.authinfo.gpg content (before encryption)
+machine api.github.com login ldeck^forge password ghp_personal_xxxxx
+machine api.github.com login lachlan-work^forge password ghp_work_yyyyy
+```
+
+To create/update encrypted file:
+```bash
+cat > /tmp/authinfo << 'EOF'
+machine api.github.com login ldeck^forge password ghp_personal_xxxxx
+machine api.github.com login lachlan-work^forge password ghp_work_yyyyy
+EOF
+
+gpg --encrypt --recipient YOUR_GPG_KEY_ID /tmp/authinfo
+mv /tmp/authinfo.gpg ~/.authinfo.gpg
+rm /tmp/authinfo
+```
+
+### 3. First-Time Per-Repository Setup
+
+When you first use Forge in a repository:
+
+1. Open the repo in Emacs: `C-x g` (magit-status)
+2. Fetch topics: `@ f f`
+3. Forge will prompt: "GitHub username for https://github.com/ORG/REPO:"
+4. Enter the appropriate username (e.g., `lachlan-work` for work repos)
+
+This stores the username in `.git/config`:
+```ini
+[github "user"]
+    username = lachlan-work
+```
+
+### 4. Automatic Git Email Switching
+
+Combine with Git conditional includes to automatically use correct email:
+
+```nix
+# ~/.local/decknix/work/home.nix
+{ ... }: {
+  programs.git.includes = [
+    {
+      condition = "gitdir:~/Code/work/";
+      contents = {
+        user = {
+          email = "lachlan@work.com";
+          name = "Lachlan Deck";
+        };
+        commit.gpgsign = true;
+      };
+    }
+  ];
+}
+```
+
+### 5. Verify Multi-Account Setup
+
+Test that Forge finds the correct credentials:
+
+```elisp
+;; In Emacs
+M-x auth-source-search RET
+;; host: api.github.com
+;; user: lachlan-work^forge
+;; Should return your work token
+
+M-x auth-source-search RET
+;; host: api.github.com
+;; user: ldeck^forge
+;; Should return your personal token
+```
+
+## PR Review Workflow
+
+Once set up, use these keybindings to review PRs:
+
+```
+;; In Magit status (C-x g)
+@ f f          → Fetch PRs and issues
+@ l p          → List all PRs
+
+;; On a PR in the list
+RET            → View PR details
+C-c C-r        → Show PR diff for review
+
+;; In PR diff
+C-c C-c        → Add review comment at point
+C-c C-a        → Approve PR
+C-c C-r        → Request changes
+C-c C-s        → Submit review
+
+;; In PR topic buffer
+C-c C-m        → Merge PR
+b              → Open in browser
+w              → Copy PR URL
+```
+
 ## GitLab Support
 
 For GitLab, add another machine entry:
