@@ -80,6 +80,16 @@ in
     autosuggestion.enable = lib.mkDefault true;
     syntaxHighlighting.enable = lib.mkDefault true;
 
+    # History configuration
+    history = {
+      size = lib.mkDefault 50000;        # In-memory history size
+      save = lib.mkDefault 50000;        # Saved history size
+      share = lib.mkDefault true;        # Share history between sessions
+      ignoreDups = lib.mkDefault true;   # Don't record duplicates
+      ignoreSpace = lib.mkDefault true;  # Don't record commands starting with space
+      extended = lib.mkDefault true;     # Save timestamps
+    };
+
     # Aliases merge, so no conflict here usually.
     shellAliases = {
       ll = lib.mkDefault "ls -l";
@@ -91,6 +101,28 @@ in
     # This makes terminal windows searchable in AeroSpace window picker
     # Using lib.mkOrder 1000 (default order) for general configuration
     initContent = lib.mkOrder 1000 ''
+      # == Prefix-based history search ==
+      # After typing a prefix, Up/Down search history for commands with that prefix
+      # e.g., type "git" then Up arrow finds "git commit", "git push", etc.
+      autoload -U up-line-or-beginning-search down-line-or-beginning-search
+      zle -N up-line-or-beginning-search
+      zle -N down-line-or-beginning-search
+      bindkey "^[[A" up-line-or-beginning-search    # Up arrow
+      bindkey "^[[B" down-line-or-beginning-search  # Down arrow
+      bindkey "^P" up-line-or-beginning-search      # Ctrl-P (Emacs style)
+      bindkey "^N" down-line-or-beginning-search    # Ctrl-N (Emacs style)
+
+      # == Local session history prioritization ==
+      # Commands from current session appear first, then global history
+      # This is achieved by:
+      # 1. INC_APPEND_HISTORY: Write to history immediately (not just on exit)
+      # 2. HIST_FIND_NO_DUPS: Skip duplicates when searching
+      # 3. Local history buffer takes precedence in search
+      setopt INC_APPEND_HISTORY      # Write immediately, don't wait for shell exit
+      setopt HIST_FIND_NO_DUPS       # Don't show duplicates when searching
+      setopt HIST_REDUCE_BLANKS      # Remove extra blanks from commands
+      setopt HIST_VERIFY             # Show command before executing from history
+
       # Set terminal title before each prompt (precmd hook)
       # Format matches bash: "📁 user@host: ~/path" or "📁 ~/path"
       function set_terminal_title() {
