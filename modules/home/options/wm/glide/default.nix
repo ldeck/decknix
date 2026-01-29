@@ -1,17 +1,31 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, inputs, ... }:
 
 with lib;
 
 let
   cfg = config.decknix.wm.glide;
 
+  # Convert a Nix value to TOML format
+  # TOML inline tables use { key = "value" } syntax, NOT JSON {"key":"value"}
+  toTomlValue = value:
+    if isString value then
+      ''"${value}"''
+    else if isInt value then
+      toString value
+    else if isBool value then
+      boolToString value
+    else if isAttrs value then
+      # TOML inline table format: { key = "value", key2 = 123 }
+      "{ ${concatStringsSep ", " (mapAttrsToList (k: v: "${k} = ${toTomlValue v}") value)} }"
+    else if isList value then
+      "[ ${concatStringsSep ", " (map toTomlValue value)} ]"
+    else
+      throw "Unsupported TOML value type: ${typeOf value}";
+
   # Convert keybindings attrset to TOML-compatible format
   keybindingsToToml = bindings:
     concatStringsSep "\n" (mapAttrsToList (key: value:
-      if isString value then
-        ''"${key}" = "${value}"''
-      else
-        ''"${key}" = ${builtins.toJSON value}''
+      ''"${key}" = ${toTomlValue value}''
     ) bindings);
 
   # Generate the TOML config content
@@ -45,6 +59,64 @@ let
     ${cfg.extraConfig}
   '';
 
+  # Helper to generate keybindings with configurable modifier
+  mkDefaultKeybindings = mod: resizePct: {
+    # Exit/control
+    "${mod} + Shift + E" = "save_and_exit";
+    "${mod} + Z" = "toggle_space_activated";
+
+    # Navigation (vim-style)
+    "${mod} + H" = { move_focus = "left"; };
+    "${mod} + J" = { move_focus = "down"; };
+    "${mod} + K" = { move_focus = "up"; };
+    "${mod} + L" = { move_focus = "right"; };
+
+    # Move windows
+    "${mod} + Shift + H" = { move_node = "left"; };
+    "${mod} + Shift + J" = { move_node = "down"; };
+    "${mod} + Shift + K" = { move_node = "up"; };
+    "${mod} + Shift + L" = { move_node = "right"; };
+
+    # Resize - grow in direction (requires GlideWM v0.2.7+)
+    "${mod} + Alt + H" = { resize = { direction = "left"; percent = resizePct; }; };
+    "${mod} + Alt + J" = { resize = { direction = "down"; percent = resizePct; }; };
+    "${mod} + Alt + K" = { resize = { direction = "up"; percent = resizePct; }; };
+    "${mod} + Alt + L" = { resize = { direction = "right"; percent = resizePct; }; };
+
+    # Resize - shrink in direction (resize opposite edge inward)
+    "${mod} + Shift + Alt + H" = { resize = { direction = "right"; percent = resizePct; }; };
+    "${mod} + Shift + Alt + J" = { resize = { direction = "up"; percent = resizePct; }; };
+    "${mod} + Shift + Alt + K" = { resize = { direction = "down"; percent = resizePct; }; };
+    "${mod} + Shift + Alt + L" = { resize = { direction = "left"; percent = resizePct; }; };
+
+    # Tree navigation
+    "${mod} + A" = "ascend";
+    "${mod} + D" = "descend";
+
+    # Layouts
+    "${mod} + N" = "next_layout";
+    "${mod} + P" = "prev_layout";
+
+    # Splitting
+    "${mod} + Backslash" = { split = "horizontal"; };
+    "${mod} + Equal" = { split = "vertical"; };
+
+    # Grouping (tabs/stacks)
+    "${mod} + T" = { group = "horizontal"; };
+    "${mod} + S" = { group = "vertical"; };
+    "${mod} + E" = "ungroup";
+
+    # Floating
+    "${mod} + Shift + Space" = "toggle_window_floating";
+    "${mod} + Space" = "toggle_focus_floating";
+
+    # Fullscreen
+    "${mod} + F" = "toggle_fullscreen";
+
+    # Debug
+    "${mod} + Shift + D" = "debug";
+  };
+
 in {
   options.decknix.wm.glide = {
     enable = mkOption {
@@ -58,20 +130,45 @@ in {
         on each space.
 
         Key features:
-        - Alt+Z toggles tiling management for current space
-        - Alt+Shift+E saves and exits (for restore on restart)
+        - <modifier>+Z toggles tiling management for current space
+        - <modifier>+Shift+E saves and exits (for restore on restart)
         - hjkl navigation between windows
         - Works per-space, integrates with Mission Control
 
-        NOTE: The glide package must be installed separately (e.g., via nix-casks
-        in your local home.nix). This module only provides configuration.
+        The modifier key defaults to "Cmd + Ctrl" to avoid conflicts with:
+        - Alt/Option: Used for extended characters and Emacs M- commands
+        - Cmd alone: Used by most macOS applications
+
+        The glide package is installed automatically when this module is enabled.
+      '';
+    };
+
+    # Modifier key configuration
+    modifier = mkOption {
+      type = types.str;
+      default = "Meta + Ctrl";
+      example = "Alt";
+      description = ''
+        Modifier key prefix for all GlideWM keybindings.
+
+        Common options:
+        - "Meta + Ctrl" (default) - Avoids conflicts with Emacs and extended characters
+          (Meta = Command key on macOS)
+        - "Alt" - GlideWM default, but conflicts with Emacs M- and extended chars
+        - "Ctrl + Alt" - Alternative that avoids some conflicts
+
+        Valid modifier names (must be capitalized):
+        - Meta (Command/⌘ on macOS)
+        - Ctrl (Control)
+        - Alt (Option on macOS)
+        - Shift
       '';
     };
 
     # Basic settings
     animate = mkOption {
       type = types.bool;
-      default = true;
+      default = false;
       description = "Enable window animations.";
     };
 
@@ -80,7 +177,7 @@ in {
       default = true;
       description = ''
         Disable tiling on each space by default.
-        Use Alt+Z to enable tiling on a space.
+        Use <modifier>+Z to enable tiling on a space.
       '';
     };
 
@@ -100,6 +197,12 @@ in {
       type = types.bool;
       default = true;
       description = "Hide mouse when a new window is focused.";
+    };
+
+    resizePercent = mkOption {
+      type = types.int;
+      default = 10;
+      description = "Percentage to resize windows by with each keypress.";
     };
 
     # Gaps
@@ -162,64 +265,19 @@ in {
     # Keybindings
     keybindings = mkOption {
       type = types.attrsOf types.anything;
-      default = {
-        # Exit/control
-        "Alt + Shift + E" = "save_and_exit";
-        "Alt + Z" = "toggle_space_activated";
-
-        # Navigation (vim-style)
-        "Alt + H" = { move_focus = "left"; };
-        "Alt + J" = { move_focus = "down"; };
-        "Alt + K" = { move_focus = "up"; };
-        "Alt + L" = { move_focus = "right"; };
-
-        # Move windows
-        "Alt + Shift + H" = { move_node = "left"; };
-        "Alt + Shift + J" = { move_node = "down"; };
-        "Alt + Shift + K" = { move_node = "up"; };
-        "Alt + Shift + L" = { move_node = "right"; };
-
-        # Resize
-        "Alt + Ctrl + H" = { resize = { direction = "left"; percent = 5; }; };
-        "Alt + Ctrl + J" = { resize = { direction = "down"; percent = 5; }; };
-        "Alt + Ctrl + K" = { resize = { direction = "up"; percent = 5; }; };
-        "Alt + Ctrl + L" = { resize = { direction = "right"; percent = 5; }; };
-
-        # Tree navigation
-        "Alt + A" = "ascend";
-        "Alt + D" = "descend";
-
-        # Layouts
-        "Alt + N" = "next_layout";
-        "Alt + P" = "prev_layout";
-
-        # Splitting
-        "Alt + Backslash" = { split = "horizontal"; };
-        "Alt + Equal" = { split = "vertical"; };
-
-        # Grouping (tabs/stacks)
-        "Alt + T" = { group = "horizontal"; };
-        "Alt + S" = { group = "vertical"; };
-        "Alt + E" = "ungroup";
-
-        # Floating
-        "Alt + Shift + Space" = "toggle_window_floating";
-        "Alt + Space" = "toggle_focus_floating";
-
-        # Fullscreen
-        "Alt + F" = "toggle_fullscreen";
-
-        # Debug
-        "Alt + Shift + D" = "debug";
-      };
+      # Default is set in config section using mkDefault so modifier option is resolved
+      default = {};
       description = ''
         Keybindings for GlideWM. Keys are formatted as "Modifier + Key".
         Values can be strings (command names) or attribute sets (complex commands).
 
+        The default keybindings use the configured `modifier` option.
+        Override specific bindings or set to {} and provide your own.
+
         Example:
         {
-          "Alt + H" = { move_focus = "left"; };
-          "Alt + Shift + E" = "save_and_exit";
+          "Cmd + Ctrl + H" = { move_focus = "left"; };
+          "Cmd + Ctrl + Shift + E" = "save_and_exit";
         }
       '';
     };
@@ -237,6 +295,16 @@ in {
           name = mkOption {
             type = types.str;
             description = "Human-readable name for the workspace.";
+          };
+          key = mkOption {
+            type = types.nullOr types.str;
+            default = null;
+            example = "n";
+            description = ''
+              Single letter key for quick switching via Hammerspoon.
+              When set, ${cfg.modifier}+Shift+<key> switches to this workspace.
+              Example: key = "n" for NurtureCloud, key = "p" for Personal.
+            '';
           };
           spaces = mkOption {
             type = types.listOf types.str;
@@ -261,11 +329,13 @@ in {
       example = {
         nurturecloud = {
           name = "NurtureCloud";
+          key = "n";
           spaces = [ "primary" "editor" "monitoring" "pipeline" "docs" "messages" "planning" ];
           startSpace = 1;
         };
         personal = {
           name = "Personal";
+          key = "p";
           spaces = [ "main" "browser" "notes" ];
           startSpace = 8;
         };
@@ -276,114 +346,262 @@ in {
 
         Each workspace maps its logical space names to consecutive macOS Spaces
         starting from startSpace.
+
+        Set 'key' to a single letter for quick switching via Hammerspoon
+        (e.g., key = "n" allows ${cfg.modifier}+Shift+N to switch to that workspace).
       '';
     };
   };
 
   # Config implementation
   config = mkIf cfg.enable {
+    # Set default keybindings using the configured modifier and resize percent
+    decknix.wm.glide.keybindings = mkDefault (mkDefaultKeybindings cfg.modifier cfg.resizePercent);
+
     # Write the glide configuration file
     home.file.".glide.toml".text = generateConfig;
 
-    # Add helper scripts for workspace navigation
-    home.packages = mkIf (cfg.workspaces != { }) [
-      (pkgs.writeShellScriptBin "glide-workspace" ''
-        #!/usr/bin/env bash
-        # Navigate to a workspace's primary space using choose-gui
+    # Install glide package and helper scripts
+    home.packages =
+      let
+        # Glide package from nix-casks
+        glidePackage = inputs.nix-casks.packages.${pkgs.stdenv.hostPlatform.system}.glide;
 
-        WORKSPACES="${concatStringsSep "\n" (mapAttrsToList (id: ws: "${ws.name}:${toString ws.startSpace}") cfg.workspaces)}"
+        # choose-gui package for GUI pickers
+        choosePkg = pkgs.choose-gui;
 
-        if command -v choose &>/dev/null; then
-          SELECTED=$(echo "$WORKSPACES" | choose -n 20 | cut -d: -f2)
-          if [ -n "$SELECTED" ]; then
-            osascript -e "tell application \"System Events\" to key code $((17 + SELECTED)) using control down"
-          fi
-        else
-          echo "choose-gui not found. Install it with: nix profile install nixpkgs#choose-gui"
-          echo "Available workspaces:"
-          echo "$WORKSPACES"
-        fi
-      '')
+        # Whether workspaces are defined
+        hasWorkspaces = cfg.workspaces != { };
 
-      (pkgs.writeShellScriptBin "glide-space" ''
-        #!/usr/bin/env bash
-        # Navigate to a specific space within current or specified workspace
+        # Workspace navigation scripts (always available, show help if no workspaces defined)
+        workspaceScripts = [
+          (pkgs.writeShellScriptBin "glide-workspace" (if hasWorkspaces then ''
+            #!/usr/bin/env bash
+            # Navigate to a workspace/space using shortcode matching
+            # Usage: glide-workspace [--gui]
+            #   --gui is accepted but ignored (always uses GUI picker)
+            #
+            # Format: "shortcode  Workspace/Space:spaceNum"
+            # Shortcode is first letter of workspace + first letter of space (lowercase)
+            # e.g., "ne  NurtureCloud/editor:2" - type "ne" to match quickly
 
-        # Build list of all spaces across all workspaces
-        SPACES="${concatStringsSep "\n" (concatLists (mapAttrsToList (id: ws:
-          imap1 (i: spaceName: "${ws.name}/${spaceName}:${toString (ws.startSpace + i - 1)}") ws.spaces
-        ) cfg.workspaces))}"
+            # Build list of all spaces across all workspaces with shortcodes
+            SPACES="${concatStringsSep "\n" (concatLists (mapAttrsToList (id: ws:
+              let
+                wsInitial = lib.toLower (lib.substring 0 1 ws.name);
+              in
+              imap1 (i: spaceName:
+                let
+                  spaceInitial = lib.toLower (lib.substring 0 1 spaceName);
+                  shortcode = "${wsInitial}${spaceInitial}";
+                in
+                "${shortcode}  ${ws.name}/${spaceName}:${toString (ws.startSpace + i - 1)}"
+              ) ws.spaces
+            ) cfg.workspaces))}"
 
-        if command -v choose &>/dev/null; then
-          SELECTED=$(echo "$SPACES" | choose -n 30 | cut -d: -f2)
-          if [ -n "$SELECTED" ]; then
-            osascript -e "tell application \"System Events\" to key code $((17 + SELECTED)) using control down"
-          fi
-        else
-          echo "choose-gui not found. Install it with: nix profile install nixpkgs#choose-gui"
-          echo "Available spaces:"
-          echo "$SPACES"
-        fi
-      '')
+            # Use -z to match from beginning, -a to rank early matches higher
+            SELECTED=$(echo "$SPACES" | ${choosePkg}/bin/choose -z -a -n 30 | grep -oE ':[0-9]+$' | cut -d: -f2)
+            if [ -n "$SELECTED" ]; then
+              osascript -e "tell application \"System Events\" to key code $((17 + SELECTED)) using control down"
+            fi
+          '' else ''
+            #!/usr/bin/env bash
+            # No workspaces defined - show help
 
-      (pkgs.writeShellScriptBin "glide-cheatsheet" ''
-        #!/usr/bin/env bash
-        # Show GlideWM cheatsheet
+            HELP_TEXT='No workspaces defined.
 
-        CHEATSHEET="GlideWM Cheatsheet
+To define workspaces, add to your ~/.local/decknix/<org>/home.nix:
+
+  decknix.wm.glide.workspaces = {
+    nurturecloud = {
+      name = "NurtureCloud";
+      key = "n";  # Meta+Ctrl+Shift+N to switch here
+      spaces = [ "primary" "editor" "monitoring" "pipeline" "docs" "messages" "planning" ];
+      startSpace = 1;
+    };
+    personal = {
+      name = "Personal";
+      key = "p";  # Meta+Ctrl+Shift+P to switch here
+      spaces = [ "main" "browser" "notes" ];
+      startSpace = 8;
+    };
+  };
+
+Then run: decknix switch'
+
+            if [[ "$1" == "--gui" ]]; then
+              # Copy to clipboard and show dialog
+              echo "$HELP_TEXT" | pbcopy
+              # Use osascript with escaped quotes
+              ESCAPED_TEXT=$(echo "$HELP_TEXT" | sed 's/"/\\"/g' | sed 's/$/\\n/' | tr -d '\n' | sed 's/\\n$//')
+              osascript <<EOF
+display dialog "$ESCAPED_TEXT
+
+(Copied to clipboard)" with title "GlideWM: No Workspaces" buttons {"OK"} default button "OK"
+EOF
+            else
+              echo "$HELP_TEXT"
+            fi
+          ''))
+
+          (pkgs.writeShellScriptBin "glide-space" (if hasWorkspaces then ''
+            #!/usr/bin/env bash
+            # Navigate to a specific space within current or specified workspace
+            # Usage: glide-space [--gui]
+            #   --gui is accepted but ignored (always uses GUI picker)
+            #
+            # Format: "shortcode  Workspace/Space:spaceNum"
+            # Shortcode is first letter of workspace + first letter of space (lowercase)
+            # e.g., "ne  NurtureCloud/editor:2" - type "ne" to match quickly
+
+            # Build list of all spaces across all workspaces with shortcodes
+            SPACES="${concatStringsSep "\n" (concatLists (mapAttrsToList (id: ws:
+              let
+                wsInitial = lib.toLower (lib.substring 0 1 ws.name);
+              in
+              imap1 (i: spaceName:
+                let
+                  spaceInitial = lib.toLower (lib.substring 0 1 spaceName);
+                  shortcode = "${wsInitial}${spaceInitial}";
+                in
+                "${shortcode}  ${ws.name}/${spaceName}:${toString (ws.startSpace + i - 1)}"
+              ) ws.spaces
+            ) cfg.workspaces))}"
+
+            # Use -z to match from beginning, -a to rank early matches higher
+            SELECTED=$(echo "$SPACES" | ${choosePkg}/bin/choose -z -a -n 30 | grep -oE ':[0-9]+$' | cut -d: -f2)
+            if [ -n "$SELECTED" ]; then
+              osascript -e "tell application \"System Events\" to key code $((17 + SELECTED)) using control down"
+            fi
+          '' else ''
+            #!/usr/bin/env bash
+            # No workspaces defined - show help
+
+            HELP_TEXT='No workspaces/spaces defined.
+
+To define workspaces with spaces, add to your ~/.local/decknix/<org>/home.nix:
+
+  decknix.wm.glide.workspaces = {
+    nurturecloud = {
+      name = "NurtureCloud";
+      key = "n";
+      spaces = [ "primary" "editor" "monitoring" "pipeline" "docs" "messages" "planning" ];
+      startSpace = 1;
+    };
+    personal = {
+      name = "Personal";
+      key = "p";
+      spaces = [ "main" "browser" "notes" ];
+      startSpace = 8;
+    };
+  };
+
+Then run: decknix switch'
+
+            if [[ "$1" == "--gui" ]]; then
+              # Copy to clipboard and show dialog
+              echo "$HELP_TEXT" | pbcopy
+              # Use osascript with escaped quotes
+              ESCAPED_TEXT=$(echo "$HELP_TEXT" | sed 's/"/\\"/g' | sed 's/$/\\n/' | tr -d '\n' | sed 's/\\n$//')
+              osascript <<EOF
+display dialog "$ESCAPED_TEXT
+
+(Copied to clipboard)" with title "GlideWM: No Spaces" buttons {"OK"} default button "OK"
+EOF
+            else
+              echo "$HELP_TEXT"
+            fi
+          ''))
+        ];
+
+        # Cheatsheet script with dynamic modifier
+        mod = cfg.modifier;
+        cheatsheetScript = pkgs.writeShellScriptBin "glide-cheatsheet" ''
+          #!/usr/bin/env bash
+          # Show GlideWM cheatsheet
+          # Usage: glide-cheatsheet [--gui]
+          #   --gui  Show in choose picker (scrollable GUI)
+          #   (default) Print to terminal
+
+          CHEATSHEET="GlideWM Cheatsheet (Modifier: ${mod})
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 BASICS
-  Alt+Z           Toggle tiling for current space
-  Alt+Shift+E     Save layout and exit
+  ${mod}+Z           Toggle tiling for current space
+  ${mod}+Shift+E     Save layout and exit
 
 NAVIGATION (Vim-style)
-  Alt+H/J/K/L     Focus left/down/up/right
-  Alt+A           Ascend (select parent)
-  Alt+D           Descend (select child)
+  ${mod}+H/J/K/L     Focus left/down/up/right
+  ${mod}+A           Ascend (select parent)
+  ${mod}+D           Descend (select child)
 
 MOVE WINDOWS
-  Alt+Shift+H/J/K/L   Move window left/down/up/right
+  ${mod}+Shift+H/J/K/L   Move window left/down/up/right
 
 RESIZE
-  Alt+Ctrl+H/J/K/L    Resize in direction (5%)
+  ${mod}+Alt+H/J/K/L     Resize in direction (5%)
 
 SPLITTING
-  Alt+\\\\          Split horizontal
-  Alt+=           Split vertical
+  ${mod}+\\          Split horizontal
+  ${mod}+=           Split vertical
 
 GROUPING (Tabs/Stacks)
-  Alt+T           Tab group (horizontal)
-  Alt+S           Stack group (vertical)
-  Alt+E           Ungroup
+  ${mod}+T           Tab group (horizontal)
+  ${mod}+S           Stack group (vertical)
+  ${mod}+E           Ungroup
 
 FLOATING
-  Alt+Shift+Space Toggle window floating
-  Alt+Space       Toggle focus floating windows
+  ${mod}+Shift+Space Toggle window floating
+  ${mod}+Space       Toggle focus floating windows
 
 FULLSCREEN
-  Alt+F           Toggle fullscreen
+  ${mod}+F           Toggle fullscreen
 
 LAYOUTS
-  Alt+N/P         Next/Previous saved layout
+  ${mod}+N/P         Next/Previous saved layout
 
-WORKSPACES (decknix)
+WORKSPACES (decknix CLI)
   glide-workspace   Switch workspace (choose-gui)
   glide-space       Switch to space (choose-gui)
-  glide-cheatsheet  Show this help
+  glide-cheatsheet  Show this help (--gui for picker)
 
-macOS SPACES
-  Ctrl+1-9        Switch to space 1-9 (System)
-  Ctrl+Left/Right Previous/Next space (System)
+HAMMERSPOON KEYBINDINGS (if enabled)
+  Workspaces:
+    ${mod}+W          Workspace picker (choose-gui)
+    ${mod}+Shift+<key> Switch to workspace (key defined in config)
+
+  Spaces:
+    ${mod}+G          Space picker (choose-gui)
+    ${mod}+1-9        Switch to space 1-9
+    ${mod}+0          Switch to space 10
+    ${mod}+-/=        Switch to space 11/12
+    ${mod}+[/]        Switch to space 13/14
+    ${mod}+;/'        Switch to space 15/16
+
+  Navigation:
+    ${mod}+Left/Right Previous/Next space
+    ${mod}+Up         Mission Control
+    ${mod}+Shift+?    Show this cheatsheet (GUI)
+
+macOS SPACES (System Settings → Keyboard → Shortcuts → Mission Control)
+  Ctrl+1-9          Switch to space 1-9
+  Ctrl+0            Switch to space 10
+  Ctrl+- / Ctrl+=   Switch to space 11/12
+  Ctrl+[ / Ctrl+]   Switch to space 13/14
+  Ctrl+; / Ctrl+'   Switch to space 15/16
+  Ctrl+Left/Right   Previous/Next space
+  Ctrl+Up           Mission Control
+  F11               Show Desktop
 "
 
-        if command -v choose &>/dev/null; then
-          echo "$CHEATSHEET" | choose -n 50
-        else
-          echo "$CHEATSHEET"
-        fi
-      '')
-    ];
+          if [[ "$1" == "--gui" ]]; then
+            echo "$CHEATSHEET" | ${choosePkg}/bin/choose -n 50
+          else
+            echo "$CHEATSHEET"
+          fi
+        '';
+
+      in [ glidePackage cheatsheetScript ] ++ workspaceScripts;
   };
 }
 
