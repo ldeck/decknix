@@ -5,6 +5,13 @@ with lib;
 let
   cfg = config.programs.emacs.decknix;
   isDarwin = pkgs.stdenv.isDarwin;
+
+  # Base Emacs package
+  # Use standard emacs (emacs30) on all platforms.
+  # emacs-macport has better macOS integration but its daemon mode cannot
+  # create GUI frames - emacsclient -c only creates terminal frames.
+  # Standard emacs daemon mode works correctly with GUI frames.
+  baseEmacsPackage = pkgs.emacs;
 in
 {
   options.programs.emacs.decknix = {
@@ -16,21 +23,21 @@ in
 
     package = mkOption {
       type = types.package;
-      # Use emacs-macport on Darwin for better macOS integration
-      # (Stage Manager shortcuts, system shortcuts passthrough, etc.)
-      default = if isDarwin then pkgs.emacs-macport else pkgs.emacs;
-      defaultText = literalExpression "pkgs.emacs-macport (Darwin) or pkgs.emacs (Linux)";
+      default = baseEmacsPackage;
+      defaultText = literalExpression "pkgs.emacs";
       description = ''
         The Emacs package to use.
 
-        On macOS, defaults to emacs-macport which provides:
-        - Proper macOS system shortcut passthrough (Stage Manager, etc.)
-        - Native macOS features (pixel scrolling, etc.)
-        - Better integration with macOS input methods
+        Defaults to standard GNU Emacs (emacs30) which supports:
+        - Daemon mode with GUI frames (emacsclient -c creates GUI frames)
+        - Hidden daemon process (no Dock icon until frame is opened)
+        - Native macOS Cocoa integration
 
-        Set to pkgs.emacs for standard GNU Emacs if preferred.
+        Note: emacs-macport has better macOS integration (pixel scrolling,
+        input methods) but its daemon mode cannot create GUI frames.
       '';
     };
+
   };
 
   config = mkIf cfg.enable {
@@ -53,6 +60,15 @@ in
           :config
           (when (or (daemonp) (memq window-system '(mac ns x)))
             (exec-path-from-shell-initialize)))
+
+        ;; == Server ==
+        ;; Start the Emacs server when running as GUI (not daemon)
+        ;; This allows emacsclient to connect to the GUI Emacs
+        ;; For emacs-mac-port, the server must be started from GUI context
+        ;; to support creating new GUI frames via emacsclient
+        (require 'server)
+        (unless (or (daemonp) (server-running-p))
+          (server-start))
 
         ;; == Startup ==
         (setq inhibit-startup-message t
