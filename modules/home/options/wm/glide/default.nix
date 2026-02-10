@@ -36,6 +36,7 @@ let
     [settings]
     animate = ${boolToString cfg.animate}
     default_disable = ${boolToString cfg.defaultDisable}
+    default_keys = ${boolToString cfg.defaultKeys}
     focus_follows_mouse = ${boolToString cfg.focusFollowsMouse}
     mouse_follows_focus = ${boolToString cfg.mouseFollowsFocus}
     mouse_hides_on_focus = ${boolToString cfg.mouseHidesOnFocus}
@@ -178,6 +179,16 @@ in {
       description = ''
         Disable tiling on each space by default.
         Use <modifier>+Z to enable tiling on a space.
+      '';
+    };
+
+    defaultKeys = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Enable the default keys of glide.
+        When true custom keys are appended to the defaults; key combos can be individually disabled.
+        When false, custom key combos are the only set, providing full control.
       '';
     };
 
@@ -604,4 +615,3 @@ macOS SPACES (System Settings → Keyboard → Shortcuts → Mission Control)
       in [ glidePackage cheatsheetScript ] ++ workspaceScripts;
   };
 }
-
