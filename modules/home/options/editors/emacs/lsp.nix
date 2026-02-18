@@ -9,7 +9,7 @@ in
   options.programs.emacs.decknix.lsp = {
     enable = mkOption {
       type = types.bool;
-      default = false;
+      default = true;
       description = ''
         Enable LSP (Language Server Protocol) support via Eglot.
         This provides IDE features like completions, go-to-definition,

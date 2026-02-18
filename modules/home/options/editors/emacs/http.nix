@@ -9,7 +9,7 @@ in
   options.programs.emacs.decknix.http = {
     enable = mkOption {
       type = types.bool;
-      default = false;
+      default = true;
       description = ''
         Enable HTTP/REST client support for API development and testing.
         Provides an interactive REST client with org-babel integration.
