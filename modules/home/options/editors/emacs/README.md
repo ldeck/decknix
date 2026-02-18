@@ -18,8 +18,8 @@ batteries-included Emacs experience out of the box.
 | `ui.nix` | UI improvements (which-key, helpful, icons) | ✓ |
 | `org.nix` | Org-mode presentations and modern styling | ✓ |
 | `languages.nix` | 30+ language modes with syntax highlighting | ✓ |
-| `lsp.nix` | LSP support via Eglot (Kotlin, Java, debugging) | ✗ |
-| `http.nix` | REST client for API development | ✗ |
+| `lsp.nix` | LSP support via Eglot (Kotlin, Java, debugging) | ✓ |
+| `http.nix` | REST client for API development | ✓ |
 
 ## Features by Module
 
@@ -197,9 +197,9 @@ Options (each language can be disabled individually):
 }
 ```
 
-### LSP (`lsp.nix`) - Opt-in
+### LSP (`lsp.nix`)
 
-**Disabled by default.** Full IDE support via Language Server Protocol:
+Full IDE support via Language Server Protocol:
 
 - **Eglot**: Built-in LSP client for Emacs 29+
 - **kotlin-language-server**: Completions, go-to-definition, refactoring for Kotlin
@@ -227,22 +227,15 @@ Debug bindings:
 - `C-c d c` → Continue
 - `C-c d q` → Quit debugger
 
-Enable in your `home.nix`:
-```nix
-{
-  programs.emacs.decknix.lsp.enable = true;
-}
-```
-
 Options:
 - `programs.emacs.decknix.lsp.kotlin.enable` - Install kotlin-language-server (default: true)
 - `programs.emacs.decknix.lsp.java.enable` - Enable Java LSP via eglot-java (default: true)
 - `programs.emacs.decknix.lsp.dap.enable` - Enable debug adapter support (default: true)
 - `programs.emacs.decknix.lsp.eldocBox.enable` - Enhanced documentation popups (default: true)
 
-### HTTP/REST Client (`http.nix`) - Opt-in
+### HTTP/REST Client (`http.nix`)
 
-**Disabled by default.** Interactive REST API testing:
+Interactive REST API testing:
 
 - **restclient**: Interactive REST client for `.http` files
 - **restclient-jq**: jq integration for JSON response processing
@@ -277,30 +270,14 @@ GET https://api.example.com/status
 #+end_src
 ```
 
-Enable in your `home.nix`:
-```nix
-{
-  programs.emacs.decknix.http.enable = true;
-}
-```
-
 Options:
 - `programs.emacs.decknix.http.jq.enable` - Install jq and enable integration (default: true)
 - `programs.emacs.decknix.http.orgBabel.enable` - Enable org-babel REST blocks (default: true)
 
-## Enabling/Disabling Modules
+## Disabling Modules
 
-Most modules are enabled by default. LSP and HTTP are **opt-in** (disabled by default).
+All modules are enabled by default. Disable individually:
 
-### Enable opt-in modules:
-```nix
-{
-  programs.emacs.decknix.lsp.enable = true;         # IDE features (Kotlin, Java, debugging)
-  programs.emacs.decknix.http.enable = true;        # REST client for API testing
-}
-```
-
-### Disable default modules:
 ```nix
 {
   programs.emacs.decknix.enable = false;            # Disable ALL emacs config
@@ -314,6 +291,8 @@ Most modules are enabled by default. LSP and HTTP are **opt-in** (disabled by de
   programs.emacs.decknix.ui.icons.enable = false;   # Disable just icons
   programs.emacs.decknix.org.enable = false;        # Disable org enhancements
   programs.emacs.decknix.org.presentation.enable = false; # Disable just presentations
+  programs.emacs.decknix.lsp.enable = false;        # Disable LSP/IDE features
+  programs.emacs.decknix.http.enable = false;       # Disable REST client
 }
 ```
 
