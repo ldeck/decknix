@@ -246,7 +246,7 @@ in
         ++ (optionals cfg.yaml.enable [ yaml-mode yaml-pro ])
         ++ (optionals cfg.toml.enable [ toml-mode ])
         # nxml-mode is built-in
-        ++ (optionals cfg.markdown.enable [ markdown-mode ])
+        ++ (optionals cfg.markdown.enable [ markdown-mode markdown-toc ])
 
         # Tier 3: Web & Frontend
         ++ (optionals cfg.web.enable [ web-mode less-css-mode scss-mode ])
@@ -605,4 +605,3 @@ in
     };
   };
 }
-
