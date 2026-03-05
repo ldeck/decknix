@@ -118,7 +118,7 @@ else
 {
   username = "$IN_USER";
   hostname = "$IN_HOST";
-  system   = "aarch64-darwin"; # Assuming Apple Silicon for now
+  system   = "$DEFAULT_SYSTEM";
   role     = "developer";
 }
 EOF
