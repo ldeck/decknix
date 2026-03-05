@@ -413,7 +413,10 @@ in {
             # Use -z to match from beginning, -a to rank early matches higher
             SELECTED=$(echo "$SPACES" | ${choosePkg}/bin/choose -z -a -n 30 | grep -oE ':[0-9]+$' | cut -d: -f2)
             if [ -n "$SELECTED" ]; then
-              osascript -e "tell application \"System Events\" to key code $((17 + SELECTED)) using control down"
+              # macOS virtual key codes for number keys are non-sequential:
+              # Key: 1=18, 2=19, 3=20, 4=21, 5=23, 6=22, 7=26, 8=28, 9=25, 0=29
+              KEY_CODES=(0 18 19 20 21 23 22 26 28 25 29)
+              osascript -e "tell application \"System Events\" to key code ''${KEY_CODES[$SELECTED]} using control down"
             fi
           '' else ''
             #!/usr/bin/env bash
@@ -482,7 +485,10 @@ EOF
             # Use -z to match from beginning, -a to rank early matches higher
             SELECTED=$(echo "$SPACES" | ${choosePkg}/bin/choose -z -a -n 30 | grep -oE ':[0-9]+$' | cut -d: -f2)
             if [ -n "$SELECTED" ]; then
-              osascript -e "tell application \"System Events\" to key code $((17 + SELECTED)) using control down"
+              # macOS virtual key codes for number keys are non-sequential:
+              # Key: 1=18, 2=19, 3=20, 4=21, 5=23, 6=22, 7=26, 8=28, 9=25, 0=29
+              KEY_CODES=(0 18 19 20 21 23 22 26 28 25 29)
+              osascript -e "tell application \"System Events\" to key code ''${KEY_CODES[$SELECTED]} using control down"
             fi
           '' else ''
             #!/usr/bin/env bash
