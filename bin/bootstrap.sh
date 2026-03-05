@@ -110,16 +110,16 @@ else
     IN_ROLE=${IN_ROLE:-$DEFAULT_ROLE}
 
     info "Generating settings.nix..."
-    info "-- username = $DEFAULT_USER"
-    info "-- hostname = $DEFAULT_HOST"
+    info "-- username = $IN_USER"
+    info "-- hostname = $IN_HOST"
     info "-- system   = $DEFAULT_SYSTEM"
-    info "-- role     = $DEFAULT_ROLE"
+    info "-- role     = $IN_ROLE"
     cat <<EOF > settings.nix
 {
   username = "$IN_USER";
   hostname = "$IN_HOST";
   system   = "$DEFAULT_SYSTEM";
-  role     = "developer";
+  role     = "$IN_ROLE";
 }
 EOF
 fi
