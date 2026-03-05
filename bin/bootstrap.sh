@@ -49,10 +49,10 @@ else
         sh -s -- install --no-confirm --extra-conf "trusted-users = $(whoami)"
     elif [[ "$installer_choice" == "2" ]]; then
       info "Running Official Installer..."
-      sh <(curl -L [https://nixos.org/nix/install](https://nixos.org/nix/install))
+      sh <(curl -L https://nixos.org/nix/install)
     elif [[ "$installer_choice" == "3" ]]; then
         info "Running Determinate Systems Installer..."
-        curl --proto '=https' --tlsv1.2 -sSf -L [https://install.determinate.systems/nix](https://install.determinate.systems/nix) | sh -s -- install
+        curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install
     else
         info "Invalid nix installer option... exiting"
         exit 1
