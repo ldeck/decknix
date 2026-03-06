@@ -5,30 +5,23 @@ with lib;
 let
   cfg = config.decknix;
 
-  # Define your templates here as multi-line strings
+  # Bootstrap templates for `decknix init` / bootstrap.sh
+  # These are written to ~/.config/decknix/local/home.nix on first setup.
+  # They are NOT used at evaluation time — only as starter files.
   templates = {
     developer = ''
       { pkgs, ... }: {
         # -- DEVELOPER LOCAL CONFIG --
-        programs.git = {
-          settings = {
-            user.email = "dev@example.com";
-            user.name = "Your Name";
-          };
+        # Fill in your identity, then rebuild.
+        programs.git.extraConfig = {
+          user.email = "you@example.com";
+          user.name  = "Your Name";
         };
 
+        # Additional packages beyond the framework defaults
         home.packages = with pkgs; [
-          ripgrep
-          jq
           nodejs
         ];
-
-        #home.sessionVariables = {
-        #  EDITOR = "nano"; # override default 'vim'
-        #};
-
-        # This overrides the upstream Starship symbol
-        #programs.starship.settings.character.success_symbol = "[⚡](bold yellow)";
       }
     '';
 
@@ -36,9 +29,14 @@ let
       { pkgs, ... }: {
         # -- DESIGNER LOCAL CONFIG --
         home.packages = with pkgs; [
-          figma-linux
           inkscape
         ];
+      }
+    '';
+
+    minimal = ''
+      { ... }: {
+        # Minimal local config — add your overrides here.
       }
     '';
   };
@@ -48,36 +46,47 @@ in {
     role = mkOption {
       type = types.enum [ "developer" "designer" "minimal" ];
       default = "minimal";
-      description = "The role determining the template for the local config.";
+      description = ''
+        The user's role. Determines:
+        - Which template is generated during bootstrap
+        - Which default packages are included
+      '';
+    };
+
+    username = mkOption {
+      type = types.str;
+      default = "setup-required";
+      description = "The macOS username. Must be set in settings.nix.";
+    };
+
+    hostname = mkOption {
+      type = types.str;
+      default = "setup-required";
+      description = "The machine hostname. Must be set in settings.nix.";
+    };
+
+    # Expose templates so bootstrap/CLI can read them
+    _internal.templates = mkOption {
+      type = types.attrsOf types.str;
+      default = templates;
+      internal = true;
+      readOnly = true;
+      description = "Bootstrap templates keyed by role name.";
     };
   };
 
   config = {
-    # We use Home Manager's activation system
-    # This runs AFTER the build, but BEFORE the generation is marked 'current'
-    # home.activation.ensureLocalConfig = lib.hm.dag.entryAfter ["writeBoundary"] ''
-    #   LOCAL_CONFIG="$HOME/.config/decknix/default/home.nix"
-
-    #   if [ ! -f "$LOCAL_CONFIG" ]; then
-    #     echo -e "\033[0;31m[Decknix] Local configuration missing at $LOCAL_CONFIG\033[0m"
-    #     echo -e "\033[0;34m[Decknix] Generating template for role: ${cfg.role}...\033[0m"
-
-    #     mkdir -p "$(dirname "$LOCAL_CONFIG")"
-
-    #     # Inject the template content based on the role selected in flake.nix
-    #     cat > "$LOCAL_CONFIG" <<EOF
-    #   ${if cfg.role == "developer" then templates.developer
-    #     else if cfg.role == "designer" then templates.designer
-    #     else "{ ... }: { }"}
-    #   EOF
-
-    #     echo -e "\033[0;32m[Decknix] Template created successfully.\033[0m"
-    #     echo -e "\033[1;33m[ACTION REQUIRED] Please edit $LOCAL_CONFIG to fill in your details.\033[0m"
-    #     echo -e "\033[1;31mAborting activation to prevent applying incomplete config.\033[0m"
-
-    #     # This aborts the switch!
-    #     exit 1
-    #   fi
-    # '';
+    # Framework-level assertions — every user gets these automatically.
+    # No need to duplicate in individual flake.nix files.
+    assertions = [
+      {
+        assertion = cfg.username != "REPLACE_ME" && cfg.username != "setup-required";
+        message = "Decknix: You must set 'username' in ~/.config/decknix/settings.nix (run: whoami)";
+      }
+      {
+        assertion = cfg.hostname != "setup-required";
+        message = "Decknix: You must set 'hostname' in ~/.config/decknix/settings.nix (run: hostname -s)";
+      }
+    ];
   };
 }
