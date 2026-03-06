@@ -86,16 +86,28 @@
     };
   };
 
-  # Loads personal overrides from ~/.config/decknix/local/
+  # Loads personal overrides from ~/.config/decknix/
   #
-  # Org/team configs should come via flake inputs (not filesystem discovery).
-  # This loader only handles personal, machine-specific overrides:
-  #   local/home.nix     — personal packages, shell config
-  #   local/system.nix   — machine-specific tweaks
-  #   local/secrets.nix  — tokens, keys (gitignored)
+  # Org/team configs come via flake inputs. This loader handles personal
+  # overrides, organised into directories:
   #
-  # For backwards compatibility, also checks the legacy "default/" directory
-  # and any other subdirectories. This will be removed in a future version.
+  #   local/              — generic personal overrides (always loaded)
+  #   <org-name>/         — per-org personal overrides (name matches flake input)
+  #
+  # Each directory supports:
+  #   home.nix, system.nix, secrets.nix   — direct files
+  #   home/<anything>.nix                 — recursive subdirectory loading
+  #
+  # Example layout:
+  #   ~/.config/decknix/
+  #   ├── local/
+  #   │   ├── home.nix           — personal packages, git identity
+  #   │   └── system.nix         — machine-specific tweaks
+  #   ├── nc-config/             — overrides for the nc-config flake input
+  #   │   ├── home.nix           — disable a team git hook, etc.
+  #   │   └── home/
+  #   │       └── extra.nix      — recursively loaded
+  #   └── secrets.nix            — root-level secrets (also supported)
   configLoader = {
     lib,
     username,
@@ -107,9 +119,9 @@
     ...
   }:
   let
-    localDir = "${configDir}/local";
-
     # --- HELPERS ---
+
+    # Recursively find all .nix files in a directory
     findNixFiles = dir:
       if lib.pathIsDirectory dir then
         lib.filter (path: lib.hasSuffix ".nix" (toString path))
@@ -121,41 +133,46 @@
         builtins.trace "  [Loader] ${type} + ${toString path}" (import path)
       ) paths;
 
-    # --- Legacy compatibility ---
-    # Auto-discover subdirectories (e.g., "default/") for users who haven't
-    # migrated to "local/" yet. Will be removed in a future version.
-    legacyDirs =
+    # --- Directory Discovery ---
+    # Find all subdirectories in ~/.config/decknix/
+    # Each corresponds to either "local" (personal) or an org name
+    allDirs =
       if lib.pathIsDirectory configDir then
         let
           contents = builtins.readDir configDir;
-          dirs = builtins.attrNames (lib.filterAttrs (n: v: v == "directory") contents);
-          nonLocal = builtins.filter (d: d != "local") dirs;
         in
-          if nonLocal != [] then
-            builtins.trace "  [Loader] Legacy dirs found: ${toString nonLocal} (migrate to local/)" nonLocal
-          else []
+          builtins.attrNames (lib.filterAttrs (n: v: v == "directory") contents)
       else [];
 
     # --- Load Logic ---
+    # For a given type (home, system, secrets), gather files from:
+    #   1. Root-level: ~/.config/decknix/<type>.nix
+    #   2. Each subdirectory:
+    #      - Direct file:  <dir>/<type>.nix
+    #      - Nested files:  <dir>/<type>/**/*.nix (recursive)
     load = type:
       let
-        # 1. Root-level file (e.g., ~/.config/decknix/home.nix)
+        # 1. Root-level file
         rootFile = "${configDir}/${type}.nix";
         rootFiles = if lib.pathIsRegularFile rootFile then [ rootFile ] else [];
 
-        # 2. local/ directory (the canonical location)
-        localFile = "${localDir}/${type}.nix";
-        localFiles = if lib.pathIsRegularFile localFile then [ localFile ] else [];
-
-        # 3. Legacy subdirectories (backwards compat)
-        legacyFiles = builtins.concatMap (dir:
+        # 2. Per-directory files (local + org override dirs)
+        dirFiles = builtins.concatMap (dir:
           let
-            f = "${configDir}/${dir}/${type}.nix";
-          in
-            if lib.pathIsRegularFile f then [ f ] else []
-        ) legacyDirs;
+            dirPath = "${configDir}/${dir}";
 
-        allFiles = localFiles ++ legacyFiles ++ rootFiles;
+            # Direct file: <dir>/<type>.nix
+            directFile = "${dirPath}/${type}.nix";
+            direct = if lib.pathIsRegularFile directFile then [ directFile ] else [];
+
+            # Nested files: <dir>/<type>/**/*.nix
+            nestedDir = "${dirPath}/${type}";
+            nested = findNixFiles nestedDir;
+          in
+            direct ++ nested
+        ) allDirs;
+
+        allFiles = dirFiles ++ rootFiles;
       in
         if allFiles == [] then
           builtins.trace "  [Loader] No ${type} modules found." []
@@ -166,6 +183,7 @@
       home = (load "home") ++ (load "secrets");
       system = load "system";
     };
+    inherit allDirs;
   };
 }
 
