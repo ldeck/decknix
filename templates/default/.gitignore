@@ -4,3 +4,9 @@ result-*
 
 # Ignore personal settings
 settings.nix
+
+# Ignore secrets (tokens, keys, credentials)
+**/secrets.nix
+
+# Ignore local/personal overrides
+local/
