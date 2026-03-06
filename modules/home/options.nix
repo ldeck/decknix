@@ -56,7 +56,7 @@ in {
     # We use Home Manager's activation system
     # This runs AFTER the build, but BEFORE the generation is marked 'current'
     # home.activation.ensureLocalConfig = lib.hm.dag.entryAfter ["writeBoundary"] ''
-    #   LOCAL_CONFIG="$HOME/.local/decknix/default/home.nix"
+    #   LOCAL_CONFIG="$HOME/.config/decknix/default/home.nix"
 
     #   if [ ! -f "$LOCAL_CONFIG" ]; then
     #     echo -e "\033[0;31m[Decknix] Local configuration missing at $LOCAL_CONFIG\033[0m"

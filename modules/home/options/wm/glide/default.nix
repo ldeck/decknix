@@ -31,7 +31,7 @@ let
   # Generate the TOML config content
   generateConfig = ''
     # GlideWM configuration - managed by decknix
-    # Override in ~/.local/decknix/<org>/home.nix
+    # Override in ~/.config/decknix/<org>/home.nix
 
     [settings]
     animate = ${boolToString cfg.animate}
@@ -424,7 +424,7 @@ in {
 
             HELP_TEXT='No workspaces defined.
 
-To define workspaces, add to your ~/.local/decknix/<org>/home.nix:
+To define workspaces, add to your ~/.config/decknix/<org>/home.nix:
 
   decknix.wm.glide.workspaces = {
     work = {
@@ -496,7 +496,7 @@ EOF
 
             HELP_TEXT='No workspaces/spaces defined.
 
-To define workspaces with spaces, add to your ~/.local/decknix/<org>/home.nix:
+To define workspaces with spaces, add to your ~/.config/decknix/<org>/home.nix:
 
   decknix.wm.glide.workspaces = {
     work = {

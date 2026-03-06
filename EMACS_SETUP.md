@@ -48,7 +48,7 @@ If you have a local flake that uses decknix, update it to use your local version
 Then rebuild:
 
 ```bash
-darwin-rebuild switch --flake ~/.config/nix-darwin#default --impure
+darwin-rebuild switch --flake ~/.config/decknix#default --impure
 ```
 
 ### Option 2: Test with the Template
@@ -184,7 +184,7 @@ If `C-x g` doesn't open Magit, check:
 1. **Did you rebuild your configuration?**
    ```bash
    # The configuration won't take effect until you rebuild
-   darwin-rebuild switch --flake ~/.config/nix-darwin#default --impure
+   darwin-rebuild switch --flake ~/.config/decknix#default --impure
 
    # After rebuilding, restart emacs or kill existing processes
    pkill emacs

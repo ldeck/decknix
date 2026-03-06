@@ -64,9 +64,7 @@
   ];
 
   # 5. ACTIVATION SCRIPTS
-  # (Your previous logic for creating ~/.local/decknix fits here)
   system.activationScripts.postActivation.text = ''
-    mkdir -p ~/.local/decknix
-    # ... logic to create empty placeholder if needed ...
+    mkdir -p ~/.config/decknix
   '';
 }

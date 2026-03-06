@@ -21,7 +21,7 @@ Run the bootstrap script to install Nix and decknix together:
 This will:
 1. Install Nix with flakes enabled
 2. Install nix-darwin
-3. Create your local config directory at `~/.local/decknix/`
+3. Create your local config directory at `~/.config/decknix/`
 4. Initialize a flake in `~/tmp/decknix-test/`
 5. Prompt you for username and hostname
 
@@ -64,7 +64,7 @@ nix run .#darwin-rebuild -- switch --flake .
 After installation, you'll have:
 
 ```
-~/.local/decknix/
+~/.config/decknix/
 ├── default/
 │   ├── home.nix        # Your home-manager config
 │   └── system.nix      # Your darwin system config
@@ -80,7 +80,7 @@ After installation, you'll have:
 
 ### 1. Set Up Git Identity
 
-Edit `~/.local/decknix/default/home.nix`:
+Edit `~/.config/decknix/default/home.nix`:
 
 ```nix
 { pkgs, ... }: {
@@ -122,7 +122,7 @@ decknix switch
 
 ### Update Just Your Config
 
-Edit files in `~/.local/decknix/`, then:
+Edit files in `~/.config/decknix/`, then:
 
 ```bash
 decknix switch
@@ -133,7 +133,7 @@ decknix switch
 You can have multiple configuration "orgs" for different contexts:
 
 ```
-~/.local/decknix/
+~/.config/decknix/
 ├── default/          # Personal defaults
 │   ├── home.nix
 │   └── system.nix
@@ -162,8 +162,8 @@ Check the trace output - decknix logs which files it loads:
 
 ```
 [Loader] Auto-discovered orgs: default work
-[Loader] system + /Users/you/.local/decknix/default/system.nix
-[Loader] home + /Users/you/.local/decknix/default/home.nix
+[Loader] system + /Users/you/.config/decknix/default/system.nix
+[Loader] home + /Users/you/.config/decknix/default/home.nix
 ```
 
 ### Reset to Clean State
