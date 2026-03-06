@@ -79,15 +79,6 @@
 
         # 4. Local User Config
         ({ pkgs, lib, ... }: {
-          # --- VALIDATION ---
-          # This assertion runs at EVALUATION time (fastest feedback loop)
-          assertions = [
-            {
-              assertion = username != "REPLACE_ME" && username != "setup-required";
-              message = "Decknix Setup: You must edit 'settings.nix' and set your 'username' before building.";
-            }
-          ];
-
           # --- SYSTEM CONFIG ---
           networking.hostName = hostname;
           system.primaryUser = username;
@@ -107,8 +98,9 @@
             ++ loader.modules.home;
 
             # --- CONFIGURATION ---
-            # Select the role here. This determines which template is
-            # generated if the local config is missing.
+            # These feed the framework assertions in options.nix
+            decknix.username = username;
+            decknix.hostname = hostname;
             decknix.role = role;
 
             home.stateVersion = "24.05";
