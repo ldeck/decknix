@@ -6,7 +6,7 @@ Decknix uses a layered configuration approach where framework defaults can be ov
 
 1. **Decknix Framework** (`darwinModules.default`, `homeModules.default`)
    - Sensible defaults using `lib.mkDefault`
-2. **Organization Configs** (`~/.local/decknix/<org>/`)
+2. **Organization Configs** (`~/.config/decknix/<org>/`)
    - Your customizations, merged in discovery order
 3. **Explicit Overrides** (`lib.mkForce`)
    - Force specific values when needed
@@ -15,10 +15,10 @@ Decknix uses a layered configuration approach where framework defaults can be ov
 
 ### Auto-Discovery
 
-Decknix automatically discovers directories in `~/.local/decknix/`:
+Decknix automatically discovers directories in `~/.config/decknix/`:
 
 ```
-~/.local/decknix/
+~/.config/decknix/
 ├── default/           # Always loaded first
 │   ├── home.nix
 │   └── system.nix
@@ -33,8 +33,8 @@ All directories are loaded and merged. The loader traces what it finds:
 
 ```
 [Loader] Auto-discovered orgs: default work personal
-[Loader] home + /Users/you/.local/decknix/default/home.nix
-[Loader] home + /Users/you/.local/decknix/work/home.nix
+[Loader] home + /Users/you/.config/decknix/default/home.nix
+[Loader] home + /Users/you/.config/decknix/work/home.nix
 ```
 
 ### Explicit Org List
@@ -42,7 +42,7 @@ All directories are loaded and merged. The loader traces what it finds:
 Control which orgs are active with `enabled-orgs.nix`:
 
 ```nix
-# ~/.local/decknix/enabled-orgs.nix
+# ~/.config/decknix/enabled-orgs.nix
 [ "default" "work" ]  # Only these orgs will be loaded
 ```
 
@@ -51,7 +51,7 @@ Control which orgs are active with `enabled-orgs.nix`:
 For complex setups, use subdirectories:
 
 ```
-~/.local/decknix/work/
+~/.config/decknix/work/
 ├── home.nix           # Main home config
 ├── home/              # Additional home modules
 │   ├── kubernetes.nix

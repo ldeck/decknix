@@ -6,7 +6,8 @@
     hostname ? "unknown",
     system ? "unknown",
     role ? "developer",
-    configDir ? "/Users/${username}/.local/decknix",
+    homeDir ? (if builtins.elem system [ "aarch64-linux" "x86_64-linux" ] then "/home/${username}" else "/Users/${username}"),
+    configDir ? "${homeDir}/.config/decknix",
     ...
   }:
   let
@@ -37,7 +38,7 @@
       if lib.pathIsRegularFile enabledOrgsPath then
         import enabledOrgsPath
       else if lib.pathIsDirectory configDir then
-        # Auto-discover directories in ~/.local/decknix
+        # Auto-discover directories in ~/.config/decknix
         let
           contents = builtins.readDir configDir;
           dirs = builtins.attrNames (lib.filterAttrs (n: v: v == "directory") contents);

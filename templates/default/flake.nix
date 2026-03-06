@@ -61,7 +61,7 @@
         decknix.darwinModules.default
 
         # 2. Inject Dynamic System-Level Configuration
-        #    (Loads ~/.local/decknix/<org>/system.nix for enabled orgs)
+        #    (Loads ~/.config/decknix/<org>/system.nix for enabled orgs)
       ] ++ loader.modules.system ++ [
 
         # 3. Local User Config
@@ -86,7 +86,7 @@
               decknix.homeModules.default
             ]
             # 4. Inject Dynamic Home-Level Configuration
-            #    (Loads ~/.local/decknix/<org>/home.nix for enabled orgs)
+            #    (Loads ~/.config/decknix/<org>/home.nix for enabled orgs)
             ++ loader.modules.home;
 
             # --- CONFIGURATION ---

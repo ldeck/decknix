@@ -46,7 +46,7 @@ decknix switch
 ## 🏗️ Architecture
 
 ```
-~/.local/decknix/                    # Your local configurations
+~/.config/decknix/                    # Your local configurations
 ├── default/                         # Personal/default org
 │   ├── home.nix                     # Home-manager config
 │   └── system.nix                   # Darwin system config
@@ -65,7 +65,7 @@ decknix switch
 ### How It Works
 
 1. **decknix** provides opinionated defaults via `darwinModules.default` and `homeModules.default`
-2. The **configLoader** discovers `~/.local/decknix/<org>/` directories
+2. The **configLoader** discovers `~/.config/decknix/<org>/` directories
 3. Each org's `system.nix` and `home.nix` files are merged into your configuration
 4. Your settings override decknix defaults (everything uses `lib.mkDefault`)
 
@@ -110,10 +110,10 @@ A complete, modern Emacs experience. See [Emacs Guide](modules/home/options/edit
 
 ### Organization-Based Config
 
-Each subdirectory in `~/.local/decknix/` is an "organization" that provides configuration:
+Each subdirectory in `~/.config/decknix/` is an "organization" that provides configuration:
 
 ```nix
-# ~/.local/decknix/default/home.nix
+# ~/.config/decknix/default/home.nix
 { pkgs, ... }: {
   programs.git.settings = {
     user.email = "you@example.com";
@@ -128,7 +128,7 @@ Each subdirectory in `~/.local/decknix/` is an "organization" that provides conf
 ```
 
 ```nix
-# ~/.local/decknix/work/home.nix
+# ~/.config/decknix/work/home.nix
 { pkgs, ... }: {
   # Work-specific tools
   home.packages = with pkgs; [
@@ -143,7 +143,7 @@ Each subdirectory in `~/.local/decknix/` is an "organization" that provides conf
 All decknix options use `lib.mkDefault` so you can override them:
 
 ```nix
-# ~/.local/decknix/default/home.nix
+# ~/.config/decknix/default/home.nix
 { ... }: {
   # Disable specific Emacs modules
   programs.emacs.decknix.welcome.enable = false;
@@ -159,7 +159,7 @@ All decknix options use `lib.mkDefault` so you can override them:
 For sensitive data like GitHub tokens, create a gitignored `secrets.nix`:
 
 ```nix
-# ~/.local/decknix/default/secrets.nix
+# ~/.config/decknix/default/secrets.nix
 { config, lib, pkgs, ... }: {
   # Forge authentication for GitHub PRs
   home.file.".authinfo".text = ''
@@ -201,7 +201,7 @@ emacsclient -c
 ### Add Custom Packages
 
 ```nix
-# ~/.local/decknix/default/home.nix
+# ~/.config/decknix/default/home.nix
 { pkgs, ... }: {
   home.packages = with pkgs; [
     kubectl

@@ -4,7 +4,7 @@ set -e
 # --- Configuration ---
 REPO_URL="github:ldeck/decknix"
 DEFAULT_REF="main"
-TARGET_DIR="$HOME/decknix"
+TARGET_DIR="$HOME/.config/decknix"
 BACKUP_SUFFIX=".before-decknix"
 
 # --- Styling ---
@@ -147,7 +147,7 @@ else
     echo "Troubleshooting:"
     echo "  - Check the error message above."
     echo "  - Ensure you have internet connectivity."
-    echo "  - Open an issue at [https://github.com/ldeck/decknix/issues](https://github.com/ldeck/decknix/issues)"
+    echo "  - Open an issue at https://github.com/ldeck/decknix/issues"
     exit 1
 fi
 

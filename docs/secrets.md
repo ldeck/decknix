@@ -7,8 +7,8 @@ This guide covers setting up authentication for GitHub (Forge), GPG encryption, 
 The decknix `configLoader` (see [`lib/default.nix`](../lib/default.nix)) automatically discovers and loads `secrets.nix` files from your org directories alongside `home.nix`. This allows you to keep sensitive configuration separate and gitignored.
 
 **File discovery order:**
-1. `~/.local/decknix/secrets.nix` (root level)
-2. `~/.local/decknix/<org>/secrets.nix` (per-org)
+1. `~/.config/decknix/secrets.nix` (root level)
+2. `~/.config/decknix/<org>/secrets.nix` (per-org)
 
 Both are merged into your home-manager configuration.
 
@@ -17,7 +17,7 @@ Both are merged into your home-manager configuration.
 Create a `secrets.nix` file in your org directory:
 
 ```nix
-# ~/.local/decknix/default/secrets.nix
+# ~/.config/decknix/default/secrets.nix
 { ... }: {
   # GitHub authentication for Forge (PR management in Emacs)
   # Format: machine HOST login USER^forge password TOKEN
@@ -30,7 +30,7 @@ Create a `secrets.nix` file in your org directory:
 **Important:** Add `secrets.nix` to `.gitignore`:
 
 ```bash
-echo "secrets.nix" >> ~/.local/decknix/.gitignore
+echo "secrets.nix" >> ~/.config/decknix/.gitignore
 ```
 
 After creating the file, run `decknix switch` to apply.
@@ -51,10 +51,10 @@ Forge requires a GitHub Personal Access Token to manage PRs and issues.
 
 ### 2. Configure Authentication in secrets.nix
 
-Create `~/.local/decknix/<org>/secrets.nix`:
+Create `~/.config/decknix/<org>/secrets.nix`:
 
 ```nix
-# ~/.local/decknix/default/secrets.nix
+# ~/.config/decknix/default/secrets.nix
 { ... }: {
   home.file.".authinfo".text = ''
     machine api.github.com login YOUR_USERNAME^forge password ghp_xxxxxxxxxxxx
@@ -87,7 +87,7 @@ rm /tmp/authinfo
 Then reference it in your config:
 
 ```nix
-# ~/.local/decknix/default/secrets.nix
+# ~/.config/decknix/default/secrets.nix
 { ... }: {
   # Tell Emacs to use the encrypted file
   programs.emacs.extraConfig = ''
@@ -150,7 +150,7 @@ Create a GitHub Personal Access Token for each account:
 Add entries for each account in your `secrets.nix` (same host, different logins):
 
 ```nix
-# ~/.local/decknix/default/secrets.nix
+# ~/.config/decknix/default/secrets.nix
 { ... }: {
   home.file.".authinfo".text = ''
     machine api.github.com login ldeck^forge password ghp_personal_xxxxx
@@ -188,7 +188,7 @@ This stores the username in `.git/config`:
 Combine with Git conditional includes to automatically use correct email:
 
 ```nix
-# ~/.local/decknix/nurturecloud/home.nix
+# ~/.config/decknix/nurturecloud/home.nix
 { ... }: {
   programs.git.includes = [
     {
@@ -263,7 +263,7 @@ For GitLab, add another machine entry:
 ### Generate SSH Key
 
 ```nix
-# ~/.local/decknix/default/home.nix
+# ~/.config/decknix/default/home.nix
 { ... }: {
   programs.ssh = {
     enable = true;
@@ -298,7 +298,7 @@ For GitLab, add another machine entry:
 ### Install GPG
 
 ```nix
-# ~/.local/decknix/default/home.nix
+# ~/.config/decknix/default/home.nix
 { pkgs, ... }: {
   home.packages = [ pkgs.gnupg pkgs.pinentry_mac ];
 
