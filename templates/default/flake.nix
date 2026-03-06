@@ -16,6 +16,15 @@
     # 4. Specific Tag/Commit (Immutable/Stable)
     # decknix.url = "github:ldeck/decknix?rev=a1b2c3d4...";
 
+    # --- ORG CONFIG (Optional) ---
+    # Add org-specific configs as versioned flake inputs.
+    # Each org repo exports darwinModules.default and homeModules.default.
+    #
+    # my-org-config = {
+    #   url = "github:my-org/decknix-config";
+    #   inputs.nixpkgs.follows = "nixpkgs";
+    # };
+
     # follow decknix inputs by default
     nixpkgs.follows = "decknix/nixpkgs";
     nix-darwin.follows = "decknix/nix-darwin";
@@ -60,11 +69,15 @@
         # 1. Import Shared Team Config
         decknix.darwinModules.default
 
-        # 2. Inject Dynamic System-Level Configuration
-        #    (Loads ~/.config/decknix/<org>/system.nix for enabled orgs)
+        # 2. Org Config via Flake Input (versioned, reproducible)
+        #    Uncomment if using an org config flake input above:
+        # inputs.my-org-config.darwinModules.default
+
+        # 3. Org Config via Filesystem (local auto-discovery fallback)
+        #    Loads ~/.config/decknix/<org>/system.nix for discovered orgs
       ] ++ loader.modules.system ++ [
 
-        # 3. Local User Config
+        # 4. Local User Config
         ({ pkgs, lib, ... }: {
           # --- VALIDATION ---
           # This assertion runs at EVALUATION time (fastest feedback loop)
@@ -84,9 +97,13 @@
           home-manager.users.${username} = { pkgs, ... }: {
             imports = [
               decknix.homeModules.default
+
+              # 4. Org Config via Flake Input (versioned, reproducible)
+              #    Uncomment if using an org config flake input above:
+              # inputs.my-org-config.homeModules.default
             ]
-            # 4. Inject Dynamic Home-Level Configuration
-            #    (Loads ~/.config/decknix/<org>/home.nix for enabled orgs)
+            # 5. Org Config via Filesystem (local auto-discovery fallback)
+            #    Loads ~/.config/decknix/<org>/home.nix for discovered orgs
             ++ loader.modules.home;
 
             # --- CONFIGURATION ---

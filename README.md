@@ -65,8 +65,8 @@ decknix switch
 ### How It Works
 
 1. **decknix** provides opinionated defaults via `darwinModules.default` and `homeModules.default`
-2. The **configLoader** discovers `~/.config/decknix/<org>/` directories
-3. Each org's `system.nix` and `home.nix` files are merged into your configuration
+2. **Org configs** are loaded via flake inputs (versioned repos) or filesystem auto-discovery
+3. Each org's `system.nix` and `home.nix` modules are merged into your configuration
 4. Your settings override decknix defaults (everything uses `lib.mkDefault`)
 
 ---
@@ -110,7 +110,9 @@ A complete, modern Emacs experience. See [Emacs Guide](modules/home/options/edit
 
 ### Organization-Based Config
 
-Each subdirectory in `~/.config/decknix/` is an "organization" that provides configuration:
+Org configs can be versioned flake inputs (recommended for teams) or local filesystem directories. See the [Configuration Guide](docs/configuration.md) for the flake input approach.
+
+Each subdirectory in `~/.config/decknix/` is an "organization" that provides local configuration:
 
 ```nix
 # ~/.config/decknix/default/home.nix

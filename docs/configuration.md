@@ -13,7 +13,66 @@ Decknix uses a layered configuration approach where framework defaults can be ov
 
 ## Organization Structure
 
-### Auto-Discovery
+Org configs can be loaded two ways:
+
+1. **Flake inputs** (recommended for teams) — versioned, reproducible, shareable
+2. **Filesystem auto-discovery** (local fallback) — quick personal overrides
+
+### Flake Inputs (Recommended)
+
+Org configs become separate git repos used as flake inputs. Each org repo exports
+`darwinModules.default` and `homeModules.default`:
+
+```nix
+# In your ~/.config/decknix/flake.nix
+inputs.my-org-config = {
+  url = "github:my-org/decknix-config";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+Then wire the modules into your configuration:
+
+```nix
+# System modules
+modules = [
+  decknix.darwinModules.default
+  inputs.my-org-config.darwinModules.default
+  # ...
+];
+
+# Home modules
+imports = [
+  decknix.homeModules.default
+  inputs.my-org-config.homeModules.default
+];
+```
+
+Benefits:
+- **Version pinning** — `flake.lock` pins a known-good version
+- **Reproducibility** — `nix flake update my-org-config` to update
+- **Distribution** — team members reference the same repo
+- **Automated updates** — Renovate can watch for new versions
+
+#### Minimal Org Config Repo
+
+An org config repo needs a `flake.nix` that exports modules:
+
+```nix
+# my-org/decknix-config/flake.nix
+{
+  description = "My Org - Decknix Config";
+
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+
+  outputs = { self, nixpkgs, ... }: {
+    darwinModules.default = import ./system.nix;
+    homeModules.default = import ./home.nix;
+  };
+}
+```
+
+### Filesystem Auto-Discovery (Local Fallback)
 
 Decknix automatically discovers directories in `~/.config/decknix/`:
 
