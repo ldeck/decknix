@@ -86,7 +86,16 @@
     };
   };
 
-  # Returns a set of helper functions for loading local configurations
+  # Loads personal overrides from ~/.config/decknix/local/
+  #
+  # Org/team configs should come via flake inputs (not filesystem discovery).
+  # This loader only handles personal, machine-specific overrides:
+  #   local/home.nix     — personal packages, shell config
+  #   local/system.nix   — machine-specific tweaks
+  #   local/secrets.nix  — tokens, keys (gitignored)
+  #
+  # For backwards compatibility, also checks the legacy "default/" directory
+  # and any other subdirectories. This will be removed in a future version.
   configLoader = {
     lib,
     username,
@@ -98,80 +107,65 @@
     ...
   }:
   let
-    # --- HELPER: Recursive File Scanner ---
-    # Recursively find all .nix files in a dir
-    findFiles = dir: ext:
+    localDir = "${configDir}/local";
+
+    # --- HELPERS ---
+    findNixFiles = dir:
       if lib.pathIsDirectory dir then
-        let
-          allPaths = lib.filesystem.listFilesRecursive dir;
-        in
-          lib.filter (path: lib.hasSuffix ext (toString path)) allPaths
+        lib.filter (path: lib.hasSuffix ".nix" (toString path))
+          (lib.filesystem.listFilesRecursive dir)
       else [];
 
-    findNixFiles = dir:
-      findFiles dir "nix";
-
-    # --- 2. Import and Trace Helper ---
-    # Imports a list of paths, adding a debug trace for each one
     importWithTrace = type: paths:
       map (path:
         builtins.trace "  [Loader] ${type} + ${toString path}" (import path)
       ) paths;
 
-    # --- 3. Org Discovery ---
-    enabledOrgsPath = "${configDir}/enabled-orgs.nix";
-
-    allOrgs =
-      if lib.pathIsRegularFile enabledOrgsPath then
-        import enabledOrgsPath
-      else if lib.pathIsDirectory configDir then
-        # Auto-discover directories in ~/.config/decknix
+    # --- Legacy compatibility ---
+    # Auto-discover subdirectories (e.g., "default/") for users who haven't
+    # migrated to "local/" yet. Will be removed in a future version.
+    legacyDirs =
+      if lib.pathIsDirectory configDir then
         let
           contents = builtins.readDir configDir;
           dirs = builtins.attrNames (lib.filterAttrs (n: v: v == "directory") contents);
+          nonLocal = builtins.filter (d: d != "local") dirs;
         in
-          builtins.trace "  [Loader] Auto-discovered orgs: ${toString dirs}" dirs
-      else
-        builtins.trace "  [Loader] No local config directory found." [];
+          if nonLocal != [] then
+            builtins.trace "  [Loader] Legacy dirs found: ${toString nonLocal} (migrate to local/)" nonLocal
+          else []
+      else [];
 
-    # --- 4. Main Load Logic ---
+    # --- Load Logic ---
     load = type:
       let
-        # root only file path
-        rootFilePath = "${configDir}/${type}.nix";
+        # 1. Root-level file (e.g., ~/.config/decknix/home.nix)
+        rootFile = "${configDir}/${type}.nix";
+        rootFiles = if lib.pathIsRegularFile rootFile then [ rootFile ] else [];
 
-        # also support simpler root only files (e.g., decknix/home.nix)
-        rootFiles =
-          (if lib.pathIsRegularFile rootFilePath then [ rootFilePath ] else []);
+        # 2. local/ directory (the canonical location)
+        localFile = "${localDir}/${type}.nix";
+        localFiles = if lib.pathIsRegularFile localFile then [ localFile ] else [];
 
-        # Gather all relevant files from all enabled orgs
-        orgNestedFiles = builtins.concatMap (org:
+        # 3. Legacy subdirectories (backwards compat)
+        legacyFiles = builtins.concatMap (dir:
           let
-            orgTypePath = "${configDir}/${org}/${type}";
-            orgTypeFile = "${orgTypePath}.nix";
-
-            # check for direct file (e.g., decknix/default/home.nix)
-            direct = if lib.pathIsRegularFile orgTypeFile then [ orgTypeFile ] else [];
-
-            nested = findNixFiles orgTypePath;
+            f = "${configDir}/${dir}/${type}.nix";
           in
-            direct ++ nested
-        ) allOrgs;
+            if lib.pathIsRegularFile f then [ f ] else []
+        ) legacyDirs;
 
-        allNixFiles = orgNestedFiles ++ rootFiles;
+        allFiles = localFiles ++ legacyFiles ++ rootFiles;
       in
-        if allNixFiles == [] then
+        if allFiles == [] then
           builtins.trace "  [Loader] No ${type} modules found." []
         else
-          importWithTrace type allNixFiles;
+          importWithTrace type allFiles;
   in {
     modules = {
-      # Load home.nix and secrets.nix together for home-manager
-      # secrets.nix is gitignored and contains sensitive data like auth tokens
       home = (load "home") ++ (load "secrets");
       system = load "system";
     };
-    inherit allOrgs;
   };
 }
 
