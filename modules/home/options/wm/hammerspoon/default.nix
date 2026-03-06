@@ -171,23 +171,31 @@ let
     -- GUI Pickers (choose-gui)
     -- ============================================
 
-    -- Helper to get home directory
-    local home = os.getenv("HOME")
-    local nixBin = home .. "/.nix-profile/bin/"
+    -- Helper: resolve Nix profile PATH for script execution
+    -- Hammerspoon doesn't inherit the user's shell PATH, so we
+    -- prepend the Nix profile bin directories explicitly.
+    local function nixExec(cmd)
+      local home = os.getenv("HOME")
+      local path = home .. "/.nix-profile/bin:"
+                .. "/run/current-system/sw/bin:"
+                .. "/nix/var/nix/profiles/default/bin:"
+                .. "/usr/local/bin:/usr/bin:/bin"
+      return hs.execute("export PATH=" .. path .. "; " .. cmd, true)
+    end
 
     -- Workspace picker (W = Workspace)
     hs.hotkey.bind(${modifiersLua}, "w", function()
-      hs.execute(nixBin .. "glide-workspace --gui", true)
+      nixExec("glide-workspace --gui")
     end)
 
     -- Space picker (G = Go to space)
     hs.hotkey.bind(${modifiersLua}, "g", function()
-      hs.execute(nixBin .. "glide-space --gui", true)
+      nixExec("glide-space --gui")
     end)
 
     -- Cheatsheet (? = Help, using / key since ? requires shift)
     hs.hotkey.bind(${modifiersShiftLua}, "/", function()
-      hs.execute(nixBin .. "glide-cheatsheet --gui", true)
+      nixExec("glide-cheatsheet --gui")
     end)
 
     ${cfg.extraConfig}
