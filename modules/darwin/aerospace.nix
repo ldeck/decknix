@@ -10,7 +10,7 @@ in
   options.decknix.services.aerospace = {
     enable = mkOption {
       type = types.bool;
-      default = true;  # Enabled by default for tiling WM experience
+      default = false;  # Opt-in: only apply AeroSpace system settings when explicitly enabled
       description = ''
         Enable AeroSpace tiling window manager system configuration.
         This configures macOS system settings for optimal AeroSpace usage:
@@ -18,6 +18,8 @@ in
         - Disables "Displays have separate Spaces" (better multi-monitor)
         - Disables Mission Control shortcuts (Ctrl+Left/Right/1/2/3)
         - Auto-hides Dock (maximize screen real estate)
+
+        To enable: decknix.services.aerospace.enable = true;
       '';
     };
 
