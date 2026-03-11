@@ -29,12 +29,52 @@ let
     ) ws.spaces
   ) cfg.workspaces));
 
+  # Build per-workspace space lists for --workspace filtering
+  workspaceNamesStr = concatStringsSep "\\n" (map (ws: ws.name) workspaceList);
+
+  perWorkspaceSpaceLists = concatStringsSep "\n" (map (ws:
+    let
+      wsInitial = lib.toLower (lib.substring 0 1 ws.name);
+      spacesStr = concatStringsSep "\\n" (imap1 (i: spaceName:
+        let
+          spaceInitial = lib.toLower (lib.substring 0 1 spaceName);
+          shortcode = "${wsInitial}${spaceInitial}";
+        in
+        "${shortcode}  ${ws.name}/${spaceName}:${toString (ws.startSpace + i - 1)}"
+      ) ws.spaces);
+    in
+    "    \"${ws.name}\") SPACES=\"${spacesStr}\" ;;"
+  ) workspaceList);
+
+  switchToSpace = ''
+    switch_to_space() {
+      local SELECTED
+      SELECTED=$(echo -e "$1" | ${choosePkg}/bin/choose -z -a -n 30 | grep -oE ':[0-9]+$' | cut -d: -f2)
+      if [ -n "$SELECTED" ]; then
+        KEY_CODES=(0 18 19 20 21 23 22 26 28 25 29)
+        osascript -e "tell application \"System Events\" to key code ''${KEY_CODES[$SELECTED]} using control down"
+      fi
+    }
+  '';
+
   pickerBody = ''
-    SPACES="${spaceListStr}"
-    SELECTED=$(echo -e "$SPACES" | ${choosePkg}/bin/choose -z -a -n 30 | grep -oE ':[0-9]+$' | cut -d: -f2)
-    if [ -n "$SELECTED" ]; then
-      KEY_CODES=(0 18 19 20 21 23 22 26 28 25 29)
-      osascript -e "tell application \"System Events\" to key code ''${KEY_CODES[$SELECTED]} using control down"
+    ${switchToSpace}
+
+    if [[ "''${1:-}" == "--workspace" || "''${1:-}" == "-w" ]]; then
+      # Workspace-first mode: pick workspace, then pick space within it
+      WS_NAMES="${workspaceNamesStr}"
+      WS=$(echo -e "$WS_NAMES" | ${choosePkg}/bin/choose -z -a -n 30)
+      if [ -n "$WS" ]; then
+        case "$WS" in
+    ${perWorkspaceSpaceLists}
+          *) echo "Unknown workspace: $WS"; exit 1 ;;
+        esac
+        switch_to_space "$SPACES"
+      fi
+    else
+      # Default: show all spaces flat
+      SPACES="${spaceListStr}"
+      switch_to_space "$SPACES"
     fi
   '';
 
@@ -44,9 +84,6 @@ let
     echo "  decknix.wm.spaces.workspaces = { ... };"
     echo "Then run: decknix switch"
   '';
-
-  dnxWorkspaceScript = pkgs.writeShellScriptBin "dnx-workspace"
-    (if hasWorkspaces then pickerBody else noWorkspacesHelp);
 
   dnxSpaceScript = pkgs.writeShellScriptBin "dnx-space"
     (if hasWorkspaces then pickerBody else noWorkspacesHelp);
@@ -64,15 +101,15 @@ SPACE NAVIGATION (Hammerspoon)
   ${mod}+Up           Mission Control
 
 WORKSPACE SWITCHING
-  ${mod}+W            Workspace picker (GUI)
-  ${mod}+G            Space picker (GUI)
+  ${mod}+W            Workspace picker (GUI, pick workspace then space)
+  ${mod}+G            Space picker (GUI, all spaces flat)
   ${mod}+Shift+<key>  Switch to workspace (key from config)
   ${mod}+Shift+?      Show this cheatsheet (GUI)
 
 CLI TOOLS
-  dnx-workspace       Switch workspace (choose-gui)
-  dnx-space           Switch to space (choose-gui)
-  dnx-cheatsheet      Show this help
+  dnx-space              All spaces flat (choose-gui)
+  dnx-space --workspace  Pick workspace first, then space
+  dnx-cheatsheet         Show this help
 "
     if [[ "$1" == "--gui" ]]; then
       echo "$CHEATSHEET" | ${choosePkg}/bin/choose -n 50
@@ -141,7 +178,6 @@ in {
 
   config = mkIf hasWorkspaces {
     home.packages = [
-      dnxWorkspaceScript
       dnxSpaceScript
       dnxCheatsheetScript
       choosePkg
