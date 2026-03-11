@@ -125,12 +125,12 @@ let
       return hs.execute("export PATH=" .. path .. "; " .. cmd, true)
     end
 
-    -- Workspace picker (W = Workspace)
+    -- Workspace picker (W = pick workspace, then space within it)
     hs.hotkey.bind(${modifiersLua}, "w", function()
-      nixExec("dnx-workspace")
+      nixExec("dnx-space --workspace")
     end)
 
-    -- Space picker (G = Go to space)
+    -- Space picker (G = Go to space, all spaces flat)
     hs.hotkey.bind(${modifiersLua}, "g", function()
       nixExec("dnx-space")
     end)
