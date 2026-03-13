@@ -24,8 +24,18 @@ enum Commands {
     },
     /// Switch system configuration
     Switch {
+        /// Dry run (don't actually apply)
         #[arg(long)]
         dry_run: bool,
+
+        /// Use a local framework checkout instead of the pinned remote.
+        /// Reads path from --dev-path, or DECKNIX_DEV env var, or defaults to ~/tools/decknix.
+        #[arg(long)]
+        dev: bool,
+
+        /// Explicit path to a local decknix framework checkout (implies --dev)
+        #[arg(long, value_name = "PATH")]
+        dev_path: Option<String>,
     },
     Help {
         /// The command to look up
@@ -34,6 +44,37 @@ enum Commands {
     // This variant catches unknown commands to check extensions
     #[command(external_subcommand)]
     External(Vec<String>),
+}
+
+/// Resolve the local framework path for --dev mode.
+/// Priority: --dev-path flag > DECKNIX_DEV env var > ~/tools/decknix
+fn resolve_dev_path(explicit: Option<&str>) -> anyhow::Result<PathBuf> {
+    if let Some(p) = explicit {
+        let path = PathBuf::from(p);
+        if !path.is_dir() {
+            anyhow::bail!("--dev-path '{}' is not a directory", p);
+        }
+        return Ok(path);
+    }
+
+    if let Ok(env_path) = std::env::var("DECKNIX_DEV") {
+        let path = PathBuf::from(&env_path);
+        if !path.is_dir() {
+            anyhow::bail!("DECKNIX_DEV='{}' is not a directory", env_path);
+        }
+        return Ok(path);
+    }
+
+    let default = dirs::home_dir()
+        .unwrap_or_default()
+        .join("tools/decknix");
+    if !default.is_dir() {
+        anyhow::bail!(
+            "Default dev path '{}' not found. Set DECKNIX_DEV or use --dev-path.",
+            default.display()
+        );
+    }
+    Ok(default)
 }
 
 // 2. Dynamic Configuration Schema
@@ -120,13 +161,31 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Switch { dry_run }) => {
-            println!("🔄 Switching...");
-            let mut cmd = Command::new("sudo");
-            cmd.arg("darwin-rebuild").arg("switch").arg("--flake").arg(".#default").arg("--impure");
-            if dry_run { cmd.arg("--dry-run"); }
-            let status = cmd.status()?;
-            std::process::exit(status.code().unwrap_or(1));
+        Some(Commands::Switch { dry_run, dev, dev_path }) => {
+            let use_dev = dev || dev_path.is_some();
+
+            if use_dev {
+                let path = resolve_dev_path(dev_path.as_deref())?;
+                println!("🔄 Switching (dev: {})...", path.display());
+                let mut cmd = Command::new("sudo");
+                cmd.arg("darwin-rebuild").arg("switch")
+                    .arg("--flake").arg(".#default")
+                    .arg("--impure")
+                    .arg("--override-input").arg("decknix")
+                    .arg(format!("path:{}", path.display()));
+                if dry_run { cmd.arg("--dry-run"); }
+                let status = cmd.status()?;
+                std::process::exit(status.code().unwrap_or(1));
+            } else {
+                println!("🔄 Switching...");
+                let mut cmd = Command::new("sudo");
+                cmd.arg("darwin-rebuild").arg("switch")
+                    .arg("--flake").arg(".#default")
+                    .arg("--impure");
+                if dry_run { cmd.arg("--dry-run"); }
+                let status = cmd.status()?;
+                std::process::exit(status.code().unwrap_or(1));
+            }
         }
         Some(Commands::Update { input }) => {
             println!("⬇️  Updating...");
