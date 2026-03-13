@@ -2,5 +2,8 @@
 result
 result-*
 
+# Ignore Rust/Cargo build artifacts
+cli/target/
+
 # Ignore automatically generated direnv output
 .direnv
