@@ -26,10 +26,10 @@ in
   programs.home-manager.enable = lib.mkDefault true;
 
   # 2. SESSION VARIABLES
-  # By using mkDefault, if the user sets EDITOR in their local config,
-  # their value takes precedence.
+  # EDITOR is driven by decknix.defaultEditor (see options.nix).
+  # Users can override via their local config or by setting decknix.defaultEditor.
   home.sessionVariables = {
-    EDITOR = lib.mkDefault "vim";
+    EDITOR = lib.mkDefault config.decknix.defaultEditor;
     # PAGER = lib.mkDefault "less";
   };
 

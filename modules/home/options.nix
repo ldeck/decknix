@@ -65,6 +65,16 @@ in {
       description = "The machine hostname. Must be set in settings.nix.";
     };
 
+    defaultEditor = mkOption {
+      type = types.str;
+      default = "vim";
+      description = ''
+        The default EDITOR environment variable.
+        Set this to decouple your preferred editor from any editor profile.
+        Examples: "vim", "nvim", "emacs", "emacsclient -t"
+      '';
+    };
+
     # Expose templates so bootstrap/CLI can read them
     _internal.templates = mkOption {
       type = types.attrsOf types.str;
