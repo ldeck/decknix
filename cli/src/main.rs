@@ -24,7 +24,7 @@ enum Commands {
     },
     /// Switch system configuration
     Switch {
-        /// Dry run (don't actually apply)
+        /// Build only — don't activate (uses darwin-rebuild build instead of switch)
         #[arg(long)]
         dry_run: bool,
 
@@ -163,26 +163,34 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Some(Commands::Switch { dry_run, dev, dev_path }) => {
             let use_dev = dev || dev_path.is_some();
+            // darwin-rebuild switch --dry-run still activates; use 'build' for true dry run
+            let action = if dry_run { "build" } else { "switch" };
 
             if use_dev {
                 let path = resolve_dev_path(dev_path.as_deref())?;
-                println!("🔄 Switching (dev: {})...", path.display());
+                if dry_run {
+                    println!("🔍 Dry run (dev: {})...", path.display());
+                } else {
+                    println!("🔄 Switching (dev: {})...", path.display());
+                }
                 let mut cmd = Command::new("sudo");
-                cmd.arg("darwin-rebuild").arg("switch")
+                cmd.arg("darwin-rebuild").arg(action)
                     .arg("--flake").arg(".#default")
                     .arg("--impure")
                     .arg("--override-input").arg("decknix")
                     .arg(format!("path:{}", path.display()));
-                if dry_run { cmd.arg("--dry-run"); }
                 let status = cmd.status()?;
                 std::process::exit(status.code().unwrap_or(1));
             } else {
-                println!("🔄 Switching...");
+                if dry_run {
+                    println!("🔍 Dry run...");
+                } else {
+                    println!("🔄 Switching...");
+                }
                 let mut cmd = Command::new("sudo");
-                cmd.arg("darwin-rebuild").arg("switch")
+                cmd.arg("darwin-rebuild").arg(action)
                     .arg("--flake").arg(".#default")
                     .arg("--impure");
-                if dry_run { cmd.arg("--dry-run"); }
                 let status = cmd.status()?;
                 std::process::exit(status.code().unwrap_or(1));
             }
