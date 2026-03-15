@@ -166,6 +166,17 @@ fn main() -> anyhow::Result<()> {
             // darwin-rebuild switch --dry-run still activates; use 'build' for true dry run
             let action = if dry_run { "build" } else { "switch" };
 
+            // Always run from the decknix config directory so --flake .#default resolves correctly
+            let config_dir = dirs::home_dir()
+                .unwrap_or_default()
+                .join(".config/decknix");
+            if !config_dir.is_dir() {
+                anyhow::bail!(
+                    "Config directory '{}' not found. Run bootstrap first.",
+                    config_dir.display()
+                );
+            }
+
             if use_dev {
                 let path = resolve_dev_path(dev_path.as_deref())?;
                 if dry_run {
@@ -174,7 +185,8 @@ fn main() -> anyhow::Result<()> {
                     println!("🔄 Switching (dev: {})...", path.display());
                 }
                 let mut cmd = Command::new("sudo");
-                cmd.arg("darwin-rebuild").arg(action)
+                cmd.current_dir(&config_dir)
+                    .arg("darwin-rebuild").arg(action)
                     .arg("--flake").arg(".#default")
                     .arg("--impure")
                     .arg("--override-input").arg("decknix")
@@ -188,7 +200,8 @@ fn main() -> anyhow::Result<()> {
                     println!("🔄 Switching...");
                 }
                 let mut cmd = Command::new("sudo");
-                cmd.arg("darwin-rebuild").arg(action)
+                cmd.current_dir(&config_dir)
+                    .arg("darwin-rebuild").arg(action)
                     .arg("--flake").arg(".#default")
                     .arg("--impure");
                 let status = cmd.status()?;
