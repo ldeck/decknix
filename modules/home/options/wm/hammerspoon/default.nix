@@ -112,7 +112,7 @@ let
     end)
 
     -- ============================================
-    -- GUI Pickers (choose-gui via dnx-* scripts)
+    -- GUI Pickers (choose-gui via decknix-* scripts)
     -- ============================================
 
     -- Helper: resolve Nix profile PATH for script execution
@@ -127,17 +127,17 @@ let
 
     -- Workspace picker (W = pick workspace, then space within it)
     hs.hotkey.bind(${modifiersLua}, "w", function()
-      nixExec("dnx-space --workspace")
+      nixExec("decknix-space --workspace")
     end)
 
     -- Space picker (G = Go to space, all spaces flat)
     hs.hotkey.bind(${modifiersLua}, "g", function()
-      nixExec("dnx-space")
+      nixExec("decknix-space")
     end)
 
     -- Cheatsheet (? = Help, using / key since ? requires shift)
     hs.hotkey.bind(${modifiersShiftLua}, "/", function()
-      nixExec("dnx-cheatsheet --gui")
+      nixExec("decknix-cheatsheet --gui")
     end)
 
     ${cfg.extraConfig}
