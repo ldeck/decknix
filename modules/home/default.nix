@@ -94,7 +94,7 @@ in
     shellAliases = {
       ll = lib.mkDefault "ls -l";
       reload = "unset __HM_SESS_VARS_SOURCED && exec zsh";
-      update = lib.mkDefault "darwin-rebuild switch --flake ~/.config/decknix#default --impure";
+      update = lib.mkDefault "decknix switch";
     };
 
     # Set terminal tab/window title (macOS zsh doesn't do this by default)

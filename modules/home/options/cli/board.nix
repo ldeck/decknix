@@ -7,7 +7,7 @@ let
 
   repos = builtins.concatStringsSep " " cfg.repos;
 
-  boardScript = pkgs.writeShellScriptBin "dnx-board" ''
+  boardScript = pkgs.writeShellScriptBin "decknix-board" ''
     set -euo pipefail
 
     # ── Colours ──────────────────────────────────────────────────────
@@ -134,12 +134,12 @@ let
     done
 
     # ── Footer ───────────────────────────────────────────────────────
-    printf "%sUsage: dnx-board [open|closed|all] [--no-color]%s\n\n" "$DIM" "$RESET"
+    printf "%sUsage: decknix-board [open|closed|all] [--no-color]%s\n\n" "$DIM" "$RESET"
   '';
 
 in {
   options.decknix.cli.board = {
-    enable = mkEnableOption "dnx-board issue dashboard";
+    enable = mkEnableOption "decknix-board issue dashboard";
 
     repos = mkOption {
       type = types.listOf types.str;
@@ -155,6 +155,12 @@ in {
 
   config = mkIf cfg.enable {
     home.packages = [ boardScript ];
+
+    # Register as decknix subcommand: decknix board
+    programs.decknix-cli.subtasks.board = {
+      description = "Issue dashboard across repos";
+      command = "${boardScript}/bin/decknix-board";
+    };
   };
 }
 

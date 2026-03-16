@@ -186,7 +186,7 @@ else
         echo ""
         echo "Next steps:"
         echo "  1. Close this terminal and open a new one."
-        echo "  2. Run 'decknix help' to see available commands."
+        echo "  2. Run 'decknix help' to see available commands (or 'decknix-board' for issue tracking)."
         echo "  3. Explore your config in $TARGET_DIR"
     else
         echo ""

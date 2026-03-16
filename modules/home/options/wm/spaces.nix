@@ -85,11 +85,11 @@ let
     echo "Then run: decknix switch"
   '';
 
-  dnxSpaceScript = pkgs.writeShellScriptBin "dnx-space"
+  spaceScript = pkgs.writeShellScriptBin "decknix-space"
     (if hasWorkspaces then pickerBody else noWorkspacesHelp);
 
   mod = cfg.modifier;
-  dnxCheatsheetScript = pkgs.writeShellScriptBin "dnx-cheatsheet" ''
+  cheatsheetScript = pkgs.writeShellScriptBin "decknix-cheatsheet" ''
     CHEATSHEET="decknix WM Cheatsheet (Modifier: ${mod})
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SPACE NAVIGATION (Hammerspoon)
@@ -107,9 +107,11 @@ WORKSPACE SWITCHING
   ${mod}+Shift+?      Show this cheatsheet (GUI)
 
 CLI TOOLS
-  dnx-space              All spaces flat (choose-gui)
-  dnx-space --workspace  Pick workspace first, then space
-  dnx-cheatsheet         Show this help
+  decknix-space              All spaces flat (choose-gui)
+  decknix-space --workspace  Pick workspace first, then space
+  decknix-cheatsheet         Show this help
+  decknix space              Alias for decknix-space
+  decknix cheatsheet         Alias for decknix-cheatsheet
 "
     if [[ "$1" == "--gui" ]]; then
       echo "$CHEATSHEET" | ${choosePkg}/bin/choose -n 50
@@ -171,17 +173,29 @@ in {
       };
       description = ''
         WM-agnostic workspace definitions. A workspace is a logical grouping of
-        macOS Spaces. Consumed by Hammerspoon and CLI tools (dnx-workspace, etc).
+        macOS Spaces. Consumed by Hammerspoon and CLI tools (decknix-space, etc).
       '';
     };
   };
 
   config = mkIf hasWorkspaces {
     home.packages = [
-      dnxSpaceScript
-      dnxCheatsheetScript
+      spaceScript
+      cheatsheetScript
       choosePkg
     ];
+
+    # Register as decknix subcommands: decknix space, decknix cheatsheet
+    programs.decknix-cli.subtasks = {
+      space = {
+        description = "Space picker (GUI)";
+        command = "${spaceScript}/bin/decknix-space";
+      };
+      cheatsheet = {
+        description = "Show WM keybinding cheatsheet";
+        command = "${cheatsheetScript}/bin/decknix-cheatsheet";
+      };
+    };
   };
 }
 
