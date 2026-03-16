@@ -53,7 +53,7 @@ let
         cli)             printf "%s" "''${BLUE}cli''${RESET}" ;;
         editors)         printf "%s" "''${GREEN}editors''${RESET}" ;;
         window-manager)  printf "%s" "''${MAGENTA}wm''${RESET}" ;;
-        *)               printf "%s" "''${DIM}%s''${RESET}" "$label" ;;
+        *)               printf "%s%s%s" "''${DIM}" "$label" "''${RESET}" ;;
       esac
     }
 
