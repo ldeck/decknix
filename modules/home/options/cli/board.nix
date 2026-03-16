@@ -52,6 +52,7 @@ let
         bootstrap)       printf "%s" "''${YELLOW}bootstrap''${RESET}" ;;
         cli)             printf "%s" "''${BLUE}cli''${RESET}" ;;
         editors)         printf "%s" "''${GREEN}editors''${RESET}" ;;
+        ai)              printf "%s" "''${MAGENTA}ai''${RESET}" ;;
         window-manager)  printf "%s" "''${MAGENTA}wm''${RESET}" ;;
         *)               printf "%s%s%s" "''${DIM}" "$label" "''${RESET}" ;;
       esac
