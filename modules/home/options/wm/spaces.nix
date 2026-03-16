@@ -186,7 +186,7 @@ in {
     ];
 
     # Register as decknix subcommands: decknix space, decknix cheatsheet
-    programs.decknix-cli.subtasks = {
+    decknix.cli.extensions = {
       space = {
         description = "Space picker (GUI)";
         command = "${spaceScript}/bin/decknix-space";

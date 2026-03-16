@@ -157,7 +157,7 @@ in {
     home.packages = [ boardScript ];
 
     # Register as decknix subcommand: decknix board
-    programs.decknix-cli.subtasks.board = {
+    decknix.cli.extensions.board = {
       description = "Issue dashboard across repos";
       command = "${boardScript}/bin/decknix-board";
     };
