@@ -20,7 +20,10 @@ in {
     subtasks = mkOption {
       type = types.attrsOf subtaskType;
       default = {};
-      description = "Custom subtasks to extend the decknix CLI";
+      description = ''
+        System-level subtasks to extend the decknix CLI.
+        For home-manager level extensions, use decknix.cli.extensions instead.
+      '';
       example = {
         cleanup = {
           description = "Garbage collect nix store";
@@ -34,7 +37,7 @@ in {
   config = mkIf cfg.enable {
     # 1. Install the Rust Binary
     environment.systemPackages = [
-      pkgs.decknix-cli # Assuming this is in your overlay
+      pkgs.decknix-cli
     ] ++
     # 2. Handle Pinned Commands (Create standalone binaries)
     (mapAttrsToList (name: task:
@@ -45,8 +48,7 @@ in {
       else null
     ) cfg.subtasks);
 
-    # 3. Generate the Runtime Config for the Rust Binary
-    # We write this to /etc (system) or home-manager config path
+    # 3. Generate the Runtime Config for the Rust Binary (system-level)
     environment.etc."decknix/extensions.json".text = builtins.toJSON (
       mapAttrs (n: v: { inherit (v) description command; }) cfg.subtasks
     );
