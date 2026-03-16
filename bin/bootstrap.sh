@@ -8,11 +8,33 @@ TARGET_DIR="$HOME/.config/decknix"
 TIMESTAMP=$(date +%Y%m%dT%H%M%S)
 BACKUP_SUFFIX=".before-decknix.${TIMESTAMP}"
 
+# --- Non-interactive mode ---
+# Enabled by: --non-interactive flag, or CI=true env var
+# When enabled, all prompts use defaults or env var overrides:
+#   DECKNIX_REF       — git ref to install (default: main)
+#   DECKNIX_INSTALLER — nix installer choice: 1|2|3 (default: 1)
+#   DECKNIX_USER      — system username (default: $(whoami))
+#   DECKNIX_HOST      — hostname (default: $(hostname -s))
+#   DECKNIX_ROLE      — user role (default: developer)
+NON_INTERACTIVE=0
+
 # --- Skip flags (set any to "1" to skip that phase) ---
 # SKIP_NIX=1        — skip Nix installation check
 # SKIP_PREFLIGHT=1  — skip pre-flight conflict resolution
 # SKIP_INIT=1       — skip template initialisation
 # SKIP_ACTIVATE=1   — skip system activation
+
+# --- Parse arguments ---
+for arg in "$@"; do
+    case "$arg" in
+        --non-interactive) NON_INTERACTIVE=1 ;;
+    esac
+done
+
+# Auto-detect CI environments
+if [ "${CI:-}" = "true" ] || [ "${CI:-}" = "1" ]; then
+    NON_INTERACTIVE=1
+fi
 
 # --- Styling ---
 BOLD='\033[1m'
@@ -29,13 +51,19 @@ function warn()  { echo -e "${RED}  !!${NC} $1"; }
 
 # --- 0. Version Selection ---
 step "🚀 Decknix Bootstrap..."
-step "Which version of Decknix would you like to install?"
-info "  [Enter] for Default ($DEFAULT_REF)"
-info "  Or type a branch name / tag (e.g., 'v0.1.0', 'develop')"
-read -rp "Ref: " USER_REF
-TARGET_REF=${USER_REF:-$DEFAULT_REF}
-REPO_URL="${REPO_URL}/tree/${TARGET_REF}"
 
+if [ "$NON_INTERACTIVE" = "1" ]; then
+    info "Running in non-interactive mode"
+    TARGET_REF=${DECKNIX_REF:-$DEFAULT_REF}
+else
+    step "Which version of Decknix would you like to install?"
+    info "  [Enter] for Default ($DEFAULT_REF)"
+    info "  Or type a branch name / tag (e.g., 'v0.1.0', 'develop')"
+    read -rp "Ref: " USER_REF
+    TARGET_REF=${USER_REF:-$DEFAULT_REF}
+fi
+
+REPO_URL="${REPO_URL}/tree/${TARGET_REF}"
 info "⬇️  Installing from reference: $TARGET_REF"
 
 # --- 1. Install Nix ---
@@ -46,13 +74,19 @@ elif command -v nix >/dev/null; then
     info "✅ Nix is already installed."
 else
     warn "↘️  Nix needs to be installed."
-    echo "Choose an installer:"
-    echo "  1) 📗 ** Decknix supported**: Nix Community's nix-installer (Experimental fork of the Determinate Systems installer)"
-    echo "  2) 📒 Official Nix Installer (Standard)"
-    echo "  3) 📙 Determinate Systems (May be incompatible with nix-darwin configuration of decknix. TBD)"
 
-    read -rp "Selection [1]: " installer_choice
-    installer_choice=${installer_choice:-1}
+    if [ "$NON_INTERACTIVE" = "1" ]; then
+        installer_choice=${DECKNIX_INSTALLER:-1}
+        info "Using installer option $installer_choice (non-interactive)"
+    else
+        echo "Choose an installer:"
+        echo "  1) 📗 ** Decknix supported**: Nix Community's nix-installer (Experimental fork of the Determinate Systems installer)"
+        echo "  2) 📒 Official Nix Installer (Standard)"
+        echo "  3) 📙 Determinate Systems (May be incompatible with nix-darwin configuration of decknix. TBD)"
+
+        read -rp "Selection [1]: " installer_choice
+        installer_choice=${installer_choice:-1}
+    fi
 
     if [[ "$installer_choice" == "1" ]]; then
       info "Running Nix Community's nix-installer..."
@@ -100,35 +134,44 @@ if [ "${SKIP_INIT:-}" = "1" ]; then
     skip "Skipped (SKIP_INIT=1)"
 else
     # Helper: prompt for settings and write settings.nix
+    # In non-interactive mode, uses env vars or auto-detected defaults.
     generate_settings() {
         local dir="$1"
-        echo ""
-        echo "We need to configure your basic settings."
 
-        DEFAULT_USER=$(whoami)
-        DEFAULT_HOST=$(hostname -s)
-        DEFAULT_SYSTEM=$(nix-instantiate --eval --expr 'builtins.currentSystem' --raw)
-        DEFAULT_ROLE=developer
+        local detected_user detected_host detected_system
+        detected_user=$(whoami)
+        detected_host=$(hostname -s)
+        detected_system=$(nix-instantiate --eval --expr 'builtins.currentSystem' --raw)
 
-        read -rp "  Enter System Username [$DEFAULT_USER]: " IN_USER
-        IN_USER=${IN_USER:-$DEFAULT_USER}
+        if [ "$NON_INTERACTIVE" = "1" ]; then
+            IN_USER=${DECKNIX_USER:-$detected_user}
+            IN_HOST=${DECKNIX_HOST:-$detected_host}
+            IN_ROLE=${DECKNIX_ROLE:-developer}
+            info "Using settings from environment (non-interactive)"
+        else
+            echo ""
+            echo "We need to configure your basic settings."
 
-        read -rp "  Enter Hostname [$DEFAULT_HOST]: " IN_HOST
-        IN_HOST=${IN_HOST:-$DEFAULT_HOST}
+            read -rp "  Enter System Username [$detected_user]: " IN_USER
+            IN_USER=${IN_USER:-$detected_user}
 
-        read -rp "  Enter role [$DEFAULT_ROLE]: " IN_ROLE
-        IN_ROLE=${IN_ROLE:-$DEFAULT_ROLE}
+            read -rp "  Enter Hostname [$detected_host]: " IN_HOST
+            IN_HOST=${IN_HOST:-$detected_host}
+
+            read -rp "  Enter role [developer]: " IN_ROLE
+            IN_ROLE=${IN_ROLE:-developer}
+        fi
 
         info "Generating settings.nix..."
         info "-- username = $IN_USER"
         info "-- hostname = $IN_HOST"
-        info "-- system   = $DEFAULT_SYSTEM"
+        info "-- system   = $detected_system"
         info "-- role     = $IN_ROLE"
         cat <<EOF > "$dir/settings.nix"
 {
   username = "$IN_USER";
   hostname = "$IN_HOST";
-  system   = "$DEFAULT_SYSTEM";
+  system   = "$detected_system";
   role     = "$IN_ROLE";
 }
 EOF
