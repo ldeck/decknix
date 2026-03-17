@@ -205,6 +205,122 @@ in
         ;; Show session ID in header and session selection prompt
         (setq agent-shell-show-session-id t)
 
+        ;; == Tutorial: welcome message + help buffer ==
+
+        (defun decknix--agent-welcome-keybindings ()
+          "Return a formatted string of key keybinding hints for the welcome message."
+          (let ((bindings
+                 '(("C-c e"   "Compose"    "Open multi-line prompt editor")
+                   ("C-c s"   "Sessions"   "Pick / resume / start session")
+                   ("C-c q"   "Quit"       "Save and quit session")
+                   ("C-c h"   "History"    "View conversation history")
+                   ("C-c t t" "Template"   "Insert a prompt template")
+                   ("C-c T t" "Tag"        "Tag this session")
+                   ("C-c T l" "By tag"     "Filter sessions by tag")
+                   ("C-c ?"   "Help"       "Full keybinding reference"))))
+            (mapconcat
+             (lambda (b)
+               (format "  %-8s  %-10s  %s"
+                       (propertize (nth 0 b) 'font-lock-face 'font-lock-keyword-face)
+                       (propertize (nth 1 b) 'font-lock-face 'font-lock-function-name-face)
+                       (nth 2 b)))
+             bindings "\n")))
+
+        (defun decknix--agent-welcome-message (config)
+          "Custom welcome message with keybinding hints.
+        Wraps the default auggie welcome with a quick-reference card."
+          (let ((original (agent-shell-auggie--welcome-message config))
+                (divider (propertize (make-string 52 ?─)
+                                    'font-lock-face 'font-lock-comment-face))
+                (title (propertize " Quick Reference"
+                                   'font-lock-face 'font-lock-comment-face)))
+            (concat original "\n"
+                    divider "\n"
+                    title "\n\n"
+                    (decknix--agent-welcome-keybindings) "\n\n"
+                    divider "\n")))
+
+        ;; Override the auggie welcome function with our enhanced version
+        (advice-add 'agent-shell-auggie--welcome-message
+                    :override #'decknix--agent-welcome-message)
+
+        (defun decknix-agent-help ()
+          "Show a help buffer with all agent-shell keybindings.
+        Grouped by category. Press q to dismiss."
+          (interactive)
+          (let ((buf (get-buffer-create "*Agent Help*")))
+            (with-current-buffer buf
+              (let ((inhibit-read-only t))
+                (erase-buffer)
+                (insert
+                 (propertize "Agent Shell — Keybinding Reference\n"
+                             'font-lock-face '(:weight bold :height 1.2))
+                 (propertize (make-string 52 ?═) 'font-lock-face 'font-lock-comment-face)
+                 "\n\n"
+
+                 (propertize "Session Management\n" 'font-lock-face '(:weight bold))
+                 (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
+                 "  C-c s       Session picker (live + saved)\n"
+                 "  C-c q       Quit session (saves automatically)\n"
+                 "  C-c h       View history (current session)\n"
+                 "  C-c H       View history (pick any session)\n"
+                 "  C-c r       Rename buffer\n"
+                 "  C-c A a     Start / switch to agent\n"
+                 "  C-c A n     Force new session\n"
+                 "  C-c A k     Interrupt agent\n"
+                 "\n"
+
+                 (propertize "Input & Editing\n" 'font-lock-face '(:weight bold))
+                 (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
+                 "  C-c e       Compose buffer (multi-line editor)\n"
+                 "  RET         Send prompt (at end of input)\n"
+                 "  S-RET       Insert newline in prompt\n"
+                 "  C-c C-c     Interrupt running agent\n"
+                 "  TAB         Expand yasnippet template\n"
+                 "\n"
+
+                 (propertize "Templates  (C-c t …)\n" 'font-lock-face '(:weight bold))
+                 (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
+                 "  C-c t t     Insert a prompt template\n"
+                 "  C-c t n     Create new template\n"
+                 "  C-c t e     Edit existing template\n"
+                 "\n"
+
+                 (propertize "Tags  (C-c T …)\n" 'font-lock-face '(:weight bold))
+                 (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
+                 "  C-c T t     Tag current session\n"
+                 "  C-c T r     Remove tag\n"
+                 "  C-c T l     List / filter by tag\n"
+                 "  C-c T e     Rename a tag\n"
+                 "  C-c T d     Delete tag globally\n"
+                 "  C-c T c     Cleanup orphaned tags\n"
+                 "\n"
+
+                 (propertize "Model & Mode\n" 'font-lock-face '(:weight bold))
+                 (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
+                 "  C-c v       Pick model\n"
+                 "  C-c M       Pick mode\n"
+                 "  C-c C-v     Pick model (built-in)\n"
+                 "  C-c C-m     Pick mode (built-in)\n"
+                 "\n"
+
+                 (propertize "Extensions\n" 'font-lock-face '(:weight bold))
+                 (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
+                 "  C-c m       Manager dashboard\n"
+                 "  C-c w       Workspace tab toggle\n"
+                 "  C-c j       Jump to session needing attention\n"
+                 "\n"
+
+                 (propertize (make-string 52 ?═) 'font-lock-face 'font-lock-comment-face) "\n"
+                 (propertize "Global prefix: C-c A <key>  (same commands from any buffer)\n"
+                             'font-lock-face 'font-lock-comment-face)
+                 (propertize "Press q to close this buffer.\n"
+                             'font-lock-face 'font-lock-comment-face))
+                (goto-char (point-min))
+                (special-mode)))
+            (display-buffer buf '(display-buffer-at-bottom
+                                  (window-height . fit-window-to-buffer)))))
+
         ;; == Named prefix map: C-c A → "Agent" ==
         ;; Gives which-key / minibuffer a descriptive label instead of "+prefix"
         (define-prefix-command 'decknix-agent-prefix-map)
@@ -219,7 +335,7 @@ in
         (define-key decknix-agent-prefix-map (kbd "k") 'agent-shell-interrupt)            ; Interrupt agent
         (define-key decknix-agent-prefix-map (kbd "v") 'agent-shell-set-session-model)    ; Pick model
         (define-key decknix-agent-prefix-map (kbd "M") 'agent-shell-set-session-mode)     ; Pick mode
-        (define-key decknix-agent-prefix-map (kbd "?") 'agent-shell-help-menu)            ; Help menu
+        (define-key decknix-agent-prefix-map (kbd "?") 'decknix-agent-help)               ; Help reference
 
         ;; == Session management: unified picker + clean quit ==
 
@@ -772,7 +888,7 @@ freely (RET for newlines), then:
                     (local-set-key (kbd "C-c q") 'decknix-agent-session-quit)
                     (local-set-key (kbd "C-c h") 'decknix-agent-session-history)
                     (local-set-key (kbd "C-c H") 'decknix-agent-session-history-pick)
-                    (local-set-key (kbd "C-c ?") 'agent-shell-help-menu)
+                    (local-set-key (kbd "C-c ?") 'decknix-agent-help)
                     (local-set-key (kbd "C-c r") 'agent-shell-rename-buffer)
                     (local-set-key (kbd "C-c v") 'agent-shell-set-session-model)
                     (local-set-key (kbd "C-c M") 'agent-shell-set-session-mode)
