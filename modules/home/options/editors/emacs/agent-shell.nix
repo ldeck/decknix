@@ -375,6 +375,91 @@ even when in an agent-shell buffer with a known session."
         (global-set-key (kbd "C-c A q") 'decknix-agent-session-quit)          ; Quit session
         (global-set-key (kbd "C-c A h") 'decknix-agent-session-history)       ; View history (DWIM)
         (global-set-key (kbd "C-c A H") 'decknix-agent-session-history-pick)  ; View history (pick)
+
+        ;; == Compose buffer: magit-style prompt editing ==
+        ;; Opens a temporary buffer for composing multi-line prompts.
+        ;; C-c C-c submits, C-c C-k cancels. Like magit commit messages.
+
+        (defvar-local decknix--compose-target-buffer nil
+          "The agent-shell buffer to submit the composed prompt to.")
+
+        (defvar decknix-agent-compose-mode-map
+          (let ((map (make-sparse-keymap)))
+            (define-key map (kbd "C-c C-c") #'decknix-agent-compose-submit)
+            (define-key map (kbd "C-c C-k") #'decknix-agent-compose-cancel)
+            map)
+          "Keymap for `decknix-agent-compose-mode'.")
+
+        (define-minor-mode decknix-agent-compose-mode
+          "Minor mode for composing agent-shell prompts.
+\\<decknix-agent-compose-mode-map>
+\\[decknix-agent-compose-submit] to submit, \
+\\[decknix-agent-compose-cancel] to cancel."
+          :lighter " Compose"
+          :keymap decknix-agent-compose-mode-map)
+
+        (defun decknix-agent-compose-submit ()
+          "Submit the compose buffer content to the agent-shell."
+          (interactive)
+          (let ((input (string-trim (buffer-string)))
+                (target decknix--compose-target-buffer)
+                (compose-buf (current-buffer))
+                (compose-win (selected-window)))
+            (if (string-empty-p input)
+                (user-error "Empty prompt — nothing to submit")
+              ;; Close the compose window/buffer first
+              (quit-restore-window compose-win 'kill)
+              ;; Submit to the agent-shell buffer
+              (when (buffer-live-p target)
+                (with-current-buffer target
+                  (goto-char (point-max))
+                  (shell-maker-submit :input input))))))
+
+        (defun decknix-agent-compose-cancel ()
+          "Cancel the compose buffer without submitting."
+          (interactive)
+          (let ((compose-win (selected-window)))
+            (quit-restore-window compose-win 'kill)
+            (message "Compose cancelled.")))
+
+        (defun decknix-agent-compose ()
+          "Open a compose buffer for writing a multi-line agent prompt.
+The buffer opens at the bottom of the frame. Type your prompt
+freely (RET for newlines), then:
+  C-c C-c  submit to the agent
+  C-c C-k  cancel"
+          (interactive)
+          ;; Find the target agent-shell buffer
+          (let* ((target (cond
+                          ;; Already in an agent-shell buffer
+                          ((derived-mode-p 'agent-shell-mode)
+                           (current-buffer))
+                          ;; Find the most recent agent-shell buffer
+                          ((and (fboundp 'agent-shell-buffers)
+                                (agent-shell-buffers))
+                           (car (agent-shell-buffers)))
+                          (t (user-error
+                              "No agent-shell buffer found. Start one with C-c A a"))))
+                 (compose-buf (generate-new-buffer
+                               (format "*Compose: %s*" (buffer-name target)))))
+            ;; Display at the bottom, sized for comfortable editing
+            (display-buffer compose-buf
+                           '((display-buffer-at-bottom)
+                             (window-height . 10)
+                             (dedicated . t)))
+            (select-window (get-buffer-window compose-buf))
+            (with-current-buffer compose-buf
+              (text-mode)
+              (decknix-agent-compose-mode 1)
+              (setq-local decknix--compose-target-buffer target)
+              (setq-local header-line-format
+                          (substitute-command-keys
+                           " Compose prompt → \\<decknix-agent-compose-mode-map>\
+\\[decknix-agent-compose-submit] submit, \
+\\[decknix-agent-compose-cancel] cancel"))
+              (set-buffer-modified-p nil))))
+
+        (global-set-key (kbd "C-c A e") 'decknix-agent-compose)               ; Compose prompt
       ''
       + optionalString cfg.manager.enable ''
 
