@@ -157,8 +157,6 @@ in
 
         ;; Jump to session needing attention
         (global-set-key (kbd "C-c A j") 'agent-shell-attention-jump)
-        ;; Also bind globally for quick access
-        (global-set-key (kbd "C-z a") 'agent-shell-attention-jump)
       ''
       + ''
 
