@@ -209,6 +209,105 @@ in
         (global-set-key (kbd "C-c A v") 'agent-shell-set-session-model)    ; Pick model (minibuffer)
         (global-set-key (kbd "C-c A M") 'agent-shell-set-session-mode)     ; Pick mode (minibuffer)
         (global-set-key (kbd "C-c A ?") 'agent-shell-help-menu)            ; Transient help menu
+
+        ;; == Session management: unified picker + clean quit ==
+
+        (defun decknix--agent-session-time-ago (iso-time)
+          "Format ISO-TIME as a relative time string (e.g. \"2h ago\")."
+          (let* ((time (date-to-time iso-time))
+                 (delta (float-time (time-subtract (current-time) time)))
+                 (minutes (/ delta 60))
+                 (hours (/ delta 3600))
+                 (days (/ delta 86400)))
+            (cond ((< minutes 1) "just now")
+                  ((< minutes 60) (format "%dm ago" (truncate minutes)))
+                  ((< hours 24) (format "%dh ago" (truncate hours)))
+                  ((< days 30) (format "%dd ago" (truncate days)))
+                  (t (format-time-string "%Y-%m-%d" time)))))
+
+        (defun decknix--agent-session-list ()
+          "Fetch saved auggie sessions as a list of alists."
+          (condition-case err
+              (let* ((json-array-type 'list)
+                     (json-object-type 'alist)
+                     (json-key-type 'symbol)
+                     (raw (shell-command-to-string
+                           "auggie session list --json -n 30 2>/dev/null"))
+                     (trimmed (string-trim raw)))
+                (if (and (not (string-empty-p trimmed))
+                         (string-prefix-p "[" trimmed))
+                    (json-read-from-string trimmed)
+                  nil))
+            (error
+             (message "Failed to fetch auggie sessions: %s" (error-message-string err))
+             nil)))
+
+        (defun decknix--agent-session-preview (session)
+          "Format a one-line preview for a saved SESSION."
+          (let* ((id (alist-get 'sessionId session))
+                 (modified (alist-get 'modified session))
+                 (exchanges (alist-get 'exchangeCount session 0))
+                 (first-msg (alist-get 'firstUserMessage session ""))
+                 (preview (car (split-string first-msg "\n" t)))
+                 (truncated (truncate-string-to-width (or preview "") 60 nil nil "...")))
+            (format "%-8s  %-8s  %3dx  %s"
+                    (substring id 0 (min 8 (length id)))
+                    (if modified (decknix--agent-session-time-ago modified) "?")
+                    exchanges
+                    truncated)))
+
+        (defun decknix-agent-session-picker ()
+          "Pick from live agent-shell buffers and saved auggie sessions.
+Live buffers are shown first, then saved sessions. Selecting a live
+buffer switches to it; selecting a saved session resumes it in a
+new agent-shell."
+          (interactive)
+          (let* ((live-buffers (when (fboundp 'agent-shell-buffers)
+                                 (agent-shell-buffers)))
+                 (live-entries (mapcar (lambda (buf)
+                                        (cons (format "[live]  %s" (buffer-name buf))
+                                              (cons 'buffer buf)))
+                                      live-buffers))
+                 (saved-sessions (decknix--agent-session-list))
+                 (saved-entries (mapcar (lambda (session)
+                                         (cons (format "[saved] %s"
+                                                       (decknix--agent-session-preview session))
+                                               (cons 'session session)))
+                                       saved-sessions))
+                 (new-entry (list (cons "[new]   Start a new auggie session"
+                                        (cons 'new nil))))
+                 (all-entries (append new-entry live-entries saved-entries))
+                 (selection (completing-read "Agent session: "
+                                            (mapcar #'car all-entries)
+                                            nil t))
+                 (chosen (cdr (assoc selection all-entries))))
+            (pcase (car chosen)
+              ('buffer (switch-to-buffer (cdr chosen)))
+              ('session
+               (let* ((session (cdr chosen))
+                      (session-id (alist-get 'sessionId session))
+                      (agent-shell-auggie-acp-command
+                       (append agent-shell-auggie-acp-command
+                               (list "--resume" session-id))))
+                 (agent-shell-start
+                  :config (agent-shell-auggie-make-agent-config))))
+              ('new (agent-shell-start
+                     :config (agent-shell-auggie-make-agent-config))))))
+
+        (defun decknix-agent-session-quit ()
+          "Cleanly quit the current agent-shell session.
+Kills the buffer (which sends SIGHUP to auggie, saving the session)
+and switches back to the previous buffer."
+          (interactive)
+          (unless (derived-mode-p 'agent-shell-mode)
+            (user-error "Not in an agent-shell buffer"))
+          (when (y-or-n-p "Quit this agent session? ")
+            (let ((buf (current-buffer)))
+              (previous-buffer)
+              (kill-buffer buf))))
+
+        (global-set-key (kbd "C-c A s") 'decknix-agent-session-picker)  ; Session picker
+        (global-set-key (kbd "C-c A q") 'decknix-agent-session-quit)    ; Quit session
       ''
       + optionalString cfg.manager.enable ''
 
