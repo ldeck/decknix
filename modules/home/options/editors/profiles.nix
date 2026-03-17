@@ -27,9 +27,10 @@ let
     welcome     = [ "standard" "full" ];
 
     # full tier — power-user features
-    lsp  = [ "full" ];
-    org  = [ "full" ];
-    http = [ "full" ];
+    lsp        = [ "full" ];
+    org        = [ "full" ];
+    http       = [ "full" ];
+    agentShell = [ "full" ];
   };
 
   emacsEnabled = module:
@@ -57,7 +58,7 @@ in {
 
         - minimal:  Core + completion + editing + ui + undo + project
         - standard: Minimal + development + magit + treemacs + languages + welcome
-        - full:     Standard + lsp + org + http (default)
+        - full:     Standard + lsp + org + http + agent-shell (default)
         - custom:   User-provided configuration (disables framework emacs config)
       '';
     };
@@ -94,6 +95,7 @@ in {
       programs.emacs.decknix.lsp.enable         = mkDefault (emacsEnabled "lsp");
       programs.emacs.decknix.org.enable         = mkDefault (emacsEnabled "org");
       programs.emacs.decknix.http.enable        = mkDefault (emacsEnabled "http");
+      programs.emacs.decknix.agentShell.enable  = mkDefault (emacsEnabled "agentShell");
     })
     (mkIf (emacsProfile == "custom") {
       programs.emacs.decknix.enable = mkDefault false;
