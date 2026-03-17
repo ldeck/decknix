@@ -202,6 +202,9 @@ in
         (global-set-key (kbd "C-c A n") 'agent-shell-new)                  ; Force new session
         (global-set-key (kbd "C-c A r") 'agent-shell-rename-buffer)        ; Rename session
         (global-set-key (kbd "C-c A k") 'agent-shell-interrupt)            ; Interrupt agent
+        (global-set-key (kbd "C-c A v") 'agent-shell-set-session-model)    ; Pick model (minibuffer)
+        (global-set-key (kbd "C-c A M") 'agent-shell-set-session-mode)     ; Pick mode (minibuffer)
+        (global-set-key (kbd "C-c A ?") 'agent-shell-help-menu)            ; Transient help menu
       ''
       + optionalString cfg.manager.enable ''
 
