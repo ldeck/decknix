@@ -143,8 +143,6 @@ in
 
         ;; == Workspace: dedicated tab-bar tab with sidebar ==
         (require 'agent-shell-workspace)
-        (with-eval-after-load 'agent-shell
-          (define-key agent-shell-command-map (kbd "w") 'agent-shell-workspace-toggle))
         (global-set-key (kbd "C-c A w") 'agent-shell-workspace-toggle)
       ''
       + optionalString cfg.attention.enable ''
