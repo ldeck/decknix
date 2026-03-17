@@ -51,6 +51,84 @@ let
     packageRequires = [ agent-shell ];
   };
 
+  # == Yasnippet prompt templates for agent-shell-mode ==
+  # Deployed to ~/.emacs.d/snippets/agent-shell-mode/ via home.file
+  # Note: ''${ escapes Nix interpolation to produce literal ${ for yasnippet fields
+  snippetDir = ".emacs.d/snippets/agent-shell-mode";
+
+  mkSnippet = name: key: body: ''
+    # -*- mode: snippet -*-
+    # name: ${name}
+    # key: ${key}
+    # --
+    ${body}
+  '';
+
+  snippets = {
+    review = mkSnippet "review" "/review" ''
+      Review `''${1:`(buffer-file-name (agent-shell--source-buffer))`}` for ''${2:$$$(yas-choose-value '("bugs" "performance" "readability" "security"))}.
+
+      Focus on:
+      - ''${3:specific concerns}
+
+      ''${4:Additional context.}'';
+
+    refactor = mkSnippet "refactor" "/refactor" ''
+      Refactor ''${1:description} in `''${2:`(buffer-file-name (agent-shell--source-buffer))`}`.
+
+      Follow the ''${3:$$$(yas-choose-value '("extract method" "rename" "move" "inline" "simplify" "DRY up"))} pattern.
+
+      Requirements:
+      - ''${4:requirements}'';
+
+    test = mkSnippet "test" "/test" ''
+      Write tests for ''${1:function/module} in `''${2:`(buffer-file-name (agent-shell--source-buffer))`}`.
+
+      Cover:
+      - ''${3:happy path}
+      - ''${4:edge cases}
+      - ''${5:error cases}
+
+      Use the ''${6:existing test framework} already in the project.'';
+
+    explain = mkSnippet "explain" "/explain" ''
+      Explain how ''${1:code/concept} works in `''${2:`(buffer-file-name (agent-shell--source-buffer))`}`.
+
+      I want to understand:
+      - ''${3:specific aspects}'';
+
+    fix = mkSnippet "fix" "/fix" ''
+      Fix the ''${1:error/issue} in `''${2:`(buffer-file-name (agent-shell--source-buffer))`}`.
+
+      Stack trace / error:
+      ```
+      ''${3:paste error here}
+      ```
+
+      ''${4:Additional context.}'';
+
+    implement = mkSnippet "implement" "/implement" ''
+      Implement ''${1:feature description}.
+
+      Follow the pattern in `''${2:`(buffer-file-name (agent-shell--source-buffer))`}`.
+
+      Requirements:
+      - ''${3:requirements}
+
+      ''${4:Additional context.}'';
+
+    debug = mkSnippet "debug" "/debug" ''
+      Debug why ''${1:symptom} is happening in `''${2:`(buffer-file-name (agent-shell--source-buffer))`}`.
+
+      Relevant logs:
+      ```
+      ''${3:paste logs here}
+      ```
+
+      What I've tried:
+      - ''${4:steps taken}'';
+  };
+
 in
 {
   options.programs.emacs.decknix.agentShell = {
@@ -77,9 +155,20 @@ in
       default = true;
       description = "Enable agent-shell-attention (mode-line attention tracker).";
     };
+
+    templates.enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Enable yasnippet prompt templates for agent-shell (review, refactor, test, etc.).";
+    };
   };
 
   config = mkIf cfg.enable {
+    # Deploy yasnippet snippet files to ~/.emacs.d/snippets/agent-shell-mode/
+    home.file = mkIf cfg.templates.enable
+      (mapAttrs'
+        (name: text: nameValuePair "${snippetDir}/${name}" { inherit text; })
+        snippets);
     programs.emacs = {
       extraPackages = _epkgs:
         # Core (from unstable): agent-shell + acp + shell-maker + markdown-mode
@@ -140,6 +229,19 @@ in
 
         ;; Jump to session needing attention
         (global-set-key (kbd "C-c A j") 'agent-shell-attention-jump)
+      ''
+      + optionalString cfg.templates.enable ''
+
+        ;; == Yasnippet prompt templates ==
+        ;; Register agent-shell-mode snippet directory
+        (with-eval-after-load 'yasnippet
+          (let ((dir (expand-file-name "~/${snippetDir}")))
+            (unless (member dir yas-snippet-dirs)
+              (push dir yas-snippet-dirs))
+            (yas-load-directory dir)))
+
+        ;; C-c A t — insert a prompt template via yasnippet
+        (global-set-key (kbd "C-c A t") 'yas-insert-snippet)
       ''
       + ''
 
