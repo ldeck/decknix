@@ -216,6 +216,11 @@ in
 
         ;; == Session management: unified picker + clean quit ==
 
+        ;; Buffer-local var to track the auggie CLI session ID
+        ;; (distinct from ACP session ID in agent-shell--state)
+        (defvar-local decknix--agent-auggie-session-id nil
+          "The auggie CLI session ID for this buffer, if known.")
+
         (defun decknix--agent-session-time-ago (iso-time)
           "Format ISO-TIME as a relative time string (e.g. \"2h ago\")."
           (let* ((time (date-to-time iso-time))
@@ -295,7 +300,10 @@ new agent-shell."
                        (append agent-shell-auggie-acp-command
                                (list "--resume" session-id))))
                  (agent-shell-start
-                  :config (agent-shell-auggie-make-agent-config))))
+                  :config (agent-shell-auggie-make-agent-config))
+                 ;; Store the auggie session ID in the new buffer
+                 ;; (agent-shell-start switches to the new buffer)
+                 (setq-local decknix--agent-auggie-session-id session-id)))
               ('new (agent-shell-start
                      :config (agent-shell-auggie-make-agent-config))))))
 
@@ -311,12 +319,26 @@ and switches back to the previous buffer."
               (previous-buffer)
               (kill-buffer buf))))
 
-        (defun decknix-agent-session-history ()
-          "View the conversation history for a session.
-If in an agent-shell buffer, offers to view the current session.
-Otherwise, prompts to pick from saved sessions.
-Generates a share link via `auggie session share' and opens it."
-          (interactive)
+        (defun decknix--agent-session-open-share (session-id)
+          "Generate a share link for SESSION-ID and open it in Emacs.
+Uses xwidget-webkit if available, otherwise falls back to eww."
+          (message "Generating share link for %s..." (substring session-id 0 8))
+          (let* ((output (shell-command-to-string
+                          (format "auggie session share %s 2>&1"
+                                  (shell-quote-argument session-id))))
+                 (url (when (string-match "https://[^ \t\n]+" output)
+                        (match-string 0 output))))
+            (if url
+                (progn
+                  (message "Opening %s" url)
+                  (if (fboundp 'xwidget-webkit-browse-url)
+                      (xwidget-webkit-browse-url url t)
+                    (eww url t)))
+              (user-error "Failed to generate share link: %s"
+                          (string-trim output)))))
+
+        (defun decknix--agent-session-pick-for-history ()
+          "Prompt to pick a saved session and return its full ID."
           (let* ((sessions (decknix--agent-session-list))
                  (entries (mapcar (lambda (session)
                                    (cons (decknix--agent-session-preview session)
@@ -324,26 +346,35 @@ Generates a share link via `auggie session share' and opens it."
                                  sessions))
                  (selection (completing-read "View history for session: "
                                             (mapcar #'car entries)
-                                            nil t))
-                 (session-id (cdr (assoc selection entries))))
-            (unless session-id
-              (user-error "No session selected"))
-            (message "Generating share link for %s..." (substring session-id 0 8))
-            (let* ((output (shell-command-to-string
-                            (format "auggie session share %s 2>&1"
-                                    (shell-quote-argument session-id))))
-                   (url (when (string-match "https://[^ \t\n]+" output)
-                          (match-string 0 output))))
-              (if url
-                  (progn
-                    (message "Opening %s" url)
-                    (browse-url url))
-                (user-error "Failed to generate share link: %s"
-                            (string-trim output))))))
+                                            nil t)))
+            (or (cdr (assoc selection entries))
+                (user-error "No session selected"))))
 
-        (global-set-key (kbd "C-c A s") 'decknix-agent-session-picker)  ; Session picker
-        (global-set-key (kbd "C-c A q") 'decknix-agent-session-quit)    ; Quit session
-        (global-set-key (kbd "C-c A h") 'decknix-agent-session-history) ; View history
+        (defun decknix-agent-session-history ()
+          "View conversation history for the current or a picked session.
+If in an agent-shell buffer with a known session ID, shows that
+session's history directly. Otherwise, prompts to pick a session.
+Opens in xwidget-webkit (q to quit) or eww as fallback."
+          (interactive)
+          (let ((session-id
+                 (if (and (derived-mode-p 'agent-shell-mode)
+                          decknix--agent-auggie-session-id)
+                     decknix--agent-auggie-session-id
+                   (decknix--agent-session-pick-for-history))))
+            (decknix--agent-session-open-share session-id)))
+
+        (defun decknix-agent-session-history-pick ()
+          "Always prompt to pick a session to view history for.
+Like `decknix-agent-session-history' but always shows the picker,
+even when in an agent-shell buffer with a known session."
+          (interactive)
+          (decknix--agent-session-open-share
+           (decknix--agent-session-pick-for-history)))
+
+        (global-set-key (kbd "C-c A s") 'decknix-agent-session-picker)        ; Session picker
+        (global-set-key (kbd "C-c A q") 'decknix-agent-session-quit)          ; Quit session
+        (global-set-key (kbd "C-c A h") 'decknix-agent-session-history)       ; View history (DWIM)
+        (global-set-key (kbd "C-c A H") 'decknix-agent-session-history-pick)  ; View history (pick)
       ''
       + optionalString cfg.manager.enable ''
 
