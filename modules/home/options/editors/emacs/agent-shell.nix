@@ -5,7 +5,21 @@ with lib;
 let
   cfg = config.programs.emacs.decknix.agentShell;
 
-  # == Package sources (not yet in nixpkgs) ==
+  # == Package sources (not yet in nixpkgs, or nixpkgs version too old) ==
+
+  # shell-maker in nixpkgs is too old; agent-shell requires >= 0.89.1
+  # for markdown-overlays support
+  shell-maker-el = pkgs.emacsPackages.trivialBuild {
+    pname = "shell-maker";
+    version = "0-unstable-2026-03-17";
+    src = pkgs.fetchFromGitHub {
+      owner = "xenodium";
+      repo = "shell-maker";
+      rev = "79181104659ce70900a1ccadaed9ffa67be49924";
+      hash = "sha256-gt7a2yQZ6Hdf4cM/drg5EQ4MeEyjFyy+BJiJ7Cb+qGk=";
+    };
+    packageRequires = with pkgs.emacsPackages; [ markdown-mode ];
+  };
 
   acp-el = pkgs.emacsPackages.trivialBuild {
     pname = "acp";
@@ -28,10 +42,10 @@ let
       rev = "4594c16ab9665bf68052a06fd08581168b69d8d5";
       hash = "sha256-BG+NQpNIzkiOwkfU0TSSp4AMwhNiaQoXmgmlnc4Vi1g=";
     };
-    packageRequires = with pkgs.emacsPackages; [
-      shell-maker
+    packageRequires = [
+      shell-maker-el
       acp-el
-      markdown-mode
+      pkgs.emacsPackages.markdown-mode
     ];
   };
 
@@ -103,8 +117,8 @@ in
     programs.emacs = {
       extraPackages = _epkgs:
         # Core: agent-shell + acp + shell-maker + markdown-mode
-        [ agent-shell-el acp-el ]
-        ++ (with pkgs.emacsPackages; [ shell-maker markdown-mode ])
+        [ agent-shell-el acp-el shell-maker-el ]
+        ++ (with pkgs.emacsPackages; [ markdown-mode ])
         # Add-ons
         ++ (optional cfg.manager.enable agent-shell-manager-el)
         ++ (optional cfg.workspace.enable agent-shell-workspace-el)
@@ -117,9 +131,8 @@ in
         (require 'agent-shell)
         (require 'agent-shell-auggie)
 
-        ;; Use auggie as the default agent
-        (setq agent-shell-default-agent-config
-              (agent-shell-auggie-make-agent-config))
+        ;; Use auggie as the default agent (skip agent selection prompt)
+        (setq agent-shell-preferred-agent-config 'auggie)
 
         ;; Project-scoped sessions: each project.el root gets its own sessions
         ;; Strategy: prompt to resume or start new
