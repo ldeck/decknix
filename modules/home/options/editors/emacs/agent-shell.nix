@@ -246,8 +246,12 @@ in
       + ''
 
         ;; Disable line numbers in agent-shell buffers
+        ;; Re-enable TAB for yasnippet expansion (no completion conflict here)
         (add-hook 'agent-shell-mode-hook
-                  (lambda () (display-line-numbers-mode 0)))
+                  (lambda ()
+                    (display-line-numbers-mode 0)
+                    (local-set-key (kbd "TAB") 'yas-expand)
+                    (local-set-key (kbd "<tab>") 'yas-expand)))
       '';
     };
   };
