@@ -205,14 +205,21 @@ in
         ;; Show session ID in header and session selection prompt
         (setq agent-shell-show-session-id t)
 
-        ;; Keybindings under C-c A prefix (agent-shell-command-map)
-        (global-set-key (kbd "C-c A a") 'agent-shell)                      ; Start/switch to agent
-        (global-set-key (kbd "C-c A n") 'agent-shell-new)                  ; Force new session
-        (global-set-key (kbd "C-c A r") 'agent-shell-rename-buffer)        ; Rename session
-        (global-set-key (kbd "C-c A k") 'agent-shell-interrupt)            ; Interrupt agent
-        (global-set-key (kbd "C-c A v") 'agent-shell-set-session-model)    ; Pick model (minibuffer)
-        (global-set-key (kbd "C-c A M") 'agent-shell-set-session-mode)     ; Pick mode (minibuffer)
-        (global-set-key (kbd "C-c A ?") 'agent-shell-help-menu)            ; Transient help menu
+        ;; == Named prefix map: C-c A → "Agent" ==
+        ;; Gives which-key / minibuffer a descriptive label instead of "+prefix"
+        (define-prefix-command 'decknix-agent-prefix-map)
+        (global-set-key (kbd "C-c A") 'decknix-agent-prefix-map)
+        (with-eval-after-load 'which-key
+          (which-key-add-key-based-replacements "C-c A" "Agent"))
+
+        ;; Global keybindings under C-c A prefix
+        (define-key decknix-agent-prefix-map (kbd "a") 'agent-shell)                      ; Start/switch to agent
+        (define-key decknix-agent-prefix-map (kbd "n") 'agent-shell-new)                  ; Force new session
+        (define-key decknix-agent-prefix-map (kbd "r") 'agent-shell-rename-buffer)        ; Rename session
+        (define-key decknix-agent-prefix-map (kbd "k") 'agent-shell-interrupt)            ; Interrupt agent
+        (define-key decknix-agent-prefix-map (kbd "v") 'agent-shell-set-session-model)    ; Pick model
+        (define-key decknix-agent-prefix-map (kbd "M") 'agent-shell-set-session-mode)     ; Pick mode
+        (define-key decknix-agent-prefix-map (kbd "?") 'agent-shell-help-menu)            ; Help menu
 
         ;; == Session management: unified picker + clean quit ==
 
@@ -371,10 +378,10 @@ even when in an agent-shell buffer with a known session."
           (decknix--agent-session-open-share
            (decknix--agent-session-pick-for-history)))
 
-        (global-set-key (kbd "C-c A s") 'decknix-agent-session-picker)        ; Session picker
-        (global-set-key (kbd "C-c A q") 'decknix-agent-session-quit)          ; Quit session
-        (global-set-key (kbd "C-c A h") 'decknix-agent-session-history)       ; View history (DWIM)
-        (global-set-key (kbd "C-c A H") 'decknix-agent-session-history-pick)  ; View history (pick)
+        (define-key decknix-agent-prefix-map (kbd "s") 'decknix-agent-session-picker)        ; Session picker
+        (define-key decknix-agent-prefix-map (kbd "q") 'decknix-agent-session-quit)          ; Quit session
+        (define-key decknix-agent-prefix-map (kbd "h") 'decknix-agent-session-history)       ; View history (DWIM)
+        (define-key decknix-agent-prefix-map (kbd "H") 'decknix-agent-session-history-pick)  ; View history (pick)
 
         ;; == Compose buffer: magit-style prompt editing ==
         ;; Opens a temporary buffer for composing multi-line prompts.
@@ -459,13 +466,13 @@ freely (RET for newlines), then:
 \\[decknix-agent-compose-cancel] cancel"))
               (set-buffer-modified-p nil))))
 
-        (global-set-key (kbd "C-c A e") 'decknix-agent-compose)               ; Compose prompt
+        (define-key decknix-agent-prefix-map (kbd "e") 'decknix-agent-compose)               ; Compose prompt
       ''
       + optionalString cfg.manager.enable ''
 
         ;; == Manager: tabulated session dashboard ==
         (require 'agent-shell-manager)
-        (global-set-key (kbd "C-c A m") 'agent-shell-manager-toggle)
+        (define-key decknix-agent-prefix-map (kbd "m") 'agent-shell-manager-toggle)
         ;; Show manager at the bottom of the frame
         (setq agent-shell-manager-side 'bottom)
       ''
@@ -473,7 +480,7 @@ freely (RET for newlines), then:
 
         ;; == Workspace: dedicated tab-bar tab with sidebar ==
         (require 'agent-shell-workspace)
-        (global-set-key (kbd "C-c A w") 'agent-shell-workspace-toggle)
+        (define-key decknix-agent-prefix-map (kbd "w") 'agent-shell-workspace-toggle)
       ''
       + optionalString cfg.attention.enable ''
 
@@ -486,7 +493,7 @@ freely (RET for newlines), then:
               #'agent-shell-attention-render-active)
 
         ;; Jump to session needing attention
-        (global-set-key (kbd "C-c A j") 'agent-shell-attention-jump)
+        (define-key decknix-agent-prefix-map (kbd "j") 'agent-shell-attention-jump)
       ''
       + optionalString cfg.templates.enable ''
 
@@ -499,18 +506,37 @@ freely (RET for newlines), then:
             (yas-load-directory dir)))
 
         ;; C-c A t — insert a prompt template via yasnippet
-        (global-set-key (kbd "C-c A t") 'yas-insert-snippet)
+        (define-key decknix-agent-prefix-map (kbd "t") 'yas-insert-snippet)
       ''
       + ''
 
         ;; Disable line numbers in agent-shell buffers
         ;; Re-enable TAB for yasnippet expansion (no completion conflict here)
+        ;; In-buffer shortcuts: C-c x (no A prefix needed inside agent-shell)
         (add-hook 'agent-shell-mode-hook
                   (lambda ()
                     (display-line-numbers-mode 0)
                     (local-set-key (kbd "TAB") 'yas-expand)
                     (local-set-key (kbd "<tab>") 'yas-expand)
-                    (local-set-key (kbd "C-c e") 'decknix-agent-compose)))
+                    ;; Simplified in-buffer bindings (mirrors C-c A x globals)
+                    (local-set-key (kbd "C-c e") 'decknix-agent-compose)
+                    (local-set-key (kbd "C-c s") 'decknix-agent-session-picker)
+                    (local-set-key (kbd "C-c q") 'decknix-agent-session-quit)
+                    (local-set-key (kbd "C-c h") 'decknix-agent-session-history)
+                    (local-set-key (kbd "C-c H") 'decknix-agent-session-history-pick)
+                    (local-set-key (kbd "C-c ?") 'agent-shell-help-menu)
+                    (local-set-key (kbd "C-c r") 'agent-shell-rename-buffer)
+                    (local-set-key (kbd "C-c v") 'agent-shell-set-session-model)
+                    (local-set-key (kbd "C-c M") 'agent-shell-set-session-mode)
+                    ;; Conditional bindings (may not be loaded)
+                    (when (fboundp 'agent-shell-manager-toggle)
+                      (local-set-key (kbd "C-c m") 'agent-shell-manager-toggle))
+                    (when (fboundp 'agent-shell-workspace-toggle)
+                      (local-set-key (kbd "C-c w") 'agent-shell-workspace-toggle))
+                    (when (fboundp 'agent-shell-attention-jump)
+                      (local-set-key (kbd "C-c j") 'agent-shell-attention-jump))
+                    (when (fboundp 'yas-insert-snippet)
+                      (local-set-key (kbd "C-c t") 'yas-insert-snippet))))
       '';
     };
   };
