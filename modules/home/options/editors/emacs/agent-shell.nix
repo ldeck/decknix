@@ -311,8 +311,39 @@ and switches back to the previous buffer."
               (previous-buffer)
               (kill-buffer buf))))
 
+        (defun decknix-agent-session-history ()
+          "View the conversation history for a session.
+If in an agent-shell buffer, offers to view the current session.
+Otherwise, prompts to pick from saved sessions.
+Generates a share link via `auggie session share' and opens it."
+          (interactive)
+          (let* ((sessions (decknix--agent-session-list))
+                 (entries (mapcar (lambda (session)
+                                   (cons (decknix--agent-session-preview session)
+                                         (alist-get 'sessionId session)))
+                                 sessions))
+                 (selection (completing-read "View history for session: "
+                                            (mapcar #'car entries)
+                                            nil t))
+                 (session-id (cdr (assoc selection entries))))
+            (unless session-id
+              (user-error "No session selected"))
+            (message "Generating share link for %s..." (substring session-id 0 8))
+            (let* ((output (shell-command-to-string
+                            (format "auggie session share %s 2>&1"
+                                    (shell-quote-argument session-id))))
+                   (url (when (string-match "https://[^ \t\n]+" output)
+                          (match-string 0 output))))
+              (if url
+                  (progn
+                    (message "Opening %s" url)
+                    (browse-url url))
+                (user-error "Failed to generate share link: %s"
+                            (string-trim output))))))
+
         (global-set-key (kbd "C-c A s") 'decknix-agent-session-picker)  ; Session picker
         (global-set-key (kbd "C-c A q") 'decknix-agent-session-quit)    ; Quit session
+        (global-set-key (kbd "C-c A h") 'decknix-agent-session-history) ; View history
       ''
       + optionalString cfg.manager.enable ''
 
