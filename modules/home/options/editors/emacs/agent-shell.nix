@@ -201,6 +201,9 @@ in
         ;; the graphical header, so it's always visible
         (setq agent-shell-header-style 'text)
 
+        ;; Show session ID in header and session selection prompt
+        (setq agent-shell-show-session-id t)
+
         ;; Keybindings under C-c A prefix (agent-shell-command-map)
         (global-set-key (kbd "C-c A a") 'agent-shell)                      ; Start/switch to agent
         (global-set-key (kbd "C-c A n") 'agent-shell-new)                  ; Force new session
