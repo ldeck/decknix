@@ -197,6 +197,10 @@ in
         ;; Strategy: prompt to resume or start new
         (setq agent-shell-session-strategy 'prompt)
 
+        ;; Show model and mode in the mode-line (bottom bar) instead of
+        ;; the graphical header, so it's always visible
+        (setq agent-shell-header-style 'text)
+
         ;; Keybindings under C-c A prefix (agent-shell-command-map)
         (global-set-key (kbd "C-c A a") 'agent-shell)                      ; Start/switch to agent
         (global-set-key (kbd "C-c A n") 'agent-shell-new)                  ; Force new session
