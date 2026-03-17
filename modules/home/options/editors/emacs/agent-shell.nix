@@ -93,6 +93,10 @@ in
       extraConfig = ''
         ;;; Agent Shell Configuration (auggie AI integration)
 
+        ;; Suppress native-comp warnings from popping up as buffers;
+        ;; they are harmless and still logged to *Warnings*
+        (setq native-comp-async-report-warnings-errors 'silent)
+
         ;; == Core: agent-shell with auggie defaults ==
         (require 'agent-shell)
         (require 'agent-shell-auggie)
