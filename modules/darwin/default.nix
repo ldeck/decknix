@@ -1,4 +1,9 @@
-{ pkgs, lib, ... }: {
+{ config, pkgs, lib, ... }:
+let
+  username = config.system.primaryUser;
+  homeDir = config.users.users.${username}.home;
+in
+{
   # set and forget
   system.stateVersion = 6;
 
@@ -47,6 +52,14 @@
   # You generally do NOT need mkDefault here unless you want to allow 
   # the user to strictly *remove* your experimental features.
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
+
+  # Include user-managed access tokens (e.g. GitHub API auth) so the
+  # nix-daemon can make authenticated requests. The token file is
+  # written by the nix-github-auth activation script and is NOT in
+  # the Nix store. If the file doesn't exist, !include silently skips it.
+  nix.extraOptions = ''
+    !include ${homeDir}/.config/nix/access-tokens.conf
+  '';
 
   # 3. SYSTEM PACKAGES
   # These are installed in /run/current-system/sw (available to all users).
