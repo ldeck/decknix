@@ -505,8 +505,14 @@ freely (RET for newlines), then:
               (push dir yas-snippet-dirs))
             (yas-load-directory dir)))
 
-        ;; C-c A t — insert a prompt template via yasnippet
-        (define-key decknix-agent-prefix-map (kbd "t") 'yas-insert-snippet)
+        ;; C-c A t — template sub-prefix ("Templates")
+        (define-prefix-command 'decknix-agent-template-map)
+        (define-key decknix-agent-prefix-map (kbd "t") 'decknix-agent-template-map)
+        (with-eval-after-load 'which-key
+          (which-key-add-key-based-replacements "C-c A t" "Templates"))
+        (define-key decknix-agent-template-map (kbd "t") 'yas-insert-snippet)       ; Insert
+        (define-key decknix-agent-template-map (kbd "n") 'yas-new-snippet)          ; New
+        (define-key decknix-agent-template-map (kbd "e") 'yas-visit-snippet-file)   ; Edit
       ''
       + ''
 
@@ -535,8 +541,13 @@ freely (RET for newlines), then:
                       (local-set-key (kbd "C-c w") 'agent-shell-workspace-toggle))
                     (when (fboundp 'agent-shell-attention-jump)
                       (local-set-key (kbd "C-c j") 'agent-shell-attention-jump))
+                    ;; C-c t — template sub-prefix in-buffer
                     (when (fboundp 'yas-insert-snippet)
-                      (local-set-key (kbd "C-c t") 'yas-insert-snippet))))
+                      (let ((map (make-sparse-keymap)))
+                        (define-key map (kbd "t") 'yas-insert-snippet)
+                        (define-key map (kbd "n") 'yas-new-snippet)
+                        (define-key map (kbd "e") 'yas-visit-snippet-file)
+                        (local-set-key (kbd "C-c t") map)))))
       '';
     };
   };
