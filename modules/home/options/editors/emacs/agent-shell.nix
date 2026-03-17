@@ -289,13 +289,18 @@ new agent-shell."
               ('session
                (let* ((session (cdr chosen))
                       (session-id (alist-get 'sessionId session))
+                      ;; Pass --resume to auggie and bypass agent-shell's
+                      ;; own session prompt (which is a separate ACP layer)
                       (agent-shell-auggie-acp-command
                        (append agent-shell-auggie-acp-command
-                               (list "--resume" session-id))))
+                               (list "--resume" session-id)))
+                      (agent-shell-session-strategy 'new))
                  (agent-shell-start
                   :config (agent-shell-auggie-make-agent-config))))
-              ('new (agent-shell-start
-                     :config (agent-shell-auggie-make-agent-config))))))
+              ('new
+               (let ((agent-shell-session-strategy 'new))
+                 (agent-shell-start
+                  :config (agent-shell-auggie-make-agent-config)))))))
 
         (defun decknix-agent-session-quit ()
           "Cleanly quit the current agent-shell session.
