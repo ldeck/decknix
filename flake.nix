@@ -4,6 +4,8 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
 
+    nixpkgs-unstable.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+
     nix-darwin = {
       url = "github:LnL7/nix-darwin/nix-darwin-25.11";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -63,6 +65,12 @@
         darwinModules = {
           default = { config, ... }: let
             find = import ./lib/find.nix { lib = nixpkgs.lib; };
+            unstableOverlay = final: prev: {
+              unstable = import inputs.nixpkgs-unstable {
+                system = prev.stdenv.hostPlatform.system;
+                config = prev.config;
+              };
+            };
           in
           {
             imports =
@@ -72,6 +80,15 @@
 
             # expose 'lib.find' globally
             config.lib.find = find;
+
+            # Tiered package sourcing: make pkgs.unstable available to all modules
+            # Priority: stable nixpkgs > unstable nixpkgs > nix-casks > custom derivations
+            config.nixpkgs.overlays = [ unstableOverlay ];
+
+            # Propagate pkgs.unstable into home-manager's pkgs as well
+            config.home-manager.sharedModules = [{
+              nixpkgs.overlays = [ unstableOverlay ];
+            }];
           };
         };
 

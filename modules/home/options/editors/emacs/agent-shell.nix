@@ -5,49 +5,15 @@ with lib;
 let
   cfg = config.programs.emacs.decknix.agentShell;
 
-  # == Package sources (not yet in nixpkgs, or nixpkgs version too old) ==
+  # == Tiered package sourcing ==
+  # Priority: stable nixpkgs > unstable nixpkgs > custom derivations
+  #
+  # From unstable (not yet in stable, or stable version too old):
+  #   shell-maker, acp, agent-shell
+  # Custom derivations (not in any nixpkgs channel):
+  #   agent-shell-manager, agent-shell-workspace, agent-shell-attention
 
-  # shell-maker in nixpkgs is too old; agent-shell requires >= 0.89.1
-  # for markdown-overlays support
-  shell-maker-el = pkgs.emacsPackages.trivialBuild {
-    pname = "shell-maker";
-    version = "0-unstable-2026-03-17";
-    src = pkgs.fetchFromGitHub {
-      owner = "xenodium";
-      repo = "shell-maker";
-      rev = "79181104659ce70900a1ccadaed9ffa67be49924";
-      hash = "sha256-gt7a2yQZ6Hdf4cM/drg5EQ4MeEyjFyy+BJiJ7Cb+qGk=";
-    };
-    packageRequires = with pkgs.emacsPackages; [ markdown-mode ];
-  };
-
-  acp-el = pkgs.emacsPackages.trivialBuild {
-    pname = "acp";
-    version = "0-unstable-2026-03-17";
-    src = pkgs.fetchFromGitHub {
-      owner = "xenodium";
-      repo = "acp.el";
-      rev = "9737a9678a658a3289229d7d37459c84db1eef24";
-      hash = "sha256-P3E3CQJde0pn0BHM3liZ/F7mCxoAXzKp8dF8/p2Wf9A=";
-    };
-    # acp.el has acp.el and acp-traffic.el at the top level
-  };
-
-  agent-shell-el = pkgs.emacsPackages.trivialBuild {
-    pname = "agent-shell";
-    version = "0-unstable-2026-03-17";
-    src = pkgs.fetchFromGitHub {
-      owner = "xenodium";
-      repo = "agent-shell";
-      rev = "4594c16ab9665bf68052a06fd08581168b69d8d5";
-      hash = "sha256-BG+NQpNIzkiOwkfU0TSSp4AMwhNiaQoXmgmlnc4Vi1g=";
-    };
-    packageRequires = [
-      shell-maker-el
-      acp-el
-      pkgs.emacsPackages.markdown-mode
-    ];
-  };
+  inherit (pkgs.unstable.emacsPackages) shell-maker acp agent-shell;
 
   agent-shell-manager-el = pkgs.emacsPackages.trivialBuild {
     pname = "agent-shell-manager";
@@ -58,7 +24,7 @@ let
       rev = "53b73f13ed1ac9d2de128465a8504a7265490ea7";
       hash = "sha256-JPB/OnOhYbM0LMirSYQhpB6hW8SAg0Ri6buU8tMP7rA=";
     };
-    packageRequires = [ agent-shell-el ];
+    packageRequires = [ agent-shell ];
   };
 
   agent-shell-workspace-el = pkgs.emacsPackages.trivialBuild {
@@ -70,7 +36,7 @@ let
       rev = "5d791c658b0692867c03a598ff4457599b5e20a5";
       hash = "sha256-durGK2f+Ovv5scbz4hv1k8nHeylgLNfHAR5tvQAifKI=";
     };
-    packageRequires = [ agent-shell-el ];
+    packageRequires = [ agent-shell ];
   };
 
   agent-shell-attention-el = pkgs.emacsPackages.trivialBuild {
@@ -82,7 +48,7 @@ let
       rev = "db89dc71e6e2ca5f0a6859ea9e9b183391614cea";
       hash = "sha256-bc5DjvGJnFBlsLtyYlN1hJQrcvK9khGaywtT37ACn+s=";
     };
-    packageRequires = [ agent-shell-el ];
+    packageRequires = [ agent-shell ];
   };
 
 in
@@ -116,8 +82,8 @@ in
   config = mkIf cfg.enable {
     programs.emacs = {
       extraPackages = _epkgs:
-        # Core: agent-shell + acp + shell-maker + markdown-mode
-        [ agent-shell-el acp-el shell-maker-el ]
+        # Core (from unstable): agent-shell + acp + shell-maker + markdown-mode
+        [ agent-shell acp shell-maker ]
         ++ (with pkgs.emacsPackages; [ markdown-mode ])
         # Add-ons
         ++ (optional cfg.manager.enable agent-shell-manager-el)
