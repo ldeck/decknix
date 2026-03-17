@@ -509,7 +509,8 @@ freely (RET for newlines), then:
                   (lambda ()
                     (display-line-numbers-mode 0)
                     (local-set-key (kbd "TAB") 'yas-expand)
-                    (local-set-key (kbd "<tab>") 'yas-expand)))
+                    (local-set-key (kbd "<tab>") 'yas-expand)
+                    (local-set-key (kbd "C-c e") 'decknix-agent-compose)))
       '';
     };
   };
