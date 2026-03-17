@@ -193,9 +193,10 @@ in
         ;; Use auggie as the default agent (skip agent selection prompt)
         (setq agent-shell-preferred-agent-config 'auggie)
 
-        ;; Project-scoped sessions: each project.el root gets its own sessions
-        ;; Strategy: prompt to resume or start new
-        (setq agent-shell-session-strategy 'prompt)
+        ;; Session strategy: always start new (no built-in session prompt).
+        ;; All session management (new/resume/switch) goes through our
+        ;; custom picker at C-c A s instead.
+        (setq agent-shell-session-strategy 'new)
 
         ;; Show model and mode in the mode-line (bottom bar) instead of
         ;; the graphical header, so it's always visible
@@ -289,18 +290,14 @@ new agent-shell."
               ('session
                (let* ((session (cdr chosen))
                       (session-id (alist-get 'sessionId session))
-                      ;; Pass --resume to auggie and bypass agent-shell's
-                      ;; own session prompt (which is a separate ACP layer)
+                      ;; Pass --resume to auggie so it resumes the saved session
                       (agent-shell-auggie-acp-command
                        (append agent-shell-auggie-acp-command
-                               (list "--resume" session-id)))
-                      (agent-shell-session-strategy 'new))
+                               (list "--resume" session-id))))
                  (agent-shell-start
                   :config (agent-shell-auggie-make-agent-config))))
-              ('new
-               (let ((agent-shell-session-strategy 'new))
-                 (agent-shell-start
-                  :config (agent-shell-auggie-make-agent-config)))))))
+              ('new (agent-shell-start
+                     :config (agent-shell-auggie-make-agent-config))))))
 
         (defun decknix-agent-session-quit ()
           "Cleanly quit the current agent-shell session.
