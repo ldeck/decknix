@@ -1,0 +1,19 @@
+[book]
+title = "Decknix Documentation"
+description = "Opinionated Nix framework for macOS — documentation and guides"
+authors = ["Lachlan Deck"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/ldeck/decknix"
+edit-url-template = "https://github.com/ldeck/decknix/edit/main/docs/{path}"
+
+[output.html.search]
+enable = true
+
