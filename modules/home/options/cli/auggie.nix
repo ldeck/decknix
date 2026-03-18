@@ -49,7 +49,7 @@ in {
       indexingAllowDirs = mkOption {
         type = types.listOf types.str;
         default = [];
-        example = [ "/Users/me/Code/my-project" "/Users/ldeck/tools/decknix" ];
+        example = [ "/Users/me/Code/my-project" "/Users/me/tools/decknix" ];
         description = "Directories auggie is allowed to index without prompting.";
       };
 

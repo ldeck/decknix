@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'modules/**'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -22,6 +23,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+
+      - name: Generate options reference
+        run: |
+          OPTIONS_MD=$(nix-build docs/generate-options.nix -A markdown --no-out-link)
+          # Inject generated markdown between the markers in options.md
+          {
+            sed -n '1,/<!-- OPTIONS_START -->/p' docs/src/options.md
+            cat "$OPTIONS_MD"
+            sed -n '/<!-- OPTIONS_END -->/,$p' docs/src/options.md
+          } > docs/src/options.md.tmp
+          mv docs/src/options.md.tmp docs/src/options.md
 
       - name: Install mdBook
         run: |
