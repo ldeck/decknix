@@ -880,6 +880,10 @@ freely (RET for newlines), then:
         (add-hook 'agent-shell-mode-hook
                   (lambda ()
                     (display-line-numbers-mode 0)
+                    ;; Keep prompt pinned to the bottom of the window
+                    (setq-local comint-scroll-to-bottom-on-input t)
+                    (setq-local comint-scroll-to-bottom-on-output t)
+                    (setq-local comint-scroll-show-maximum-output t)
                     (local-set-key (kbd "TAB") 'yas-expand)
                     (local-set-key (kbd "<tab>") 'yas-expand)
                     ;; Simplified in-buffer bindings (mirrors C-c A x globals)
