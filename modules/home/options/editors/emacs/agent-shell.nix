@@ -51,6 +51,124 @@ let
     packageRequires = [ agent-shell ];
   };
 
+  # == Custom auggie commands ==
+  # Deployed to ~/.augment/commands/ via home.file (as symlinks).
+  # User-created commands (regular files) coexist in the same directory
+  # and are not affected by Nix. On `decknix switch`, Nix-managed ones
+  # are refreshed; runtime-created ones persist.
+  commandDir = ".augment/commands";
+
+  commands = {
+    "start.md" = ''
+      ---
+      description: Create a new session and rename it, optionally from a Jira ticket key
+      argument-hint: [session name or JIRA-KEY]
+      ---
+
+      Create a new Augment session and rename it in one step.
+
+      **Instructions:**
+
+      1. **Parse the argument:** The user provides `$ARGUMENTS` which can be:
+         - A **Jira ticket key** (e.g., `ALR-4268`, `ARC-10308`) — detected by matching the pattern `[A-Z]+-\d+`
+         - A **plain session name** (e.g., "proptrack pubsub fix")
+         - **Empty** — prompt the user for a name
+
+      2. **If a Jira ticket key is detected:**
+         - Fetch the ticket summary from Jira using the Jira API tool: `GET /issue/{key}` with fields `summary,status,assignee,parent`
+         - If the ticket has a parent, also fetch the parent summary
+         - Construct the session name as: `{KEY}: {parent summary or ticket summary}`
+         - Display the ticket details briefly:
+           ```
+           📋 {KEY}: {summary}
+           📌 Status: {status} | Assignee: {assignee or "Unassigned"}
+           🏷️ Session: {constructed name}
+           ```
+
+      3. **Inform the user** that `/new` and `/rename` are built-in commands that cannot be invoked programmatically from within a session. Instead, provide the exact commands to run:
+
+         ```
+         To start this session, run these commands:
+
+         /new
+         /rename {session name}
+         ```
+
+         If the session name contains special characters, wrap it in quotes.
+
+      4. **Offer to set up context** for the new session:
+         - Ask if they'd like a brief summary of the current session to carry forward
+         - If yes, generate a 3-5 bullet summary of key decisions, findings, and next steps from the current conversation
+    '';
+
+    "find-session.md" = ''
+      ---
+      description: Search all saved sessions by keyword and display matches for resuming
+      argument-hint: <search term>
+      ---
+
+      Search through ALL auggie sessions (not just the last 10) and help the user find the one they want to resume.
+
+      **Instructions:**
+
+      1. Run this shell command to get all sessions as JSON:
+         ```
+         auggie session list --json -n 500 --all 2>/dev/null
+         ```
+
+      2. If the user provided a search term as `$ARGUMENTS`, filter the sessions where `firstUserMessage`, `lastUserMessage`, or any entry in `userMessages` contains that term (case-insensitive). If no search term was provided, show the most recent 30 sessions.
+
+      3. Display the matching sessions in a clean, compact table. For each session show:
+         - A number (starting from 1)
+         - The session ID (first 8 characters)
+         - When it was last modified (relative, e.g. "2h ago", "3d ago")
+         - Number of exchanges
+         - The first user message (truncated to 80 chars)
+         Sort by most recently modified first.
+
+      4. Ask the user which session they'd like to resume (by number or search term).
+
+      5. When the user picks a session, tell them the exact command to run:
+         ```
+         auggie session resume <sessionId>
+         ```
+         **Note:** Session switching cannot be triggered programmatically from within an active session — the user must exit first (Ctrl+C or /exit) and then run the resume command.
+
+      6. If no sessions match, suggest broadening the search or trying `/find-session` with no arguments to see recent sessions.
+
+      **Important:** Use `python3` for JSON parsing. Keep output concise and scannable.
+    '';
+
+    "pivot-conversation.md" = ''
+      ---
+      description: Hard pivot — discard current plan and re-evaluate with new context
+      argument-hint: [new direction or constraint]
+      ---
+
+      **[SYSTEM OVERRIDE: HARD PIVOT INITIATED]**
+
+      Stop your current execution path immediately. I am injecting new information, constraints, or a change in direction that supersedes your previous plan.
+
+      Please execute the following steps strictly in order:
+      1. **Halt and Discard:** Discard the immediate next steps or tool calls you were just about to execute.
+      2. **Ingest New Context:** Carefully review the new information I have provided in my prompt alongside this command.
+      3. **Analyze the Impact:** Briefly explain (in 1-2 sentences) how this new information changes our current approach or invalidates your previous assumptions.
+      4. **State the New Plan:** Provide a concise, bulleted list of the exact next steps you will take based on this pivot.
+      5. **Wait for Approval:** Do NOT write any code, modify any files, or execute any terminal commands until I explicitly approve your new plan.
+    '';
+
+    "step-back.md" = ''
+      ---
+      description: Stop, summarize progress, and wait for direction
+      ---
+
+      Stop your current execution path.
+      1. Summarize exactly what you have modified so far.
+      2. List the specific errors or roadblocks you are encountering.
+      3. Wait for my explicit direction before writing any more code or executing any more terminal commands.
+    '';
+  };
+
   # == Yasnippet prompt templates for agent-shell-mode ==
   # Deployed to ~/.emacs.d/snippets/agent-shell-mode/ via home.file
   # Note: ''${ escapes Nix interpolation to produce literal ${ for yasnippet fields
@@ -161,14 +279,28 @@ in
       default = true;
       description = "Enable yasnippet prompt templates for agent-shell (review, refactor, test, etc.).";
     };
+
+    commands.enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Enable Nix-managed auggie custom commands (deployed to ~/.augment/commands/).";
+    };
   };
 
   config = mkIf cfg.enable {
-    # Deploy yasnippet snippet files to ~/.emacs.d/snippets/agent-shell-mode/
-    home.file = mkIf cfg.templates.enable
-      (mapAttrs'
-        (name: text: nameValuePair "${snippetDir}/${name}" { inherit text; })
-        snippets);
+    # Deploy yasnippet snippets + auggie commands via home.file
+    home.file =
+      # Yasnippet snippet files → ~/.emacs.d/snippets/agent-shell-mode/
+      (optionalAttrs cfg.templates.enable
+        (mapAttrs'
+          (name: text: nameValuePair "${snippetDir}/${name}" { inherit text; })
+          snippets))
+      //
+      # Auggie custom commands → ~/.augment/commands/
+      (optionalAttrs cfg.commands.enable
+        (mapAttrs'
+          (name: text: nameValuePair "${commandDir}/${name}" { inherit text; })
+          commands));
     programs.emacs = {
       extraPackages = _epkgs:
         # Core (from unstable): agent-shell + acp + shell-maker + markdown-mode
@@ -215,6 +347,7 @@ in
                    ("C-c q"   "Quit"       "Save and quit session")
                    ("C-c h"   "History"    "View conversation history")
                    ("C-c t t" "Template"   "Insert a prompt template")
+                   ("C-c c c" "Command"    "Pick & insert a slash command")
                    ("C-c T t" "Tag"        "Tag this session")
                    ("C-c T l" "By tag"     "Filter sessions by tag")
                    ("C-c ?"   "Help"       "Full keybinding reference"))))
@@ -284,6 +417,13 @@ in
                  "  C-c t t     Insert a prompt template\n"
                  "  C-c t n     Create new template\n"
                  "  C-c t e     Edit existing template\n"
+                 "\n"
+
+                 (propertize "Commands  (C-c c …)\n" 'font-lock-face '(:weight bold))
+                 (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
+                 "  C-c c c     Pick & insert a slash command\n"
+                 "  C-c c n     Create new command\n"
+                 "  C-c c e     Edit existing command\n"
                  "\n"
 
                  (propertize "Tags  (C-c T …)\n" 'font-lock-face '(:weight bold))
@@ -825,6 +965,100 @@ freely (RET for newlines), then:
               (set-buffer-modified-p nil))))
 
         (define-key decknix-agent-prefix-map (kbd "e") 'decknix-agent-compose)               ; Compose prompt
+
+        ;; == Custom commands: discovery, picker, authoring ==
+
+        (defvar decknix--agent-command-dirs
+          (list (expand-file-name "~/.augment/commands"))
+          "Directories to scan for auggie custom commands.
+        Project-level .augment/commands/ is added dynamically.")
+
+        (defun decknix--agent-command-files ()
+          "Return an alist of (name . path) for all available commands.
+        Scans global and project-level command directories."
+          (let ((dirs (copy-sequence decknix--agent-command-dirs))
+                (result nil))
+            ;; Add project-level .augment/commands/ if it exists
+            (when-let* ((proj (project-current))
+                        (root (project-root proj))
+                        (proj-dir (expand-file-name ".augment/commands" root)))
+              (when (file-directory-p proj-dir)
+                (push proj-dir dirs)))
+            (dolist (dir dirs)
+              (when (file-directory-p dir)
+                (dolist (file (directory-files dir t "\\.md\\'" t))
+                  (let* ((name (file-name-sans-extension
+                                (file-name-nondirectory file)))
+                         (scope (if (string-prefix-p
+                                     (expand-file-name "~/.augment") dir)
+                                    "global" "project")))
+                    (push (cons (format "/%s  (%s)" name scope) file) result)))))
+            (nreverse result)))
+
+        (defun decknix--agent-command-description (file)
+          "Extract the description from a command FILE's YAML frontmatter."
+          (with-temp-buffer
+            (insert-file-contents file nil 0 500)
+            (goto-char (point-min))
+            (if (and (looking-at "---")
+                     (re-search-forward "^description:\\s-*\\(.+\\)" nil t))
+                (match-string 1)
+              "")))
+
+        (defun decknix-agent-command-run ()
+          "Pick a custom command and insert it as a slash command in the prompt.
+        Shows commands from ~/.augment/commands/ and project .augment/commands/."
+          (interactive)
+          (let* ((cmds (decknix--agent-command-files))
+                 (annotator (lambda (cand)
+                              (when-let* ((file (cdr (assoc cand cmds))))
+                                (format "  %s" (decknix--agent-command-description file)))))
+                 (selection (completing-read
+                             "Command: " (mapcar #'car cmds) nil t nil nil nil
+                             `(annotation-function . ,annotator)))
+                 (file (cdr (assoc selection cmds)))
+                 (name (progn (string-match "^/\\([^ ]+\\)" selection)
+                              (match-string 1 selection))))
+            ;; Insert the slash command at the agent-shell prompt
+            (if (derived-mode-p 'agent-shell-mode)
+                (progn
+                  (goto-char (point-max))
+                  (insert (format "/%s " name)))
+              (message "Copied: /%s (use in an agent-shell buffer)" name))))
+
+        (defun decknix-agent-command-new ()
+          "Create a new auggie custom command.
+        Prompts for a name and opens a template in ~/.augment/commands/."
+          (interactive)
+          (let* ((name (read-string "Command name (no extension): "))
+                 (name (string-trim name))
+                 (file (expand-file-name
+                        (format "~/.augment/commands/%s.md" name))))
+            (when (string-empty-p name)
+              (user-error "Name cannot be empty"))
+            (when (file-exists-p file)
+              (user-error "Command %s already exists — use edit instead" name))
+            (find-file file)
+            (insert (format "---\ndescription: %s\nargument-hint: [args]\n---\n\n" name))
+            (message "New command: %s — write instructions, then save." name)))
+
+        (defun decknix-agent-command-edit ()
+          "Edit an existing auggie custom command."
+          (interactive)
+          (let* ((cmds (decknix--agent-command-files))
+                 (selection (completing-read "Edit command: "
+                                            (mapcar #'car cmds) nil t))
+                 (file (cdr (assoc selection cmds))))
+            (find-file file)))
+
+        ;; C-c A c — commands sub-prefix ("Commands")
+        (define-prefix-command 'decknix-agent-command-map)
+        (define-key decknix-agent-prefix-map (kbd "c") 'decknix-agent-command-map)
+        (with-eval-after-load 'which-key
+          (which-key-add-key-based-replacements "C-c A c" "Commands"))
+        (define-key decknix-agent-command-map (kbd "c") 'decknix-agent-command-run)    ; Pick & insert
+        (define-key decknix-agent-command-map (kbd "n") 'decknix-agent-command-new)    ; New
+        (define-key decknix-agent-command-map (kbd "e") 'decknix-agent-command-edit)   ; Edit
       ''
       + optionalString cfg.manager.enable ''
 
@@ -910,6 +1144,12 @@ freely (RET for newlines), then:
                         (define-key map (kbd "n") 'yas-new-snippet)
                         (define-key map (kbd "e") 'yas-visit-snippet-file)
                         (local-set-key (kbd "C-c t") map)))
+                    ;; C-c c — commands sub-prefix in-buffer
+                    (let ((map (make-sparse-keymap)))
+                      (define-key map (kbd "c") 'decknix-agent-command-run)
+                      (define-key map (kbd "n") 'decknix-agent-command-new)
+                      (define-key map (kbd "e") 'decknix-agent-command-edit)
+                      (local-set-key (kbd "C-c c") map))
                     ;; C-c T — tags sub-prefix in-buffer
                     (let ((map (make-sparse-keymap)))
                       (define-key map (kbd "t") 'decknix-agent-tag-add)
