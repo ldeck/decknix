@@ -47,6 +47,10 @@
 - [Framework Development](./guides/development.md)
 - [Troubleshooting](./guides/troubleshooting.md)
 
+# Reference
+
+- [Options Reference](./options.md)
+
 ---
 
 [External Resources](./resources.md)

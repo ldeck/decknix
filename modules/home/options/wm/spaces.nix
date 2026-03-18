@@ -160,7 +160,7 @@ in {
       example = {
         work = {
           name = "Work";
-          key = "n";
+          key = "w";
           spaces = [ "primary" "editor" "monitoring" "pipeline" "docs" "messages" "planning" ];
           startSpace = 1;
         };

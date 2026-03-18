@@ -8,8 +8,14 @@ let
   # Type definition for extensions
   extensionType = types.submodule {
     options = {
-      description = mkOption { type = types.str; };
-      command = mkOption { type = types.str; };
+      description = mkOption {
+        type = types.str;
+        description = "Short description shown in `decknix help` and shell completions.";
+      };
+      command = mkOption {
+        type = types.str;
+        description = "Absolute path to the executable that implements this extension.";
+      };
     };
   };
 
