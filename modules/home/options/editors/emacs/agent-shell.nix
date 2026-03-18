@@ -449,6 +449,7 @@ in
                  "  C-c m       Manager dashboard\n"
                  "  C-c w       Workspace tab toggle\n"
                  "  C-c j       Jump to session needing attention\n"
+                 "  C-c A S     MCP server list\n"
                  "\n"
 
                  (propertize (make-string 52 ?═) 'font-lock-face 'font-lock-comment-face) "\n"
@@ -1059,6 +1060,67 @@ freely (RET for newlines), then:
         (define-key decknix-agent-command-map (kbd "c") 'decknix-agent-command-run)    ; Pick & insert
         (define-key decknix-agent-command-map (kbd "n") 'decknix-agent-command-new)    ; New
         (define-key decknix-agent-command-map (kbd "e") 'decknix-agent-command-edit)   ; Edit
+
+        ;; == MCP server listing ==
+
+        (defun decknix-agent-mcp-list ()
+          "Show configured MCP servers in a help buffer.
+        Reads from ~/.augment/settings.json."
+          (interactive)
+          (let* ((settings-file (expand-file-name "~/.augment/settings.json"))
+                 (json-object-type 'alist)
+                 (json-array-type 'list)
+                 (json-key-type 'symbol)
+                 (settings (if (file-exists-p settings-file)
+                               (json-read-file settings-file)
+                             nil))
+                 (servers (alist-get 'mcpServers settings))
+                 (buf (get-buffer-create "*MCP Servers*")))
+            (with-current-buffer buf
+              (let ((inhibit-read-only t))
+                (erase-buffer)
+                (insert
+                 (propertize "MCP Server Configuration\n"
+                             'font-lock-face '(:weight bold :height 1.2))
+                 (propertize (make-string 52 ?═) 'font-lock-face 'font-lock-comment-face)
+                 "\n"
+                 (propertize (format "Source: %s\n\n" settings-file)
+                             'font-lock-face 'font-lock-comment-face))
+                (if (null servers)
+                    (insert "  No MCP servers configured.\n")
+                  (dolist (server servers)
+                    (let* ((name (symbol-name (car server)))
+                           (config (cdr server))
+                           (cmd (or (alist-get 'command config) "?"))
+                           (args (alist-get 'args config))
+                           (stype (or (alist-get 'type config) "stdio"))
+                           (env (alist-get 'env config)))
+                      (insert (propertize (format "  %s\n" name)
+                                          'font-lock-face 'font-lock-function-name-face))
+                      (insert (format "    type:    %s\n" stype))
+                      (insert (format "    command: %s\n" cmd))
+                      (when args
+                        (insert (format "    args:    %s\n"
+                                        (string-join (mapcar #'format args) " "))))
+                      (when (and env (> (length env) 0))
+                        (insert "    env:\n")
+                        (dolist (e env)
+                          (insert (format "      %s=%s\n"
+                                          (symbol-name (car e)) (cdr e)))))
+                      (insert "\n"))))
+                (insert (propertize (make-string 52 ?═) 'font-lock-face 'font-lock-comment-face) "\n"
+                        (propertize "Runtime changes (auggie mcp add) are temporary.\n"
+                                    'font-lock-face 'font-lock-comment-face)
+                        (propertize "To persist, edit Nix config and run decknix switch.\n"
+                                    'font-lock-face 'font-lock-comment-face)
+                        (propertize "Press q to close this buffer.\n"
+                                    'font-lock-face 'font-lock-comment-face))
+                (goto-char (point-min))
+                (special-mode)))
+            (display-buffer buf '(display-buffer-at-bottom
+                                  (window-height . fit-window-to-buffer)))))
+
+        (define-key decknix-agent-prefix-map (kbd "S") 'decknix-agent-mcp-list)           ; MCP servers
       ''
       + optionalString cfg.manager.enable ''
 
