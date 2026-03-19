@@ -8,3 +8,4 @@ cli/target/
 # Ignore automatically generated direnv output
 .direnv
 docs/book/
+docs/src/data/
