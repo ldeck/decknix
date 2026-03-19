@@ -1,19 +1,48 @@
-# Options Reference
+# Configuration Hub
 
-> Auto-generated from module source. Updated on each deploy.
-> Use the controls below to search options and switch nixpkgs channels.
+> Your single entry point for configuring a decknix-managed system.
+> Browse framework options, or jump to upstream references for home-manager, nix-darwin, packages, and casks.
 
 <div id="options-hub">
-  <div id="options-controls" style="margin-bottom:1.5em;padding:0.75em 1em;background:var(--sidebar-bg);border:1px solid var(--sidebar-separator);border-radius:6px;display:flex;align-items:center;gap:0.75em;flex-wrap:wrap;">
-    <input id="options-search" type="text" placeholder="Search options…"
-      style="flex:1;min-width:200px;padding:0.4em 0.6em;font-size:0.95em;border:1px solid var(--sidebar-separator);border-radius:4px;background:var(--bg);color:var(--fg);" />
-    <select id="options-channel"
-      style="padding:0.4em 0.6em;font-size:0.95em;border:1px solid var(--sidebar-separator);border-radius:4px;background:var(--bg);color:var(--fg);">
-      <option value="unstable">nixpkgs unstable</option>
-      <option value="24.11">nixpkgs 24.11</option>
-    </select>
-    <span id="options-count" style="font-size:0.85em;color:var(--sidebar-fg);white-space:nowrap;"></span>
+  <nav id="hub-tabs" style="display:flex;gap:0;margin-bottom:0;border-bottom:2px solid var(--sidebar-separator);">
+    <button class="hub-tab active" data-tab="decknix"
+      style="padding:0.5em 1.2em;font-size:0.95em;border:1px solid var(--sidebar-separator);border-bottom:none;border-radius:6px 6px 0 0;background:var(--bg);color:var(--fg);cursor:pointer;font-weight:600;margin-right:2px;">Decknix</button>
+    <button class="hub-tab" data-tab="home-manager"
+      style="padding:0.5em 1.2em;font-size:0.95em;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;background:var(--sidebar-bg);color:var(--sidebar-fg);cursor:pointer;margin-right:2px;">Home Manager</button>
+    <button class="hub-tab" data-tab="nix-darwin"
+      style="padding:0.5em 1.2em;font-size:0.95em;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;background:var(--sidebar-bg);color:var(--sidebar-fg);cursor:pointer;margin-right:2px;">nix-darwin</button>
+    <button class="hub-tab" data-tab="packages"
+      style="padding:0.5em 1.2em;font-size:0.95em;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;background:var(--sidebar-bg);color:var(--sidebar-fg);cursor:pointer;margin-right:2px;">Packages</button>
+    <button class="hub-tab" data-tab="nix-casks"
+      style="padding:0.5em 1.2em;font-size:0.95em;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;background:var(--sidebar-bg);color:var(--sidebar-fg);cursor:pointer;">nix-casks</button>
+  </nav>
+
+  <!-- Decknix tab (full search) -->
+  <div id="tab-decknix" class="hub-panel" style="padding:1em 0;">
+    <div id="options-controls" style="margin-bottom:1.5em;padding:0.75em 1em;background:var(--sidebar-bg);border:1px solid var(--sidebar-separator);border-radius:6px;display:flex;align-items:center;gap:0.75em;flex-wrap:wrap;">
+      <input id="options-search" type="text" placeholder="Search decknix options…"
+        style="flex:1;min-width:200px;padding:0.4em 0.6em;font-size:0.95em;border:1px solid var(--sidebar-separator);border-radius:4px;background:var(--bg);color:var(--fg);" />
+      <select id="options-channel"
+        style="padding:0.4em 0.6em;font-size:0.95em;border:1px solid var(--sidebar-separator);border-radius:4px;background:var(--bg);color:var(--fg);">
+        <option value="unstable">nixpkgs unstable</option>
+        <option value="24.11">nixpkgs 24.11</option>
+      </select>
+      <span id="options-count" style="font-size:0.85em;color:var(--sidebar-fg);white-space:nowrap;"></span>
+    </div>
+    <div id="options-list"></div>
   </div>
-  <div id="options-list"></div>
-  <noscript><p>JavaScript is required for the interactive options reference.</p></noscript>
+
+  <!-- Home Manager tab -->
+  <div id="tab-home-manager" class="hub-panel" style="display:none;padding:1em 0;"></div>
+
+  <!-- nix-darwin tab -->
+  <div id="tab-nix-darwin" class="hub-panel" style="display:none;padding:1em 0;"></div>
+
+  <!-- Packages tab -->
+  <div id="tab-packages" class="hub-panel" style="display:none;padding:1em 0;"></div>
+
+  <!-- nix-casks tab -->
+  <div id="tab-nix-casks" class="hub-panel" style="display:none;padding:1em 0;"></div>
+
+  <noscript><p>JavaScript is required for the interactive configuration hub.</p></noscript>
 </div>

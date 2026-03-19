@@ -49,7 +49,7 @@
 
 # Reference
 
-- [Options Reference](./options.md)
+- [Configuration Hub](./options.md)
 
 ---
 
