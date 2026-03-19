@@ -3,7 +3,10 @@
 
   var REPO_URL = "https://github.com/ldeck/decknix/blob/main/modules/";
   var FRAMEWORK_HUB = "https://ldeck.github.io/decknix/hub.html";
-  var allOptions = {};
+  var FRAMEWORK_DATA = "https://ldeck.github.io/decknix/data/";
+  var coreOptions = {};   // from options-{channel}.json (local or framework)
+  var orgOptions = {};    // from org-options.json (optional)
+  var hasOrgOptions = false;
   var teamPackages = null; // loaded from org-packages.json if present
 
   /* ── helpers ── */
@@ -138,17 +141,53 @@
       '</div>';
   }
 
-  /* ── decknix options rendering ── */
+  /* ── decknix options rendering (source-aware) ── */
+
+  function mergedOptionKeys(showCore, showOrg) {
+    var keySet = {};
+    if (showCore) { for (var k in coreOptions) keySet[k] = true; }
+    if (showOrg) { for (var k2 in orgOptions) keySet[k2] = true; }
+    return Object.keys(keySet).sort();
+  }
+
+  function getOption(name) {
+    // Org options override core (experimental may redefine)
+    var isOrg = orgOptions.hasOwnProperty(name);
+    var isCore = coreOptions.hasOwnProperty(name);
+    var opt = isOrg ? orgOptions[name] : coreOptions[name];
+    var source = isOrg && isCore ? "both" : isOrg ? "org" : "core";
+    return { opt: opt, source: source };
+  }
+
+  function sourceBadge(source) {
+    if (source === "org") return '<span style="background:#8b5cf6;color:#fff;padding:1px 6px;border-radius:3px;font-size:0.75em;margin-left:6px;vertical-align:middle;">org</span>';
+    if (source === "both") return '<span style="background:#3b82f6;color:#fff;padding:1px 6px;border-radius:3px;font-size:0.75em;margin-left:6px;vertical-align:middle;">core</span>' +
+      '<span style="background:#8b5cf6;color:#fff;padding:1px 6px;border-radius:3px;font-size:0.75em;margin-left:3px;vertical-align:middle;">org</span>';
+    return "";
+  }
 
   function renderDecknixOptions(list, count, search) {
     var query = (search.value || "").toLowerCase().trim();
-    var keys = Object.keys(allOptions).sort();
+    var showCoreEl = document.getElementById("opt-show-core");
+    var showOrgEl = document.getElementById("opt-show-org");
+    var showCore = showCoreEl ? showCoreEl.checked : true;
+    var showOrg = showOrgEl ? showOrgEl.checked : true;
+
+    var keys = mergedOptionKeys(showCore, showOrg);
     var html = [];
     var visible = 0;
+    var total = keys.length;
 
     for (var i = 0; i < keys.length; i++) {
       var name = keys[i];
-      var opt = allOptions[name];
+      var entry = getOption(name);
+      var opt = entry.opt;
+      var source = entry.source;
+
+      // Apply source filter
+      if (!showCore && source === "core") continue;
+      if (!showOrg && source === "org") continue;
+
       var desc = opt.description || "";
       if (query && (name + " " + desc).toLowerCase().indexOf(query) === -1) continue;
       visible++;
@@ -156,14 +195,17 @@
       var defVal = formatLiteral(opt["default"]);
       var exVal = formatLiteral(opt.example);
       var typeStr = opt.type || "unknown";
+      var badge = hasOrgOptions ? sourceBadge(source) : "";
       var declLinks = (opt.declarations || []).map(function (d) {
-        return '<a href="' + REPO_URL + escapeHtml(d) + '" target="_blank" rel="noopener">' + escapeHtml(d) + '</a>';
+        var url = source === "org" ? "#" : REPO_URL + escapeHtml(d);
+        var target = source === "org" ? "" : ' target="_blank" rel="noopener"';
+        return '<a href="' + url + '"' + target + '>' + escapeHtml(d) + '</a>';
       }).join(", ");
 
       html.push(
         '<div class="option-card" style="margin-bottom:1.2em;padding:0.8em 1em;border:1px solid var(--sidebar-separator);border-radius:6px;background:var(--bg);">' +
           '<h3 style="margin:0 0 0.3em 0;font-size:1em;font-family:var(--mono-font,monospace);">' +
-            '<a id="' + escapeHtml(name) + '" href="#' + escapeHtml(name) + '" style="color:var(--links);">' + escapeHtml(name) + '</a></h3>' +
+            '<a id="' + escapeHtml(name) + '" href="#' + escapeHtml(name) + '" style="color:var(--links);">' + escapeHtml(name) + '</a>' + badge + '</h3>' +
           (desc ? '<p style="margin:0 0 0.5em 0;font-size:0.92em;">' + escapeHtml(desc) + '</p>' : '') +
           '<table style="font-size:0.85em;border-collapse:collapse;width:100%;">' +
             '<tr><td style="padding:2px 8px 2px 0;font-weight:600;white-space:nowrap;vertical-align:top;">Type</td><td style="padding:2px 0;"><code>' + escapeHtml(typeStr) + '</code></td></tr>' +
@@ -176,7 +218,7 @@
 
     list.innerHTML = html.length > 0 ? html.join("") :
       '<p style="color:var(--sidebar-fg);font-style:italic;">No options match "' + escapeHtml(query) + '"</p>';
-    count.textContent = visible + " of " + keys.length + " options";
+    count.textContent = visible + " of " + total + " options";
 
     if (window.location.hash) {
       var target = document.getElementById(window.location.hash.slice(1));
@@ -327,42 +369,78 @@
       optChannel.value = savedCh;
     }
 
+    // Load org-options.json (optional, one-time)
+    var orgLoaded = false;
+    function loadOrgOptions() {
+      if (orgLoaded) return Promise.resolve();
+      orgLoaded = true;
+      return fetch("data/org-options.json")
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+        .then(function (data) {
+          orgOptions = data;
+          hasOrgOptions = Object.keys(data).length > 0;
+          if (hasOrgOptions) {
+            var filters = document.getElementById("options-source-filters");
+            if (filters) filters.style.display = "";
+          }
+        })
+        .catch(function () { orgOptions = {}; hasOrgOptions = false; });
+    }
+
+    // Fetch core options: try local first, then cross-origin from framework
+    function fetchCoreOptions(ch) {
+      return fetch("data/options-" + ch + ".json")
+        .then(function (r) {
+          if (!r.ok) throw new Error("local");
+          return r.json();
+        })
+        .catch(function () {
+          // Fallback: fetch from framework GitHub Pages
+          return fetch(FRAMEWORK_DATA + "options-" + ch + ".json")
+            .then(function (r) {
+              if (!r.ok) throw new Error("HTTP " + r.status);
+              return r.json();
+            });
+        });
+    }
+
     // Decknix options loading
     function loadChannel(ch) {
       lsSet("decknix-options-channel", ch);
       if (optList) optList.innerHTML = '<p style="color:var(--sidebar-fg);font-style:italic;">Loading options\u2026</p>';
 
-      fetch("data/options-" + ch + ".json")
-        .then(function (r) {
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          return r.json();
-        })
-        .then(function (data) {
-          allOptions = data;
+      Promise.all([fetchCoreOptions(ch), loadOrgOptions()])
+        .then(function (results) {
+          coreOptions = results[0];
           renderDecknixOptions(optList, optCount, optSearch);
         })
         .catch(function () {
-          // Options JSON not available (e.g. org site without local options data)
+          // Neither local nor framework options available
           if (optList) optList.innerHTML =
             '<div style="padding:1em;border:1px solid var(--sidebar-separator);border-radius:6px;background:var(--bg);">' +
-              '<p style="margin:0 0 0.5em 0;">Options data is not available on this site.</p>' +
+              '<p style="margin:0 0 0.5em 0;">Unable to load options data.</p>' +
               '<p style="margin:0;">Browse the full searchable options reference on the framework site:</p>' +
               '<p style="margin:0.5em 0 0 0;"><a href="' + FRAMEWORK_HUB + '" target="_blank" rel="noopener" style="color:var(--links);font-weight:600;">' +
                 'Open Decknix Configuration Hub \u2197</a></p>' +
             '</div>';
           if (optCount) optCount.textContent = "";
-          if (optSearch) optSearch.style.display = "none";
-          if (optChannel) optChannel.style.display = "none";
         });
     }
 
+    // Wire up search + source filter checkboxes
+    function refreshOptions() { renderDecknixOptions(optList, optCount, optSearch); }
     if (optSearch) {
       var timer = null;
       optSearch.addEventListener("input", function () {
         clearTimeout(timer);
-        timer = setTimeout(function () { renderDecknixOptions(optList, optCount, optSearch); }, 150);
+        timer = setTimeout(refreshOptions, 150);
       });
     }
+    var showCoreEl = document.getElementById("opt-show-core");
+    var showOrgEl = document.getElementById("opt-show-org");
+    if (showCoreEl) showCoreEl.addEventListener("change", refreshOptions);
+    if (showOrgEl) showOrgEl.addEventListener("change", refreshOptions);
+
     if (optChannel) {
       optChannel.addEventListener("change", function () { loadChannel(optChannel.value); });
       loadChannel(optChannel.value);

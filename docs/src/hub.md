@@ -30,6 +30,11 @@
         <option value="unstable">nixpkgs unstable</option>
         <option value="24.11">nixpkgs 24.11</option>
       </select>
+      <!-- Source filters: hidden by default, shown when org-options.json exists -->
+      <span id="options-source-filters" style="display:none;font-size:0.9em;">
+        <label style="cursor:pointer;margin-right:0.6em;"><input type="checkbox" id="opt-show-core" checked style="margin-right:3px;" />Core</label>
+        <label style="cursor:pointer;"><input type="checkbox" id="opt-show-org" checked style="margin-right:3px;" />Org</label>
+      </span>
       <span id="options-count" style="font-size:0.85em;color:var(--sidebar-fg);white-space:nowrap;"></span>
     </div>
     <div id="options-list"></div>
