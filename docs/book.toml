@@ -14,7 +14,7 @@ preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/ldeck/decknix"
 edit-url-template = "https://github.com/ldeck/decknix/edit/main/docs/{path}"
 
-additional-js = ["theme/options-search.js"]
+additional-js = ["theme/hub.js"]
 
 [output.html.search]
 enable = true
