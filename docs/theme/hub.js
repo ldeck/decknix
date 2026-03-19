@@ -2,6 +2,7 @@
   "use strict";
 
   var REPO_URL = "https://github.com/ldeck/decknix/blob/main/modules/";
+  var FRAMEWORK_HUB = "https://ldeck.github.io/decknix/hub.html";
   var allOptions = {};
   var teamPackages = null; // loaded from org-packages.json if present
 
@@ -118,7 +119,8 @@
       "macOS GUI applications (like browsers, editors, utilities) that aren't available in nixpkgs \u2014 " +
       'all managed declaratively through Nix.</p>' +
       card("\ud83c\udf7a", "nix-casks Repository", "Browse available casks and documentation.", [
-        { url: "https://github.com/jacekszymanski/nix-casks", label: "GitHub: nix-casks", note: "source repository" }
+        { url: "https://nix-casks.yorganci.dev/", label: "nix-casks package search", note: "searchable catalogue" },
+        { url: "https://github.com/atahanyorganci/nix-casks", label: "GitHub: nix-casks", note: "source repository" }
       ]) +
       card("\ud83d\udca1", "When to Use nix-casks", "Use nix-casks when a macOS app isn't in nixpkgs.", []) +
       '<div style="margin-bottom:1.2em;padding:0.8em 1em;border:1px solid var(--sidebar-separator);border-radius:6px;background:var(--bg);">' +
@@ -339,9 +341,18 @@
           allOptions = data;
           renderDecknixOptions(optList, optCount, optSearch);
         })
-        .catch(function (err) {
-          if (optList) optList.innerHTML = '<p style="color:#c33;">Failed to load options for <b>' + ch + '</b>: ' + err.message + '</p>';
+        .catch(function () {
+          // Options JSON not available (e.g. org site without local options data)
+          if (optList) optList.innerHTML =
+            '<div style="padding:1em;border:1px solid var(--sidebar-separator);border-radius:6px;background:var(--bg);">' +
+              '<p style="margin:0 0 0.5em 0;">Options data is not available on this site.</p>' +
+              '<p style="margin:0;">Browse the full searchable options reference on the framework site:</p>' +
+              '<p style="margin:0.5em 0 0 0;"><a href="' + FRAMEWORK_HUB + '" target="_blank" rel="noopener" style="color:var(--links);font-weight:600;">' +
+                'Open Decknix Configuration Hub \u2197</a></p>' +
+            '</div>';
           if (optCount) optCount.textContent = "";
+          if (optSearch) optSearch.style.display = "none";
+          if (optChannel) optChannel.style.display = "none";
         });
     }
 
