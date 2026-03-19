@@ -1,77 +1,136 @@
 (function () {
   "use strict";
 
-  function initOptionsSearch() {
-    // Only activate on pages containing option headings
-    var headings = document.querySelectorAll("h2");
-    var optionHeadings = [];
-    for (var i = 0; i < headings.length; i++) {
-      var text = headings[i].textContent || "";
-      if (/^(decknix\.|programs\..*\.decknix\.)/.test(text)) {
-        optionHeadings.push(headings[i]);
-      }
-    }
-    if (optionHeadings.length === 0) return;
+  var REPO_URL = "https://github.com/ldeck/decknix/blob/main/modules/";
+  var allOptions = {};
+  var currentChannel = "";
 
-    // Collect sections: each section is an h2 plus all siblings until the next h2
-    var sections = [];
-    for (var j = 0; j < optionHeadings.length; j++) {
-      var h2 = optionHeadings[j];
-      var els = [h2];
-      var sibling = h2.nextElementSibling;
-      while (sibling && sibling.tagName !== "H2") {
-        els.push(sibling);
-        sibling = sibling.nextElementSibling;
-      }
-      sections.push({ heading: h2, elements: els, text: h2.textContent.toLowerCase() });
+  function initOptionsHub() {
+    var list = document.getElementById("options-list");
+    if (!list) return; // not on the options page
+
+    var search = document.getElementById("options-search");
+    var channel = document.getElementById("options-channel");
+    var count = document.getElementById("options-count");
+
+    // Restore saved channel preference
+    var saved = localStorage.getItem("decknix-options-channel");
+    if (saved && channel.querySelector('option[value="' + saved + '"]')) {
+      channel.value = saved;
     }
 
-    // Build search UI
-    var container = document.createElement("div");
-    container.className = "options-search";
-    container.style.cssText =
-      "margin-bottom:1.5em;padding:0.75em 1em;background:var(--sidebar-bg);border:1px solid var(--sidebar-separator);border-radius:6px;display:flex;align-items:center;gap:0.75em;flex-wrap:wrap;";
+    function loadChannel(ch) {
+      currentChannel = ch;
+      localStorage.setItem("decknix-options-channel", ch);
+      list.innerHTML = '<p style="color:var(--sidebar-fg);font-style:italic;">Loading options…</p>';
 
-    var input = document.createElement("input");
-    input.type = "text";
-    input.placeholder = "Filter options\u2026";
-    input.style.cssText =
-      "flex:1;min-width:200px;padding:0.4em 0.6em;font-size:0.95em;border:1px solid var(--sidebar-separator);border-radius:4px;background:var(--bg);color:var(--fg);";
+      fetch("data/options-" + ch + ".json")
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        })
+        .then(function (data) {
+          allOptions = data;
+          render();
+        })
+        .catch(function (err) {
+          list.innerHTML = '<p style="color:#c33;">Failed to load options for <b>' + ch +
+            '</b>: ' + err.message + '</p>';
+          count.textContent = "";
+        });
+    }
 
-    var count = document.createElement("span");
-    count.style.cssText = "font-size:0.85em;color:var(--sidebar-fg);white-space:nowrap;";
-    count.textContent = sections.length + " of " + sections.length + " options";
+    function escapeHtml(s) {
+      var div = document.createElement("div");
+      div.appendChild(document.createTextNode(s));
+      return div.innerHTML;
+    }
 
-    container.appendChild(input);
-    container.appendChild(count);
+    function formatLiteral(val) {
+      if (!val) return "";
+      if (val._type === "literalExpression") return val.text || "";
+      if (val._type === "literalMD") return val.text || "";
+      if (typeof val === "string") return val;
+      return JSON.stringify(val);
+    }
 
-    // Insert before the first option heading (after any intro content)
-    var firstH2 = optionHeadings[0];
-    firstH2.parentNode.insertBefore(container, firstH2);
-
-    // Filter logic
-    function filterOptions() {
-      var query = input.value.toLowerCase().trim();
+    function render() {
+      var query = (search.value || "").toLowerCase().trim();
+      var keys = Object.keys(allOptions).sort();
+      var html = [];
       var visible = 0;
-      for (var k = 0; k < sections.length; k++) {
-        var match = query === "" || sections[k].text.indexOf(query) !== -1;
-        var display = match ? "" : "none";
-        for (var m = 0; m < sections[k].elements.length; m++) {
-          sections[k].elements[m].style.display = display;
-        }
-        if (match) visible++;
+
+      for (var i = 0; i < keys.length; i++) {
+        var name = keys[i];
+        var opt = allOptions[name];
+        var desc = opt.description || "";
+        var searchText = (name + " " + desc).toLowerCase();
+
+        if (query && searchText.indexOf(query) === -1) continue;
+        visible++;
+
+        var defVal = formatLiteral(opt["default"]);
+        var exVal = formatLiteral(opt.example);
+        var typeStr = opt.type || "unknown";
+
+        // Build declaration links
+        var declLinks = (opt.declarations || []).map(function (d) {
+          return '<a href="' + REPO_URL + escapeHtml(d) + '" target="_blank" rel="noopener">' +
+            escapeHtml(d) + '</a>';
+        }).join(", ");
+
+        html.push(
+          '<div class="option-card" style="margin-bottom:1.2em;padding:0.8em 1em;border:1px solid var(--sidebar-separator);border-radius:6px;background:var(--bg);">' +
+            '<h3 style="margin:0 0 0.3em 0;font-size:1em;font-family:var(--mono-font,monospace);">' +
+              '<a id="' + escapeHtml(name) + '" href="#' + escapeHtml(name) + '" style="color:var(--links);">' +
+                escapeHtml(name) +
+              '</a>' +
+            '</h3>' +
+            (desc ? '<p style="margin:0 0 0.5em 0;font-size:0.92em;">' + escapeHtml(desc) + '</p>' : '') +
+            '<table style="font-size:0.85em;border-collapse:collapse;width:100%;">' +
+              '<tr><td style="padding:2px 8px 2px 0;font-weight:600;white-space:nowrap;vertical-align:top;">Type</td>' +
+                '<td style="padding:2px 0;"><code>' + escapeHtml(typeStr) + '</code></td></tr>' +
+              (defVal ? '<tr><td style="padding:2px 8px 2px 0;font-weight:600;white-space:nowrap;vertical-align:top;">Default</td>' +
+                '<td style="padding:2px 0;"><code style="white-space:pre-wrap;">' + escapeHtml(defVal) + '</code></td></tr>' : '') +
+              (exVal ? '<tr><td style="padding:2px 8px 2px 0;font-weight:600;white-space:nowrap;vertical-align:top;">Example</td>' +
+                '<td style="padding:2px 0;"><code style="white-space:pre-wrap;">' + escapeHtml(exVal) + '</code></td></tr>' : '') +
+              (declLinks ? '<tr><td style="padding:2px 8px 2px 0;font-weight:600;white-space:nowrap;vertical-align:top;">Declared in</td>' +
+                '<td style="padding:2px 0;">' + declLinks + '</td></tr>' : '') +
+            '</table>' +
+          '</div>'
+        );
       }
-      count.textContent = visible + " of " + sections.length + " options";
+
+      list.innerHTML = html.length > 0 ? html.join("") :
+        '<p style="color:var(--sidebar-fg);font-style:italic;">No options match "' + escapeHtml(query) + '"</p>';
+      count.textContent = visible + " of " + keys.length + " options";
+
+      // Scroll to hash if present
+      if (window.location.hash) {
+        var target = document.getElementById(window.location.hash.slice(1));
+        if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
     }
 
-    input.addEventListener("input", filterOptions);
+    // Debounced search
+    var timer = null;
+    search.addEventListener("input", function () {
+      clearTimeout(timer);
+      timer = setTimeout(render, 150);
+    });
+
+    channel.addEventListener("change", function () {
+      loadChannel(channel.value);
+    });
+
+    // Initial load
+    loadChannel(channel.value);
   }
 
-  // Run after DOM is ready
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initOptionsSearch);
+    document.addEventListener("DOMContentLoaded", initOptionsHub);
   } else {
-    initOptionsSearch();
+    initOptionsHub();
   }
 })();
 

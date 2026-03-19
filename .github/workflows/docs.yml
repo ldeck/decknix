@@ -26,19 +26,32 @@ jobs:
 
       - name: Install Nix
         uses: cachix/install-nix-action@v30
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
 
-      - name: Generate options reference
+      - name: Generate options JSON (per nixpkgs channel)
         run: |
-          OPTIONS_MD=$(nix-build docs/generate-options.nix -A markdown --no-out-link)
-          # Inject generated markdown between the markers in options.md
-          {
-            sed -n '1,/<!-- OPTIONS_START -->/p' docs/src/options.md
-            cat "$OPTIONS_MD"
-            sed -n '/<!-- OPTIONS_END -->/,$p' docs/src/options.md
-          } > docs/src/options.md.tmp
-          mv docs/src/options.md.tmp docs/src/options.md
+          mkdir -p docs/src/data
+          for channel in nixos-24.11 nixos-unstable; do
+            echo "::group::Generating options for $channel"
+            OPTIONS_JSON=$(NIX_PATH="nixpkgs=channel:$channel" nix-build docs/generate-options.nix -A json --no-out-link)
+            # Copy JSON and normalise declaration paths to relative
+            python3 -c "
+          import json, sys, os
+          with open(os.path.join('$OPTIONS_JSON', 'share/doc/nixos/options.json')) as f:
+              data = json.load(f)
+          # Strip absolute paths to relative (modules/...)
+          for opt in data.values():
+              opt['declarations'] = [
+                  d.split('/modules/', 1)[-1] if '/modules/' in d else d.rsplit('/', 1)[-1]
+                  for d in opt.get('declarations', [])
+              ]
+          slug = '$channel'.replace('nixos-', '')
+          with open(f'docs/src/data/options-{slug}.json', 'w') as f:
+              json.dump(data, f, separators=(',', ':'))
+          print(f'  wrote options-{slug}.json ({len(data)} options)')
+          "
+            echo "::endgroup::"
+          done
+          ls -la docs/src/data/
 
       - name: Install mdBook
         run: |
