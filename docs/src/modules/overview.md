@@ -13,7 +13,7 @@ Decknix is organised into modular components, each responsible for a specific ar
 | **Shell & Terminal** | Zsh, Starship prompt, completions | [Shell →](./shell.md) |
 | **Git** | Delta diffs, global config, LFS | [Git →](./git.md) |
 | **Window Management** | AeroSpace, Hammerspoon, Spaces | [WM →](./window-management.md) |
-| **AI Tooling** | Augment Code agent, MCP servers | [AI →](./ai-tooling.md) |
+| **AI Tooling** | Augment Code agent, MCP servers, Agent Shell | [AI →](./ai/overview.md) |
 
 ### Darwin (System) Modules
 

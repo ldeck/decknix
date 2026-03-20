@@ -33,7 +33,16 @@
 - [Shell & Terminal](./modules/shell.md)
 - [Git](./modules/git.md)
 - [Window Management](./modules/window-management.md)
-- [AI Tooling](./modules/ai-tooling.md)
+- [AI Tooling](./modules/ai/overview.md)
+  - [Configuration](./modules/ai/configuration.md)
+  - [Agent Shell](./modules/ai/agent-shell/overview.md)
+    - [Foundation](./modules/ai/agent-shell/foundation.md)
+    - [Multi-Session](./modules/ai/agent-shell/multi-session.md)
+    - [Productivity](./modules/ai/agent-shell/productivity.md)
+    - [Integration](./modules/ai/agent-shell/integration.md)
+    - [Context Awareness](./modules/ai/agent-shell/context.md)
+    - [Keybindings](./modules/ai/agent-shell/keybindings.md)
+  - [Vision](./modules/ai/vision.md)
 
 # CLI Reference
 

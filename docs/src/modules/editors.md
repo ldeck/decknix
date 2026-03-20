@@ -13,7 +13,7 @@ A batteries-included Emacs configuration with 13+ modules covering completion, g
 - 30+ language modes with syntax highlighting
 - Org-mode presentations
 - REST API client
-- AI agent shell integration
+- [AI Agent Shell](./ai/agent-shell/overview.md) — multi-session AI interface
 
 → **[Full Emacs documentation](./emacs.md)**
 
