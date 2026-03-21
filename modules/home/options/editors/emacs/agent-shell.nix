@@ -717,45 +717,52 @@ Returns a list of (USER-MSG . ASSISTANT-RESP) cons cells, oldest first."
                           (error-message-string err))
                  nil)))))
 
-        (defun decknix--agent-session-format-history (exchanges)
-          "Format EXCHANGES as a read-only history block for the buffer.
-EXCHANGES is a list of (USER-MSG . ASSISTANT-RESP) cons cells."
-          (let ((parts nil)
-                (sep (make-string 60 ?\u2500)))
-            (push (format "\n%s\n  Session History (last %d exchange%s)\n%s\n"
-                          sep (length exchanges)
-                          (if (= (length exchanges) 1) "" "s")
-                          sep)
-                  parts)
-            (dolist (ex exchanges)
-              (let ((user (car ex))
-                    (resp (cdr ex)))
-                (push (format "\n\u276f %s\n" (truncate-string-to-width user 500 nil nil "..."))
-                      parts)
-                (when (and resp (not (string-empty-p resp)))
-                  (push (format "\n%s\n"
-                                (truncate-string-to-width resp 2000 nil nil "\n[...truncated]"))
-                        parts))))
-            (push (format "\n%s\n  End of history \u2014 new messages below\n%s\n\n"
-                          sep sep)
-                  parts)
-            (apply #'concat (nreverse parts))))
+        (defun decknix--agent-session-insert-propertized (text face)
+          "Insert TEXT with FACE and read-only properties at point."
+          (insert (propertize text
+                             'font-lock-face face
+                             'read-only t
+                             'rear-nonsticky t)))
 
         (defun decknix--agent-session-prepopulate (session-id n)
           "Insert the last N exchanges from SESSION-ID into the current buffer.
-Inserts read-only history text at the top of the buffer."
+Inserts color-coded read-only history text at the top of the buffer.
+User messages are shown in `font-lock-keyword-face' and assistant
+responses in `font-lock-doc-face'."
           (let ((exchanges (decknix--agent-session-extract-history session-id n)))
             (when exchanges
-              (let ((history-text (decknix--agent-session-format-history exchanges))
-                    (inhibit-read-only t))
+              (let ((inhibit-read-only t)
+                    (sep (make-string 60 ?\u2500)))
                 (save-excursion
                   (goto-char (point-min))
-                  ;; Skip past any existing shell-maker output (notices, etc.)
-                  (let ((start (point)))
-                    (insert (propertize history-text
-                                       'font-lock-face 'font-lock-comment-face
-                                       'read-only t
-                                       'rear-nonsticky t))))))))
+                  ;; Header
+                  (decknix--agent-session-insert-propertized
+                   (format "\n%s\n  Session History (last %d exchange%s)\n%s\n"
+                           sep (length exchanges)
+                           (if (= (length exchanges) 1) "" "s")
+                           sep)
+                   'font-lock-comment-face)
+                  ;; Exchanges
+                  (dolist (ex exchanges)
+                    (let ((user (car ex))
+                          (resp (cdr ex)))
+                      ;; User message — keyword face (bold/prominent)
+                      (decknix--agent-session-insert-propertized
+                       (format "\n\u276f %s\n"
+                               (truncate-string-to-width user 500 nil nil "..."))
+                       'font-lock-keyword-face)
+                      ;; Assistant response — doc face (muted/italic)
+                      (when (and resp (not (string-empty-p resp)))
+                        (decknix--agent-session-insert-propertized
+                         (format "\n%s\n"
+                                 (truncate-string-to-width resp 2000 nil nil
+                                                          "\n[...truncated]"))
+                         'font-lock-doc-face))))
+                  ;; Footer
+                  (decknix--agent-session-insert-propertized
+                   (format "\n%s\n  End of history \u2014 new messages below\n%s\n\n"
+                           sep sep)
+                   'font-lock-comment-face))))))
 
         (defun decknix--agent-unsorted-table (candidates)
           "Wrap CANDIDATES in a completion table that preserves list order.
