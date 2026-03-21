@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand, CommandFactory};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::process::Command;
 use std::fs;
 use std::path::PathBuf;
@@ -154,6 +155,99 @@ fn print_extended_help(extensions: &ExtensionMap) {
     }
 }
 
+/// Snapshot org.nixos.* LaunchAgent plists: returns map of label -> file content hash.
+fn snapshot_launch_agents() -> HashMap<String, u64> {
+    let agents_dir = dirs::home_dir()
+        .unwrap_or_default()
+        .join("Library/LaunchAgents");
+    let mut map = HashMap::new();
+    if let Ok(entries) = fs::read_dir(&agents_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("org.nixos.") && name.ends_with(".plist") {
+                if let Ok(content) = fs::read(entry.path()) {
+                    // Simple hash for change detection
+                    let hash = content.iter().fold(0u64, |acc, &b| {
+                        acc.wrapping_mul(31).wrapping_add(b as u64)
+                    });
+                    let label = name.trim_end_matches(".plist").to_string();
+                    map.insert(label, hash);
+                }
+            }
+        }
+    }
+    map
+}
+
+/// After a successful switch, restart changed user LaunchAgents and remove obsolete ones.
+fn restart_changed_agents(
+    before: &HashMap<String, u64>,
+    after: &HashMap<String, u64>,
+) {
+    let uid = unsafe { libc::getuid() };
+
+    // Find changed services (present in both but content differs)
+    let mut changed: Vec<&str> = Vec::new();
+    for (label, new_hash) in after {
+        if let Some(old_hash) = before.get(label) {
+            if old_hash != new_hash {
+                changed.push(label);
+            }
+        }
+        // New services are handled by nix-darwin activation (launchctl load)
+    }
+
+    // Find removed services (in before but not in after)
+    let after_labels: HashSet<&String> = after.keys().collect();
+    let mut removed: Vec<&str> = Vec::new();
+    for label in before.keys() {
+        if !after_labels.contains(label) {
+            removed.push(label);
+        }
+    }
+
+    // Restart changed services
+    for label in &changed {
+        let target = format!("gui/{}/{}", uid, label);
+        eprintln!("🔄 Restarting {}...", label);
+        // kickstart -k: kill existing instance and restart
+        let status = Command::new("launchctl")
+            .args(["kickstart", "-k", &target])
+            .status();
+        match status {
+            Ok(s) if s.success() => eprintln!("   ✅ {}", label),
+            _ => {
+                // Fallback: try bootout + bootstrap
+                eprintln!("   ⚠️  kickstart failed, trying bootout + bootstrap...");
+                let plist = dirs::home_dir()
+                    .unwrap_or_default()
+                    .join(format!("Library/LaunchAgents/{}.plist", label));
+                let _ = Command::new("launchctl")
+                    .args(["bootout", &target])
+                    .status();
+                let _ = Command::new("launchctl")
+                    .args(["bootstrap", &format!("gui/{}", uid), &plist.to_string_lossy()])
+                    .status();
+                eprintln!("   ✅ {}", label);
+            }
+        }
+    }
+
+    // Remove obsolete services
+    for label in &removed {
+        let target = format!("gui/{}/{}", uid, label);
+        eprintln!("🗑️  Removing {}...", label);
+        let _ = Command::new("launchctl")
+            .args(["bootout", &target])
+            .status();
+        eprintln!("   ✅ {}", label);
+    }
+
+    if changed.is_empty() && removed.is_empty() {
+        eprintln!("✅ No user LaunchAgent changes detected.");
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let extensions = load_merged_extensions();
 
@@ -177,6 +271,15 @@ fn main() -> anyhow::Result<()> {
                 );
             }
 
+            // Snapshot LaunchAgents before switch (for restart detection)
+            let agents_before = if !dry_run { snapshot_launch_agents() } else { HashMap::new() };
+
+            let mut cmd = Command::new("sudo");
+            cmd.current_dir(&config_dir)
+                .arg("darwin-rebuild").arg(action)
+                .arg("--flake").arg(".#default")
+                .arg("--impure");
+
             if use_dev {
                 let path = resolve_dev_path(dev_path.as_deref())?;
                 if dry_run {
@@ -184,28 +287,23 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     println!("🔄 Switching (dev: {})...", path.display());
                 }
-                let mut cmd = Command::new("sudo");
-                cmd.current_dir(&config_dir)
-                    .arg("darwin-rebuild").arg(action)
-                    .arg("--flake").arg(".#default")
-                    .arg("--impure")
-                    .arg("--override-input").arg("decknix")
+                cmd.arg("--override-input").arg("decknix")
                     .arg(format!("path:{}", path.display()));
-                let status = cmd.status()?;
-                std::process::exit(status.code().unwrap_or(1));
+            } else if dry_run {
+                println!("🔍 Dry run...");
             } else {
-                if dry_run {
-                    println!("🔍 Dry run...");
-                } else {
-                    println!("🔄 Switching...");
-                }
-                let mut cmd = Command::new("sudo");
-                cmd.current_dir(&config_dir)
-                    .arg("darwin-rebuild").arg(action)
-                    .arg("--flake").arg(".#default")
-                    .arg("--impure");
-                let status = cmd.status()?;
+                println!("🔄 Switching...");
+            }
+
+            let status = cmd.status()?;
+            if !status.success() {
                 std::process::exit(status.code().unwrap_or(1));
+            }
+
+            // After successful switch, restart any changed user LaunchAgents
+            if !dry_run {
+                let agents_after = snapshot_launch_agents();
+                restart_changed_agents(&agents_before, &agents_after);
             }
         }
         Some(Commands::Update { input }) => {
