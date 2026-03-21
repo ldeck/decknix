@@ -702,52 +702,96 @@ exchange, which are the user-facing summary strings."
                           (error-message-string err))
                  nil)))))
 
-        (defun decknix--agent-session-insert-propertized (text face)
-          "Insert TEXT with FACE and read-only properties at point."
-          (insert (propertize text
-                             'font-lock-face face
-                             'read-only t
-                             'rear-nonsticky t)))
-
-        (defun decknix--agent-session-prepopulate (session-id n)
-          "Insert the last N exchanges from SESSION-ID into the current buffer.
-Inserts color-coded read-only history text at the top of the buffer.
-User messages are shown in `font-lock-keyword-face' and assistant
-responses in `font-lock-doc-face'."
-          (let ((exchanges (decknix--agent-session-extract-history session-id n)))
-            (when exchanges
-              (let ((inhibit-read-only t)
-                    (sep (make-string 60 ?\u2500)))
+        (defun decknix--agent-context-toggle ()
+          "Toggle the visibility of the Context history section.
+Switches between ▶ (collapsed) and ▼ (expanded)."
+          (interactive)
+          (let* ((inhibit-read-only t)
+                 ;; Find the body region tagged with our symbol
+                 (body-start (next-single-property-change
+                              (point-min) 'decknix-context-body))
+                 (body-end (when body-start
+                             (next-single-property-change
+                              body-start 'decknix-context-body))))
+            (when (and body-start body-end)
+              (let ((currently-hidden (get-text-property body-start 'invisible)))
+                ;; Toggle invisible
+                (put-text-property body-start body-end
+                                  'invisible (not currently-hidden))
+                ;; Swap the arrow in the header
                 (save-excursion
                   (goto-char (point-min))
-                  ;; Header
-                  (decknix--agent-session-insert-propertized
-                   (format "\n%s\n  Session History (last %d exchange%s)\n%s\n"
-                           sep (length exchanges)
-                           (if (= (length exchanges) 1) "" "s")
-                           sep)
-                   'font-lock-comment-face)
-                  ;; Exchanges
-                  (dolist (ex exchanges)
-                    (let ((user (car ex))
-                          (resp (cdr ex)))
-                      ;; User message — keyword face (bold/prominent)
-                      (decknix--agent-session-insert-propertized
-                       (format "\n\u276f %s\n"
-                               (truncate-string-to-width user 500 nil nil "..."))
-                       'font-lock-keyword-face)
-                      ;; Assistant response — doc face (muted/italic)
-                      (when (and resp (not (string-empty-p resp)))
-                        (decknix--agent-session-insert-propertized
-                         (format "\n%s\n"
-                                 (truncate-string-to-width resp 2000 nil nil
-                                                          "\n[...truncated]"))
-                         'font-lock-doc-face))))
-                  ;; Footer
-                  (decknix--agent-session-insert-propertized
-                   (format "\n%s\n  End of history \u2014 new messages below\n%s\n\n"
-                           sep sep)
-                   'font-lock-comment-face))))))
+                  (when (re-search-forward "[▼▶]" body-start t)
+                    (replace-match (if currently-hidden "▼" "▶"))))))))
+
+        (defvar decknix--agent-context-header-map
+          (let ((map (make-sparse-keymap)))
+            (define-key map [mouse-1] #'decknix--agent-context-toggle)
+            (define-key map (kbd "TAB") #'decknix--agent-context-toggle)
+            (define-key map (kbd "RET") #'decknix--agent-context-toggle)
+            map)
+          "Keymap for the Context section header toggle.")
+
+        (defun decknix--agent-session-prepopulate (session-id n)
+          "Insert a collapsible Context section with the last N exchanges.
+Inserts just before the prompt, matching the ▶/▼ toggle style of
+agent-shell's built-in sections (Notices, Agent capabilities, etc.).
+User messages shown in `font-lock-keyword-face', assistant responses
+in `font-lock-doc-face'.  Section is expanded by default."
+          (let ((exchanges (decknix--agent-session-extract-history session-id n)))
+            (when exchanges
+              (let ((inhibit-read-only t))
+                (save-excursion
+                  ;; Find the prompt — search backwards from end
+                  (goto-char (point-max))
+                  (let ((prompt-pos
+                         (when (bound-and-true-p comint-prompt-regexp)
+                           (re-search-backward comint-prompt-regexp nil t))))
+                    (if prompt-pos
+                        (goto-char prompt-pos)
+                      ;; Fallback: insert before point-max
+                      (goto-char (point-max))))
+                  ;; Move to start of the prompt line
+                  (beginning-of-line)
+                  (let ((insert-pos (point)))
+                    ;; Header: ▼ Context (N exchanges) — clickable/TAB-able
+                    (insert (propertize
+                             (format "▼ %s\n"
+                                     (propertize
+                                      (format "Context (%d exchange%s)"
+                                              (length exchanges)
+                                              (if (= (length exchanges) 1) "" "s"))
+                                      'font-lock-face 'font-lock-doc-markup-face))
+                             'read-only t
+                             'rear-nonsticky t
+                             'keymap decknix--agent-context-header-map))
+                    ;; Body: exchanges with invisible toggling
+                    (let ((body-start (point)))
+                      (dolist (ex exchanges)
+                        (let ((user (car ex))
+                              (resp (cdr ex)))
+                          ;; User message
+                          (insert (propertize
+                                   (format "\n❯ %s\n"
+                                           (truncate-string-to-width
+                                            user 500 nil nil "..."))
+                                   'font-lock-face 'font-lock-keyword-face
+                                   'read-only t
+                                   'rear-nonsticky t))
+                          ;; Assistant response
+                          (when (and resp (not (string-empty-p resp)))
+                            (insert (propertize
+                                     (format "\n%s\n"
+                                             (truncate-string-to-width
+                                              resp 2000 nil nil
+                                              "\n[...truncated]"))
+                                     'font-lock-face 'font-lock-doc-face
+                                     'read-only t
+                                     'rear-nonsticky t)))))
+                      (insert (propertize "\n" 'read-only t 'rear-nonsticky t))
+                      ;; Tag the body region for toggling
+                      (put-text-property body-start (point)
+                                         'decknix-context-body t))))))))
 
         (defun decknix--agent-unsorted-table (candidates)
           "Wrap CANDIDATES in a completion table that preserves list order.
