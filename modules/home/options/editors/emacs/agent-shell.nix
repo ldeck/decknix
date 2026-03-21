@@ -354,9 +354,9 @@ in
           "Return a formatted string of key keybinding hints for the welcome message."
           (let ((bindings
                  '(("C-c e"   "Compose"    "Open multi-line prompt editor")
-                   ("C-c s"   "Sessions"   "Pick / resume / start session")
-                   ("C-c q"   "Quit"       "Save and quit session")
-                   ("C-c h"   "History"    "View conversation history")
+                   ("C-c s s" "Sessions"   "Pick / resume / start session")
+                   ("C-c s q" "Quit"       "Save and quit session")
+                   ("C-c s h" "History"    "View conversation history")
                    ("C-c t t" "Template"   "Insert a prompt template")
                    ("C-c c c" "Command"    "Pick & insert a slash command")
                    ("C-c T t" "Tag"        "Tag this session")
@@ -372,21 +372,33 @@ in
 
         (defun decknix--agent-welcome-message (config)
           "Custom welcome message with keybinding hints.
-        Wraps the default auggie welcome with a quick-reference card."
-          (let ((original (agent-shell-auggie--welcome-message config))
-                (divider (propertize (make-string 52 ?─)
-                                    'font-lock-face 'font-lock-comment-face))
-                (title (propertize " Quick Reference"
-                                   'font-lock-face 'font-lock-comment-face)))
+        Reproduces the auggie welcome (ASCII art + shell-maker message)
+        and appends a quick-reference keybinding card."
+          (let* ((art (agent-shell--indent-string 4 (agent-shell-auggie--ascii-art)))
+                 (base-msg (string-trim-left (shell-maker-welcome-message config) "\n"))
+                 (original (concat "\n\n" art "\n\n" base-msg))
+                 (divider (propertize (make-string 52 ?─)
+                                     'font-lock-face 'font-lock-comment-face))
+                 (title (propertize " Quick Reference"
+                                    'font-lock-face 'font-lock-comment-face)))
             (concat original "\n"
                     divider "\n"
                     title "\n\n"
                     (decknix--agent-welcome-keybindings) "\n\n"
                     divider "\n")))
 
-        ;; Override the auggie welcome function with our enhanced version
-        (advice-add 'agent-shell-auggie--welcome-message
-                    :override #'decknix--agent-welcome-message)
+        ;; Swap the :welcome-function in the agent config to use our
+        ;; enhanced version.  We advise make-agent-config because the
+        ;; welcome function is stored as a direct function reference
+        ;; in the config alist (not called by symbol), so symbol-level
+        ;; advice on agent-shell-auggie--welcome-message has no effect.
+        (advice-add 'agent-shell-auggie-make-agent-config
+                    :filter-return
+                    (lambda (config)
+                      (let ((cell (assq :welcome-function config)))
+                        (when cell
+                          (setcdr cell #'decknix--agent-welcome-message)))
+                      config))
 
         (defun decknix-agent-help ()
           "Show a help buffer with all agent-shell keybindings.
@@ -402,21 +414,18 @@ in
                  (propertize (make-string 52 ?═) 'font-lock-face 'font-lock-comment-face)
                  "\n\n"
 
-                 (propertize "Session Management\n" 'font-lock-face '(:weight bold))
+                 (propertize "Sessions  (C-c s …)\n" 'font-lock-face '(:weight bold))
                  (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
-                 "  C-c s       Session picker (live + saved)\n"
-                 "  C-c q       Quit session (saves automatically)\n"
-                 "  C-c h       View history (current session)\n"
-                 "  C-c H       View history (pick any session)\n"
-                 "  C-c r       Rename buffer\n"
-                 "  C-c A a     Start / switch to agent\n"
-                 "  C-c A n     Force new session\n"
-                 "  C-c A k     Interrupt agent\n"
+                 "  C-c s s     Session picker (live + saved)\n"
+                 "  C-c s q     Quit session (saves automatically)\n"
+                 "  C-c s h     View history (current session)\n"
+                 "  C-c s H     View history (pick any session)\n"
                  "\n"
 
                  (propertize "Input & Editing\n" 'font-lock-face '(:weight bold))
                  (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
                  "  C-c e       Compose buffer (multi-line editor)\n"
+                 "  C-c r       Rename buffer\n"
                  "  RET         Send prompt (at end of input)\n"
                  "  S-RET       Insert newline in prompt\n"
                  "  C-c C-c     Interrupt running agent\n"
@@ -449,10 +458,8 @@ in
 
                  (propertize "Model & Mode\n" 'font-lock-face '(:weight bold))
                  (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
-                 "  C-c v       Pick model\n"
-                 "  C-c M       Pick mode\n"
-                 "  C-c C-v     Pick model (built-in)\n"
-                 "  C-c C-m     Pick mode (built-in)\n"
+                 "  C-c C-v     Pick model\n"
+                 "  C-c C-m     Pick mode\n"
                  "\n"
 
                  (propertize "Context  (C-c i …)\n" 'font-lock-face '(:weight bold))
@@ -476,9 +483,17 @@ in
                  "  C-c A S     MCP server list\n"
                  "\n"
 
+                 (propertize "Global  (C-c A …)\n" 'font-lock-face '(:weight bold))
+                 (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
+                 "  C-c A a     Start / switch to agent\n"
+                 "  C-c A n     Force new session\n"
+                 "  C-c A s     Session picker\n"
+                 "  C-c A h     View history\n"
+                 "  C-c A e     Compose buffer\n"
+                 "  C-c A ?     This help buffer\n"
+                 "\n"
+
                  (propertize (make-string 52 ?═) 'font-lock-face 'font-lock-comment-face) "\n"
-                 (propertize "Global prefix: C-c A <key>  (same commands from any buffer)\n"
-                             'font-lock-face 'font-lock-comment-face)
                  (propertize "Press q to close this buffer.\n"
                              'font-lock-face 'font-lock-comment-face))
                 (goto-char (point-min))
@@ -494,12 +509,10 @@ in
           (which-key-add-key-based-replacements "C-c A" "Agent"))
 
         ;; Global keybindings under C-c A prefix
+        ;; Only actions that make sense from OUTSIDE an agent-shell buffer.
+        ;; Buffer-local bindings (C-c ...) handle in-buffer actions — no duplicates.
         (define-key decknix-agent-prefix-map (kbd "a") 'agent-shell)                      ; Start/switch to agent
         (define-key decknix-agent-prefix-map (kbd "n") 'agent-shell-new)                  ; Force new session
-        (define-key decknix-agent-prefix-map (kbd "r") 'agent-shell-rename-buffer)        ; Rename session
-        (define-key decknix-agent-prefix-map (kbd "k") 'agent-shell-interrupt)            ; Interrupt agent
-        (define-key decknix-agent-prefix-map (kbd "v") 'agent-shell-set-session-model)    ; Pick model
-        (define-key decknix-agent-prefix-map (kbd "M") 'agent-shell-set-session-mode)     ; Pick mode
         (define-key decknix-agent-prefix-map (kbd "?") 'decknix-agent-help)               ; Help reference
 
         ;; == Session management: unified picker + clean quit ==
@@ -663,7 +676,6 @@ even when in an agent-shell buffer with a known session."
            (decknix--agent-session-pick-for-history)))
 
         (define-key decknix-agent-prefix-map (kbd "s") 'decknix-agent-session-picker)        ; Session picker
-        (define-key decknix-agent-prefix-map (kbd "q") 'decknix-agent-session-quit)          ; Quit session
         (define-key decknix-agent-prefix-map (kbd "h") 'decknix-agent-session-history)       ; View history (DWIM)
         (define-key decknix-agent-prefix-map (kbd "H") 'decknix-agent-session-history-pick)  ; View history (pick)
 
@@ -1795,16 +1807,18 @@ Preserves pinned items and previously fetched metadata."
                     (setq-local comint-scroll-show-maximum-output t)
                     (local-set-key (kbd "TAB") 'yas-expand)
                     (local-set-key (kbd "<tab>") 'yas-expand)
-                    ;; Simplified in-buffer bindings (mirrors C-c A x globals)
+                    ;; Buffer-local bindings — no C-c A prefix needed inside agent-shell.
+                    ;; Native bindings: C-c C-c (interrupt), C-c C-v (model), C-c C-m (mode)
                     (local-set-key (kbd "C-c e") 'decknix-agent-compose)
-                    (local-set-key (kbd "C-c s") 'decknix-agent-session-picker)
-                    (local-set-key (kbd "C-c q") 'decknix-agent-session-quit)
-                    (local-set-key (kbd "C-c h") 'decknix-agent-session-history)
-                    (local-set-key (kbd "C-c H") 'decknix-agent-session-history-pick)
                     (local-set-key (kbd "C-c ?") 'decknix-agent-help)
                     (local-set-key (kbd "C-c r") 'agent-shell-rename-buffer)
-                    (local-set-key (kbd "C-c v") 'agent-shell-set-session-model)
-                    (local-set-key (kbd "C-c M") 'agent-shell-set-session-mode)
+                    ;; C-c s — session sub-prefix
+                    (let ((map (make-sparse-keymap)))
+                      (define-key map (kbd "s") 'decknix-agent-session-picker)
+                      (define-key map (kbd "q") 'decknix-agent-session-quit)
+                      (define-key map (kbd "h") 'decknix-agent-session-history)
+                      (define-key map (kbd "H") 'decknix-agent-session-history-pick)
+                      (local-set-key (kbd "C-c s") map))
                     ;; Conditional bindings (may not be loaded)
                     (when (fboundp 'agent-shell-manager-toggle)
                       (local-set-key (kbd "C-c m") 'agent-shell-manager-toggle))
