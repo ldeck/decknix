@@ -42,13 +42,17 @@ in
   config = mkIf cfg.enable {
     # Create a launchd agent that starts Emacs in daemon mode at login.
     #
-    # Standard GNU Emacs daemon mode:
-    # - Runs as a hidden background process (no Dock icon, no Cmd+Tab)
-    # - Creates GUI frames via emacsclient -c (frames appear in Dock while open)
-    # - Frames can be closed without killing the daemon
-    # - Daemon persists invisibly until explicitly killed
+    # Uses --fg-daemon (foreground daemon) instead of --daemon so that:
+    # - launchd can track the actual process PID (--daemon double-forks,
+    #   orphaning the real daemon so launchd loses track of it)
+    # - `launchctl kickstart -k` can reliably kill and restart it
+    # - `decknix switch` restart detection works correctly
+    #
+    # The daemon runs as a hidden background process (no Dock icon, no Cmd+Tab).
+    # GUI frames are created via emacsclient -c and appear in the Dock while open.
+    # Closing all frames does not kill the daemon.
     launchd.user.agents.emacs-server = {
-      command = "${emacsBinary} --daemon";
+      command = "${emacsBinary} --fg-daemon";
 
       serviceConfig = {
         RunAtLoad = true;
