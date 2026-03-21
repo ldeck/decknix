@@ -418,10 +418,8 @@ in
                  (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
                  "  C-c s s     Session picker (live + saved)\n"
                  "  C-c s q     Quit session (saves automatically)\n"
-                 "  C-c s h     View history (current session)\n"
-                 "  C-c s H     View history (pick any session)\n"
-                 "  C-c s y     Copy session ID (short hash)\n"
-                 "  C-c s Y     Copy session ID (full)\n"
+                 "  C-c s h     View history (C-u to pick any session)\n"
+                 "  C-c s y     Copy session ID (C-u for full ID)\n"
                  "  C-c s d     Toggle short/full ID in header\n"
                  "\n"
 
@@ -657,30 +655,24 @@ Uses xwidget-webkit if available, otherwise falls back to eww."
             (or (cdr (assoc selection entries))
                 (user-error "No session selected"))))
 
-        (defun decknix-agent-session-history ()
-          "View conversation history for the current or a picked session.
-If in an agent-shell buffer with a known session ID, shows that
-session's history directly. Otherwise, prompts to pick a session.
+        (defun decknix-agent-session-history (&optional pick)
+          "View conversation history for a session.
+Without prefix argument PICK, shows history for the current session
+if in an agent-shell buffer with a known session ID, otherwise
+prompts to pick a session.
+With \\[universal-argument], always prompts to pick a session.
 Opens in xwidget-webkit (q to quit) or eww as fallback."
-          (interactive)
+          (interactive "P")
           (let ((session-id
-                 (if (and (derived-mode-p 'agent-shell-mode)
+                 (if (and (not pick)
+                          (derived-mode-p 'agent-shell-mode)
                           decknix--agent-auggie-session-id)
                      decknix--agent-auggie-session-id
                    (decknix--agent-session-pick-for-history))))
             (decknix--agent-session-open-share session-id)))
 
-        (defun decknix-agent-session-history-pick ()
-          "Always prompt to pick a session to view history for.
-Like `decknix-agent-session-history' but always shows the picker,
-even when in an agent-shell buffer with a known session."
-          (interactive)
-          (decknix--agent-session-open-share
-           (decknix--agent-session-pick-for-history)))
-
         (define-key decknix-agent-prefix-map (kbd "s") 'decknix-agent-session-picker)        ; Session picker
-        (define-key decknix-agent-prefix-map (kbd "h") 'decknix-agent-session-history)       ; View history (DWIM)
-        (define-key decknix-agent-prefix-map (kbd "H") 'decknix-agent-session-history-pick)  ; View history (pick)
+        (define-key decknix-agent-prefix-map (kbd "h") 'decknix-agent-session-history)       ; View history (C-u to pick)
 
         ;; == Session tagging: metadata layer for session organisation ==
         ;; Tags are stored in a JSON file, keyed by auggie session ID.
@@ -943,22 +935,16 @@ When nil (default), show only the first 8 characters.")
           (when (derived-mode-p 'agent-shell-mode)
             (map-nested-elt (agent-shell--state) '(:session :id))))
 
-        (defun decknix-agent-session-copy-short-id ()
-          "Copy the shortened session ID (first 8 chars) to the kill ring."
-          (interactive)
+        (defun decknix-agent-session-copy-id (&optional full)
+          "Copy the session ID to the kill ring.
+With prefix argument FULL (\\[universal-argument]), copy the full ID.
+Otherwise copy the shortened 8-character hash."
+          (interactive "P")
           (if-let ((id (decknix--agent-get-session-id)))
-              (let ((short (substring id 0 (min 8 (length id)))))
-                (kill-new short)
-                (message "Copied: %s" short))
-            (user-error "No active session")))
-
-        (defun decknix-agent-session-copy-full-id ()
-          "Copy the full session ID to the kill ring."
-          (interactive)
-          (if-let ((id (decknix--agent-get-session-id)))
-              (progn
-                (kill-new id)
-                (message "Copied: %s" id))
+              (let ((result (if full id
+                             (substring id 0 (min 8 (length id))))))
+                (kill-new result)
+                (message "Copied: %s" result))
             (user-error "No active session")))
 
         (defun decknix-agent-session-toggle-id-display ()
@@ -1814,7 +1800,6 @@ Preserves pinned items and previously fetched metadata."
         (define-key decknix-agent-context-map (kbd "d") 'decknix-context-unpin)
         (define-key decknix-agent-context-map (kbd "g") 'decknix-context-browse)
         (define-key decknix-agent-context-map (kbd "f") 'decknix-context-forge-visit)
-        (define-key decknix-agent-context-map (kbd "R") 'decknix-context-show-reviews)
       ''
       + optionalString cfg.attention.enable ''
 
@@ -1872,9 +1857,7 @@ Preserves pinned items and previously fetched metadata."
                       (define-key map (kbd "s") 'decknix-agent-session-picker)
                       (define-key map (kbd "q") 'decknix-agent-session-quit)
                       (define-key map (kbd "h") 'decknix-agent-session-history)
-                      (define-key map (kbd "H") 'decknix-agent-session-history-pick)
-                      (define-key map (kbd "y") 'decknix-agent-session-copy-short-id)
-                      (define-key map (kbd "Y") 'decknix-agent-session-copy-full-id)
+                      (define-key map (kbd "y") 'decknix-agent-session-copy-id)
                       (define-key map (kbd "d") 'decknix-agent-session-toggle-id-display)
                       (local-set-key (kbd "C-c s") map))
                     ;; Conditional bindings (may not be loaded)
