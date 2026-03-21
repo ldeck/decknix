@@ -1233,19 +1233,22 @@ Otherwise copy the shortened 8-character hash."
           (let ((map (make-sparse-keymap)))
             (define-key map (kbd "C-c C-c") #'decknix-agent-compose-submit)
             (define-key map (kbd "C-c C-k") #'decknix-agent-compose-cancel)
+            (define-key map (kbd "C-c k C-c") #'decknix-agent-compose-interrupt-and-submit)
             map)
           "Keymap for `decknix-agent-compose-mode'.")
 
         (define-minor-mode decknix-agent-compose-mode
           "Minor mode for composing agent-shell prompts.
 \\<decknix-agent-compose-mode-map>
-\\[decknix-agent-compose-submit] to submit, \
+\\[decknix-agent-compose-submit] to submit (queued if busy), \
+\\[decknix-agent-compose-interrupt-and-submit] to interrupt & submit, \
 \\[decknix-agent-compose-cancel] to cancel."
           :lighter " Compose"
           :keymap decknix-agent-compose-mode-map)
 
         (defun decknix-agent-compose-submit ()
-          "Submit the compose buffer content to the agent-shell."
+          "Submit the compose buffer content to the agent-shell.
+If the agent is currently processing, the prompt is queued."
           (interactive)
           (let ((input (string-trim (buffer-string)))
                 (target decknix--compose-target-buffer)
@@ -1261,6 +1264,37 @@ Otherwise copy the shortened 8-character hash."
                   (goto-char (point-max))
                   (shell-maker-submit :input input))))))
 
+        (defun decknix-agent-compose-interrupt-and-submit ()
+          "Interrupt any in-progress agent response, then submit the compose buffer.
+Use this when the agent is processing and you want to interject immediately
+rather than waiting for the current response to complete."
+          (interactive)
+          (let ((input (string-trim (buffer-string)))
+                (target decknix--compose-target-buffer)
+                (compose-win (selected-window)))
+            (if (string-empty-p input)
+                (user-error "Empty prompt — nothing to submit")
+              ;; Interrupt the agent first
+              (when (buffer-live-p target)
+                (with-current-buffer target
+                  (when (fboundp 'agent-shell-interrupt)
+                    (let ((agent-shell-confirm-interrupt nil))
+                      (agent-shell-interrupt)))))
+              ;; Close the compose window/buffer
+              (quit-restore-window compose-win 'kill)
+              ;; Submit after a brief delay to let the interrupt settle
+              (let ((tgt target)
+                    (inp input))
+                (run-at-time
+                 0.3 nil
+                 (eval
+                  `(lambda ()
+                     (when (buffer-live-p ,tgt)
+                       (with-current-buffer ,tgt
+                         (goto-char (point-max))
+                         (shell-maker-submit :input ,inp))))
+                  t))))))
+
         (defun decknix-agent-compose-cancel ()
           "Cancel the compose buffer without submitting."
           (interactive)
@@ -1272,8 +1306,9 @@ Otherwise copy the shortened 8-character hash."
           "Open a compose buffer for writing a multi-line agent prompt.
 The buffer opens at the bottom of the frame. Type your prompt
 freely (RET for newlines), then:
-  C-c C-c  submit to the agent
-  C-c C-k  cancel"
+  C-c C-c    submit (queued if agent is busy)
+  C-c k C-c  interrupt agent & submit immediately
+  C-c C-k    cancel"
           (interactive)
           ;; Find the target agent-shell buffer
           (let* ((target (cond
@@ -1302,6 +1337,7 @@ freely (RET for newlines), then:
                           (substitute-command-keys
                            " Compose prompt → \\<decknix-agent-compose-mode-map>\
 \\[decknix-agent-compose-submit] submit, \
+\\[decknix-agent-compose-interrupt-and-submit] interrupt & submit, \
 \\[decknix-agent-compose-cancel] cancel"))
               (set-buffer-modified-p nil))))
 
