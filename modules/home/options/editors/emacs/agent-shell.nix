@@ -420,6 +420,9 @@ in
                  "  C-c s q     Quit session (saves automatically)\n"
                  "  C-c s h     View history (current session)\n"
                  "  C-c s H     View history (pick any session)\n"
+                 "  C-c s y     Copy session ID (short hash)\n"
+                 "  C-c s Y     Copy session ID (full)\n"
+                 "  C-c s d     Toggle short/full ID in header\n"
                  "\n"
 
                  (propertize "Input & Editing\n" 'font-lock-face '(:weight bold))
@@ -917,6 +920,58 @@ even when in an agent-shell buffer with a known session."
         (define-key decknix-agent-tags-map (kbd "e") 'decknix-agent-tag-edit)      ; Edit/rename
         (define-key decknix-agent-tags-map (kbd "d") 'decknix-agent-tag-delete)    ; Delete globally
         (define-key decknix-agent-tags-map (kbd "c") 'decknix-agent-tag-cleanup)   ; Cleanup orphans
+
+        ;; == Session ID: shortened display, copy, toggle ==
+
+        (defvar decknix--agent-show-full-session-id nil
+          "When non-nil, show the full session ID in the header.
+When nil (default), show only the first 8 characters.")
+
+        (advice-add 'agent-shell--session-id-indicator
+                    :filter-return
+                    (lambda (result)
+                      "Truncate the session ID to 8 chars unless full display is toggled on."
+                      (if (and result (stringp result)
+                               (not decknix--agent-show-full-session-id)
+                               (> (length result) 8))
+                          (propertize (substring (substring-no-properties result) 0 8)
+                                     'font-lock-face 'font-lock-constant-face)
+                        result)))
+
+        (defun decknix--agent-get-session-id ()
+          "Return the current ACP session ID, or nil."
+          (when (derived-mode-p 'agent-shell-mode)
+            (map-nested-elt (agent-shell--state) '(:session :id))))
+
+        (defun decknix-agent-session-copy-short-id ()
+          "Copy the shortened session ID (first 8 chars) to the kill ring."
+          (interactive)
+          (if-let ((id (decknix--agent-get-session-id)))
+              (let ((short (substring id 0 (min 8 (length id)))))
+                (kill-new short)
+                (message "Copied: %s" short))
+            (user-error "No active session")))
+
+        (defun decknix-agent-session-copy-full-id ()
+          "Copy the full session ID to the kill ring."
+          (interactive)
+          (if-let ((id (decknix--agent-get-session-id)))
+              (progn
+                (kill-new id)
+                (message "Copied: %s" id))
+            (user-error "No active session")))
+
+        (defun decknix-agent-session-toggle-id-display ()
+          "Toggle between showing short (8-char) and full session ID in the header."
+          (interactive)
+          (setq decknix--agent-show-full-session-id
+                (not decknix--agent-show-full-session-id))
+          ;; Force header refresh
+          (when (derived-mode-p 'agent-shell-mode)
+            (setq-local agent-shell--header-cache (make-hash-table :test 'equal))
+            (force-mode-line-update))
+          (message "Session ID display: %s"
+                   (if decknix--agent-show-full-session-id "full" "short (8 chars)")))
 
         ;; == Compose buffer: magit-style prompt editing ==
         ;; Opens a temporary buffer for composing multi-line prompts.
@@ -1818,6 +1873,9 @@ Preserves pinned items and previously fetched metadata."
                       (define-key map (kbd "q") 'decknix-agent-session-quit)
                       (define-key map (kbd "h") 'decknix-agent-session-history)
                       (define-key map (kbd "H") 'decknix-agent-session-history-pick)
+                      (define-key map (kbd "y") 'decknix-agent-session-copy-short-id)
+                      (define-key map (kbd "Y") 'decknix-agent-session-copy-full-id)
+                      (define-key map (kbd "d") 'decknix-agent-session-toggle-id-display)
                       (local-set-key (kbd "C-c s") map))
                     ;; Conditional bindings (may not be loaded)
                     (when (fboundp 'agent-shell-manager-toggle)
