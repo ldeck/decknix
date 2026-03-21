@@ -668,7 +668,9 @@ Press q to dismiss."
 
         (defun decknix--agent-session-extract-history (session-id n)
           "Extract the last N user-visible exchanges from SESSION-ID's local JSON.
-Returns a list of (USER-MSG . ASSISTANT-RESP) cons cells, oldest first."
+Returns a list of (USER-MSG . ASSISTANT-RESP) cons cells, oldest first.
+Uses the top-level request_message and response_text fields of each
+exchange, which are the user-facing summary strings."
           (let ((file (decknix--agent-session-file session-id)))
             (when (file-exists-p file)
               (condition-case err
@@ -684,31 +686,12 @@ Returns a list of (USER-MSG . ASSISTANT-RESP) cons cells, oldest first."
                       (while (and (>= i 0) (< count n))
                         (let* ((entry (nth i history))
                                (ex (alist-get 'exchange entry))
-                               (user-msg nil)
-                               (resp-parts nil))
-                          ;; Extract user message from type=0 request nodes
-                          (dolist (node (alist-get 'request_nodes ex))
-                            (when (and (eq (alist-get 'type node) 0)
-                                       (alist-get 'text_node node))
-                              (setq user-msg
-                                    (alist-get 'content
-                                               (alist-get 'text_node node)))))
-                          ;; Extract assistant response from type=0 response nodes
-                          (dolist (node (alist-get 'response_nodes ex))
-                            (when (and (eq (alist-get 'type node) 0)
-                                       (alist-get 'content node))
-                              (push (alist-get 'content node) resp-parts)))
-                          ;; Also check response_text as fallback
-                          (when (and (not resp-parts)
-                                     (alist-get 'response_text ex)
-                                     (not (string-empty-p
-                                           (alist-get 'response_text ex))))
-                            (push (alist-get 'response_text ex) resp-parts))
-                          ;; Only count exchanges that have a user message
-                          (when user-msg
-                            (push (cons user-msg
-                                        (string-join (nreverse resp-parts) ""))
-                                  exchanges)
+                               (user-msg (alist-get 'request_message ex ""))
+                               (resp-text (alist-get 'response_text ex "")))
+                          ;; Only count exchanges with a non-empty user message
+                          (when (and (stringp user-msg)
+                                     (not (string-empty-p (string-trim user-msg))))
+                            (push (cons user-msg resp-text) exchanges)
                             (setq count (1+ count))))
                         (setq i (1- i))))
                     exchanges)
@@ -816,28 +799,41 @@ since default.el is evaluated under dynamic binding."
           "Default number of recent exchanges to show when resuming a session.
 Use C-u prefix with the session picker to override.")
 
+        (defun decknix--agent-find-new-shell-buffer (before-buffers)
+          "Find the agent-shell buffer that was created after BEFORE-BUFFERS snapshot.
+Returns the new buffer, or nil if not found."
+          (seq-find (lambda (buf)
+                      (and (buffer-live-p buf)
+                           (not (memq buf before-buffers))
+                           (with-current-buffer buf
+                             (derived-mode-p 'agent-shell-mode))))
+                    (buffer-list)))
+
         (defun decknix--agent-session-resume (session-id history-count)
           "Resume SESSION-ID and pre-populate buffer with HISTORY-COUNT exchanges."
-          (let ((agent-shell-auggie-acp-command
+          ;; Snapshot existing buffers so we can detect the new one
+          (let ((before-buffers (buffer-list))
+                (agent-shell-auggie-acp-command
                  (append agent-shell-auggie-acp-command
                          (list "--resume" session-id))))
             (agent-shell-start
              :config (agent-shell-auggie-make-agent-config))
-            ;; agent-shell-start switches to the new buffer
-            (setq-local decknix--agent-auggie-session-id session-id)
-            ;; Pre-populate with history after a short delay
-            ;; (the buffer needs time to initialise)
-            (let ((buf (current-buffer))
-                  (sid session-id)
-                  (n history-count))
+            ;; agent-shell-start is async — it doesn't switch current-buffer.
+            ;; Use a timer to find the new buffer and prepopulate it.
+            (let ((sid session-id)
+                  (n history-count)
+                  (bufs before-buffers))
               (run-at-time
-               0.5 nil
+               1.5 nil
                (eval
-                `(let ((buf ',buf) (sid ,sid) (n ,n))
-                   (lambda ()
-                     (when (buffer-live-p buf)
-                       (with-current-buffer buf
-                         (decknix--agent-session-prepopulate sid n)))))
+                `(lambda ()
+                   (let ((shell-buf (decknix--agent-find-new-shell-buffer ',bufs)))
+                     (if shell-buf
+                         (with-current-buffer shell-buf
+                           (setq-local decknix--agent-auggie-session-id ,sid)
+                           (decknix--agent-session-prepopulate ,sid ,n))
+                       (message "Could not find agent-shell buffer for session %s"
+                                (substring ,sid 0 8)))))
                 t)))))
 
         (defun decknix-agent-session-picker (arg)
