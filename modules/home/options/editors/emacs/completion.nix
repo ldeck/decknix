@@ -128,8 +128,10 @@ in
               corfu-quit-no-match 'separator
               corfu-quit-at-boundary 'separator)
 
-        ;; Corfu in terminal
-        (unless (display-graphic-p)
+        ;; Corfu in terminal (guard for daemon mode where display-graphic-p
+        ;; is nil at init time even for GUI frames)
+        (when (and (not (display-graphic-p))
+                   (fboundp 'corfu-terminal-mode))
           (corfu-terminal-mode 1))
 
         ;; Corfu history
