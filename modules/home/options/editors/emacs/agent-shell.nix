@@ -640,6 +640,15 @@ Press q to dismiss."
                   ((< days 30) (format "%dd ago" (truncate days)))
                   (t (format-time-string "%Y-%m-%d" time)))))
 
+        (defun decknix--agent-unsorted-table (candidates)
+          "Wrap CANDIDATES in a completion table that preserves list order.
+Prevents vertico/orderless from re-sorting alphabetically."
+          (lambda (string pred action)
+            (if (eq action 'metadata)
+                '(metadata (display-sort-function . identity)
+                           (cycle-sort-function . identity))
+              (complete-with-action action candidates string pred))))
+
         (defun decknix--agent-session-list ()
           "Fetch saved auggie sessions as a list of alists."
           (condition-case err
@@ -696,7 +705,8 @@ new agent-shell."
                                         (cons 'new nil))))
                  (all-entries (append new-entry live-entries saved-entries))
                  (selection (completing-read "Agent session: "
-                                            (mapcar #'car all-entries)
+                                            (decknix--agent-unsorted-table
+                                             (mapcar #'car all-entries))
                                             nil t))
                  (chosen (cdr (assoc selection all-entries))))
             (pcase (car chosen)
@@ -754,7 +764,8 @@ Uses xwidget-webkit if available, otherwise falls back to eww."
                                          (alist-get 'sessionId session)))
                                  sessions))
                  (selection (completing-read "View history for session: "
-                                            (mapcar #'car entries)
+                                            (decknix--agent-unsorted-table
+                                             (mapcar #'car entries))
                                             nil t)))
             (or (cdr (assoc selection entries))
                 (user-error "No session selected"))))
@@ -919,7 +930,8 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
                   (user-error "No active sessions match tag \"%s\" (sessions may have expired)" tag))
                 (let* ((selection (completing-read
                                    (format "Sessions tagged \"%s\": " tag)
-                                   (mapcar #'car entries) nil t))
+                                   (decknix--agent-unsorted-table
+                                    (mapcar #'car entries)) nil t))
                        (chosen (cdr (assoc selection entries)))
                        (session (cdr chosen))
                        (session-id (alist-get 'sessionId session))
