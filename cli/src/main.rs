@@ -179,26 +179,37 @@ fn snapshot_launch_agents() -> HashMap<String, u64> {
     map
 }
 
-/// Kill orphaned Emacs daemon processes that launchd lost track of.
+/// Gracefully stop the Emacs daemon before restarting via launchd.
 ///
-/// When the LaunchAgent plist uses `--daemon` (forking mode), Emacs double-forks
-/// and the real daemon process gets orphaned (PPID=1). launchd can't track or kill
-/// these processes. This function finds and terminates them before starting a new
-/// daemon via the LaunchAgent (which now uses `--fg-daemon`).
-fn kill_orphaned_emacs_daemons() {
-    // Use pkill to send SIGTERM to any Emacs processes running in daemon mode.
-    // This matches both --daemon and --bg-daemon (the re-exec'd grandchild).
+/// Tries `emacsclient --eval '(kill-emacs)'` first for a clean shutdown
+/// (no macOS crash dialog). Falls back to `pkill` for orphaned daemons
+/// from the old `--daemon` (forking) mode that launchd lost track of.
+fn kill_emacs_daemon() {
+    // Try graceful shutdown via emacsclient first.
+    // This avoids the macOS "application quit unexpectedly" dialog.
+    let graceful = Command::new("emacsclient")
+        .args(["--eval", "(kill-emacs)"])
+        .stderr(std::process::Stdio::null())
+        .status();
+    match graceful {
+        Ok(s) if s.success() => {
+            eprintln!("   🧹 Emacs daemon stopped gracefully");
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            return;
+        }
+        _ => {}
+    }
+    // Fallback: pkill for orphaned daemons (old --daemon forking mode).
     let result = Command::new("pkill")
         .args(["-f", "Emacs.*--.*daemon"])
         .status();
     match result {
         Ok(s) if s.success() => {
             eprintln!("   🧹 Killed orphaned Emacs daemon(s)");
-            // Give the process a moment to exit cleanly
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
         _ => {
-            // No matching processes, or pkill not available — that's fine
+            // No matching processes — that's fine
         }
     }
 }
@@ -240,7 +251,7 @@ fn restart_changed_agents(
         // an orphaned emacs process that launchd can't track or kill.
         // New plists use --fg-daemon but we still need to clean up the old one.
         if label.contains("emacs") {
-            kill_orphaned_emacs_daemons();
+            kill_emacs_daemon();
         }
 
         // kickstart -k: kill existing instance and restart
