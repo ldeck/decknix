@@ -117,6 +117,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dirs",
+ "libc",
  "process_control",
  "serde",
  "serde_json",
