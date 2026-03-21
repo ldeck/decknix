@@ -734,13 +734,12 @@ new agent-shell."
               ('buffer (switch-to-buffer (cdr chosen)))
               ('session
                (let* ((session (cdr chosen))
-                      (session-id (alist-get 'sessionId session))
-                      ;; Pass --resume to auggie so it resumes the saved session
-                      (agent-shell-auggie-acp-command
-                       (append agent-shell-auggie-acp-command
-                               (list "--resume" session-id))))
+                      (session-id (alist-get 'sessionId session)))
+                 ;; Use the ACP session resume protocol (not CLI --resume)
+                 ;; so agent-shell properly loads/resumes the session
                  (agent-shell-start
-                  :config (agent-shell-auggie-make-agent-config))
+                  :config (agent-shell-auggie-make-agent-config)
+                  :session-id session-id)
                  ;; Store the auggie session ID in the new buffer
                  ;; (agent-shell-start switches to the new buffer)
                  (setq-local decknix--agent-auggie-session-id session-id)))
@@ -955,12 +954,11 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
                                     (mapcar #'car entries)) nil t))
                        (chosen (cdr (assoc selection entries)))
                        (session (cdr chosen))
-                       (session-id (alist-get 'sessionId session))
-                       (agent-shell-auggie-acp-command
-                        (append agent-shell-auggie-acp-command
-                                (list "--resume" session-id))))
+                       (session-id (alist-get 'sessionId session)))
+                  ;; Use the ACP session resume protocol (not CLI --resume)
                   (agent-shell-start
-                   :config (agent-shell-auggie-make-agent-config))
+                   :config (agent-shell-auggie-make-agent-config)
+                   :session-id session-id)
                   (setq-local decknix--agent-auggie-session-id session-id))))))
 
         (defun decknix-agent-tag-edit ()
