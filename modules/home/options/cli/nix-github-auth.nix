@@ -30,12 +30,14 @@ in
       TOKEN_FILE="$NIX_DIR/access-tokens.conf"
       NIX_CONF="$NIX_DIR/nix.conf"
       INCLUDE_LINE="!include access-tokens.conf"
+      GH="${pkgs.gh}/bin/gh"
 
       mkdir -p "$NIX_DIR"
 
-      # 1. Write fresh token file
-      if command -v gh >/dev/null 2>&1; then
-        TOKEN=$(gh auth token 2>/dev/null || true)
+      # 1. Write fresh token file (use Nix store path — gh may not be on
+      #    PATH yet during activation)
+      if [ -x "$GH" ]; then
+        TOKEN=$("$GH" auth token 2>/dev/null || true)
         if [ -n "$TOKEN" ]; then
           echo "access-tokens = github.com=$TOKEN" > "$TOKEN_FILE"
           chmod 600 "$TOKEN_FILE"
@@ -44,7 +46,7 @@ in
           echo "  [nix-github-auth] Warning: gh auth token returned empty (not logged in?)"
         fi
       else
-        echo "  [nix-github-auth] Warning: gh CLI not found, skipping token generation"
+        echo "  [nix-github-auth] Warning: gh not found at $GH, skipping token generation"
       fi
 
       # 2. Ensure nix.conf includes the token file (idempotent)
