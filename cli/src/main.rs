@@ -179,6 +179,30 @@ fn snapshot_launch_agents() -> HashMap<String, u64> {
     map
 }
 
+/// Kill orphaned Emacs daemon processes that launchd lost track of.
+///
+/// When the LaunchAgent plist uses `--daemon` (forking mode), Emacs double-forks
+/// and the real daemon process gets orphaned (PPID=1). launchd can't track or kill
+/// these processes. This function finds and terminates them before starting a new
+/// daemon via the LaunchAgent (which now uses `--fg-daemon`).
+fn kill_orphaned_emacs_daemons() {
+    // Use pkill to send SIGTERM to any Emacs processes running in daemon mode.
+    // This matches both --daemon and --bg-daemon (the re-exec'd grandchild).
+    let result = Command::new("pkill")
+        .args(["-f", "Emacs.*--.*daemon"])
+        .status();
+    match result {
+        Ok(s) if s.success() => {
+            eprintln!("   🧹 Killed orphaned Emacs daemon(s)");
+            // Give the process a moment to exit cleanly
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        _ => {
+            // No matching processes, or pkill not available — that's fine
+        }
+    }
+}
+
 /// After a successful switch, restart changed user LaunchAgents and remove obsolete ones.
 fn restart_changed_agents(
     before: &HashMap<String, u64>,
@@ -210,6 +234,15 @@ fn restart_changed_agents(
     for label in &changed {
         let target = format!("gui/{}/{}", uid, label);
         eprintln!("🔄 Restarting {}...", label);
+
+        // For emacs-server: kill any orphaned daemon processes first.
+        // Old plists used --daemon (forking mode) which double-forks, leaving
+        // an orphaned emacs process that launchd can't track or kill.
+        // New plists use --fg-daemon but we still need to clean up the old one.
+        if label.contains("emacs") {
+            kill_orphaned_emacs_daemons();
+        }
+
         // kickstart -k: kill existing instance and restart
         let status = Command::new("launchctl")
             .args(["kickstart", "-k", &target])
