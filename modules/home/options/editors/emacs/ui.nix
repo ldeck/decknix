@@ -133,9 +133,11 @@ in
         ''}
         ;; == Which-key: Show available keybindings ==
         (which-key-mode 1)
-        (setq which-key-idle-delay 0.5
-              which-key-idle-secondary-delay 0.1
-              which-key-popup-type 'minibuffer
+        (setq which-key-idle-delay 0.3
+              which-key-idle-secondary-delay 0.05
+              which-key-popup-type 'side-window
+              which-key-side-window-location 'bottom
+              which-key-side-window-max-height 0.25
               which-key-max-display-columns nil
               which-key-min-display-lines 5
               which-key-separator " → "

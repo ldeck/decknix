@@ -606,9 +606,25 @@ Press q to dismiss."
         ;; Gives which-key / minibuffer a descriptive label instead of "+prefix"
         (define-prefix-command 'decknix-agent-prefix-map)
         (global-set-key (kbd "C-c A") 'decknix-agent-prefix-map)
+        ;; Register all C-c A sub-key descriptions with which-key.
+        ;; Single consolidated block so which-key can display the full menu.
         (with-eval-after-load 'which-key
-          (which-key-add-key-based-replacements "C-c A" "Agent")
-          (which-key-add-key-based-replacements "C-c A ?" "Help"))
+          (which-key-add-key-based-replacements
+            "C-c A"   "Agent"
+            "C-c A ?" "Help"
+            "C-c A a" "start/switch"
+            "C-c A n" "new session"
+            "C-c A s" "session picker"
+            "C-c A h" "history"
+            "C-c A e" "compose"
+            "C-c A T" "Tags"
+            "C-c A c" "Commands"
+            "C-c A t" "Templates"
+            "C-c A i" "Context"
+            "C-c A S" "MCP servers"
+            "C-c A m" "manager"
+            "C-c A w" "workspace"
+            "C-c A j" "attention jump"))
 
         ;; Global keybindings under C-c A prefix
         ;; Only actions that make sense from OUTSIDE an agent-shell buffer.
@@ -642,12 +658,17 @@ Press q to dismiss."
 
         (defun decknix--agent-unsorted-table (candidates)
           "Wrap CANDIDATES in a completion table that preserves list order.
-Prevents vertico/orderless from re-sorting alphabetically."
-          (lambda (string pred action)
-            (if (eq action 'metadata)
-                '(metadata (display-sort-function . identity)
-                           (cycle-sort-function . identity))
-              (complete-with-action action candidates string pred))))
+Prevents vertico/orderless from re-sorting alphabetically.
+Uses eval with lexical-binding to create a proper closure
+since default.el is evaluated under dynamic binding."
+          (eval
+           `(let ((cands ',candidates))
+              (lambda (string pred action)
+                (if (eq action 'metadata)
+                    '(metadata (display-sort-function . identity)
+                               (cycle-sort-function . identity))
+                  (complete-with-action action cands string pred))))
+           t))
 
         (defun decknix--agent-session-list ()
           "Fetch saved auggie sessions as a list of alists."
@@ -1020,8 +1041,6 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
         ;; C-c A T — tags sub-prefix ("Tags")
         (define-prefix-command 'decknix-agent-tags-map)
         (define-key decknix-agent-prefix-map (kbd "T") 'decknix-agent-tags-map)
-        (with-eval-after-load 'which-key
-          (which-key-add-key-based-replacements "C-c A T" "Tags"))
         (define-key decknix-agent-tags-map (kbd "t") 'decknix-agent-tag-add)       ; Tag (add)
         (define-key decknix-agent-tags-map (kbd "r") 'decknix-agent-tag-remove)    ; Remove
         (define-key decknix-agent-tags-map (kbd "l") 'decknix-agent-tag-list)      ; List/filter
@@ -1248,8 +1267,6 @@ freely (RET for newlines), then:
         ;; C-c A c — commands sub-prefix ("Commands")
         (define-prefix-command 'decknix-agent-command-map)
         (define-key decknix-agent-prefix-map (kbd "c") 'decknix-agent-command-map)
-        (with-eval-after-load 'which-key
-          (which-key-add-key-based-replacements "C-c A c" "Commands"))
         (define-key decknix-agent-command-map (kbd "c") 'decknix-agent-command-run)    ; Pick & insert
         (define-key decknix-agent-command-map (kbd "n") 'decknix-agent-command-new)    ; New
         (define-key decknix-agent-command-map (kbd "e") 'decknix-agent-command-edit)   ; Edit
@@ -1906,8 +1923,6 @@ Preserves pinned items and previously fetched metadata."
         ;; -- Global keybindings: C-c A i prefix --
         (define-prefix-command 'decknix-agent-context-map)
         (define-key decknix-agent-prefix-map (kbd "i") 'decknix-agent-context-map)
-        (with-eval-after-load 'which-key
-          (which-key-add-key-based-replacements "C-c A i" "Context"))
         (define-key decknix-agent-context-map (kbd "i") 'decknix-context-list-issues)
         (define-key decknix-agent-context-map (kbd "p") 'decknix-context-list-prs)
         (define-key decknix-agent-context-map (kbd "c") 'decknix-context-show-ci)
@@ -1943,8 +1958,6 @@ Preserves pinned items and previously fetched metadata."
         ;; C-c A t — template sub-prefix ("Templates")
         (define-prefix-command 'decknix-agent-template-map)
         (define-key decknix-agent-prefix-map (kbd "t") 'decknix-agent-template-map)
-        (with-eval-after-load 'which-key
-          (which-key-add-key-based-replacements "C-c A t" "Templates"))
         (define-key decknix-agent-template-map (kbd "t") 'yas-insert-snippet)       ; Insert
         (define-key decknix-agent-template-map (kbd "n") 'yas-new-snippet)          ; New
         (define-key decknix-agent-template-map (kbd "e") 'yas-visit-snippet-file)   ; Edit
