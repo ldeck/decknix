@@ -415,6 +415,7 @@ Press q to dismiss."
             (propertize "Input & Editing\n" 'font-lock-face '(:weight bold))
             (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
             "  C-c e       Compose buffer (multi-line editor)\n"
+            "  C-c E       Interrupt agent + open compose\n"
             "  C-c r       Rename buffer\n"
             "  RET         Send prompt (at end of input)\n"
             "  S-RET       Insert newline in prompt\n"
@@ -504,6 +505,7 @@ Press q to dismiss."
             "  Use S-RET to insert a newline without sending.\n"
             "  For longer prompts, press C-c e to open the compose buffer.\n"
             "  Press C-c C-c to interrupt a running response.\n"
+            "  Press C-c E to interrupt and open the compose buffer.\n"
             "\n"
 
             (propertize "2. Sessions\n" 'font-lock-face '(:weight bold))
@@ -1248,7 +1250,8 @@ Otherwise copy the shortened 8-character hash."
 
         (defun decknix-agent-compose-submit ()
           "Submit the compose buffer content to the agent-shell.
-If the agent is currently processing, the prompt is queued."
+If the agent is busy, warns the user and offers to interrupt instead.
+Use \\[decknix-agent-compose-interrupt-and-submit] to interrupt & submit."
           (interactive)
           (let ((input (string-trim (buffer-string)))
                 (target decknix--compose-target-buffer)
@@ -1256,7 +1259,20 @@ If the agent is currently processing, the prompt is queued."
                 (compose-win (selected-window)))
             (if (string-empty-p input)
                 (user-error "Empty prompt — nothing to submit")
-              ;; Close the compose window/buffer first
+              ;; Check if the agent is busy
+              (when (and (buffer-live-p target)
+                         (with-current-buffer target
+                           (bound-and-true-p shell-maker--busy)))
+                (unless (y-or-n-p
+                         "Agent is busy — interrupt and submit? (C-c k C-c skips this) ")
+                  (user-error "Submit cancelled — agent is still processing"))
+                ;; User said yes — interrupt first
+                (with-current-buffer target
+                  (when (fboundp 'agent-shell-interrupt)
+                    (let ((agent-shell-confirm-interrupt nil))
+                      (agent-shell-interrupt))))
+                (sit-for 0.3))
+              ;; Close the compose window/buffer
               (quit-restore-window compose-win 'kill)
               ;; Submit to the agent-shell buffer
               (when (buffer-live-p target)
@@ -1341,7 +1357,37 @@ freely (RET for newlines), then:
 \\[decknix-agent-compose-cancel] cancel"))
               (set-buffer-modified-p nil))))
 
+        (defun decknix-agent-compose-interrupt ()
+          "Interrupt the agent, then open the compose buffer.
+Use this when the agent is mid-response and you want to interject.
+The compose buffer opens with all the usual bindings:
+  C-c C-c    submit
+  C-c k C-c  interrupt & submit (redundant here, agent already interrupted)
+  C-c C-k    cancel"
+          (interactive)
+          ;; Find the target agent-shell buffer
+          (let ((target (cond
+                          ((derived-mode-p 'agent-shell-mode)
+                           (current-buffer))
+                          ((and (fboundp 'agent-shell-buffers)
+                                (agent-shell-buffers))
+                           (car (agent-shell-buffers)))
+                          (t (user-error
+                              "No agent-shell buffer found. Start one with C-c A a")))))
+            ;; Interrupt if busy
+            (when (and (buffer-live-p target)
+                       (with-current-buffer target
+                         (bound-and-true-p shell-maker--busy)))
+              (with-current-buffer target
+                (when (fboundp 'agent-shell-interrupt)
+                  (let ((agent-shell-confirm-interrupt nil))
+                    (agent-shell-interrupt))))
+              (sit-for 0.3))
+            ;; Open compose as usual
+            (decknix-agent-compose)))
+
         (define-key decknix-agent-prefix-map (kbd "e") 'decknix-agent-compose)               ; Compose prompt
+        (define-key decknix-agent-prefix-map (kbd "E") 'decknix-agent-compose-interrupt)      ; Interrupt + compose
 
         ;; == Custom commands: discovery, picker, authoring ==
 
@@ -2143,6 +2189,7 @@ Preserves pinned items and previously fetched metadata."
                     ;; Buffer-local bindings — no C-c A prefix needed inside agent-shell.
                     ;; Native bindings: C-c C-c (interrupt), C-c C-v (model), C-c C-m (mode)
                     (local-set-key (kbd "C-c e") 'decknix-agent-compose)
+                    (local-set-key (kbd "C-c E") 'decknix-agent-compose-interrupt)
                     (local-set-key (kbd "C-c ?") decknix-agent-help-map)
                     (local-set-key (kbd "C-c r") 'agent-shell-rename-buffer)
                     ;; C-c s — session sub-prefix
