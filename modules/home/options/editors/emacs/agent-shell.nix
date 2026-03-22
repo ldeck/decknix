@@ -2219,6 +2219,62 @@ Preserves pinned items and previously fetched metadata."
       + ''
 
         ;; Disable line numbers in agent-shell buffers
+        ;; == Post-prompt fragment relocation ==
+        ;; agent-shell-ui inserts new fragments at point-max, which is
+        ;; after the prompt. This idle timer detects fragments that
+        ;; appeared after the prompt and moves them before it, keeping
+        ;; the prompt as the last thing in the buffer.
+
+        (defvar-local decknix--agent-relocate-timer nil
+          "Idle timer for relocating post-prompt fragments.")
+
+        (defun decknix--agent-relocate-post-prompt-fragments ()
+          "Move any agent-shell UI fragments from after the prompt to before it.
+Only acts when the agent is idle (not processing a response)."
+          (when (and (derived-mode-p 'agent-shell-mode)
+                     (not (bound-and-true-p shell-maker--busy))
+                     (get-buffer-process (current-buffer)))
+            (let* ((proc (get-buffer-process (current-buffer)))
+                   (pmark (marker-position (process-mark proc))))
+              (when (and pmark (< pmark (point-max)))
+                ;; Check if content after prompt has agent-shell-ui-section property
+                (let ((post-start nil)
+                      (post-end nil)
+                      (pos pmark))
+                  ;; Scan for agent-shell UI content after the prompt
+                  (while (< pos (point-max))
+                    (when (get-text-property pos 'agent-shell-ui-section)
+                      (unless post-start
+                        ;; Include any whitespace/newlines before the fragment
+                        (setq post-start (max pmark
+                                              (or (previous-single-property-change
+                                                   pos 'agent-shell-ui-section nil pmark)
+                                                  pmark))))
+                      (setq post-end (or (next-single-property-change
+                                          pos 'agent-shell-ui-section nil (point-max))
+                                         (point-max))))
+                    (setq pos (1+ pos)))
+                  ;; If we found fragments after the prompt, relocate them
+                  (when (and post-start post-end (> post-end post-start))
+                    (let ((inhibit-read-only t)
+                          (fragment-text (buffer-substring post-start post-end)))
+                      ;; Find the prompt line start
+                      (save-excursion
+                        (goto-char pmark)
+                        (beginning-of-line)
+                        (let ((prompt-line-start (point)))
+                          ;; Delete from after prompt
+                          (delete-region post-start post-end)
+                          ;; Insert before prompt line
+                          (goto-char prompt-line-start)
+                          (insert fragment-text "\n")
+                          ;; Update process mark to account for the moved text
+                          (set-marker (process-mark proc)
+                                     (+ pmark (length fragment-text) 1))))
+                      ;; Move point to after the prompt if user hasn't moved it
+                      (when (>= (point) post-start)
+                        (goto-char (marker-position (process-mark proc)))))))))))
+
         ;; Re-enable TAB for yasnippet expansion (no completion conflict here)
         ;; In-buffer shortcuts: C-c x (no A prefix needed inside agent-shell)
         (add-hook 'agent-shell-mode-hook
@@ -2228,6 +2284,23 @@ Preserves pinned items and previously fetched metadata."
                     (setq-local comint-scroll-to-bottom-on-input t)
                     (setq-local comint-scroll-to-bottom-on-output t)
                     (setq-local comint-scroll-show-maximum-output t)
+                    ;; Set up idle timer to relocate post-prompt fragments
+                    (setq decknix--agent-relocate-timer
+                          (run-with-idle-timer
+                           0.5 t
+                           (eval
+                            `(let ((buf ,(current-buffer)))
+                               (lambda ()
+                                 (when (buffer-live-p buf)
+                                   (with-current-buffer buf
+                                     (decknix--agent-relocate-post-prompt-fragments)))))
+                            t)))
+                    ;; Clean up the timer when buffer is killed
+                    (add-hook 'kill-buffer-hook
+                              (lambda ()
+                                (when decknix--agent-relocate-timer
+                                  (cancel-timer decknix--agent-relocate-timer)))
+                              nil t)
                     (local-set-key (kbd "TAB") 'yas-expand)
                     (local-set-key (kbd "<tab>") 'yas-expand)
                     ;; Buffer-local bindings — no C-c A prefix needed inside agent-shell.
