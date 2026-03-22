@@ -12,8 +12,31 @@ let
   #   shell-maker, acp, agent-shell
   # Custom derivations (not in any nixpkgs channel):
   #   agent-shell-manager, agent-shell-workspace, agent-shell-attention
+  #
+  # IMPORTANT: We take the source/recipe from unstable but rebuild using the
+  # local emacsPackages (which uses the same Emacs as the daemon). This ensures
+  # native-compiled .eln files match the running Emacs build hash, avoiding
+  # JIT recompilation at startup.
 
-  inherit (pkgs.unstable.emacsPackages) shell-maker acp agent-shell;
+  shell-maker = pkgs.emacsPackages.trivialBuild {
+    pname = "shell-maker";
+    version = pkgs.unstable.emacsPackages.shell-maker.version;
+    src = pkgs.unstable.emacsPackages.shell-maker.src;
+    packageRequires = with pkgs.emacsPackages; [ markdown-mode ];
+  };
+
+  acp = pkgs.emacsPackages.trivialBuild {
+    pname = "acp";
+    version = pkgs.unstable.emacsPackages.acp.version;
+    src = pkgs.unstable.emacsPackages.acp.src;
+  };
+
+  agent-shell = pkgs.emacsPackages.trivialBuild {
+    pname = "agent-shell";
+    version = pkgs.unstable.emacsPackages.agent-shell.version;
+    src = pkgs.unstable.emacsPackages.agent-shell.src;
+    packageRequires = [ shell-maker acp ] ++ (with pkgs.emacsPackages; [ markdown-mode ]);
+  };
 
   agent-shell-manager-el = pkgs.emacsPackages.trivialBuild {
     pname = "agent-shell-manager";
@@ -812,22 +835,125 @@ since default.el is evaluated under dynamic binding."
                   (complete-with-action action cands string pred))))
            t))
 
+        ;; -- Session list caching --
+        ;; Reads session files directly from ~/.augment/sessions/ using
+        ;; jq for metadata extraction. This is ~6x faster than `auggie
+        ;; session list` which loads full chat history and emits terminal
+        ;; escape codes that break async process output.
+
+        (defvar decknix--agent-session-cache nil
+          "Cached list of auggie sessions (alists).")
+
+        (defvar decknix--agent-session-cache-time 0
+          "Time when session cache was last updated (float-time).")
+
+        (defvar decknix--agent-session-cache-ttl 120
+          "Seconds before session cache is considered stale.")
+
+        (defvar decknix--agent-session-refresh-proc nil
+          "Process handle for async session list refresh.")
+
+        (defvar decknix--agent-sessions-dir
+          (expand-file-name "~/.augment/sessions")
+          "Directory containing auggie session JSON files.")
+
         (defun decknix--agent-session-list ()
-          "Fetch saved auggie sessions as a list of alists."
-          (condition-case err
+          "Return cached auggie sessions, refreshing async if stale.
+On first call (empty cache), falls back to a synchronous fetch."
+          (when (and (null decknix--agent-session-cache)
+                     (= decknix--agent-session-cache-time 0))
+            ;; First call ever: synchronous fetch so picker has data
+            (decknix--agent-session-refresh-sync))
+          ;; Trigger async refresh if stale
+          (when (> (- (float-time) decknix--agent-session-cache-time)
+                   decknix--agent-session-cache-ttl)
+            (decknix--agent-session-refresh-async))
+          decknix--agent-session-cache)
+
+        (defvar decknix--agent-session-jq-filter-file nil
+          "Path to temp file containing the jq filter for session extraction.")
+
+        (defun decknix--agent-session-ensure-jq-filter ()
+          "Create the jq filter file if it doesn't exist. Return its path."
+          (unless (and decknix--agent-session-jq-filter-file
+                      (file-exists-p decknix--agent-session-jq-filter-file))
+            (setq decknix--agent-session-jq-filter-file
+                  (make-temp-file "auggie-session-" nil ".jq"))
+            (with-temp-file decknix--agent-session-jq-filter-file
+              (insert "{sessionId, created, modified,"
+                      " exchangeCount: (.chatHistory | length),"
+                      " firstUserMessage:"
+                      " (.chatHistory[0].exchange.request_message[:200]"
+                      " // \"\")}\n")))
+          decknix--agent-session-jq-filter-file)
+
+        (defun decknix--agent-session-jq-cmd ()
+          "Shell command to extract session metadata directly from files.
+Sorts by filesystem mtime (newest first), takes top 30, extracts
+only the fields needed for the picker via parallel jq."
+          (let ((jqf (decknix--agent-session-ensure-jq-filter)))
+            (concat
+             "ls -t " (shell-quote-argument decknix--agent-sessions-dir)
+             "/*.json 2>/dev/null"
+             " | head -30"
+             " | xargs -P4 -I{} jq -Mc -f "
+             (shell-quote-argument jqf)
+             " {} 2>/dev/null"
+             " | jq -Msc 'sort_by(.modified) | reverse'")))
+
+        (defun decknix--agent-session-parse (raw)
+          "Parse RAW json string into session alists.
+Handles process output that may contain trailing text after the JSON array."
+          (condition-case nil
               (let* ((json-array-type 'list)
                      (json-object-type 'alist)
                      (json-key-type 'symbol)
-                     (raw (shell-command-to-string
-                           "auggie session list --json -n 30 2>/dev/null"))
-                     (trimmed (string-trim raw)))
-                (if (and (not (string-empty-p trimmed))
-                         (string-prefix-p "[" trimmed))
-                    (json-read-from-string trimmed)
-                  nil))
-            (error
-             (message "Failed to fetch auggie sessions: %s" (error-message-string err))
-             nil)))
+                     (trimmed (string-trim raw))
+                     ;; Process buffers append 'Process ... finished' — find last ']'
+                     (end (when (string-prefix-p "[" trimmed)
+                            (1+ (or (cl-position ?\] trimmed :from-end t) -1))))
+                     (json-str (when (and end (> end 1))
+                                 (substring trimmed 0 end))))
+                (when json-str
+                  (json-read-from-string json-str)))
+            (error nil)))
+
+        (defun decknix--agent-session-refresh-sync ()
+          "Synchronous session list fetch (used on first call only)."
+          (let ((result (decknix--agent-session-parse
+                         (shell-command-to-string
+                          (decknix--agent-session-jq-cmd)))))
+            (setq decknix--agent-session-cache result
+                  decknix--agent-session-cache-time (float-time))))
+
+        (defun decknix--agent-session-refresh-async ()
+          "Refresh session cache asynchronously without blocking."
+          (when (or (null decknix--agent-session-refresh-proc)
+                    (not (process-live-p decknix--agent-session-refresh-proc)))
+            (let ((buf (generate-new-buffer " *auggie-session-list*")))
+              (setq decknix--agent-session-refresh-proc
+                    (start-process-shell-command
+                     "auggie-session-list" buf
+                     (decknix--agent-session-jq-cmd)))
+              (set-process-sentinel
+               decknix--agent-session-refresh-proc
+               (eval
+                `(lambda (proc _event)
+                   (when (eq (process-status proc) 'exit)
+                     (let ((pbuf (process-buffer proc)))
+                       (when (buffer-live-p pbuf)
+                         (let ((result (decknix--agent-session-parse
+                                        (with-current-buffer pbuf
+                                          (buffer-string)))))
+                           (when result
+                             (setq decknix--agent-session-cache result
+                                   decknix--agent-session-cache-time
+                                   (float-time))))
+                         (kill-buffer pbuf)))))
+                t)))))
+
+        ;; Pre-fetch session list shortly after daemon starts
+        (run-at-time 3 nil #'decknix--agent-session-refresh-async)
 
         (defun decknix--agent-session-preview (session)
           "Format a one-line preview for a saved SESSION, including tags."
@@ -862,6 +988,8 @@ Returns the new buffer, or nil if not found."
 
         (defun decknix--agent-session-resume (session-id history-count)
           "Resume SESSION-ID and pre-populate buffer with HISTORY-COUNT exchanges."
+          ;; Invalidate cache so next picker invocation fetches fresh data
+          (setq decknix--agent-session-cache-time 0)
           ;; Snapshot existing buffers so we can detect the new one
           (let ((before-buffers (buffer-list))
                 (agent-shell-auggie-acp-command
@@ -988,6 +1116,8 @@ workspace = project root, name = auto-generated, no tags."
                           (list "--workspace-root" workspace))))
             (agent-shell-start
              :config (agent-shell-auggie-make-agent-config))
+            ;; Invalidate session cache so next picker is fresh
+            (setq decknix--agent-session-cache-time 0)
             ;; Post-creation: rename buffer, apply tags (using timers)
             (decknix--agent-session-new-post-create
              before-buffers name tags)
