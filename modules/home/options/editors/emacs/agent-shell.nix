@@ -416,6 +416,8 @@ Press q to dismiss."
             (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
             "  C-c e       Compose buffer (multi-line editor)\n"
             "  C-c E       Interrupt agent + open compose\n"
+            "              In compose: C-c C-s toggle sticky/transient\n"
+            "              In compose: C-c k k interrupt, C-c k C-c interrupt+submit\n"
             "  C-c r       Rename buffer\n"
             "  RET         Send prompt (at end of input)\n"
             "  S-RET       Insert newline in prompt\n"
@@ -504,6 +506,9 @@ Press q to dismiss."
             "  Type a prompt at the bottom and press RET to send.\n"
             "  Use S-RET to insert a newline without sending.\n"
             "  For longer prompts, press C-c e to open the compose buffer.\n"
+            "  In compose: C-c C-c submit, C-c C-k clear/close.\n"
+            "  In compose: C-c C-s toggles sticky (stays open) / transient.\n"
+            "  In compose: C-c k k interrupts the agent, C-c k C-c interrupts & submits.\n"
             "  Press C-c C-c to interrupt a running response.\n"
             "  Press C-c E to interrupt and open the compose buffer.\n"
             "\n"
@@ -1269,38 +1274,66 @@ Otherwise copy the shortened 8-character hash."
                    (if decknix--agent-show-full-session-id "full" "short (8 chars)")))
 
         ;; == Compose buffer: magit-style prompt editing ==
-        ;; Opens a temporary buffer for composing multi-line prompts.
-        ;; C-c C-c submits, C-c C-k cancels. Like magit commit messages.
+        ;; Opens a buffer for composing multi-line prompts.
+        ;; Supports sticky (persistent) and transient modes.
+        ;; C-c C-c submits, C-c C-k cancels/clears, C-c C-s toggles sticky.
+        ;; C-c k prefix: k = interrupt, C-c = interrupt + submit.
 
         (defvar-local decknix--compose-target-buffer nil
           "The agent-shell buffer to submit the composed prompt to.")
+
+        (defcustom decknix-agent-compose-sticky nil
+          "When non-nil, the compose editor stays open after submit/cancel.
+Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
+          :type 'boolean
+          :group 'decknix)
+
+        (defvar-local decknix--compose-sticky nil
+          "Buffer-local sticky state for this compose buffer.")
+
+        (defvar decknix-agent-compose-interrupt-map
+          (let ((map (make-sparse-keymap)))
+            (define-key map (kbd "k") #'decknix-agent-compose-interrupt-agent)
+            (define-key map (kbd "C-c") #'decknix-agent-compose-interrupt-and-submit)
+            map)
+          "Sub-keymap under C-c k in compose mode.
+\\`k' interrupts the agent, \\`C-c' interrupts and submits.")
 
         (defvar decknix-agent-compose-mode-map
           (let ((map (make-sparse-keymap)))
             (define-key map (kbd "C-c C-c") #'decknix-agent-compose-submit)
             (define-key map (kbd "C-c C-k") #'decknix-agent-compose-cancel)
-            (define-key map (kbd "C-c k C-c") #'decknix-agent-compose-interrupt-and-submit)
+            (define-key map (kbd "C-c C-s") #'decknix-agent-compose-toggle-sticky)
+            (define-key map (kbd "C-c k") decknix-agent-compose-interrupt-map)
             map)
           "Keymap for `decknix-agent-compose-mode'.")
 
         (define-minor-mode decknix-agent-compose-mode
           "Minor mode for composing agent-shell prompts.
 \\<decknix-agent-compose-mode-map>
-\\[decknix-agent-compose-submit] to submit (queued if busy), \
-\\[decknix-agent-compose-interrupt-and-submit] to interrupt & submit, \
-\\[decknix-agent-compose-cancel] to cancel."
-          :lighter " Compose"
+\\[decknix-agent-compose-submit] submit, \
+\\[decknix-agent-compose-cancel] cancel/clear, \
+\\[decknix-agent-compose-toggle-sticky] toggle sticky.
+C-c k k interrupt agent, C-c k C-c interrupt & submit."
+          :lighter (:eval (if decknix--compose-sticky " Compose[sticky]" " Compose"))
           :keymap decknix-agent-compose-mode-map)
+
+        (defun decknix--compose-finish ()
+          "Finish a compose action: clear if sticky, close if transient."
+          (if decknix--compose-sticky
+              (progn
+                (erase-buffer)
+                (set-buffer-modified-p nil))
+            (let ((win (selected-window)))
+              (quit-restore-window win 'kill))))
 
         (defun decknix-agent-compose-submit ()
           "Submit the compose buffer content to the agent-shell.
-If the agent is busy, warns the user and offers to interrupt instead.
-Use \\[decknix-agent-compose-interrupt-and-submit] to interrupt & submit."
+If the agent is busy, warns the user and offers to interrupt first.
+Use C-c k k to pre-emptively interrupt, then C-c C-c to submit cleanly."
           (interactive)
           (let ((input (string-trim (buffer-string)))
-                (target decknix--compose-target-buffer)
-                (compose-buf (current-buffer))
-                (compose-win (selected-window)))
+                (target decknix--compose-target-buffer))
             (if (string-empty-p input)
                 (user-error "Empty prompt — nothing to submit")
               ;; Check if the agent is busy
@@ -1308,7 +1341,7 @@ Use \\[decknix-agent-compose-interrupt-and-submit] to interrupt & submit."
                          (with-current-buffer target
                            (bound-and-true-p shell-maker--busy)))
                 (unless (y-or-n-p
-                         "Agent is busy — interrupt and submit? (C-c k C-c skips this) ")
+                         "Agent is busy — interrupt and submit? (C-c k k to pre-interrupt) ")
                   (user-error "Submit cancelled — agent is still processing"))
                 ;; User said yes — interrupt first
                 (with-current-buffer target
@@ -1316,13 +1349,30 @@ Use \\[decknix-agent-compose-interrupt-and-submit] to interrupt & submit."
                     (let ((agent-shell-confirm-interrupt nil))
                       (agent-shell-interrupt))))
                 (sit-for 0.3))
-              ;; Close the compose window/buffer
-              (quit-restore-window compose-win 'kill)
+              ;; Clear or close the compose buffer
+              (decknix--compose-finish)
               ;; Submit to the agent-shell buffer
               (when (buffer-live-p target)
                 (with-current-buffer target
                   (goto-char (point-max))
                   (shell-maker-submit :input input))))))
+
+        (defun decknix-agent-compose-interrupt-agent ()
+          "Pre-emptively interrupt the agent without submitting.
+After interrupting, you can compose your message and submit with
+\\[decknix-agent-compose-submit] without the busy prompt."
+          (interactive)
+          (let ((target decknix--compose-target-buffer))
+            (if (and (buffer-live-p target)
+                     (with-current-buffer target
+                       (bound-and-true-p shell-maker--busy)))
+                (progn
+                  (with-current-buffer target
+                    (when (fboundp 'agent-shell-interrupt)
+                      (let ((agent-shell-confirm-interrupt nil))
+                        (agent-shell-interrupt))))
+                  (message "Agent interrupted. Compose your message and C-c C-c to submit."))
+              (message "Agent is not busy."))))
 
         (defun decknix-agent-compose-interrupt-and-submit ()
           "Interrupt any in-progress agent response, then submit the compose buffer.
@@ -1330,8 +1380,7 @@ Use this when the agent is processing and you want to interject immediately
 rather than waiting for the current response to complete."
           (interactive)
           (let ((input (string-trim (buffer-string)))
-                (target decknix--compose-target-buffer)
-                (compose-win (selected-window)))
+                (target decknix--compose-target-buffer))
             (if (string-empty-p input)
                 (user-error "Empty prompt — nothing to submit")
               ;; Interrupt the agent first
@@ -1340,8 +1389,8 @@ rather than waiting for the current response to complete."
                   (when (fboundp 'agent-shell-interrupt)
                     (let ((agent-shell-confirm-interrupt nil))
                       (agent-shell-interrupt)))))
-              ;; Close the compose window/buffer
-              (quit-restore-window compose-win 'kill)
+              ;; Clear or close the compose buffer
+              (decknix--compose-finish)
               ;; Submit after a brief delay to let the interrupt settle
               (let ((tgt target)
                     (inp input))
@@ -1356,68 +1405,100 @@ rather than waiting for the current response to complete."
                   t))))))
 
         (defun decknix-agent-compose-cancel ()
-          "Cancel the compose buffer without submitting."
+          "Cancel/clear the compose buffer without submitting.
+Sticky mode: clears the buffer. Transient mode: closes the buffer."
           (interactive)
-          (let ((compose-win (selected-window)))
-            (quit-restore-window compose-win 'kill)
-            (message "Compose cancelled.")))
+          (decknix--compose-finish)
+          (message (if decknix--compose-sticky "Compose cleared." "Compose cancelled.")))
+
+        (defun decknix-agent-compose-toggle-sticky ()
+          "Toggle sticky mode for the compose buffer.
+Sticky: editor stays open after submit/cancel (content is cleared).
+Transient: editor closes after submit/cancel."
+          (interactive)
+          (setq decknix--compose-sticky (not decknix--compose-sticky))
+          (decknix--compose-update-header-line)
+          (force-mode-line-update)
+          (message "Compose: %s" (if decknix--compose-sticky "sticky (stays open)" "transient (closes on action)")))
+
+        (defun decknix--compose-update-header-line ()
+          "Update the header-line to reflect current sticky state."
+          (setq-local header-line-format
+                      (concat
+                       (propertize
+                        (if decknix--compose-sticky " ● Compose [sticky]" " ○ Compose")
+                        'font-lock-face (if decknix--compose-sticky
+                                            'font-lock-constant-face
+                                          'font-lock-comment-face))
+                       (propertize
+                        " → C-c C-c submit, C-c k k interrupt, C-c k C-c interrupt+submit, C-c C-k clear, C-c C-s toggle"
+                        'font-lock-face 'font-lock-comment-face))))
+
+        (defun decknix--compose-find-target ()
+          "Find the agent-shell buffer to target for compose."
+          (cond
+           ;; Already in an agent-shell buffer
+           ((derived-mode-p 'agent-shell-mode)
+            (current-buffer))
+           ;; In a compose buffer — return its target
+           (decknix--compose-target-buffer
+            decknix--compose-target-buffer)
+           ;; Find the most recent agent-shell buffer
+           ((and (fboundp 'agent-shell-buffers)
+                 (agent-shell-buffers))
+            (car (agent-shell-buffers)))
+           (t (user-error
+               "No agent-shell buffer found. Start one with C-c A a"))))
+
+        (defun decknix--compose-get-or-create (target)
+          "Get the existing compose buffer for TARGET, or create a new one.
+If a compose buffer already exists and is visible, just select it."
+          (let* ((compose-name (format "*Compose: %s*" (buffer-name target)))
+                 (existing (get-buffer compose-name)))
+            (if (and existing (buffer-live-p existing))
+                ;; Re-use existing compose buffer
+                (progn
+                  (unless (get-buffer-window existing)
+                    (display-buffer existing
+                                   '((display-buffer-at-bottom)
+                                     (window-height . 10)
+                                     (dedicated . t))))
+                  (select-window (get-buffer-window existing))
+                  existing)
+              ;; Create new compose buffer
+              (let ((compose-buf (generate-new-buffer compose-name)))
+                (display-buffer compose-buf
+                                '((display-buffer-at-bottom)
+                                  (window-height . 10)
+                                  (dedicated . t)))
+                (select-window (get-buffer-window compose-buf))
+                (with-current-buffer compose-buf
+                  (text-mode)
+                  (decknix-agent-compose-mode 1)
+                  (setq-local decknix--compose-target-buffer target)
+                  (setq-local decknix--compose-sticky decknix-agent-compose-sticky)
+                  (decknix--compose-update-header-line)
+                  (set-buffer-modified-p nil))
+                compose-buf))))
 
         (defun decknix-agent-compose ()
-          "Open a compose buffer for writing a multi-line agent prompt.
+          "Open or focus the compose buffer for writing a multi-line agent prompt.
 The buffer opens at the bottom of the frame. Type your prompt
 freely (RET for newlines), then:
-  C-c C-c    submit (queued if agent is busy)
+  C-c C-c    submit (prompts if agent is busy)
+  C-c k k    interrupt agent (pre-emptive)
   C-c k C-c  interrupt agent & submit immediately
-  C-c C-k    cancel"
+  C-c C-k    cancel/clear
+  C-c C-s    toggle sticky (stays open) / transient (closes)"
           (interactive)
-          ;; Find the target agent-shell buffer
-          (let* ((target (cond
-                          ;; Already in an agent-shell buffer
-                          ((derived-mode-p 'agent-shell-mode)
-                           (current-buffer))
-                          ;; Find the most recent agent-shell buffer
-                          ((and (fboundp 'agent-shell-buffers)
-                                (agent-shell-buffers))
-                           (car (agent-shell-buffers)))
-                          (t (user-error
-                              "No agent-shell buffer found. Start one with C-c A a"))))
-                 (compose-buf (generate-new-buffer
-                               (format "*Compose: %s*" (buffer-name target)))))
-            ;; Display at the bottom, sized for comfortable editing
-            (display-buffer compose-buf
-                           '((display-buffer-at-bottom)
-                             (window-height . 10)
-                             (dedicated . t)))
-            (select-window (get-buffer-window compose-buf))
-            (with-current-buffer compose-buf
-              (text-mode)
-              (decknix-agent-compose-mode 1)
-              (setq-local decknix--compose-target-buffer target)
-              (setq-local header-line-format
-                          (substitute-command-keys
-                           " Compose prompt → \\<decknix-agent-compose-mode-map>\
-\\[decknix-agent-compose-submit] submit, \
-\\[decknix-agent-compose-interrupt-and-submit] interrupt & submit, \
-\\[decknix-agent-compose-cancel] cancel"))
-              (set-buffer-modified-p nil))))
+          (let ((target (decknix--compose-find-target)))
+            (decknix--compose-get-or-create target)))
 
         (defun decknix-agent-compose-interrupt ()
           "Interrupt the agent, then open the compose buffer.
-Use this when the agent is mid-response and you want to interject.
-The compose buffer opens with all the usual bindings:
-  C-c C-c    submit
-  C-c k C-c  interrupt & submit (redundant here, agent already interrupted)
-  C-c C-k    cancel"
+Use this when the agent is mid-response and you want to interject."
           (interactive)
-          ;; Find the target agent-shell buffer
-          (let ((target (cond
-                          ((derived-mode-p 'agent-shell-mode)
-                           (current-buffer))
-                          ((and (fboundp 'agent-shell-buffers)
-                                (agent-shell-buffers))
-                           (car (agent-shell-buffers)))
-                          (t (user-error
-                              "No agent-shell buffer found. Start one with C-c A a")))))
+          (let ((target (decknix--compose-find-target)))
             ;; Interrupt if busy
             (when (and (buffer-live-p target)
                        (with-current-buffer target
@@ -1427,8 +1508,8 @@ The compose buffer opens with all the usual bindings:
                   (let ((agent-shell-confirm-interrupt nil))
                     (agent-shell-interrupt))))
               (sit-for 0.3))
-            ;; Open compose as usual
-            (decknix-agent-compose)))
+            ;; Open/focus compose
+            (decknix--compose-get-or-create target)))
 
         (define-key decknix-agent-prefix-map (kbd "e") 'decknix-agent-compose)               ; Compose prompt
         (define-key decknix-agent-prefix-map (kbd "E") 'decknix-agent-compose-interrupt)      ; Interrupt + compose
@@ -2219,62 +2300,6 @@ Preserves pinned items and previously fetched metadata."
       + ''
 
         ;; Disable line numbers in agent-shell buffers
-        ;; == Post-prompt fragment relocation ==
-        ;; agent-shell-ui inserts new fragments at point-max, which is
-        ;; after the prompt. This idle timer detects fragments that
-        ;; appeared after the prompt and moves them before it, keeping
-        ;; the prompt as the last thing in the buffer.
-
-        (defvar-local decknix--agent-relocate-timer nil
-          "Idle timer for relocating post-prompt fragments.")
-
-        (defun decknix--agent-relocate-post-prompt-fragments ()
-          "Move any agent-shell UI fragments from after the prompt to before it.
-Only acts when the agent is idle (not processing a response)."
-          (when (and (derived-mode-p 'agent-shell-mode)
-                     (not (bound-and-true-p shell-maker--busy))
-                     (get-buffer-process (current-buffer)))
-            (let* ((proc (get-buffer-process (current-buffer)))
-                   (pmark (marker-position (process-mark proc))))
-              (when (and pmark (< pmark (point-max)))
-                ;; Check if content after prompt has agent-shell-ui-section property
-                (let ((post-start nil)
-                      (post-end nil)
-                      (pos pmark))
-                  ;; Scan for agent-shell UI content after the prompt
-                  (while (< pos (point-max))
-                    (when (get-text-property pos 'agent-shell-ui-section)
-                      (unless post-start
-                        ;; Include any whitespace/newlines before the fragment
-                        (setq post-start (max pmark
-                                              (or (previous-single-property-change
-                                                   pos 'agent-shell-ui-section nil pmark)
-                                                  pmark))))
-                      (setq post-end (or (next-single-property-change
-                                          pos 'agent-shell-ui-section nil (point-max))
-                                         (point-max))))
-                    (setq pos (1+ pos)))
-                  ;; If we found fragments after the prompt, relocate them
-                  (when (and post-start post-end (> post-end post-start))
-                    (let ((inhibit-read-only t)
-                          (fragment-text (buffer-substring post-start post-end)))
-                      ;; Find the prompt line start
-                      (save-excursion
-                        (goto-char pmark)
-                        (beginning-of-line)
-                        (let ((prompt-line-start (point)))
-                          ;; Delete from after prompt
-                          (delete-region post-start post-end)
-                          ;; Insert before prompt line
-                          (goto-char prompt-line-start)
-                          (insert fragment-text "\n")
-                          ;; Update process mark to account for the moved text
-                          (set-marker (process-mark proc)
-                                     (+ pmark (length fragment-text) 1))))
-                      ;; Move point to after the prompt if user hasn't moved it
-                      (when (>= (point) post-start)
-                        (goto-char (marker-position (process-mark proc)))))))))))
-
         ;; Re-enable TAB for yasnippet expansion (no completion conflict here)
         ;; In-buffer shortcuts: C-c x (no A prefix needed inside agent-shell)
         (add-hook 'agent-shell-mode-hook
@@ -2284,23 +2309,6 @@ Only acts when the agent is idle (not processing a response)."
                     (setq-local comint-scroll-to-bottom-on-input t)
                     (setq-local comint-scroll-to-bottom-on-output t)
                     (setq-local comint-scroll-show-maximum-output t)
-                    ;; Set up idle timer to relocate post-prompt fragments
-                    (setq decknix--agent-relocate-timer
-                          (run-with-idle-timer
-                           0.5 t
-                           (eval
-                            `(let ((buf ,(current-buffer)))
-                               (lambda ()
-                                 (when (buffer-live-p buf)
-                                   (with-current-buffer buf
-                                     (decknix--agent-relocate-post-prompt-fragments)))))
-                            t)))
-                    ;; Clean up the timer when buffer is killed
-                    (add-hook 'kill-buffer-hook
-                              (lambda ()
-                                (when decknix--agent-relocate-timer
-                                  (cancel-timer decknix--agent-relocate-timer)))
-                              nil t)
                     (local-set-key (kbd "TAB") 'yas-expand)
                     (local-set-key (kbd "<tab>") 'yas-expand)
                     ;; Buffer-local bindings — no C-c A prefix needed inside agent-shell.
