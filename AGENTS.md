@@ -1,0 +1,85 @@
+# AI Agent Guidelines — decknix
+
+> Universal guidelines for AI agents working in this repository.
+> Applies to Augment, Cursor, Copilot, Claude Code, and any other AI tooling.
+
+## Project Overview
+
+**decknix** is a Nix-based macOS configuration framework combining nix-darwin,
+home-manager, and Nix Flakes. It provides opinionated defaults for editors,
+shell, git, AI tooling, and system configuration with a 3-layer override model
+(framework → org → personal).
+
+### Key Paths
+
+| Path | Purpose |
+|------|---------|
+| `modules/darwin/` | macOS system-level config (launchd, system packages) |
+| `modules/home/options/` | home-manager modules (editors, shell, git, AI) |
+| `modules/home/options/editors/emacs/` | Emacs configuration (13+ modules) |
+| `cli/` | Rust CLI (`decknix switch`, `decknix update`, etc.) |
+| `docs/` | mdBook documentation |
+| `templates/` | Flake templates for `nix flake init` |
+
+### Build & Test
+
+```bash
+# Build the full system (from a decknix-config repo)
+cd ~/.config/decknix
+decknix switch              # Apply configuration
+decknix switch --dev        # Test local framework changes (uses ~/tools/decknix)
+decknix switch --dry-run    # Build without activating
+
+# Build just the system derivation (for CI or validation)
+nix build .#darwinConfigurations.default.system --impure \
+  --override-input decknix path:$HOME/tools/decknix
+```
+
+## Rules for AI Agents
+
+### 1. Documentation Must Stay Current
+
+**Every code change must include corresponding documentation updates.** This is
+non-negotiable. Specifically:
+
+- **README.md files**: Update module READMEs when adding, changing, or removing
+  features, keybindings, options, or behaviour.
+- **AGENTS.md files**: Update when architecture, conventions, or workflows change.
+- **Inline comments**: Nix modules and Elisp code should have clear comments
+  explaining *why*, not just *what*.
+- **Issue references**: Link to GitHub issues when implementing tracked features.
+- **Planned features**: Mark unimplemented but tracked features as **(Planned)**
+  in documentation rather than omitting them.
+
+### 2. Nix Conventions
+
+- All framework defaults use `lib.mkDefault` so user overrides always win.
+- Module options follow the pattern: `programs.<tool>.decknix.<module>.<option>`.
+- Use `mkEnableOption` for feature flags with `default = true` for batteries-included.
+- Package sourcing priority: stable nixpkgs → unstable nixpkgs → custom derivations.
+- Always use `with lib;` at the top of modules.
+
+### 3. Commit Conventions
+
+- Use conventional commits: `feat(scope):`, `fix(scope):`, `perf(scope):`,
+  `docs(scope):`, `refactor(scope):`.
+- Scope is the module or area: `emacs`, `cli`, `shell`, `darwin`, `agent-shell`.
+- Reference issues: `(#73)`, `(#74)`.
+- Do NOT commit or push without explicit user permission.
+
+### 4. Testing Changes
+
+- Always build before declaring a change complete:
+  ```bash
+  cd ~/.config/decknix && nix build .#darwinConfigurations.default.system \
+    --impure --override-input decknix path:$HOME/tools/decknix
+  ```
+- For Elisp changes, verify parenthesis balance — the byte compiler catches
+  this during build, but check early to avoid wasted build cycles.
+- Test activation with `decknix switch --dev` only when the user requests it.
+
+### 5. Emacs-Specific Rules
+
+See `modules/home/options/editors/emacs/AGENTS.md` for detailed Emacs conventions
+including the dynamic binding pattern, package sourcing, and agent-shell architecture.
+

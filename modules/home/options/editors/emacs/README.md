@@ -8,9 +8,11 @@ batteries-included Emacs experience out of the box.
 | Module | Description | Enabled by Default |
 |--------|-------------|-------------------|
 | `default.nix` | Core settings (theme, scrolling, backups) | ✓ |
+| `agent-shell.nix` | AI agent integration (sessions, compose, context) | ✓ |
 | `welcome.nix` | Startup screen with keybinding cheat sheet | ✓ |
 | `magit.nix` | Git integration via Magit, Forge, code-review | ✓ |
 | `completion.nix` | Modern completion (Vertico, Consult, Corfu) | ✓ |
+| `project.nix` | Project management (project.el enhancements) | ✓ |
 | `treemacs.nix` | Project file tree with git integration | ✓ |
 | `undo.nix` | Improved undo (undo-fu, vundo) | ✓ |
 | `editing.nix` | Editing enhancements (smartparens, crux) | ✓ |
@@ -31,6 +33,67 @@ batteries-included Emacs experience out of the box.
 - Better scrolling, spaces instead of tabs
 - Auto-refresh buffers, organized backups
 - Winner mode, improved performance settings
+
+### Agent Shell (`agent-shell.nix`)
+
+AI agent integration with the [Augment](https://www.augmentcode.com/) auggie CLI.
+This is the largest Emacs module (~2600 lines) and provides a complete agent
+orchestration environment.
+
+#### Session Management
+
+- **Session picker** (`C-c A s`): Fast session browser reading directly from
+  `~/.augment/sessions/` via parallel `jq`. Cached with 2-minute TTL,
+  pre-fetched on daemon start for instant display.
+- **New session** (`C-c A n`): Guided creation flow — prompts for workspace
+  directory (defaults to project root), session name (defaults to `dir/branch`),
+  and tags. Passes `--workspace-root` to auggie. Use `C-u C-c A n` to skip prompts.
+- **Session resume**: Restores conversation history into a comint buffer.
+- **Session tagging** (`C-c A t`): Add/remove tags for organisation and filtering.
+
+#### Compose Editor
+
+Decoupled input buffer for drafting prompts before submitting:
+
+- **Sticky mode**: Persistent compose buffer that clears after submit.
+- **Transient mode**: Magit-style popup that closes after submit.
+- Toggle with `C-c C-s` in the compose buffer.
+
+Header-line shows available keys with the common `C-c` prefix factored out:
+
+```
+● Compose [sticky] → C-c: C-c submit | k k interrupt  k C-c interrupt+submit | C-k clear | C-s toggle
+```
+
+Key bindings (in compose buffer):
+- `C-c C-c` → Submit prompt
+- `C-c k k` → Interrupt agent
+- `C-c k C-c` → Interrupt and submit new prompt
+- `C-c C-k` → Clear compose buffer
+- `C-c C-s` → Toggle sticky/transient mode
+
+#### Context Panel
+
+Tracks project context alongside the agent conversation:
+
+- **Issue/PR tracking**: Auto-detects `#123` and `org/repo#123` references.
+- **CI status**: Fetches latest check run status from GitHub.
+- **Review threads**: Shows unresolved review thread count for open PRs.
+- **Collapsible summary**: Compact header-line with expandable detail view.
+
+Key bindings (in agent-shell buffers):
+- `C-c i p` → Pin an issue/PR to context
+- `C-c i g` → Open tracked item in browser
+- `C-c i c` → Refresh CI status
+- `C-c i r` → Refresh review status
+- `C-c i d` → Show full context detail panel
+
+#### Planned Features
+
+- **Worktree-aware sessions** — git worktree per agent session ([#69](https://github.com/ldeck/decknix/issues/69)) (Planned)
+- **Session board** — magit-style multi-session dashboard ([#70](https://github.com/ldeck/decknix/issues/70)) (Planned)
+- **Session templates** — engineering, review, support workflows ([#71](https://github.com/ldeck/decknix/issues/71)) (Planned)
+- **Automation & notifications** — push notifications, auto-created sessions ([#72](https://github.com/ldeck/decknix/issues/72)) (Planned)
 
 ### Welcome Screen (`welcome.nix`)
 
@@ -300,9 +363,22 @@ All modules are enabled by default. Disable individually:
 
 Configured in `modules/darwin/emacs.nix`, enabled by default on macOS.
 
+The daemon runs as a launchd user agent (`org.nixos.emacs-server`) using
+`bin/emacs --fg-daemon`. It uses the `bin/emacs` binary (not `Emacs.app`) so
+macOS does not treat it as a GUI application — this prevents the "application
+quit unexpectedly" dialog when the daemon restarts during `decknix switch`.
+`ProcessType = "Background"` is set in the plist for proper background service
+classification.
+
+GUI frames are created on demand via `emacsclient -c` and appear in the Dock
+while open. Closing all frames does not kill the daemon.
+
 ```bash
-ec filename           # Open file in terminal
-emacsclient -c        # Create new GUI frame
+ec filename           # Open file (auto-starts daemon if needed)
+ec -c -n              # Create new GUI frame
+ec -c -n file.txt     # Open file in new GUI frame
+ec -t file.txt        # Open in terminal
+emacsclient -c        # Create new GUI frame (without ec wrapper)
 ```
 
 ## Customization
