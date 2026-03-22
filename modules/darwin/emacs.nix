@@ -11,11 +11,13 @@ let
     then config.home-manager.users.${config.users.primaryUser or "ldeck"}.programs.emacs.finalPackage or cfg.package
     else cfg.package;
 
-  # Get the Emacs.app path from the package (for GUI frames)
-  emacsApp = "${emacsPackage}/Applications/Emacs.app";
-
-  # The Emacs binary to run in daemon mode
-  emacsBinary = "${emacsApp}/Contents/MacOS/Emacs";
+  # The Emacs binary to run in daemon mode.
+  # Uses bin/emacs (not Emacs.app/Contents/MacOS/Emacs) so macOS does not
+  # register it as a GUI application. This prevents the "application quit
+  # unexpectedly" dialog when the daemon is restarted during `decknix switch`.
+  # Standard GNU Emacs has NS/Cocoa support compiled into the binary itself,
+  # so emacsclient -c still creates GUI frames regardless of launch path.
+  emacsBinary = "${emacsPackage}/bin/emacs";
 in
 {
   options.services.emacs.decknix = {
@@ -48,6 +50,9 @@ in
     # - `launchctl kickstart -k` can reliably kill and restart it
     # - `decknix switch` restart detection works correctly
     #
+    # ProcessType = "Background" tells macOS this is a background service,
+    # suppressing the "application quit unexpectedly" dialog on restart.
+    #
     # The daemon runs as a hidden background process (no Dock icon, no Cmd+Tab).
     # GUI frames are created via emacsclient -c and appear in the Dock while open.
     # Closing all frames does not kill the daemon.
@@ -57,6 +62,7 @@ in
       serviceConfig = {
         RunAtLoad = true;
         KeepAlive = false;
+        ProcessType = "Background";
       };
     };
 

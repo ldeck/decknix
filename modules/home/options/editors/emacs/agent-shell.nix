@@ -637,7 +637,7 @@ Press q to dismiss."
         ;; Only actions that make sense from OUTSIDE an agent-shell buffer.
         ;; Buffer-local bindings (C-c ...) handle in-buffer actions — no duplicates.
         (define-key decknix-agent-prefix-map (kbd "a") 'agent-shell)                      ; Start/switch to agent
-        (define-key decknix-agent-prefix-map (kbd "n") 'agent-shell-new)                  ; Force new session
+        (define-key decknix-agent-prefix-map (kbd "n") 'decknix-agent-session-new)          ; New session (guided)
         (define-key decknix-agent-prefix-map (kbd "?") 'decknix-agent-help-map)           ; Help sub-prefix
         (define-key decknix-agent-help-map (kbd "k") 'decknix-agent-help-keys)            ; Keybindings
         (define-key decknix-agent-help-map (kbd "t") 'decknix-agent-help-tutorial)        ; Tutorial
@@ -926,8 +926,131 @@ when resuming a saved session (default: `decknix-agent-session-history-count')."
                (decknix--agent-session-resume
                 (alist-get 'sessionId (cdr chosen))
                 history-count))
-              ('new (agent-shell-start
-                     :config (agent-shell-auggie-make-agent-config))))))
+              ('new (decknix-agent-session-new)))))
+
+        (defun decknix--agent-detect-workspace ()
+          "Detect the best workspace directory for a new session.
+Uses project root if available, otherwise `default-directory'."
+          (or (when (fboundp 'project-root)
+                (when-let ((proj (project-current)))
+                  (project-root proj)))
+              default-directory))
+
+        (defun decknix--agent-detect-branch (dir)
+          "Detect the current git branch in DIR, or nil."
+          (let ((default-directory dir))
+            (let ((branch (string-trim
+                           (shell-command-to-string
+                            "git rev-parse --abbrev-ref HEAD 2>/dev/null"))))
+              (unless (or (string-empty-p branch)
+                          (string= branch "HEAD"))
+                branch))))
+
+        (defun decknix--agent-session-tags-for (session-id tags)
+          "Apply TAGS (list of strings) to SESSION-ID in the tag store."
+          (when (and session-id tags)
+            (let ((store (decknix--agent-tags-read))
+                  (entry (make-hash-table :test 'equal)))
+              (puthash "tags" tags entry)
+              (puthash session-id entry store)
+              (decknix--agent-tags-write store))))
+
+        (defun decknix-agent-session-new (&optional quick)
+          "Start a new agent session with guided setup.
+Prompts for workspace directory, session name, and initial tags.
+
+With prefix argument QUICK, skip prompts and use defaults:
+workspace = project root, name = auto-generated, no tags."
+          (interactive "P")
+          (let* ((default-ws (decknix--agent-detect-workspace))
+                 (workspace (if quick default-ws
+                              (read-directory-name "Workspace: " default-ws nil t)))
+                 (workspace (expand-file-name workspace))
+                 (dir-name (file-name-nondirectory
+                            (directory-file-name workspace)))
+                 (branch (decknix--agent-detect-branch workspace))
+                 (default-name (if branch
+                                   (format "%s/%s" dir-name branch)
+                                 dir-name))
+                 (name (if quick default-name
+                         (read-string (format "Session name [%s]: " default-name)
+                                      nil nil default-name)))
+                 (tags (unless quick
+                         (let ((input (completing-read-multiple
+                                       "Tags (comma-separated): "
+                                       (decknix--agent-tags-all)
+                                       nil nil)))
+                           (mapcar #'string-trim
+                                   (seq-remove #'string-empty-p input)))))
+                 (before-buffers (buffer-list))
+                 (agent-shell-auggie-acp-command
+                  (append agent-shell-auggie-acp-command
+                          (list "--workspace-root" workspace))))
+            (agent-shell-start
+             :config (agent-shell-auggie-make-agent-config))
+            ;; Post-creation: rename buffer, apply tags (using timers)
+            (decknix--agent-session-new-post-create
+             before-buffers name tags)
+            (message "Starting agent session \"%s\" in %s…" name workspace)))
+
+        (defvar decknix--session-new-pending nil
+          "Pending post-creation data: (BEFORE-BUFFERS NAME TAGS).")
+
+        (defun decknix--agent-session-new-post-create (before-buffers name tags)
+          "Post-creation setup: rename buffer to NAME, apply TAGS.
+BEFORE-BUFFERS is the buffer snapshot taken before agent-shell-start."
+          ;; Store pending data in a global so timers can access it
+          ;; without nested quasiquotes (default.el uses dynamic binding).
+          (setq decknix--session-new-pending (list before-buffers name tags))
+          (run-at-time 1.5 nil #'decknix--agent-session-new-finish))
+
+        (defun decknix--agent-session-new-finish ()
+          "Timer callback: rename new buffer and schedule tag application."
+          (when decknix--session-new-pending
+            (let* ((data decknix--session-new-pending)
+                   (before-buffers (nth 0 data))
+                   (name (nth 1 data))
+                   (tags (nth 2 data))
+                   (shell-buf (decknix--agent-find-new-shell-buffer before-buffers)))
+              (setq decknix--session-new-pending nil)
+              (when shell-buf
+                (with-current-buffer shell-buf
+                  (rename-buffer
+                   (generate-new-buffer-name
+                    (format "*Auggie: %s*" name))))
+                ;; Schedule tag application (session ID may not be available yet)
+                (when tags
+                  (decknix--agent-session-new-schedule-tags shell-buf tags))))))
+
+        (defvar decknix--session-new-tag-pending nil
+          "Pending tag data: (BUF TAGS ATTEMPTS-LEFT).")
+
+        (defun decknix--agent-session-new-schedule-tags (buf tags)
+          "Schedule applying TAGS to the session in BUF once its ID is known."
+          (setq decknix--session-new-tag-pending (list buf tags 5))
+          (run-at-time 2.0 nil #'decknix--agent-session-new-try-tags))
+
+        (defun decknix--agent-session-new-try-tags ()
+          "Try to apply tags to a pending session. Retries if ID not yet available."
+          (when decknix--session-new-tag-pending
+            (let ((buf (nth 0 decknix--session-new-tag-pending))
+                  (tags (nth 1 decknix--session-new-tag-pending))
+                  (attempts-left (nth 2 decknix--session-new-tag-pending)))
+              (cond
+               ((not (buffer-live-p buf))
+                (setq decknix--session-new-tag-pending nil))
+               ((with-current-buffer buf decknix--agent-auggie-session-id)
+                (decknix--agent-session-tags-for
+                 (with-current-buffer buf decknix--agent-auggie-session-id)
+                 tags)
+                (setq decknix--session-new-tag-pending nil)
+                (message "Tags applied: [%s]" (string-join tags ", ")))
+               ((<= attempts-left 0)
+                (setq decknix--session-new-tag-pending nil)
+                (message "Could not apply tags: session ID not available"))
+               (t
+                (setf (nth 2 decknix--session-new-tag-pending) (1- attempts-left))
+                (run-at-time 2.0 nil #'decknix--agent-session-new-try-tags))))))
 
         (defun decknix-agent-session-quit ()
           "Cleanly quit the current agent-shell session.
@@ -1308,6 +1431,17 @@ Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
             map)
           "Keymap for `decknix-agent-compose-mode'.")
 
+        ;; which-key labels for compose mode keybindings
+        (with-eval-after-load 'which-key
+          (which-key-add-keymap-based-replacements decknix-agent-compose-mode-map
+            "C-c C-c" "submit"
+            "C-c C-k" "clear/cancel"
+            "C-c C-s" "toggle sticky"
+            "C-c k"   "interrupt…")
+          (which-key-add-keymap-based-replacements decknix-agent-compose-interrupt-map
+            "k"   "interrupt agent"
+            "C-c" "interrupt+submit"))
+
         (define-minor-mode decknix-agent-compose-mode
           "Minor mode for composing agent-shell prompts.
 \\<decknix-agent-compose-mode-map>
@@ -1424,15 +1558,28 @@ Transient: editor closes after submit/cancel."
         (defun decknix--compose-update-header-line ()
           "Update the header-line to reflect current sticky state."
           (setq-local header-line-format
-                      (concat
+                      (list
                        (propertize
                         (if decknix--compose-sticky " ● Compose [sticky]" " ○ Compose")
                         'font-lock-face (if decknix--compose-sticky
                                             'font-lock-constant-face
                                           'font-lock-comment-face))
-                       (propertize
-                        " → C-c C-c submit, C-c k k interrupt, C-c k C-c interrupt+submit, C-c C-k clear, C-c C-s toggle"
-                        'font-lock-face 'font-lock-comment-face))))
+                       (propertize " → " 'font-lock-face 'font-lock-comment-face)
+                       (propertize "C-c" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize ": " 'font-lock-face 'font-lock-comment-face)
+                       (propertize "C-c" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize " submit" 'font-lock-face 'font-lock-comment-face)
+                       (propertize " | " 'font-lock-face 'font-lock-comment-delimiter-face)
+                       (propertize "k k" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize " interrupt  " 'font-lock-face 'font-lock-comment-face)
+                       (propertize "k C-c" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize " interrupt+submit" 'font-lock-face 'font-lock-comment-face)
+                       (propertize " | " 'font-lock-face 'font-lock-comment-delimiter-face)
+                       (propertize "C-k" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize " clear" 'font-lock-face 'font-lock-comment-face)
+                       (propertize " | " 'font-lock-face 'font-lock-comment-delimiter-face)
+                       (propertize "C-s" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize " toggle" 'font-lock-face 'font-lock-comment-face))))
 
         (defun decknix--compose-find-target ()
           "Find the agent-shell buffer to target for compose."
