@@ -1161,7 +1161,10 @@ BEFORE-BUFFERS is the buffer snapshot taken before agent-shell-start."
           (run-at-time 2.0 nil #'decknix--agent-session-new-try-tags))
 
         (defun decknix--agent-session-new-try-tags ()
-          "Try to apply tags to a pending session. Retries if ID not yet available."
+          "Try to apply tags to a pending session. Retries if ID not yet available.
+For new sessions, the session ID is extracted from the ACP state
+\(agent-shell--state → :session :id\) since `decknix--agent-auggie-session-id'
+is only set during session resume."
           (when decknix--session-new-tag-pending
             (let ((buf (nth 0 decknix--session-new-tag-pending))
                   (tags (nth 1 decknix--session-new-tag-pending))
@@ -1169,12 +1172,23 @@ BEFORE-BUFFERS is the buffer snapshot taken before agent-shell-start."
               (cond
                ((not (buffer-live-p buf))
                 (setq decknix--session-new-tag-pending nil))
-               ((with-current-buffer buf decknix--agent-auggie-session-id)
-                (decknix--agent-session-tags-for
-                 (with-current-buffer buf decknix--agent-auggie-session-id)
-                 tags)
-                (setq decknix--session-new-tag-pending nil)
-                (message "Tags applied: [%s]" (string-join tags ", ")))
+               ;; Try buffer-local var first, then fall back to ACP state.
+               ;; Guard with condition-case: shell-maker--config may be nil
+               ;; if the timer fires before agent-shell fully initialises.
+               ((let ((sid (with-current-buffer buf
+                             (or decknix--agent-auggie-session-id
+                                 (condition-case nil
+                                     (map-nested-elt (agent-shell--state)
+                                                     '(:session :id))
+                                   (error nil))))))
+                  (when (and sid (not (string-empty-p sid)))
+                    ;; Persist for future use (tag mgmt, copy-id, etc.)
+                    (with-current-buffer buf
+                      (setq-local decknix--agent-auggie-session-id sid))
+                    (decknix--agent-session-tags-for sid tags)
+                    (setq decknix--session-new-tag-pending nil)
+                    (message "Tags applied: [%s]" (string-join tags ", "))
+                    t)))
                ((<= attempts-left 0)
                 (setq decknix--session-new-tag-pending nil)
                 (message "Could not apply tags: session ID not available"))
