@@ -1711,8 +1711,9 @@ Transient: editor closes after submit/cancel."
 
         (defun decknix--compose-update-header-line ()
           "Update the header-line to reflect current sticky state.
-Shows full key sequences grouped by purpose:
-  submit/interrupt │ clear/close │ toggle sticky."
+Compact header — shows C-c as the action prefix and hints that
+which-key will reveal bindings.  Full sequences shown via which-key
+after pressing C-c."
           (setq-local header-line-format
                       (list
                        (propertize
@@ -1721,25 +1722,9 @@ Shows full key sequences grouped by purpose:
                                             'font-lock-constant-face
                                           'font-lock-comment-face))
                        (propertize "  " 'font-lock-face 'font-lock-comment-face)
-                       ;; Submit / interrupt group
-                       (propertize "C-c C-c" 'font-lock-face 'font-lock-keyword-face)
-                       (propertize " submit  " 'font-lock-face 'font-lock-comment-face)
-                       (propertize "C-c k k" 'font-lock-face 'font-lock-keyword-face)
-                       (propertize " interrupt  " 'font-lock-face 'font-lock-comment-face)
-                       (propertize "C-c k C-c" 'font-lock-face 'font-lock-keyword-face)
-                       (propertize " interrupt+submit" 'font-lock-face 'font-lock-comment-face)
-                       ;; Separator
-                       (propertize " │ " 'font-lock-face 'font-lock-comment-delimiter-face)
-                       ;; Clear / close group
-                       (propertize "C-c C-k" 'font-lock-face 'font-lock-keyword-face)
-                       (propertize " clear  " 'font-lock-face 'font-lock-comment-face)
-                       (propertize "C-c C-q" 'font-lock-face 'font-lock-keyword-face)
-                       (propertize " close" 'font-lock-face 'font-lock-comment-face)
-                       ;; Separator
-                       (propertize " │ " 'font-lock-face 'font-lock-comment-delimiter-face)
-                       ;; Toggle
-                       (propertize "C-c C-s" 'font-lock-face 'font-lock-keyword-face)
-                       (propertize " toggle sticky" 'font-lock-face 'font-lock-comment-face))))
+                       (propertize "C-c" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize " for actions (submit, interrupt, close, toggle sticky)"
+                                   'font-lock-face 'font-lock-comment-face))))
 
         (defun decknix--compose-find-target ()
           "Find the agent-shell buffer to target for compose."
