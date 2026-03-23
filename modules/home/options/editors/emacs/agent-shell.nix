@@ -1570,6 +1570,7 @@ Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
           (let ((map (make-sparse-keymap)))
             (define-key map (kbd "C-c C-c") #'decknix-agent-compose-submit)
             (define-key map (kbd "C-c C-k") #'decknix-agent-compose-cancel)
+            (define-key map (kbd "C-c C-q") #'decknix-agent-compose-close)
             (define-key map (kbd "C-c C-s") #'decknix-agent-compose-toggle-sticky)
             (define-key map (kbd "C-c k") decknix-agent-compose-interrupt-map)
             map)
@@ -1580,6 +1581,7 @@ Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
           (which-key-add-keymap-based-replacements decknix-agent-compose-mode-map
             "C-c C-c" "submit"
             "C-c C-k" "clear/cancel"
+            "C-c C-q" "close"
             "C-c C-s" "toggle sticky"
             "C-c k"   "interrupt…")
           (which-key-add-keymap-based-replacements decknix-agent-compose-interrupt-map
@@ -1591,6 +1593,7 @@ Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
 \\<decknix-agent-compose-mode-map>
 \\[decknix-agent-compose-submit] submit, \
 \\[decknix-agent-compose-cancel] cancel/clear, \
+\\[decknix-agent-compose-close] close, \
 \\[decknix-agent-compose-toggle-sticky] toggle sticky.
 C-c k k interrupt agent, C-c k C-c interrupt & submit."
           :lighter (:eval (if decknix--compose-sticky " Compose[sticky]" " Compose"))
@@ -1689,6 +1692,13 @@ Sticky mode: clears the buffer. Transient mode: closes the buffer."
           (decknix--compose-finish)
           (message (if decknix--compose-sticky "Compose cleared." "Compose cancelled.")))
 
+        (defun decknix-agent-compose-close ()
+          "Close the compose buffer unconditionally (regardless of sticky mode)."
+          (interactive)
+          (let ((win (selected-window)))
+            (quit-restore-window win 'kill))
+          (message "Compose closed."))
+
         (defun decknix-agent-compose-toggle-sticky ()
           "Toggle sticky mode for the compose buffer.
 Sticky: editor stays open after submit/cancel (content is cleared).
@@ -1700,7 +1710,9 @@ Transient: editor closes after submit/cancel."
           (message "Compose: %s" (if decknix--compose-sticky "sticky (stays open)" "transient (closes on action)")))
 
         (defun decknix--compose-update-header-line ()
-          "Update the header-line to reflect current sticky state."
+          "Update the header-line to reflect current sticky state.
+Shows full key sequences grouped by purpose:
+  submit/interrupt │ clear/close │ toggle sticky."
           (setq-local header-line-format
                       (list
                        (propertize
@@ -1708,22 +1720,26 @@ Transient: editor closes after submit/cancel."
                         'font-lock-face (if decknix--compose-sticky
                                             'font-lock-constant-face
                                           'font-lock-comment-face))
-                       (propertize " → " 'font-lock-face 'font-lock-comment-face)
-                       (propertize "C-c" 'font-lock-face 'font-lock-keyword-face)
-                       (propertize ": " 'font-lock-face 'font-lock-comment-face)
-                       (propertize "C-c" 'font-lock-face 'font-lock-keyword-face)
-                       (propertize " submit" 'font-lock-face 'font-lock-comment-face)
-                       (propertize " | " 'font-lock-face 'font-lock-comment-delimiter-face)
-                       (propertize "k k" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize "  " 'font-lock-face 'font-lock-comment-face)
+                       ;; Submit / interrupt group
+                       (propertize "C-c C-c" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize " submit  " 'font-lock-face 'font-lock-comment-face)
+                       (propertize "C-c k k" 'font-lock-face 'font-lock-keyword-face)
                        (propertize " interrupt  " 'font-lock-face 'font-lock-comment-face)
-                       (propertize "k C-c" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize "C-c k C-c" 'font-lock-face 'font-lock-keyword-face)
                        (propertize " interrupt+submit" 'font-lock-face 'font-lock-comment-face)
-                       (propertize " | " 'font-lock-face 'font-lock-comment-delimiter-face)
-                       (propertize "C-k" 'font-lock-face 'font-lock-keyword-face)
-                       (propertize " clear" 'font-lock-face 'font-lock-comment-face)
-                       (propertize " | " 'font-lock-face 'font-lock-comment-delimiter-face)
-                       (propertize "C-s" 'font-lock-face 'font-lock-keyword-face)
-                       (propertize " toggle" 'font-lock-face 'font-lock-comment-face))))
+                       ;; Separator
+                       (propertize " │ " 'font-lock-face 'font-lock-comment-delimiter-face)
+                       ;; Clear / close group
+                       (propertize "C-c C-k" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize " clear  " 'font-lock-face 'font-lock-comment-face)
+                       (propertize "C-c C-q" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize " close" 'font-lock-face 'font-lock-comment-face)
+                       ;; Separator
+                       (propertize " │ " 'font-lock-face 'font-lock-comment-delimiter-face)
+                       ;; Toggle
+                       (propertize "C-c C-s" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize " toggle sticky" 'font-lock-face 'font-lock-comment-face))))
 
         (defun decknix--compose-find-target ()
           "Find the agent-shell buffer to target for compose."
