@@ -1630,25 +1630,31 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
                                  (error-message-string err))
                         (make-hash-table :test 'equal)))
                    (make-hash-table :test 'equal))))
-            ;; Auto-migrate v1 format: keys are session IDs (UUIDs), no "conversations" key
-            (unless (gethash "conversations" store)
-              (let ((convs (make-hash-table :test 'equal))
-                    (sessions (decknix--agent-session-list))
-                    (old-entries nil))
-                ;; Collect old session-keyed entries
-                (maphash (lambda (key val)
-                           (when (and (hash-table-p val)
-                                      (gethash "tags" val)
-                                      (not (member key '("conversations" "bookmarks"))))
-                             (push (cons key val) old-entries)))
-                         store)
-                ;; Group by conversation key
+            ;; Auto-migrate v1 format: session-keyed entries → conversation-keyed.
+            ;; Handles both initial migration (no "conversations" key) and
+            ;; incremental migration (orphaned v1 entries coexisting with v2).
+            (let ((convs (or (gethash "conversations" store)
+                             (make-hash-table :test 'equal)))
+                  (sessions (decknix--agent-session-list))
+                  (old-entries nil)
+                  (migrated 0))
+              ;; Collect orphaned session-keyed entries (UUID keys with tags)
+              (maphash (lambda (key val)
+                         (when (and (hash-table-p val)
+                                    (gethash "tags" val)
+                                    (not (member key '("conversations" "bookmarks"))))
+                           (push (cons key val) old-entries)))
+                       store)
+              (when old-entries
+                ;; Resolve each old session → conversation and merge tags
                 (dolist (entry old-entries)
                   (let* ((sid (car entry))
                          (data (cdr entry))
-                         (match (seq-find (lambda (s)
-                                            (string= (alist-get 'sessionId s) sid))
-                                          sessions))
+                         (match (seq-find
+                                 (eval `(lambda (s)
+                                          (string= (alist-get 'sessionId s) ,sid))
+                                       t)
+                                 sessions))
                          (conv-key (when match
                                      (decknix--agent-conversation-key
                                       (alist-get 'firstUserMessage match ""))))
@@ -1668,19 +1674,16 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
                         (let ((sids (gethash "sessions" conv-entry)))
                           (cl-pushnew sid sids :test #'string=)
                           (puthash "sessions" sids conv-entry))
-                        (puthash conv-key conv-entry convs)))))
-                ;; Build new store
-                (let ((new-store (make-hash-table :test 'equal)))
-                  (puthash "conversations" convs new-store)
-                  (puthash "bookmarks" (make-hash-table :test 'equal) new-store)
-                  ;; Preserve context entries from old store
-                  (maphash (lambda (key val)
-                             (when (and (hash-table-p val) (gethash "context" val))
-                               (puthash key val new-store)))
-                           store)
-                  (decknix--agent-tags-write new-store)
-                  (message "Migrated tag store to conversation-keyed format (v2)")
-                  (setq store new-store))))
+                        (puthash conv-key conv-entry convs)))
+                    ;; Remove the old session-keyed entry regardless
+                    (remhash sid store)
+                    (setq migrated (1+ migrated))))
+                ;; Write back the cleaned store
+                (puthash "conversations" convs store)
+                (unless (gethash "bookmarks" store)
+                  (puthash "bookmarks" (make-hash-table :test 'equal) store))
+                (decknix--agent-tags-write store)
+                (message "Migrated %d v1 tag entries to conversation format" migrated)))
             store))
 
         (defun decknix--agent-tags-write (store)
