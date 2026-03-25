@@ -867,14 +867,13 @@ On first call (empty cache), falls back to a synchronous fetch."
 
         (defun decknix--agent-session-jq-cmd ()
           "Shell command to extract session metadata directly from files.
-Sorts by filesystem mtime (newest first), takes top 30, extracts
-only the fields needed for the picker via parallel jq."
+Extracts only the fields needed for the picker via parallel jq,
+then sorts by modified time (newest first)."
           (let ((jqf (decknix--agent-session-ensure-jq-filter)))
             (concat
-             "ls -t " (shell-quote-argument decknix--agent-sessions-dir)
-             "/*.json 2>/dev/null"
-             " | head -30"
-             " | xargs -P4 -I{} jq -Mc -f "
+             "find " (shell-quote-argument decknix--agent-sessions-dir)
+             " -maxdepth 1 -name '*.json' -print0 2>/dev/null"
+             " | xargs -0 -P8 -I{} jq -Mc -f "
              (shell-quote-argument jqf)
              " {} 2>/dev/null"
              " | jq -Msc 'sort_by(.modified) | reverse'")))
@@ -1141,20 +1140,25 @@ CONV-GROUP is (CONV-KEY LATEST-SESSION ALL-SESSIONS)."
                 :items
                 (lambda ()
                   (let* ((sessions (decknix--agent-session-list))
-                         (ht (make-hash-table :test 'equal)))
+                         (ht (make-hash-table :test 'equal))
+                         (ordered nil))
                     (if decknix--session-picker-expand
-                        ;; Expanded: all individual sessions
+                        ;; Expanded: all individual sessions (already newest-first)
                         (dolist (session sessions)
-                          (puthash (decknix--agent-session-preview session)
-                                   session ht))
+                          (let ((key (decknix--agent-session-preview session)))
+                            (puthash key session ht)
+                            (push key ordered)))
                       ;; Collapsed: one entry per conversation (default)
+                      ;; group-by-conversation returns groups newest-first
                       (let ((groups (decknix--agent-session-group-by-conversation
                                     sessions)))
                         (dolist (group groups)
-                          (puthash (decknix--agent-conversation-preview group)
-                                   (cadr group) ht))))
+                          (let ((key (decknix--agent-conversation-preview group)))
+                            (puthash key (cadr group) ht)
+                            (push key ordered)))))
                     (setq decknix--session-picker-saved-map ht)
-                    (hash-table-keys ht)))
+                    ;; Return in newest-first order (push reverses, so nreverse)
+                    (nreverse ordered)))
                 :action
                 (lambda (cand)
                   (when cand
