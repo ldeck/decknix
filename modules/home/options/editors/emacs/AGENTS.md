@@ -19,6 +19,7 @@ Nix build time.
 | `ui.nix` | which-key, helpful, nerd-icons |
 | `languages.nix` | 30+ language modes |
 | `lsp.nix` | Eglot, language servers, DAP debugging |
+| `deckmacs.nix` | Framework management — hot-reload, status, diagnostics (#85) |
 | Others | editing, undo, org, treemacs, http, welcome, project |
 
 ### Daemon (`modules/darwin/emacs.nix`)
@@ -68,11 +69,24 @@ Priority: stable nixpkgs → unstable nixpkgs → custom derivations
 The largest module (~2600 lines). Key subsystems:
 
 ### Session Management
-- **Session picker** (`C-c A s`): Reads `~/.augment/sessions/*.json` directly
-  via parallel `jq`, cached with 2-min TTL, pre-fetched on daemon start.
+- **Session picker** (`C-c A s`): Uses `consult--multi` with sectioned groups
+  (like `C-x b`): **Live Sessions** → **Saved Sessions** → **New**. Each section
+  has a horizontal divider. Live sessions show workspace + tags; current buffer
+  is excluded. Saved sessions read `~/.augment/sessions/*.json` via parallel
+  `jq`, cached with 2-min TTL, pre-fetched on daemon start. Default view is
+  **conversation-collapsed** (one row per conversation). `C-u C-c A s` expands
+  to show all individual session snapshots.
+- **Conversation identity**: Derived by hashing `firstUserMessage` (SHA-256,
+  truncated to 16 chars). Provides stable identity across resumed sessions (#78).
 - **Session creation** (`C-c A n`): Guided flow — workspace dir, name, tags.
-  Passes `--workspace-root` to auggie CLI.
-- **Session resume**: Restores history into comint buffer.
+  Passes `--workspace-root` to auggie CLI via closure (survives deferred
+  `:client-maker` invocation).
+- **Session close** (`C-c A q` / `C-c s q`): Kills the buffer. If other live
+  sessions exist, switches to the next one (or opens the picker if multiple).
+  If last session, returns to the welcome screen or `*scratch*`.
+- **Session resume**: Restores history into comint buffer. Buffer is renamed
+  to `*Auggie: <name>*` using tags (if any) or first-message preview, matching
+  the naming convention of new sessions.
 
 ### Compose Editor
 - Decoupled input buffer (sticky or transient mode).
@@ -89,9 +103,17 @@ The largest module (~2600 lines). Key subsystems:
 | Prefix | Purpose |
 |--------|---------|
 | `C-c A` | Agent commands (global) |
-| `C-c A s` | Session picker |
+| `C-c A s` | Session picker (sectioned: Live / Saved / New); `C-u` for all snapshots (#77) |
+| `C-c A g` | Grep sessions — consult + ripgrep full-text search across all session content; `C-u` for all snapshots |
 | `C-c A n` | New session |
-| `C-c A t` | Tag management |
+| `C-c A q` | Quit/close session (switch to next or welcome) |
+| `C-c A T` | Tags — global (list/filter conversations, rename, delete, cleanup) |
+| `C-c T` | Tags — conversation-scoped (show, add, remove) — in-buffer only (#78) |
+| `C-c D` | Deckmacs — framework management (reload, status, diff, log) (#85) |
+| `C-c D r` | Reload default.el from current Nix profile; `C-u` to force |
+| `C-c D s` | Show framework status (loaded/current store paths, staleness) |
+| `C-c D d` | Show diff between loaded and current store paths |
+| `C-c D l` | Show reload history log |
 | `C-c i` | Context panel (in agent-shell buffers) |
 
 ### Planned Features
@@ -105,6 +127,7 @@ The largest module (~2600 lines). Key subsystems:
 ## Keybinding Conventions
 
 - Global agent prefix: `C-c A` (capital A)
+- Framework prefix: `C-c D` (capital D — Deckmacs)
 - Module-local prefix: `C-c <lowercase>` (e.g., `C-c i` for context)
 - Compose mode: `C-c C-c` submit, `C-c k` interrupt sub-map, `C-c C-s` toggle
 - Always add `which-key` labels for new prefix maps

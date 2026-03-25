@@ -124,43 +124,7 @@ let
          - If yes, generate a 3-5 bullet summary of key decisions, findings, and next steps from the current conversation
     '';
 
-    "find-session.md" = ''
-      ---
-      description: Search all saved sessions by keyword and display matches for resuming
-      argument-hint: <search term>
-      ---
 
-      Search through ALL auggie sessions (not just the last 10) and help the user find the one they want to resume.
-
-      **Instructions:**
-
-      1. Run this shell command to get all sessions as JSON:
-         ```
-         auggie session list --json -n 500 --all 2>/dev/null
-         ```
-
-      2. If the user provided a search term as `$ARGUMENTS`, filter the sessions where `firstUserMessage`, `lastUserMessage`, or any entry in `userMessages` contains that term (case-insensitive). If no search term was provided, show the most recent 30 sessions.
-
-      3. Display the matching sessions in a clean, compact table. For each session show:
-         - A number (starting from 1)
-         - The session ID (first 8 characters)
-         - When it was last modified (relative, e.g. "2h ago", "3d ago")
-         - Number of exchanges
-         - The first user message (truncated to 80 chars)
-         Sort by most recently modified first.
-
-      4. Ask the user which session they'd like to resume (by number or search term).
-
-      5. When the user picks a session, tell them the exact command to run:
-         ```
-         auggie session resume <sessionId>
-         ```
-         **Note:** Session switching cannot be triggered programmatically from within an active session — the user must exit first (Ctrl+C or /exit) and then run the resume command.
-
-      6. If no sessions match, suggest broadening the search or trying `/find-session` with no arguments to see recent sessions.
-
-      **Important:** Use `python3` for JSON parsing. Keep output concise and scannable.
-    '';
 
     "pivot-conversation.md" = ''
       ---
@@ -462,14 +426,18 @@ Press q to dismiss."
             "  C-c c e     Edit existing command\n"
             "\n"
 
-            (propertize "Tags  (C-c T …)\n" 'font-lock-face '(:weight bold))
+            (propertize "Tags — session  (C-c T …)\n" 'font-lock-face '(:weight bold))
             (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
-            "  C-c T t     Tag current session\n"
-            "  C-c T r     Remove tag\n"
-            "  C-c T l     List / filter by tag\n"
-            "  C-c T e     Rename a tag\n"
-            "  C-c T d     Delete tag globally\n"
-            "  C-c T c     Cleanup orphaned tags\n"
+            "  C-c T l     Show this session's tags\n"
+            "  C-c T a     Add tag (select or create new)\n"
+            "  C-c T r     Remove tag from this session\n"
+            "\n"
+            (propertize "Tags — global  (C-c A T …)\n" 'font-lock-face '(:weight bold))
+            (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
+            "  C-c A T l   List / filter sessions by tag\n"
+            "  C-c A T e   Rename a tag across all sessions\n"
+            "  C-c A T d   Delete tag globally\n"
+            "  C-c A T c   Cleanup orphaned tags\n"
             "\n"
 
             (propertize "Model & Mode\n" 'font-lock-face '(:weight bold))
@@ -555,9 +523,11 @@ Press q to dismiss."
 
             (propertize "4. Tags & Organisation\n" 'font-lock-face '(:weight bold))
             (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
-            "  C-c T t adds a tag to the current session.\n"
-            "  C-c T l filters sessions by tag in the picker.\n"
-            "  Tags are stored in ~/.config/agent-sessions.json.\n"
+            "  C-c T l shows this conversation's tags.\n"
+            "  C-c T a adds a tag (select existing or type new).\n"
+            "  C-c T r removes a tag from this conversation.\n"
+            "  C-c A T l filters conversations by tag (global).\n"
+            "  Tags apply to the conversation (all sessions sharing the same start).\n"
             "\n"
 
             (propertize "5. Context Awareness\n" 'font-lock-face '(:weight bold))
@@ -571,6 +541,7 @@ Press q to dismiss."
             (propertize "6. Multi-Session Workflow\n" 'font-lock-face '(:weight bold))
             (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
             "  C-c A n starts a new session from anywhere.\n"
+            "  C-c A g greps all session content (ripgrep).\n"
             "  C-c m opens the manager dashboard.\n"
             "  C-c j jumps to a session needing attention.\n"
             "  C-c w toggles the workspace tab.\n"
@@ -645,22 +616,25 @@ Press q to dismiss."
             "C-c A a" "start/switch"
             "C-c A n" "new session"
             "C-c A s" "session picker"
+            "C-c A g" "grep sessions"
             "C-c A h" "history"
             "C-c A e" "compose"
-            "C-c A T" "Tags"
+            "C-c A T" "Tags (global)"
             "C-c A c" "Commands"
             "C-c A t" "Templates"
             "C-c A i" "Context"
             "C-c A S" "MCP servers"
             "C-c A m" "manager"
             "C-c A w" "workspace"
-            "C-c A j" "attention jump"))
+            "C-c A j" "attention jump"
+            "C-c A q" "quit session"))
 
         ;; Global keybindings under C-c A prefix
         ;; Only actions that make sense from OUTSIDE an agent-shell buffer.
         ;; Buffer-local bindings (C-c ...) handle in-buffer actions — no duplicates.
         (define-key decknix-agent-prefix-map (kbd "a") 'agent-shell)                      ; Start/switch to agent
         (define-key decknix-agent-prefix-map (kbd "n") 'decknix-agent-session-new)          ; New session (guided)
+        (define-key decknix-agent-prefix-map (kbd "q") 'decknix-agent-session-quit)         ; Quit/close session
         (define-key decknix-agent-prefix-map (kbd "?") 'decknix-agent-help-map)           ; Help sub-prefix
         (define-key decknix-agent-help-map (kbd "k") 'decknix-agent-help-keys)            ; Keybindings
         (define-key decknix-agent-help-map (kbd "t") 'decknix-agent-help-tutorial)        ; Tutorial
@@ -672,6 +646,10 @@ Press q to dismiss."
         ;; (distinct from ACP session ID in agent-shell--state)
         (defvar-local decknix--agent-auggie-session-id nil
           "The auggie CLI session ID for this buffer, if known.")
+
+        ;; Buffer-local var to track the workspace root for this session
+        (defvar-local decknix--agent-session-workspace nil
+          "The workspace root directory for this agent session, if set.")
 
         (defun decknix--agent-session-time-ago (iso-time)
           "Format ISO-TIME as a relative time string (e.g. \"2h ago\")."
@@ -986,8 +964,27 @@ Returns the new buffer, or nil if not found."
                              (derived-mode-p 'agent-shell-mode))))
                     (buffer-list)))
 
-        (defun decknix--agent-session-resume (session-id history-count)
-          "Resume SESSION-ID and pre-populate buffer with HISTORY-COUNT exchanges."
+        (defun decknix--agent-session-display-name (session)
+          "Derive a short buffer display name from SESSION data.
+Uses tags if available, otherwise truncates the first user message."
+          (let* ((sid (alist-get 'sessionId session ""))
+                 (first-msg (alist-get 'firstUserMessage session ""))
+                 (conv-key (decknix--agent-conversation-key first-msg))
+                 (tags (when conv-key (decknix--agent-tags-for-conv-key conv-key)))
+                 (preview (car (split-string first-msg "\n" t))))
+            (cond
+             ;; If there are tags, use them as the name
+             (tags (string-join tags "/"))
+             ;; Otherwise use a truncated preview of the first message
+             ((and preview (not (string-empty-p preview)))
+              (truncate-string-to-width preview 40 nil nil "..."))
+             ;; Fallback to session ID prefix
+             (t (substring sid 0 (min 8 (length sid)))))))
+
+        (defun decknix--agent-session-resume (session-id history-count
+                                              &optional display-name)
+          "Resume SESSION-ID and pre-populate buffer with HISTORY-COUNT exchanges.
+DISPLAY-NAME, if provided, is used to rename the buffer to *Auggie: NAME*."
           ;; Invalidate cache so next picker invocation fetches fresh data
           (setq decknix--agent-session-cache-time 0)
           ;; Snapshot existing buffers so we can detect the new one
@@ -998,10 +995,11 @@ Returns the new buffer, or nil if not found."
             (agent-shell-start
              :config (agent-shell-auggie-make-agent-config))
             ;; agent-shell-start is async — it doesn't switch current-buffer.
-            ;; Use a timer to find the new buffer and prepopulate it.
+            ;; Use a timer to find the new buffer, rename it, and prepopulate.
             (let ((sid session-id)
                   (n history-count)
-                  (bufs before-buffers))
+                  (bufs before-buffers)
+                  (bname display-name))
               (run-at-time
                1.5 nil
                (eval
@@ -1010,51 +1008,319 @@ Returns the new buffer, or nil if not found."
                      (if shell-buf
                          (with-current-buffer shell-buf
                            (setq-local decknix--agent-auggie-session-id ,sid)
+                           ;; Rename buffer to match conversation identity
+                           (when ,bname
+                             (rename-buffer
+                              (generate-new-buffer-name
+                               (format "*Auggie: %s*" ,bname)))
+                             (setq-local shell-maker--buffer-name-override
+                                         (buffer-name)))
                            (decknix--agent-session-prepopulate ,sid ,n))
                        (message "Could not find agent-shell buffer for session %s"
                                 (substring ,sid 0 8)))))
                 t)))))
 
+        (defun decknix--agent-session-group-by-conversation (sessions)
+          "Group SESSIONS by conversation (shared firstUserMessage).
+Returns a list of (CONV-KEY LATEST-SESSION ALL-SESSIONS) triples,
+sorted by most recently modified first."
+          (let ((groups (make-hash-table :test 'equal)))
+            (dolist (s sessions)
+              (let* ((first-msg (alist-get 'firstUserMessage s ""))
+                     (conv-key (decknix--agent-conversation-key first-msg)))
+                (when conv-key
+                  (let ((existing (gethash conv-key groups)))
+                    (puthash conv-key (cons s existing) groups)))))
+            ;; Build result: (conv-key latest-session all-sessions)
+            (let (result)
+              (maphash (lambda (key sessions-list)
+                         (let ((sorted (sort (copy-sequence sessions-list)
+                                            (lambda (a b)
+                                              (string> (or (alist-get 'modified a) "")
+                                                       (or (alist-get 'modified b) ""))))))
+                           (push (list key (car sorted) sorted) result)))
+                       groups)
+              ;; Sort by latest session modified time
+              (sort result (lambda (a b)
+                             (string> (or (alist-get 'modified (cadr a)) "")
+                                      (or (alist-get 'modified (cadr b)) "")))))))
+
+        (defun decknix--agent-conversation-preview (conv-group)
+          "Format a one-line preview for a conversation CONV-GROUP.
+CONV-GROUP is (CONV-KEY LATEST-SESSION ALL-SESSIONS)."
+          (let* ((conv-key (car conv-group))
+                 (latest (cadr conv-group))
+                 (all (caddr conv-group))
+                 (session-count (length all))
+                 (id (alist-get 'sessionId latest))
+                 (modified (alist-get 'modified latest))
+                 (exchanges (alist-get 'exchangeCount latest 0))
+                 (first-msg (alist-get 'firstUserMessage latest ""))
+                 (preview (car (split-string first-msg "\n" t)))
+                 (tags (decknix--agent-tags-for-conv-key conv-key))
+                 (tag-str (if tags (format " [%s]" (string-join tags ", ")) ""))
+                 (count-str (if (> session-count 1)
+                                (format " (%d sessions)" session-count)
+                              ""))
+                 (truncated (truncate-string-to-width (or preview "") 50 nil nil "...")))
+            (format "%-8s  %-8s  %4dx  %s%s%s"
+                    (substring id 0 (min 8 (length id)))
+                    (if modified (decknix--agent-session-time-ago modified) "?")
+                    exchanges
+                    truncated
+                    tag-str
+                    count-str)))
+
+        ;; ── Session picker (consult--multi) ──────────────────────────
+        ;; Modelled after C-x b (consult-buffer): sectioned groups with
+        ;; horizontal dividers — Live Sessions → Saved Sessions → New.
+
+        (defun decknix--agent-session-live-label (buf)
+          "Build a display label for live agent-shell buffer BUF."
+          (let* ((ws (buffer-local-value
+                      'decknix--agent-session-workspace buf))
+                 (ws-short (when ws
+                             (file-name-nondirectory
+                              (directory-file-name ws))))
+                 (tags (when (buffer-live-p buf)
+                         (with-current-buffer buf
+                           (when (and (boundp 'decknix--agent-auggie-session-id)
+                                      decknix--agent-auggie-session-id)
+                             (decknix--agent-tags-for-session
+                              decknix--agent-auggie-session-id)))))
+                 (tag-str (when tags
+                            (mapconcat (lambda (tg) (format "#%s" tg))
+                                       tags " ")))
+                 (detail (string-join (delq nil (list ws-short tag-str)) "  ")))
+            (format "%s%s"
+                    (buffer-name buf)
+                    (if (string-empty-p detail) ""
+                      (format "  — %s" detail)))))
+
+        ;; We store a hash-table mapping candidate strings → payloads so that
+        ;; each source's :action can look up the data for the selected string.
+        (defvar decknix--session-picker-live-map nil
+          "Candidate-string → buffer map for live source.")
+        (defvar decknix--session-picker-saved-map nil
+          "Candidate-string → session alist for saved source.")
+        (defvar decknix--session-picker-expand nil
+          "Non-nil shows all snapshots instead of collapsed conversations.")
+
+        (defvar decknix--session-source-live
+          (list :name     "Live Sessions"
+                :narrow   ?l
+                :category 'agent-session-live
+                :face     'consult-buffer
+                :items
+                (lambda ()
+                  (let* ((bufs (when (fboundp 'agent-shell-buffers)
+                                 (agent-shell-buffers)))
+                         ;; Exclude the current buffer — you're already in it.
+                         ;; Most-recently-used ordering is preserved from
+                         ;; agent-shell-buffers (which follows buffer-list order).
+                         (cur (current-buffer))
+                         (others (remq cur bufs))
+                         (ht (make-hash-table :test 'equal)))
+                    (dolist (buf others)
+                      (puthash (decknix--agent-session-live-label buf) buf ht))
+                    (setq decknix--session-picker-live-map ht)
+                    (hash-table-keys ht)))
+                :action
+                (lambda (cand)
+                  (when cand
+                    (let ((buf (gethash cand decknix--session-picker-live-map)))
+                      (when (and buf (buffer-live-p buf))
+                        (switch-to-buffer buf))))))
+          "Consult multi-source for live agent-shell buffers.")
+
+        (defvar decknix--session-source-saved
+          (list :name     "Saved Sessions"
+                :narrow   ?s
+                :category 'agent-session-saved
+                :face     'consult-file
+                :items
+                (lambda ()
+                  (let* ((sessions (decknix--agent-session-list))
+                         (ht (make-hash-table :test 'equal)))
+                    (if decknix--session-picker-expand
+                        ;; Expanded: all individual sessions
+                        (dolist (session sessions)
+                          (puthash (decknix--agent-session-preview session)
+                                   session ht))
+                      ;; Collapsed: one entry per conversation (default)
+                      (let ((groups (decknix--agent-session-group-by-conversation
+                                    sessions)))
+                        (dolist (group groups)
+                          (puthash (decknix--agent-conversation-preview group)
+                                   (cadr group) ht))))
+                    (setq decknix--session-picker-saved-map ht)
+                    (hash-table-keys ht)))
+                :action
+                (lambda (cand)
+                  (when cand
+                    (let ((session (gethash cand decknix--session-picker-saved-map)))
+                      (when session
+                        (decknix--agent-session-resume
+                         (alist-get 'sessionId session)
+                         decknix-agent-session-history-count
+                         (decknix--agent-session-display-name session)))))))
+          "Consult multi-source for saved auggie sessions.")
+
+        (defvar decknix--session-source-new
+          (list :name     "New"
+                :narrow   ?n
+                :category 'agent-session-new
+                :face     'consult-bookmark
+                :items    (lambda () (list "Start a new auggie session…"))
+                :action   (lambda (_cand)
+                            (decknix-agent-session-new)))
+          "Consult multi-source for starting a new session.")
+
         (defun decknix-agent-session-picker (arg)
           "Pick from live agent-shell buffers and saved auggie sessions.
-Live buffers are shown first, then saved sessions. Selecting a live
-buffer switches to it; selecting a saved session resumes it in a
-new agent-shell.
+Sections are separated by dividers (like `consult-buffer' / C-x b):
+  Live Sessions  — currently running agent buffers (most recent first)
+  Saved Sessions — past conversations from ~/.augment/sessions
+  New            — start a new session (fallback)
 
-With prefix ARG, prompt for the number of history exchanges to show
-when resuming a saved session (default: `decknix-agent-session-history-count')."
+By default, saved sessions are collapsed by conversation.
+With \\[universal-argument], shows all individual session snapshots."
           (interactive "P")
-          (let* ((history-count (if arg
-                                   (read-number "History exchanges to show: "
-                                                decknix-agent-session-history-count)
-                                 decknix-agent-session-history-count))
-                 (live-buffers (when (fboundp 'agent-shell-buffers)
-                                 (agent-shell-buffers)))
-                 (live-entries (mapcar (lambda (buf)
-                                        (cons (format "[live]  %s" (buffer-name buf))
-                                              (cons 'buffer buf)))
-                                      live-buffers))
-                 (saved-sessions (decknix--agent-session-list))
-                 (saved-entries (mapcar (lambda (session)
-                                         (cons (format "[saved] %s"
-                                                       (decknix--agent-session-preview session))
-                                               (cons 'session session)))
-                                       saved-sessions))
-                 (new-entry (list (cons "[new]   Start a new auggie session"
-                                        (cons 'new nil))))
-                 (all-entries (append new-entry live-entries saved-entries))
-                 (selection (completing-read "Agent session: "
-                                            (decknix--agent-unsorted-table
-                                             (mapcar #'car all-entries))
-                                            nil t))
-                 (chosen (cdr (assoc selection all-entries))))
-            (pcase (car chosen)
-              ('buffer (switch-to-buffer (cdr chosen)))
-              ('session
-               (decknix--agent-session-resume
-                (alist-get 'sessionId (cdr chosen))
-                history-count))
-              ('new (decknix-agent-session-new)))))
+          (require 'consult)
+          (setq decknix--session-picker-expand arg)
+          (consult--multi (list decknix--session-source-live
+                               decknix--session-source-saved
+                               decknix--session-source-new)
+                          :prompt (format "Agent session%s: "
+                                          (if arg " (all snapshots)" ""))
+                          :sort nil))
+
+        ;; == Session grep: consult + ripgrep full-text search ==
+        ;; Searches ALL content (user messages, agent responses, code blocks)
+        ;; across every session JSON file using ripgrep.
+        ;; C-c A g — type a search term, results narrow live.
+
+        (defun decknix--agent-session-rg-search (term)
+          "Search session files for TERM using ripgrep.
+Returns a list of session alists for files containing TERM.
+Uses rg -li for fast case-insensitive file matching, then
+extracts metadata with jq for the matching files."
+          (let* ((jqf (decknix--agent-session-ensure-jq-filter))
+                 (rg-cmd (format "%s -li %s %s 2>/dev/null"
+                                 (or (executable-find "rg") "rg")
+                                 (shell-quote-argument term)
+                                 (shell-quote-argument
+                                  (expand-file-name "sessions" "~/.augment"))))
+                 (files (split-string
+                         (string-trim (shell-command-to-string rg-cmd))
+                         "\n" t)))
+            (when files
+              (let* ((file-args (mapconcat #'shell-quote-argument files " "))
+                     (jq-cmd (format "jq -Mc -f %s %s 2>/dev/null | jq -Msc 'sort_by(.modified) | reverse'"
+                                     (shell-quote-argument jqf)
+                                     file-args)))
+                (decknix--agent-session-parse
+                 (shell-command-to-string jq-cmd))))))
+
+        (defun decknix--agent-session-grep-candidate (session)
+          "Build a candidate string for SESSION in grep results."
+          (let* ((id (alist-get 'sessionId session))
+                 (modified (alist-get 'modified session))
+                 (exchanges (alist-get 'exchangeCount session 0))
+                 (first-msg (alist-get 'firstUserMessage session ""))
+                 (preview (car (split-string first-msg "\n" t)))
+                 (tags (decknix--agent-tags-for-session id))
+                 (tag-str (if tags (format " [%s]" (string-join tags ", ")) ""))
+                 (time-ago (if modified
+                               (decknix--agent-session-time-ago modified)
+                             "?"))
+                 (msg-preview (truncate-string-to-width
+                               (or preview "") 80 nil nil "...")))
+            (format "%-8s  %-8s  %4dx%s  %s"
+                    (substring id 0 (min 8 (length id)))
+                    time-ago exchanges tag-str msg-preview)))
+
+        (defun decknix--agent-session-grep-build-entries (sessions expand)
+          "Build candidate entries from SESSIONS for grep results.
+If EXPAND is non-nil, show all individual sessions.
+Otherwise collapse by conversation."
+          (if expand
+              (mapcar (lambda (session)
+                        (cons (decknix--agent-session-grep-candidate session)
+                              (cons 'session session)))
+                      sessions)
+            (let ((conv-groups
+                   (decknix--agent-session-group-by-conversation sessions)))
+              (mapcar (lambda (group)
+                        (let* ((conv-key (car group))
+                               (latest (cadr group))
+                               (all (caddr group))
+                               (session-count (length all))
+                               (id (alist-get 'sessionId latest))
+                               (modified (alist-get 'modified latest))
+                               (exchanges (alist-get 'exchangeCount latest 0))
+                               (first-msg (alist-get 'firstUserMessage latest ""))
+                               (preview (car (split-string first-msg "\n" t)))
+                               (tags (decknix--agent-tags-for-conv-key conv-key))
+                               (tag-str (if tags (format " [%s]" (string-join tags ", ")) ""))
+                               (count-str (if (> session-count 1)
+                                              (format " (%d sessions)" session-count)
+                                            ""))
+                               (time-ago (if modified
+                                             (decknix--agent-session-time-ago modified)
+                                           "?"))
+                               (msg-preview (truncate-string-to-width
+                                             (or preview "") 80 nil nil "...")))
+                          (cons (format "%-8s  %-8s  %4dx%s%s  %s"
+                                        (substring id 0 (min 8 (length id)))
+                                        time-ago exchanges tag-str count-str
+                                        msg-preview)
+                                (cons 'session latest))))
+                      conv-groups))))
+
+        (defun decknix-agent-session-grep (arg)
+          "Full-text grep across all session content using consult + ripgrep.
+Type a search term and ripgrep searches ALL user messages, agent
+responses, and code blocks in every session file (~1s for 200+ sessions).
+Results narrow live as you type.
+
+By default shows conversation-collapsed results (one per conversation).
+With \\\\[universal-argument], shows all individual session snapshots."
+          (interactive "P")
+          (require 'consult)
+          (let* ((expand arg)
+                 ;; entries-cache: alist mapping candidate-string → (session . session-data)
+                 ;; Rebuilt on each rg invocation; used for lookup after selection.
+                 (entries-cache nil)
+                 (selected
+                  (consult--read
+                   (consult--dynamic-collection
+                     (eval
+                      `(lambda (input)
+                         (cond
+                          ((or (null input) (< (length (string-trim input)) 2))
+                           nil)
+                          (t
+                           (condition-case nil
+                               (let* ((matches (decknix--agent-session-rg-search input))
+                                      (entries (when matches
+                                                 (decknix--agent-session-grep-build-entries
+                                                  matches ,expand))))
+                                 (setq entries-cache entries)
+                                 (mapcar #'car entries))
+                             (error nil)))))
+                      t)
+                     :min-input 2)
+                   :prompt "Grep sessions: "
+                   :sort nil
+                   :require-match t))
+                 (chosen (cdr (assoc selected entries-cache))))
+            (when chosen
+              (let ((s (cdr chosen)))
+                (decknix--agent-session-resume
+                 (alist-get 'sessionId s)
+                 decknix-agent-session-history-count
+                 (decknix--agent-session-display-name s))))))
 
         (defun decknix--agent-detect-workspace ()
           "Detect the best workspace directory for a new session.
@@ -1111,27 +1377,54 @@ workspace = project root, name = auto-generated, no tags."
                            (mapcar #'string-trim
                                    (seq-remove #'string-empty-p input)))))
                  (before-buffers (buffer-list))
-                 (agent-shell-auggie-acp-command
+                 ;; Build an augmented command with --workspace-root.
+                 ;; We must capture this in a closure rather than using a let-binding
+                 ;; of agent-shell-auggie-acp-command, because the :client-maker
+                 ;; lambda is stored in agent-shell--state and called later
+                 ;; (when the first message is sent) — by which time a dynamic
+                 ;; let-binding would have expired.
+                 (augmented-cmd
                   (append agent-shell-auggie-acp-command
-                          (list "--workspace-root" workspace))))
-            (agent-shell-start
-             :config (agent-shell-auggie-make-agent-config))
+                          (list "--workspace-root" workspace)))
+                 ;; Create config with a client-maker that closes over augmented-cmd.
+                 ;; eval+backquote is needed because default.el uses dynamic binding.
+                 (config
+                  (let ((base (agent-shell-auggie-make-agent-config)))
+                    (setf (alist-get :client-maker base)
+                          (eval `(lambda (buffer)
+                                   (agent-shell--make-acp-client
+                                    :command ,(car augmented-cmd)
+                                    :command-params ',(cdr augmented-cmd)
+                                    :environment-variables
+                                    (cond ((map-elt agent-shell-auggie-authentication :none)
+                                           agent-shell-auggie-environment)
+                                          ((map-elt agent-shell-auggie-authentication :login)
+                                           agent-shell-auggie-environment)
+                                          (t
+                                           (error "Invalid Auggie authentication")))
+                                    :context-buffer buffer)) t))
+                    base)))
+            ;; Set default-directory so agent-shell-cwd picks up the chosen
+            ;; workspace instead of inheriting the calling buffer's directory
+            ;; (which may be ~/ when invoked from the welcome screen).
+            (let ((default-directory workspace))
+              (agent-shell-start :config config))
             ;; Invalidate session cache so next picker is fresh
             (setq decknix--agent-session-cache-time 0)
-            ;; Post-creation: rename buffer, apply tags (using timers)
+            ;; Post-creation: rename buffer, apply tags, set workspace (using timers)
             (decknix--agent-session-new-post-create
-             before-buffers name tags)
+             before-buffers name tags workspace)
             (message "Starting agent session \"%s\" in %s…" name workspace)))
 
         (defvar decknix--session-new-pending nil
-          "Pending post-creation data: (BEFORE-BUFFERS NAME TAGS).")
+          "Pending post-creation data: (BEFORE-BUFFERS NAME TAGS WORKSPACE).")
 
-        (defun decknix--agent-session-new-post-create (before-buffers name tags)
-          "Post-creation setup: rename buffer to NAME, apply TAGS.
+        (defun decknix--agent-session-new-post-create (before-buffers name tags workspace)
+          "Post-creation setup: rename buffer to NAME, apply TAGS, record WORKSPACE.
 BEFORE-BUFFERS is the buffer snapshot taken before agent-shell-start."
           ;; Store pending data in a global so timers can access it
           ;; without nested quasiquotes (default.el uses dynamic binding).
-          (setq decknix--session-new-pending (list before-buffers name tags))
+          (setq decknix--session-new-pending (list before-buffers name tags workspace))
           (run-at-time 1.5 nil #'decknix--agent-session-new-finish))
 
         (defun decknix--agent-session-new-finish ()
@@ -1141,13 +1434,22 @@ BEFORE-BUFFERS is the buffer snapshot taken before agent-shell-start."
                    (before-buffers (nth 0 data))
                    (name (nth 1 data))
                    (tags (nth 2 data))
+                   (workspace (nth 3 data))
                    (shell-buf (decknix--agent-find-new-shell-buffer before-buffers)))
               (setq decknix--session-new-pending nil)
               (when shell-buf
                 (with-current-buffer shell-buf
                   (rename-buffer
                    (generate-new-buffer-name
-                    (format "*Auggie: %s*" name))))
+                    (format "*Auggie: %s*" name)))
+                  ;; Update shell-maker's buffer name override so it can
+                  ;; still find this buffer after the rename (it uses
+                  ;; shell-maker-buffer-name to locate the process buffer).
+                  (setq-local shell-maker--buffer-name-override
+                              (buffer-name))
+                  ;; Record workspace for the session picker
+                  (when workspace
+                    (setq-local decknix--agent-session-workspace workspace)))
                 ;; Schedule tag application (session ID may not be available yet)
                 (when tags
                   (decknix--agent-session-new-schedule-tags shell-buf tags))))))
@@ -1173,22 +1475,25 @@ is only set during session resume."
                ((not (buffer-live-p buf))
                 (setq decknix--session-new-tag-pending nil))
                ;; Try buffer-local var first, then fall back to ACP state.
-               ;; Guard with condition-case: shell-maker--config may be nil
-               ;; if the timer fires before agent-shell fully initialises.
-               ((let ((sid (with-current-buffer buf
-                             (or decknix--agent-auggie-session-id
-                                 (condition-case nil
-                                     (map-nested-elt (agent-shell--state)
-                                                     '(:session :id))
-                                   (error nil))))))
-                  (when (and sid (not (string-empty-p sid)))
-                    ;; Persist for future use (tag mgmt, copy-id, etc.)
-                    (with-current-buffer buf
-                      (setq-local decknix--agent-auggie-session-id sid))
-                    (decknix--agent-session-tags-for sid tags)
-                    (setq decknix--session-new-tag-pending nil)
-                    (message "Tags applied: [%s]" (string-join tags ", "))
-                    t)))
+               ;; Guard the entire block: shell-maker--config, agent-shell--state,
+               ;; or map-nested-elt may error if the timer fires before
+               ;; agent-shell fully initialises.
+               ((condition-case nil
+                    (let ((sid (with-current-buffer buf
+                                 (or decknix--agent-auggie-session-id
+                                     (when (and (boundp 'shell-maker--config)
+                                                shell-maker--config)
+                                       (map-nested-elt (agent-shell--state)
+                                                       '(:session :id)))))))
+                      (when (and sid (stringp sid) (not (string-empty-p sid)))
+                        ;; Persist for future use (tag mgmt, copy-id, etc.)
+                        (with-current-buffer buf
+                          (setq-local decknix--agent-auggie-session-id sid))
+                        (decknix--agent-session-tags-for sid tags)
+                        (setq decknix--session-new-tag-pending nil)
+                        (message "Tags applied: [%s]" (string-join tags ", "))
+                        t))
+                  (error nil)))
                ((<= attempts-left 0)
                 (setq decknix--session-new-tag-pending nil)
                 (message "Could not apply tags: session ID not available"))
@@ -1198,15 +1503,34 @@ is only set during session resume."
 
         (defun decknix-agent-session-quit ()
           "Cleanly quit the current agent-shell session.
-Kills the buffer (which sends SIGHUP to auggie, saving the session)
-and switches back to the previous buffer."
+Kills the buffer (which sends SIGHUP to auggie, saving the session).
+
+If other live agent-shell sessions exist, offers to switch to one
+via the session picker. Otherwise returns to the welcome screen
+or *scratch*."
           (interactive)
           (unless (derived-mode-p 'agent-shell-mode)
             (user-error "Not in an agent-shell buffer"))
           (when (y-or-n-p "Quit this agent session? ")
-            (let ((buf (current-buffer)))
-              (previous-buffer)
-              (kill-buffer buf))))
+            (let* ((buf (current-buffer))
+                   (other-bufs (remq buf
+                                     (when (fboundp 'agent-shell-buffers)
+                                       (agent-shell-buffers)))))
+              (cond
+               ;; Other live sessions exist — offer to switch
+               (other-bufs
+                (kill-buffer buf)
+                (if (= (length other-bufs) 1)
+                    ;; Only one other — switch directly
+                    (switch-to-buffer (car other-bufs))
+                  ;; Multiple — open the session picker
+                  (decknix-agent-session-picker nil)))
+               ;; Last session — return to welcome or scratch
+               (t
+                (kill-buffer buf)
+                (if (fboundp 'decknix-welcome)
+                    (decknix-welcome)
+                  (switch-to-buffer (get-buffer-create "*scratch*"))))))))
 
         (defun decknix--agent-session-open-share (session-id)
           "Generate a share link for SESSION-ID and open it in Emacs.
@@ -1257,28 +1581,103 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
             (decknix--agent-session-open-share session-id)))
 
         (define-key decknix-agent-prefix-map (kbd "s") 'decknix-agent-session-picker)        ; Session picker
+        (define-key decknix-agent-prefix-map (kbd "g") 'decknix-agent-session-grep)          ; Grep all session content
         (define-key decknix-agent-prefix-map (kbd "h") 'decknix-agent-session-history)       ; View history (C-u to pick)
 
         ;; == Session tagging: metadata layer for session organisation ==
-        ;; Tags are stored in a JSON file, keyed by auggie session ID.
-        ;; Format: {"session-id": {"tags": ["refactor", "decknix"]}, ...}
+        ;; Tags are conversation-scoped, keyed by a conversation hash
+        ;; derived from firstUserMessage (shared across all session snapshots).
+        ;; Format v2:
+        ;; {"conversations": {"conv-hash": {"tags": [...], "sessions": [...]}},
+        ;;  "bookmarks": {"session-id": {"label": "...", "created": "..."}}}
 
         (defvar decknix--agent-tags-file
           (expand-file-name "~/.config/decknix/agent-sessions.json")
-          "Path to the JSON file storing session tag metadata.")
+          "Path to the JSON file storing conversation tag metadata.")
+
+        (defun decknix--agent-conversation-key (first-message)
+          "Derive a stable conversation key from FIRST-MESSAGE.
+        Uses SHA-256 hash truncated to 16 chars."
+          (when (and first-message (not (string-empty-p first-message)))
+            (substring (secure-hash 'sha256 first-message) 0 16)))
+
+        (defun decknix--agent-conversation-key-for-session (session-id)
+          "Look up the conversation key for SESSION-ID from cached session data."
+          (let* ((sessions (decknix--agent-session-list))
+                 (match (seq-find (lambda (s)
+                                    (string= (alist-get 'sessionId s) session-id))
+                                  sessions)))
+            (when match
+              (decknix--agent-conversation-key
+               (alist-get 'firstUserMessage match "")))))
 
         (defun decknix--agent-tags-read ()
-          "Read the tag store from disk. Returns a hash-table."
-          (if (file-exists-p decknix--agent-tags-file)
-              (condition-case err
-                  (let* ((json-object-type 'hash-table)
-                         (json-array-type 'list)
-                         (json-key-type 'string))
-                    (json-read-file decknix--agent-tags-file))
-                (error
-                 (message "Warning: could not read tag store: %s" (error-message-string err))
-                 (make-hash-table :test 'equal)))
-            (make-hash-table :test 'equal)))
+          "Read the tag store from disk. Returns a hash-table.
+        Auto-migrates v1 (session-keyed) format to v2 (conversation-keyed)."
+          (let ((store
+                 (if (file-exists-p decknix--agent-tags-file)
+                     (condition-case err
+                         (let* ((json-object-type 'hash-table)
+                                (json-array-type 'list)
+                                (json-key-type 'string))
+                           (json-read-file decknix--agent-tags-file))
+                       (error
+                        (message "Warning: could not read tag store: %s"
+                                 (error-message-string err))
+                        (make-hash-table :test 'equal)))
+                   (make-hash-table :test 'equal))))
+            ;; Auto-migrate v1 format: keys are session IDs (UUIDs), no "conversations" key
+            (unless (gethash "conversations" store)
+              (let ((convs (make-hash-table :test 'equal))
+                    (sessions (decknix--agent-session-list))
+                    (old-entries nil))
+                ;; Collect old session-keyed entries
+                (maphash (lambda (key val)
+                           (when (and (hash-table-p val)
+                                      (gethash "tags" val)
+                                      (not (member key '("conversations" "bookmarks"))))
+                             (push (cons key val) old-entries)))
+                         store)
+                ;; Group by conversation key
+                (dolist (entry old-entries)
+                  (let* ((sid (car entry))
+                         (data (cdr entry))
+                         (match (seq-find (lambda (s)
+                                            (string= (alist-get 'sessionId s) sid))
+                                          sessions))
+                         (conv-key (when match
+                                     (decknix--agent-conversation-key
+                                      (alist-get 'firstUserMessage match ""))))
+                         (tags (gethash "tags" data)))
+                    (when (and conv-key tags)
+                      (let ((conv-entry (or (gethash conv-key convs)
+                                            (let ((h (make-hash-table :test 'equal)))
+                                              (puthash "tags" nil h)
+                                              (puthash "sessions" nil h)
+                                              h))))
+                        ;; Merge tags
+                        (let ((existing (gethash "tags" conv-entry)))
+                          (dolist (tag tags)
+                            (cl-pushnew tag existing :test #'string=))
+                          (puthash "tags" existing conv-entry))
+                        ;; Track session
+                        (let ((sids (gethash "sessions" conv-entry)))
+                          (cl-pushnew sid sids :test #'string=)
+                          (puthash "sessions" sids conv-entry))
+                        (puthash conv-key conv-entry convs)))))
+                ;; Build new store
+                (let ((new-store (make-hash-table :test 'equal)))
+                  (puthash "conversations" convs new-store)
+                  (puthash "bookmarks" (make-hash-table :test 'equal) new-store)
+                  ;; Preserve context entries from old store
+                  (maphash (lambda (key val)
+                             (when (and (hash-table-p val) (gethash "context" val))
+                               (puthash key val new-store)))
+                           store)
+                  (decknix--agent-tags-write new-store)
+                  (message "Migrated tag store to conversation-keyed format (v2)")
+                  (setq store new-store))))
+            store))
 
         (defun decknix--agent-tags-write (store)
           "Write STORE (hash-table) to the tag file."
@@ -1289,23 +1688,41 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
               (let ((json-encoding-pretty-print t))
                 (insert (json-encode store))))))
 
+        (defun decknix--agent-tags-conversations (store)
+          "Get the conversations hash-table from STORE."
+          (or (gethash "conversations" store)
+              (let ((convs (make-hash-table :test 'equal)))
+                (puthash "conversations" convs store)
+                convs)))
+
         (defun decknix--agent-tags-for-session (session-id)
-          "Return the list of tags for SESSION-ID."
+          "Return the list of tags for the conversation containing SESSION-ID."
+          (let* ((conv-key (decknix--agent-conversation-key-for-session session-id))
+                 (store (decknix--agent-tags-read))
+                 (convs (decknix--agent-tags-conversations store)))
+            (when conv-key
+              (let ((entry (gethash conv-key convs)))
+                (when (hash-table-p entry)
+                  (gethash "tags" entry))))))
+
+        (defun decknix--agent-tags-for-conv-key (conv-key)
+          "Return the list of tags for conversation CONV-KEY."
           (let* ((store (decknix--agent-tags-read))
-                 (entry (gethash session-id store)))
-            (if (hash-table-p entry)
-                (gethash "tags" entry)
-              nil)))
+                 (convs (decknix--agent-tags-conversations store)))
+            (let ((entry (gethash conv-key convs)))
+              (when (hash-table-p entry)
+                (gethash "tags" entry)))))
 
         (defun decknix--agent-tags-all ()
-          "Return a sorted list of all unique tags across all sessions."
-          (let ((store (decknix--agent-tags-read))
-                (all-tags nil))
-            (maphash (lambda (_id entry)
+          "Return a sorted list of all unique tags across all conversations."
+          (let* ((store (decknix--agent-tags-read))
+                 (convs (decknix--agent-tags-conversations store))
+                 (all-tags nil))
+            (maphash (lambda (_key entry)
                        (when (hash-table-p entry)
                          (dolist (tag (gethash "tags" entry))
                            (cl-pushnew tag all-tags :test #'string=))))
-                     store)
+                     convs)
             (sort all-tags #'string<)))
 
         (defun decknix--agent-current-session-id ()
@@ -1318,88 +1735,121 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
           (or (decknix--agent-current-session-id)
               (user-error "No auggie session ID for this buffer (is it a resumed session?)")))
 
-        (defun decknix-agent-tag-add ()
-          "Add a tag to the current session.
-        Prompts with existing tags for completion, or type a new one."
+        (defun decknix--agent-require-conv-key ()
+          "Get the conversation key for the current session, or error."
+          (let* ((session-id (decknix--agent-require-session-id))
+                 (conv-key (decknix--agent-conversation-key-for-session session-id)))
+            (unless conv-key
+              (user-error "Cannot determine conversation for session %s"
+                          (substring session-id 0 8)))
+            conv-key))
+
+        (defun decknix-agent-tag-show ()
+          "Show the tags for the current conversation."
           (interactive)
           (let* ((session-id (decknix--agent-require-session-id))
+                 (tags (decknix--agent-tags-for-session session-id)))
+            (if tags
+                (message "Conversation tags: [%s]" (string-join tags ", "))
+              (message "No tags on this conversation"))))
+
+        (defun decknix-agent-tag-add ()
+          "Add a tag to the current conversation.
+        Shows all existing tags for completion. Type a new name to create one."
+          (interactive)
+          (let* ((conv-key (decknix--agent-require-conv-key))
+                 (session-id (decknix--agent-require-session-id))
                  (existing (decknix--agent-tags-all))
-                 (current (decknix--agent-tags-for-session session-id))
-                 (tag (completing-read
-                       (format "Add tag to %s: " (substring session-id 0 8))
-                       existing nil nil))
+                 (current (decknix--agent-tags-for-conv-key conv-key))
+                 ;; Show which tags are already applied via annotation
+                 (annotator (eval
+                             `(lambda (tag)
+                                (if (member tag ',current) " (applied)" ""))
+                             t))
+                 (tag (let ((completion-extra-properties
+                             (list :annotation-function annotator)))
+                        (completing-read "Add tag (or type new): "
+                                         existing nil nil)))
                  (tag (string-trim tag)))
             (when (string-empty-p tag)
               (user-error "Tag cannot be empty"))
             (if (member tag current)
-                (message "Session already has tag \"%s\"" tag)
+                (message "Conversation already has tag \"%s\"" tag)
               (let* ((store (decknix--agent-tags-read))
-                     (entry (or (gethash session-id store)
+                     (convs (decknix--agent-tags-conversations store))
+                     (entry (or (gethash conv-key convs)
                                 (let ((h (make-hash-table :test 'equal)))
-                                  (puthash "tags" nil h) h)))
-                     (tags (gethash "tags" entry)))
+                                  (puthash "tags" nil h)
+                                  (puthash "sessions" nil h)
+                                  h)))
+                     (tags (gethash "tags" entry))
+                     (sids (gethash "sessions" entry)))
                 (puthash "tags" (append tags (list tag)) entry)
-                (puthash session-id entry store)
+                ;; Track this session in the conversation
+                (cl-pushnew session-id sids :test #'string=)
+                (puthash "sessions" sids entry)
+                (puthash conv-key entry convs)
                 (decknix--agent-tags-write store)
-                (message "Tagged %s with \"%s\" → [%s]"
-                         (substring session-id 0 8) tag
-                         (string-join (gethash "tags" entry) ", "))))))
+                (message "Tagged conversation with \"%s\" → [%s]"
+                         tag (string-join (gethash "tags" entry) ", "))))))
 
         (defun decknix-agent-tag-remove ()
-          "Remove a tag from the current session."
+          "Remove a tag from the current conversation."
           (interactive)
-          (let* ((session-id (decknix--agent-require-session-id))
-                 (current (decknix--agent-tags-for-session session-id)))
+          (let* ((conv-key (decknix--agent-require-conv-key))
+                 (current (decknix--agent-tags-for-conv-key conv-key)))
             (unless current
-              (user-error "Session %s has no tags" (substring session-id 0 8)))
-            (let* ((tag (completing-read
-                         (format "Remove tag from %s: " (substring session-id 0 8))
-                         current nil t))
+              (user-error "This conversation has no tags"))
+            (let* ((tag (completing-read "Remove tag: " current nil t))
                    (store (decknix--agent-tags-read))
-                   (entry (gethash session-id store))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (gethash conv-key convs))
                    (remaining (remove tag (gethash "tags" entry))))
               (if remaining
                   (puthash "tags" remaining entry)
-                (remhash session-id store))
+                (remhash conv-key convs))
               (decknix--agent-tags-write store)
-              (message "Removed \"%s\" from %s" tag (substring session-id 0 8)))))
+              (message "Removed \"%s\" from conversation" tag))))
 
         (defun decknix-agent-tag-list ()
-          "List sessions filtered by tag.
-        Prompts for a tag, then shows matching sessions in the picker."
+          "List conversations filtered by tag.
+        Prompts for a tag, then shows the latest session per matching conversation."
           (interactive)
           (let* ((all-tags (decknix--agent-tags-all)))
             (unless all-tags
               (user-error "No tags defined yet"))
             (let* ((tag (completing-read "Filter by tag: " all-tags nil t))
                    (store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
                    (sessions (decknix--agent-session-list))
-                   (matching-ids nil))
-              ;; Collect session IDs that have this tag
-              (maphash (lambda (id entry)
+                   (conv-groups (decknix--agent-session-group-by-conversation sessions))
+                   (matching nil))
+              ;; Find conversations with this tag
+              (maphash (lambda (conv-key entry)
                          (when (and (hash-table-p entry)
                                     (member tag (gethash "tags" entry)))
-                           (push id matching-ids)))
-                       store)
-              (unless matching-ids
-                (user-error "No sessions tagged \"%s\"" tag))
-              ;; Filter saved sessions to only matching ones
-              (let* ((filtered (seq-filter
-                                (lambda (s) (member (alist-get 'sessionId s) matching-ids))
-                                sessions))
-                     (entries (mapcar (lambda (session)
-                                       (let* ((id (alist-get 'sessionId session))
-                                              (tags (decknix--agent-tags-for-session id))
+                           (push conv-key matching)))
+                       convs)
+              (unless matching
+                (user-error "No conversations tagged \"%s\"" tag))
+              ;; Build picker from latest session per matching conversation
+              (let* ((entries
+                      (cl-loop for conv-key in matching
+                               for group = (seq-find
+                                            (lambda (g) (string= (car g) conv-key))
+                                            conv-groups)
+                               when group
+                               collect (let* ((latest (cadr group))
+                                              (tags (decknix--agent-tags-for-conv-key conv-key))
                                               (tag-str (if tags (format " [%s]" (string-join tags ", ")) "")))
                                          (cons (format "%s%s"
-                                                       (decknix--agent-session-preview session)
+                                                       (decknix--agent-session-preview latest)
                                                        tag-str)
-                                               (cons 'session session))))
-                                     filtered)))
+                                               (cons 'session latest))))))
                 (unless entries
-                  (user-error "No active sessions match tag \"%s\" (sessions may have expired)" tag))
+                  (user-error "No sessions found for tag \"%s\"" tag))
                 (let* ((selection (completing-read
-                                   (format "Sessions tagged \"%s\": " tag)
+                                   (format "Conversations tagged \"%s\": " tag)
                                    (decknix--agent-unsorted-table
                                     (mapcar #'car entries)) nil t))
                        (chosen (cdr (assoc selection entries)))
@@ -1407,10 +1857,11 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
                        (session-id (alist-get 'sessionId session)))
                   (decknix--agent-session-resume
                    session-id
-                   decknix-agent-session-history-count))))))
+                   decknix-agent-session-history-count
+                   (decknix--agent-session-display-name session)))))))
 
         (defun decknix-agent-tag-edit ()
-          "Rename a tag across all sessions."
+          "Rename a tag across all conversations."
           (interactive)
           (let* ((all-tags (decknix--agent-tags-all)))
             (unless all-tags
@@ -1419,12 +1870,13 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
                    (new-tag (string-trim
                              (read-string (format "Rename \"%s\" to: " old-tag) old-tag)))
                    (store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
                    (count 0))
               (when (string-empty-p new-tag)
                 (user-error "Tag cannot be empty"))
               (when (string= old-tag new-tag)
                 (user-error "Same name, nothing to do"))
-              (maphash (lambda (id entry)
+              (maphash (lambda (_key entry)
                          (when (hash-table-p entry)
                            (let ((tags (gethash "tags" entry)))
                              (when (member old-tag tags)
@@ -1432,67 +1884,70 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
                                         (mapcar (lambda (tg) (if (string= tg old-tag) new-tag tg)) tags)
                                         entry)
                                (cl-incf count)))))
-                       store)
+                       convs)
               (decknix--agent-tags-write store)
-              (message "Renamed \"%s\" → \"%s\" across %d session%s"
+              (message "Renamed \"%s\" → \"%s\" across %d conversation%s"
                        old-tag new-tag count (if (= count 1) "" "s")))))
 
         (defun decknix-agent-tag-delete ()
-          "Delete a tag from all sessions."
+          "Delete a tag from all conversations."
           (interactive)
           (let* ((all-tags (decknix--agent-tags-all)))
             (unless all-tags
               (user-error "No tags defined yet"))
             (let* ((tag (completing-read "Delete tag globally: " all-tags nil t)))
-              (when (y-or-n-p (format "Delete tag \"%s\" from all sessions? " tag))
-                (let ((store (decknix--agent-tags-read))
-                      (count 0)
-                      (empties nil))
-                  (maphash (lambda (id entry)
+              (when (y-or-n-p (format "Delete tag \"%s\" from all conversations? " tag))
+                (let* ((store (decknix--agent-tags-read))
+                       (convs (decknix--agent-tags-conversations store))
+                       (count 0)
+                       (empties nil))
+                  (maphash (lambda (key entry)
                              (when (hash-table-p entry)
                                (let ((tags (gethash "tags" entry)))
                                  (when (member tag tags)
                                    (let ((remaining (remove tag tags)))
                                      (if remaining
                                          (puthash "tags" remaining entry)
-                                       (push id empties)))
+                                       (push key empties)))
                                    (cl-incf count)))))
-                           store)
-                  ;; Remove entries with no tags left
-                  (dolist (id empties) (remhash id store))
+                           convs)
+                  (dolist (key empties) (remhash key convs))
                   (decknix--agent-tags-write store)
-                  (message "Deleted \"%s\" from %d session%s"
+                  (message "Deleted \"%s\" from %d conversation%s"
                            tag count (if (= count 1) "" "s")))))))
 
         (defun decknix-agent-tag-cleanup ()
-          "Remove tags for sessions that no longer exist in auggie."
+          "Remove conversation entries that have no matching sessions on disk."
           (interactive)
           (let* ((store (decknix--agent-tags-read))
+                 (convs (decknix--agent-tags-conversations store))
                  (sessions (decknix--agent-session-list))
-                 (live-ids (mapcar (lambda (s) (alist-get 'sessionId s)) sessions))
+                 (conv-groups (decknix--agent-session-group-by-conversation sessions))
+                 (live-keys (mapcar #'car conv-groups))
                  (orphans nil))
-            (maphash (lambda (id _entry)
-                       (unless (member id live-ids)
-                         (push id orphans)))
-                     store)
+            (maphash (lambda (key _entry)
+                       (unless (member key live-keys)
+                         (push key orphans)))
+                     convs)
             (if orphans
-                (when (y-or-n-p (format "Remove tags for %d orphaned session%s? "
-                                        (length orphans) (if (= (length orphans) 1) "" "s")))
-                  (dolist (id orphans) (remhash id store))
+                (when (y-or-n-p (format "Remove %d orphaned conversation tag%s? "
+                                        (length orphans)
+                                        (if (= (length orphans) 1) "" "s")))
+                  (dolist (key orphans) (remhash key convs))
                   (decknix--agent-tags-write store)
-                  (message "Cleaned up %d orphaned session%s"
-                           (length orphans) (if (= (length orphans) 1) "" "s")))
-              (message "No orphaned sessions found"))))
+                  (message "Cleaned up %d orphaned conversation%s"
+                           (length orphans)
+                           (if (= (length orphans) 1) "" "s")))
+              (message "No orphaned conversations found"))))
 
-        ;; C-c A T — tags sub-prefix ("Tags")
-        (define-prefix-command 'decknix-agent-tags-map)
-        (define-key decknix-agent-prefix-map (kbd "T") 'decknix-agent-tags-map)
-        (define-key decknix-agent-tags-map (kbd "t") 'decknix-agent-tag-add)       ; Tag (add)
-        (define-key decknix-agent-tags-map (kbd "r") 'decknix-agent-tag-remove)    ; Remove
-        (define-key decknix-agent-tags-map (kbd "l") 'decknix-agent-tag-list)      ; List/filter
-        (define-key decknix-agent-tags-map (kbd "e") 'decknix-agent-tag-edit)      ; Edit/rename
-        (define-key decknix-agent-tags-map (kbd "d") 'decknix-agent-tag-delete)    ; Delete globally
-        (define-key decknix-agent-tags-map (kbd "c") 'decknix-agent-tag-cleanup)   ; Cleanup orphans
+        ;; C-c A T — global tags sub-prefix ("Tags (global)")
+        ;; Operations that affect tags across all sessions.
+        (define-prefix-command 'decknix-agent-tags-global-map)
+        (define-key decknix-agent-prefix-map (kbd "T") 'decknix-agent-tags-global-map)
+        (define-key decknix-agent-tags-global-map (kbd "l") 'decknix-agent-tag-list)      ; List/filter sessions by tag
+        (define-key decknix-agent-tags-global-map (kbd "e") 'decknix-agent-tag-edit)      ; Rename tag globally
+        (define-key decknix-agent-tags-global-map (kbd "d") 'decknix-agent-tag-delete)    ; Delete tag globally
+        (define-key decknix-agent-tags-global-map (kbd "c") 'decknix-agent-tag-cleanup)   ; Cleanup orphans
 
         ;; == Session ID: shortened display, copy, toggle ==
 
@@ -1630,13 +2085,17 @@ Use C-c k k to pre-emptively interrupt, then C-c C-c to submit cleanly."
                     (let ((agent-shell-confirm-interrupt nil))
                       (agent-shell-interrupt))))
                 (sit-for 0.3))
+              ;; Verify the agent process is alive before submitting
+              (unless (and (buffer-live-p target)
+                           (get-buffer-process target)
+                           (process-live-p (get-buffer-process target)))
+                (user-error "Agent process not running — wait for it to start or restart with C-c A a"))
               ;; Clear or close the compose buffer
               (decknix--compose-finish)
               ;; Submit to the agent-shell buffer
-              (when (buffer-live-p target)
-                (with-current-buffer target
-                  (goto-char (point-max))
-                  (shell-maker-submit :input input))))))
+              (with-current-buffer target
+                (goto-char (point-max))
+                (shell-maker-submit :input input)))))
 
         (defun decknix-agent-compose-interrupt-agent ()
           "Pre-emptively interrupt the agent without submitting.
@@ -1679,7 +2138,9 @@ rather than waiting for the current response to complete."
                  0.3 nil
                  (eval
                   `(lambda ()
-                     (when (buffer-live-p ,tgt)
+                     (when (and (buffer-live-p ,tgt)
+                                (get-buffer-process ,tgt)
+                                (process-live-p (get-buffer-process ,tgt)))
                        (with-current-buffer ,tgt
                          (goto-char (point-max))
                          (shell-maker-submit :input ,inp))))
@@ -2591,6 +3052,22 @@ Preserves pinned items and previously fetched metadata."
       ''
       + ''
 
+        ;; Guard all submit paths against a dead/missing process or config.
+        ;; shell-maker-submit is the single entry point for sending input
+        ;; (used by RET in the shell buffer, compose C-c C-c, and programmatic calls).
+        ;; Without this, submitting before the process has started or after it
+        ;; has exited produces: "Wrong type argument: processp, nil" or
+        ;; "Wrong type argument: shell-maker-config, nil".
+        ;; Uses :around advice so we can block the call entirely.
+        (advice-add 'shell-maker-submit :around
+                    (lambda (orig-fn &rest args)
+                      (if (or (not (boundp 'shell-maker--config))
+                              (null shell-maker--config)
+                              (not (get-buffer-process (current-buffer)))
+                              (not (process-live-p (get-buffer-process (current-buffer)))))
+                          (user-error "Agent process not ready — wait for it to start or restart with C-c A a")
+                        (apply orig-fn args))))
+
         ;; Disable line numbers in agent-shell buffers
         ;; Re-enable TAB for yasnippet expansion (no completion conflict here)
         ;; In-buffer shortcuts: C-c x (no A prefix needed inside agent-shell)
@@ -2654,14 +3131,11 @@ Preserves pinned items and previously fetched metadata."
                       (define-key map (kbd "n") 'decknix-agent-command-new)
                       (define-key map (kbd "e") 'decknix-agent-command-edit)
                       (local-set-key (kbd "C-c c") map))
-                    ;; C-c T — tags sub-prefix in-buffer
+                    ;; C-c T — session-scoped tags sub-prefix in-buffer
                     (let ((map (make-sparse-keymap)))
-                      (define-key map (kbd "t") 'decknix-agent-tag-add)
-                      (define-key map (kbd "r") 'decknix-agent-tag-remove)
-                      (define-key map (kbd "l") 'decknix-agent-tag-list)
-                      (define-key map (kbd "e") 'decknix-agent-tag-edit)
-                      (define-key map (kbd "d") 'decknix-agent-tag-delete)
-                      (define-key map (kbd "c") 'decknix-agent-tag-cleanup)
+                      (define-key map (kbd "l") 'decknix-agent-tag-show)      ; List this session's tags
+                      (define-key map (kbd "a") 'decknix-agent-tag-add)       ; Add tag (create or select)
+                      (define-key map (kbd "r") 'decknix-agent-tag-remove)    ; Remove tag
                       (local-set-key (kbd "C-c T") map))))
       '';
     };
