@@ -3076,8 +3076,21 @@ Preserves pinned items and previously fetched metadata."
                           (user-error "Agent process not ready — wait for it to start or restart with C-c A a")
                         (apply orig-fn args))))
 
+        ;; TAB dispatch: when a yasnippet is actively expanding (cursor is
+        ;; inside a field), TAB should advance to the next field.  Otherwise
+        ;; TAB triggers yas-expand to start a new snippet.  We need this
+        ;; because local-set-key overrides the yas-keymap minor-mode binding.
+        (defun decknix--agent-tab-dwim ()
+          "If inside a yasnippet field, advance to the next field.
+Otherwise try to expand a snippet at point."
+          (interactive)
+          (if (and (bound-and-true-p yas-minor-mode)
+                   (yas--snippets-at-point))
+              (yas-next-field-or-maybe-expand)
+            (yas-expand)))
+
         ;; Disable line numbers in agent-shell buffers
-        ;; Re-enable TAB for yasnippet expansion (no completion conflict here)
+        ;; TAB dispatches between snippet field navigation and expansion
         ;; In-buffer shortcuts: C-c x (no A prefix needed inside agent-shell)
         (add-hook 'agent-shell-mode-hook
                   (lambda ()
@@ -3086,8 +3099,8 @@ Preserves pinned items and previously fetched metadata."
                     (setq-local comint-scroll-to-bottom-on-input t)
                     (setq-local comint-scroll-to-bottom-on-output t)
                     (setq-local comint-scroll-show-maximum-output t)
-                    (local-set-key (kbd "TAB") 'yas-expand)
-                    (local-set-key (kbd "<tab>") 'yas-expand)
+                    (local-set-key (kbd "TAB") 'decknix--agent-tab-dwim)
+                    (local-set-key (kbd "<tab>") 'decknix--agent-tab-dwim)
                     ;; Buffer-local bindings — no C-c A prefix needed inside agent-shell.
                     ;; Native bindings: C-c C-c (interrupt), C-c C-v (model), C-c C-m (mode)
                     (local-set-key (kbd "C-c e") 'decknix-agent-compose)
