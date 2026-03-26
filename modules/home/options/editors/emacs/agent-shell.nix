@@ -536,6 +536,8 @@ Press q to dismiss."
             "  In compose: C-c C-c submit, C-c C-k clear/close.\n"
             "  In compose: C-c C-s toggles sticky (stays open) / transient.\n"
             "  In compose: C-c k k interrupts the agent, C-c k C-c interrupts & submits.\n"
+            "  In compose: M-p / M-n cycle through prompts (all sessions).\n"
+            "  In compose: M-r search all prompts (consult fuzzy match).\n"
             "  Press C-c C-c to interrupt a running response.\n"
             "  Press C-c E to interrupt and open the compose buffer.\n"
             "\n"
@@ -2111,6 +2113,351 @@ Otherwise copy the shortened 8-character hash."
         (defvar-local decknix--compose-target-buffer nil
           "The agent-shell buffer to submit the composed prompt to.")
 
+        (defvar-local decknix--compose-history-index -1
+          "Current position in the prompt history.
+-1 means not navigating history (showing user's own input).")
+
+        (defvar-local decknix--compose-saved-input nil
+          "Saved user input before history navigation started.
+Restored when cycling past the newest history entry.")
+
+        (defvar-local decknix--compose-history-items nil
+          "Prompts loaded so far (current ring + streamed sessions).")
+
+        (defvar-local decknix--compose-history-seen nil
+          "Hash table tracking prompts already in history-items (for dedup).")
+
+        (defvar-local decknix--compose-history-file-queue nil
+          "Remaining session files to load on-demand (newest first).")
+
+        (defvar-local decknix--compose-history-exhausted nil
+          "Non-nil when all session files have been processed.")
+
+        ;; == On-demand per-file prompt extraction ==
+
+        (defvar decknix--prompt-extract-jq-filter-file nil
+          "Path to temp file containing the jq filter for single-file extraction.")
+
+        (defun decknix--prompt-extract-ensure-jq-filter ()
+          "Create the jq filter file for per-file prompt extraction."
+          (unless (and decknix--prompt-extract-jq-filter-file
+                      (file-exists-p decknix--prompt-extract-jq-filter-file))
+            (setq decknix--prompt-extract-jq-filter-file
+                  (make-temp-file "auggie-extract-" nil ".jq"))
+            (with-temp-file decknix--prompt-extract-jq-filter-file
+              (insert "[.chatHistory[].exchange.request_message"
+                      " // \"\" | select(length > 0)] | reverse\n")))
+          decknix--prompt-extract-jq-filter-file)
+
+        (defun decknix--prompt-extract-from-file (file)
+          "Extract user prompts from a single session FILE using jq.
+Returns a list of non-empty strings, newest first."
+          (condition-case nil
+              (let* ((jqf (decknix--prompt-extract-ensure-jq-filter))
+                     (raw (shell-command-to-string
+                           (concat "jq -c -f "
+                                   (shell-quote-argument jqf) " "
+                                   (shell-quote-argument file)
+                                   " 2>/dev/null")))
+                     (trimmed (string-trim raw)))
+                (when (and (not (string-empty-p trimmed))
+                           (string-prefix-p "[" trimmed))
+                  (let* ((json-array-type 'list)
+                         (json-key-type 'symbol)
+                         (msgs (json-read-from-string trimmed)))
+                    (seq-filter (lambda (m)
+                                  (and (stringp m)
+                                       (not (string-empty-p (string-trim m)))))
+                                msgs))))
+            (error nil)))
+
+        (defun decknix--compose-history-init ()
+          "Initialize on-demand history for this compose buffer.
+Populates items from comint-input-ring and builds the file queue."
+          (let ((seen (make-hash-table :test 'equal))
+                (items nil)
+                (current-session-id nil))
+            ;; 1. Current session's comint-input-ring
+            (when (and decknix--compose-target-buffer
+                       (buffer-live-p decknix--compose-target-buffer))
+              (with-current-buffer decknix--compose-target-buffer
+                (setq current-session-id
+                      (when (bound-and-true-p decknix--agent-auggie-session-id)
+                        decknix--agent-auggie-session-id))
+                (when (and (bound-and-true-p comint-input-ring)
+                           (not (ring-empty-p comint-input-ring)))
+                  (dotimes (i (ring-length comint-input-ring))
+                    (let ((item (ring-ref comint-input-ring i)))
+                      (when (and (stringp item)
+                                 (not (string-empty-p (string-trim item)))
+                                 (not (gethash item seen)))
+                        (puthash item t seen)
+                        (push item items)))))))
+            (setq items (nreverse items))
+            ;; 2. Build file queue: session files sorted newest-first, exclude current
+            (let* ((dir decknix--agent-sessions-dir)
+                   (exclude-file (when current-session-id
+                                   (expand-file-name
+                                    (concat current-session-id ".json") dir)))
+                   ;; ls -t gives newest-first by mtime
+                   (all-files
+                    (split-string
+                     (shell-command-to-string
+                      (concat "ls -t "
+                              (shell-quote-argument dir)
+                              "/*.json 2>/dev/null"))
+                     "\n" t))
+                   (queue (if exclude-file
+                              (seq-remove
+                               (lambda (f) (string= f exclude-file))
+                               all-files)
+                            all-files)))
+              (setq decknix--compose-history-items items
+                    decknix--compose-history-seen seen
+                    decknix--compose-history-file-queue queue
+                    decknix--compose-history-exhausted (null queue)))))
+
+        (defun decknix--compose-history-load-next-batch ()
+          "Load prompts from the next session file(s) in the queue.
+Keeps loading files until at least one new prompt is found or queue is empty.
+Returns non-nil if new prompts were added."
+          (let ((added nil))
+            (while (and (not added) decknix--compose-history-file-queue)
+              (let* ((file (pop decknix--compose-history-file-queue))
+                     (msgs (decknix--prompt-extract-from-file file)))
+                (dolist (msg msgs)
+                  (unless (gethash msg decknix--compose-history-seen)
+                    (puthash msg t decknix--compose-history-seen)
+                    ;; Append to end of items list
+                    (setq decknix--compose-history-items
+                          (nconc decknix--compose-history-items (list msg)))
+                    (setq added t)))))
+            (when (null decknix--compose-history-file-queue)
+              (setq decknix--compose-history-exhausted t))
+            added))
+
+        (defun decknix-agent-compose-previous-input ()
+          "Replace compose buffer content with the previous prompt from history.
+Streams through current session, then loads saved sessions on-demand."
+          (interactive)
+          ;; Initialize on first navigation
+          (unless decknix--compose-history-seen
+            (decknix--compose-history-init))
+          (let ((items decknix--compose-history-items))
+            ;; Save current input when starting navigation
+            (when (= decknix--compose-history-index -1)
+              (setq decknix--compose-saved-input
+                    (buffer-substring-no-properties (point-min) (point-max))))
+            ;; Try to move backward
+            (let ((new-index (1+ decknix--compose-history-index)))
+              (when (and (>= new-index (length items))
+                         (not decknix--compose-history-exhausted))
+                ;; Need more — load next session file(s)
+                (decknix--compose-history-load-next-batch)
+                (setq items decknix--compose-history-items))
+              (if (>= new-index (length items))
+                  (progn
+                    (message "End of history (%d prompts, %d sessions remaining)"
+                             (length items)
+                             (length decknix--compose-history-file-queue))
+                    (ding))
+                (setq decknix--compose-history-index new-index)
+                (erase-buffer)
+                (insert (nth new-index items))
+                (goto-char (point-max))))))
+
+        (defun decknix-agent-compose-next-input ()
+          "Replace compose buffer content with the next (newer) prompt from history.
+When past the newest entry, restores the original user input."
+          (interactive)
+          (cond
+           ;; Already at current input
+           ((= decknix--compose-history-index -1)
+            (message "End of history") (ding))
+           ;; Moving to current input (restore saved)
+           ((= decknix--compose-history-index 0)
+            (setq decknix--compose-history-index -1)
+            (erase-buffer)
+            (when decknix--compose-saved-input
+              (insert decknix--compose-saved-input))
+            (goto-char (point-max)))
+           ;; Move forward (newer)
+           (t
+            (setq decknix--compose-history-index
+                  (1- decknix--compose-history-index))
+            (erase-buffer)
+            (insert (nth decknix--compose-history-index
+                         decknix--compose-history-items))
+            (goto-char (point-max)))))
+
+        ;; == Consult-based prompt search (M-r) ==
+
+        (defvar decknix--prompt-search-cache nil
+          "Cached list of all user prompts for consult search (strings).")
+
+        (defvar decknix--prompt-search-cache-time 0
+          "Time when prompt search cache was last updated.")
+
+        (defvar decknix--prompt-search-cache-ttl 300
+          "Seconds before prompt search cache is stale (5 min).")
+
+        (defvar decknix--prompt-search-refresh-proc nil
+          "Process handle for async prompt search cache refresh.")
+
+        (defun decknix--prompt-search-jq-cmd ()
+          "Shell command to extract all user prompts from all sessions.
+Outputs one JSON array per line (one per session file)."
+          (let ((jqf (decknix--prompt-extract-ensure-jq-filter)))
+            (concat
+             "find " (shell-quote-argument decknix--agent-sessions-dir)
+             " -maxdepth 1 -name '*.json' -print0 2>/dev/null"
+             " | xargs -0 -P8 -I{}"
+             " sh -c 'jq -c -f \"$1\" \"$2\" 2>/dev/null || true' _ "
+             (shell-quote-argument jqf) " {}")))
+
+        (defun decknix--prompt-search-parse (raw)
+          "Parse RAW jq output into a flat deduplicated prompt list."
+          (let ((seen (make-hash-table :test 'equal))
+                (result nil))
+            (dolist (line (split-string (string-trim raw) "\n" t))
+              (condition-case nil
+                  (let* ((json-array-type 'list)
+                         (json-key-type 'symbol)
+                         (msgs (json-read-from-string line)))
+                    (dolist (msg msgs)
+                      (when (and (stringp msg)
+                                 (not (string-empty-p (string-trim msg)))
+                                 (not (gethash msg seen)))
+                        (puthash msg t seen)
+                        (push msg result))))
+                (error nil)))
+            (nreverse result)))
+
+        (defun decknix--prompt-search-refresh-sync ()
+          "Synchronously build the prompt search cache."
+          (message "Loading all prompt history for search…")
+          (let ((result (decknix--prompt-search-parse
+                         (shell-command-to-string
+                          (decknix--prompt-search-jq-cmd)))))
+            (setq decknix--prompt-search-cache result
+                  decknix--prompt-search-cache-time (float-time))
+            result))
+
+        (defun decknix--prompt-search-refresh-async ()
+          "Asynchronously refresh the prompt search cache."
+          (when (or (null decknix--prompt-search-refresh-proc)
+                    (not (process-live-p decknix--prompt-search-refresh-proc)))
+            (let ((buf (generate-new-buffer " *auggie-prompt-search*")))
+              (setq decknix--prompt-search-refresh-proc
+                    (start-process-shell-command
+                     "auggie-prompt-search" buf
+                     (decknix--prompt-search-jq-cmd)))
+              (set-process-sentinel
+               decknix--prompt-search-refresh-proc
+               (eval
+                `(lambda (proc _event)
+                   (when (eq (process-status proc) 'exit)
+                     (let ((pbuf (process-buffer proc)))
+                       (when (buffer-live-p pbuf)
+                         (let ((result (decknix--prompt-search-parse
+                                        (with-current-buffer pbuf
+                                          (buffer-string)))))
+                           (when result
+                             (setq decknix--prompt-search-cache result
+                                   decknix--prompt-search-cache-time
+                                   (float-time))))
+                         (kill-buffer pbuf)))))
+                t)))))
+
+        (defun decknix--prompt-search-get ()
+          "Return all prompts for search, fetching if needed."
+          (when (and (null decknix--prompt-search-cache)
+                     (= decknix--prompt-search-cache-time 0))
+            (decknix--prompt-search-refresh-sync))
+          (when (> (- (float-time) decknix--prompt-search-cache-time)
+                   decknix--prompt-search-cache-ttl)
+            (decknix--prompt-search-refresh-async))
+          ;; Also prepend current comint-input-ring entries
+          (let ((seen (make-hash-table :test 'equal))
+                (ring-items nil)
+                (target (or decknix--compose-target-buffer
+                            (when (derived-mode-p 'agent-shell-mode)
+                              (current-buffer)))))
+            (when (and target (buffer-live-p target))
+              (with-current-buffer target
+                (when (and (bound-and-true-p comint-input-ring)
+                           (not (ring-empty-p comint-input-ring)))
+                  (dotimes (i (ring-length comint-input-ring))
+                    (let ((item (ring-ref comint-input-ring i)))
+                      (when (and (stringp item)
+                                 (not (string-empty-p (string-trim item)))
+                                 (not (gethash item seen)))
+                        (puthash item t seen)
+                        (push item ring-items)))))))
+            ;; Combine: current ring + saved (deduped)
+            (let ((result (nreverse ring-items)))
+              (dolist (msg decknix--prompt-search-cache)
+                (unless (gethash msg seen)
+                  (puthash msg t seen)
+                  (push msg result)))
+              (nreverse result))))
+
+        ;; Pre-fetch prompt search cache on daemon start
+        (run-at-time 5 nil #'decknix--prompt-search-refresh-async)
+
+        (defun decknix--prompt-truncate-for-display (prompt max-len)
+          "Truncate PROMPT to MAX-LEN chars, collapsing newlines to ↵."
+          (let* ((collapsed (replace-regexp-in-string "[\n\r]+" " ↵ " prompt))
+                 (trimmed (string-trim collapsed)))
+            (if (<= (length trimmed) max-len)
+                trimmed
+              (concat (substring trimmed 0 (- max-len 1)) "…"))))
+
+        (defun decknix-agent-compose-search-history ()
+          "Search prompt history using consult with fuzzy matching.
+Selected prompt replaces the compose buffer content.
+Works in both compose buffers and agent-shell buffers."
+          (interactive)
+          (require 'consult)
+          (let* ((all-prompts (decknix--prompt-search-get))
+                 ;; Build candidates: truncated display → full prompt
+                 (candidates
+                  (mapcar (lambda (p)
+                            (cons (decknix--prompt-truncate-for-display p 120) p))
+                          all-prompts))
+                 (selected
+                  (consult--read
+                   (mapcar #'car candidates)
+                   :prompt "Search prompts: "
+                   :sort nil
+                   :require-match t
+                   :category 'decknix-prompt
+                   :history 'decknix--prompt-search-minibuffer-history))
+                 (full-prompt (cdr (assoc selected candidates))))
+            (when full-prompt
+              ;; Insert into compose buffer or show in message
+              (if (bound-and-true-p decknix-agent-compose-mode)
+                  (progn
+                    (erase-buffer)
+                    (insert full-prompt)
+                    (goto-char (point-max))
+                    ;; Reset M-p/M-n state since we jumped
+                    (setq decknix--compose-history-index -1
+                          decknix--compose-saved-input nil
+                          decknix--compose-history-items nil
+                          decknix--compose-history-seen nil
+                          decknix--compose-history-file-queue nil
+                          decknix--compose-history-exhausted nil))
+                ;; In agent-shell buffer: open compose with this prompt
+                (let ((target (current-buffer)))
+                  (decknix--compose-get-or-create target)
+                  (erase-buffer)
+                  (insert full-prompt)
+                  (goto-char (point-max)))))))
+
+        (defvar decknix--prompt-search-minibuffer-history nil
+          "Minibuffer history for prompt search.")
+
         (defcustom decknix-agent-compose-sticky nil
           "When non-nil, the compose editor stays open after submit/cancel.
 Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
@@ -2135,6 +2482,9 @@ Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
             (define-key map (kbd "C-c C-q") #'decknix-agent-compose-close)
             (define-key map (kbd "C-c C-s") #'decknix-agent-compose-toggle-sticky)
             (define-key map (kbd "C-c k") decknix-agent-compose-interrupt-map)
+            (define-key map (kbd "M-p") #'decknix-agent-compose-previous-input)
+            (define-key map (kbd "M-n") #'decknix-agent-compose-next-input)
+            (define-key map (kbd "M-r") #'decknix-agent-compose-search-history)
             map)
           "Keymap for `decknix-agent-compose-mode'.")
 
@@ -2162,7 +2512,15 @@ C-c k k interrupt agent, C-c k C-c interrupt & submit."
           :keymap decknix-agent-compose-mode-map)
 
         (defun decknix--compose-finish ()
-          "Finish a compose action: clear if sticky, close if transient."
+          "Finish a compose action: clear if sticky, close if transient.
+Resets prompt history navigation state."
+          ;; Reset all history navigation state (rebuilt on next M-p)
+          (setq decknix--compose-history-index -1
+                decknix--compose-saved-input nil
+                decknix--compose-history-items nil
+                decknix--compose-history-seen nil
+                decknix--compose-history-file-queue nil
+                decknix--compose-history-exhausted nil)
           (if decknix--compose-sticky
               (progn
                 (erase-buffer)
@@ -2291,8 +2649,13 @@ after pressing C-c."
                                           'font-lock-comment-face))
                        (propertize "  " 'font-lock-face 'font-lock-comment-face)
                        (propertize "C-c" 'font-lock-face 'font-lock-keyword-face)
-                       (propertize " for actions (submit, interrupt, close, toggle sticky)"
-                                   'font-lock-face 'font-lock-comment-face))))
+                       (propertize " actions  " 'font-lock-face 'font-lock-comment-face)
+                       (propertize "M-p" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize "/" 'font-lock-face 'font-lock-comment-face)
+                       (propertize "M-n" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize " cycle  " 'font-lock-face 'font-lock-comment-face)
+                       (propertize "M-r" 'font-lock-face 'font-lock-keyword-face)
+                       (propertize " search" 'font-lock-face 'font-lock-comment-face))))
 
         (defun decknix--compose-find-target ()
           "Find the agent-shell buffer to target for compose."
