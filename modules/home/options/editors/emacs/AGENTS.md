@@ -86,7 +86,35 @@ The largest module (~2600 lines). Key subsystems:
   If last session, returns to the welcome screen or `*scratch*`.
 - **Session resume**: Restores history into comint buffer. Buffer is renamed
   to `*Auggie: <name>*` using tags (if any) or first-message preview, matching
-  the naming convention of new sessions.
+  the naming convention of new sessions. **Workspace is restored** from
+  `agent-sessions.json` — passes `--workspace-root` to auggie CLI and sets
+  `default-directory` so the agent operates in the original project directory.
+- **Workspace persistence**: Workspace directory is stored per conversation in
+  `~/.config/decknix/agent-sessions.json` alongside tags. Saved on session
+  creation, restored on resume.
+
+### Quick Actions
+- **PR review** (`C-c A c r`): DWIM workflow — prompts for GitHub PR URL
+  (defaults to clipboard), workspace, and session name. Parses `owner/repo/number`
+  from URL (lightweight, no `gh` CLI). Auto-generates name (`pr-<repo>-<number>`)
+  and tags (`review`, `<repo>`). Creates session and auto-sends
+  `/review-service-pr <url>` once the process is ready.
+- **Batch process** (`C-c A c B`): Opens a compose editor for launching multiple
+  sessions. Uses `---` grouping syntax:
+  ```
+  --- <group-name> [: <workspace>]
+  <url>
+  <url>
+  ```
+  Lines within a `---` group share a single session. Ungrouped lines each get
+  their own session. `C-c C-c` to launch, `C-c C-k` to cancel.
+- **Batch compose mode**: Minor mode (`decknix-batch-compose-mode`) with
+  font-lock for `---` dividers, GitHub URLs, and `#` comments. Header-line
+  shows keybindings.
+- **Summary buffer**: `*Batch Launch*` shows ✓/✗ per session after batch launch.
+- Built on reusable `decknix--agent-quickaction-start` — any future quick action
+  (e.g., investigate-issue) follows the same pattern: name + tags + workspace +
+  auto-send command.
 
 ### Compose Editor
 - Decoupled input buffer (sticky or transient mode).
@@ -107,6 +135,12 @@ The largest module (~2600 lines). Key subsystems:
 | `C-c A g` | Grep sessions — consult + ripgrep full-text search across all session content; `C-u` for all snapshots |
 | `C-c A n` | New session |
 | `C-c A q` | Quit/close session (switch to next or welcome) |
+| `C-c A c` | Commands — quick actions and custom commands |
+| `C-c A c r` | Review PR (quick action) |
+| `C-c A c B` | Batch process (multi-session launcher) |
+| `C-c A c c` | Run custom command (pick & insert) |
+| `C-c A c n` | New custom command |
+| `C-c A c e` | Edit custom command |
 | `C-c A T` | Tags — global (list/filter conversations, rename, delete, cleanup) |
 | `C-c T` | Tags — conversation-scoped (show, add, remove) — in-buffer only (#78) |
 | `C-c D` | Deckmacs — framework management (reload, status, diff, log) (#85) |
@@ -130,5 +164,6 @@ The largest module (~2600 lines). Key subsystems:
 - Framework prefix: `C-c D` (capital D — Deckmacs)
 - Module-local prefix: `C-c <lowercase>` (e.g., `C-c i` for context)
 - Compose mode: `C-c C-c` submit, `C-c k` interrupt sub-map, `C-c C-s` toggle
+- Batch compose: `C-c C-c` submit, `C-c C-k` cancel
 - Always add `which-key` labels for new prefix maps
 
