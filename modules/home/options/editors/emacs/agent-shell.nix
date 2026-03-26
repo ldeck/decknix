@@ -186,10 +186,11 @@ let
     3. **Never let content wrap or truncate** — if a table cell contains long text (descriptions, URLs, paths), switch to a non-table format.
   '';
 
-  # == Yasnippet prompt templates for agent-shell-mode ==
-  # Deployed to ~/.emacs.d/snippets/agent-shell-mode/ via home.file
+  # == Yasnippet prompt templates ==
+  # Deployed to ~/.emacs.d/snippets/<mode>/ via home.file
   # Note: ''${ escapes Nix interpolation to produce literal ${ for yasnippet fields
   snippetDir = ".emacs.d/snippets/agent-shell-mode";
+  batchSnippetDir = ".emacs.d/snippets/decknix-batch-compose-mode";
 
   mkSnippet = name: key: body: ''
     # -*- mode: snippet -*-
@@ -264,6 +265,17 @@ let
       - ''${4:steps taken}'';
   };
 
+  # == Yasnippet templates for batch compose mode ==
+  # Deployed to ~/.emacs.d/snippets/decknix-batch-compose-mode/ via home.file
+  batchSnippets = {
+    group = mkSnippet "group" "---" ''
+      --- ''${1:group-name}''${2: : ''${3:~/Code/}}
+      ''${0}'';
+
+    pr = mkSnippet "PR URL" "pr" ''
+      https://github.com/''${1:owner}/''${2:repo}/pull/''${3:number}''${0}'';
+  };
+
 in
 {
   options.programs.emacs.decknix.agentShell = {
@@ -323,6 +335,12 @@ in
         (mapAttrs'
           (name: text: nameValuePair "${snippetDir}/${name}" { inherit text; })
           snippets))
+      //
+      # Batch compose snippets → ~/.emacs.d/snippets/decknix-batch-compose-mode/
+      (optionalAttrs cfg.templates.enable
+        (mapAttrs'
+          (name: text: nameValuePair "${batchSnippetDir}/${name}" { inherit text; })
+          batchSnippets))
       //
       # Auggie custom commands → ~/.augment/commands/
       (optionalAttrs cfg.commands.enable
@@ -1399,13 +1417,13 @@ Uses project root if available, otherwise `default-directory'."
                   (project-root proj)))
               default-directory))
 
-        (defvar decknix-agent-workspace-roots
-          (list (expand-file-name "~/Code/nurturecloud"))
+        (defvar decknix-agent-workspace-roots nil
           "List of parent directories that contain git repositories.
 Used by `decknix--agent-pr-detect-workspace' to find the local
 checkout of a repo from a PR URL.  E.g., if this contains
-\"~/Code/nurturecloud\" and the PR is for \"upside\", the function
-checks whether ~/Code/nurturecloud/upside/ exists.")
+\"~/Code/myorg\" and the PR is for \"myrepo\", the function
+checks whether ~/Code/myorg/myrepo/ exists.
+Set this in your decknix-config's extraConfig or default.el.")
 
         (defun decknix--agent-pr-detect-workspace (owner repo)
           "Find the best workspace for a PR from OWNER/REPO.
@@ -1457,12 +1475,51 @@ Search order:
                 branch))))
 
         (defun decknix--agent-session-tags-for (session-id tags)
-          "Apply TAGS (list of strings) to SESSION-ID in the tag store."
+          "Apply TAGS (list of strings) to SESSION-ID in the tag store.
+Looks up the conversation key for SESSION-ID and stores tags under it.
+Falls back to v1 format (session-id keyed) if conv-key is not yet available."
           (when (and session-id tags)
-            (let ((store (decknix--agent-tags-read))
-                  (entry (make-hash-table :test 'equal)))
-              (puthash "tags" tags entry)
-              (puthash session-id entry store)
+            (let* ((conv-key (decknix--agent-conversation-key-for-session
+                              session-id))
+                   (store (decknix--agent-tags-read)))
+              (if conv-key
+                  ;; v2: store under conversations
+                  (let* ((convs (decknix--agent-tags-conversations store))
+                         (entry (or (gethash conv-key convs)
+                                    (let ((h (make-hash-table :test 'equal)))
+                                      (puthash "sessions" nil h)
+                                      h))))
+                    (puthash "tags" tags entry)
+                    (let ((sids (gethash "sessions" entry)))
+                      (cl-pushnew session-id sids :test #'string=)
+                      (puthash "sessions" sids entry))
+                    (puthash conv-key entry convs)
+                    (decknix--agent-tags-write store))
+                ;; v1 fallback: session-keyed (migration will fix later)
+                (let ((entry (make-hash-table :test 'equal)))
+                  (puthash "tags" tags entry)
+                  (puthash session-id entry store)
+                  (decknix--agent-tags-write store))))))
+
+        (defun decknix--agent-store-metadata-by-conv-key (conv-key tags workspace)
+          "Store TAGS and WORKSPACE directly under CONV-KEY in the tag store.
+Use this when the conversation key is known at creation time (e.g., quickactions
+where the first message is the command itself)."
+          (when conv-key
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (or (gethash conv-key convs)
+                              (let ((h (make-hash-table :test 'equal)))
+                                (puthash "sessions" nil h)
+                                h))))
+              (when tags
+                (let ((existing (gethash "tags" entry)))
+                  (dolist (tag tags)
+                    (cl-pushnew tag existing :test #'string=))
+                  (puthash "tags" existing entry)))
+              (when workspace
+                (puthash "workspace" workspace entry))
+              (puthash conv-key entry convs)
               (decknix--agent-tags-write store))))
 
         (defun decknix-agent-session-new (&optional quick)
@@ -1532,12 +1589,19 @@ workspace = project root, name = auto-generated, no tags."
              before-buffers name tags workspace)
             (message "Starting agent session \"%s\" in %s…" name workspace)))
 
-        (defun decknix--agent-session-new-post-create (before-buffers name tags workspace)
+        (defun decknix--agent-session-new-post-create
+            (before-buffers name tags workspace &optional first-message)
           "Post-creation setup: rename buffer to NAME, apply TAGS, record WORKSPACE.
 BEFORE-BUFFERS is the buffer snapshot taken before agent-shell-start.
 Finds the new buffer immediately (agent-shell-start creates it synchronously),
-renames it, then subscribes to `prompt-ready' to persist metadata once the
-ACP session ID is available.  All state is per-buffer — safe for batch launches."
+renames it, and persists metadata.
+
+FIRST-MESSAGE, if provided, is the text that will be sent as the first user
+message (e.g., the quickaction command).  When available, metadata (tags +
+workspace) is stored immediately using a conversation key derived from it.
+Otherwise, metadata is deferred to the `prompt-ready' event and stored
+once the first exchange completes.  All state is per-buffer — safe for
+batch launches."
           (let ((shell-buf (decknix--agent-find-new-shell-buffer before-buffers)))
             (when shell-buf
               ;; Rename immediately — the buffer exists now
@@ -1549,36 +1613,49 @@ ACP session ID is available.  All state is per-buffer — safe for batch launche
                             (buffer-name))
                 (when workspace
                   (setq-local decknix--agent-session-workspace workspace)))
-              ;; Subscribe to prompt-ready to persist tags + workspace once
-              ;; the session ID is available.  The closure captures per-buffer
-              ;; values so multiple concurrent launches don't clobber each other.
+              ;; Persist metadata.
+              ;; When first-message is known (quickactions), we can derive the
+              ;; conversation key NOW and store tags + workspace immediately.
+              ;; Otherwise, defer to prompt-ready → first-exchange completion.
               (when (or tags workspace)
-                (agent-shell-subscribe-to
-                 :shell-buffer shell-buf
-                 :event 'prompt-ready
-                 :on-event
-                 (eval `(lambda (_event)
-                          (when (buffer-live-p ,shell-buf)
-                            (condition-case nil
-                                (let ((sid (with-current-buffer ,shell-buf
-                                             (or decknix--agent-auggie-session-id
-                                                 (when (and (boundp 'shell-maker--config)
-                                                            shell-maker--config)
-                                                   (map-nested-elt (agent-shell--state)
-                                                                   '(:session :id)))))))
-                                  (when (and sid (stringp sid)
-                                            (not (string-empty-p sid)))
-                                    (with-current-buffer ,shell-buf
-                                      (setq-local decknix--agent-auggie-session-id sid))
-                                    (when ',tags
-                                      (decknix--agent-session-tags-for sid ',tags)
-                                      (message "Tags applied: [%s]"
-                                               (string-join ',tags ", ")))
-                                    (when ,workspace
-                                      (decknix--agent-session-save-workspace
-                                       sid ,workspace))))
-                              (error nil))))
-                       t))))))
+                (let ((conv-key (when first-message
+                                  (decknix--agent-conversation-key first-message))))
+                  (if conv-key
+                      ;; Immediate storage — we know the conversation key
+                      (progn
+                        (decknix--agent-store-metadata-by-conv-key
+                         conv-key tags workspace)
+                        (when tags
+                          (message "Tags applied: [%s]"
+                                   (string-join tags ", "))))
+                    ;; Deferred — subscribe to prompt-ready then wait for
+                    ;; first exchange to complete so firstUserMessage exists
+                    (agent-shell-subscribe-to
+                     :shell-buffer shell-buf
+                     :event 'prompt-ready
+                     :on-event
+                     (eval `(lambda (_event)
+                              (when (buffer-live-p ,shell-buf)
+                                (condition-case nil
+                                    (let ((sid (with-current-buffer ,shell-buf
+                                                 (or decknix--agent-auggie-session-id
+                                                     (when (and (boundp 'shell-maker--config)
+                                                                shell-maker--config)
+                                                       (map-nested-elt (agent-shell--state)
+                                                                       '(:session :id)))))))
+                                      (when (and sid (stringp sid)
+                                                (not (string-empty-p sid)))
+                                        (with-current-buffer ,shell-buf
+                                          (setq-local decknix--agent-auggie-session-id sid))
+                                        (when ',tags
+                                          (decknix--agent-session-tags-for sid ',tags)
+                                          (message "Tags applied: [%s]"
+                                                   (string-join ',tags ", ")))
+                                        (when ,workspace
+                                          (decknix--agent-session-save-workspace
+                                           sid ,workspace))))
+                                  (error nil))))
+                           t))))))))
 
         (defun decknix-agent-session-quit ()
           "Cleanly quit the current agent-shell session.
@@ -1690,21 +1767,40 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
               (decknix--agent-conversation-key
                (alist-get 'firstUserMessage match "")))))
 
+        ;; In-memory cache for the tag store to avoid repeated json-read-file.
+        ;; Each call to decknix--agent-tags-read was doing disk I/O (called 29+
+        ;; times from various functions).  Now we cache the parsed hash-table and
+        ;; only re-read when the file's mtime changes.
+        (defvar decknix--agent-tags-cache nil
+          "In-memory cache of the tag store hash-table.")
+        (defvar decknix--agent-tags-cache-mtime nil
+          "File modification time when cache was last populated.")
+
         (defun decknix--agent-tags-read ()
-          "Read the tag store from disk. Returns a hash-table.
-        Auto-migrates v1 (session-keyed) format to v2 (conversation-keyed)."
-          (let ((store
-                 (if (file-exists-p decknix--agent-tags-file)
-                     (condition-case err
-                         (let* ((json-object-type 'hash-table)
-                                (json-array-type 'list)
-                                (json-key-type 'string))
-                           (json-read-file decknix--agent-tags-file))
-                       (error
-                        (message "Warning: could not read tag store: %s"
-                                 (error-message-string err))
-                        (make-hash-table :test 'equal)))
-                   (make-hash-table :test 'equal))))
+          "Read the tag store, returning an in-memory cached hash-table.
+Re-reads from disk only if the file has been modified externally.
+Auto-migrates v1 (session-keyed) format to v2 (conversation-keyed)."
+          ;; Check if cache is valid (file hasn't changed)
+          (let ((current-mtime (and (file-exists-p decknix--agent-tags-file)
+                                    (file-attribute-modification-time
+                                     (file-attributes decknix--agent-tags-file)))))
+            (when (or (null decknix--agent-tags-cache)
+                      (not (equal current-mtime decknix--agent-tags-cache-mtime)))
+              ;; Cache miss — read from disk
+              (setq decknix--agent-tags-cache
+                    (if (file-exists-p decknix--agent-tags-file)
+                        (condition-case err
+                            (let* ((json-object-type 'hash-table)
+                                   (json-array-type 'list)
+                                   (json-key-type 'string))
+                              (json-read-file decknix--agent-tags-file))
+                          (error
+                           (message "Warning: could not read tag store: %s"
+                                    (error-message-string err))
+                           (make-hash-table :test 'equal)))
+                      (make-hash-table :test 'equal)))
+              (setq decknix--agent-tags-cache-mtime current-mtime)))
+          (let ((store decknix--agent-tags-cache))
             ;; Auto-migrate v1 format: session-keyed entries → conversation-keyed.
             ;; Handles both initial migration (no "conversations" key) and
             ;; incremental migration (orphaned v1 entries coexisting with v2).
@@ -1762,13 +1858,18 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
             store))
 
         (defun decknix--agent-tags-write (store)
-          "Write STORE (hash-table) to the tag file."
+          "Write STORE (hash-table) to the tag file and update in-memory cache."
           (let ((dir (file-name-directory decknix--agent-tags-file)))
             (unless (file-directory-p dir)
               (make-directory dir t))
             (with-temp-file decknix--agent-tags-file
               (let ((json-encoding-pretty-print t))
-                (insert (json-encode store))))))
+                (insert (json-encode store))))
+            ;; Update cache so subsequent reads don't hit disk
+            (setq decknix--agent-tags-cache store
+                  decknix--agent-tags-cache-mtime
+                  (file-attribute-modification-time
+                   (file-attributes decknix--agent-tags-file)))))
 
         (defun decknix--agent-tags-conversations (store)
           "Get the conversations hash-table from STORE."
@@ -2698,6 +2799,13 @@ If a compose buffer already exists and is visible, just select it."
                 (with-current-buffer compose-buf
                   (text-mode)
                   (decknix-agent-compose-mode 1)
+                  ;; Enable yasnippet with agent-shell-mode snippets.
+                  ;; The buffer is text-mode, so yas only sees text-mode
+                  ;; snippets by default.  yas-activate-extra-mode adds
+                  ;; agent-shell-mode's snippet table as well.
+                  (when (fboundp 'yas-minor-mode)
+                    (yas-minor-mode 1)
+                    (yas-activate-extra-mode 'agent-shell-mode))
                   (setq-local decknix--compose-target-buffer target)
                   (setq-local decknix--compose-sticky decknix-agent-compose-sticky)
                   (decknix--compose-update-header-line)
@@ -2878,7 +2986,7 @@ fully established.  Returns immediately."
               (agent-shell-start :config config))
             (setq decknix--agent-session-cache-time 0)
             (decknix--agent-session-new-post-create
-             before-buffers name tags workspace)
+             before-buffers name tags workspace command)
             ;; Find the newly created shell buffer and subscribe to prompt-ready.
             ;; agent-shell-start creates the buffer synchronously (mode-hook fires
             ;; before it returns), so find-new-shell-buffer works immediately.
@@ -2922,8 +3030,8 @@ looks like a PR URL) and workspace (defaulting to current project)."
                    (number (alist-get 'number parsed))
                    ;; Auto-generate session name: pr-<repo>-<number>
                    (name (format "pr-%s-%s" repo number))
-                   ;; Tags from URL only — command can enrich later
-                   (tags (list "review" repo))
+                   ;; Tags: review + repo + PR number for distinguishability
+                   (tags (list "review" repo (format "#%s" number)))
                    ;; Workspace: smart detection from PR URL
                    ;; Priority: saved workspace → workspace-roots → project root → cwd
                    (default-ws (decknix--agent-pr-detect-workspace owner repo))
@@ -3009,10 +3117,16 @@ Each spec is an alist with keys: name, workspace, items, grouped."
                                           (format "review-%s"
                                                   (substring
                                                    (secure-hash 'sha256 line)
-                                                   0 8)))))
+                                                   0 8))))
+                             ;; Auto-detect workspace from PR URL
+                             (ws (if parsed
+                                     (or (decknix--agent-pr-detect-workspace
+                                          (alist-get 'owner parsed)
+                                          (alist-get 'repo parsed))
+                                         decknix--batch-default-workspace)
+                                   decknix--batch-default-workspace)))
                         (push (list (cons 'name auto-name)
-                                    (cons 'workspace
-                                          decknix--batch-default-workspace)
+                                    (cons 'workspace ws)
                                     (cons 'items (list line))
                                     (cons 'grouped nil))
                               specs))))))
@@ -3037,7 +3151,6 @@ Ungrouped specs send each item via /review-service-pr."
           (setq decknix--batch-launch-results nil)
           (dolist (spec specs)
             (let* ((name (alist-get 'name spec))
-                   (workspace (alist-get 'workspace spec))
                    (items (alist-get 'items spec))
                    (grouped (alist-get 'grouped spec))
                    ;; Build the command to send
@@ -3049,14 +3162,33 @@ Ungrouped specs send each item via /review-service-pr."
                                  items "\n")
                               ;; Ungrouped: single item
                               (format "/review-service-pr %s" (car items))))
-                   ;; Tags: review + repo names from parsed URLs
+                   ;; Tags: review + repo names + PR numbers from parsed URLs
                    (tags (let ((tag-list (list "review")))
                            (dolist (item items)
                              (let ((parsed (decknix--agent-parse-pr-url item)))
                                (when parsed
                                  (cl-pushnew (alist-get 'repo parsed)
+                                             tag-list :test #'string=)
+                                 (cl-pushnew (format "#%s" (alist-get 'number parsed))
                                              tag-list :test #'string=))))
-                           tag-list)))
+                           tag-list))
+                   ;; Workspace: for grouped items without explicit workspace,
+                   ;; auto-detect from the first parseable PR URL
+                   (workspace
+                    (let ((ws (alist-get 'workspace spec)))
+                      (if (and grouped
+                               (string= ws decknix--batch-default-workspace))
+                          ;; Try auto-detecting from the first PR URL
+                          (or (cl-some
+                               (lambda (item)
+                                 (let ((parsed (decknix--agent-parse-pr-url item)))
+                                   (when parsed
+                                     (decknix--agent-pr-detect-workspace
+                                      (alist-get 'owner parsed)
+                                      (alist-get 'repo parsed)))))
+                               items)
+                              ws)
+                        ws))))
               (condition-case err
                   (progn
                     (decknix--agent-quickaction-start name tags workspace command)
@@ -3165,6 +3297,11 @@ Provides syntax highlighting for --- dividers, URLs, and comments.
                              (propertize
                               " Batch: C-c C-c submit | C-c C-k cancel"
                               'face 'header-line)))
+                ;; Enable yasnippet with batch-compose-mode snippets
+                ;; (--- groups, PR URLs, workspace templates)
+                (when (fboundp 'yas-minor-mode)
+                  (yas-minor-mode 1)
+                  (yas-activate-extra-mode 'decknix-batch-compose-mode))
                 (font-lock-flush))
             (font-lock-remove-keywords nil decknix--batch-font-lock-keywords)
             (setq-local header-line-format nil)
@@ -3892,12 +4029,14 @@ Preserves pinned items and previously fetched metadata."
       + optionalString cfg.templates.enable ''
 
         ;; == Yasnippet prompt templates ==
-        ;; Register agent-shell-mode snippet directory
+        ;; Register snippet directories for agent-shell and batch-compose modes
         (with-eval-after-load 'yasnippet
-          (let ((dir (expand-file-name "~/${snippetDir}")))
+          (dolist (dir (list (expand-file-name "~/${snippetDir}")
+                             (expand-file-name "~/${batchSnippetDir}")))
             (unless (member dir yas-snippet-dirs)
               (push dir yas-snippet-dirs))
-            (yas-load-directory dir)))
+            (when (file-directory-p dir)
+              (yas-load-directory dir))))
 
         ;; C-c A t — template sub-prefix ("Templates")
         (define-prefix-command 'decknix-agent-template-map)
