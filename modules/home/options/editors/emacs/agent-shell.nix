@@ -982,24 +982,34 @@ Uses tags if available, otherwise truncates the first user message."
              (t (substring sid 0 (min 8 (length sid)))))))
 
         (defun decknix--agent-session-resume (session-id history-count
-                                              &optional display-name)
+                                              &optional display-name workspace)
           "Resume SESSION-ID and pre-populate buffer with HISTORY-COUNT exchanges.
-DISPLAY-NAME, if provided, is used to rename the buffer to *Auggie: NAME*."
+DISPLAY-NAME, if provided, is used to rename the buffer to *Auggie: NAME*.
+WORKSPACE, if provided, sets --workspace-root and default-directory so the
+agent operates in the original project directory."
           ;; Invalidate cache so next picker invocation fetches fresh data
           (setq decknix--agent-session-cache-time 0)
           ;; Snapshot existing buffers so we can detect the new one
-          (let ((before-buffers (buffer-list))
-                (agent-shell-auggie-acp-command
-                 (append agent-shell-auggie-acp-command
-                         (list "--resume" session-id))))
-            (agent-shell-start
-             :config (agent-shell-auggie-make-agent-config))
+          (let* ((resume-args (list "--resume" session-id))
+                 (ws-args (when (and workspace (file-directory-p workspace))
+                            (list "--workspace-root" workspace)))
+                 (before-buffers (buffer-list))
+                 (agent-shell-auggie-acp-command
+                  (append agent-shell-auggie-acp-command ws-args resume-args)))
+            ;; Set default-directory so agent-shell-cwd picks up the workspace
+            (let ((default-directory (if (and workspace
+                                              (file-directory-p workspace))
+                                         workspace
+                                       default-directory)))
+              (agent-shell-start
+               :config (agent-shell-auggie-make-agent-config)))
             ;; agent-shell-start is async — it doesn't switch current-buffer.
             ;; Use a timer to find the new buffer, rename it, and prepopulate.
             (let ((sid session-id)
                   (n history-count)
                   (bufs before-buffers)
-                  (bname display-name))
+                  (bname display-name)
+                  (ws workspace))
               (run-at-time
                1.5 nil
                (eval
@@ -1008,6 +1018,9 @@ DISPLAY-NAME, if provided, is used to rename the buffer to *Auggie: NAME*."
                      (if shell-buf
                          (with-current-buffer shell-buf
                            (setq-local decknix--agent-auggie-session-id ,sid)
+                           ;; Restore workspace for the session picker display
+                           (when ,ws
+                             (setq-local decknix--agent-session-workspace ,ws))
                            ;; Rename buffer to match conversation identity
                            (when ,bname
                              (rename-buffer
@@ -1163,12 +1176,21 @@ CONV-GROUP is (CONV-KEY LATEST-SESSION ALL-SESSIONS)."
                 :action
                 (lambda (cand)
                   (when cand
-                    (let ((session (gethash cand decknix--session-picker-saved-map)))
+                    (let* ((session (gethash cand decknix--session-picker-saved-map))
+                           ;; Look up workspace from the tag store using
+                           ;; the conversation key derived from firstUserMessage
+                           (conv-key (when session
+                                       (decknix--agent-conversation-key
+                                        (alist-get 'firstUserMessage session ""))))
+                           (workspace (when conv-key
+                                        (decknix--agent-workspace-for-conv-key
+                                         conv-key))))
                       (when session
                         (decknix--agent-session-resume
                          (alist-get 'sessionId session)
                          decknix-agent-session-history-count
-                         (decknix--agent-session-display-name session)))))))
+                         (decknix--agent-session-display-name session)
+                         workspace))))))
           "Consult multi-source for saved auggie sessions.")
 
         (defvar decknix--session-source-new
@@ -1455,30 +1477,33 @@ BEFORE-BUFFERS is the buffer snapshot taken before agent-shell-start."
                   ;; Record workspace for the session picker
                   (when workspace
                     (setq-local decknix--agent-session-workspace workspace)))
-                ;; Schedule tag application (session ID may not be available yet)
-                (when tags
-                  (decknix--agent-session-new-schedule-tags shell-buf tags))))))
+                ;; Schedule tag + workspace persistence (session ID may not be
+                ;; available yet — the retry timer waits for it).
+                (when (or tags workspace)
+                  (decknix--agent-session-new-schedule-meta
+                   shell-buf tags workspace))))))
 
-        (defvar decknix--session-new-tag-pending nil
-          "Pending tag data: (BUF TAGS ATTEMPTS-LEFT).")
+        (defvar decknix--session-new-meta-pending nil
+          "Pending post-creation metadata: (BUF TAGS WORKSPACE ATTEMPTS-LEFT).")
 
-        (defun decknix--agent-session-new-schedule-tags (buf tags)
-          "Schedule applying TAGS to the session in BUF once its ID is known."
-          (setq decknix--session-new-tag-pending (list buf tags 5))
-          (run-at-time 2.0 nil #'decknix--agent-session-new-try-tags))
+        (defun decknix--agent-session-new-schedule-meta (buf tags workspace)
+          "Schedule applying TAGS and WORKSPACE to session in BUF once ID is known."
+          (setq decknix--session-new-meta-pending (list buf tags workspace 5))
+          (run-at-time 2.0 nil #'decknix--agent-session-new-try-meta))
 
-        (defun decknix--agent-session-new-try-tags ()
-          "Try to apply tags to a pending session. Retries if ID not yet available.
-For new sessions, the session ID is extracted from the ACP state
-\(agent-shell--state → :session :id\) since `decknix--agent-auggie-session-id'
-is only set during session resume."
-          (when decknix--session-new-tag-pending
-            (let ((buf (nth 0 decknix--session-new-tag-pending))
-                  (tags (nth 1 decknix--session-new-tag-pending))
-                  (attempts-left (nth 2 decknix--session-new-tag-pending)))
+        (defun decknix--agent-session-new-try-meta ()
+          "Try to apply tags and workspace to a pending session.
+Retries if ID not yet available. For new sessions, the session ID is
+extracted from the ACP state \(agent-shell--state → :session :id\)
+since `decknix--agent-auggie-session-id' is only set during session resume."
+          (when decknix--session-new-meta-pending
+            (let ((buf (nth 0 decknix--session-new-meta-pending))
+                  (tags (nth 1 decknix--session-new-meta-pending))
+                  (workspace (nth 2 decknix--session-new-meta-pending))
+                  (attempts-left (nth 3 decknix--session-new-meta-pending)))
               (cond
                ((not (buffer-live-p buf))
-                (setq decknix--session-new-tag-pending nil))
+                (setq decknix--session-new-meta-pending nil))
                ;; Try buffer-local var first, then fall back to ACP state.
                ;; Guard the entire block: shell-maker--config, agent-shell--state,
                ;; or map-nested-elt may error if the timer fires before
@@ -1491,20 +1516,26 @@ is only set during session resume."
                                        (map-nested-elt (agent-shell--state)
                                                        '(:session :id)))))))
                       (when (and sid (stringp sid) (not (string-empty-p sid)))
-                        ;; Persist for future use (tag mgmt, copy-id, etc.)
+                        ;; Persist session ID for future use
                         (with-current-buffer buf
                           (setq-local decknix--agent-auggie-session-id sid))
-                        (decknix--agent-session-tags-for sid tags)
-                        (setq decknix--session-new-tag-pending nil)
-                        (message "Tags applied: [%s]" (string-join tags ", "))
+                        ;; Save tags (v1 session-keyed, migrated on read)
+                        (when tags
+                          (decknix--agent-session-tags-for sid tags))
+                        ;; Save workspace to tag store per conversation key
+                        (when workspace
+                          (decknix--agent-session-save-workspace sid workspace))
+                        (setq decknix--session-new-meta-pending nil)
+                        (when tags
+                          (message "Tags applied: [%s]" (string-join tags ", ")))
                         t))
                   (error nil)))
                ((<= attempts-left 0)
-                (setq decknix--session-new-tag-pending nil)
-                (message "Could not apply tags: session ID not available"))
+                (setq decknix--session-new-meta-pending nil)
+                (message "Could not apply session metadata: session ID not available"))
                (t
-                (setf (nth 2 decknix--session-new-tag-pending) (1- attempts-left))
-                (run-at-time 2.0 nil #'decknix--agent-session-new-try-tags))))))
+                (setf (nth 3 decknix--session-new-meta-pending) (1- attempts-left))
+                (run-at-time 2.0 nil #'decknix--agent-session-new-try-meta))))))
 
         (defun decknix-agent-session-quit ()
           "Cleanly quit the current agent-shell session.
@@ -1720,6 +1751,33 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
             (let ((entry (gethash conv-key convs)))
               (when (hash-table-p entry)
                 (gethash "tags" entry)))))
+
+        (defun decknix--agent-workspace-for-conv-key (conv-key)
+          "Return the workspace directory for conversation CONV-KEY, or nil."
+          (let* ((store (decknix--agent-tags-read))
+                 (convs (decknix--agent-tags-conversations store)))
+            (let ((entry (gethash conv-key convs)))
+              (when (hash-table-p entry)
+                (gethash "workspace" entry)))))
+
+        (defun decknix--agent-session-save-workspace (session-id workspace)
+          "Persist WORKSPACE for the conversation containing SESSION-ID.
+Looks up the conversation key from cached session data, then stores
+the workspace in the conversation entry alongside tags."
+          (when (and session-id workspace)
+            (let ((conv-key (decknix--agent-conversation-key-for-session
+                             session-id)))
+              (when conv-key
+                (let* ((store (decknix--agent-tags-read))
+                       (convs (decknix--agent-tags-conversations store))
+                       (entry (or (gethash conv-key convs)
+                                  (let ((h (make-hash-table :test 'equal)))
+                                    (puthash "tags" nil h)
+                                    (puthash "sessions" nil h)
+                                    h))))
+                  (puthash "workspace" workspace entry)
+                  (puthash conv-key entry convs)
+                  (decknix--agent-tags-write store))))))
 
         (defun decknix--agent-tags-all ()
           "Return a sorted list of all unique tags across all conversations."
