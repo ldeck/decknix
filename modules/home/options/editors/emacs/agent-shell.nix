@@ -154,7 +154,37 @@ let
       2. List the specific errors or roadblocks you are encountering.
       3. Wait for my explicit direction before writing any more code or executing any more terminal commands.
     '';
+
   };
+
+  # == User-level augment guidelines ==
+  # Deployed to ~/.augment-guidelines via home.file (as a symlink).
+  # Provides default formatting/response rules for Augment agents.
+  guidelinesFile = ".augment-guidelines";
+  guidelinesContent = ''
+    # Augment Agent Guidelines (User-level)
+
+    ## Markdown Table Formatting
+
+    When printing markdown tables in responses:
+
+    1. **Expand columns** — pad every cell so columns are fully aligned and easy to scan. Do not use minimal-width columns.
+    2. **Check terminal width** — if any row would exceed ~80 characters, do NOT use a table. Instead, use one of these readable alternatives:
+       - **Definition list style** — one item per block with a bold heading and indented details:
+         ```
+         **#19 — Editor profile tiering**
+           Category: Editors
+           Effort:   Large
+           Status:   Open
+         ```
+       - **Sectioned list style** — group items under headings:
+         ```
+         ### Open Issues
+         - **#19** Editor profile tiering (Editors, Large)
+         - **#26** Secrets management (Core, Medium)
+         ```
+    3. **Never let content wrap or truncate** — if a table cell contains long text (descriptions, URLs, paths), switch to a non-table format.
+  '';
 
   # == Yasnippet prompt templates for agent-shell-mode ==
   # Deployed to ~/.emacs.d/snippets/agent-shell-mode/ via home.file
@@ -298,7 +328,10 @@ in
       (optionalAttrs cfg.commands.enable
         (mapAttrs'
           (name: text: nameValuePair "${commandDir}/${name}" { inherit text; })
-          commands));
+          commands))
+      //
+      # User-level augment guidelines → ~/.augment-guidelines
+      { "${guidelinesFile}".text = guidelinesContent; };
     programs.emacs = {
       extraPackages = _epkgs:
         # Core (from unstable): agent-shell + acp + shell-maker + markdown-mode
@@ -1364,6 +1397,53 @@ Uses project root if available, otherwise `default-directory'."
                   (project-root proj)))
               default-directory))
 
+        (defvar decknix-agent-workspace-roots
+          (list (expand-file-name "~/Code/nurturecloud"))
+          "List of parent directories that contain git repositories.
+Used by `decknix--agent-pr-detect-workspace' to find the local
+checkout of a repo from a PR URL.  E.g., if this contains
+\"~/Code/nurturecloud\" and the PR is for \"upside\", the function
+checks whether ~/Code/nurturecloud/upside/ exists.")
+
+        (defun decknix--agent-pr-detect-workspace (owner repo)
+          "Find the best workspace for a PR from OWNER/REPO.
+Search order:
+  1. Saved workspaces in agent-sessions.json whose path ends in REPO
+  2. Known workspace roots (`decknix-agent-workspace-roots') containing REPO
+  3. Current project root
+  4. `default-directory'"
+          (or
+           ;; 1. Check saved workspaces for a path ending in /REPO/
+           (let ((best nil))
+             (condition-case nil
+                 (let* ((store (decknix--agent-tags-read))
+                        (convs (decknix--agent-tags-conversations store)))
+                   (maphash
+                    (lambda (_key entry)
+                      (when (hash-table-p entry)
+                        (let ((ws (gethash "workspace" entry)))
+                          (when (and ws (stringp ws))
+                            ;; Match repo name as the last path component
+                            (let ((dir-name (file-name-nondirectory
+                                             (directory-file-name ws))))
+                              (when (string-equal-ignore-case dir-name repo)
+                                (when (file-directory-p ws)
+                                  (setq best ws))))))))
+                    convs))
+               (error nil))
+             best)
+           ;; 2. Check known workspace roots for REPO subdir
+           (cl-loop for root in decknix-agent-workspace-roots
+                    for candidate = (expand-file-name repo root)
+                    when (file-directory-p candidate)
+                    return (file-name-as-directory candidate))
+           ;; 3. Current project root
+           (when (fboundp 'project-root)
+             (when-let ((proj (project-current)))
+               (project-root proj)))
+           ;; 4. Fallback
+           default-directory))
+
         (defun decknix--agent-detect-branch (dir)
           "Detect the current git branch in DIR, or nil."
           (let ((default-directory dir))
@@ -1445,104 +1525,58 @@ workspace = project root, name = auto-generated, no tags."
               (agent-shell-start :config config))
             ;; Invalidate session cache so next picker is fresh
             (setq decknix--agent-session-cache-time 0)
-            ;; Post-creation: rename buffer, apply tags, set workspace (using timers)
+            ;; Post-creation: rename buffer immediately, subscribe to prompt-ready for metadata
             (decknix--agent-session-new-post-create
              before-buffers name tags workspace)
             (message "Starting agent session \"%s\" in %s…" name workspace)))
 
-        (defvar decknix--session-new-pending nil
-          "Pending post-creation data: (BEFORE-BUFFERS NAME TAGS WORKSPACE).")
-
         (defun decknix--agent-session-new-post-create (before-buffers name tags workspace)
           "Post-creation setup: rename buffer to NAME, apply TAGS, record WORKSPACE.
-BEFORE-BUFFERS is the buffer snapshot taken before agent-shell-start."
-          ;; Store pending data in a global so timers can access it
-          ;; without nested quasiquotes (default.el uses dynamic binding).
-          (setq decknix--session-new-pending (list before-buffers name tags workspace))
-          (run-at-time 1.5 nil #'decknix--agent-session-new-finish))
-
-        (defun decknix--agent-session-new-finish ()
-          "Timer callback: rename new buffer and schedule tag application."
-          (when decknix--session-new-pending
-            (let* ((data decknix--session-new-pending)
-                   (before-buffers (nth 0 data))
-                   (name (nth 1 data))
-                   (tags (nth 2 data))
-                   (workspace (nth 3 data))
-                   (shell-buf (decknix--agent-find-new-shell-buffer before-buffers)))
-              (setq decknix--session-new-pending nil)
-              (when shell-buf
-                (with-current-buffer shell-buf
-                  (rename-buffer
-                   (generate-new-buffer-name
-                    (format "*Auggie: %s*" name)))
-                  ;; Update shell-maker's buffer name override so it can
-                  ;; still find this buffer after the rename (it uses
-                  ;; shell-maker-buffer-name to locate the process buffer).
-                  (setq-local shell-maker--buffer-name-override
-                              (buffer-name))
-                  ;; Record workspace for the session picker
-                  (when workspace
-                    (setq-local decknix--agent-session-workspace workspace)))
-                ;; Schedule tag + workspace persistence (session ID may not be
-                ;; available yet — the retry timer waits for it).
-                (when (or tags workspace)
-                  (decknix--agent-session-new-schedule-meta
-                   shell-buf tags workspace))))))
-
-        (defvar decknix--session-new-meta-pending nil
-          "Pending post-creation metadata: (BUF TAGS WORKSPACE ATTEMPTS-LEFT).")
-
-        (defun decknix--agent-session-new-schedule-meta (buf tags workspace)
-          "Schedule applying TAGS and WORKSPACE to session in BUF once ID is known."
-          (setq decknix--session-new-meta-pending (list buf tags workspace 5))
-          (run-at-time 2.0 nil #'decknix--agent-session-new-try-meta))
-
-        (defun decknix--agent-session-new-try-meta ()
-          "Try to apply tags and workspace to a pending session.
-Retries if ID not yet available. For new sessions, the session ID is
-extracted from the ACP state \(agent-shell--state → :session :id\)
-since `decknix--agent-auggie-session-id' is only set during session resume."
-          (when decknix--session-new-meta-pending
-            (let ((buf (nth 0 decknix--session-new-meta-pending))
-                  (tags (nth 1 decknix--session-new-meta-pending))
-                  (workspace (nth 2 decknix--session-new-meta-pending))
-                  (attempts-left (nth 3 decknix--session-new-meta-pending)))
-              (cond
-               ((not (buffer-live-p buf))
-                (setq decknix--session-new-meta-pending nil))
-               ;; Try buffer-local var first, then fall back to ACP state.
-               ;; Guard the entire block: shell-maker--config, agent-shell--state,
-               ;; or map-nested-elt may error if the timer fires before
-               ;; agent-shell fully initialises.
-               ((condition-case nil
-                    (let ((sid (with-current-buffer buf
-                                 (or decknix--agent-auggie-session-id
-                                     (when (and (boundp 'shell-maker--config)
-                                                shell-maker--config)
-                                       (map-nested-elt (agent-shell--state)
-                                                       '(:session :id)))))))
-                      (when (and sid (stringp sid) (not (string-empty-p sid)))
-                        ;; Persist session ID for future use
-                        (with-current-buffer buf
-                          (setq-local decknix--agent-auggie-session-id sid))
-                        ;; Save tags (v1 session-keyed, migrated on read)
-                        (when tags
-                          (decknix--agent-session-tags-for sid tags))
-                        ;; Save workspace to tag store per conversation key
-                        (when workspace
-                          (decknix--agent-session-save-workspace sid workspace))
-                        (setq decknix--session-new-meta-pending nil)
-                        (when tags
-                          (message "Tags applied: [%s]" (string-join tags ", ")))
-                        t))
-                  (error nil)))
-               ((<= attempts-left 0)
-                (setq decknix--session-new-meta-pending nil)
-                (message "Could not apply session metadata: session ID not available"))
-               (t
-                (setf (nth 3 decknix--session-new-meta-pending) (1- attempts-left))
-                (run-at-time 2.0 nil #'decknix--agent-session-new-try-meta))))))
+BEFORE-BUFFERS is the buffer snapshot taken before agent-shell-start.
+Finds the new buffer immediately (agent-shell-start creates it synchronously),
+renames it, then subscribes to `prompt-ready' to persist metadata once the
+ACP session ID is available.  All state is per-buffer — safe for batch launches."
+          (let ((shell-buf (decknix--agent-find-new-shell-buffer before-buffers)))
+            (when shell-buf
+              ;; Rename immediately — the buffer exists now
+              (with-current-buffer shell-buf
+                (rename-buffer
+                 (generate-new-buffer-name
+                  (format "*Auggie: %s*" name)))
+                (setq-local shell-maker--buffer-name-override
+                            (buffer-name))
+                (when workspace
+                  (setq-local decknix--agent-session-workspace workspace)))
+              ;; Subscribe to prompt-ready to persist tags + workspace once
+              ;; the session ID is available.  The closure captures per-buffer
+              ;; values so multiple concurrent launches don't clobber each other.
+              (when (or tags workspace)
+                (agent-shell-subscribe-to
+                 :shell-buffer shell-buf
+                 :event 'prompt-ready
+                 :on-event
+                 (eval `(lambda (_event)
+                          (when (buffer-live-p ,shell-buf)
+                            (condition-case nil
+                                (let ((sid (with-current-buffer ,shell-buf
+                                             (or decknix--agent-auggie-session-id
+                                                 (when (and (boundp 'shell-maker--config)
+                                                            shell-maker--config)
+                                                   (map-nested-elt (agent-shell--state)
+                                                                   '(:session :id)))))))
+                                  (when (and sid (stringp sid)
+                                            (not (string-empty-p sid)))
+                                    (with-current-buffer ,shell-buf
+                                      (setq-local decknix--agent-auggie-session-id sid))
+                                    (when ',tags
+                                      (decknix--agent-session-tags-for sid ',tags)
+                                      (message "Tags applied: [%s]"
+                                               (string-join ',tags ", ")))
+                                    (when ,workspace
+                                      (decknix--agent-session-save-workspace
+                                       sid ,workspace))))
+                              (error nil))))
+                       t))))))
 
         (defun decknix-agent-session-quit ()
           "Cleanly quit the current agent-shell session.
@@ -2451,40 +2485,11 @@ Handles: https://github.com/OWNER/REPO/pull/NUMBER[/...]"
             (when (and text (string-match-p "github\\.com/.*/pull/" text))
               (string-trim text))))
 
-        (defvar decknix--quickaction-pending nil
-          "Pending quick-action data: (BUF COMMAND ATTEMPTS-LEFT).
-Used by the retry timer to auto-send a command once the agent
-process is ready.")
-
-        (defun decknix--agent-quickaction-try-send ()
-          "Try to send the pending command to the session buffer.
-Retries if the process is not yet ready."
-          (when decknix--quickaction-pending
-            (let ((buf (nth 0 decknix--quickaction-pending))
-                  (command (nth 1 decknix--quickaction-pending))
-                  (attempts-left (nth 2 decknix--quickaction-pending)))
-              (cond
-               ((not (buffer-live-p buf))
-                (setq decknix--quickaction-pending nil))
-               ((and (get-buffer-process buf)
-                     (process-live-p (get-buffer-process buf)))
-                ;; Process is ready — send the command
-                (with-current-buffer buf
-                  (goto-char (point-max))
-                  (shell-maker-submit :input command))
-                (setq decknix--quickaction-pending nil)
-                (message "Sent: %s" (truncate-string-to-width command 60)))
-               ((<= attempts-left 0)
-                (setq decknix--quickaction-pending nil)
-                (message "Could not auto-send command: agent not ready"))
-               (t
-                (setf (nth 2 decknix--quickaction-pending) (1- attempts-left))
-                (run-at-time 2.0 nil #'decknix--agent-quickaction-try-send))))))
-
         (defun decknix--agent-quickaction-start (name tags workspace command)
           "Start a quick-action session with NAME, TAGS, WORKSPACE, and auto-send COMMAND.
-Creates a new agent session, applies metadata, then schedules sending
-COMMAND once the process is ready.  Returns immediately."
+Creates a new agent session, applies metadata, then subscribes to the
+`prompt-ready' event to send COMMAND as soon as the ACP session is
+fully established.  Returns immediately."
           (let* ((workspace (expand-file-name workspace))
                  (before-buffers (buffer-list))
                  (augmented-cmd
@@ -2511,19 +2516,23 @@ COMMAND once the process is ready.  Returns immediately."
             (setq decknix--agent-session-cache-time 0)
             (decknix--agent-session-new-post-create
              before-buffers name tags workspace)
-            ;; Schedule auto-sending the command once the process is ready.
-            (let ((cmd command)
-                  (bufs before-buffers))
-              (run-at-time
-               3.0 nil
-               (eval
-                `(lambda ()
-                   (let ((shell-buf (decknix--agent-find-new-shell-buffer ',bufs)))
-                     (when shell-buf
-                       (setq decknix--quickaction-pending
-                             (list shell-buf ,cmd 5))
-                       (decknix--agent-quickaction-try-send))))
-                t)))))
+            ;; Find the newly created shell buffer and subscribe to prompt-ready.
+            ;; agent-shell-start creates the buffer synchronously (mode-hook fires
+            ;; before it returns), so find-new-shell-buffer works immediately.
+            (let ((shell-buf (decknix--agent-find-new-shell-buffer before-buffers)))
+              (when shell-buf
+                (agent-shell-subscribe-to
+                 :shell-buffer shell-buf
+                 :event 'prompt-ready
+                 :on-event
+                 (eval `(lambda (_event)
+                          (when (buffer-live-p ,shell-buf)
+                            (with-current-buffer ,shell-buf
+                              (goto-char (point-max))
+                              (shell-maker-submit :input ,command))
+                            (message "Sent: %s"
+                                     (truncate-string-to-width ,command 60))))
+                       t))))))
 
         (defun decknix-agent-review-pr (url)
           "Start a PR review session for URL.
@@ -2552,8 +2561,9 @@ looks like a PR URL) and workspace (defaulting to current project)."
                    (name (format "pr-%s-%s" repo number))
                    ;; Tags from URL only — command can enrich later
                    (tags (list "review" repo))
-                   ;; Workspace: default to current project root
-                   (default-ws (decknix--agent-detect-workspace))
+                   ;; Workspace: smart detection from PR URL
+                   ;; Priority: saved workspace → workspace-roots → project root → cwd
+                   (default-ws (decknix--agent-pr-detect-workspace owner repo))
                    (workspace (read-directory-name
                                (format "Workspace for %s/%s#%s: "
                                        owner repo number)
@@ -3551,18 +3561,33 @@ Preserves pinned items and previously fetched metadata."
                           (user-error "Agent process not ready — wait for it to start or restart with C-c A a")
                         (apply orig-fn args))))
 
-        ;; TAB dispatch: when a yasnippet is actively expanding (cursor is
-        ;; inside a field), TAB should advance to the next field.  Otherwise
-        ;; TAB triggers yas-expand to start a new snippet.  We need this
-        ;; because local-set-key overrides the yas-keymap minor-mode binding.
+        ;; TAB dispatch: yas field → corfu complete → yas expand → completion.
+        ;; local-set-key overrides both the yas-keymap minor-mode binding
+        ;; AND corfu-map, so we must check for both explicitly.
         (defun decknix--agent-tab-dwim ()
-          "If inside a yasnippet field, advance to the next field.
-Otherwise try to expand a snippet at point."
+          "Smart TAB: yasnippet fields, Corfu completion, snippet expansion, or CAPF.
+Priority order:
+1. Inside an active yasnippet field → advance to next field
+2. Corfu popup visible → accept the selected completion
+3. Try yasnippet expansion (returns non-nil on success)
+4. Fall back to `completion-at-point'"
           (interactive)
-          (if (and (bound-and-true-p yas-minor-mode)
-                   (yas--snippets-at-point))
-              (yas-next-field-or-maybe-expand)
-            (yas-expand)))
+          (cond
+           ;; 1. Active snippet field — advance
+           ((and (bound-and-true-p yas-minor-mode)
+                 (yas--snippets-at-point))
+            (yas-next-field-or-maybe-expand))
+           ;; 2. Corfu popup visible — accept completion
+           ((and (bound-and-true-p corfu-mode)
+                 (boundp 'corfu--frame)
+                 (frame-live-p corfu--frame)
+                 (frame-visible-p corfu--frame))
+            (corfu-complete))
+           ;; 3. Try snippet expansion (yas-expand returns nil when nothing matched)
+           ((and (bound-and-true-p yas-minor-mode)
+                 (yas-expand)))
+           ;; 4. Fall back to standard completion
+           (t (completion-at-point))))
 
         ;; Disable line numbers in agent-shell buffers
         ;; TAB dispatches between snippet field navigation and expansion
