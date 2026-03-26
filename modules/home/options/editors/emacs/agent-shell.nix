@@ -475,6 +475,7 @@ Press q to dismiss."
             "  C-c A s     Session picker\n"
             "  C-c A h     View history (C-u to pick)\n"
             "  C-c A e     Compose buffer\n"
+            "  C-c A c r   Review PR (quick action)\n"
             "  C-c A ? k   This keybinding reference\n"
             "\n"
 
@@ -622,6 +623,10 @@ Press q to dismiss."
             "C-c A e" "compose"
             "C-c A T" "Tags (global)"
             "C-c A c" "Commands"
+            "C-c A c r" "review PR"
+            "C-c A c c" "run command"
+            "C-c A c n" "new command"
+            "C-c A c e" "edit command"
             "C-c A t" "Templates"
             "C-c A i" "Context"
             "C-c A S" "MCP servers"
@@ -2418,12 +2423,153 @@ Use this when the agent is mid-response and you want to interject."
                  (file (cdr (assoc selection cmds))))
             (find-file file)))
 
+        ;; == Quick actions: PR review, batch processing ==
+        ;; DWIM workflows that create a session with pre-configured name,
+        ;; tags, workspace, and auto-send a command.
+        ;; Metadata enrichment (author, Jira key, etc.) is deferred to the
+        ;; review command itself, keeping initiation instant.
+
+        (defun decknix--agent-parse-pr-url (url)
+          "Parse a GitHub PR URL into an alist with owner, repo, number.
+Returns nil if URL is not a valid GitHub PR URL.
+Handles: https://github.com/OWNER/REPO/pull/NUMBER[/...]"
+          (when (string-match
+                 "github\\.com/\\([^/]+\\)/\\([^/]+\\)/pull/\\([0-9]+\\)"
+                 url)
+            (list (cons 'owner (match-string 1 url))
+                  (cons 'repo (match-string 2 url))
+                  (cons 'number (match-string 3 url)))))
+
+        (defun decknix--agent-clipboard-url ()
+          "Return a GitHub PR URL from the kill ring or system clipboard, or nil."
+          (let ((text (or (ignore-errors (current-kill 0 t))
+                          (ignore-errors
+                            (string-trim
+                             (shell-command-to-string "pbpaste"))))))
+            (when (and text (string-match-p "github\\.com/.*/pull/" text))
+              (string-trim text))))
+
+        (defvar decknix--quickaction-pending nil
+          "Pending quick-action data: (BUF COMMAND ATTEMPTS-LEFT).
+Used by the retry timer to auto-send a command once the agent
+process is ready.")
+
+        (defun decknix--agent-quickaction-try-send ()
+          "Try to send the pending command to the session buffer.
+Retries if the process is not yet ready."
+          (when decknix--quickaction-pending
+            (let ((buf (nth 0 decknix--quickaction-pending))
+                  (command (nth 1 decknix--quickaction-pending))
+                  (attempts-left (nth 2 decknix--quickaction-pending)))
+              (cond
+               ((not (buffer-live-p buf))
+                (setq decknix--quickaction-pending nil))
+               ((and (get-buffer-process buf)
+                     (process-live-p (get-buffer-process buf)))
+                ;; Process is ready — send the command
+                (with-current-buffer buf
+                  (goto-char (point-max))
+                  (shell-maker-submit :input command))
+                (setq decknix--quickaction-pending nil)
+                (message "Sent: %s" (truncate-string-to-width command 60)))
+               ((<= attempts-left 0)
+                (setq decknix--quickaction-pending nil)
+                (message "Could not auto-send command: agent not ready"))
+               (t
+                (setf (nth 2 decknix--quickaction-pending) (1- attempts-left))
+                (run-at-time 2.0 nil #'decknix--agent-quickaction-try-send))))))
+
+        (defun decknix--agent-quickaction-start (name tags workspace command)
+          "Start a quick-action session with NAME, TAGS, WORKSPACE, and auto-send COMMAND.
+Creates a new agent session, applies metadata, then schedules sending
+COMMAND once the process is ready.  Returns immediately."
+          (let* ((workspace (expand-file-name workspace))
+                 (before-buffers (buffer-list))
+                 (augmented-cmd
+                  (append agent-shell-auggie-acp-command
+                          (list "--workspace-root" workspace)))
+                 (config
+                  (let ((base (agent-shell-auggie-make-agent-config)))
+                    (setf (alist-get :client-maker base)
+                          (eval `(lambda (buffer)
+                                   (agent-shell--make-acp-client
+                                    :command ,(car augmented-cmd)
+                                    :command-params ',(cdr augmented-cmd)
+                                    :environment-variables
+                                    (cond ((map-elt agent-shell-auggie-authentication :none)
+                                           agent-shell-auggie-environment)
+                                          ((map-elt agent-shell-auggie-authentication :login)
+                                           agent-shell-auggie-environment)
+                                          (t
+                                           (error "Invalid Auggie authentication")))
+                                    :context-buffer buffer)) t))
+                    base)))
+            (let ((default-directory workspace))
+              (agent-shell-start :config config))
+            (setq decknix--agent-session-cache-time 0)
+            (decknix--agent-session-new-post-create
+             before-buffers name tags workspace)
+            ;; Schedule auto-sending the command once the process is ready.
+            (let ((cmd command)
+                  (bufs before-buffers))
+              (run-at-time
+               3.0 nil
+               (eval
+                `(lambda ()
+                   (let ((shell-buf (decknix--agent-find-new-shell-buffer ',bufs)))
+                     (when shell-buf
+                       (setq decknix--quickaction-pending
+                             (list shell-buf ,cmd 5))
+                       (decknix--agent-quickaction-try-send))))
+                t)))))
+
+        (defun decknix-agent-review-pr (url)
+          "Start a PR review session for URL.
+Parses the GitHub PR URL, creates a new session with auto-generated
+name and tags, then sends /review-service-pr.  Metadata enrichment
+\(author, Jira key, title\) is handled by the review command itself.
+
+Interactively, prompts for URL (defaulting to clipboard if it
+looks like a PR URL) and workspace (defaulting to current project)."
+          (interactive
+           (let* ((default-url (decknix--agent-clipboard-url))
+                  (url (read-string
+                        (if default-url
+                            (format "PR URL [%s]: " default-url)
+                          "PR URL: ")
+                        nil nil default-url)))
+             (list url)))
+          ;; Parse and validate
+          (let ((parsed (decknix--agent-parse-pr-url url)))
+            (unless parsed
+              (user-error "Not a valid GitHub PR URL: %s" url))
+            (let* ((owner (alist-get 'owner parsed))
+                   (repo (alist-get 'repo parsed))
+                   (number (alist-get 'number parsed))
+                   ;; Auto-generate session name: pr-<repo>-<number>
+                   (name (format "pr-%s-%s" repo number))
+                   ;; Tags from URL only — command can enrich later
+                   (tags (list "review" repo))
+                   ;; Workspace: default to current project root
+                   (default-ws (decknix--agent-detect-workspace))
+                   (workspace (read-directory-name
+                               (format "Workspace for %s/%s#%s: "
+                                       owner repo number)
+                               default-ws nil t))
+                   ;; Confirm name
+                   (name (read-string (format "Session name [%s]: " name)
+                                      nil nil name))
+                   (command (format "/review-service-pr %s" url)))
+              (decknix--agent-quickaction-start name tags workspace command)
+              (message "Starting review: %s/%s#%s" owner repo number))))
+
         ;; C-c A c — commands sub-prefix ("Commands")
         (define-prefix-command 'decknix-agent-command-map)
         (define-key decknix-agent-prefix-map (kbd "c") 'decknix-agent-command-map)
         (define-key decknix-agent-command-map (kbd "c") 'decknix-agent-command-run)    ; Pick & insert
         (define-key decknix-agent-command-map (kbd "n") 'decknix-agent-command-new)    ; New
         (define-key decknix-agent-command-map (kbd "e") 'decknix-agent-command-edit)   ; Edit
+        (define-key decknix-agent-command-map (kbd "r") 'decknix-agent-review-pr)      ; PR review
 
         ;; == MCP server listing ==
 
