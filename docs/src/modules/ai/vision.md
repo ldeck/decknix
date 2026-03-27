@@ -85,7 +85,7 @@ Workflows as Nix configuration:
   decknix.ai.workflows = {
     investigate = {
       description = "Full property sync investigation";
-      mcpServers = [ "gcp-monitoring" "nurturecloud-knowledge-base" ];
+      mcpServers = [ "gcp-monitoring" "org-knowledge-base" ];
       template = "investigate";
       context.autoPin = [ "jira" ];  # Auto-pin Jira tickets mentioned
     };

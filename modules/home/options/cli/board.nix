@@ -62,7 +62,7 @@ let
       local body="$1"
       # Extract "#<num>" references from Depends on / Blocked by / Related lines
       echo "$body" | ${pkgs.gnugrep}/bin/grep -iE '(depends on|blocked by|blocks|related)' \
-        | ${pkgs.gnugrep}/bin/grep -oE '(ldeck/decknix|UpsideRealty/experiment-decknix-config)?#[0-9]+' \
+        | ${pkgs.gnugrep}/bin/grep -oE '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|#[0-9]+' \
         | sort -u || true
     }
 
@@ -145,7 +145,7 @@ in {
     repos = mkOption {
       type = types.listOf types.str;
       default = [ ];
-      example = [ "ldeck/decknix" "UpsideRealty/experiment-decknix-config" ];
+      example = [ "owner/repo" "org/another-repo" ];
       description = ''
         GitHub repositories to show on the board.
         Format: "owner/repo" (e.g., "ldeck/decknix").
