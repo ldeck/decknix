@@ -9,7 +9,8 @@
 { config, lib, pkgs, ... }:
 
 let
-  inherit (lib) mkEnableOption mkIf mkOption types optionalAttrs;
+  inherit (lib) mkEnableOption mkIf mkOption types optionalAttrs mapAttrs'
+    nameValuePair;
 
   cfg = config.decknix.cli.auggie;
 
@@ -78,11 +79,58 @@ in {
         MCP (Model Context Protocol) server configurations for auggie.
         Each key is the server name, value is the server config object.
         Generates the "mcpServers" section of ~/.augment/settings.json.
+
+        Note: Slack MCP workspaces declared via `slack.workspaces` are
+        automatically merged into this option as "slack-<name>" entries.
+      '';
+    };
+
+    slack.workspaces = mkOption {
+      type = types.attrsOf (types.submodule {
+        options = {
+          clientId = mkOption {
+            type = types.str;
+            description = ''
+              Slack app CLIENT_ID for OAuth authentication to this workspace.
+              Each MCP client needs a registered Slack app; the CLIENT_ID
+              comes from the app's OAuth configuration.
+            '';
+          };
+          description = mkOption {
+            type = types.str;
+            default = "";
+            description = "Human-readable description of this Slack workspace.";
+          };
+        };
+      });
+      default = {};
+      example = {
+        personal = { clientId = "3660753192626.123456"; };
+        acme-corp = {
+          clientId = "3660753192626.789012";
+          description = "ACME Corp team workspace";
+        };
+      };
+      description = ''
+        Slack workspaces to connect via the Slack MCP server.
+        Each entry generates a "slack-<name>" MCP server pointing at
+        https://mcp.slack.com/mcp with the workspace's CLIENT_ID.
+
+        Downstream configs (org or personal) simply add entries:
+          decknix.cli.auggie.slack.workspaces.my-team.clientId = "...";
       '';
     };
   };
 
   config = mkIf cfg.enable {
+    # Generate mcpServers entries from declared Slack workspaces
+    decknix.cli.auggie.mcpServers = mapAttrs'
+      (name: ws: nameValuePair "slack-${name}" {
+        url = "https://mcp.slack.com/mcp";
+        auth = { CLIENT_ID = ws.clientId; };
+      })
+      cfg.slack.workspaces;
+
     home.packages = [ auggieScript ];
 
     # Copy (not symlink) settings.json on activation so auggie can modify it
