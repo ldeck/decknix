@@ -28,7 +28,21 @@ The `C-c A` prefix is labelled "Agent" in which-key.
 | `RET` | Send prompt (at end of input) |
 | `S-RET` | Insert newline in prompt |
 | `C-c C-c` | Interrupt running agent |
+| `C-c E` | Interrupt agent and open compose buffer |
 | `TAB` | Expand yasnippet template |
+
+### In Compose Buffer
+
+| Key | Action |
+|-----|--------|
+| `C-c C-c` | Submit composed prompt |
+| `C-c C-k` | Cancel / close compose buffer |
+| `C-c C-s` | Toggle sticky (stays open) vs transient |
+| `C-c k k` | Interrupt agent |
+| `C-c k C-c` | Interrupt agent and submit |
+| `M-p` | Previous prompt (history) |
+| `M-n` | Next prompt (history) |
+| `M-r` | Search prompt history (consult) |
 
 ## Templates (`C-c t` / `C-c A t`)
 
@@ -45,6 +59,8 @@ The `C-c A` prefix is labelled "Agent" in which-key.
 | `c` | Pick & insert a slash command |
 | `n` | Create new command |
 | `e` | Edit existing command |
+| `r` | Review PR (quick action) |
+| `B` | Batch process (multi-session launcher) |
 
 ## Tags (`C-c T` / `C-c A T`)
 
