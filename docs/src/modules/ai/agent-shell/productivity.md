@@ -27,7 +27,23 @@ A magit-style multi-line editor for writing prompts. Opens at the bottom of the 
 
 - `C-c C-c` — submit the composed text to the agent
 - `C-c C-k` — cancel and close the compose buffer
+- `C-c C-s` — toggle sticky (stays open after submit) vs transient (closes after submit)
+- `C-c k k` — interrupt the agent, `C-c k C-c` — interrupt and submit
 - Full text-mode editing: `RET` for newlines, no accidental submissions
+
+### Prompt History (`M-p` / `M-n`)
+
+The compose buffer supports prompt history across all sessions — cycle through previously sent prompts:
+
+| Key | Action |
+|-----|--------|
+| `M-p` | Previous prompt (older) |
+| `M-n` | Next prompt (newer) |
+| `M-r` | Search all prompts (consult fuzzy match) |
+
+History is loaded lazily from auggie session files — `M-p` starts with the current session, then progressively loads older sessions as you keep pressing. `M-r` provides a full fuzzy search across all sessions using [consult](https://github.com/minad/consult).
+
+Your current input is saved when you start navigating and restored when you cycle past the newest entry.
 
 ## Yasnippet Prompt Templates (`C-c t t`)
 
@@ -109,6 +125,50 @@ Tags are stored in `~/.config/decknix/agent-sessions.json`, keyed by auggie sess
 ```
 [saved] a1b2c3d4  2h ago  12x  Fix pubsub timeout... [proptrack, bug]
 ```
+
+## Quick Actions
+
+### PR Review (`C-c c r` / `C-c A c r`)
+
+Start a code review session for a GitHub PR:
+
+1. Prompts for PR URL (auto-detects from clipboard)
+2. Creates a named session: `Review: owner/repo#123`
+3. Tags the session with `review` and sends `/review-service-pr <url>`
+
+### Batch Process (`C-c c B` / `C-c A c B`)
+
+Launch multiple sessions from a single editor — ideal for batch code reviews or parallel investigations:
+
+```
+┌─────────────────────────────────────────────┐
+│  Batch: C-c C-c submit | C-c C-k cancel    │
+│                                             │
+│  # Batch session launcher — workspace: ~/.. │
+│  --- backend : ~/Code/my-project            │
+│  https://github.com/org/api/pull/42         │
+│  https://github.com/org/api/pull/43         │
+│                                             │
+│  --- frontend                               │
+│  https://github.com/org/web/pull/17         │
+│                                             │
+└─────────────────────────────────────────────┘
+```
+
+**Syntax:**
+- `--- <name> [: <workspace>]` — group header (items below launch as one session)
+- Ungrouped URLs — each gets its own session
+- `#` lines — comments, ignored
+
+**Snippets** (via yasnippet in batch compose mode):
+| Key | Snippet | Description |
+|-----|---------|-------------|
+| `---` | Group header | `--- <name> : <workspace>` with tab stops |
+| `pr` | PR URL | Generic `github.com/<owner>/<repo>/pull/<number>` |
+
+Org-specific snippets (e.g., pre-filled workspace paths) can be added via downstream `decknix-config`.
+
+`C-c C-c` parses the buffer and launches all sessions. A summary buffer shows success/failure for each.
 
 ## Nix Options
 

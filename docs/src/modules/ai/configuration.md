@@ -53,6 +53,34 @@ Declaratively configure [Model Context Protocol](https://modelcontextprotocol.io
 
 MCP servers are written into the `mcpServers` section of `~/.augment/settings.json`.
 
+### Slack MCP Workspaces
+
+Connect auggie to one or more Slack workspaces using the official [Slack MCP server](https://mcp.slack.com/mcp):
+
+```nix
+{ ... }: {
+  decknix.cli.auggie.slack.workspaces = {
+    acme-corp = {
+      clientId = "3660753192626.123456";
+      description = "ACME Corp team workspace";
+    };
+    personal = {
+      clientId = "3660753192626.789012";
+    };
+  };
+}
+```
+
+Each workspace generates a `slack-<name>` entry in `mcpServers` pointing at `https://mcp.slack.com/mcp` with the workspace's `CLIENT_ID` for OAuth authentication.
+
+**Setup requirements:**
+1. Create or reuse a Slack app at [api.slack.com/apps](https://api.slack.com/apps)
+2. Enable OAuth with appropriate scopes (e.g., `search:read.public`, `chat:write`, `channels:history`)
+3. Publish as an internal app or to the Slack Marketplace
+4. Copy the **Client ID** from the app's OAuth settings
+
+Multiple workspaces merge naturally — define some in your org config, others in your personal config, and they all appear in `settings.json`.
+
 ### Viewing Configured Servers
 
 From Emacs: `C-c A S` opens a formatted buffer showing all configured MCP servers with their type, command, args, and environment variables.
