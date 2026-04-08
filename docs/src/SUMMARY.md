@@ -52,6 +52,7 @@
 
 # Guides
 
+- [Decknix Hub](./guides/decknix-hub.md)
 - [Adding Org Configs for Your Team](./guides/org-configs.md)
 - [Framework Development](./guides/development.md)
 - [Troubleshooting](./guides/troubleshooting.md)
