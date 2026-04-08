@@ -4295,6 +4295,34 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                        (format " ● %d live  ◦ %d saved" live saved-count)
                        'face 'font-lock-keyword-face))))))
 
+        ;; -- Fix sidebar kill: upstream uses comint-send-eof which calls
+        ;; comint-send-input, searching for the prompt regexp.  If the prompt
+        ;; isn't at point (process dead, mid-output, duplicate buffer), the
+        ;; search fails with "Search failed: Auggie> ".
+        ;; Use process-send-eof directly (bypasses comint's prompt search)
+        ;; and fall back to kill-process if that also fails.
+        (advice-add 'agent-shell-workspace-sidebar-kill :override
+          (lambda ()
+            "Kill the agent-shell process at point (robust, no prompt search)."
+            (interactive)
+            (let ((buffer (agent-shell-workspace-sidebar--buffer-at-point)))
+              (unless (and buffer (buffer-live-p buffer))
+                (user-error "No live agent buffer at point"))
+              (when (yes-or-no-p
+                     (format "Kill agent-shell process in %s? "
+                             (buffer-name buffer)))
+                (let ((proc (get-buffer-process buffer)))
+                  (when (and proc (process-live-p proc))
+                    (condition-case nil
+                        (process-send-eof proc)
+                      (error
+                       ;; process-send-eof can fail if pipe is broken
+                       (ignore-errors (kill-process proc)))))
+                  (message "Killed agent-shell process in %s"
+                           (buffer-name buffer)))
+                (run-with-timer 0.1 nil
+                                #'agent-shell-workspace-sidebar-refresh)))))
+
         ;; -- Bind keys in sidebar mode --
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "?") #'decknix-sidebar-help)
