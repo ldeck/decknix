@@ -4089,9 +4089,12 @@ Like treemacs `W' / extra-wide-toggle."
           (interactive)
           (message (concat
             "RET goto  c new  k kill  r restart  R rename  d del-killed  "
-            "S switch  s… session ops  w workspace  a/x tile add/rm  "
+            "s… session ops  w workspace  a/x tile add/rm  "
             "g refresh  q quit | "
-            "t tile[%s]  M display[%s]  W width[%s]")
+            "S switch[%s]  t tile[%s]  M display[%s]  W width[%s]")
+           (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
+                    agent-shell-workspace-sidebar--quick-switch)
+               "on" "off")
            (if (and agent-shell-workspace-sidebar--selected-buffer
                     (memq agent-shell-workspace-sidebar--selected-buffer
                           agent-shell-workspace--tiled-buffers))
@@ -4125,7 +4128,6 @@ state with colour-coded on/off indicators."
                            ("k"   . "kill")
                            ("r"   . "restart")
                            ("R"   . "rename")
-                           ("S"   . "quick-switch")
                            ("s s" . "search sessions")
                            ("s g" . "grep sessions")
                            ("w"   . "set workspace")
@@ -4141,6 +4143,15 @@ state with colour-coded on/off indicators."
                       "\n")))
           ;; ── Toggles / Cycles ──
           (insert (propertize " Toggles" 'face 'bold) "\n")
+          ;; S — quick-switch mode
+          (let* ((qs-p (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
+                            agent-shell-workspace-sidebar--quick-switch))
+                 (qs-label (if qs-p "on" "off"))
+                 (qs-face (if qs-p 'success 'font-lock-comment-face)))
+            (insert (propertize "   S " 'face 'font-lock-keyword-face)
+                    (propertize "quick-switch " 'face 'font-lock-comment-face)
+                    (propertize qs-label 'face qs-face)
+                    "\n"))
           ;; t — tile: check if selected buffer is currently tiled
           (let* ((sel agent-shell-workspace-sidebar--selected-buffer)
                  (tiled-p (and sel
