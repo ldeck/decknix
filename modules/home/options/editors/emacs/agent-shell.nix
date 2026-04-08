@@ -3982,6 +3982,18 @@ Comments start with #."
         (require 'agent-shell-workspace)
         (define-key decknix-agent-prefix-map (kbd "w") 'agent-shell-workspace-toggle)
 
+        ;; Focus the sidebar when entering the Agents tab via C-c w.
+        ;; The upstream toggle opens/shows the sidebar but leaves focus
+        ;; in the main area; we want the sidebar to receive focus so
+        ;; the user can immediately navigate with single keys.
+        (advice-add 'agent-shell-workspace-toggle :after
+          (lambda (&rest _)
+            (when (agent-shell-workspace--in-agents-tab-p)
+              (let ((sidebar-win (get-buffer-window
+                                   agent-shell-workspace-sidebar-buffer-name)))
+                (when (and sidebar-win (window-live-p sidebar-win))
+                  (select-window sidebar-win))))))
+
         ;; -- Buffer isolation: teach workspace that compose/batch buffers
         ;; belong in the Agents tab.  Without this, opening compose
         ;; triggers the redirect rule which switches away from the Agents
@@ -4179,8 +4191,9 @@ Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
           "Insert a section header TITLE into the sidebar."
           (insert (propertize (concat " " title) 'face 'bold) "\n"))
 
-        (defvar decknix--sidebar-show-keys nil
-          "When non-nil, show an expanded key listing in the sidebar footer.")
+        (defvar decknix--sidebar-show-keys t
+          "When non-nil, show categorised key listing in the sidebar footer.
+Defaults to t for discoverability; toggle with K.")
 
         (defun decknix-sidebar-toggle-keys ()
           "Toggle the inline key listing in the sidebar footer."
@@ -4189,54 +4202,58 @@ Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
           (when (fboundp 'agent-shell-workspace-sidebar-refresh)
             (agent-shell-workspace-sidebar-refresh)))
 
+        (defun decknix--sidebar-render-key-group (label keys)
+          "Insert a group LABEL header and KEYS alist as vertical key lines."
+          (insert (propertize (format " %s" label) 'face 'bold) "\n")
+          (dolist (kv keys)
+            (insert (propertize (format " %3s " (car kv))
+                                'face 'font-lock-keyword-face)
+                    (propertize (cdr kv)
+                                'face 'font-lock-comment-face)
+                    "\n")))
+
         (defun decknix--sidebar-render-footer ()
-          "Insert compact hint or expanded key listing depending on toggle.
-Press K to toggle, ? to open full transient menu."
+          "Insert categorised key listing or compact hint depending on toggle.
+Press K to toggle, ? to open full transient menu with live state."
           (insert "\n")
           (if decknix--sidebar-show-keys
-              ;; Expanded: show common keys inline
-              (let ((keys '(("RET" . "open")
-                             ("c"   . "new")
-                             ("k"   . "kill")
-                             ("r"   . "restart")
-                             ("R"   . "rename")
-                             ("d"   . "del killed")
-                             ("s"   . "sessions…")
-                             ("w"   . "workspace")
-                             ("S"   . "quick-switch")
-                             ("t"   . "tile toggle")
-                             ("a/x" . "tile +/-")
-                             ("M"   . "display")
-                             ("W"   . "width")
-                             ("g"   . "refresh")
-                             ("q"   . "quit"))))
-                (dolist (kv keys)
-                  (insert (propertize (format " %3s " (car kv))
-                                      'face 'font-lock-keyword-face)
-                          (propertize (cdr kv)
-                                      'face 'font-lock-comment-face)
-                          "\n"))
+              (progn
+                ;; ── Actions ──
+                (decknix--sidebar-render-key-group "Actions"
+                  '(("RET" . "open")
+                    ("c"   . "new session")
+                    ("k"   . "kill")
+                    ("r"   . "restart")
+                    ("R"   . "rename")
+                    ("d"   . "del killed")
+                    ("g"   . "refresh")
+                    ("q"   . "quit")))
+                ;; ── Sessions ──
+                (decknix--sidebar-render-key-group "Sessions"
+                  '(("s"   . "sessions…")
+                    ("w"   . "set workspace")))
+                ;; ── Toggles ──
+                (decknix--sidebar-render-key-group "Toggles"
+                  (append
+                   '(("S"   . "quick-switch")
+                     ("t"   . "tile toggle")
+                     ("a/x" . "tile +/-")
+                     ("M"   . "display mode")
+                     ("W"   . "width"))
+                   (when (boundp 'decknix--hub-org-filter)
+                     '(("O" . "org filter")))))
+                ;; Trailing hint
                 (insert (propertize " K " 'face 'font-lock-keyword-face)
-                        (propertize "hide keys" 'face 'font-lock-comment-face)
+                        (propertize "hide" 'face 'font-lock-comment-face)
                         "  "
                         (propertize "? " 'face 'font-lock-keyword-face)
-                        (propertize "all actions" 'face 'font-lock-comment-face)
+                        (propertize "all + state" 'face 'font-lock-comment-face)
                         "\n"))
-            ;; Compact: single hint line
-            (insert (propertize " ? " 'face 'font-lock-keyword-face)
-                    (propertize "actions" 'face 'font-lock-comment-face)
-                    "  "
-                    (propertize "c " 'face 'font-lock-keyword-face)
-                    (propertize "new" 'face 'font-lock-comment-face)
-                    "  "
-                    (propertize "k " 'face 'font-lock-keyword-face)
-                    (propertize "kill" 'face 'font-lock-comment-face)
-                    "  "
-                    (propertize "s " 'face 'font-lock-keyword-face)
-                    (propertize "sessions" 'face 'font-lock-comment-face)
-                    "  "
-                    (propertize "K " 'face 'font-lock-keyword-face)
-                    (propertize "keys" 'face 'font-lock-comment-face)
+            ;; Compact: vertical, one key per line, no categories
+            (insert (propertize " ?" 'face 'font-lock-keyword-face)
+                    (propertize " actions  " 'face 'font-lock-comment-face)
+                    (propertize "K" 'face 'font-lock-keyword-face)
+                    (propertize " show keys" 'face 'font-lock-comment-face)
                     "\n")))
 
         (defun decknix--sidebar-abbreviate-workspace (path)
