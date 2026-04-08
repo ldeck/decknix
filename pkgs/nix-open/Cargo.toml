@@ -1,0 +1,10 @@
+[package]
+name = "nix-open"
+version = "0.1.0"
+edition = "2021"
+description = "Nix-aware macOS application launcher"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+dirs = "5.0"
+libc = "0.2.183"

@@ -20,6 +20,7 @@ in
     # Safe fallback:
     (final: prev: {
       decknix-cli = prev.callPackage ../../pkgs/decknix-cli/default.nix { };
+      nix-open = prev.callPackage ../../pkgs/nix-open/default.nix { };
     })
   ];
 
@@ -69,6 +70,7 @@ in
     git
     curl
     skim
+    nix-open
   ];
 
   # 4. FONTS
