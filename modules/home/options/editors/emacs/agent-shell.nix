@@ -4083,27 +4083,87 @@ Like treemacs `W' / extra-wide-toggle."
                  (setq decknix--sidebar-width-state 'default)
                  (message "Sidebar: default (%d)" default-w))))))
 
-        ;; -- Sidebar help command --
-        (defun decknix-sidebar-help ()
-          "Show sidebar keybinding help in minibuffer."
+        ;; -- Sidebar transient menu (magit-style ? popup) --
+        (require 'transient)
+
+        ;; Transient suffix descriptions that show live state
+        (transient-define-suffix decknix-sidebar-transient--quick-switch ()
+          :key "S"
+          :description
+          (lambda ()
+            (format "Quick-switch  %s"
+                    (propertize
+                     (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
+                              agent-shell-workspace-sidebar--quick-switch)
+                         "[on]" "[off]")
+                     'face (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
+                                    agent-shell-workspace-sidebar--quick-switch)
+                               'success 'font-lock-comment-face))))
           (interactive)
-          (message (concat
-            "RET goto  c new  k kill  r restart  R rename  d del-killed  "
-            "s… session ops  w workspace  a/x tile add/rm  "
-            "g refresh  q quit | "
-            "S switch[%s]  t tile[%s]  M display[%s]  W width[%s]  O org[%s]")
-           (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
-                    agent-shell-workspace-sidebar--quick-switch)
-               "on" "off")
-           (if (and agent-shell-workspace-sidebar--selected-buffer
-                    (memq agent-shell-workspace-sidebar--selected-buffer
-                          agent-shell-workspace--tiled-buffers))
-               "on" "off")
-           (symbol-name decknix--sidebar-display-mode)
-           (symbol-name decknix--sidebar-width-state)
-           (if (boundp 'decknix--hub-org-filter)
-               (or decknix--hub-org-filter "all")
-             "n/a")))
+          (call-interactively #'agent-shell-workspace-sidebar-quick-switch-mode))
+
+        (transient-define-suffix decknix-sidebar-transient--tile-toggle ()
+          :key "t"
+          :description
+          (lambda ()
+            (let* ((sel (and (boundp 'agent-shell-workspace-sidebar--selected-buffer)
+                             agent-shell-workspace-sidebar--selected-buffer))
+                   (tiled (and sel
+                               (boundp 'agent-shell-workspace--tiled-buffers)
+                               (memq sel agent-shell-workspace--tiled-buffers))))
+              (format "Tile toggle   %s"
+                      (propertize (if tiled "[on]" "[off]")
+                                  'face (if tiled 'success 'font-lock-comment-face)))))
+          (interactive)
+          (call-interactively #'agent-shell-workspace-sidebar-tile-toggle))
+
+        (transient-define-suffix decknix-sidebar-transient--display-mode ()
+          :key "M"
+          :description
+          (lambda ()
+            (format "Display mode  %s"
+                    (propertize
+                     (format "[%s]" (symbol-name decknix--sidebar-display-mode))
+                     'face 'font-lock-constant-face)))
+          (interactive)
+          (call-interactively #'decknix-sidebar-cycle-display-mode))
+
+        (transient-define-suffix decknix-sidebar-transient--width ()
+          :key "W"
+          :description
+          (lambda ()
+            (format "Width         %s"
+                    (propertize
+                     (format "[%s]" (symbol-name decknix--sidebar-width-state))
+                     'face 'font-lock-constant-face)))
+          (interactive)
+          (call-interactively #'decknix-sidebar-cycle-width))
+
+        (transient-define-prefix decknix-sidebar-transient ()
+          "Sidebar actions and toggles."
+          ["Actions"
+           ("RET" "Open / goto" agent-shell-workspace-sidebar-open)
+           ("c"   "New session" agent-shell-workspace-sidebar-new)
+           ("k"   "Kill"        agent-shell-workspace-sidebar-kill)
+           ("r"   "Restart"     agent-shell-workspace-sidebar-restart)
+           ("R"   "Rename"      agent-shell-workspace-sidebar-rename)
+           ("d"   "Delete killed" agent-shell-workspace-sidebar-delete-killed)
+           ("g"   "Refresh"     agent-shell-workspace-sidebar-refresh)
+           ("q"   "Quit sidebar" delete-window)]
+          ["Sessions"
+           ("s s" "Search"  decknix-agent-session-picker)
+           ("s g" "Grep"    decknix-agent-session-grep)
+           ("s r" "Recent"  decknix-agent-session-recent)
+           ("w"   "Set workspace" decknix-sidebar-set-workspace)]
+          ["Tiling"
+           ("a"   "Add tile"    agent-shell-workspace-sidebar-tile-add)
+           ("x"   "Remove tile" agent-shell-workspace-sidebar-tile-remove)
+           ("m"   "Set mode"    agent-shell-workspace-sidebar-mode)]
+          ["Toggles"
+           (decknix-sidebar-transient--quick-switch)
+           (decknix-sidebar-transient--tile-toggle)
+           (decknix-sidebar-transient--display-mode)
+           (decknix-sidebar-transient--width)])
 
         ;; -- Enhanced sidebar render: live + saved sessions + key footer --
         ;; Override the upstream render to add saved sessions grouped by
@@ -4120,80 +4180,19 @@ Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
           (insert (propertize (concat " " title) 'face 'bold) "\n"))
 
         (defun decknix--sidebar-render-footer ()
-          "Insert vertical key-help footer with actions and stateful toggles.
-Actions are shown in a compact block; toggles show their current
-state with colour-coded on/off indicators."
-          (insert "\n")
-          ;; ── Actions ──
-          (insert (propertize " Keys" 'face 'bold) "\n")
-          (let ((actions '(("RET" . "open")
-                           ("c"   . "new session")
-                           ("k"   . "kill")
-                           ("r"   . "restart")
-                           ("R"   . "rename")
-                           ("s s" . "search sessions")
-                           ("s g" . "grep sessions")
-                           ("w"   . "set workspace")
-                           ("a/x" . "tile add/rm")
-                           ("g"   . "refresh")
-                           ("?"   . "help")
-                           ("q"   . "quit"))))
-            (dolist (kv actions)
-              (insert (propertize (format " %3s " (car kv))
-                                  'face 'font-lock-keyword-face)
-                      (propertize (cdr kv)
-                                  'face 'font-lock-comment-face)
-                      "\n")))
-          ;; ── Toggles / Cycles ──
-          (insert (propertize " Toggles" 'face 'bold) "\n")
-          ;; S — quick-switch mode
-          (let* ((qs-p (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
-                            agent-shell-workspace-sidebar--quick-switch))
-                 (qs-label (if qs-p "on" "off"))
-                 (qs-face (if qs-p 'success 'font-lock-comment-face)))
-            (insert (propertize "   S " 'face 'font-lock-keyword-face)
-                    (propertize "quick-switch " 'face 'font-lock-comment-face)
-                    (propertize qs-label 'face qs-face)
-                    "\n"))
-          ;; t — tile: check if selected buffer is currently tiled
-          (let* ((sel agent-shell-workspace-sidebar--selected-buffer)
-                 (tiled-p (and sel
-                               (memq sel agent-shell-workspace--tiled-buffers)))
-                 (tile-label (if tiled-p "on" "off"))
-                 (tile-face (if tiled-p 'success 'font-lock-comment-face)))
-            (insert (propertize "   t " 'face 'font-lock-keyword-face)
-                    (propertize "tile " 'face 'font-lock-comment-face)
-                    (propertize tile-label 'face tile-face)
-                    "\n"))
-          ;; M — display mode cycle
-          (let* ((mode-str (symbol-name decknix--sidebar-display-mode))
-                 (mode-face 'font-lock-constant-face))
-            (insert (propertize "   M " 'face 'font-lock-keyword-face)
-                    (propertize "display " 'face 'font-lock-comment-face)
-                    (propertize mode-str 'face mode-face)
-                    "\n"))
-          ;; W — width cycle
-          (let* ((width-str (symbol-name decknix--sidebar-width-state))
-                 (width-face 'font-lock-constant-face))
-            (insert (propertize "   W " 'face 'font-lock-keyword-face)
-                    (propertize "width " 'face 'font-lock-comment-face)
-                    (propertize width-str 'face width-face)
-                    "\n"))
-          ;; O — org filter (only when hub is loaded)
-          (when (boundp 'decknix--hub-org-filter)
-            (let* ((org-str (or decknix--hub-org-filter "all"))
-                   (org-face (if decknix--hub-org-filter
-                                 'font-lock-constant-face
-                               'font-lock-comment-face)))
-              (insert (propertize "   O " 'face 'font-lock-keyword-face)
-                      (propertize "org " 'face 'font-lock-comment-face)
-                      (propertize org-str 'face org-face)
-                      "\n")))
-          ;; -- CI legend --
-          (insert (propertize " CI: " 'face 'bold)
-                  (propertize "✓" 'face 'success) "pass "
-                  (propertize "✗" 'face 'error) "fail "
-                  (propertize "⟳" 'face 'warning) "run"
+          "Insert a compact hint line pointing to the transient menu."
+          (insert "\n"
+                  (propertize " ? " 'face 'font-lock-keyword-face)
+                  (propertize "actions" 'face 'font-lock-comment-face)
+                  "  "
+                  (propertize "c " 'face 'font-lock-keyword-face)
+                  (propertize "new" 'face 'font-lock-comment-face)
+                  "  "
+                  (propertize "k " 'face 'font-lock-keyword-face)
+                  (propertize "kill" 'face 'font-lock-comment-face)
+                  "  "
+                  (propertize "s " 'face 'font-lock-keyword-face)
+                  (propertize "sessions" 'face 'font-lock-comment-face)
                   "\n"))
 
         (defun decknix--sidebar-abbreviate-workspace (path)
@@ -4505,9 +4504,20 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                 (when (fboundp 'agent-shell-workspace-sidebar-refresh)
                   (agent-shell-workspace-sidebar-refresh))))))
 
+        ;; -- Session transient (replaces s prefix keymap) --
+        (transient-define-prefix decknix-sidebar-sessions ()
+          "Session operations."
+          ["Sessions"
+           ("s" "Search (picker)" decknix-agent-session-picker)
+           ("g" "Grep"           decknix-agent-session-grep)
+           ("r" "Recent"         decknix-agent-session-recent)
+           ("w" "Set workspace"  decknix-sidebar-set-workspace)])
+
         ;; -- Bind keys in sidebar mode --
         (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "?") #'decknix-sidebar-help)
+          (kbd "?") #'decknix-sidebar-transient)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "h") #'decknix-sidebar-transient)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "W") #'decknix-sidebar-cycle-width)
         (define-key agent-shell-workspace-sidebar-mode-map
@@ -4515,40 +4525,11 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "w") #'decknix-sidebar-set-workspace)
 
-        ;; Remap s → S for quick-switch, s becomes session-ops prefix
+        ;; S = quick-switch (direct), s = session transient
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "S") #'agent-shell-workspace-sidebar-quick-switch-mode)
-        (let ((s-map (make-sparse-keymap)))
-          (define-key s-map (kbd "s") #'decknix-agent-session-picker)
-          (define-key s-map (kbd "g") #'decknix-agent-session-grep)
-          (define-key s-map (kbd "r") #'decknix-agent-session-recent)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "s") s-map))
-
-        ;; which-key labels for sidebar mode
-        (with-eval-after-load 'which-key
-          (which-key-add-keymap-based-replacements agent-shell-workspace-sidebar-mode-map
-            "c" "new agent"
-            "k" "kill"
-            "r" "restart"
-            "R" "rename"
-            "d" "delete killed"
-            "S" "quick-switch"
-            "s" "session…"
-            "s s" "search"
-            "s g" "grep"
-            "s r" "recent"
-            "M" "cycle display"
-            "w" "set workspace"
-            "a" "tile add"
-            "x" "tile remove"
-            "t" "tile toggle"
-            "g" "refresh"
-            "m" "set mode"
-            "q" "quit"
-            "?" "help"
-            "W" "cycle width"
-            "h" "help"))
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "s") #'decknix-sidebar-sessions)
       ''
       + optionalString cfg.hub.enable ''
 
@@ -4644,11 +4625,25 @@ Re-reads only the changed file and refreshes the sidebar."
         ;; Bind O to cycle org filter in sidebar
         (with-eval-after-load 'agent-shell-workspace
           (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "O") #'decknix--hub-cycle-org-filter)
-          (with-eval-after-load 'which-key
-            (which-key-add-keymap-based-replacements
-              agent-shell-workspace-sidebar-mode-map
-              "O" "filter org")))
+            (kbd "O") #'decknix--hub-cycle-org-filter))
+
+        ;; Add Hub group to the sidebar transient
+        (transient-define-suffix decknix-sidebar-transient--org-filter ()
+          :key "O"
+          :description
+          (lambda ()
+            (format "Org filter    %s"
+                    (propertize
+                     (format "[%s]" (or decknix--hub-org-filter "all"))
+                     'face (if decknix--hub-org-filter
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          (interactive)
+          (call-interactively #'decknix--hub-cycle-org-filter))
+
+        (transient-append-suffix 'decknix-sidebar-transient "Toggles"
+          ["Hub"
+           (decknix-sidebar-transient--org-filter)])
 
         ;; -- Hub: org/owner filter --
         ;; Allows toggling visibility per GitHub owner (org or user).
