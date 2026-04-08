@@ -727,6 +727,20 @@ Press q to dismiss."
                   ((< days 30) (format "%dd ago" (truncate days)))
                   (t (format-time-string "%Y-%m-%d" time)))))
 
+        (defun decknix--agent-session-time-compact (iso-time)
+          "Format ISO-TIME as a compact relative time (e.g. \"2h\", \"5d\").
+Used in the sidebar where horizontal space is at a premium."
+          (let* ((time (date-to-time iso-time))
+                 (delta (float-time (time-subtract (current-time) time)))
+                 (minutes (/ delta 60))
+                 (hours (/ delta 3600))
+                 (days (/ delta 86400)))
+            (cond ((< minutes 1) "now")
+                  ((< minutes 60) (format "%dm" (truncate minutes)))
+                  ((< hours 24) (format "%dh" (truncate hours)))
+                  ((< days 30) (format "%dd" (truncate days)))
+                  (t (format-time-string "%m/%d" time)))))
+
         ;; == Session history pre-population ==
         ;; When resuming a session via --resume, the buffer is empty.
         ;; This reads the local session JSON and inserts recent exchanges
@@ -4063,13 +4077,18 @@ Like treemacs `W' / extra-wide-toggle."
           (interactive)
           (message (concat
             "RET goto  c new  k kill  r restart  R rename  d del-killed  "
-            "s switch  a/x/t tile  W width  g refresh  q quit")))
+            "S switch  s… session ops  M display  w workspace  "
+            "a/x/t tile  W width  g refresh  q quit")))
 
         ;; -- Enhanced sidebar render: live + saved sessions + key footer --
         ;; Override the upstream render to add saved sessions grouped by
         ;; workspace and a vertical key-help footer below the session lists.
         (defvar decknix--sidebar-max-saved 8
           "Maximum number of recent saved conversations to show in sidebar.")
+
+        (defvar decknix--sidebar-display-mode 'name
+          "What to show for saved sessions in the sidebar.
+Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
 
         (defun decknix--sidebar-render-section-header (title)
           "Insert a section header TITLE into the sidebar."
@@ -4083,7 +4102,11 @@ Like treemacs `W' / extra-wide-toggle."
                         ("k"   . "kill")
                         ("r"   . "restart")
                         ("R"   . "rename")
-                        ("s"   . "quick-switch")
+                        ("S"   . "quick-switch")
+                        ("s s" . "search sessions")
+                        ("s g" . "grep sessions")
+                        ("M"   . "cycle display")
+                        ("w"   . "set workspace")
                         ("a/x" . "tile add/rm")
                         ("t"   . "tile toggle")
                         ("W"   . "cycle width")
@@ -4197,48 +4220,69 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                                           'agent-shell-workspace-buffer buf))
                     (insert line "\n"))))
 
-              ;; ── Saved Sessions (grouped by workspace) ──
+              ;; ── Saved Sessions (grouped by workspace, merged by display name) ──
               (when saved
                 (insert "\n")
                 (setq line-num (1+ line-num)) ;; blank line
                 (decknix--sidebar-render-section-header
                  (format "Recent (%d)" (length saved)))
                 (setq line-num (1+ line-num)) ;; section header
-                ;; Group by workspace for display
-                (let ((by-ws (make-hash-table :test 'equal)))
+                ;; Group by ABBREVIATED workspace name so differently-stored
+                ;; paths (~/Code/foo vs /Users/x/Code/foo) merge under one heading
+                (let ((by-ws (make-hash-table :test 'equal))
+                      (ws-order nil))
                   (dolist (entry saved)
-                    (let* ((ws (or (nth 1 entry) "unknown"))
-                           (existing (gethash ws by-ws)))
-                      (puthash ws (append existing (list entry)) by-ws)))
-                  ;; Render each workspace group
-                  (let ((ws-keys (sort (hash-table-keys by-ws) #'string<)))
-                    (dolist (ws ws-keys)
-                      ;; Workspace sub-header
-                      (let ((ws-label (decknix--sidebar-abbreviate-workspace ws)))
-                        (insert (propertize (format "  %s" ws-label)
-                                           'face 'font-lock-type-face)
+                    (let* ((raw-ws (nth 1 entry))
+                           (ws-label (if raw-ws
+                                         (decknix--sidebar-abbreviate-workspace raw-ws)
+                                       "unknown"))
+                           (existing (gethash ws-label by-ws)))
+                      (unless existing
+                        (push ws-label ws-order))
+                      (puthash ws-label (append existing (list entry)) by-ws)))
+                  ;; Render each workspace group (order preserved from data, newest first)
+                  (dolist (ws-label (nreverse ws-order))
+                    ;; Workspace sub-header
+                    (insert (propertize (format "  %s" ws-label)
+                                       'face 'font-lock-type-face)
+                            "\n")
+                    (setq line-num (1+ line-num))
+                    ;; Sessions under this workspace
+                    (dolist (entry (gethash ws-label by-ws))
+                      (let* ((name (nth 0 entry))
+                             (conv-key (nth 2 entry))
+                             (session (nth 3 entry))
+                             (modified (nth 4 entry))
+                             (tags (when conv-key
+                                     (decknix--agent-tags-for-conv-key conv-key)))
+                             (time-str (if modified
+                                           (decknix--agent-session-time-compact modified)
+                                         ""))
+                             ;; Build display string based on mode
+                             (label (pcase decknix--sidebar-display-mode
+                                      ('tags
+                                       (if tags
+                                           (string-join tags "/")
+                                         (or name "?")))
+                                      ('both
+                                       (if tags
+                                           (format "%s %s"
+                                                   (string-join tags "/")
+                                                   (propertize
+                                                    (format "(%s)" (or name ""))
+                                                    'face 'font-lock-comment-face))
+                                         (or name "?")))
+                                      (_ (or name "?"))))  ;; 'name mode
+                             (display (format "  %4s %s"
+                                              (propertize time-str
+                                                          'face 'font-lock-comment-face)
+                                              label)))
+                        (insert (propertize display
+                                           'decknix-sidebar-saved-session session
+                                           'decknix-sidebar-saved-conv-key conv-key
+                                           'decknix-sidebar-saved-workspace (nth 1 entry))
                                 "\n")
-                        (setq line-num (1+ line-num)))
-                      ;; Sessions under this workspace
-                      (dolist (entry (gethash ws by-ws))
-                        (let* ((name (nth 0 entry))
-                               (conv-key (nth 2 entry))
-                               (session (nth 3 entry))
-                               (modified (nth 4 entry))
-                               (time-str (if modified
-                                             (decknix--agent-session-time-ago modified)
-                                           ""))
-                               (display (format "   %-14s %s"
-                                                (truncate-string-to-width
-                                                 (or name "?") 14 nil nil "…")
-                                                (propertize time-str
-                                                            'face 'font-lock-comment-face))))
-                          (insert (propertize display
-                                             'decknix-sidebar-saved-session session
-                                             'decknix-sidebar-saved-conv-key conv-key
-                                             'decknix-sidebar-saved-workspace (nth 1 entry))
-                                  "\n")
-                          (setq line-num (1+ line-num))))))))
+                        (setq line-num (1+ line-num)))))))
 
               ;; ── Key help footer ──
               (decknix--sidebar-render-footer)
@@ -4323,11 +4367,61 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                 (run-with-timer 0.1 nil
                                 #'agent-shell-workspace-sidebar-refresh)))))
 
+        ;; -- New sidebar commands --
+        (defun decknix-sidebar-cycle-display-mode ()
+          "Cycle sidebar display mode: name → tags → both → name."
+          (interactive)
+          (setq decknix--sidebar-display-mode
+                (pcase decknix--sidebar-display-mode
+                  ('name 'tags)
+                  ('tags 'both)
+                  ('both 'name)
+                  (_ 'name)))
+          (message "Sidebar display: %s" decknix--sidebar-display-mode)
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (agent-shell-workspace-sidebar-refresh)))
+
+        (defun decknix-sidebar-set-workspace ()
+          "Set or change the workspace for the saved session at point."
+          (interactive)
+          (let ((conv-key (get-text-property
+                           (line-beginning-position)
+                           'decknix-sidebar-saved-conv-key)))
+            (unless conv-key
+              (user-error "No saved session at point"))
+            (let* ((new-ws (read-directory-name "Workspace: " nil nil t))
+                   (store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (gethash conv-key convs)))
+              (when entry
+                (puthash "workspace" new-ws entry)
+                (puthash "lastAccessed"
+                         (format-time-string "%Y-%m-%dT%H:%M:%S.000Z" nil t) entry)
+                (decknix--agent-tags-write store)
+                (message "Workspace set to %s"
+                         (abbreviate-file-name new-ws))
+                (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                  (agent-shell-workspace-sidebar-refresh))))))
+
         ;; -- Bind keys in sidebar mode --
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "?") #'decknix-sidebar-help)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "W") #'decknix-sidebar-cycle-width)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "M") #'decknix-sidebar-cycle-display-mode)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "w") #'decknix-sidebar-set-workspace)
+
+        ;; Remap s → S for quick-switch, s becomes session-ops prefix
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "S") #'agent-shell-workspace-sidebar-quick-switch-mode)
+        (let ((s-map (make-sparse-keymap)))
+          (define-key s-map (kbd "s") #'decknix-agent-session-picker)
+          (define-key s-map (kbd "g") #'decknix-agent-session-grep)
+          (define-key s-map (kbd "r") #'decknix-agent-session-recent)
+          (define-key agent-shell-workspace-sidebar-mode-map
+            (kbd "s") s-map))
 
         ;; which-key labels for sidebar mode
         (with-eval-after-load 'which-key
@@ -4337,12 +4431,17 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
             "r" "restart"
             "R" "rename"
             "d" "delete killed"
-            "s" "quick-switch"
+            "S" "quick-switch"
+            "s" "session…"
+            "s s" "search"
+            "s g" "grep"
+            "s r" "recent"
+            "M" "cycle display"
+            "w" "set workspace"
             "a" "tile add"
             "x" "tile remove"
             "t" "tile toggle"
             "g" "refresh"
-            "M" "cycle mode"
             "m" "set mode"
             "q" "quit"
             "?" "help"
