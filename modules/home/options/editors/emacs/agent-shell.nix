@@ -4232,16 +4232,45 @@ Press K to toggle, ? to open full transient menu with live state."
                 (decknix--sidebar-render-key-group "Sessions"
                   '(("s"   . "sessions…")
                     ("w"   . "set workspace")))
-                ;; ── Toggles ──
+                ;; ── Toggles (with live state) ──
                 (decknix--sidebar-render-key-group "Toggles"
                   (append
-                   '(("S"   . "quick-switch")
-                     ("t"   . "tile toggle")
-                     ("a/x" . "tile +/-")
-                     ("M"   . "display mode")
-                     ("W"   . "width"))
+                   (list
+                    (cons "S" (format "quick-switch %s"
+                                (propertize
+                                 (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
+                                          agent-shell-workspace-sidebar--quick-switch)
+                                     "[on]" "[off]")
+                                 'face (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
+                                                agent-shell-workspace-sidebar--quick-switch)
+                                           'success 'font-lock-comment-face))))
+                    (cons "t" (format "tile %s"
+                                (let* ((sb (get-buffer "*agent-shell-sidebar*"))
+                                       (tiled (and sb
+                                                   (buffer-local-value
+                                                    'agent-shell-workspace--tiled sb))))
+                                  (propertize (if tiled "[on]" "[off]")
+                                              'face (if tiled 'success 'font-lock-comment-face)))))
+                    '("a/x" . "tile +/-")
+                    (cons "M" (format "display %s"
+                                (propertize
+                                 (format "[%s]" (symbol-name decknix--sidebar-display-mode))
+                                 'face 'font-lock-constant-face)))
+                    (cons "W" (format "width %s"
+                                (propertize
+                                 (format "[%s]" (symbol-name decknix--sidebar-width-state))
+                                 'face 'font-lock-constant-face))))
                    (when (fboundp 'decknix--hub-org-filter-dispatch)
-                     '(("O" . "org filter")))))
+                     (list
+                      (cons "O" (format "org %s"
+                                  (if (fboundp 'decknix--hub-org-filter-summary)
+                                      (let ((summary (decknix--hub-org-filter-summary)))
+                                        (propertize
+                                         (format "[%s]" summary)
+                                         'face (if (string= summary "all")
+                                                   'font-lock-comment-face
+                                                 'font-lock-constant-face)))
+                                    (propertize "[off]" 'face 'font-lock-comment-face))))))))
                 ;; Trailing hint
                 (insert (propertize " K " 'face 'font-lock-keyword-face)
                         (propertize "hide" 'face 'font-lock-comment-face)
