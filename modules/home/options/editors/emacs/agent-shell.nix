@@ -1090,7 +1090,9 @@ existing conversation entry in the tag store."
               ;; so it appears in the session picker even before the buffer
               ;; is fully set up.
               (when ck
-                (decknix--agent-register-session-id ck sid))
+                (decknix--agent-register-session-id ck sid)
+                ;; Bump recency so the conversation sorts to the top
+                (decknix--agent-conv-touch ck))
               (run-at-time
                1.5 nil
                (eval
@@ -1117,7 +1119,11 @@ existing conversation entry in the tag store."
         (defun decknix--agent-session-group-by-conversation (sessions)
           "Group SESSIONS by conversation (shared firstUserMessage).
 Returns a list of (CONV-KEY LATEST-SESSION ALL-SESSIONS) triples,
-sorted by most recently modified first."
+sorted by most recently interacted first.
+
+Inter-group sort uses max(session.modified, conversation.lastAccessed)
+so that tag/rename/resume operations bump a conversation to the top,
+not just augment writing to the session file."
           (let ((groups (make-hash-table :test 'equal)))
             (dolist (s sessions)
               (let* ((first-msg (alist-get 'firstUserMessage s ""))
@@ -1134,10 +1140,16 @@ sorted by most recently modified first."
                                                        (or (alist-get 'modified b) ""))))))
                            (push (list key (car sorted) sorted) result)))
                        groups)
-              ;; Sort by latest session modified time
+              ;; Sort by max(session.modified, lastAccessed) — any interaction
+              ;; with a conversation (tagging, renaming, resuming) counts.
               (sort result (lambda (a b)
-                             (string> (or (alist-get 'modified (cadr a)) "")
-                                      (or (alist-get 'modified (cadr b)) "")))))))
+                             (let* ((mod-a (or (alist-get 'modified (cadr a)) ""))
+                                    (mod-b (or (alist-get 'modified (cadr b)) ""))
+                                    (acc-a (or (decknix--agent-conv-last-accessed (car a)) ""))
+                                    (acc-b (or (decknix--agent-conv-last-accessed (car b)) ""))
+                                    (eff-a (if (string> acc-a mod-a) acc-a mod-a))
+                                    (eff-b (if (string> acc-b mod-b) acc-b mod-b)))
+                               (string> eff-a eff-b)))))))
 
         (defun decknix--agent-conversation-preview (conv-group)
           "Format a one-line preview for a conversation CONV-GROUP.
@@ -1602,6 +1614,9 @@ where the first message is the command itself)."
                   (puthash "tags" existing entry)))
               (when workspace
                 (puthash "workspace" workspace entry))
+              ;; Bump recency
+              (puthash "lastAccessed"
+                       (format-time-string "%Y-%m-%dT%H:%M:%S.000Z" nil t) entry)
               (puthash conv-key entry convs)
               (decknix--agent-tags-write store))))
 
@@ -2094,6 +2109,29 @@ Auto-migrates v1 (session-keyed) format to v2 (conversation-keyed)."
                 (puthash "conversations" convs store)
                 convs)))
 
+        (defun decknix--agent-conv-touch (conv-key)
+          "Stamp lastAccessed on CONV-KEY so it sorts to the top.
+Called by user-facing operations (tag, rename, resume, create)
+so that any interaction with a conversation bumps its recency,
+not just augment writing to the session file."
+          (when conv-key
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (gethash conv-key convs)))
+              (when entry
+                (puthash "lastAccessed"
+                         (format-time-string "%Y-%m-%dT%H:%M:%S.000Z" nil t)
+                         entry)
+                (decknix--agent-tags-write store)))))
+
+        (defun decknix--agent-conv-last-accessed (conv-key)
+          "Return the lastAccessed timestamp for CONV-KEY, or nil."
+          (when conv-key
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (gethash conv-key convs)))
+              (when entry (gethash "lastAccessed" entry)))))
+
         (defun decknix--agent-tags-for-session (session-id)
           "Return the list of tags for the conversation containing SESSION-ID."
           (let* ((conv-key (decknix--agent-conversation-key-for-session session-id))
@@ -2241,6 +2279,9 @@ conversation that had no workspace stored."
               ;; Track this session in the conversation
               (cl-pushnew session-id sids :test #'string=)
               (puthash "sessions" sids entry)
+              ;; Bump recency so this conversation sorts to the top
+              (puthash "lastAccessed"
+                       (format-time-string "%Y-%m-%dT%H:%M:%S.000Z" nil t) entry)
               (puthash conv-key entry convs)
               (decknix--agent-tags-write store)
               ;; Report what happened
@@ -2271,7 +2312,10 @@ conversation that had no workspace stored."
                    (entry (gethash conv-key convs))
                    (remaining (remove tag (gethash "tags" entry))))
               (if remaining
-                  (puthash "tags" remaining entry)
+                  (progn
+                    (puthash "tags" remaining entry)
+                    (puthash "lastAccessed"
+                             (format-time-string "%Y-%m-%dT%H:%M:%S.000Z" nil t) entry))
                 (remhash conv-key convs))
               (decknix--agent-tags-write store)
               (message "Removed \"%s\" from conversation" tag))))
@@ -2446,6 +2490,9 @@ agent-shell buffer."
             (puthash "tags" new-tags entry)
             (cl-pushnew session-id sids :test #'string=)
             (puthash "sessions" sids entry)
+            ;; Bump recency
+            (puthash "lastAccessed"
+                     (format-time-string "%Y-%m-%dT%H:%M:%S.000Z" nil t) entry)
             (puthash conv-key entry convs)
             (decknix--agent-tags-write store)
             ;; Rename the live buffer
