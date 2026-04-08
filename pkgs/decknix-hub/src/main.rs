@@ -118,6 +118,8 @@ struct WipPr {
     ci: Option<CiStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -392,6 +394,7 @@ struct GhMyPr {
     url: String,
     state: String,
     is_draft: Option<bool>,
+    updated_at: Option<String>,
     repository: Option<GhRepo>,
 }
 
@@ -401,7 +404,7 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
         "search", "prs",
         "--author=@me",
         "--state=open",
-        "--json", "number,title,url,state,isDraft,repository",
+        "--json", "number,title,url,state,isDraft,updatedAt,repository",
         "--limit", "50",
     ]).await?;
 
@@ -419,6 +422,8 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
         // Fetch branch + CI per PR
         let (branch, ci) = fetch_pr_details(&repo, pr.number).await;
         let entry = repo_map.entry(repo).or_default();
+        let updated_ts = pr.updated_at.as_deref()
+            .and_then(|s| s.parse::<DateTime<Utc>>().ok());
         entry.push(WipPr {
             number: pr.number,
             title: pr.title.clone(),
@@ -427,6 +432,7 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
             draft: pr.is_draft,
             ci,
             branch,
+            updated: updated_ts,
         });
     }
 
