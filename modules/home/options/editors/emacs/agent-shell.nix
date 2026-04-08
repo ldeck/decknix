@@ -325,6 +325,18 @@ in
         for a detailed transient panel. Requires gh CLI on PATH.
       '';
     };
+
+    hub.enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Enable hub integration in the workspace sidebar.
+        Reads JSON files written by decknix-hub to show Requests
+        (PR reviews needing attention) and WIP (my open PRs) sections
+        above the Live sessions list.  Requires decknix-hub to be
+        running (decknix.services.hub.enable = true).
+      '';
+    };
   };
 
   config = mkIf cfg.enable {
@@ -4201,7 +4213,7 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
 
         (advice-add 'agent-shell-workspace-sidebar--render :override
           (lambda ()
-            "Render sidebar with live sessions, saved sessions, and key footer."
+            "Render sidebar with hub data, live sessions, saved sessions, and key footer."
             (let* ((buffers (sort (copy-sequence
                                    (seq-filter #'buffer-live-p (agent-shell-buffers)))
                                   (lambda (a b)
@@ -4220,6 +4232,14 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                    (saved (decknix--sidebar-saved-sessions))
                    (line-num 0))
               (erase-buffer)
+
+              ;; ── Hub: Requests (PR reviews) ──
+              (when (fboundp 'decknix--hub-render-requests)
+                (setq line-num (decknix--hub-render-requests line-num)))
+
+              ;; ── Hub: WIP (my open PRs) ──
+              (when (fboundp 'decknix--hub-render-wip)
+                (setq line-num (decknix--hub-render-wip line-num)))
 
               ;; ── Live Sessions ──
               (decknix--sidebar-render-section-header
@@ -4327,14 +4347,22 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
               (when target-line
                 (forward-line (1- target-line))))))
 
-        ;; -- Sidebar goto: handle both live and saved sessions --
+        ;; -- Sidebar goto: handle hub items, live, and saved sessions --
         (advice-add 'agent-shell-workspace-sidebar-goto :around
           (lambda (orig-fn)
-            "Open live buffer at point, or resume saved session."
-            (let ((saved (get-text-property
+            "Open hub URL, live buffer, or resume saved session at point."
+            (let ((hub-url (get-text-property
+                            (line-beginning-position)
+                            'decknix-hub-url))
+                  (saved (get-text-property
                           (line-beginning-position)
                           'decknix-sidebar-saved-session)))
-              (if saved
+              (cond
+               ;; Hub item: open URL in browser
+               (hub-url
+                (browse-url hub-url))
+               ;; Saved session
+               (saved
                   ;; Resume saved session
                   (let* ((conv-key (get-text-property
                                     (line-beginning-position)
@@ -4355,9 +4383,9 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                         (decknix--agent-session-resume
                          session-id
                          decknix-agent-session-history-count
-                         name workspace conv-key))))
-                ;; Default: live buffer
-                (funcall orig-fn)))))
+                         name workspace conv-key)))))
+               ;; Default: live buffer
+               (t (funcall orig-fn))))))
 
         ;; -- Summary header-line --
         (add-hook 'agent-shell-workspace-sidebar-mode-hook
@@ -4370,9 +4398,18 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                                             (length (decknix--agent-session-group-by-conversation
                                                      (decknix--agent-session-list)))
                                           (error 0))))
-                      (propertize
-                       (format " ● %d live  ◦ %d saved" live saved-count)
-                       'face 'font-lock-keyword-face))))))
+                      (let* ((reviews (when (boundp 'decknix--hub-reviews)
+                                        (length (alist-get 'items
+                                                           decknix--hub-reviews))))
+                             (hub-str (if (and reviews (> reviews 0))
+                                         (format "  ⚡%d review%s"
+                                                 reviews
+                                                 (if (= reviews 1) "" "s"))
+                                       "")))
+                        (propertize
+                         (format " ● %d live  ◦ %d saved%s"
+                                 live saved-count hub-str)
+                         'face 'font-lock-keyword-face)))))))
 
         ;; -- Fix sidebar kill: upstream uses comint-send-eof which calls
         ;; comint-send-input, searching for the prompt regexp.  If the prompt
@@ -4482,6 +4519,232 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
             "?" "help"
             "W" "cycle width"
             "h" "help"))
+      ''
+      + optionalString cfg.hub.enable ''
+
+        ;; == Hub: surface decknix-hub data in the sidebar ==
+        ;; Reads per-adapter JSON files from ~/.config/decknix/hub/ and
+        ;; renders Requests (PR reviews) and WIP (my PRs) sections above
+        ;; Live sessions.  A file-notify watcher triggers sidebar refresh
+        ;; automatically when any hub file changes — zero polling from Emacs.
+
+        (defvar decknix--hub-dir
+          (expand-file-name "~/.config/decknix/hub/")
+          "Directory where decknix-hub writes per-adapter JSON files.")
+
+        (defvar decknix--hub-reviews nil
+          "Parsed github-reviews.json data (alist).")
+        (defvar decknix--hub-wip nil
+          "Parsed github-wip.json data (alist).")
+        (defvar decknix--hub-meta nil
+          "Parsed meta.json data (alist).")
+        (defvar decknix--hub-watcher nil
+          "File-notify descriptor watching the hub directory.")
+
+        (defun decknix--hub-read-json (filename)
+          "Read and parse a JSON file from the hub directory.
+Returns nil on any error (file missing, parse failure, etc.)."
+          (let ((path (expand-file-name filename decknix--hub-dir)))
+            (when (file-exists-p path)
+              (condition-case err
+                  (json-parse-string
+                   (with-temp-buffer
+                     (insert-file-contents path)
+                     (buffer-string))
+                   :object-type 'alist
+                   :array-type 'list
+                   :null-object nil
+                   :false-object nil)
+                (error
+                 (message "hub: parse error in %s: %s" filename err)
+                 nil)))))
+
+        (defun decknix--hub-refresh-reviews ()
+          "Re-read github-reviews.json."
+          (setq decknix--hub-reviews
+                (decknix--hub-read-json "github-reviews.json")))
+
+        (defun decknix--hub-refresh-wip ()
+          "Re-read github-wip.json."
+          (setq decknix--hub-wip
+                (decknix--hub-read-json "github-wip.json")))
+
+        (defun decknix--hub-refresh-meta ()
+          "Re-read meta.json."
+          (setq decknix--hub-meta
+                (decknix--hub-read-json "meta.json")))
+
+        (defun decknix--hub-refresh-all ()
+          "Re-read all hub JSON files."
+          (decknix--hub-refresh-reviews)
+          (decknix--hub-refresh-wip)
+          (decknix--hub-refresh-meta))
+
+        (defun decknix--hub-on-file-change (event)
+          "Handle a file-notify EVENT for the hub directory.
+Re-reads only the changed file and refreshes the sidebar."
+          (let ((file (nth 2 event)))
+            (when (and file (stringp file))
+              (let ((name (file-name-nondirectory file)))
+                (pcase name
+                  ("github-reviews.json" (decknix--hub-refresh-reviews))
+                  ("github-wip.json"     (decknix--hub-refresh-wip))
+                  ("meta.json"           (decknix--hub-refresh-meta))
+                  (_ nil))
+                ;; Refresh the sidebar if it exists
+                (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
+                           (get-buffer "*agent-shell-sidebar*"))
+                  (agent-shell-workspace-sidebar-refresh))))))
+
+        (defun decknix--hub-start-watcher ()
+          "Start watching the hub directory for changes."
+          (when decknix--hub-watcher
+            (file-notify-rm-watch decknix--hub-watcher)
+            (setq decknix--hub-watcher nil))
+          (when (file-directory-p decknix--hub-dir)
+            (setq decknix--hub-watcher
+                  (file-notify-add-watch
+                   decknix--hub-dir '(change)
+                   #'decknix--hub-on-file-change))))
+
+        ;; Load initial data and start watching
+        (decknix--hub-refresh-all)
+        (decknix--hub-start-watcher)
+
+        ;; -- Hub: age formatting --
+        (defun decknix--hub-format-age (iso-time)
+          "Format an ISO timestamp as a compact age string (e.g. 3d, 5h, 12m)."
+          (if (and iso-time (stringp iso-time))
+              (let* ((then (condition-case nil
+                               (encode-time (iso8601-parse iso-time))
+                             (error nil)))
+                     (secs (when then
+                             (float-time (time-subtract (current-time) then)))))
+                (cond
+                 ((null secs) "?")
+                 ((>= secs 86400) (format "%dd" (truncate (/ secs 86400))))
+                 ((>= secs 3600) (format "%dh" (truncate (/ secs 3600))))
+                 ((>= secs 60) (format "%dm" (truncate (/ secs 60))))
+                 (t "now")))
+            "?"))
+
+        ;; -- Hub: CI status icon --
+        (defun decknix--hub-ci-icon (ci)
+          "Return a short icon for a CI status alist."
+          (if ci
+              (let ((status (alist-get 'status ci)))
+                (pcase status
+                  ("pass"    (propertize "✓" 'face 'success))
+                  ("fail"    (propertize "✗" 'face 'error))
+                  ("running" (propertize "⟳" 'face 'warning))
+                  (_         (propertize "?" 'face 'font-lock-comment-face))))
+            ""))
+
+        ;; -- Hub: sidebar render helpers --
+        (defun decknix--hub-render-requests (line-num)
+          "Render the Requests (PR reviews) section. Returns updated LINE-NUM."
+          (let* ((data decknix--hub-reviews)
+                 (items (when data (alist-get 'items data))))
+            (when items
+              (decknix--sidebar-render-section-header
+               (format "Requests (%d)" (length items)))
+              (setq line-num (1+ line-num))
+              (dolist (item items)
+                (let* ((age (decknix--hub-format-age
+                             (alist-get 'created item)))
+                       (repo-full (or (alist-get 'repo item) ""))
+                       ;; Show only repo name, not owner/repo
+                       (repo (car (last (split-string repo-full "/"))))
+                       (number (alist-get 'number item))
+                       (title (or (alist-get 'title item) ""))
+                       (ci (alist-get 'ci item))
+                       (ci-str (decknix--hub-ci-icon ci))
+                       (draft (alist-get 'draft item))
+                       (url (alist-get 'url item))
+                       ;; Truncate title to fit sidebar
+                       (max-title (max 8 (- (window-width) 18)))
+                       (short-title (if (> (length title) max-title)
+                                        (concat (substring title 0 (- max-title 1)) "…")
+                                      title))
+                       (age-face (cond
+                                  ((string-match-p "d$" age)
+                                   (if (>= (string-to-number age) 3)
+                                       'error 'warning))
+                                  (t 'font-lock-comment-face)))
+                       (line (format " %3s %s#%d %s %s"
+                                     (propertize age 'face age-face)
+                                     (propertize (or repo "") 'face 'font-lock-type-face)
+                                     number
+                                     ci-str
+                                     (if draft
+                                         (propertize short-title 'face 'font-lock-comment-face)
+                                       short-title))))
+                  (insert (propertize line
+                                     'decknix-hub-url url
+                                     'decknix-hub-type 'review
+                                     'decknix-hub-repo repo-full
+                                     'decknix-hub-number number)
+                          "\n")
+                  (setq line-num (1+ line-num))))
+              (insert "\n")
+              (setq line-num (1+ line-num))))
+          line-num)
+      ''
+      + optionalString cfg.hub.enable ''
+
+        (defun decknix--hub-render-wip (line-num)
+          "Render the WIP (my open PRs) section. Returns updated LINE-NUM."
+          (let* ((data decknix--hub-wip)
+                 (repos (when data (alist-get 'repos data)))
+                 (total (cl-reduce #'+ (mapcar
+                                        (lambda (r) (length (alist-get 'prs r)))
+                                        (or repos '()))
+                                   :initial-value 0)))
+            (when (and repos (> total 0))
+              (decknix--sidebar-render-section-header
+               (format "WIP (%d)" total))
+              (setq line-num (1+ line-num))
+              (dolist (repo-entry repos)
+                (let* ((repo-full (or (alist-get 'repo repo-entry) ""))
+                       (repo (car (last (split-string repo-full "/"))))
+                       (prs (alist-get 'prs repo-entry)))
+                  (when prs
+                    ;; Repo sub-header
+                    (insert (propertize (format "  %s" repo)
+                                       'face 'font-lock-type-face)
+                            "\n")
+                    (setq line-num (1+ line-num))
+                    ;; PRs under this repo
+                    (dolist (pr prs)
+                      (let* ((number (alist-get 'number pr))
+                             (title (or (alist-get 'title pr) ""))
+                             (ci (alist-get 'ci pr))
+                             (ci-str (decknix--hub-ci-icon ci))
+                             (draft (alist-get 'draft pr))
+                             (branch (alist-get 'branch pr))
+                             (url (alist-get 'url pr))
+                             (max-title (max 8 (- (window-width) 14)))
+                             (short-title (if (> (length title) max-title)
+                                              (concat (substring title 0 (- max-title 1)) "…")
+                                            title))
+                             (line (format "  #%-4d %s %s"
+                                          number
+                                          ci-str
+                                          (if draft
+                                              (propertize short-title
+                                                         'face 'font-lock-comment-face)
+                                            short-title))))
+                        (insert (propertize line
+                                           'decknix-hub-url url
+                                           'decknix-hub-type 'wip
+                                           'decknix-hub-repo repo-full
+                                           'decknix-hub-number number
+                                           'decknix-hub-branch branch)
+                                "\n")
+                        (setq line-num (1+ line-num)))))))
+              (insert "\n")
+              (setq line-num (1+ line-num))))
+          line-num)
       ''
       + optionalString cfg.context.enable ''
 
