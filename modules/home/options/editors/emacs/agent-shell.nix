@@ -4100,7 +4100,7 @@ Like treemacs `W' / extra-wide-toggle."
                                     agent-shell-workspace-sidebar--quick-switch)
                                'success 'font-lock-comment-face))))
           (interactive)
-          (call-interactively #'agent-shell-workspace-sidebar-quick-switch-mode))
+          (call-interactively #'agent-shell-workspace-sidebar-toggle-quick-switch))
 
         (transient-define-suffix decknix-sidebar-transient--tile-toggle ()
           :key "t"
@@ -4115,7 +4115,7 @@ Like treemacs `W' / extra-wide-toggle."
                       (propertize (if tiled "[on]" "[off]")
                                   'face (if tiled 'success 'font-lock-comment-face)))))
           (interactive)
-          (call-interactively #'agent-shell-workspace-sidebar-tile-toggle))
+          (call-interactively #'agent-shell-workspace-tile-toggle))
 
         (transient-define-suffix decknix-sidebar-transient--display-mode ()
           :key "M"
@@ -4142,23 +4142,23 @@ Like treemacs `W' / extra-wide-toggle."
         (transient-define-prefix decknix-sidebar-transient ()
           "Sidebar actions and toggles."
           ["Actions"
-           ("RET" "Open / goto" agent-shell-workspace-sidebar-open)
-           ("c"   "New session" agent-shell-workspace-sidebar-new)
-           ("k"   "Kill"        agent-shell-workspace-sidebar-kill)
-           ("r"   "Restart"     agent-shell-workspace-sidebar-restart)
-           ("R"   "Rename"      agent-shell-workspace-sidebar-rename)
+           ("RET" "Open / goto"   agent-shell-workspace-sidebar-goto)
+           ("c"   "New session"   agent-shell-workspace-sidebar-new)
+           ("k"   "Kill"          agent-shell-workspace-sidebar-kill)
+           ("r"   "Restart"       agent-shell-workspace-sidebar-restart)
+           ("R"   "Rename"        agent-shell-workspace-sidebar-rename)
            ("d"   "Delete killed" agent-shell-workspace-sidebar-delete-killed)
-           ("g"   "Refresh"     agent-shell-workspace-sidebar-refresh)
-           ("q"   "Quit sidebar" delete-window)]
+           ("g"   "Refresh"       agent-shell-workspace-sidebar-refresh)
+           ("q"   "Quit sidebar"  quit-window)]
           ["Sessions"
-           ("s s" "Search"  decknix-agent-session-picker)
-           ("s g" "Grep"    decknix-agent-session-grep)
-           ("s r" "Recent"  decknix-agent-session-recent)
+           ("s s" "Search"        decknix-agent-session-picker)
+           ("s g" "Grep"          decknix-agent-session-grep)
+           ("s r" "Recent"        decknix-agent-session-recent)
            ("w"   "Set workspace" decknix-sidebar-set-workspace)]
           ["Tiling"
-           ("a"   "Add tile"    agent-shell-workspace-sidebar-tile-add)
-           ("x"   "Remove tile" agent-shell-workspace-sidebar-tile-remove)
-           ("m"   "Set mode"    agent-shell-workspace-sidebar-mode)]
+           ("a"   "Add tile"      agent-shell-workspace-tile-add)
+           ("x"   "Remove tile"   agent-shell-workspace-tile-remove)
+           ("m"   "Set mode"      agent-shell-workspace-sidebar-set-mode)]
           ["Toggles"
            (decknix-sidebar-transient--quick-switch)
            (decknix-sidebar-transient--tile-toggle)
@@ -4179,21 +4179,65 @@ Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
           "Insert a section header TITLE into the sidebar."
           (insert (propertize (concat " " title) 'face 'bold) "\n"))
 
+        (defvar decknix--sidebar-show-keys nil
+          "When non-nil, show an expanded key listing in the sidebar footer.")
+
+        (defun decknix-sidebar-toggle-keys ()
+          "Toggle the inline key listing in the sidebar footer."
+          (interactive)
+          (setq decknix--sidebar-show-keys (not decknix--sidebar-show-keys))
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (agent-shell-workspace-sidebar-refresh)))
+
         (defun decknix--sidebar-render-footer ()
-          "Insert a compact hint line pointing to the transient menu."
-          (insert "\n"
-                  (propertize " ? " 'face 'font-lock-keyword-face)
-                  (propertize "actions" 'face 'font-lock-comment-face)
-                  "  "
-                  (propertize "c " 'face 'font-lock-keyword-face)
-                  (propertize "new" 'face 'font-lock-comment-face)
-                  "  "
-                  (propertize "k " 'face 'font-lock-keyword-face)
-                  (propertize "kill" 'face 'font-lock-comment-face)
-                  "  "
-                  (propertize "s " 'face 'font-lock-keyword-face)
-                  (propertize "sessions" 'face 'font-lock-comment-face)
-                  "\n"))
+          "Insert compact hint or expanded key listing depending on toggle.
+Press K to toggle, ? to open full transient menu."
+          (insert "\n")
+          (if decknix--sidebar-show-keys
+              ;; Expanded: show common keys inline
+              (let ((keys '(("RET" . "open")
+                             ("c"   . "new")
+                             ("k"   . "kill")
+                             ("r"   . "restart")
+                             ("R"   . "rename")
+                             ("d"   . "del killed")
+                             ("s"   . "sessions…")
+                             ("w"   . "workspace")
+                             ("S"   . "quick-switch")
+                             ("t"   . "tile toggle")
+                             ("a/x" . "tile +/-")
+                             ("M"   . "display")
+                             ("W"   . "width")
+                             ("g"   . "refresh")
+                             ("q"   . "quit"))))
+                (dolist (kv keys)
+                  (insert (propertize (format " %3s " (car kv))
+                                      'face 'font-lock-keyword-face)
+                          (propertize (cdr kv)
+                                      'face 'font-lock-comment-face)
+                          "\n"))
+                (insert (propertize " K " 'face 'font-lock-keyword-face)
+                        (propertize "hide keys" 'face 'font-lock-comment-face)
+                        "  "
+                        (propertize "? " 'face 'font-lock-keyword-face)
+                        (propertize "all actions" 'face 'font-lock-comment-face)
+                        "\n"))
+            ;; Compact: single hint line
+            (insert (propertize " ? " 'face 'font-lock-keyword-face)
+                    (propertize "actions" 'face 'font-lock-comment-face)
+                    "  "
+                    (propertize "c " 'face 'font-lock-keyword-face)
+                    (propertize "new" 'face 'font-lock-comment-face)
+                    "  "
+                    (propertize "k " 'face 'font-lock-keyword-face)
+                    (propertize "kill" 'face 'font-lock-comment-face)
+                    "  "
+                    (propertize "s " 'face 'font-lock-keyword-face)
+                    (propertize "sessions" 'face 'font-lock-comment-face)
+                    "  "
+                    (propertize "K " 'face 'font-lock-keyword-face)
+                    (propertize "keys" 'face 'font-lock-comment-face)
+                    "\n")))
 
         (defun decknix--sidebar-abbreviate-workspace (path)
           "Abbreviate PATH for sidebar display."
@@ -4519,6 +4563,8 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "h") #'decknix-sidebar-transient)
         (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "K") #'decknix-sidebar-toggle-keys)
+        (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "W") #'decknix-sidebar-cycle-width)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "M") #'decknix-sidebar-cycle-display-mode)
@@ -4527,7 +4573,7 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
 
         ;; S = quick-switch (direct), s = session transient
         (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "S") #'agent-shell-workspace-sidebar-quick-switch-mode)
+          (kbd "S") #'agent-shell-workspace-sidebar-toggle-quick-switch)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "s") #'decknix-sidebar-sessions)
       ''
