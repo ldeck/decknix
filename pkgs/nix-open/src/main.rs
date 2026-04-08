@@ -24,8 +24,16 @@ struct Cli {
     #[arg(short, long)]
     new: bool,
 
+    /// Restart all running Nix-managed apps that have stale store paths.
+    /// Requires --restart (-r). Discovers apps in Home Manager Apps and
+    /// Nix Apps directories, checks which are running from an old store
+    /// path, and restarts only those.
+    #[arg(short, long, requires = "restart")]
+    all: bool,
+
     /// Application name(s) (without .app suffix).
-    #[arg(required = true)]
+    /// Not required when --all is used.
+    #[arg(required_unless_present = "all")]
     apps: Vec<String>,
 }
 
@@ -43,6 +51,72 @@ fn app_search_dirs() -> Vec<PathBuf> {
         home.join("Applications"),
     ]
 }
+
+/// Nix-only app directories (for --all scanning).
+fn nix_app_dirs() -> Vec<PathBuf> {
+    let home = dirs::home_dir().unwrap_or_default();
+    vec![
+        home.join("Applications/Home Manager Apps"),
+        home.join("Applications/Nix Apps"),
+    ]
+}
+
+/// Extract the nix store hash (first 32 chars after /nix/store/) from a path.
+fn nix_store_hash(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/nix/store/")?;
+    rest.get(..32)
+}
+
+/// Find all running Nix-managed apps whose store hash differs from the
+/// currently installed version. Deduplicates by app name (Home Manager
+/// Apps takes priority over Nix Apps).
+fn find_stale_nix_apps() -> Vec<(String, PathBuf)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut stale = Vec::new();
+    for dir in nix_app_dirs() {
+        if !dir.is_dir() {
+            continue;
+        }
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = match path.file_name() {
+                Some(n) => n.to_string_lossy().replace(".app", ""),
+                None => continue,
+            };
+            // Deduplicate: same app may appear in both directories
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            // Is this app running?
+            let (_, exe_path) = match running_app_exe(&name) {
+                Some(pair) => pair,
+                None => continue,
+            };
+            // What store path does the symlink/bundle point to now?
+            let installed = match resolved_app_store_path(&path) {
+                Some(p) => p,
+                None => continue,
+            };
+            // Compare store *hashes* — more reliable than derivation names
+            // (e.g. "emacs-30.2" vs "emacs-with-packages-30.2" are different
+            // derivation names but might be the same or different builds)
+            let running_hash = nix_store_hash(&exe_path);
+            let installed_hash = nix_store_hash(&installed);
+            match (running_hash, installed_hash) {
+                (Some(old), Some(new)) if old != new => {
+                    stale.push((name, path));
+                }
+                _ => {}
+            }
+        }
+    }
+    stale
+}
+
 
 /// Find an application bundle by name (case-insensitive).
 fn find_app(name: &str) -> Option<PathBuf> {
@@ -253,13 +327,33 @@ fn handle_open_app(name: &str, restart: bool, new_instance: bool) -> bool {
 
 fn main() {
     let cli = Cli::parse();
-    let mut all_ok = true;
-    for name in &cli.apps {
-        if !handle_open_app(name, cli.restart, cli.new) {
-            all_ok = false;
+
+    if cli.all {
+        // --restart --all: find and restart stale Nix-managed apps
+        let stale = find_stale_nix_apps();
+        if stale.is_empty() {
+            eprintln!("✅ All running Nix apps are up to date.");
+            return;
         }
-    }
-    if !all_ok {
-        std::process::exit(1);
+        eprintln!("Found {} stale app(s):", stale.len());
+        let mut all_ok = true;
+        for (name, _) in &stale {
+            if !handle_open_app(name, true, false) {
+                all_ok = false;
+            }
+        }
+        if !all_ok {
+            std::process::exit(1);
+        }
+    } else {
+        let mut all_ok = true;
+        for name in &cli.apps {
+            if !handle_open_app(name, cli.restart, cli.new) {
+                all_ok = false;
+            }
+        }
+        if !all_ok {
+            std::process::exit(1);
+        }
     }
 }
