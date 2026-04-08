@@ -15,8 +15,11 @@ shell, git, AI tooling, and system configuration with a 3-layer override model
 | Path | Purpose |
 |------|---------|
 | `modules/darwin/` | macOS system-level config (launchd, system packages) |
+| `modules/darwin/hub.nix` | decknix-hub launchd service + Nix options |
 | `modules/home/options/` | home-manager modules (editors, shell, git, AI) |
 | `modules/home/options/editors/emacs/` | Emacs configuration (13+ modules) |
+| `pkgs/decknix-hub/` | Background work-item aggregator (GitHub, Jira, CI) |
+| `pkgs/nix-open/` | Nix-aware macOS app launcher/restarter |
 | `cli/` | Rust CLI (`decknix switch`, `decknix update`, etc.) |
 | `docs/` | mdBook documentation |
 | `templates/` | Flake templates for `nix flake init` |
@@ -27,8 +30,11 @@ shell, git, AI tooling, and system configuration with a 3-layer override model
 # Build the full system (from a decknix-config repo)
 cd ~/.config/decknix
 decknix switch              # Apply configuration
-decknix switch --dev        # Test local framework changes (uses ~/tools/decknix)
 decknix switch --dry-run    # Build without activating
+
+# Override any flake input with a local path (repeatable, for pre-PR testing)
+decknix switch --override decknix=~/tools/decknix
+decknix switch --override decknix=~/tools/decknix --override nc-config=~/Code/my-org/decknix-config
 
 # Build just the system derivation (for CI or validation)
 nix build .#darwinConfigurations.default.system --impure \
@@ -76,7 +82,7 @@ non-negotiable. Specifically:
   ```
 - For Elisp changes, verify parenthesis balance — the byte compiler catches
   this during build, but check early to avoid wasted build cycles.
-- Test activation with `decknix switch --dev` only when the user requests it.
+- Test activation with `decknix switch --override decknix=~/tools/decknix` only when the user requests it.
 
 ### 5. Emacs-Specific Rules
 

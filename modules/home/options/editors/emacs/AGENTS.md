@@ -66,7 +66,7 @@ Priority: stable nixpkgs → unstable nixpkgs → custom derivations
 
 ## Agent Shell Module (`agent-shell.nix`)
 
-The largest module (~2600 lines). Key subsystems:
+The largest module (~4400 lines). Key subsystems:
 
 ### Session Management
 - **Session picker** (`C-c A s`): Uses `consult--multi` with sectioned groups
@@ -120,11 +120,78 @@ The largest module (~2600 lines). Key subsystems:
 - Decoupled input buffer (sticky or transient mode).
 - Header-line shows available keys with `C-c` prefix factored out.
 - `which-key` labels for all sub-maps including the `k` (interrupt) prefix.
+- **History navigation**: `M-p`/`M-n` cycle through the **current session's**
+  prompts only (from `comint-input-ring`). `M-P`/`M-N` (shifted) cycle through
+  **all sessions** (current first, then on-demand from saved session files).
+- **Interrupt-and-submit** (`C-c k C-c`): Interrupts the agent, then submits
+  the compose buffer after a 0.3s delay. The compose buffer stays visible until
+  the submit fires (not closed prematurely).
+
+### Unified Header-Line
+Every agent-shell buffer displays a persistent header-line combining:
+1. **Status icon + label** — `● ready`, `◐ working`, `◉ waiting`,
+   `✔ finished`, `○ initializing`, `✕ killed`. Color-coded (green/yellow/red/cyan).
+   Uses `agent-shell-workspace`'s rich detection when available, falls back to
+   `shell-maker--busy`.
+2. **Session tags** — from `agent-sessions.json`, shown as `#tag1 #tag2`.
+3. **Workspace path** — abbreviated (e.g., `~/tools/decknix`).
+4. **Context panel items** — issues, PRs, CI, reviews (when context module enabled).
+
+Auto-refreshed every 2 seconds via a buffer-local timer. Detects `working → ready`
+transitions and shows `✔ finished` until the user views the buffer.
+
+The `decknix--context-update-header` function delegates to the unified header
+(`decknix--header-update`) so context data is always incorporated.
 
 ### Context Panel
 - Tracks GitHub issues, PRs, CI status, review threads.
-- Collapsible header-line summary.
+- Data is rendered as part of the unified header-line (merged, not standalone).
 - `C-c i` prefix for context commands.
+
+### Hub Integration (`decknix-hub`)
+- Surfaces data from the `decknix-hub` background daemon in the workspace
+  sidebar — zero Emacs CPU overhead (all polling happens in the Rust daemon).
+- **Requests** section: PR reviews assigned to me, ordered oldest first.
+  Shows age (color-coded: 3d+ = red, <3d = yellow), repo, PR number, CI
+  status icon (✓/✗/⟳), and title. `RET` opens the PR in the browser.
+- **WIP** section: My open PRs grouped by repository, with CI status and
+  branch names. `RET` opens the PR in the browser.
+- Data is read from `~/.config/decknix/hub/` JSON files via
+  `file-notify-add-watch` on the directory — sidebar refreshes the instant
+  any hub file changes.
+- Header-line shows review count: `⚡3 reviews`.
+- Controlled by `programs.agent-shell.decknix.hub.enable` (default: true).
+- Requires `decknix.services.hub.enable = true` in the darwin config to run
+  the background daemon. See `modules/darwin/hub.nix` for service options.
+- Future adapters (Jira, TeamCity, Slack) will add more sidebar sections
+  reading from additional JSON files in the same hub directory.
+
+### Workspace (`agent-shell-workspace`)
+- Dedicated `Agents` tab-bar tab with buffer isolation (`C-c w` to toggle).
+- Sidebar sections (top to bottom): **Requests** → **WIP** → **Live** →
+  **Recent** → **Keys/Toggles** footer.
+- Agent management: `c` new, `k` kill, `r` restart, `R` rename, `d` delete killed.
+- Tiling controls: `a` add, `x` remove, `t` toggle.
+- Quick-switch mode (`S`): moving up/down in sidebar previews the agent in the
+  main area without stealing focus.
+- Session ops prefix (`s`): `s s` picker, `s g` grep, `s r` recent.
+- Auto-refreshes every 2 seconds (live sessions) plus instant refresh on hub
+  file changes.
+
+### Attention (`agent-shell-attention`)
+- Global mode-line indicator `AS:n/m` showing pending/active session counts.
+- `C-c j` jumps to the next session needing user input.
+- `C-u C-c j` prompts with a completion list of all active sessions (annotated
+  with Awaiting/Permissions/Running status).
+- `C-u C-u C-c j` opens a tabulated dashboard of all agent-shell buffers.
+- Tracks status via advice on `agent-shell--send-command` and
+  `agent-shell--on-request` — no custom process sentinels needed.
+
+### Multi-Session Concurrency
+Multiple agent-shell sessions run **independently and concurrently**. Each
+buffer has its own process. Switching away from a session does NOT pause it —
+the agent continues working in the background. The attention indicator and
+workspace sidebar surface which sessions need attention.
 
 ### Key Prefix Map
 
@@ -141,6 +208,8 @@ The largest module (~2600 lines). Key subsystems:
 | `C-c A c c` | Run custom command (pick & insert) |
 | `C-c A c n` | New custom command |
 | `C-c A c e` | Edit custom command |
+| `C-c A w` | Toggle Agents workspace tab (tab-bar with sidebar) |
+| `C-c A j` | Jump to next session needing attention; `C-u` to pick, `C-u C-u` dashboard |
 | `C-c A T` | Tags — global (list/filter conversations, rename, delete, cleanup) |
 | `C-c T` | Tags — conversation-scoped (show, add, remove) — in-buffer only (#78) |
 | `C-c D` | Deckmacs — framework management (reload, status, diff, log) (#85) |
@@ -149,9 +218,17 @@ The largest module (~2600 lines). Key subsystems:
 | `C-c D d` | Show diff between loaded and current store paths |
 | `C-c D l` | Show reload history log |
 | `C-c i` | Context panel (in agent-shell buffers) |
+| `C-c w` | Toggle Agents workspace (in-buffer shortcut) |
+| `C-c j` | Jump to pending session (in-buffer shortcut) |
 
 ### Planned Features
 
+- **Hub: Jira adapter** — WIP tasks assigned to me, linked to PRs by branch name (Planned)
+- **Hub: TeamCity adapter** — Build statuses for branches in WIP (Planned)
+- **Hub: Slack adapter** — Unread mentions requiring follow-up (Planned)
+- **Hub: Cross-linking** — Associate sessions with work items (reviews, tasks) (Planned)
+- **Hub: Expandable Recent** — Expand a saved session to see related work items (Planned)
+- **Hub: macOS notifications** — New review requests, CI failures (Planned)
 - **Worktree-aware sessions** — git worktree per agent session (#69) (Planned)
 - **Session board** — magit-style multi-session dashboard (#70) (Planned)
 - **Session templates** — engineering, review, support workflows (#71) (Planned)
@@ -164,6 +241,7 @@ The largest module (~2600 lines). Key subsystems:
 - Framework prefix: `C-c D` (capital D — Deckmacs)
 - Module-local prefix: `C-c <lowercase>` (e.g., `C-c i` for context)
 - Compose mode: `C-c C-c` submit, `C-c k` interrupt sub-map, `C-c C-s` toggle
+- Compose history: `M-p`/`M-n` local (current session), `M-P`/`M-N` global (all sessions)
 - Batch compose: `C-c C-c` submit, `C-c C-k` cancel
 - Always add `which-key` labels for new prefix maps
 
