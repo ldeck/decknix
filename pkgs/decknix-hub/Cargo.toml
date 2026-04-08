@@ -1,0 +1,13 @@
+[package]
+name = "decknix-hub"
+version = "0.1.0"
+edition = "2021"
+description = "Background work-item aggregator for decknix — polls GitHub, Jira, CI/CD"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+dirs = "5.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process", "fs", "signal", "sync"] }
+chrono = { version = "0.4", features = ["serde"] }

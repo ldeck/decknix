@@ -31,6 +31,7 @@
       # make 'pkgs.decknix' available to any module that uses this overlay.
       flake.overlays.default = final: prev: {
         decknix-cli = final.callPackage ./pkgs/decknix-cli/default.nix { };
+        decknix-hub = final.callPackage ./pkgs/decknix-hub/default.nix { };
         nix-open = final.callPackage ./pkgs/nix-open/default.nix { };
       };
 
@@ -38,6 +39,7 @@
         # --- Expose the Decknix CLI Package ---
         # This allows you to run 'nix run .#decknix' or 'nix build'
         packages.decknix-cli = pkgs.callPackage ./pkgs/decknix-cli/default.nix { };
+        packages.decknix-hub = pkgs.callPackage ./pkgs/decknix-hub/default.nix { };
         packages.nix-open = pkgs.callPackage ./pkgs/nix-open/default.nix { };
 
         # Set it as the default so 'nix run' works without arguments
