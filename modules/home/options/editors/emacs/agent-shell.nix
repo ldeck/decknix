@@ -688,7 +688,9 @@ Press q to dismiss."
             "C-c A m" "manager"
             "C-c A w" "workspace"
             "C-c A j" "attention jump"
-            "C-c A q" "quit session"))
+            "C-c A q" "quit session"
+            "C-c A R" "rename session"
+            "C-c A r" "recent sessions"))
 
         ;; Global keybindings under C-c A prefix
         ;; Only actions that make sense from OUTSIDE an agent-shell buffer.
@@ -1339,23 +1341,39 @@ With \\[universal-argument], shows all individual session snapshots."
           "Search session files for TERM using ripgrep.
 Returns a list of session alists for files containing TERM.
 Uses rg -li for fast case-insensitive file matching, then
-extracts metadata with jq for the matching files."
+extracts metadata with jq for the matching files.
+
+Uses `make-process' + `accept-process-output' instead of
+`shell-command-to-string' so Emacs remains responsive to input.
+This lets consult's `while-no-input' interrupt the search if the
+user types more characters, preventing the cursor-freeze / [quit]
+issue."
           (let* ((jqf (decknix--agent-session-ensure-jq-filter))
-                 (rg-cmd (format "%s -li %s %s 2>/dev/null"
-                                 (or (executable-find "rg") "rg")
-                                 (shell-quote-argument term)
-                                 (shell-quote-argument
-                                  (expand-file-name "sessions" "~/.augment"))))
-                 (files (split-string
-                         (string-trim (shell-command-to-string rg-cmd))
-                         "\n" t)))
-            (when files
-              (let* ((file-args (mapconcat #'shell-quote-argument files " "))
-                     (jq-cmd (format "jq -Mc -f %s %s 2>/dev/null | jq -Msc 'sort_by(.modified) | reverse'"
-                                     (shell-quote-argument jqf)
-                                     file-args)))
-                (decknix--agent-session-parse
-                 (shell-command-to-string jq-cmd))))))
+                 (sessions-dir (shell-quote-argument
+                                (expand-file-name "sessions" "~/.augment")))
+                 (cmd (format "%s -li %s %s 2>/dev/null | xargs jq -Mc -f %s 2>/dev/null | jq -Msc 'sort_by(.modified) | reverse'"
+                              (or (executable-find "rg") "rg")
+                              (shell-quote-argument term)
+                              sessions-dir
+                              (shell-quote-argument jqf)))
+                 (output "")
+                 (proc (make-process
+                        :name "agent-grep-rg"
+                        :buffer nil
+                        :command (list "sh" "-c" cmd)
+                        :noquery t
+                        :connection-type 'pipe
+                        :filter (lambda (_p o)
+                                  (setq output (concat output o))))))
+            ;; Yield to Emacs event loop between output chunks.
+            ;; accept-process-output with a small timeout lets
+            ;; while-no-input (used by consult) interrupt us if the
+            ;; user types more characters — no more cursor freeze.
+            (while (process-live-p proc)
+              (accept-process-output proc 0.03))
+            ;; Collect any trailing output
+            (accept-process-output proc 0)
+            (decknix--agent-session-parse output)))
 
         (defun decknix--agent-session-grep-candidate (session)
           "Build a candidate string for SESSION in grep results."
@@ -1794,6 +1812,94 @@ or *scratch*."
                     (decknix-welcome)
                   (switch-to-buffer (get-buffer-create "*scratch*"))))))))
 
+        (defun decknix-agent-session-recent ()
+          "Quickly pick from recently used conversations.
+Like `recentf' but for agent sessions — shows the most recent
+conversations (newest first), annotated with workspace and tags."
+          (interactive)
+          (let* ((sessions (decknix--agent-session-list))
+                 (groups (when sessions
+                           (decknix--agent-session-group-by-conversation sessions)))
+                 (live-conv-keys
+                  (seq-filter
+                   #'identity
+                   (mapcar (lambda (buf)
+                             (when (buffer-live-p buf)
+                               (with-current-buffer buf
+                                 (when (derived-mode-p 'agent-shell-mode)
+                                   (ignore-errors (decknix--session-conv-id))))))
+                           (if (fboundp 'agent-shell-buffers)
+                               (agent-shell-buffers) nil))))
+                 (candidates nil))
+            ;; Build candidate list from conversation groups (already sorted newest first)
+            (dolist (group groups)
+              (let* ((conv-key (car group))
+                     (latest (cadr group))
+                     (name (decknix--agent-session-display-name latest))
+                     (workspace (when conv-key
+                                  (decknix--agent-workspace-for-conv-key conv-key)))
+                     (ws-short (if workspace
+                                   (if (string-match "/\\([^/]+\\)/?$"
+                                                     (abbreviate-file-name workspace))
+                                       (match-string 1 (abbreviate-file-name workspace))
+                                     (abbreviate-file-name workspace))
+                                 "?"))
+                     (live-p (member conv-key live-conv-keys))
+                     (label (format "%s%s"
+                                    (if live-p "● " "  ")
+                                    name)))
+                (push (list label ws-short conv-key latest workspace live-p) candidates)))
+            (setq candidates (nreverse candidates))
+            (unless candidates
+              (user-error "No saved sessions found"))
+            ;; Build completion table with annotations
+            (let* ((max-name (apply #'max (mapcar (lambda (c) (length (car c))) candidates)))
+                   (annotator
+                    (eval
+                     `(lambda (cand)
+                        (when-let ((entry (assoc cand ',candidates)))
+                          (format "%s %s"
+                                  (make-string (- ,(+ max-name 2) (length cand)) ?\s)
+                                  (nth 1 entry))))
+                     t))
+                   (table (decknix--agent-unsorted-table
+                           (mapcar #'car candidates)))
+                   (selection
+                    (let ((completion-extra-properties
+                           (list :annotation-function annotator)))
+                      (completing-read "Recent session: " table nil t))))
+              (when-let ((entry (assoc selection candidates)))
+                (let ((conv-key (nth 2 entry))
+                      (session (nth 3 entry))
+                      (workspace (nth 4 entry))
+                      (live-p (nth 5 entry)))
+                  (if live-p
+                      ;; Already live — find and switch to the buffer
+                      (let ((buf (seq-find
+                                  (lambda (b)
+                                    (when (buffer-live-p b)
+                                      (with-current-buffer b
+                                        (when (derived-mode-p 'agent-shell-mode)
+                                          (equal conv-key
+                                                 (ignore-errors
+                                                   (decknix--session-conv-id)))))))
+                                  (agent-shell-buffers))))
+                        (if buf (switch-to-buffer buf)
+                          (user-error "Live buffer not found")))
+                    ;; Saved — resume
+                    (let ((session-id (alist-get 'sessionId session))
+                          (name (decknix--agent-session-display-name session)))
+                      (unless workspace
+                        (setq workspace
+                              (read-directory-name "Workspace: " nil nil t)))
+                      (decknix--agent-session-resume
+                       session-id
+                       decknix-agent-session-history-count
+                       name workspace conv-key))))))))
+
+        ;; Wire C-c A r globally
+        (define-key decknix-agent-prefix-map (kbd "r") 'decknix-agent-session-recent)
+
         (defun decknix--agent-session-open-share (session-id)
           "Generate a share link for SESSION-ID and open it in Emacs.
 Uses xwidget-webkit if available, otherwise falls back to eww."
@@ -2087,8 +2193,9 @@ conversation that had no workspace stored."
               (message "No tags on this conversation"))))
 
         (defun decknix-agent-tag-add ()
-          "Add a tag to the current conversation.
-        Shows all existing tags for completion. Type a new name to create one."
+          "Add tags to the current conversation.
+        Accepts comma-separated input for multiple tags at once.
+        Shows all existing tags for completion. Type new names to create them."
           (interactive)
           (let* ((conv-key (decknix--agent-require-conv-key))
                  (session-id (decknix--agent-require-session-id))
@@ -2099,32 +2206,53 @@ conversation that had no workspace stored."
                              `(lambda (tag)
                                 (if (member tag ',current) " (applied)" ""))
                              t))
-                 (tag (let ((completion-extra-properties
-                             (list :annotation-function annotator)))
-                        (completing-read "Add tag (or type new): "
-                                         existing nil nil)))
-                 (tag (string-trim tag)))
-            (when (string-empty-p tag)
-              (user-error "Tag cannot be empty"))
-            (if (member tag current)
-                (message "Conversation already has tag \"%s\"" tag)
-              (let* ((store (decknix--agent-tags-read))
-                     (convs (decknix--agent-tags-conversations store))
-                     (entry (or (gethash conv-key convs)
-                                (let ((h (make-hash-table :test 'equal)))
-                                  (puthash "tags" nil h)
-                                  (puthash "sessions" nil h)
-                                  h)))
-                     (tags (gethash "tags" entry))
-                     (sids (gethash "sessions" entry)))
-                (puthash "tags" (append tags (list tag)) entry)
-                ;; Track this session in the conversation
-                (cl-pushnew session-id sids :test #'string=)
-                (puthash "sessions" sids entry)
-                (puthash conv-key entry convs)
-                (decknix--agent-tags-write store)
-                (message "Tagged conversation with \"%s\" → [%s]"
-                         tag (string-join (gethash "tags" entry) ", "))))))
+                 (input (let ((completion-extra-properties
+                               (list :annotation-function annotator)))
+                          (completing-read "Add tag(s) (comma-separated): "
+                                           existing nil nil)))
+                 ;; Split on commas, trim whitespace, remove empties
+                 (new-tags (seq-remove #'string-empty-p
+                                       (mapcar #'string-trim
+                                               (split-string input "," t)))))
+            (unless new-tags
+              (user-error "No tags provided"))
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (or (gethash conv-key convs)
+                              (let ((h (make-hash-table :test 'equal)))
+                                (puthash "tags" nil h)
+                                (puthash "sessions" nil h)
+                                h)))
+                   (tags (gethash "tags" entry))
+                   (sids (gethash "sessions" entry))
+                   (added nil)
+                   (skipped nil))
+              ;; Add each tag, tracking what was added vs already present
+              (dolist (tag new-tags)
+                (if (member tag tags)
+                    (push tag skipped)
+                  (setq tags (append tags (list tag)))
+                  (push tag added)))
+              (puthash "tags" tags entry)
+              ;; Track this session in the conversation
+              (cl-pushnew session-id sids :test #'string=)
+              (puthash "sessions" sids entry)
+              (puthash conv-key entry convs)
+              (decknix--agent-tags-write store)
+              ;; Report what happened
+              (cond
+               ((and added (not skipped))
+                (message "Tagged: %s → [%s]"
+                         (string-join (nreverse added) ", ")
+                         (string-join tags ", ")))
+               ((and added skipped)
+                (message "Tagged: %s (already had: %s) → [%s]"
+                         (string-join (nreverse added) ", ")
+                         (string-join (nreverse skipped) ", ")
+                         (string-join tags ", ")))
+               (t
+                (message "All tags already applied: [%s]"
+                         (string-join tags ", ")))))))
 
         (defun decknix-agent-tag-remove ()
           "Remove a tag from the current conversation."
@@ -2276,6 +2404,117 @@ conversation that had no workspace stored."
                            (length orphans)
                            (if (= (length orphans) 1) "" "s")))
               (message "No orphaned conversations found"))))
+
+        ;; == Rename session/conversation ==
+        ;; Persists the name into agent-sessions.json tags so it survives
+        ;; restarts and appears correctly in the sidebar and picker.
+
+        (defun decknix-agent-session-rename (new-name)
+          "Rename the current conversation to NEW-NAME.
+Updates the tags in agent-sessions.json (replacing all existing tags
+with the new name) and renames the live buffer.  Works from any
+agent-shell buffer."
+          (interactive
+           (let* ((conv-key (decknix--agent-require-conv-key))
+                  (current-tags (decknix--agent-tags-for-conv-key conv-key))
+                  (default (string-join current-tags "/")))
+             (list (read-string (format "Rename conversation%s: "
+                                        (if (string-empty-p default) ""
+                                          (format " (%s)" default)))
+                                default))))
+          (when (string-empty-p (string-trim new-name))
+            (user-error "Name cannot be empty"))
+          (let* ((conv-key (decknix--agent-require-conv-key))
+                 (session-id (decknix--agent-require-session-id))
+                 (store (decknix--agent-tags-read))
+                 (convs (decknix--agent-tags-conversations store))
+                 (entry (or (gethash conv-key convs)
+                            (let ((h (make-hash-table :test 'equal)))
+                              (puthash "tags" nil h)
+                              (puthash "sessions" nil h)
+                              h)))
+                 (sids (gethash "sessions" entry))
+                 ;; Split new-name on "/" or "," to allow multi-tag names
+                 (new-tags (seq-remove #'string-empty-p
+                                       (mapcar #'string-trim
+                                               (split-string new-name "[/,]" t)))))
+            ;; Update tags
+            (puthash "tags" new-tags entry)
+            (cl-pushnew session-id sids :test #'string=)
+            (puthash "sessions" sids entry)
+            (puthash conv-key entry convs)
+            (decknix--agent-tags-write store)
+            ;; Rename the live buffer
+            (let ((display (string-join new-tags "/")))
+              (rename-buffer (format "*Auggie: %s*" display) t)
+              (when (boundp 'shell-maker--buffer-name-override)
+                (setq shell-maker--buffer-name-override (buffer-name)))
+              ;; Refresh sidebar if visible
+              (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                (ignore-errors (agent-shell-workspace-sidebar-refresh)))
+              (message "Renamed conversation → %s" display))))
+
+        ;; Wire C-c A R globally
+        (define-key decknix-agent-prefix-map (kbd "R") 'decknix-agent-session-rename)
+
+        ;; Advise sidebar R to handle saved (non-live) sessions:
+        ;; For saved sessions, resume first then rename.
+        (advice-add 'agent-shell-workspace-sidebar-rename :around
+          (lambda (orig-fn)
+            "Handle rename for both live and saved sessions in sidebar."
+            (let ((saved (get-text-property
+                           (line-beginning-position)
+                           'decknix-sidebar-saved-session)))
+              (if saved
+                  ;; Saved session: prompt for new name, update tags directly
+                  (let* ((conv-key (get-text-property
+                                     (line-beginning-position)
+                                     'decknix-sidebar-saved-conv-key))
+                         (current-tags (when conv-key
+                                         (decknix--agent-tags-for-conv-key conv-key)))
+                         (default (string-join (or current-tags '()) "/"))
+                         (new-name (read-string
+                                    (format "Rename '%s' to: " default)
+                                    default)))
+                    (when (string-empty-p (string-trim new-name))
+                      (user-error "Name cannot be empty"))
+                    (let* ((store (decknix--agent-tags-read))
+                           (convs (decknix--agent-tags-conversations store))
+                           (entry (gethash conv-key convs))
+                           (new-tags (seq-remove
+                                      #'string-empty-p
+                                      (mapcar #'string-trim
+                                              (split-string new-name "[/,]" t)))))
+                      (when entry
+                        (puthash "tags" new-tags entry)
+                        (decknix--agent-tags-write store)
+                        (agent-shell-workspace-sidebar-refresh)
+                        (message "Renamed saved conversation → %s"
+                                 (string-join new-tags "/")))))
+                ;; Live session: use upstream rename, then persist to tags
+                (funcall orig-fn)
+                ;; After upstream rename, sync the new name to tags
+                (when-let* ((buf (agent-shell-workspace-sidebar--buffer-at-point))
+                            ((buffer-live-p buf)))
+                  (with-current-buffer buf
+                    (when (derived-mode-p 'agent-shell-mode)
+                      (ignore-errors
+                        (let* ((conv-key (decknix--agent-require-conv-key))
+                               (short (agent-shell-workspace--short-name buf))
+                               (new-tags (seq-remove
+                                           #'string-empty-p
+                                           (mapcar #'string-trim
+                                                   (split-string short "[/,]" t))))
+                               (store (decknix--agent-tags-read))
+                               (convs (decknix--agent-tags-conversations store))
+                               (entry (or (gethash conv-key convs)
+                                          (let ((h (make-hash-table :test 'equal)))
+                                            (puthash "tags" nil h)
+                                            (puthash "sessions" nil h)
+                                            h))))
+                          (puthash "tags" new-tags entry)
+                          (puthash conv-key entry convs)
+                          (decknix--agent-tags-write store))))))))))
 
         ;; C-c A T — global tags sub-prefix ("Tags (global)")
         ;; Operations that affect tags across all sessions.
@@ -4862,6 +5101,10 @@ Priority order:
         (add-hook 'agent-shell-mode-hook
                   (lambda ()
                     (display-line-numbers-mode 0)
+                    ;; Disable cape-file in agent-shell buffers — synchronous
+                    ;; filesystem scans freeze the cursor during typing.
+                    (setq-local completion-at-point-functions
+                                (remove #'cape-file completion-at-point-functions))
                     ;; Keep prompt pinned to the bottom of the window
                     (setq-local comint-scroll-to-bottom-on-input t)
                     (setq-local comint-scroll-to-bottom-on-output t)
