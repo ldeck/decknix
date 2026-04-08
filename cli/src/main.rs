@@ -29,14 +29,10 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
 
-        /// Use a local framework checkout instead of the pinned remote.
-        /// Reads path from --dev-path, or DECKNIX_DEV env var, or defaults to ~/tools/decknix.
-        #[arg(long)]
-        dev: bool,
-
-        /// Explicit path to a local decknix framework checkout (implies --dev)
-        #[arg(long, value_name = "PATH")]
-        dev_path: Option<String>,
+        /// Override flake input(s) with local paths (repeatable, INPUT=PATH).
+        /// Example: --override decknix=~/tools/decknix --override nc-config=~/Code/my-org/decknix-config
+        #[arg(long, value_name = "INPUT=PATH")]
+        r#override: Vec<String>,
     },
     Help {
         /// The command to look up
@@ -47,35 +43,31 @@ enum Commands {
     External(Vec<String>),
 }
 
-/// Resolve the local framework path for --dev mode.
-/// Priority: --dev-path flag > DECKNIX_DEV env var > ~/tools/decknix
-fn resolve_dev_path(explicit: Option<&str>) -> anyhow::Result<PathBuf> {
-    if let Some(p) = explicit {
-        let path = PathBuf::from(p);
-        if !path.is_dir() {
-            anyhow::bail!("--dev-path '{}' is not a directory", p);
-        }
-        return Ok(path);
+/// Expand ~ and validate a directory path, returning a canonical path.
+fn resolve_path(raw: &str, context: &str) -> anyhow::Result<PathBuf> {
+    let expanded = if raw.starts_with("~/") {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(&raw[2..])
+    } else {
+        PathBuf::from(raw)
+    };
+    let path = expanded.canonicalize().unwrap_or(expanded);
+    if !path.is_dir() {
+        anyhow::bail!("{}: '{}' is not a directory", context, path.display());
     }
+    Ok(path)
+}
 
-    if let Ok(env_path) = std::env::var("DECKNIX_DEV") {
-        let path = PathBuf::from(&env_path);
-        if !path.is_dir() {
-            anyhow::bail!("DECKNIX_DEV='{}' is not a directory", env_path);
-        }
-        return Ok(path);
-    }
-
-    let default = dirs::home_dir()
-        .unwrap_or_default()
-        .join("tools/decknix");
-    if !default.is_dir() {
-        anyhow::bail!(
-            "Default dev path '{}' not found. Set DECKNIX_DEV or use --dev-path.",
-            default.display()
-        );
-    }
-    Ok(default)
+/// Parse an INPUT=PATH override string into (input_name, resolved_path).
+fn parse_override(s: &str) -> anyhow::Result<(String, PathBuf)> {
+    let (input_name, raw_path) = s.split_once('=')
+        .ok_or_else(|| anyhow::anyhow!(
+            "--override '{}': expected INPUT=PATH format (e.g. nc-config=~/Code/my-org/decknix-config)",
+            s
+        ))?;
+    let path = resolve_path(raw_path, &format!("--override {}", input_name))?;
+    Ok((input_name.to_string(), path))
 }
 
 // 2. Dynamic Configuration Schema
@@ -299,8 +291,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Switch { dry_run, dev, dev_path }) => {
-            let use_dev = dev || dev_path.is_some();
+        Some(Commands::Switch { dry_run, r#override }) => {
             // darwin-rebuild switch --dry-run still activates; use 'build' for true dry run
             let action = if dry_run { "build" } else { "switch" };
 
@@ -315,6 +306,12 @@ fn main() -> anyhow::Result<()> {
                 );
             }
 
+            // Parse and resolve all --override INPUT=PATH pairs
+            let mut overrides: Vec<(String, PathBuf)> = Vec::new();
+            for s in &r#override {
+                overrides.push(parse_override(s)?);
+            }
+
             // Snapshot LaunchAgents before switch (for restart detection)
             let agents_before = if !dry_run { snapshot_launch_agents() } else { HashMap::new() };
 
@@ -324,19 +321,21 @@ fn main() -> anyhow::Result<()> {
                 .arg("--flake").arg(".#default")
                 .arg("--impure");
 
-            if use_dev {
-                let path = resolve_dev_path(dev_path.as_deref())?;
-                if dry_run {
-                    println!("🔍 Dry run (dev: {})...", path.display());
-                } else {
-                    println!("🔄 Switching (dev: {})...", path.display());
-                }
-                cmd.arg("--override-input").arg("decknix")
+            // Apply all overrides
+            for (input_name, path) in &overrides {
+                cmd.arg("--override-input").arg(input_name)
                     .arg(format!("path:{}", path.display()));
-            } else if dry_run {
-                println!("🔍 Dry run...");
+            }
+
+            // Status message
+            if overrides.is_empty() {
+                println!("{}", if dry_run { "🔍 Dry run..." } else { "🔄 Switching..." });
             } else {
-                println!("🔄 Switching...");
+                let labels: Vec<String> = overrides.iter()
+                    .map(|(name, path)| format!("{}={}", name, path.display()))
+                    .collect();
+                let icon = if dry_run { "🔍 Dry run" } else { "🔄 Switching" };
+                println!("{} ({})...", icon, labels.join(", "));
             }
 
             let status = cmd.status()?;
