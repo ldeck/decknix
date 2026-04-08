@@ -4091,7 +4091,7 @@ Like treemacs `W' / extra-wide-toggle."
             "RET goto  c new  k kill  r restart  R rename  d del-killed  "
             "s… session ops  w workspace  a/x tile add/rm  "
             "g refresh  q quit | "
-            "S switch[%s]  t tile[%s]  M display[%s]  W width[%s]")
+            "S switch[%s]  t tile[%s]  M display[%s]  W width[%s]  O org[%s]")
            (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
                     agent-shell-workspace-sidebar--quick-switch)
                "on" "off")
@@ -4100,7 +4100,10 @@ Like treemacs `W' / extra-wide-toggle."
                           agent-shell-workspace--tiled-buffers))
                "on" "off")
            (symbol-name decknix--sidebar-display-mode)
-           (symbol-name decknix--sidebar-width-state)))
+           (symbol-name decknix--sidebar-width-state)
+           (if (boundp 'decknix--hub-org-filter)
+               (or decknix--hub-org-filter "all")
+             "n/a")))
 
         ;; -- Enhanced sidebar render: live + saved sessions + key footer --
         ;; Override the upstream render to add saved sessions grouped by
@@ -4175,7 +4178,23 @@ state with colour-coded on/off indicators."
             (insert (propertize "   W " 'face 'font-lock-keyword-face)
                     (propertize "width " 'face 'font-lock-comment-face)
                     (propertize width-str 'face width-face)
-                    "\n")))
+                    "\n"))
+          ;; O — org filter (only when hub is loaded)
+          (when (boundp 'decknix--hub-org-filter)
+            (let* ((org-str (or decknix--hub-org-filter "all"))
+                   (org-face (if decknix--hub-org-filter
+                                 'font-lock-constant-face
+                               'font-lock-comment-face)))
+              (insert (propertize "   O " 'face 'font-lock-keyword-face)
+                      (propertize "org " 'face 'font-lock-comment-face)
+                      (propertize org-str 'face org-face)
+                      "\n")))
+          ;; -- CI legend --
+          (insert (propertize " CI: " 'face 'bold)
+                  (propertize "✓" 'face 'success) "pass "
+                  (propertize "✗" 'face 'error) "fail "
+                  (propertize "⟳" 'face 'warning) "run"
+                  "\n"))
 
         (defun decknix--sidebar-abbreviate-workspace (path)
           "Abbreviate PATH for sidebar display."
@@ -4622,6 +4641,66 @@ Re-reads only the changed file and refreshes the sidebar."
         (decknix--hub-refresh-all)
         (decknix--hub-start-watcher)
 
+        ;; Bind O to cycle org filter in sidebar
+        (with-eval-after-load 'agent-shell-workspace
+          (define-key agent-shell-workspace-sidebar-mode-map
+            (kbd "O") #'decknix--hub-cycle-org-filter)
+          (with-eval-after-load 'which-key
+            (which-key-add-keymap-based-replacements
+              agent-shell-workspace-sidebar-mode-map
+              "O" "filter org")))
+
+        ;; -- Hub: org/owner filter --
+        ;; Allows toggling visibility per GitHub owner (org or user).
+        ;; All orgs are shown by default; the user cycles through
+        ;; the filter with the `O` key in the sidebar.
+
+        (defvar decknix--hub-org-filter nil
+          "Current org filter for hub items.
+nil = show all, a string = show only that owner/org.")
+
+        (defun decknix--hub-discover-orgs ()
+          "Return a sorted list of unique GitHub owners across reviews and WIP."
+          (let ((orgs (make-hash-table :test 'equal)))
+            ;; Reviews
+            (when decknix--hub-reviews
+              (dolist (item (alist-get 'items decknix--hub-reviews))
+                (let* ((repo (or (alist-get 'repo item) ""))
+                       (owner (car (split-string repo "/"))))
+                  (when (and owner (not (string-empty-p owner)))
+                    (puthash owner t orgs)))))
+            ;; WIP
+            (when decknix--hub-wip
+              (dolist (repo-entry (alist-get 'repos decknix--hub-wip))
+                (let* ((repo (or (alist-get 'repo repo-entry) ""))
+                       (owner (car (split-string repo "/"))))
+                  (when (and owner (not (string-empty-p owner)))
+                    (puthash owner t orgs)))))
+            (sort (hash-table-keys orgs) #'string<)))
+
+        (defun decknix--hub-cycle-org-filter ()
+          "Cycle through org filters: all → org1 → org2 → … → all."
+          (interactive)
+          (let* ((orgs (decknix--hub-discover-orgs))
+                 (current decknix--hub-org-filter)
+                 (next (cond
+                        ((null orgs) nil)
+                        ((null current) (car orgs))
+                        (t (let ((pos (cl-position current orgs :test #'string=)))
+                             (if (and pos (< (1+ pos) (length orgs)))
+                                 (nth (1+ pos) orgs)
+                               nil))))))
+            (setq decknix--hub-org-filter next)
+            (when (get-buffer "*agent-shell-sidebar*")
+              (agent-shell-workspace-sidebar-refresh))
+            (message "Hub filter: %s" (or next "all"))))
+
+        (defun decknix--hub-item-visible-p (repo-full)
+          "Return non-nil if REPO-FULL (owner/repo) passes the current org filter."
+          (or (null decknix--hub-org-filter)
+              (string= decknix--hub-org-filter
+                       (car (split-string (or repo-full "") "/")))))
+
         ;; -- Hub: age formatting --
         (defun decknix--hub-format-age (iso-time)
           "Format an ISO timestamp as a compact age string (e.g. 3d, 5h, 12m)."
@@ -4653,9 +4732,14 @@ Re-reads only the changed file and refreshes the sidebar."
 
         ;; -- Hub: sidebar render helpers --
         (defun decknix--hub-render-requests (line-num)
-          "Render the Requests (PR reviews) section. Returns updated LINE-NUM."
+          "Render the Requests (PR reviews) section. Returns updated LINE-NUM.
+Respects `decknix--hub-org-filter' to show only items from the selected org."
           (let* ((data decknix--hub-reviews)
-                 (items (when data (alist-get 'items data))))
+                 (all-items (when data (alist-get 'items data)))
+                 (items (seq-filter
+                         (lambda (item)
+                           (decknix--hub-item-visible-p (alist-get 'repo item)))
+                         (or all-items '()))))
             (when items
               (decknix--sidebar-render-section-header
                (format "Requests (%d)" (length items)))
@@ -4704,14 +4788,20 @@ Re-reads only the changed file and refreshes the sidebar."
       + optionalString cfg.hub.enable ''
 
         (defun decknix--hub-render-wip (line-num)
-          "Render the WIP (my open PRs) section. Returns updated LINE-NUM."
+          "Render the WIP (my open PRs) section. Returns updated LINE-NUM.
+Respects `decknix--hub-org-filter'. Shows time since last update."
           (let* ((data decknix--hub-wip)
-                 (repos (when data (alist-get 'repos data)))
+                 (all-repos (when data (alist-get 'repos data)))
+                 ;; Filter repos by org
+                 (repos (seq-filter
+                         (lambda (r)
+                           (decknix--hub-item-visible-p (alist-get 'repo r)))
+                         (or all-repos '())))
                  (total (cl-reduce #'+ (mapcar
                                         (lambda (r) (length (alist-get 'prs r)))
-                                        (or repos '()))
+                                        repos)
                                    :initial-value 0)))
-            (when (and repos (> total 0))
+            (when (> total 0)
               (decknix--sidebar-render-section-header
                (format "WIP (%d)" total))
               (setq line-num (1+ line-num))
@@ -4734,11 +4824,14 @@ Re-reads only the changed file and refreshes the sidebar."
                              (draft (alist-get 'draft pr))
                              (branch (alist-get 'branch pr))
                              (url (alist-get 'url pr))
-                             (max-title (max 8 (- (window-width) 14)))
+                             (age (decknix--hub-format-age
+                                   (alist-get 'updated pr)))
+                             (max-title (max 8 (- (window-width) 20)))
                              (short-title (if (> (length title) max-title)
                                               (concat (substring title 0 (- max-title 1)) "…")
                                             title))
-                             (line (format "  #%-4d %s %s"
+                             (line (format " %3s #%-4d %s %s"
+                                          (propertize age 'face 'font-lock-comment-face)
                                           number
                                           ci-str
                                           (if draft
