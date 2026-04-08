@@ -4077,8 +4077,15 @@ Like treemacs `W' / extra-wide-toggle."
           (interactive)
           (message (concat
             "RET goto  c new  k kill  r restart  R rename  d del-killed  "
-            "S switch  s… session ops  M display  w workspace  "
-            "a/x/t tile  W width  g refresh  q quit")))
+            "S switch  s… session ops  w workspace  a/x tile add/rm  "
+            "g refresh  q quit | "
+            "t tile[%s]  M display[%s]  W width[%s]")
+           (if (and agent-shell-workspace-sidebar--selected-buffer
+                    (memq agent-shell-workspace-sidebar--selected-buffer
+                          agent-shell-workspace--tiled-buffers))
+               "on" "off")
+           (symbol-name decknix--sidebar-display-mode)
+           (symbol-name decknix--sidebar-width-state)))
 
         ;; -- Enhanced sidebar render: live + saved sessions + key footer --
         ;; Override the upstream render to add saved sessions grouped by
@@ -4095,29 +4102,57 @@ Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
           (insert (propertize (concat " " title) 'face 'bold) "\n"))
 
         (defun decknix--sidebar-render-footer ()
-          "Insert vertical key-help footer at bottom of sidebar."
+          "Insert vertical key-help footer with actions and stateful toggles.
+Actions are shown in a compact block; toggles show their current
+state with colour-coded on/off indicators."
           (insert "\n")
-          (let ((keys '(("RET" . "open")
-                        ("c"   . "new session")
-                        ("k"   . "kill")
-                        ("r"   . "restart")
-                        ("R"   . "rename")
-                        ("S"   . "quick-switch")
-                        ("s s" . "search sessions")
-                        ("s g" . "grep sessions")
-                        ("M"   . "cycle display")
-                        ("w"   . "set workspace")
-                        ("a/x" . "tile add/rm")
-                        ("t"   . "tile toggle")
-                        ("W"   . "cycle width")
-                        ("g"   . "refresh")
-                        ("?"   . "help")
-                        ("q"   . "quit"))))
-            (dolist (kv keys)
-              (insert (propertize
-                       (format " %3s %s" (car kv) (cdr kv))
-                       'face 'font-lock-comment-face)
-                      "\n"))))
+          ;; ── Actions ──
+          (insert (propertize " Keys" 'face 'bold) "\n")
+          (let ((actions '(("RET" . "open")
+                           ("c"   . "new session")
+                           ("k"   . "kill")
+                           ("r"   . "restart")
+                           ("R"   . "rename")
+                           ("S"   . "quick-switch")
+                           ("s s" . "search sessions")
+                           ("s g" . "grep sessions")
+                           ("w"   . "set workspace")
+                           ("a/x" . "tile add/rm")
+                           ("g"   . "refresh")
+                           ("?"   . "help")
+                           ("q"   . "quit"))))
+            (dolist (kv actions)
+              (insert (propertize (format " %3s " (car kv))
+                                  'face 'font-lock-keyword-face)
+                      (propertize (cdr kv)
+                                  'face 'font-lock-comment-face)
+                      "\n")))
+          ;; ── Toggles / Cycles ──
+          (insert (propertize " Toggles" 'face 'bold) "\n")
+          ;; t — tile: check if selected buffer is currently tiled
+          (let* ((sel agent-shell-workspace-sidebar--selected-buffer)
+                 (tiled-p (and sel
+                               (memq sel agent-shell-workspace--tiled-buffers)))
+                 (tile-label (if tiled-p "on" "off"))
+                 (tile-face (if tiled-p 'success 'font-lock-comment-face)))
+            (insert (propertize "   t " 'face 'font-lock-keyword-face)
+                    (propertize "tile " 'face 'font-lock-comment-face)
+                    (propertize tile-label 'face tile-face)
+                    "\n"))
+          ;; M — display mode cycle
+          (let* ((mode-str (symbol-name decknix--sidebar-display-mode))
+                 (mode-face 'font-lock-constant-face))
+            (insert (propertize "   M " 'face 'font-lock-keyword-face)
+                    (propertize "display " 'face 'font-lock-comment-face)
+                    (propertize mode-str 'face mode-face)
+                    "\n"))
+          ;; W — width cycle
+          (let* ((width-str (symbol-name decknix--sidebar-width-state))
+                 (width-face 'font-lock-constant-face))
+            (insert (propertize "   W " 'face 'font-lock-keyword-face)
+                    (propertize "width " 'face 'font-lock-comment-face)
+                    (propertize width-str 'face width-face)
+                    "\n")))
 
         (defun decknix--sidebar-abbreviate-workspace (path)
           "Abbreviate PATH for sidebar display."
