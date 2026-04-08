@@ -4331,6 +4331,10 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
               (when (fboundp 'decknix--hub-render-wip)
                 (setq line-num (decknix--hub-render-wip line-num)))
 
+              ;; ── Hub: status hint when no data ──
+              (when (fboundp 'decknix--hub-render-status-hint)
+                (setq line-num (decknix--hub-render-status-hint line-num)))
+
               ;; ── Live Sessions ──
               (decknix--sidebar-render-section-header
                (format "Live (%d)" (length buffers)))
@@ -4695,12 +4699,16 @@ Re-reads only the changed file and refreshes the sidebar."
           :key "O"
           :description
           (lambda ()
-            (format "Org filter    %s"
-                    (propertize
-                     (format "[%s]" (or decknix--hub-org-filter "all"))
-                     'face (if decknix--hub-org-filter
-                               'font-lock-constant-face
-                             'font-lock-comment-face))))
+            (if (decknix--hub-has-data-p)
+                (format "Org filter    %s"
+                        (propertize
+                         (format "[%s]" (or decknix--hub-org-filter "all"))
+                         'face (if decknix--hub-org-filter
+                                   'font-lock-constant-face
+                                 'font-lock-comment-face)))
+              (format "Org filter    %s"
+                      (propertize "[not running]"
+                                  'face 'font-lock-comment-face))))
           (interactive)
           (call-interactively #'decknix--hub-cycle-org-filter))
 
@@ -4737,21 +4745,27 @@ nil = show all, a string = show only that owner/org.")
             (sort (hash-table-keys orgs) #'string<)))
 
         (defun decknix--hub-cycle-org-filter ()
-          "Cycle through org filters: all → org1 → org2 → … → all."
+          "Cycle through org filters: all → org1 → org2 → … → all.
+When no hub data is available, shows setup instructions instead."
           (interactive)
-          (let* ((orgs (decknix--hub-discover-orgs))
-                 (current decknix--hub-org-filter)
-                 (next (cond
-                        ((null orgs) nil)
-                        ((null current) (car orgs))
-                        (t (let ((pos (cl-position current orgs :test #'string=)))
-                             (if (and pos (< (1+ pos) (length orgs)))
-                                 (nth (1+ pos) orgs)
-                               nil))))))
-            (setq decknix--hub-org-filter next)
-            (when (get-buffer "*agent-shell-sidebar*")
-              (agent-shell-workspace-sidebar-refresh))
-            (message "Hub filter: %s" (or next "all"))))
+          (if (not (decknix--hub-has-data-p))
+              (message (concat
+                "Hub: no data. Enable the daemon in your decknix-config:\n"
+                "  decknix.services.hub.enable = true;\n"
+                "Then: decknix switch"))
+            (let* ((orgs (decknix--hub-discover-orgs))
+                   (current decknix--hub-org-filter)
+                   (next (cond
+                          ((null orgs) nil)
+                          ((null current) (car orgs))
+                          (t (let ((pos (cl-position current orgs :test #'string=)))
+                               (if (and pos (< (1+ pos) (length orgs)))
+                                   (nth (1+ pos) orgs)
+                                 nil))))))
+              (setq decknix--hub-org-filter next)
+              (when (get-buffer "*agent-shell-sidebar*")
+                (agent-shell-workspace-sidebar-refresh))
+              (message "Hub filter: %s" (or next "all")))))
 
         (defun decknix--hub-item-visible-p (repo-full)
           "Return non-nil if REPO-FULL (owner/repo) passes the current org filter."
@@ -4787,6 +4801,34 @@ nil = show all, a string = show only that owner/org.")
                   ("running" (propertize "⟳" 'face 'warning))
                   (_         (propertize "?" 'face 'font-lock-comment-face))))
             ""))
+
+        ;; -- Hub: status hint when daemon not running --
+        (defun decknix--hub-has-data-p ()
+          "Return non-nil if any hub data files exist and contain data."
+          (or decknix--hub-reviews decknix--hub-wip))
+
+        (defun decknix--hub-render-status-hint (line-num)
+          "Show a setup hint when hub integration is enabled but no data exists.
+Returns updated LINE-NUM."
+          (unless (decknix--hub-has-data-p)
+            (insert (propertize " Hub" 'face 'bold) "\n")
+            (setq line-num (1+ line-num))
+            (if (file-directory-p decknix--hub-dir)
+                ;; Dir exists but no data — daemon may have just started
+                (progn
+                  (insert (propertize "  waiting for data…"
+                                      'face 'font-lock-comment-face)
+                          "\n")
+                  (setq line-num (1+ line-num)))
+              ;; Dir doesn't exist — daemon not configured
+              (insert (propertize "  not running — " 'face 'font-lock-comment-face)
+                      (propertize "? O" 'face 'font-lock-keyword-face)
+                      (propertize " for setup" 'face 'font-lock-comment-face)
+                      "\n")
+              (setq line-num (1+ line-num)))
+            (insert "\n")
+            (setq line-num (1+ line-num)))
+          line-num)
 
         ;; -- Hub: sidebar render helpers --
         (defun decknix--hub-render-requests (line-num)
