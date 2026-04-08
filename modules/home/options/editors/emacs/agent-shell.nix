@@ -554,7 +554,7 @@ Press q to dismiss."
             "  In compose: C-c C-c submit, C-c C-k clear/close.\n"
             "  In compose: C-c C-s toggles sticky (stays open) / transient.\n"
             "  In compose: C-c k k interrupts the agent, C-c k C-c interrupts & submits.\n"
-            "  In compose: M-p / M-n cycle through prompts (all sessions).\n"
+            "  In compose: M-p / M-n cycle session prompts; M-P / M-N cycle all sessions.\n"
             "  In compose: M-r search all prompts (consult fuzzy match).\n"
             "  Press C-c C-c to interrupt a running response.\n"
             "  Press C-c E to interrupt and open the compose buffer.\n"
@@ -919,10 +919,20 @@ On first call (empty cache), falls back to a synchronous fetch."
             (setq decknix--agent-session-jq-filter-file
                   (make-temp-file "auggie-session-" nil ".jq"))
             (with-temp-file decknix--agent-session-jq-filter-file
+              ;; Use try//default for chatHistory operations so that
+              ;; files being actively written (mid-write parse errors)
+              ;; still produce partial results instead of being silently
+              ;; dropped from the session list.
+              ;; Skip MCP startup errors when extracting firstUserMessage —
+              ;; find the first real user message instead.
               (insert "{sessionId, created, modified,"
-                      " exchangeCount: (.chatHistory | length),"
+                      " exchangeCount: (try (.chatHistory | length) // 0),"
                       " firstUserMessage:"
-                      " (.chatHistory[0].exchange.request_message[:200]"
+                      " (try (first(.chatHistory[]"
+                      " | .exchange.request_message"
+                      " | select(. != null)"
+                      " | select(startswith(\"\\u26a0\") | not)"
+                      " | select(length > 0))[:200])"
                       " // \"\")}\n")))
           decknix--agent-session-jq-filter-file)
 
@@ -1042,11 +1052,14 @@ Uses tags if available, otherwise truncates the first user message."
              (t (substring sid 0 (min 8 (length sid)))))))
 
         (defun decknix--agent-session-resume (session-id history-count
-                                              &optional display-name workspace)
+                                              &optional display-name workspace
+                                              conv-key)
           "Resume SESSION-ID and pre-populate buffer with HISTORY-COUNT exchanges.
 DISPLAY-NAME, if provided, is used to rename the buffer to *Auggie: NAME*.
 WORKSPACE, if provided, sets --workspace-root and default-directory so the
-agent operates in the original project directory."
+agent operates in the original project directory.
+CONV-KEY, if provided, is used to register the new session-id under the
+existing conversation entry in the tag store."
           ;; Invalidate cache so next picker invocation fetches fresh data
           (setq decknix--agent-session-cache-time 0)
           ;; Snapshot existing buffers so we can detect the new one
@@ -1069,7 +1082,13 @@ agent operates in the original project directory."
                   (n history-count)
                   (bufs before-buffers)
                   (bname display-name)
-                  (ws workspace))
+                  (ws workspace)
+                  (ck conv-key))
+              ;; Register new session-id under the conversation immediately
+              ;; so it appears in the session picker even before the buffer
+              ;; is fully set up.
+              (when ck
+                (decknix--agent-register-session-id ck sid))
               (run-at-time
                1.5 nil
                (eval
@@ -1218,17 +1237,38 @@ CONV-GROUP is (CONV-KEY LATEST-SESSION ALL-SESSIONS)."
                          (ordered nil))
                     (if decknix--session-picker-expand
                         ;; Expanded: all individual sessions (already newest-first)
+                        ;; Pre-resolve workspace so :action doesn't need to
+                        ;; re-derive conv-key (which can fail on large files).
                         (dolist (session sessions)
-                          (let ((key (decknix--agent-session-preview session)))
-                            (puthash key session ht)
+                          (let* ((first-msg (alist-get 'firstUserMessage session ""))
+                                 (conv-key (decknix--agent-conversation-key first-msg))
+                                 (workspace (when conv-key
+                                              (decknix--agent-workspace-for-conv-key
+                                               conv-key)))
+                                 (entry (if workspace
+                                            (cons (cons '__workspace workspace)
+                                                  session)
+                                          session))
+                                 (key (decknix--agent-session-preview session)))
+                            (puthash key entry ht)
                             (push key ordered)))
-                      ;; Collapsed: one entry per conversation (default)
-                      ;; group-by-conversation returns groups newest-first
+                      ;; Collapsed: one entry per conversation (default).
+                      ;; group-by-conversation already computes conv-keys
+                      ;; for grouping — reuse them to pre-resolve workspace.
                       (let ((groups (decknix--agent-session-group-by-conversation
                                     sessions)))
                         (dolist (group groups)
-                          (let ((key (decknix--agent-conversation-preview group)))
-                            (puthash key (cadr group) ht)
+                          (let* ((conv-key (car group))
+                                 (latest (cadr group))
+                                 (workspace (when conv-key
+                                              (decknix--agent-workspace-for-conv-key
+                                               conv-key)))
+                                 (entry (if workspace
+                                            (cons (cons '__workspace workspace)
+                                                  latest)
+                                          latest))
+                                 (key (decknix--agent-conversation-preview group)))
+                            (puthash key entry ht)
                             (push key ordered)))))
                     (setq decknix--session-picker-saved-map ht)
                     ;; Return in newest-first order (push reverses, so nreverse)
@@ -1237,20 +1277,28 @@ CONV-GROUP is (CONV-KEY LATEST-SESSION ALL-SESSIONS)."
                 (lambda (cand)
                   (when cand
                     (let* ((session (gethash cand decknix--session-picker-saved-map))
-                           ;; Look up workspace from the tag store using
-                           ;; the conversation key derived from firstUserMessage
-                           (conv-key (when session
-                                       (decknix--agent-conversation-key
-                                        (alist-get 'firstUserMessage session ""))))
-                           (workspace (when conv-key
-                                        (decknix--agent-workspace-for-conv-key
-                                         conv-key))))
+                           ;; Workspace was pre-resolved during :items
+                           (workspace (alist-get '__workspace session)))
                       (when session
-                        (decknix--agent-session-resume
-                         (alist-get 'sessionId session)
-                         decknix-agent-session-history-count
-                         (decknix--agent-session-display-name session)
-                         workspace))))))
+                        (let ((conv-key (decknix--agent-conversation-key
+                                        (alist-get 'firstUserMessage
+                                                   session ""))))
+                          ;; If no stored workspace, prompt the user so the
+                          ;; session opens in the right directory.
+                          (unless workspace
+                            (setq workspace
+                                  (read-directory-name
+                                   "Workspace for this session: "
+                                   nil nil t))
+                            ;; Persist for future resumes (best-effort)
+                            (when (and conv-key workspace)
+                              (decknix--agent-session-save-workspace-for-conv-key
+                               conv-key workspace)))
+                          (decknix--agent-session-resume
+                           (alist-get 'sessionId session)
+                           decknix-agent-session-history-count
+                           (decknix--agent-session-display-name session)
+                           workspace conv-key)))))))
           "Consult multi-source for saved auggie sessions.")
 
         (defvar decknix--session-source-new
@@ -1403,11 +1451,24 @@ With \\\\[universal-argument], shows all individual session snapshots."
                    :require-match t))
                  (chosen (cdr (assoc selected entries-cache))))
             (when chosen
-              (let ((s (cdr chosen)))
+              (let* ((s (cdr chosen))
+                     (first-msg (alist-get 'firstUserMessage s ""))
+                     (conv-key (decknix--agent-conversation-key first-msg))
+                     (workspace (when conv-key
+                                  (decknix--agent-workspace-for-conv-key
+                                   conv-key))))
+                (unless workspace
+                  (setq workspace
+                        (read-directory-name
+                         "Workspace for this session: " nil nil t))
+                  (when (and conv-key workspace)
+                    (decknix--agent-session-save-workspace-for-conv-key
+                     conv-key workspace)))
                 (decknix--agent-session-resume
                  (alist-get 'sessionId s)
                  decknix-agent-session-history-count
-                 (decknix--agent-session-display-name s))))))
+                 (decknix--agent-session-display-name s)
+                 workspace conv-key)))))
 
         (defun decknix--agent-detect-workspace ()
           "Detect the best workspace directory for a new session.
@@ -1522,6 +1583,22 @@ where the first message is the command itself)."
               (puthash conv-key entry convs)
               (decknix--agent-tags-write store))))
 
+        (defun decknix--agent-register-session-id (conv-key session-id)
+          "Ensure SESSION-ID is in the sessions list for CONV-KEY.
+This keeps all session snapshots (original + resumed) linked to
+the same conversation."
+          (when (and conv-key session-id)
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (gethash conv-key convs)))
+              (when entry
+                (let ((sids (gethash "sessions" entry)))
+                  (unless (and sids (member session-id sids))
+                    (puthash "sessions"
+                             (cons session-id (or sids '()))
+                             entry)
+                    (decknix--agent-tags-write store)))))))
+
         (defun decknix-agent-session-new (&optional quick)
           "Start a new agent session with guided setup.
 Prompts for workspace directory, session name, and initial tags.
@@ -1628,8 +1705,11 @@ batch launches."
                         (when tags
                           (message "Tags applied: [%s]"
                                    (string-join tags ", "))))
-                    ;; Deferred — subscribe to prompt-ready then wait for
-                    ;; first exchange to complete so firstUserMessage exists
+                    ;; Deferred — subscribe to prompt-ready then derive
+                    ;; conv-key from the comint input ring (the user's first
+                    ;; message is there once the agent has responded).
+                    ;; This avoids the stale-cache bug where the async session
+                    ;; list refresh hasn't completed yet.
                     (agent-shell-subscribe-to
                      :shell-buffer shell-buf
                      :event 'prompt-ready
@@ -1637,23 +1717,49 @@ batch launches."
                      (eval `(lambda (_event)
                               (when (buffer-live-p ,shell-buf)
                                 (condition-case nil
-                                    (let ((sid (with-current-buffer ,shell-buf
-                                                 (or decknix--agent-auggie-session-id
+                                    (with-current-buffer ,shell-buf
+                                      ;; Get session ID
+                                      (let ((sid (or decknix--agent-auggie-session-id
                                                      (when (and (boundp 'shell-maker--config)
                                                                 shell-maker--config)
                                                        (map-nested-elt (agent-shell--state)
-                                                                       '(:session :id)))))))
-                                      (when (and sid (stringp sid)
-                                                (not (string-empty-p sid)))
-                                        (with-current-buffer ,shell-buf
-                                          (setq-local decknix--agent-auggie-session-id sid))
-                                        (when ',tags
-                                          (decknix--agent-session-tags-for sid ',tags)
-                                          (message "Tags applied: [%s]"
-                                                   (string-join ',tags ", ")))
-                                        (when ,workspace
-                                          (decknix--agent-session-save-workspace
-                                           sid ,workspace))))
+                                                                       '(:session :id))))))
+                                        (when (and sid (stringp sid)
+                                                  (not (string-empty-p sid)))
+                                          (setq-local decknix--agent-auggie-session-id sid)
+                                          ;; Derive conv-key from comint input ring
+                                          ;; (the first user message) — reliable even
+                                          ;; when session cache is stale.
+                                          (let* ((ring (and (boundp 'comint-input-ring)
+                                                           comint-input-ring))
+                                                 (first-msg (when (and ring
+                                                                       (ring-p ring)
+                                                                       (> (ring-length ring) 0))
+                                                              ;; Oldest entry = first message
+                                                              (ring-ref ring
+                                                                        (1- (ring-length ring)))))
+                                                 (conv-key (when (and first-msg
+                                                                      (not (string-empty-p first-msg)))
+                                                             (decknix--agent-conversation-key
+                                                              first-msg))))
+                                            (if conv-key
+                                                (progn
+                                                  (decknix--agent-store-metadata-by-conv-key
+                                                   conv-key ',tags ,workspace)
+                                                  ;; Also register session-id under conv-key
+                                                  (decknix--agent-register-session-id
+                                                   conv-key sid)
+                                                  (when ',tags
+                                                    (message "Tags applied: [%s]"
+                                                             (string-join ',tags ", "))))
+                                              ;; Fallback: try the old cache-based path
+                                              (when ',tags
+                                                (decknix--agent-session-tags-for sid ',tags)
+                                                (message "Tags applied: [%s]"
+                                                         (string-join ',tags ", ")))
+                                              (when ,workspace
+                                                (decknix--agent-session-save-workspace
+                                                 sid ,workspace)))))))
                                   (error nil))))
                            t))))))))
 
@@ -1923,6 +2029,23 @@ the workspace in the conversation entry alongside tags."
                   (puthash conv-key entry convs)
                   (decknix--agent-tags-write store))))))
 
+        (defun decknix--agent-session-save-workspace-for-conv-key
+            (conv-key workspace)
+          "Persist WORKSPACE for CONV-KEY directly (no session-id lookup).
+Used by the session picker when the user selects a workspace for a
+conversation that had no workspace stored."
+          (when (and conv-key workspace)
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (or (gethash conv-key convs)
+                              (let ((h (make-hash-table :test 'equal)))
+                                (puthash "tags" nil h)
+                                (puthash "sessions" nil h)
+                                h))))
+              (puthash "workspace" workspace entry)
+              (puthash conv-key entry convs)
+              (decknix--agent-tags-write store))))
+
         (defun decknix--agent-tags-all ()
           "Return a sorted list of all unique tags across all conversations."
           (let* ((store (decknix--agent-tags-read))
@@ -2065,10 +2188,14 @@ the workspace in the conversation entry alongside tags."
                        (chosen (cdr (assoc selection entries)))
                        (session (cdr chosen))
                        (session-id (alist-get 'sessionId session)))
-                  (decknix--agent-session-resume
-                   session-id
-                   decknix-agent-session-history-count
-                   (decknix--agent-session-display-name session)))))))
+                  (let ((conv-key (decknix--agent-conversation-key
+                                   (alist-get 'firstUserMessage
+                                              session ""))))
+                    (decknix--agent-session-resume
+                     session-id
+                     decknix-agent-session-history-count
+                     (decknix--agent-session-display-name session)
+                     nil conv-key)))))))
 
         (defun decknix-agent-tag-edit ()
           "Rename a tag across all conversations."
@@ -2272,9 +2399,16 @@ Returns a list of non-empty strings, newest first."
                                 msgs))))
             (error nil)))
 
+        (defvar-local decknix--compose-history-local-only t
+          "When non-nil, M-p/M-n only cycle the current session's prompts.
+Set to nil by M-P/M-N to enable cross-session history navigation.")
+
         (defun decknix--compose-history-init ()
           "Initialize on-demand history for this compose buffer.
-Populates items from comint-input-ring and builds the file queue."
+Populates items from comint-input-ring.  When
+`decknix--compose-history-local-only' is non-nil (default / M-p/M-n),
+only current-session prompts are loaded.  When nil (M-P/M-N), also
+builds the cross-session file queue for on-demand streaming."
           (let ((seen (make-hash-table :test 'equal))
                 (items nil)
                 (current-session-id nil))
@@ -2295,28 +2429,35 @@ Populates items from comint-input-ring and builds the file queue."
                         (puthash item t seen)
                         (push item items)))))))
             (setq items (nreverse items))
-            ;; 2. Build file queue: session files sorted newest-first, exclude current
-            (let* ((dir decknix--agent-sessions-dir)
-                   (exclude-file (when current-session-id
-                                   (expand-file-name
-                                    (concat current-session-id ".json") dir)))
-                   ;; ls -t gives newest-first by mtime
-                   (all-files
-                    (split-string
-                     (shell-command-to-string
-                      (concat "ls -t "
-                              (shell-quote-argument dir)
-                              "/*.json 2>/dev/null"))
-                     "\n" t))
-                   (queue (if exclude-file
-                              (seq-remove
-                               (lambda (f) (string= f exclude-file))
-                               all-files)
-                            all-files)))
-              (setq decknix--compose-history-items items
-                    decknix--compose-history-seen seen
-                    decknix--compose-history-file-queue queue
-                    decknix--compose-history-exhausted (null queue)))))
+            ;; 2. File queue: only when cross-session mode is active (M-P/M-N)
+            (if decknix--compose-history-local-only
+                ;; Local-only: no file queue, mark exhausted immediately
+                (setq decknix--compose-history-items items
+                      decknix--compose-history-seen seen
+                      decknix--compose-history-file-queue nil
+                      decknix--compose-history-exhausted t)
+              ;; Cross-session: build file queue, exclude current session
+              (let* ((dir decknix--agent-sessions-dir)
+                     (exclude-file (when current-session-id
+                                     (expand-file-name
+                                      (concat current-session-id ".json") dir)))
+                     ;; ls -t gives newest-first by mtime
+                     (all-files
+                      (split-string
+                       (shell-command-to-string
+                        (concat "ls -t "
+                                (shell-quote-argument dir)
+                                "/*.json 2>/dev/null"))
+                       "\n" t))
+                     (queue (if exclude-file
+                                (seq-remove
+                                 (lambda (f) (string= f exclude-file))
+                                 all-files)
+                              all-files)))
+                (setq decknix--compose-history-items items
+                      decknix--compose-history-seen seen
+                      decknix--compose-history-file-queue queue
+                      decknix--compose-history-exhausted (null queue))))))
 
         (defun decknix--compose-history-load-next-batch ()
           "Load prompts from the next session file(s) in the queue.
@@ -2337,10 +2478,8 @@ Returns non-nil if new prompts were added."
               (setq decknix--compose-history-exhausted t))
             added))
 
-        (defun decknix-agent-compose-previous-input ()
-          "Replace compose buffer content with the previous prompt from history.
-Streams through current session, then loads saved sessions on-demand."
-          (interactive)
+        (defun decknix--compose-history-navigate-previous ()
+          "Core implementation: move to the previous (older) prompt in history."
           ;; Initialize on first navigation
           (unless decknix--compose-history-seen
             (decknix--compose-history-init))
@@ -2358,19 +2497,18 @@ Streams through current session, then loads saved sessions on-demand."
                 (setq items decknix--compose-history-items))
               (if (>= new-index (length items))
                   (progn
-                    (message "End of history (%d prompts, %d sessions remaining)"
-                             (length items)
-                             (length decknix--compose-history-file-queue))
+                    (message "End of %s history (%d prompts)"
+                             (if decknix--compose-history-local-only
+                                 "session" "global")
+                             (length items))
                     (ding))
                 (setq decknix--compose-history-index new-index)
                 (erase-buffer)
                 (insert (nth new-index items))
                 (goto-char (point-max))))))
 
-        (defun decknix-agent-compose-next-input ()
-          "Replace compose buffer content with the next (newer) prompt from history.
-When past the newest entry, restores the original user input."
-          (interactive)
+        (defun decknix--compose-history-navigate-next ()
+          "Core implementation: move to the next (newer) prompt in history."
           (cond
            ;; Already at current input
            ((= decknix--compose-history-index -1)
@@ -2390,6 +2528,37 @@ When past the newest entry, restores the original user input."
             (insert (nth decknix--compose-history-index
                          decknix--compose-history-items))
             (goto-char (point-max)))))
+
+        (defun decknix-agent-compose-previous-input ()
+          "Cycle to the previous prompt from the CURRENT session only.
+Use M-P for cross-session history."
+          (interactive)
+          (when (not decknix--compose-history-local-only)
+            ;; Switching from global → local: reset to rebuild
+            (setq decknix--compose-history-local-only t
+                  decknix--compose-history-seen nil))
+          (decknix--compose-history-navigate-previous))
+
+        (defun decknix-agent-compose-next-input ()
+          "Cycle to the next (newer) prompt from the CURRENT session only.
+Use M-N for cross-session history."
+          (interactive)
+          (decknix--compose-history-navigate-next))
+
+        (defun decknix-agent-compose-previous-input-global ()
+          "Cycle to the previous prompt across ALL sessions.
+Starts with the current session, then streams from saved sessions on-demand."
+          (interactive)
+          (when decknix--compose-history-local-only
+            ;; Switching from local → global: reset to rebuild with file queue
+            (setq decknix--compose-history-local-only nil
+                  decknix--compose-history-seen nil))
+          (decknix--compose-history-navigate-previous))
+
+        (defun decknix-agent-compose-next-input-global ()
+          "Cycle to the next (newer) prompt across ALL sessions."
+          (interactive)
+          (decknix--compose-history-navigate-next))
 
         ;; == Consult-based prompt search (M-r) ==
 
@@ -2548,7 +2717,8 @@ Works in both compose buffers and agent-shell buffers."
                           decknix--compose-history-items nil
                           decknix--compose-history-seen nil
                           decknix--compose-history-file-queue nil
-                          decknix--compose-history-exhausted nil))
+                          decknix--compose-history-exhausted nil
+                          decknix--compose-history-local-only t))
                 ;; In agent-shell buffer: open compose with this prompt
                 (let ((target (current-buffer)))
                   (decknix--compose-get-or-create target)
@@ -2576,6 +2746,49 @@ Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
           "Sub-keymap under C-c k in compose mode.
 \\`k' interrupts the agent, \\`C-c' interrupts and submits.")
 
+        ;; -- Compose → parent buffer forwarding commands --
+        ;; These let you invoke parent agent-shell commands without
+        ;; closing the compose window first.
+
+        (defun decknix-compose--forward-to-parent (cmd)
+          "Run CMD interactively in the compose target (parent) buffer."
+          (when-let ((target (and (boundp 'decknix--compose-target-buffer)
+                                  decknix--compose-target-buffer))
+                     ((buffer-live-p target)))
+            (with-current-buffer target
+              (call-interactively cmd))))
+
+        (defun decknix-compose-jump ()
+          "Jump to next pending session (forwarded to parent)."
+          (interactive)
+          (if (fboundp 'agent-shell-attention-jump)
+              (call-interactively 'agent-shell-attention-jump)
+            (message "agent-shell-attention not loaded")))
+
+        (defun decknix-compose-workspace-toggle ()
+          "Toggle Agents workspace (forwarded to parent)."
+          (interactive)
+          (if (fboundp 'agent-shell-workspace-toggle)
+              (call-interactively 'agent-shell-workspace-toggle)
+            (message "agent-shell-workspace not loaded")))
+
+        (defun decknix-compose-session-picker ()
+          "Open session picker (forwarded to parent)."
+          (interactive)
+          (decknix-compose--forward-to-parent 'decknix-session-picker))
+
+        (defun decknix-compose-context-panel ()
+          "Open context panel (forwarded to parent)."
+          (interactive)
+          (when (fboundp 'decknix-context-panel)
+            (decknix-compose--forward-to-parent 'decknix-context-panel)))
+
+        (defun decknix-compose-tags ()
+          "Show session tags (forwarded to parent)."
+          (interactive)
+          (when (fboundp 'decknix-session-tags-show)
+            (decknix-compose--forward-to-parent 'decknix-session-tags-show)))
+
         (defvar decknix-agent-compose-mode-map
           (let ((map (make-sparse-keymap)))
             (define-key map (kbd "C-c C-c") #'decknix-agent-compose-submit)
@@ -2585,7 +2798,15 @@ Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
             (define-key map (kbd "C-c k") decknix-agent-compose-interrupt-map)
             (define-key map (kbd "M-p") #'decknix-agent-compose-previous-input)
             (define-key map (kbd "M-n") #'decknix-agent-compose-next-input)
+            (define-key map (kbd "M-P") #'decknix-agent-compose-previous-input-global)
+            (define-key map (kbd "M-N") #'decknix-agent-compose-next-input-global)
             (define-key map (kbd "M-r") #'decknix-agent-compose-search-history)
+            ;; Forward parent buffer commands
+            (define-key map (kbd "C-c j") #'decknix-compose-jump)
+            (define-key map (kbd "C-c w") #'decknix-compose-workspace-toggle)
+            (define-key map (kbd "C-c s") #'decknix-compose-session-picker)
+            (define-key map (kbd "C-c i") #'decknix-compose-context-panel)
+            (define-key map (kbd "C-c T") #'decknix-compose-tags)
             map)
           "Keymap for `decknix-agent-compose-mode'.")
 
@@ -2596,7 +2817,12 @@ Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
             "C-c C-k" "clear/cancel"
             "C-c C-q" "close"
             "C-c C-s" "toggle sticky"
-            "C-c k"   "interrupt…")
+            "C-c k"   "interrupt…"
+            "C-c j"   "jump pending"
+            "C-c w"   "workspace"
+            "C-c s"   "sessions"
+            "C-c i"   "context"
+            "C-c T"   "tags")
           (which-key-add-keymap-based-replacements decknix-agent-compose-interrupt-map
             "k"   "interrupt agent"
             "C-c" "interrupt+submit"))
@@ -2621,7 +2847,8 @@ Resets prompt history navigation state."
                 decknix--compose-history-items nil
                 decknix--compose-history-seen nil
                 decknix--compose-history-file-queue nil
-                decknix--compose-history-exhausted nil)
+                decknix--compose-history-exhausted nil
+                decknix--compose-history-local-only t)
           (if decknix--compose-sticky
               (progn
                 (erase-buffer)
@@ -2683,10 +2910,12 @@ After interrupting, you can compose your message and submit with
         (defun decknix-agent-compose-interrupt-and-submit ()
           "Interrupt any in-progress agent response, then submit the compose buffer.
 Use this when the agent is processing and you want to interject immediately
-rather than waiting for the current response to complete."
+rather than waiting for the current response to complete.
+The compose buffer is closed/cleared AFTER the submit, not before."
           (interactive)
           (let ((input (string-trim (buffer-string)))
-                (target decknix--compose-target-buffer))
+                (target decknix--compose-target-buffer)
+                (compose-buf (current-buffer)))
             (if (string-empty-p input)
                 (user-error "Empty prompt — nothing to submit")
               ;; Interrupt the agent first
@@ -2695,11 +2924,11 @@ rather than waiting for the current response to complete."
                   (when (fboundp 'agent-shell-interrupt)
                     (let ((agent-shell-confirm-interrupt nil))
                       (agent-shell-interrupt)))))
-              ;; Clear or close the compose buffer
-              (decknix--compose-finish)
-              ;; Submit after a brief delay to let the interrupt settle
+              ;; Submit after a brief delay to let the interrupt settle,
+              ;; then close/clear the compose buffer.
               (let ((tgt target)
-                    (inp input))
+                    (inp input)
+                    (cbuf compose-buf))
                 (run-at-time
                  0.3 nil
                  (eval
@@ -2709,7 +2938,11 @@ rather than waiting for the current response to complete."
                                 (process-live-p (get-buffer-process ,tgt)))
                        (with-current-buffer ,tgt
                          (goto-char (point-max))
-                         (shell-maker-submit :input ,inp))))
+                         (shell-maker-submit :input ,inp)))
+                     ;; Now finish (clear/close) the compose buffer
+                     (when (buffer-live-p ,cbuf)
+                       (with-current-buffer ,cbuf
+                         (decknix--compose-finish))))
                   t))))))
 
         (defun decknix-agent-compose-cancel ()
@@ -2774,6 +3007,16 @@ after pressing C-c."
            (t (user-error
                "No agent-shell buffer found. Start one with C-c A a"))))
 
+        (defun decknix--compose-display-action ()
+          "Return a display-buffer action for the compose window.
+Uses a bottom side-window so it never steals the workspace sidebar
+or other side-windows."
+          '((display-buffer-in-side-window)
+            (side . bottom)
+            (slot . 0)
+            (window-height . 10)
+            (preserve-size . (nil . t))))
+
         (defun decknix--compose-get-or-create (target)
           "Get the existing compose buffer for TARGET, or create a new one.
 If a compose buffer already exists and is visible, just select it."
@@ -2784,17 +3027,13 @@ If a compose buffer already exists and is visible, just select it."
                 (progn
                   (unless (get-buffer-window existing)
                     (display-buffer existing
-                                   '((display-buffer-at-bottom)
-                                     (window-height . 10)
-                                     (dedicated . t))))
+                                   (decknix--compose-display-action)))
                   (select-window (get-buffer-window existing))
                   existing)
               ;; Create new compose buffer
               (let ((compose-buf (generate-new-buffer compose-name)))
                 (display-buffer compose-buf
-                                '((display-buffer-at-bottom)
-                                  (window-height . 10)
-                                  (dedicated . t)))
+                                (decknix--compose-display-action))
                 (select-window (get-buffer-window compose-buf))
                 (with-current-buffer compose-buf
                   (text-mode)
@@ -3426,6 +3665,371 @@ Comments start with #."
         ;; == Workspace: dedicated tab-bar tab with sidebar ==
         (require 'agent-shell-workspace)
         (define-key decknix-agent-prefix-map (kbd "w") 'agent-shell-workspace-toggle)
+
+        ;; -- Buffer isolation: teach workspace that compose/batch buffers
+        ;; belong in the Agents tab.  Without this, opening compose
+        ;; triggers the redirect rule which switches away from the Agents
+        ;; tab and collapses the sidebar.
+        (advice-add 'agent-shell-workspace--agent-buffer-p :around
+          (lambda (orig-fn buffer)
+            (or (funcall orig-fn buffer)
+                (when (and buffer (buffer-live-p buffer))
+                  (with-current-buffer buffer
+                    (or (bound-and-true-p decknix-agent-compose-mode)
+                        (bound-and-true-p decknix-batch-compose-mode)
+                        (string-match-p "\\*Compose:.*\\*\\|\\*Batch" (buffer-name buffer))))))))
+
+        ;; -- Agent kind & config: the upstream functions parse buffer names
+        ;; expecting "<Kind> Agent @ <workspace>" but ours are "*Auggie: <name>*".
+        ;; Advise to extract agent kind from agent-shell--state instead.
+        (advice-add 'agent-shell-workspace--agent-kind :around
+          (lambda (orig-fn buffer)
+            (let ((result (funcall orig-fn buffer)))
+              (if (not (string= result "-"))
+                  result
+                ;; Fallback: get from agent-shell state
+                (or (when (buffer-live-p buffer)
+                      (with-current-buffer buffer
+                        (when (boundp 'agent-shell--state)
+                          (map-nested-elt agent-shell--state
+                                          '(:agent-config :buffer-name)))))
+                    "-")))))
+
+        (advice-add 'agent-shell-workspace--buffer-config :around
+          (lambda (orig-fn buffer)
+            (or (funcall orig-fn buffer)
+                ;; Fallback: get config from agent-shell state
+                (when (buffer-live-p buffer)
+                  (with-current-buffer buffer
+                    (when (and (derived-mode-p 'agent-shell-mode)
+                               (boundp 'agent-shell--state))
+                      (map-elt agent-shell--state :agent-config)))))))
+
+        ;; -- Short-name: handle *Auggie: <name>* naming convention.
+        ;; The default looks for " @ " which our buffers don't use.
+        ;; Extract the part after "*Auggie: " and show tags when available.
+        (advice-add 'agent-shell-workspace--short-name :around
+          (lambda (orig-fn buffer)
+            (let* ((name (buffer-name buffer))
+                   ;; Match *Auggie: <name>* or *<Type>: <name>*
+                   (short (if (string-match "\\*[^:]+: \\(.+\\)\\*" name)
+                              (match-string 1 name)
+                            (funcall orig-fn buffer)))
+                   ;; Append tags if we have them
+                   (tags (when (and (boundp 'decknix--sessions-data)
+                                    decknix--sessions-data
+                                    (fboundp 'decknix--session-conv-id))
+                           (with-current-buffer buffer
+                             (when-let ((cid (ignore-errors (decknix--session-conv-id)))
+                                        (entry (assoc cid decknix--sessions-data)))
+                               (cdr (assoc 'tags (cdr entry))))))))
+              (if (and tags (> (length tags) 0))
+                  (format "%s %s" short
+                          (mapconcat (lambda (tag) (concat "#" tag)) tags " "))
+                short))))
+
+        ;; -- Sidebar width cycling (inspired by treemacs) --
+        ;; W cycles: default (24) → fit-to-content → wide (48) → default.
+        (defvar decknix--sidebar-width-state 'default
+          "Current sidebar width state: default, fit, or wide.")
+
+        (defun decknix-sidebar-cycle-width ()
+          "Cycle sidebar width: default → fit-to-content → wide → default.
+Like treemacs `W' / extra-wide-toggle."
+          (interactive)
+          (let* ((win (get-buffer-window
+                       agent-shell-workspace-sidebar-buffer-name))
+                 (default-w agent-shell-workspace-sidebar-width)
+                 (wide-w (* 2 default-w)))
+            (when (and win (window-live-p win))
+              (pcase decknix--sidebar-width-state
+                ('default
+                 ;; Fit to content: measure longest line
+                 (let ((max-len 0))
+                   (with-current-buffer (window-buffer win)
+                     (save-excursion
+                       (goto-char (point-min))
+                       (while (not (eobp))
+                         (setq max-len
+                               (max max-len (- (line-end-position)
+                                               (line-beginning-position))))
+                         (forward-line 1))))
+                   (let ((fit-w (max default-w (+ max-len 2))))
+                     (window-resize win (- fit-w (window-width win)) t)))
+                 (setq decknix--sidebar-width-state 'fit)
+                 (message "Sidebar: fit-to-content"))
+                ('fit
+                 (window-resize win (- wide-w (window-width win)) t)
+                 (setq decknix--sidebar-width-state 'wide)
+                 (message "Sidebar: wide (%d)" wide-w))
+                ('wide
+                 (window-resize win (- default-w (window-width win)) t)
+                 (setq decknix--sidebar-width-state 'default)
+                 (message "Sidebar: default (%d)" default-w))))))
+
+        ;; -- Sidebar help command --
+        (defun decknix-sidebar-help ()
+          "Show sidebar keybinding help in minibuffer."
+          (interactive)
+          (message (concat
+            "RET goto  c new  k kill  r restart  R rename  d del-killed  "
+            "s switch  a/x/t tile  W width  g refresh  q quit")))
+
+        ;; -- Enhanced sidebar render: live + saved sessions + key footer --
+        ;; Override the upstream render to add saved sessions grouped by
+        ;; workspace and a vertical key-help footer below the session lists.
+        (defvar decknix--sidebar-max-saved 8
+          "Maximum number of recent saved conversations to show in sidebar.")
+
+        (defun decknix--sidebar-render-section-header (title)
+          "Insert a section header TITLE into the sidebar."
+          (insert (propertize (concat " " title) 'face 'bold) "\n"))
+
+        (defun decknix--sidebar-render-footer ()
+          "Insert vertical key-help footer at bottom of sidebar."
+          (insert "\n")
+          (let ((keys '(("RET" . "open")
+                        ("c"   . "new session")
+                        ("k"   . "kill")
+                        ("r"   . "restart")
+                        ("R"   . "rename")
+                        ("s"   . "quick-switch")
+                        ("a/x" . "tile add/rm")
+                        ("t"   . "tile toggle")
+                        ("W"   . "cycle width")
+                        ("g"   . "refresh")
+                        ("?"   . "help")
+                        ("q"   . "quit"))))
+            (dolist (kv keys)
+              (insert (propertize
+                       (format " %3s %s" (car kv) (cdr kv))
+                       'face 'font-lock-comment-face)
+                      "\n"))))
+
+        (defun decknix--sidebar-abbreviate-workspace (path)
+          "Abbreviate PATH for sidebar display."
+          (if (null path) "?"
+            (let ((abbr (abbreviate-file-name path)))
+              ;; Extract last path component for compact display
+              (if (string-match "/\\([^/]+\\)/?$" abbr)
+                  (match-string 1 abbr)
+                abbr))))
+
+        (defun decknix--sidebar-saved-sessions ()
+          "Return recent saved conversations as alist of (name workspace conv-key session).
+Grouped by workspace, limited to `decknix--sidebar-max-saved'."
+          (condition-case nil
+              (let* ((sessions (decknix--agent-session-list))
+                     (groups (when sessions
+                               (decknix--agent-session-group-by-conversation
+                                sessions)))
+                     (result nil)
+                     (count 0))
+                ;; Collect up to max-saved conversations (already sorted newest first)
+                (dolist (group groups)
+                  (when (< count decknix--sidebar-max-saved)
+                    (let* ((conv-key (car group))
+                           (latest (cadr group))
+                           (name (decknix--agent-session-display-name latest))
+                           (workspace (when conv-key
+                                        (decknix--agent-workspace-for-conv-key
+                                         conv-key)))
+                           (modified (alist-get 'modified latest)))
+                      ;; Skip if this conversation is already live
+                      (unless (seq-find
+                               (lambda (buf)
+                                 (when (buffer-live-p buf)
+                                   (with-current-buffer buf
+                                     (when (boundp 'agent-shell--state)
+                                       (let* ((fm (alist-get 'firstUserMessage latest ""))
+                                              (ck (decknix--agent-conversation-key fm)))
+                                         (equal ck (ignore-errors
+                                                     (decknix--session-conv-id))))))))
+                               (agent-shell-buffers))
+                        (push (list name workspace conv-key latest modified) result)
+                        (setq count (1+ count))))))
+                (nreverse result))
+            (error nil)))
+
+        (advice-add 'agent-shell-workspace-sidebar--render :override
+          (lambda ()
+            "Render sidebar with live sessions, saved sessions, and key footer."
+            (let* ((buffers (sort (copy-sequence
+                                   (seq-filter #'buffer-live-p (agent-shell-buffers)))
+                                  (lambda (a b)
+                                    (string< (agent-shell-workspace--short-name a)
+                                             (agent-shell-workspace--short-name b)))))
+                   (selected agent-shell-workspace-sidebar--selected-buffer)
+                   (tiled agent-shell-workspace--tiled-buffers)
+                   (inhibit-read-only t)
+                   (target-line nil)
+                   (max-name-width (when buffers
+                                     (apply #'max
+                                            (mapcar (lambda (buf)
+                                                      (length
+                                                       (agent-shell-workspace--short-name buf)))
+                                                    buffers))))
+                   (saved (decknix--sidebar-saved-sessions))
+                   (line-num 0))
+              (erase-buffer)
+
+              ;; ── Live Sessions ──
+              (decknix--sidebar-render-section-header
+               (format "Live (%d)" (length buffers)))
+              (setq line-num (1+ line-num)) ;; section header line
+              (if (null buffers)
+                  (progn
+                    (insert (propertize "  (none)" 'face 'font-lock-comment-face) "\n")
+                    (setq line-num (1+ line-num)))
+                (dolist (buf buffers)
+                  (let* ((agent-icon (agent-shell-workspace--agent-icon buf))
+                         (status (agent-shell-workspace--track-status
+                                  buf (agent-shell-workspace--buffer-status buf)))
+                         (status-face (agent-shell-workspace--status-face status))
+                         (short-name (agent-shell-workspace--short-name buf))
+                         (tile-indicator (if (memq buf tiled) " ▫" ""))
+                         (display-face (if (string= status "finished") "cyan" status-face))
+                         (logo-box (agent-shell-workspace--make-logo-box
+                                    agent-icon display-face))
+                         (name-box (agent-shell-workspace--make-name-box
+                                    short-name display-face max-name-width))
+                         (name-box-styled
+                          (if (string= status "waiting")
+                              (propertize name-box 'face '(:background "#3a1515"))
+                            name-box))
+                         (selection-indicator (if (eq buf selected) ">" " "))
+                         (line (concat selection-indicator " "
+                                      logo-box name-box-styled tile-indicator)))
+                    (setq line-num (1+ line-num))
+                    (when (eq buf selected)
+                      (setq target-line line-num))
+                    (setq line (propertize line
+                                          'agent-shell-workspace-buffer buf))
+                    (insert line "\n"))))
+
+              ;; ── Saved Sessions (grouped by workspace) ──
+              (when saved
+                (insert "\n")
+                (setq line-num (1+ line-num)) ;; blank line
+                (decknix--sidebar-render-section-header
+                 (format "Recent (%d)" (length saved)))
+                (setq line-num (1+ line-num)) ;; section header
+                ;; Group by workspace for display
+                (let ((by-ws (make-hash-table :test 'equal)))
+                  (dolist (entry saved)
+                    (let* ((ws (or (nth 1 entry) "unknown"))
+                           (existing (gethash ws by-ws)))
+                      (puthash ws (append existing (list entry)) by-ws)))
+                  ;; Render each workspace group
+                  (let ((ws-keys (sort (hash-table-keys by-ws) #'string<)))
+                    (dolist (ws ws-keys)
+                      ;; Workspace sub-header
+                      (let ((ws-label (decknix--sidebar-abbreviate-workspace ws)))
+                        (insert (propertize (format "  %s" ws-label)
+                                           'face 'font-lock-type-face)
+                                "\n")
+                        (setq line-num (1+ line-num)))
+                      ;; Sessions under this workspace
+                      (dolist (entry (gethash ws by-ws))
+                        (let* ((name (nth 0 entry))
+                               (conv-key (nth 2 entry))
+                               (session (nth 3 entry))
+                               (modified (nth 4 entry))
+                               (time-str (if modified
+                                             (decknix--agent-session-time-ago modified)
+                                           ""))
+                               (display (format "   %-14s %s"
+                                                (truncate-string-to-width
+                                                 (or name "?") 14 nil nil "…")
+                                                (propertize time-str
+                                                            'face 'font-lock-comment-face))))
+                          (insert (propertize display
+                                             'decknix-sidebar-saved-session session
+                                             'decknix-sidebar-saved-conv-key conv-key
+                                             'decknix-sidebar-saved-workspace (nth 1 entry))
+                                  "\n")
+                          (setq line-num (1+ line-num))))))))
+
+              ;; ── Key help footer ──
+              (decknix--sidebar-render-footer)
+
+              ;; Restore cursor
+              (goto-char (point-min))
+              (when target-line
+                (forward-line (1- target-line))))))
+
+        ;; -- Sidebar goto: handle both live and saved sessions --
+        (advice-add 'agent-shell-workspace-sidebar-goto :around
+          (lambda (orig-fn)
+            "Open live buffer at point, or resume saved session."
+            (let ((saved (get-text-property
+                          (line-beginning-position)
+                          'decknix-sidebar-saved-session)))
+              (if saved
+                  ;; Resume saved session
+                  (let* ((conv-key (get-text-property
+                                    (line-beginning-position)
+                                    'decknix-sidebar-saved-conv-key))
+                         (workspace (get-text-property
+                                     (line-beginning-position)
+                                     'decknix-sidebar-saved-workspace))
+                         (session-id (alist-get 'sessionId saved))
+                         (name (decknix--agent-session-display-name saved)))
+                    (when session-id
+                      ;; If no workspace, prompt
+                      (unless workspace
+                        (setq workspace
+                              (read-directory-name "Workspace: " nil nil t)))
+                      (let ((conv-key (decknix--agent-conversation-key
+                                       (alist-get 'firstUserMessage
+                                                  saved ""))))
+                        (decknix--agent-session-resume
+                         session-id
+                         decknix-agent-session-history-count
+                         name workspace conv-key))))
+                ;; Default: live buffer
+                (funcall orig-fn)))))
+
+        ;; -- Summary header-line --
+        (add-hook 'agent-shell-workspace-sidebar-mode-hook
+          (lambda ()
+            (setq header-line-format
+                  '(:eval
+                    (let* ((live (length (seq-filter #'buffer-live-p
+                                                     (agent-shell-buffers))))
+                           (saved-count (condition-case nil
+                                            (length (decknix--agent-session-group-by-conversation
+                                                     (decknix--agent-session-list)))
+                                          (error 0))))
+                      (propertize
+                       (format " ● %d live  ◦ %d saved" live saved-count)
+                       'face 'font-lock-keyword-face))))))
+
+        ;; -- Bind keys in sidebar mode --
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "?") #'decknix-sidebar-help)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "W") #'decknix-sidebar-cycle-width)
+
+        ;; which-key labels for sidebar mode
+        (with-eval-after-load 'which-key
+          (which-key-add-keymap-based-replacements agent-shell-workspace-sidebar-mode-map
+            "c" "new agent"
+            "k" "kill"
+            "r" "restart"
+            "R" "rename"
+            "d" "delete killed"
+            "s" "quick-switch"
+            "a" "tile add"
+            "x" "tile remove"
+            "t" "tile toggle"
+            "g" "refresh"
+            "M" "cycle mode"
+            "m" "set mode"
+            "q" "quit"
+            "?" "help"
+            "W" "cycle width"
+            "h" "help"))
       ''
       + optionalString cfg.context.enable ''
 
@@ -3686,13 +4290,10 @@ Preserves pinned items and previously fetched metadata."
               nil)))
 
         (defun decknix--context-update-header ()
-          "Update the header-line-format for the current agent-shell buffer."
+          "Update the header-line-format for the current agent-shell buffer.
+Delegates to the unified header which incorporates context data."
           (when (derived-mode-p 'agent-shell-mode)
-            (let ((ctx (decknix--context-header-string)))
-              (setq-local header-line-format
-                          (when ctx
-                            (list (propertize " " 'display '(space :width 0.5))
-                                  ctx))))))
+            (decknix--header-update)))
       ''
       + optionalString cfg.context.enable ''
 
@@ -4047,6 +4648,170 @@ Preserves pinned items and previously fetched metadata."
       ''
       + ''
 
+        ;; == Unified header-line: status + tags + workspace + context ==
+        ;; Provides at-a-glance session identity and agent state in every
+        ;; agent-shell buffer.  Merges with context panel data when available.
+        ;; Refreshed every 2 seconds via a buffer-local timer to track
+        ;; status transitions (working → ready → finished).
+
+        (defvar-local decknix--header-timer nil
+          "Buffer-local timer for refreshing the header-line.")
+
+        (defvar-local decknix--header-prev-status nil
+          "Previous raw status string, used to detect transitions.")
+
+        (defun decknix--header-detect-status ()
+          "Return the current agent status as a string.
+Uses agent-shell-workspace's detection when available (richer states),
+otherwise falls back to shell-maker--busy."
+          (cond
+           ;; Rich detection from agent-shell-workspace
+           ((fboundp 'agent-shell-workspace--buffer-status)
+            (agent-shell-workspace--buffer-status (current-buffer)))
+           ;; Fallback: shell-maker busy flag
+           ((bound-and-true-p shell-maker--busy) "working")
+           ;; Check if process is alive
+           ((and (get-buffer-process (current-buffer))
+                 (process-live-p (get-buffer-process (current-buffer))))
+            "ready")
+           ((not (get-buffer-process (current-buffer))) "killed")
+           (t "unknown")))
+
+        (defun decknix--header-status-icon (status)
+          "Return a status icon string for STATUS."
+          (pcase status
+            ("ready"        "●")
+            ("finished"     "✔")
+            ("working"      "◐")
+            ("waiting"      "◉")
+            ("initializing" "○")
+            ("killed"       "✕")
+            (_              "?")))
+
+        (defun decknix--header-status-face (status)
+          "Return a face for STATUS."
+          (pcase status
+            ("ready"        'success)
+            ("finished"     '(:foreground "cyan" :weight bold))
+            ("working"      'warning)
+            ("waiting"      '(:foreground "red" :weight bold))
+            ("initializing" 'font-lock-comment-face)
+            ("killed"       'error)
+            (_              'shadow)))
+
+        (defun decknix--header-tags ()
+          "Return the tag list for the current buffer's conversation, or nil."
+          (when (and (boundp 'decknix--agent-auggie-session-id)
+                     decknix--agent-auggie-session-id)
+            (decknix--agent-tags-for-session
+             decknix--agent-auggie-session-id)))
+
+        (defun decknix--header-workspace-short ()
+          "Return an abbreviated workspace path for the header-line."
+          (when (and (boundp 'decknix--agent-session-workspace)
+                     decknix--agent-session-workspace
+                     (not (string-empty-p decknix--agent-session-workspace)))
+            (abbreviate-file-name decknix--agent-session-workspace)))
+
+        (defun decknix--header-upstream ()
+          "Return agent-shell's text header string.
+This embeds the upstream header (agent name, model, mode, workspace,
+session ID, context/usage indicator, busy animation) so we inherit
+any improvements to agent-shell--make-header automatically."
+          (ignore-errors
+            (when (fboundp 'agent-shell--make-header)
+              (let ((agent-shell-header-style 'text))
+                (agent-shell--make-header (agent-shell--state))))))
+
+        (defun decknix--header-build ()
+          "Build the unified header-line string for the current agent-shell buffer.
+Embeds agent-shell's full header (agent name, model, mode, workspace,
+busy animation) and appends decknix extras (status icon, tags, context panel)."
+          (let* ((raw-status (decknix--header-detect-status))
+                 ;; Track transitions: working → ready = finished
+                 (status (cond
+                          ((and (member decknix--header-prev-status
+                                        '("working" "waiting"))
+                                (string= raw-status "ready"))
+                           "finished")
+                          (t raw-status)))
+                 (icon (decknix--header-status-icon status))
+                 (face (decknix--header-status-face status))
+                 (upstream (decknix--header-upstream))
+                 (tags (decknix--header-tags))
+                 (parts nil))
+            ;; Clear "finished" once user returns to the buffer
+            (when (and (string= status "finished")
+                       (eq (current-buffer) (window-buffer (selected-window))))
+              (setq status raw-status))
+            ;; Update previous status for next cycle
+            (when (member raw-status '("working" "waiting"))
+              (setq decknix--header-prev-status raw-status))
+            (when (not (member raw-status '("working" "waiting")))
+              (setq decknix--header-prev-status nil))
+            ;; 1. Status icon + label
+            (push (propertize (format " %s %s" icon status)
+                              'face face)
+                  parts)
+            ;; 2. Tags (stable width — before animated upstream)
+            (when tags
+              (push (propertize
+                     (mapconcat (lambda (tg) (format "#%s" tg)) tags " ")
+                     'face 'font-lock-type-face)
+                    parts))
+            ;; 3. Context panel items (stable — before animated upstream)
+            (when (fboundp 'decknix--context-header-string)
+              (let ((ctx (decknix--context-header-string)))
+                (when ctx (push ctx parts))))
+            ;; 4. Agent-shell upstream header (agent, model, mode,
+            ;;    workspace, session-id, usage, busy animation)
+            ;; Placed last so the animated busy indicator expands/contracts
+            ;; at the right edge without shifting stable elements.
+            (when (and upstream (not (string-empty-p upstream)))
+              (push (string-trim upstream) parts))
+            ;; Join with separator
+            (mapconcat #'identity (nreverse parts) "  │  ")))
+
+        (defun decknix--header-update ()
+          "Update the header-line-format for the current agent-shell buffer."
+          (when (derived-mode-p 'agent-shell-mode)
+            (setq-local header-line-format
+                        (list (decknix--header-build)))))
+
+        (defun decknix--header-start-timer ()
+          "Start a buffer-local 2-second timer to refresh the header-line."
+          (when decknix--header-timer
+            (cancel-timer decknix--header-timer))
+          (let ((buf (current-buffer)))
+            (setq decknix--header-timer
+                  (run-with-timer
+                   1 2
+                   (eval
+                    `(lambda ()
+                       (when (buffer-live-p ,buf)
+                         (with-current-buffer ,buf
+                           (decknix--header-update))))
+                    t)))))
+
+        (defun decknix--header-stop-timer ()
+          "Stop the header-line refresh timer."
+          (when decknix--header-timer
+            (cancel-timer decknix--header-timer)
+            (setq decknix--header-timer nil)))
+
+        ;; Prevent agent-shell's built-in header from overwriting ours.
+        ;; agent-shell--update-header-and-mode-line is called from many
+        ;; places (mode changes, session updates, busy indicator, etc.)
+        ;; and sets header-line-format to its own value.  We override it
+        ;; to use our unified header instead, which already incorporates
+        ;; status, tags, workspace, and context panel data.
+        (advice-add 'agent-shell--update-header-and-mode-line :override
+          (lambda (&rest _args)
+            "Use the unified decknix header instead of agent-shell's default."
+            (when (derived-mode-p 'agent-shell-mode)
+              (decknix--header-update)
+              (force-mode-line-update))))
+
         ;; Guard all submit paths against a dead/missing process or config.
         ;; shell-maker-submit is the single entry point for sending input
         ;; (used by RET in the shell buffer, compose C-c C-c, and programmatic calls).
@@ -4170,7 +4935,11 @@ Priority order:
                       (define-key map (kbd "l") 'decknix-agent-tag-show)      ; List this session's tags
                       (define-key map (kbd "a") 'decknix-agent-tag-add)       ; Add tag (create or select)
                       (define-key map (kbd "r") 'decknix-agent-tag-remove)    ; Remove tag
-                      (local-set-key (kbd "C-c T") map))))
+                      (local-set-key (kbd "C-c T") map))
+                    ;; Unified header-line: status + tags + workspace + context
+                    (decknix--header-update)
+                    (decknix--header-start-timer)
+                    (add-hook 'kill-buffer-hook #'decknix--header-stop-timer nil t)))
       '';
     };
   };
