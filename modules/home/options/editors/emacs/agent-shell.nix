@@ -4240,7 +4240,7 @@ Press K to toggle, ? to open full transient menu with live state."
                      ("a/x" . "tile +/-")
                      ("M"   . "display mode")
                      ("W"   . "width"))
-                   (when (boundp 'decknix--hub-org-filter)
+                   (when (fboundp 'decknix--hub-org-filter-dispatch)
                      '(("O" . "org filter")))))
                 ;; Trailing hint
                 (insert (propertize " K " 'face 'font-lock-keyword-face)
@@ -4692,38 +4692,18 @@ Re-reads only the changed file and refreshes the sidebar."
         ;; Bind O to cycle org filter in sidebar
         (with-eval-after-load 'agent-shell-workspace
           (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "O") #'decknix--hub-cycle-org-filter))
+            (kbd "O") #'decknix--hub-org-filter-dispatch))
 
         ;; Add Hub group to the sidebar transient
-        (transient-define-suffix decknix-sidebar-transient--org-filter ()
-          :key "O"
-          :description
-          (lambda ()
-            (if (decknix--hub-has-data-p)
-                (format "Org filter    %s"
-                        (propertize
-                         (format "[%s]" (or decknix--hub-org-filter "all"))
-                         'face (if decknix--hub-org-filter
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face)))
-              (format "Org filter    %s"
-                      (propertize "[not running]"
-                                  'face 'font-lock-comment-face))))
-          (interactive)
-          (call-interactively #'decknix--hub-cycle-org-filter))
+        ;; -- Hub: org filter (multi-select transient) --
+        ;; Tracks which GitHub orgs are visible using a hash-table.
+        ;; nil = show all (default). When the table has entries,
+        ;; only orgs with t value are shown. O opens a transient
+        ;; with per-org toggles, show all / show none.
 
-        (transient-append-suffix 'decknix-sidebar-transient "Toggles"
-          ["Hub"
-           (decknix-sidebar-transient--org-filter)])
-
-        ;; -- Hub: org/owner filter --
-        ;; Allows toggling visibility per GitHub owner (org or user).
-        ;; All orgs are shown by default; the user cycles through
-        ;; the filter with the `O` key in the sidebar.
-
-        (defvar decknix--hub-org-filter nil
-          "Current org filter for hub items.
-nil = show all, a string = show only that owner/org.")
+        (defvar decknix--hub-org-visibility nil
+          "Hash-table tracking org visibility (org-name → boolean).
+nil means show all orgs (no filter active).")
 
         (defun decknix--hub-discover-orgs ()
           "Return a sorted list of unique GitHub owners across reviews and WIP."
@@ -4744,34 +4724,142 @@ nil = show all, a string = show only that owner/org.")
                     (puthash owner t orgs)))))
             (sort (hash-table-keys orgs) #'string<)))
 
-        (defun decknix--hub-cycle-org-filter ()
-          "Cycle through org filters: all → org1 → org2 → … → all.
-When no hub data is available, shows setup instructions instead."
+        (defun decknix--hub-org-visible-p (org)
+          "Return non-nil if ORG should be shown.
+When no filter is active (table is nil), all orgs are visible."
+          (or (null decknix--hub-org-visibility)
+              (gethash org decknix--hub-org-visibility)))
+
+        (defun decknix--hub-toggle-org (org)
+          "Toggle visibility of ORG and refresh the sidebar."
+          (unless decknix--hub-org-visibility
+            ;; First toggle: initialise all orgs as visible
+            (setq decknix--hub-org-visibility (make-hash-table :test 'equal))
+            (dolist (o (decknix--hub-discover-orgs))
+              (puthash o t decknix--hub-org-visibility)))
+          (puthash org (not (gethash org decknix--hub-org-visibility))
+                   decknix--hub-org-visibility)
+          ;; If everything is now visible again, clear the table
+          (when (cl-every (lambda (o) (gethash o decknix--hub-org-visibility))
+                          (decknix--hub-discover-orgs))
+            (setq decknix--hub-org-visibility nil))
+          (when (get-buffer "*agent-shell-sidebar*")
+            (agent-shell-workspace-sidebar-refresh)))
+
+        (defun decknix--hub-org-filter-show-all ()
+          "Show all orgs (clear filter)."
           (interactive)
-          (if (not (decknix--hub-has-data-p))
-              (message (concat
-                "Hub: no data. Enable the daemon in your decknix-config:\n"
-                "  decknix.services.hub.enable = true;\n"
-                "Then: decknix switch"))
+          (setq decknix--hub-org-visibility nil)
+          (when (get-buffer "*agent-shell-sidebar*")
+            (agent-shell-workspace-sidebar-refresh))
+          (message "Hub: showing all orgs"))
+
+        (defun decknix--hub-org-filter-show-none ()
+          "Hide all orgs."
+          (interactive)
+          (setq decknix--hub-org-visibility (make-hash-table :test 'equal))
+          (dolist (org (decknix--hub-discover-orgs))
+            (puthash org nil decknix--hub-org-visibility))
+          (when (get-buffer "*agent-shell-sidebar*")
+            (agent-shell-workspace-sidebar-refresh))
+          (message "Hub: hiding all orgs"))
+
+        (defun decknix--hub-org-filter-summary ()
+          "Return a short string describing the current org filter state."
+          (if (null decknix--hub-org-visibility)
+              "all"
             (let* ((orgs (decknix--hub-discover-orgs))
-                   (current decknix--hub-org-filter)
-                   (next (cond
-                          ((null orgs) nil)
-                          ((null current) (car orgs))
-                          (t (let ((pos (cl-position current orgs :test #'string=)))
-                               (if (and pos (< (1+ pos) (length orgs)))
-                                   (nth (1+ pos) orgs)
-                                 nil))))))
-              (setq decknix--hub-org-filter next)
-              (when (get-buffer "*agent-shell-sidebar*")
-                (agent-shell-workspace-sidebar-refresh))
-              (message "Hub filter: %s" (or next "all")))))
+                   (total (length orgs))
+                   (visible (cl-count-if
+                             (lambda (o) (gethash o decknix--hub-org-visibility))
+                             orgs)))
+              (cond
+               ((= visible total) "all")
+               ((= visible 0) "none")
+               (t (format "%d/%d" visible total))))))
+
+        ;; -- Hub: per-org toggle command factory --
+        (defun decknix--hub-make-org-toggle-cmd (org)
+          "Create and return a named command symbol for toggling ORG visibility."
+          (let ((sym (intern (format "decknix--hub-toggle--%s"
+                                     (replace-regexp-in-string
+                                      "[^a-zA-Z0-9]" "-" org)))))
+            (fset sym (eval `(lambda ()
+                               ,(format "Toggle visibility of %s." org)
+                               (interactive)
+                               (decknix--hub-toggle-org ,org)) t))
+            sym))
+
+        ;; -- Hub: org filter transient --
+        (defun decknix--hub-org-filter-children (_)
+          "Generate transient children: one toggle per discovered org + show all/none."
+          (let ((orgs (decknix--hub-discover-orgs)))
+            (append
+             (cl-loop for org in orgs
+                      for idx from 1
+                      collect
+                      (let ((cmd (decknix--hub-make-org-toggle-cmd org))
+                            (vis (decknix--hub-org-visible-p org)))
+                        (transient-parse-suffix
+                         transient--prefix
+                         (list (number-to-string idx)
+                               (format "%s %s"
+                                       (if vis
+                                           (propertize "✓" 'face 'success)
+                                         (propertize "✗" 'face 'error))
+                                       org)
+                               cmd
+                               :transient t))))
+             (list
+              (transient-parse-suffix
+               transient--prefix
+               '("a" "Show all" decknix--hub-org-filter-show-all :transient t))
+              (transient-parse-suffix
+               transient--prefix
+               '("n" "Show none" decknix--hub-org-filter-show-none :transient t))))))
+
+        (transient-define-prefix decknix-hub-org-filter-transient ()
+          "Toggle visibility of GitHub orgs in the hub sidebar."
+          [:class transient-column
+           :setup-children decknix--hub-org-filter-children])
+
+        (defun decknix--hub-org-filter-dispatch ()
+          "Open the org filter transient, or show setup help if no data."
+          (interactive)
+          (if (decknix--hub-has-data-p)
+              (call-interactively #'decknix-hub-org-filter-transient)
+            (message (concat
+              "Hub: no data. Enable the daemon in your decknix-config:\n"
+              "  decknix.services.hub.enable = true;\n"
+              "Then: decknix switch"))))
+
+        ;; -- Hub: org filter in main transient --
+        (transient-define-suffix decknix-sidebar-transient--org-filter ()
+          :key "O"
+          :description
+          (lambda ()
+            (if (decknix--hub-has-data-p)
+                (let ((summary (decknix--hub-org-filter-summary)))
+                  (format "Org filter    %s"
+                          (propertize
+                           (format "[%s]" summary)
+                           'face (if (string= summary "all")
+                                     'font-lock-comment-face
+                                   'font-lock-constant-face))))
+              (format "Org filter    %s"
+                      (propertize "[not running]"
+                                  'face 'font-lock-comment-face))))
+          (interactive)
+          (call-interactively #'decknix--hub-org-filter-dispatch))
+
+        (transient-append-suffix 'decknix-sidebar-transient "Toggles"
+          ["Hub"
+           (decknix-sidebar-transient--org-filter)])
 
         (defun decknix--hub-item-visible-p (repo-full)
-          "Return non-nil if REPO-FULL (owner/repo) passes the current org filter."
-          (or (null decknix--hub-org-filter)
-              (string= decknix--hub-org-filter
-                       (car (split-string (or repo-full "") "/")))))
+          "Return non-nil if REPO-FULL (owner/repo) passes the org visibility filter."
+          (decknix--hub-org-visible-p
+           (car (split-string (or repo-full "") "/"))))
 
         ;; -- Hub: age formatting --
         (defun decknix--hub-format-age (iso-time)
@@ -4833,7 +4921,7 @@ Returns updated LINE-NUM."
         ;; -- Hub: sidebar render helpers --
         (defun decknix--hub-render-requests (line-num)
           "Render the Requests (PR reviews) section. Returns updated LINE-NUM.
-Respects `decknix--hub-org-filter' to show only items from the selected org."
+Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
           (let* ((data decknix--hub-reviews)
                  (all-items (when data (alist-get 'items data)))
                  (items (seq-filter
@@ -4889,7 +4977,7 @@ Respects `decknix--hub-org-filter' to show only items from the selected org."
 
         (defun decknix--hub-render-wip (line-num)
           "Render the WIP (my open PRs) section. Returns updated LINE-NUM.
-Respects `decknix--hub-org-filter'. Shows time since last update."
+Respects `decknix--hub-org-visibility'. Shows time since last update."
           (let* ((data decknix--hub-wip)
                  (all-repos (when data (alist-get 'repos data)))
                  ;; Filter repos by org
