@@ -12,6 +12,7 @@ in
     ../cli/default.nix
     ../common/unfree.nix
     ./aerospace.nix
+    ./hub.nix
   ];
 
   nixpkgs.overlays = [
@@ -20,6 +21,7 @@ in
     # Safe fallback:
     (final: prev: {
       decknix-cli = prev.callPackage ../../pkgs/decknix-cli/default.nix { };
+      decknix-hub = prev.callPackage ../../pkgs/decknix-hub/default.nix { };
       nix-open = prev.callPackage ../../pkgs/nix-open/default.nix { };
     })
   ];
