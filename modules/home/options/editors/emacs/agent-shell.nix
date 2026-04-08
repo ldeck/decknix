@@ -1214,11 +1214,15 @@ CONV-GROUP is (CONV-KEY LATEST-SESSION ALL-SESSIONS)."
                          ;; agent-shell-buffers (which follows buffer-list order).
                          (cur (current-buffer))
                          (others (remq cur bufs))
-                         (ht (make-hash-table :test 'equal)))
+                         (ht (make-hash-table :test 'equal))
+                         (ordered nil))
                     (dolist (buf others)
-                      (puthash (decknix--agent-session-live-label buf) buf ht))
+                      (let ((key (decknix--agent-session-live-label buf)))
+                        (puthash key buf ht)
+                        (push key ordered)))
                     (setq decknix--session-picker-live-map ht)
-                    (hash-table-keys ht)))
+                    ;; Preserve MRU buffer-list order (push reverses, nreverse restores)
+                    (nreverse ordered)))
                 :action
                 (lambda (cand)
                   (when cand
