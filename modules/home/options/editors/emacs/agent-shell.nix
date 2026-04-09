@@ -4635,7 +4635,7 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
           (let ((sym (make-symbol "decknix--nav-item")))
             (fset sym (eval `(lambda ()
                                (interactive)
-                               (funcall ,action-fn ',item-data)) t))
+                               (funcall ',action-fn ',item-data)) t))
             sym))
 
         ;; -- Item action menus --
