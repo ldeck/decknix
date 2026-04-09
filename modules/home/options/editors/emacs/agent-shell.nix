@@ -1572,10 +1572,10 @@ Set this in your decknix-config's extraConfig or default.el.")
         (defun decknix--agent-pr-detect-workspace (owner repo)
           "Find the best workspace for a PR from OWNER/REPO.
 Search order:
-  1. Saved workspaces in agent-sessions.json whose path ends in REPO
-  2. Known workspace roots (`decknix-agent-workspace-roots') containing REPO
-  3. Current project root
-  4. `default-directory'"
+  1. Saved workspaces whose path ends in REPO (exact match)
+  2. Saved workspaces that contain a REPO subdirectory on disk
+  3. Known workspace roots (`decknix-agent-workspace-roots') containing REPO
+  4. nil (caller should prompt the user)"
           (or
            ;; 1. Check saved workspaces for a path ending in /REPO/
            (let ((best nil))
@@ -1596,17 +1596,36 @@ Search order:
                     convs))
                (error nil))
              best)
-           ;; 2. Check known workspace roots for REPO subdir
+           ;; 2. Check saved workspaces for a REPO subdirectory on disk.
+           ;; Handles repos not checked out as their own workspace but under
+           ;; a parent org directory (e.g., ~/Code/nurturecloud/ contains
+           ;; nct-intelligence-beholder/).  Returns the PARENT workspace,
+           ;; not the repo subdir — matching the convention where tags
+           ;; identify the specific repo within the org workspace.
+           (let ((best nil))
+             (condition-case nil
+                 (let* ((store (decknix--agent-tags-read))
+                        (convs (decknix--agent-tags-conversations store))
+                        (seen (make-hash-table :test 'equal)))
+                   (maphash
+                    (lambda (_key entry)
+                      (when (hash-table-p entry)
+                        (let ((ws (gethash "workspace" entry)))
+                          (when (and ws (stringp ws))
+                            (let ((expanded (expand-file-name ws)))
+                              (unless (gethash expanded seen)
+                                (puthash expanded t seen)
+                                (let ((candidate (expand-file-name repo expanded)))
+                                  (when (file-directory-p candidate)
+                                    (setq best (file-name-as-directory expanded))))))))))
+                    convs))
+               (error nil))
+             best)
+           ;; 3. Check known workspace roots for REPO subdir
            (cl-loop for root in decknix-agent-workspace-roots
                     for candidate = (expand-file-name repo root)
                     when (file-directory-p candidate)
-                    return (file-name-as-directory candidate))
-           ;; 3. Current project root
-           (when (fboundp 'project-root)
-             (when-let ((proj (project-current)))
-               (project-root proj)))
-           ;; 4. Fallback
-           default-directory))
+                    return (file-name-as-directory candidate))))
 
         (defun decknix--agent-detect-branch (dir)
           "Detect the current git branch in DIR, or nil."
@@ -4805,7 +4824,8 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
 
         (defun decknix--nav-hub-start-review (url)
           "Start a PR review session for URL without prompting.
-Auto-detects workspace and generates session name from the URL."
+Auto-detects workspace and generates session name from the URL.
+Prompts for workspace if auto-detection fails."
           (let ((parsed (decknix--agent-parse-pr-url url)))
             (if (not parsed)
                 (message "Not a valid PR URL: %s" url)
@@ -4814,9 +4834,12 @@ Auto-detects workspace and generates session name from the URL."
                      (number (alist-get 'number parsed))
                      (name (format "pr-%s-%s" repo number))
                      (tags (list "review" repo (format "#%s" number)))
-                     (workspace (or (and (fboundp 'decknix--agent-pr-detect-workspace)
-                                         (decknix--agent-pr-detect-workspace owner repo))
-                                    default-directory))
+                     (detected (when (fboundp 'decknix--agent-pr-detect-workspace)
+                                 (decknix--agent-pr-detect-workspace owner repo)))
+                     (workspace (or detected
+                                    (read-directory-name
+                                     (format "Workspace for %s/%s: " owner repo)
+                                     nil nil t)))
                      (command (format "/review-service-pr %s" url)))
                 (decknix--agent-quickaction-start name tags workspace command)
                 (message "Starting review: %s/%s#%s" owner repo number)))))
