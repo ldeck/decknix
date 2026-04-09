@@ -3994,6 +3994,113 @@ Comments start with #."
         (require 'agent-shell-workspace)
         (define-key decknix-agent-prefix-map (kbd "w") 'agent-shell-workspace-toggle)
 
+        ;; -- xwidget-webkit URL opener --
+        ;; Opens URLs in xwidget-webkit (in-Emacs browser) when available,
+        ;; falling back to the system browser.  Used for hub items (PRs, etc.).
+
+        (defvar decknix--use-xwidget-webkit t
+          "When non-nil, open hub URLs in xwidget-webkit instead of external browser.
+Set to nil to always use the system browser.")
+
+        (defun decknix--open-url (url)
+          "Open URL in xwidget-webkit or external browser based on preference."
+          (if (and decknix--use-xwidget-webkit
+                   (fboundp 'xwidget-webkit-browse-url))
+              (let ((buf-name (format "*WebKit: %s*"
+                                      (or (and (string-match "/pull/\\([0-9]+\\)" url)
+                                               (match-string 0 url))
+                                          (truncate-string-to-width url 40)))))
+                ;; Open in the main area, not the sidebar
+                (xwidget-webkit-browse-url url t)
+                ;; If in agents tab, focus the webkit buffer in the main window
+                (when (and (fboundp 'agent-shell-workspace--in-agents-tab-p)
+                           (agent-shell-workspace--in-agents-tab-p))
+                  (let ((target nil))
+                    (walk-windows
+                     (lambda (win)
+                       (when (and (not target)
+                                  (not (window-parameter win 'window-side)))
+                         (setq target win)))
+                     nil nil)
+                    (when target
+                      (select-window target)))))
+            (browse-url url)))
+
+        ;; -- xwidget-webkit: enhanced keybindings --
+        ;; The built-in xwidget-webkit-mode has C-s for isearch, but some
+        ;; packages (e.g., consult) may override it globally.  We also add
+        ;; quick-navigation keys for a more vim-like browsing experience.
+        (with-eval-after-load 'xwidget
+          ;; Ensure C-s works for in-page search (protect against global overrides)
+          (define-key xwidget-webkit-mode-map (kbd "C-s") #'xwidget-webkit-isearch-mode)
+          (define-key xwidget-webkit-mode-map (kbd "C-r") #'xwidget-webkit-isearch-mode)
+
+          ;; Quick navigation
+          (define-key xwidget-webkit-mode-map (kbd "q") #'quit-window)
+          (define-key xwidget-webkit-mode-map (kbd "/") #'xwidget-webkit-isearch-mode)
+          (define-key xwidget-webkit-mode-map (kbd "j") #'xwidget-webkit-scroll-up-line)
+          (define-key xwidget-webkit-mode-map (kbd "k") #'xwidget-webkit-scroll-down-line)
+          (define-key xwidget-webkit-mode-map (kbd "d") #'xwidget-webkit-scroll-up)
+          (define-key xwidget-webkit-mode-map (kbd "u") #'xwidget-webkit-scroll-down)
+          (define-key xwidget-webkit-mode-map (kbd "G") #'xwidget-webkit-scroll-bottom)
+          (define-key xwidget-webkit-mode-map (kbd "0")
+            (lambda () (interactive)
+              (xwidget-webkit-scroll-top (xwidget-webkit-current-session))))
+          (define-key xwidget-webkit-mode-map (kbd "y") #'xwidget-webkit-copy-selection-as-kill)
+          (define-key xwidget-webkit-mode-map (kbd "o") #'xwidget-webkit-browse-url)
+          (define-key xwidget-webkit-mode-map (kbd "O")
+            (lambda () (interactive)
+              "Open current URL in system browser."
+              (let ((url (xwidget-webkit-uri (xwidget-webkit-current-session))))
+                (browse-url url)
+                (message "Opened in browser: %s" url))))
+          (define-key xwidget-webkit-mode-map (kbd "Y")
+            (lambda () (interactive)
+              "Copy current URL to kill-ring."
+              (let ((url (xwidget-webkit-uri (xwidget-webkit-current-session))))
+                (kill-new url)
+                (message "Copied: %s" url))))
+
+          ;; Header-line with navigation hints
+          (add-hook 'xwidget-webkit-mode-hook
+            (lambda ()
+              (setq header-line-format
+                    '(:eval
+                      (let ((url (condition-case nil
+                                     (xwidget-webkit-uri
+                                      (xwidget-webkit-current-session))
+                                   (error ""))))
+                        (concat
+                         (propertize " WebKit " 'face '(:background "#3d5a80" :foreground "white"))
+                         " "
+                         (propertize
+                          (if (> (length url) 60)
+                              (concat (substring url 0 57) "…")
+                            url)
+                          'face 'font-lock-comment-face)
+                         "  "
+                         (propertize "j/k" 'face 'font-lock-keyword-face) " scroll  "
+                         (propertize "/" 'face 'font-lock-keyword-face) " search  "
+                         (propertize "b/f" 'face 'font-lock-keyword-face) " back/fwd  "
+                         (propertize "O" 'face 'font-lock-keyword-face) " browser  "
+                         (propertize "Y" 'face 'font-lock-keyword-face) " copy-url  "
+                         (propertize "q" 'face 'font-lock-keyword-face) " quit")))))))
+
+        ;; Don't auto-create a session when opening the Agents tab for the
+        ;; first time.  The upstream --setup-layout calls (agent-shell) when
+        ;; no live sessions exist; override to just show the current buffer
+        ;; (welcome screen, *scratch*, etc.) so the user can decide via
+        ;; sidebar commands (c, s, p, etc.).
+        (advice-add 'agent-shell-workspace--setup-layout :override
+          (lambda ()
+            "Set up Agents tab without auto-creating a session."
+            (delete-other-windows)
+            (let ((agent-buffers (seq-filter #'buffer-live-p (agent-shell-buffers))))
+              (when agent-buffers
+                (switch-to-buffer (car agent-buffers))))
+            ;; If no agent buffers, just keep whatever buffer is current
+            (agent-shell-workspace-sidebar-open)))
+
         ;; Focus the sidebar when entering the Agents tab via C-c w.
         ;; The upstream toggle opens/shows the sidebar but leaves focus
         ;; in the main area; we want the sidebar to receive focus so
@@ -4508,9 +4615,9 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                           (line-beginning-position)
                           'decknix-sidebar-saved-session)))
               (cond
-               ;; Hub item: open URL in browser
+               ;; Hub item: open in xwidget-webkit or browser
                (hub-url
-                (browse-url hub-url))
+                (decknix--open-url hub-url))
                ;; Previous session: restore it
                (prev
                 (decknix--sidebar-restore-previous-session prev))
@@ -4701,11 +4808,12 @@ Auto-detects workspace and generates session name from the URL."
             (run-at-time 0.05 nil
               (eval `(lambda ()
                        (let ((choice (read-char-choice
-                                      ,(format "%s#%s: [o]pen [c]opy-url [r]eview [q]uit"
+                                      ,(format "%s#%s: [o]pen [b]rowser [c]opy-url [r]eview [q]uit"
                                                short-repo number)
-                                      '(?o ?c ?r ?q))))
+                                      '(?o ?b ?c ?r ?q))))
                          (pcase choice
-                           (?o (when ,url (browse-url ,url)))
+                           (?o (when ,url (decknix--open-url ,url)))
+                           (?b (when ,url (browse-url ,url)))
                            (?c (when ,url
                                  (kill-new ,url)
                                  (message "Copied: %s" ,url)))
