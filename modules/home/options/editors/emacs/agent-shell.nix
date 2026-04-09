@@ -4281,7 +4281,14 @@ Press K to toggle, ? to open full transient menu with live state."
                                          'face (if (string= summary "all")
                                                    'font-lock-comment-face
                                                  'font-lock-constant-face)))
-                                    (propertize "[off]" 'face 'font-lock-comment-face))))))))
+                                    (propertize "[off]" 'face 'font-lock-comment-face))))
+                      (cons "F" (format "age %s"
+                                  (let ((label (decknix--hub-age-filter-label)))
+                                    (propertize
+                                     (format "[%s]" label)
+                                     'face (if (string= label "all")
+                                               'font-lock-comment-face
+                                             'font-lock-constant-face)))))))))
                 ;; Trailing hint
                 (insert (propertize " K " 'face 'font-lock-keyword-face)
                         (propertize "hide" 'face 'font-lock-comment-face)
@@ -4704,7 +4711,8 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
             (let* ((all-items (alist-get 'items decknix--hub-reviews))
                    (items (seq-filter
                            (lambda (item)
-                             (decknix--hub-item-visible-p (alist-get 'repo item)))
+                             (and (decknix--hub-item-visible-p (alist-get 'repo item))
+                                  (decknix--hub-age-visible-p (alist-get 'created item))))
                            (or all-items '())))
                    (keys decknix--nav-keys))
               (append
@@ -4746,7 +4754,11 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
             (let* ((all-repos (alist-get 'repos decknix--hub-wip))
                    (repos (seq-filter
                            (lambda (r)
-                             (decknix--hub-item-visible-p (alist-get 'repo r)))
+                             (and (decknix--hub-item-visible-p (alist-get 'repo r))
+                                  (seq-some
+                                   (lambda (pr)
+                                     (decknix--hub-age-visible-p (alist-get 'updated pr)))
+                                   (alist-get 'prs r))))
                            (or all-repos '())))
                    (keys decknix--nav-keys)
                    (idx 0)
@@ -4755,7 +4767,10 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
               (dolist (repo-entry repos)
                 (let* ((repo-full (or (alist-get 'repo repo-entry) ""))
                        (repo (car (last (split-string repo-full "/")))))
-                  (dolist (pr (alist-get 'prs repo-entry))
+                  (dolist (pr (seq-filter
+                               (lambda (pr)
+                                 (decknix--hub-age-visible-p (alist-get 'updated pr)))
+                               (alist-get 'prs repo-entry)))
                     (when (< idx (length keys))
                       (let* ((key (nth idx keys))
                              (number (alist-get 'number pr))
@@ -4999,7 +5014,9 @@ Re-reads only the changed file and refreshes the sidebar."
         ;; Bind O to cycle org filter in sidebar
         (with-eval-after-load 'agent-shell-workspace
           (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "O") #'decknix--hub-org-filter-dispatch))
+            (kbd "O") #'decknix--hub-org-filter-dispatch)
+          (define-key agent-shell-workspace-sidebar-mode-map
+            (kbd "F") #'decknix--hub-cycle-age-filter))
 
         ;; Add Hub group to the sidebar transient
         ;; -- Hub: org filter (multi-select transient) --
@@ -5159,14 +5176,77 @@ When no filter is active (table is nil), all orgs are visible."
           (interactive)
           (call-interactively #'decknix--hub-org-filter-dispatch))
 
+        (transient-define-suffix decknix-sidebar-transient--age-filter ()
+          :key "F"
+          :description
+          (lambda ()
+            (let ((label (decknix--hub-age-filter-label)))
+              (format "Age filter    %s"
+                      (propertize
+                       (format "[%s]" label)
+                       'face (if (string= label "all")
+                                 'font-lock-comment-face
+                               'font-lock-constant-face)))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-cycle-age-filter))
+
         (transient-append-suffix 'decknix-sidebar-transient "Toggles"
           ["Hub"
-           (decknix-sidebar-transient--org-filter)])
+           (decknix-sidebar-transient--org-filter)
+           (decknix-sidebar-transient--age-filter)])
 
         (defun decknix--hub-item-visible-p (repo-full)
           "Return non-nil if REPO-FULL (owner/repo) passes the org visibility filter."
           (decknix--hub-org-visible-p
            (car (split-string (or repo-full "") "/"))))
+
+        ;; -- Hub: age filter --
+        ;; Cycles through preset age thresholds.  Items older than the
+        ;; threshold are hidden from both Requests and WIP sections.
+        ;; nil = show all (no age filter).
+
+        (defvar decknix--hub-age-filter nil
+          "Current age filter threshold in seconds, or nil for no filter.
+Use `decknix--hub-cycle-age-filter' to cycle through presets.")
+
+        (defvar decknix--hub-age-presets
+          '((nil    . "all")
+            (86400  . "1d")
+            (259200 . "3d")
+            (604800 . "7d")
+            (1209600 . "14d")
+            (2592000 . "30d"))
+          "Alist of (SECONDS . LABEL) presets for the age filter.")
+
+        (defun decknix--hub-age-filter-label ()
+          "Return the label for the current age filter."
+          (or (alist-get decknix--hub-age-filter
+                         decknix--hub-age-presets)
+              "all"))
+
+        (defun decknix--hub-cycle-age-filter ()
+          "Cycle the hub age filter through presets."
+          (interactive)
+          (let* ((keys (mapcar #'car decknix--hub-age-presets))
+                 (pos (cl-position decknix--hub-age-filter keys :test #'equal))
+                 (next-pos (mod (1+ (or pos 0)) (length keys))))
+            (setq decknix--hub-age-filter (nth next-pos keys))
+            (when (get-buffer "*agent-shell-sidebar*")
+              (agent-shell-workspace-sidebar-refresh))
+            (message "Hub age filter: %s" (decknix--hub-age-filter-label))))
+
+        (defun decknix--hub-age-visible-p (iso-time)
+          "Return non-nil if ISO-TIME is within the current age filter.
+Always returns t when filter is nil (show all)."
+          (or (null decknix--hub-age-filter)
+              (and iso-time (stringp iso-time)
+                   (condition-case nil
+                       (let* ((then (encode-time (iso8601-parse iso-time)))
+                              (age-secs (float-time
+                                         (time-subtract (current-time) then))))
+                         (<= age-secs decknix--hub-age-filter))
+                     (error t)))))
 
         ;; -- Hub: age formatting --
         (defun decknix--hub-format-age (iso-time)
@@ -5233,7 +5313,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                  (all-items (when data (alist-get 'items data)))
                  (items (seq-filter
                          (lambda (item)
-                           (decknix--hub-item-visible-p (alist-get 'repo item)))
+                           (and (decknix--hub-item-visible-p (alist-get 'repo item))
+                                (decknix--hub-age-visible-p (alist-get 'created item))))
                          (or all-items '()))))
             (when items
               (decknix--sidebar-render-section-header
@@ -5287,13 +5368,22 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
 Respects `decknix--hub-org-visibility'. Shows time since last update."
           (let* ((data decknix--hub-wip)
                  (all-repos (when data (alist-get 'repos data)))
-                 ;; Filter repos by org
+                 ;; Filter repos by org, then filter PRs by age
                  (repos (seq-filter
                          (lambda (r)
-                           (decknix--hub-item-visible-p (alist-get 'repo r)))
+                           (and (decknix--hub-item-visible-p (alist-get 'repo r))
+                                ;; Keep repo only if it has age-visible PRs
+                                (seq-some
+                                 (lambda (pr)
+                                   (decknix--hub-age-visible-p (alist-get 'updated pr)))
+                                 (alist-get 'prs r))))
                          (or all-repos '())))
                  (total (cl-reduce #'+ (mapcar
-                                        (lambda (r) (length (alist-get 'prs r)))
+                                        (lambda (r)
+                                          (cl-count-if
+                                           (lambda (pr)
+                                             (decknix--hub-age-visible-p (alist-get 'updated pr)))
+                                           (alist-get 'prs r)))
                                         repos)
                                    :initial-value 0)))
             (when (> total 0)
@@ -5303,7 +5393,10 @@ Respects `decknix--hub-org-visibility'. Shows time since last update."
               (dolist (repo-entry repos)
                 (let* ((repo-full (or (alist-get 'repo repo-entry) ""))
                        (repo (car (last (split-string repo-full "/"))))
-                       (prs (alist-get 'prs repo-entry)))
+                       (prs (seq-filter
+                             (lambda (pr)
+                               (decknix--hub-age-visible-p (alist-get 'updated pr)))
+                             (alist-get 'prs repo-entry))))
                   (when prs
                     ;; Repo sub-header
                     (insert (propertize (format "  %s" repo)
