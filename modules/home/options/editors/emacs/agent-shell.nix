@@ -4701,6 +4701,32 @@ Auto-detects workspace and generates session name from the URL."
                                  (decknix--nav-hub-start-review ,url)))
                            (?q (message "Cancelled"))))) t))))
 
+        (defun decknix--nav-display-in-main (buf)
+          "Display BUF in the main (non-side) window, matching sidebar RET behaviour."
+          (when (buffer-live-p buf)
+            ;; Update sidebar selection
+            (when (boundp 'agent-shell-workspace-sidebar--selected-buffer)
+              (setq agent-shell-workspace-sidebar--selected-buffer buf))
+            (when (fboundp 'agent-shell-workspace--clear-finished)
+              (agent-shell-workspace--clear-finished buf))
+            ;; Find a non-side, non-sidebar window and display there
+            (let ((target nil))
+              (walk-windows
+               (lambda (win)
+                 (when (and (not target)
+                            (not (window-parameter win 'window-side))
+                            (not (string= (buffer-name (window-buffer win))
+                                          (or (bound-and-true-p
+                                               agent-shell-workspace-sidebar-buffer-name)
+                                              "*agent-shell-sidebar*"))))
+                   (setq target win)))
+               nil nil)
+              (when target
+                (set-window-buffer target buf)
+                (select-window target)))
+            (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+              (agent-shell-workspace-sidebar-refresh))))
+
         (defun decknix--nav-live-item-actions (buf)
           "Show an action menu for a live session buffer BUF."
           (let ((name (buffer-name buf)))
@@ -4711,7 +4737,7 @@ Auto-detects workspace and generates session name from the URL."
                                         ,(format "%s: [s]witch [k]ill [r]estart [q]uit" name)
                                         '(?s ?k ?r ?q))))
                            (pcase choice
-                             (?s (pop-to-buffer ,buf))
+                             (?s (decknix--nav-display-in-main ,buf))
                              (?k (when (buffer-live-p ,buf)
                                    (kill-buffer ,buf)
                                    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
