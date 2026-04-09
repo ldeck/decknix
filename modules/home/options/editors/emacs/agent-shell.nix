@@ -1169,10 +1169,36 @@ existing conversation entry in the tag store."
                                 (substring ,sid 0 8)))))
                 t)))))
 
+        (defun decknix--agent-conversation-hidden-p (conv-key)
+          "Return non-nil if CONV-KEY is marked as hidden in agent-sessions.json.
+Hidden conversations are background/automated sessions (e.g., git hook
+commit reviews) that should not appear in user-facing session lists."
+          (condition-case nil
+              (let* ((store (decknix--agent-tags-read))
+                     (convs (decknix--agent-tags-conversations store))
+                     (entry (gethash conv-key convs)))
+                (and entry (eq (gethash "hidden" entry) t)))
+            (error nil)))
+
+        (defun decknix--agent-conversation-set-hidden (conv-key hidden)
+          "Set the hidden flag for CONV-KEY to HIDDEN (t or nil)."
+          (let* ((store (decknix--agent-tags-read))
+                 (convs (decknix--agent-tags-conversations store))
+                 (entry (gethash conv-key convs)))
+            (unless entry
+              (setq entry (make-hash-table :test 'equal))
+              (puthash conv-key entry convs))
+            (puthash "hidden" (if hidden t :json-false) entry)
+            (decknix--agent-tags-write store)))
+
         (defun decknix--agent-session-group-by-conversation (sessions)
           "Group SESSIONS by conversation (shared firstUserMessage).
 Returns a list of (CONV-KEY LATEST-SESSION ALL-SESSIONS) triples,
 sorted by most recently interacted first.
+
+Hidden conversations (marked with hidden=true in agent-sessions.json)
+are excluded — these are background/automated sessions like git hook
+commit reviews.
 
 Inter-group sort uses max(session.modified, conversation.lastAccessed)
 so that tag/rename/resume operations bump a conversation to the top,
@@ -1181,7 +1207,8 @@ not just augment writing to the session file."
             (dolist (s sessions)
               (let* ((first-msg (alist-get 'firstUserMessage s ""))
                      (conv-key (decknix--agent-conversation-key first-msg)))
-                (when conv-key
+                (when (and conv-key
+                           (not (decknix--agent-conversation-hidden-p conv-key)))
                   (let ((existing (gethash conv-key groups)))
                     (puthash conv-key (cons s existing) groups)))))
             ;; Build result: (conv-key latest-session all-sessions)
@@ -4384,6 +4411,7 @@ Like treemacs `W' / extra-wide-toggle."
            ("a k" "Kill"          agent-shell-workspace-sidebar-kill)
            ("a d" "Delete killed" agent-shell-workspace-sidebar-delete-killed)
            ("a w" "Set workspace" decknix-sidebar-set-workspace)
+           ("a h" "Hide"          decknix-sidebar-hide-conversation)
            ("a m" "Set mode"      agent-shell-workspace-sidebar-set-mode)
            ("a a" "Add tile"      agent-shell-workspace-tile-add)
            ("a x" "Remove tile"   agent-shell-workspace-tile-remove)]
@@ -4830,6 +4858,23 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                 (when (fboundp 'agent-shell-workspace-sidebar-refresh)
                   (agent-shell-workspace-sidebar-refresh))))))
 
+        (defun decknix-sidebar-hide-conversation ()
+          "Hide the saved conversation at point from all session lists.
+Hidden conversations (e.g., automated git hook reviews) are excluded
+from the sidebar, session picker, and recent sessions.  Use
+`decknix-sidebar-unhide-conversation' or set hidden=false in
+agent-sessions.json to restore."
+          (interactive)
+          (let ((conv-key (get-text-property
+                            (line-beginning-position)
+                            'decknix-sidebar-saved-conv-key)))
+            (unless conv-key
+              (user-error "No saved session at point"))
+            (when (yes-or-no-p "Hide this conversation from all session lists? ")
+              (decknix--agent-conversation-set-hidden conv-key t)
+              (agent-shell-workspace-sidebar-refresh)
+              (message "Conversation hidden"))))
+
         ;; -- Session transient --
         (transient-define-prefix decknix-sidebar-sessions ()
           "Session operations."
@@ -4849,6 +4894,7 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
            ("k" "Kill"          agent-shell-workspace-sidebar-kill)
            ("d" "Delete killed" agent-shell-workspace-sidebar-delete-killed)
            ("w" "Set workspace" decknix-sidebar-set-workspace)
+           ("h" "Hide"          decknix-sidebar-hide-conversation)
            ("m" "Set mode"      agent-shell-workspace-sidebar-set-mode)]
           ["Tiling"
            ("a" "Add tile"      agent-shell-workspace-tile-add)
