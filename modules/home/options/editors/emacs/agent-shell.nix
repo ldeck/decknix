@@ -4661,6 +4661,24 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
         ;; Uses read-char-choice after a short delay to avoid conflicts
         ;; with the transient exit hook / sidebar restore.
 
+        (defun decknix--nav-hub-start-review (url)
+          "Start a PR review session for URL without prompting.
+Auto-detects workspace and generates session name from the URL."
+          (let ((parsed (decknix--agent-parse-pr-url url)))
+            (if (not parsed)
+                (message "Not a valid PR URL: %s" url)
+              (let* ((owner (alist-get 'owner parsed))
+                     (repo (alist-get 'repo parsed))
+                     (number (alist-get 'number parsed))
+                     (name (format "pr-%s-%s" repo number))
+                     (tags (list "review" repo (format "#%s" number)))
+                     (workspace (or (and (fboundp 'decknix--agent-pr-detect-workspace)
+                                         (decknix--agent-pr-detect-workspace owner repo))
+                                    default-directory))
+                     (command (format "/review-service-pr %s" url)))
+                (decknix--agent-quickaction-start name tags workspace command)
+                (message "Starting review: %s/%s#%s" owner repo number)))))
+
         (defun decknix--nav-hub-item-actions (item)
           "Show an action menu for a hub ITEM (review or WIP PR)."
           (let* ((url (alist-get 'url item))
@@ -4680,8 +4698,7 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                                  (kill-new ,url)
                                  (message "Copied: %s" ,url)))
                            (?r (when ,url
-                                 (when (fboundp 'decknix--agent-quickaction-pr-review)
-                                   (decknix--agent-quickaction-pr-review ,url))))
+                                 (decknix--nav-hub-start-review ,url)))
                            (?q (message "Cancelled"))))) t))))
 
         (defun decknix--nav-live-item-actions (buf)
