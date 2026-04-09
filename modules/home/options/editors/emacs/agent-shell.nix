@@ -4153,24 +4153,25 @@ Like treemacs `W' / extra-wide-toggle."
 
         (transient-define-prefix decknix-sidebar-transient ()
           "Sidebar actions and toggles."
-          ["Actions"
+          ["Navigate"
+           ("r"   "Requests"      decknix-sidebar-goto-requests)
+           ("w"   "WIP"           decknix-sidebar-goto-wip)
+           ("l"   "Live"          decknix-sidebar-goto-live)
+           ("s"   "Sessions…"     decknix-sidebar-sessions)]
+          ["Quick"
            ("RET" "Open / goto"   agent-shell-workspace-sidebar-goto)
            ("c"   "New session"   agent-shell-workspace-sidebar-new)
-           ("k"   "Kill"          agent-shell-workspace-sidebar-kill)
-           ("r"   "Restart"       agent-shell-workspace-sidebar-restart)
-           ("R"   "Rename"        agent-shell-workspace-sidebar-rename)
-           ("d"   "Delete killed" agent-shell-workspace-sidebar-delete-killed)
            ("g"   "Refresh"       agent-shell-workspace-sidebar-refresh)
            ("q"   "Quit sidebar"  quit-window)]
-          ["Sessions"
-           ("s s" "Search"        decknix-agent-session-picker)
-           ("s g" "Grep"          decknix-agent-session-grep)
-           ("s r" "Recent"        decknix-agent-session-recent)
-           ("w"   "Set workspace" decknix-sidebar-set-workspace)]
-          ["Tiling"
-           ("a"   "Add tile"      agent-shell-workspace-tile-add)
-           ("x"   "Remove tile"   agent-shell-workspace-tile-remove)
-           ("m"   "Set mode"      agent-shell-workspace-sidebar-set-mode)]
+          ["Actions (a …)"
+           ("a r" "Restart"       agent-shell-workspace-sidebar-restart)
+           ("a R" "Rename"        agent-shell-workspace-sidebar-rename)
+           ("a k" "Kill"          agent-shell-workspace-sidebar-kill)
+           ("a d" "Delete killed" agent-shell-workspace-sidebar-delete-killed)
+           ("a w" "Set workspace" decknix-sidebar-set-workspace)
+           ("a m" "Set mode"      agent-shell-workspace-sidebar-set-mode)
+           ("a a" "Add tile"      agent-shell-workspace-tile-add)
+           ("a x" "Remove tile"   agent-shell-workspace-tile-remove)]
           ["Toggles"
            (decknix-sidebar-transient--quick-switch)
            (decknix-sidebar-transient--tile-toggle)
@@ -4218,20 +4219,19 @@ Press K to toggle, ? to open full transient menu with live state."
           (insert "\n")
           (if decknix--sidebar-show-keys
               (progn
-                ;; ── Actions ──
-                (decknix--sidebar-render-key-group "Actions"
+                ;; ── Navigate ──
+                (decknix--sidebar-render-key-group "Navigate"
+                  '(("r"   . "requests")
+                    ("w"   . "wip")
+                    ("l"   . "live")
+                    ("s"   . "sessions…")))
+                ;; ── Quick ──
+                (decknix--sidebar-render-key-group "Quick"
                   '(("RET" . "open")
                     ("c"   . "new session")
-                    ("k"   . "kill")
-                    ("r"   . "restart")
-                    ("R"   . "rename")
-                    ("d"   . "del killed")
                     ("g"   . "refresh")
-                    ("q"   . "quit")))
-                ;; ── Sessions ──
-                (decknix--sidebar-render-key-group "Sessions"
-                  '(("s"   . "sessions…")
-                    ("w"   . "set workspace")))
+                    ("q"   . "quit")
+                    ("a"   . "actions…")))
                 ;; ── Toggles (with live state) ──
                 (decknix--sidebar-render-key-group "Toggles"
                   (append
@@ -4251,7 +4251,6 @@ Press K to toggle, ? to open full transient menu with live state."
                                                     'agent-shell-workspace--tiled sb))))
                                   (propertize (if tiled "[on]" "[off]")
                                               'face (if tiled 'success 'font-lock-comment-face)))))
-                    '("a/x" . "tile +/-")
                     (cons "M" (format "display %s"
                                 (propertize
                                  (format "[%s]" (symbol-name decknix--sidebar-display-mode))
@@ -4598,16 +4597,251 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                 (when (fboundp 'agent-shell-workspace-sidebar-refresh)
                   (agent-shell-workspace-sidebar-refresh))))))
 
-        ;; -- Session transient (replaces s prefix keymap) --
+        ;; -- Session transient --
         (transient-define-prefix decknix-sidebar-sessions ()
           "Session operations."
           ["Sessions"
            ("s" "Search (picker)" decknix-agent-session-picker)
            ("g" "Grep"           decknix-agent-session-grep)
-           ("r" "Recent"         decknix-agent-session-recent)
-           ("w" "Set workspace"  decknix-sidebar-set-workspace)])
+           ("r" "Recent"         decknix-agent-session-recent)])
+
+        ;; -- Actions prefix keymap (a …) --
+        ;; Displaced commands that gave up their top-level keys to
+        ;; section navigation (r → Requests, w → WIP, a → actions).
+        (transient-define-prefix decknix-sidebar-actions ()
+          "Agent actions on the session at point."
+          ["Agent"
+           ("r" "Restart"       agent-shell-workspace-sidebar-restart)
+           ("R" "Rename"        agent-shell-workspace-sidebar-rename)
+           ("k" "Kill"          agent-shell-workspace-sidebar-kill)
+           ("d" "Delete killed" agent-shell-workspace-sidebar-delete-killed)
+           ("w" "Set workspace" decknix-sidebar-set-workspace)
+           ("m" "Set mode"      agent-shell-workspace-sidebar-set-mode)]
+          ["Tiling"
+           ("a" "Add tile"      agent-shell-workspace-tile-add)
+           ("x" "Remove tile"   agent-shell-workspace-tile-remove)])
+
+        ;; -- Section navigation: item pickers --
+        ;; Each section key opens a transient showing lettered items.
+
+        ;; Letter keys for item indexing (a-z)
+        (defvar decknix--nav-keys
+          (mapcar #'char-to-string (number-sequence ?a ?z))
+          "Single-letter keys a–z for item selection in section transients.")
+
+        ;; Helper: build a transient command for a specific item
+        (defun decknix--nav-make-item-cmd (item-data action-fn)
+          "Create a named command that calls ACTION-FN with ITEM-DATA."
+          (let ((sym (make-symbol "decknix--nav-item")))
+            (fset sym (eval `(lambda ()
+                               (interactive)
+                               (funcall ,action-fn ',item-data)) t))
+            sym))
+
+        ;; -- Item action menus --
+        (defun decknix--nav-hub-item-actions (item)
+          "Show an action menu for a hub ITEM (review or WIP PR)."
+          (let* ((url (alist-get 'url item))
+                 (repo (or (alist-get 'repo item) ""))
+                 (number (alist-get 'number item))
+                 (type (alist-get 'decknix-type item))
+                 (choice (read-char-choice
+                          (format "%s#%s: [o]pen [c]opy-url [r]eview-session [q]uit"
+                                  (car (last (split-string repo "/")))
+                                  number)
+                          '(?o ?c ?r ?q))))
+            (pcase choice
+              (?o (when url (browse-url url)))
+              (?c (when url
+                    (kill-new url)
+                    (message "Copied: %s" url)))
+              (?r (when url
+                    ;; Launch a PR review quick-action session
+                    (when (fboundp 'decknix--agent-quickaction-pr-review)
+                      (decknix--agent-quickaction-pr-review url))))
+              (?q (message "Cancelled")))))
+
+        (defun decknix--nav-live-item-actions (buf)
+          "Show an action menu for a live session buffer BUF."
+          (let ((choice (read-char-choice
+                         (format "%s: [o]pen [k]ill [r]estart [R]ename [q]uit"
+                                 (buffer-name buf))
+                         '(?o ?k ?r ?R ?q))))
+            (pcase choice
+              (?o (pop-to-buffer buf))
+              (?k (when (buffer-live-p buf)
+                    (with-current-buffer buf
+                      (when (fboundp 'agent-shell-workspace-sidebar-kill)
+                        (kill-buffer buf)))
+                    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                      (agent-shell-workspace-sidebar-refresh))))
+              (?r (when (buffer-live-p buf)
+                    (with-current-buffer buf
+                      (when (fboundp 'agent-shell-restart)
+                        (agent-shell-restart)))))
+              (?R (when (buffer-live-p buf)
+                    (agent-shell-workspace-sidebar-rename)))
+              (?q (message "Cancelled")))))
+
+        ;; -- Section: Requests --
+        (defun decknix--nav-requests-children (_)
+          "Generate transient children for hub Requests items."
+          (if (not (and (boundp 'decknix--hub-reviews) decknix--hub-reviews))
+              (list (transient-parse-suffix transient--prefix
+                      '("q" "No requests" ignore)))
+            (let* ((all-items (alist-get 'items decknix--hub-reviews))
+                   (items (seq-filter
+                           (lambda (item)
+                             (decknix--hub-item-visible-p (alist-get 'repo item)))
+                           (or all-items '())))
+                   (keys decknix--nav-keys))
+              (append
+               (cl-loop for item in items
+                        for key in keys
+                        collect
+                        (let* ((age (decknix--hub-format-age
+                                     (alist-get 'created item)))
+                               (repo-full (or (alist-get 'repo item) ""))
+                               (repo (car (last (split-string repo-full "/"))))
+                               (number (alist-get 'number item))
+                               (title (or (alist-get 'title item) ""))
+                               (ci-str (decknix--hub-ci-icon (alist-get 'ci item)))
+                               (short (if (> (length title) 30)
+                                          (concat (substring title 0 29) "…")
+                                        title))
+                               (tagged (cons (cons 'decknix-type 'review) item))
+                               (cmd (decknix--nav-make-item-cmd
+                                     tagged #'decknix--nav-hub-item-actions)))
+                          (transient-parse-suffix
+                           transient--prefix
+                           (list key
+                                 (format "%3s %s#%d %s %s" age repo number ci-str short)
+                                 cmd))))
+               (list (transient-parse-suffix transient--prefix
+                       '("q" "Back" transient-quit-one)))))))
+
+        (transient-define-prefix decknix-sidebar-nav-requests ()
+          "Pick a PR review request."
+          [:class transient-column
+           :setup-children decknix--nav-requests-children])
+
+        ;; -- Section: WIP --
+        (defun decknix--nav-wip-children (_)
+          "Generate transient children for hub WIP items."
+          (if (not (and (boundp 'decknix--hub-wip) decknix--hub-wip))
+              (list (transient-parse-suffix transient--prefix
+                      '("q" "No WIP items" ignore)))
+            (let* ((all-repos (alist-get 'repos decknix--hub-wip))
+                   (repos (seq-filter
+                           (lambda (r)
+                             (decknix--hub-item-visible-p (alist-get 'repo r)))
+                           (or all-repos '())))
+                   (keys decknix--nav-keys)
+                   (idx 0)
+                   (children nil))
+              ;; Flatten: repo headers (visual) + PR items (selectable)
+              (dolist (repo-entry repos)
+                (let* ((repo-full (or (alist-get 'repo repo-entry) ""))
+                       (repo (car (last (split-string repo-full "/")))))
+                  (dolist (pr (alist-get 'prs repo-entry))
+                    (when (< idx (length keys))
+                      (let* ((key (nth idx keys))
+                             (number (alist-get 'number pr))
+                             (title (or (alist-get 'title pr) ""))
+                             (ci-str (decknix--hub-ci-icon (alist-get 'ci pr)))
+                             (age (decknix--hub-format-age
+                                   (alist-get 'updated pr)))
+                             (short (if (> (length title) 28)
+                                        (concat (substring title 0 27) "…")
+                                      title))
+                             (tagged (append
+                                      (list (cons 'decknix-type 'wip)
+                                            (cons 'repo repo-full))
+                                      pr))
+                             (cmd (decknix--nav-make-item-cmd
+                                   tagged #'decknix--nav-hub-item-actions)))
+                        (push (transient-parse-suffix
+                               transient--prefix
+                               (list key
+                                     (format "%3s %s#%d %s %s"
+                                             age repo number ci-str short)
+                                     cmd))
+                              children)
+                        (setq idx (1+ idx)))))))
+              (append (nreverse children)
+                      (list (transient-parse-suffix transient--prefix
+                              '("q" "Back" transient-quit-one)))))))
+
+        (transient-define-prefix decknix-sidebar-nav-wip ()
+          "Pick a WIP PR."
+          [:class transient-column
+           :setup-children decknix--nav-wip-children])
+
+        ;; -- Section: Live sessions --
+        (defun decknix--nav-live-children (_)
+          "Generate transient children for live agent-shell sessions."
+          (let* ((buffers (seq-filter #'buffer-live-p
+                                      (when (fboundp 'agent-shell-buffers)
+                                        (agent-shell-buffers))))
+                 (keys decknix--nav-keys))
+            (if (null buffers)
+                (list (transient-parse-suffix transient--prefix
+                        '("q" "No live sessions" ignore)))
+              (append
+               (cl-loop for buf in buffers
+                        for key in keys
+                        collect
+                        (let* ((name (buffer-name buf))
+                               ;; Strip *Auggie: prefix and trailing *
+                               (short (replace-regexp-in-string
+                                       "\\`\\*[^:]*: *\\|\\*\\'" "" name))
+                               (short (if (> (length short) 35)
+                                          (concat (substring short 0 34) "…")
+                                        short))
+                               (cmd (decknix--nav-make-item-cmd
+                                     buf #'decknix--nav-live-item-actions)))
+                          (transient-parse-suffix
+                           transient--prefix
+                           (list key short cmd))))
+               (list (transient-parse-suffix transient--prefix
+                       '("q" "Back" transient-quit-one)))))))
+
+        (transient-define-prefix decknix-sidebar-nav-live ()
+          "Pick a live agent session."
+          [:class transient-column
+           :setup-children decknix--nav-live-children])
+
+        ;; -- Dispatch commands for section keys --
+        (defun decknix-sidebar-goto-requests ()
+          "Navigate to hub Requests items."
+          (interactive)
+          (if (and (fboundp 'decknix--hub-has-data-p) (decknix--hub-has-data-p))
+              (call-interactively #'decknix-sidebar-nav-requests)
+            (message "Hub: no data — enable with decknix.services.hub.enable = true")))
+
+        (defun decknix-sidebar-goto-wip ()
+          "Navigate to hub WIP items."
+          (interactive)
+          (if (and (fboundp 'decknix--hub-has-data-p) (decknix--hub-has-data-p))
+              (call-interactively #'decknix-sidebar-nav-wip)
+            (message "Hub: no data — enable with decknix.services.hub.enable = true")))
+
+        (defun decknix-sidebar-goto-live ()
+          "Navigate to live sessions."
+          (interactive)
+          (call-interactively #'decknix-sidebar-nav-live))
 
         ;; -- Bind keys in sidebar mode --
+        ;; Override upstream keys: r, w, a now serve section navigation
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "r") #'decknix-sidebar-goto-requests)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "w") #'decknix-sidebar-goto-wip)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "l") #'decknix-sidebar-goto-live)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "a") #'decknix-sidebar-actions)
+
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "?") #'decknix-sidebar-transient)
         (define-key agent-shell-workspace-sidebar-mode-map
@@ -4618,8 +4852,6 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
           (kbd "W") #'decknix-sidebar-cycle-width)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "M") #'decknix-sidebar-cycle-display-mode)
-        (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "w") #'decknix-sidebar-set-workspace)
 
         ;; S = quick-switch (direct), s = session transient
         (define-key agent-shell-workspace-sidebar-mode-map

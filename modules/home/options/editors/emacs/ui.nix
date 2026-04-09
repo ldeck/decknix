@@ -211,6 +211,7 @@ in
               (delete-window)
             (delete-frame)))
 
+        (global-set-key (kbd "M-o") 'ace-window)              ; M-o = ace-window (quick switch)
         (global-set-key (kbd "s-t") 'split-window-right)     ; Cmd+T = Split window right
         (global-set-key (kbd "s-T") 'split-window-below)     ; Cmd+Shift+T = Split below
         (global-set-key (kbd "s-w") 'decknix-close-window-or-frame) ; Cmd+W = Close window/frame
