@@ -9,3 +9,6 @@ cli/target/
 .direnv
 docs/book/
 docs/src/data/
+
+# Ignore agent-shell transcripts
+.agent-shell/transcripts/
