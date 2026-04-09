@@ -180,7 +180,25 @@ fn resolved_app_store_path(app_path: &PathBuf) -> Option<String> {
 // Process helpers
 // ---------------------------------------------------------------------------
 
-/// Get the executable path of a running process by app name.
+/// Check whether a process is a background daemon (e.g. `emacs --fg-daemon`).
+/// These are managed by launchd and must not be killed by nix-open.
+fn is_daemon_process(pid: u32) -> bool {
+    let ps = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "args="])
+        .output()
+        .ok();
+    match ps {
+        Some(output) => {
+            let args = String::from_utf8_lossy(&output.stdout);
+            args.contains("--daemon") || args.contains("--fg-daemon")
+        }
+        None => false,
+    }
+}
+
+/// Get the executable path of a running foreground process by app name.
+/// Skips daemon processes (--daemon / --fg-daemon) which are managed by
+/// launchd and should not be restarted by nix-open.
 fn running_app_exe(app_name: &str) -> Option<(u32, String)> {
     let pgrep = Command::new("pgrep")
         .args(["-xi", app_name])
@@ -189,19 +207,28 @@ fn running_app_exe(app_name: &str) -> Option<(u32, String)> {
     if !pgrep.status.success() {
         return None;
     }
-    let pid_str = String::from_utf8_lossy(&pgrep.stdout)
-        .lines()
-        .next()?
-        .trim()
-        .to_string();
-    let pid: u32 = pid_str.parse().ok()?;
-
-    let ps = Command::new("ps")
-        .args(["-p", &pid_str, "-o", "comm="])
-        .output()
-        .ok()?;
-    let exe = String::from_utf8_lossy(&ps.stdout).trim().to_string();
-    if exe.is_empty() { None } else { Some((pid, exe)) }
+    // Iterate all matching PIDs — skip daemons, return first foreground match.
+    for line in String::from_utf8_lossy(&pgrep.stdout).lines() {
+        let pid_str = line.trim();
+        let pid: u32 = match pid_str.parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if is_daemon_process(pid) {
+            continue;
+        }
+        let ps = Command::new("ps")
+            .args(["-p", pid_str, "-o", "comm="])
+            .output()
+            .ok();
+        if let Some(output) = ps {
+            let exe = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !exe.is_empty() {
+                return Some((pid, exe));
+            }
+        }
+    }
+    None
 }
 
 /// Gracefully quit a macOS application via AppleScript.
