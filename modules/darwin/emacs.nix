@@ -5,10 +5,12 @@ with lib;
 let
   cfg = config.services.emacs.decknix;
 
+  username = config.system.primaryUser;
+
   # Get the emacs package from home-manager if available, otherwise use the configured package
   emacsPackage =
-    if config.home-manager.users ? ${config.users.primaryUser or "ldeck"}
-    then config.home-manager.users.${config.users.primaryUser or "ldeck"}.programs.emacs.finalPackage or cfg.package
+    if config.home-manager.users ? ${username}
+    then config.home-manager.users.${username}.programs.emacs.finalPackage or cfg.package
     else cfg.package;
 
   # The Emacs binary to run in daemon mode.
@@ -18,6 +20,22 @@ let
   # Standard GNU Emacs has NS/Cocoa support compiled into the binary itself,
   # so emacsclient -c still creates GUI frames regardless of launch path.
   emacsBinary = "${emacsPackage}/bin/emacs";
+
+  homeDir = config.users.users.${username}.home;
+
+  # Stable launcher script that resolves the emacs binary from the Nix
+  # profile at runtime.  Because the script content never references the
+  # Nix store directly, it doesn't change when only Elisp config changes.
+  # This keeps the launchd plist stable so launchd does NOT restart the
+  # daemon on config-only `decknix switch`.  Instead, the post-activation
+  # hook sends (deckmacs-reload) to the running daemon via emacsclient.
+  #
+  # The daemon only restarts when this script's content changes (never for
+  # Elisp-only changes) or when the Emacs binary package itself changes.
+  emacsLauncher = pkgs.writeShellScript "emacs-daemon-launcher" ''
+    EMACS="${homeDir}/.nix-profile/bin/emacs"
+    exec "$EMACS" --fg-daemon
+  '';
 in
 {
   options.services.emacs.decknix = {
@@ -57,7 +75,10 @@ in
     # GUI frames are created via emacsclient -c and appear in the Dock while open.
     # Closing all frames does not kill the daemon.
     launchd.user.agents.emacs-server = {
-      command = "${emacsBinary} --fg-daemon";
+      # Use the stable launcher script instead of a direct store path.
+      # This prevents launchd from restarting the daemon on config-only
+      # changes — the launcher resolves emacs from ~/.nix-profile at runtime.
+      command = "${emacsLauncher}";
 
       serviceConfig = {
         RunAtLoad = true;
@@ -82,6 +103,18 @@ in
         exec ${emacsPackage}/bin/emacsclient -a "" "$@"
       '')
     ];
+
+    # After activation, signal the running Emacs daemon to hot-reload its
+    # config instead of waiting for a manual C-c D r.  If the daemon was
+    # restarted by launchd (binary change), this is a harmless no-op since
+    # the daemon already loaded the fresh config.  If the daemon is still
+    # running (config-only change), this picks up the new default.el.
+    system.activationScripts.postActivation.text = lib.mkAfter ''
+      if ${emacsPackage}/bin/emacsclient -e '(boundp (quote deckmacs-reload))' 2>/dev/null | grep -q t; then
+        ${emacsPackage}/bin/emacsclient -e '(deckmacs-reload)' 2>/dev/null && \
+          echo "emacs: config hot-reloaded (deckmacs-reload)" || true
+      fi
+    '';
   };
 }
 
