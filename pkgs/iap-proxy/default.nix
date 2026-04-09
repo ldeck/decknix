@@ -1,6 +1,16 @@
 { lib, python3Packages, iap-proxy-src, ... }:
 
-python3Packages.buildPythonApplication rec {
+let
+  # setproctitle tests segfault on macOS with Python 3.13 — skip them
+  py3 = python3Packages.override {
+    overrides = _final: prev: {
+      setproctitle = prev.setproctitle.overridePythonAttrs {
+        doCheck = false;
+      };
+    };
+  };
+in
+py3.buildPythonApplication rec {
   pname = "iap-proxy";
   version = "0.2.0";
   pyproject = true;
@@ -13,9 +23,9 @@ python3Packages.buildPythonApplication rec {
   #   };
   src = iap-proxy-src;
 
-  build-system = [ python3Packages.hatchling ];
+  build-system = [ py3.hatchling ];
 
-  dependencies = with python3Packages; [
+  dependencies = with py3; [
     fastapi
     uvicorn
     httpx
