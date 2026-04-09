@@ -4169,6 +4169,7 @@ Like treemacs `W' / extra-wide-toggle."
            ("r"   "Requests"      decknix-sidebar-goto-requests)
            ("w"   "WIP"           decknix-sidebar-goto-wip)
            ("l"   "Live"          decknix-sidebar-goto-live)
+           ("p"   "Previous"      decknix-sidebar-goto-previous)
            ("s"   "Sessions…"     decknix-sidebar-sessions)]
           ["Quick"
            ("RET" "Open / goto"   agent-shell-workspace-sidebar-goto)
@@ -4416,6 +4417,11 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                                           'agent-shell-workspace-buffer buf))
                     (insert line "\n"))))
 
+              ;; ── Previous sessions (greyed-out, from last exit) ──
+              (when (fboundp 'decknix--sidebar-render-previous-sessions)
+                (setq line-num
+                      (decknix--sidebar-render-previous-sessions line-num)))
+
               ;; ── Saved Sessions (grouped by workspace, merged by display name) ──
               (when saved
                 (insert "\n")
@@ -4495,6 +4501,9 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
             (let ((hub-url (get-text-property
                             (line-beginning-position)
                             'decknix-hub-url))
+                  (prev (get-text-property
+                          (line-beginning-position)
+                          'decknix-previous-session))
                   (saved (get-text-property
                           (line-beginning-position)
                           'decknix-sidebar-saved-session)))
@@ -4502,6 +4511,9 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                ;; Hub item: open URL in browser
                (hub-url
                 (browse-url hub-url))
+               ;; Previous session: restore it
+               (prev
+                (decknix--sidebar-restore-previous-session prev))
                ;; Saved session
                (saved
                   ;; Resume saved session
@@ -4884,6 +4896,55 @@ Auto-detects workspace and generates session name from the URL."
           [:class transient-column
            :setup-children decknix--nav-live-children])
 
+        ;; -- Section: Previous sessions --
+        (defun decknix--nav-previous-children (_)
+          "Generate transient children for previous (restorable) sessions."
+          (let* ((live-bufs (seq-filter #'buffer-live-p
+                                        (when (fboundp 'agent-shell-buffers)
+                                          (agent-shell-buffers))))
+                 (live-sids (mapcar
+                             (lambda (buf)
+                               (with-current-buffer buf
+                                 (when (boundp 'agent-shell-session-id)
+                                   (symbol-value 'agent-shell-session-id))))
+                             live-bufs))
+                 (prev (seq-filter
+                        (lambda (e)
+                          (not (member (alist-get 'session-id e) live-sids)))
+                        (or decknix--sidebar-previous-sessions '())))
+                 (keys decknix--nav-keys))
+            (if (null prev)
+                (list (transient-parse-suffix transient--prefix
+                        '("q" "No previous sessions" ignore)))
+              (append
+               (list (transient-parse-suffix transient--prefix
+                       (list "A" "Restore all"
+                             #'decknix--sidebar-restore-all-previous)))
+               (cl-loop for entry in prev
+                        for key in keys
+                        collect
+                        (let* ((name (or (alist-get 'name entry) "unknown"))
+                               (short (if (string-match "\\*Auggie: \\(.*\\)\\*" name)
+                                          (match-string 1 name)
+                                        name))
+                               (short (if (> (length short) 35)
+                                          (concat (substring short 0 34) "…")
+                                        short))
+                               (cmd (decknix--nav-make-item-cmd
+                                     entry #'decknix--nav-previous-item-actions)))
+                          (transient-parse-suffix
+                           transient--prefix
+                           (list key
+                                 (propertize short 'face 'font-lock-comment-face)
+                                 cmd))))
+               (list (transient-parse-suffix transient--prefix
+                       '("q" "Back" transient-quit-one)))))))
+
+        (transient-define-prefix decknix-sidebar-nav-previous ()
+          "Pick a previous session to restore."
+          [:class transient-column
+           :setup-children decknix--nav-previous-children])
+
         ;; -- Sidebar → transient helper --
         ;; Transient records `selected-window' as its "original" window.
         ;; When invoked from a side window (the sidebar), transient's
@@ -4934,6 +4995,13 @@ Auto-detects workspace and generates session name from the URL."
           (interactive)
           (decknix--sidebar-call-transient #'decknix-sidebar-nav-live))
 
+        (defun decknix-sidebar-goto-previous ()
+          "Navigate to previous (restorable) sessions."
+          (interactive)
+          (if decknix--sidebar-previous-sessions
+              (decknix--sidebar-call-transient #'decknix-sidebar-nav-previous)
+            (message "No previous sessions")))
+
         ;; -- Bind keys in sidebar mode --
         ;; Override upstream keys: r, w, a now serve section navigation
         (define-key agent-shell-workspace-sidebar-mode-map
@@ -4942,6 +5010,8 @@ Auto-detects workspace and generates session name from the URL."
           (kbd "w") #'decknix-sidebar-goto-wip)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "l") #'decknix-sidebar-goto-live)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "p") #'decknix-sidebar-goto-previous)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "a") (lambda () (interactive)
                       (decknix--sidebar-call-transient #'decknix-sidebar-actions)))
@@ -4965,6 +5035,188 @@ Auto-detects workspace and generates session name from the URL."
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "s") (lambda () (interactive)
                       (decknix--sidebar-call-transient #'decknix-sidebar-sessions)))
+
+        ;; == Sidebar state persistence ==
+        ;; Saves toggle states and previous live sessions across restarts.
+        ;; File: ~/.config/decknix/sidebar-state.el (s-expression format).
+
+        (defvar decknix--sidebar-state-file
+          (expand-file-name "~/.config/decknix/sidebar-state.el")
+          "Path to the file storing sidebar toggle states and previous sessions.")
+
+        (defvar decknix--sidebar-previous-sessions nil
+          "List of sessions that were live when Emacs last exited.
+Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
+
+        (defun decknix--sidebar-state-save ()
+          "Save sidebar toggle states and current live sessions to disk."
+          (let* ((live-info
+                  (mapcar
+                   (lambda (buf)
+                     (with-current-buffer buf
+                       (let* ((sid (when (boundp 'agent-shell-session-id)
+                                     (symbol-value 'agent-shell-session-id)))
+                              (conv-key (when sid
+                                          (ignore-errors
+                                            (decknix--agent-conversation-key-for-session sid))))
+                              (tags (when conv-key
+                                      (decknix--agent-tags-for-conv-key conv-key)))
+                              (ws (when conv-key
+                                    (decknix--agent-workspace-for-conv-key conv-key))))
+                         (list (cons 'session-id sid)
+                               (cons 'name (buffer-name buf))
+                               (cons 'workspace (or ws (expand-file-name default-directory)))
+                               (cons 'conv-key conv-key)
+                               (cons 'tags tags)))))
+                   (seq-filter #'buffer-live-p (agent-shell-buffers))))
+                 (state
+                  (list
+                   (cons 'display-mode decknix--sidebar-display-mode)
+                   (cons 'width-state decknix--sidebar-width-state)
+                   (cons 'quick-switch
+                         (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
+                              agent-shell-workspace-sidebar--quick-switch))
+                   (cons 'age-filter
+                         (when (boundp 'decknix--hub-age-filter)
+                           decknix--hub-age-filter))
+                   (cons 'org-hidden
+                         (when (boundp 'decknix--hub-org-hidden)
+                           decknix--hub-org-hidden))
+                   (cons 'previous-sessions live-info))))
+            (make-directory (file-name-directory decknix--sidebar-state-file) t)
+            (with-temp-file decknix--sidebar-state-file
+              (insert ";; Auto-generated — do not edit\n")
+              (prin1 state (current-buffer))
+              (insert "\n"))))
+
+        (defun decknix--sidebar-state-restore ()
+          "Restore sidebar toggle states and previous sessions from disk."
+          (when (file-exists-p decknix--sidebar-state-file)
+            (condition-case err
+                (let ((state (with-temp-buffer
+                               (insert-file-contents decknix--sidebar-state-file)
+                               (read (current-buffer)))))
+                  (when-let ((dm (alist-get 'display-mode state)))
+                    (setq decknix--sidebar-display-mode dm))
+                  (when-let ((ws (alist-get 'width-state state)))
+                    (setq decknix--sidebar-width-state ws))
+                  (let ((qs (alist-get 'quick-switch state)))
+                    (when (and qs (boundp 'agent-shell-workspace-sidebar--quick-switch))
+                      (setq agent-shell-workspace-sidebar--quick-switch t)))
+                  ;; Hub toggles (restored even if hub loads later)
+                  (let ((af (alist-get 'age-filter state)))
+                    (when (and af (boundp 'decknix--hub-age-filter))
+                      (setq decknix--hub-age-filter af)))
+                  (when-let ((oh (alist-get 'org-hidden state)))
+                    (when (boundp 'decknix--hub-org-hidden)
+                      (setq decknix--hub-org-hidden oh)))
+                  (when-let ((prev (alist-get 'previous-sessions state)))
+                    (setq decknix--sidebar-previous-sessions prev)))
+              (error
+               (message "sidebar-state: restore failed: %s" (error-message-string err))))))
+
+        ;; Save on exit, restore on load
+        (add-hook 'kill-emacs-hook #'decknix--sidebar-state-save)
+        (decknix--sidebar-state-restore)
+
+        ;; -- Previous sessions: sidebar rendering --
+        (defun decknix--sidebar-render-previous-sessions (line-num)
+          "Render greyed-out previous live sessions after the Live section.
+Returns updated LINE-NUM."
+          (let* ((live-bufs (seq-filter #'buffer-live-p (agent-shell-buffers)))
+                 (live-sids (mapcar
+                             (lambda (buf)
+                               (with-current-buffer buf
+                                 (when (boundp 'agent-shell-session-id)
+                                   (symbol-value 'agent-shell-session-id))))
+                             live-bufs))
+                 ;; Filter out sessions that are already live
+                 (prev (seq-filter
+                        (lambda (entry)
+                          (not (member (alist-get 'session-id entry) live-sids)))
+                        decknix--sidebar-previous-sessions)))
+            (when prev
+              (insert "\n")
+              (setq line-num (1+ line-num))
+              (decknix--sidebar-render-section-header
+               (format "Previous (%d)" (length prev)))
+              (setq line-num (1+ line-num))
+              (dolist (entry prev)
+                (let* ((name (or (alist-get 'name entry) "unknown"))
+                       ;; Strip *Auggie: ... * wrapper if present
+                       (short (if (string-match "\\*Auggie: \\(.*\\)\\*" name)
+                                  (match-string 1 name)
+                                name))
+                       (line (concat "  "
+                                     (propertize "○" 'face 'font-lock-comment-face)
+                                     " "
+                                     (propertize short 'face 'font-lock-comment-face))))
+                  (setq line (propertize line
+                                        'decknix-previous-session entry))
+                  (insert line "\n")
+                  (setq line-num (1+ line-num))))))
+          line-num)
+
+        ;; -- Previous sessions: restore action --
+        (defun decknix--sidebar-restore-previous-session (entry)
+          "Resume the previous session described by ENTRY."
+          (let* ((sid (alist-get 'session-id entry))
+                 (name (alist-get 'name entry))
+                 (workspace (alist-get 'workspace entry))
+                 (conv-key (alist-get 'conv-key entry))
+                 ;; Strip *Auggie: ... * wrapper
+                 (display-name (if (and name (string-match "\\*Auggie: \\(.*\\)\\*" name))
+                                   (match-string 1 name)
+                                 name)))
+            (if (not sid)
+                (message "Cannot restore: no session ID")
+              (decknix--agent-session-resume sid 20 display-name workspace conv-key)
+              ;; Remove from previous list since it's now live
+              (setq decknix--sidebar-previous-sessions
+                    (seq-filter (lambda (e)
+                                  (not (equal (alist-get 'session-id e) sid)))
+                                decknix--sidebar-previous-sessions))
+              (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                (agent-shell-workspace-sidebar-refresh)))))
+
+        (defun decknix--sidebar-restore-all-previous ()
+          "Restore all previous live sessions."
+          (interactive)
+          (let ((entries (copy-sequence decknix--sidebar-previous-sessions)))
+            (if (null entries)
+                (message "No previous sessions to restore")
+              (dolist (entry entries)
+                (decknix--sidebar-restore-previous-session entry))
+              (message "Restored %d sessions" (length entries)))))
+
+        ;; -- Previous session actions --
+        (defun decknix--nav-previous-item-actions (entry)
+          "Show an action menu for a previous session ENTRY."
+          (let ((name (or (alist-get 'name entry) "unknown")))
+            (run-at-time 0.05 nil
+              (eval `(lambda ()
+                       (let ((choice (read-char-choice
+                                      ,(format "%s: [r]estore [d]ismiss [q]uit"
+                                               (if (string-match "\\*Auggie: \\(.*\\)\\*" name)
+                                                   (match-string 1 name)
+                                                 name))
+                                      '(?r ?d ?q))))
+                         (pcase choice
+                           (?r (decknix--sidebar-restore-previous-session ',entry))
+                           (?d (setq decknix--sidebar-previous-sessions
+                                     (seq-filter
+                                      (lambda (e)
+                                        (not (equal (alist-get 'session-id e)
+                                                    ',(alist-get 'session-id entry))))
+                                      decknix--sidebar-previous-sessions))
+                               (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                                 (agent-shell-workspace-sidebar-refresh))
+                               (message "Dismissed"))
+                           (?q (message "Cancelled"))))) t))))
+
+        ;; Bind 'P' to restore all previous sessions
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "P") #'decknix--sidebar-restore-all-previous)
       ''
       + optionalString cfg.hub.enable ''
 
