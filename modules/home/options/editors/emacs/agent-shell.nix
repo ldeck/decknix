@@ -3082,10 +3082,22 @@ Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
             (message "agent-shell-attention not loaded")))
 
         (defun decknix-compose-workspace-toggle ()
-          "Toggle Agents workspace (forwarded to parent)."
+          "Toggle Agents workspace, carrying the compose buffer along."
           (interactive)
           (if (fboundp 'agent-shell-workspace-toggle)
-              (call-interactively 'agent-shell-workspace-toggle)
+              (let ((compose-buf (current-buffer))
+                    (is-compose (bound-and-true-p decknix-agent-compose-mode)))
+                (call-interactively 'agent-shell-workspace-toggle)
+                ;; If we came from a compose buffer and we're now in the
+                ;; Agents tab, re-display the compose buffer in the main
+                ;; area so it doesn't vanish with the previous tab.
+                (when (and is-compose
+                           (fboundp 'agent-shell-workspace--in-agents-tab-p)
+                           (agent-shell-workspace--in-agents-tab-p)
+                           (buffer-live-p compose-buf))
+                  (let ((main (window-main-window (selected-frame))))
+                    (when (and main (window-live-p main))
+                      (set-window-buffer main compose-buf)))))
             (message "agent-shell-workspace not loaded")))
 
         (defun decknix-compose-session-picker ()
@@ -4811,25 +4823,44 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
           [:class transient-column
            :setup-children decknix--nav-live-children])
 
+        ;; -- Sidebar → transient helper --
+        ;; Transient records `selected-window' as its "original" window.
+        ;; When invoked from a side window (the sidebar), transient's
+        ;; window management collapses the sidebar on exit.  Fix: select
+        ;; the main (non-side) window before opening any transient, then
+        ;; return focus to the sidebar after the transient exits.
+        (defun decknix--sidebar-call-transient (cmd)
+          "Invoke transient CMD from the main window to preserve the sidebar."
+          (let ((sidebar-win (selected-window)))
+            ;; Move to the main window so transient anchors there
+            (let ((main (window-main-window (selected-frame))))
+              (when (and main (window-live-p main))
+                (select-window main)))
+            (call-interactively cmd)
+            ;; After transient sets up, re-select the sidebar so the
+            ;; user can keep navigating (transient reads keys globally).
+            (when (and sidebar-win (window-live-p sidebar-win))
+              (select-window sidebar-win))))
+
         ;; -- Dispatch commands for section keys --
         (defun decknix-sidebar-goto-requests ()
           "Navigate to hub Requests items."
           (interactive)
           (if (and (fboundp 'decknix--hub-has-data-p) (decknix--hub-has-data-p))
-              (call-interactively #'decknix-sidebar-nav-requests)
+              (decknix--sidebar-call-transient #'decknix-sidebar-nav-requests)
             (message "Hub: no data — enable with decknix.services.hub.enable = true")))
 
         (defun decknix-sidebar-goto-wip ()
           "Navigate to hub WIP items."
           (interactive)
           (if (and (fboundp 'decknix--hub-has-data-p) (decknix--hub-has-data-p))
-              (call-interactively #'decknix-sidebar-nav-wip)
+              (decknix--sidebar-call-transient #'decknix-sidebar-nav-wip)
             (message "Hub: no data — enable with decknix.services.hub.enable = true")))
 
         (defun decknix-sidebar-goto-live ()
           "Navigate to live sessions."
           (interactive)
-          (call-interactively #'decknix-sidebar-nav-live))
+          (decknix--sidebar-call-transient #'decknix-sidebar-nav-live))
 
         ;; -- Bind keys in sidebar mode --
         ;; Override upstream keys: r, w, a now serve section navigation
@@ -4840,12 +4871,15 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "l") #'decknix-sidebar-goto-live)
         (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "a") #'decknix-sidebar-actions)
+          (kbd "a") (lambda () (interactive)
+                      (decknix--sidebar-call-transient #'decknix-sidebar-actions)))
 
         (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "?") #'decknix-sidebar-transient)
+          (kbd "?") (lambda () (interactive)
+                      (decknix--sidebar-call-transient #'decknix-sidebar-transient)))
         (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "h") #'decknix-sidebar-transient)
+          (kbd "h") (lambda () (interactive)
+                      (decknix--sidebar-call-transient #'decknix-sidebar-transient)))
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "K") #'decknix-sidebar-toggle-keys)
         (define-key agent-shell-workspace-sidebar-mode-map
@@ -4857,7 +4891,8 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "S") #'agent-shell-workspace-sidebar-toggle-quick-switch)
         (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "s") #'decknix-sidebar-sessions)
+          (kbd "s") (lambda () (interactive)
+                      (decknix--sidebar-call-transient #'decknix-sidebar-sessions)))
       ''
       + optionalString cfg.hub.enable ''
 
