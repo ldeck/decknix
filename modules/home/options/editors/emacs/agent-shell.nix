@@ -3204,22 +3204,24 @@ Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
             (message "agent-shell-attention not loaded")))
 
         (defun decknix-compose-workspace-toggle ()
-          "Toggle Agents workspace, carrying the compose buffer along."
+          "Toggle Agents workspace from a compose buffer.
+Close the compose side-window first so the tab switch happens
+cleanly (side-windows persist across tab switches and corrupt
+the layout otherwise).  Focus returns to the agent buffer before
+the toggle."
           (interactive)
           (if (fboundp 'agent-shell-workspace-toggle)
-              (let ((compose-buf (current-buffer))
-                    (is-compose (bound-and-true-p decknix-agent-compose-mode)))
-                (call-interactively 'agent-shell-workspace-toggle)
-                ;; If we came from a compose buffer and we're now in the
-                ;; Agents tab, re-display the compose buffer in the main
-                ;; area so it doesn't vanish with the previous tab.
-                (when (and is-compose
-                           (fboundp 'agent-shell-workspace--in-agents-tab-p)
-                           (agent-shell-workspace--in-agents-tab-p)
-                           (buffer-live-p compose-buf))
-                  (let ((main (window-main-window (selected-frame))))
-                    (when (and main (window-live-p main))
-                      (set-window-buffer main compose-buf)))))
+              (let ((target decknix--compose-target-buffer)
+                    (compose-win (selected-window)))
+                ;; Close the compose side-window (kill the buffer)
+                (quit-restore-window compose-win 'kill)
+                ;; Move focus to the target agent buffer if it's visible
+                (when (and target (buffer-live-p target))
+                  (let ((target-win (get-buffer-window target)))
+                    (when (and target-win (window-live-p target-win))
+                      (select-window target-win))))
+                ;; Now toggle tabs cleanly
+                (call-interactively 'agent-shell-workspace-toggle))
             (message "agent-shell-workspace not loaded")))
 
         (defun decknix-compose-session-picker ()
