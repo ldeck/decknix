@@ -164,6 +164,29 @@ let
   guidelinesContent = ''
     # Augment Agent Guidelines (User-level)
 
+    These rules apply globally across ALL workspaces. Workspace-level
+    AGENTS.md files may add project-specific rules but should not need
+    to repeat these.
+
+    ## Command Execution — Prefer Nix-managed Tools
+
+    This is a Nix-managed macOS system. All tooling is installed via Nix.
+
+    1. **Never hardcode paths** to system binaries. Do not use
+       `/usr/bin/python3`, `/usr/local/bin/node`, or similar. Use bare
+       command names (`python3`, `node`, `ruby`, `java`) and let the
+       user's Nix-first PATH resolve them.
+    2. **The PATH order is**: `~/.nix-profile/bin` →
+       `/run/current-system/sw/bin` → `/nix/var/nix/profiles/default/bin`
+       → `/usr/local/bin` → `/usr/bin` → `/bin` → `/usr/sbin` → `/sbin`.
+       Nix paths come first deliberately.
+    3. To verify which version will run: `which python3` or
+       `command -v node`.
+    4. In generated Nix code (scripts, launchd services), pin to a
+       specific Nix package: `''${pkgs.python3}/bin/python3`.
+    5. **Exception**: `#!/usr/bin/env bash` shebangs are acceptable —
+       this is the standard portable idiom.
+
     ## Markdown Table Formatting
 
     When printing markdown tables in responses:
