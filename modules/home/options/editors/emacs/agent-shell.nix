@@ -4827,20 +4827,31 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
         ;; Transient records `selected-window' as its "original" window.
         ;; When invoked from a side window (the sidebar), transient's
         ;; window management collapses the sidebar on exit.  Fix: select
-        ;; the main (non-side) window before opening any transient, then
-        ;; return focus to the sidebar after the transient exits.
+        ;; the main (non-side) window before opening the transient, and
+        ;; use `transient-exit-hook' to restore the sidebar afterwards.
+
+        (defun decknix--sidebar-restore-after-transient ()
+          "One-shot hook: re-show and focus the sidebar after a transient exits."
+          (remove-hook 'transient-exit-hook #'decknix--sidebar-restore-after-transient)
+          (when (and (fboundp 'agent-shell-workspace--in-agents-tab-p)
+                     (agent-shell-workspace--in-agents-tab-p))
+            ;; Re-create sidebar if it was destroyed
+            (when (fboundp 'agent-shell-workspace-sidebar-show)
+              (agent-shell-workspace-sidebar-show))
+            ;; Focus the sidebar
+            (when-let ((sw (get-buffer-window
+                            agent-shell-workspace-sidebar-buffer-name)))
+              (select-window sw))))
+
         (defun decknix--sidebar-call-transient (cmd)
           "Invoke transient CMD from the main window to preserve the sidebar."
-          (let ((sidebar-win (selected-window)))
-            ;; Move to the main window so transient anchors there
-            (let ((main (window-main-window (selected-frame))))
-              (when (and main (window-live-p main))
-                (select-window main)))
-            (call-interactively cmd)
-            ;; After transient sets up, re-select the sidebar so the
-            ;; user can keep navigating (transient reads keys globally).
-            (when (and sidebar-win (window-live-p sidebar-win))
-              (select-window sidebar-win))))
+          ;; Move to the main window so transient anchors there
+          (let ((main (window-main-window (selected-frame))))
+            (when (and main (window-live-p main))
+              (select-window main)))
+          ;; Arrange to restore the sidebar after the transient exits
+          (add-hook 'transient-exit-hook #'decknix--sidebar-restore-after-transient)
+          (call-interactively cmd))
 
         ;; -- Dispatch commands for section keys --
         (defun decknix-sidebar-goto-requests ()
