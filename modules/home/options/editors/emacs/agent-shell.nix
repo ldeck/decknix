@@ -4304,6 +4304,37 @@ Set to nil to always use the system browser.")
         (defvar decknix--sidebar-width-state 'default
           "Current sidebar width state: default, fit, or wide.")
 
+        (defun decknix--sidebar-apply-width ()
+          "Apply the saved width state to the sidebar window.
+Called after the sidebar opens to restore the width from the
+previous session."
+          (let ((win (get-buffer-window
+                      agent-shell-workspace-sidebar-buffer-name))
+                (default-w agent-shell-workspace-sidebar-width))
+            (when (and win (window-live-p win)
+                       (not (eq decknix--sidebar-width-state 'default)))
+              (pcase decknix--sidebar-width-state
+                ('fit
+                 ;; Fit to content: measure longest line
+                 (let ((max-len 0))
+                   (with-current-buffer (window-buffer win)
+                     (save-excursion
+                       (goto-char (point-min))
+                       (while (not (eobp))
+                         (setq max-len
+                               (max max-len (- (line-end-position)
+                                               (line-beginning-position))))
+                         (forward-line 1))))
+                   (let ((fit-w (max default-w (+ max-len 2))))
+                     (window-resize win (- fit-w (window-width win)) t))))
+                ('wide
+                 (let ((wide-w (* 2 default-w)))
+                   (window-resize win (- wide-w (window-width win)) t)))))))
+
+        ;; Apply saved width after the sidebar opens
+        (advice-add 'agent-shell-workspace-sidebar-open :after
+          (lambda (&rest _) (decknix--sidebar-apply-width)))
+
         (defun decknix-sidebar-cycle-width ()
           "Cycle sidebar width: default → fit-to-content → wide → default.
 Like treemacs `W' / extra-wide-toggle."
@@ -5200,19 +5231,34 @@ Prompts for workspace if auto-detection fails."
           [:class transient-column
            :setup-children decknix--nav-previous-children])
 
+        ;; -- Buffer isolation fix: allow transient buffers in the Agents tab --
+        ;; The upstream agent-shell-workspace has buffer isolation that
+        ;; redirects non-agent buffers out of the Agents tab (switches to
+        ;; the previous tab).  Transient's ` *transient*' buffer fails the
+        ;; agent-buffer-p check, causing the tab to switch away — which
+        ;; looks like the sidebar "collapsing".  Fix: extend the predicate
+        ;; to recognize transient and completion buffers as legitimate.
+        (advice-add 'agent-shell-workspace--agent-buffer-p :around
+          (lambda (orig-fn buffer)
+            "Also recognize transient/completion buffers as agent-tab-safe."
+            (or (funcall orig-fn buffer)
+                (when (and buffer (buffer-live-p buffer))
+                  (let ((name (buffer-name buffer)))
+                    (or (string-match-p "\\` \\*transient\\*" name)
+                        (string-match-p "\\` \\*Transient" name)
+                        (string-match-p "\\*Completions\\*" name)))))))
+
         ;; -- Sidebar → transient helper --
-        ;; Transient records `selected-window' as its "original" window.
-        ;; When invoked from a side window (the sidebar), transient's
-        ;; window management collapses the sidebar on exit.  Fix: select
-        ;; the main (non-side) window before opening the transient, and
-        ;; use `transient-exit-hook' to restore the sidebar afterwards.
+        ;; Now that isolation no longer redirects transient buffers, the
+        ;; transient renders fine from the sidebar.  We just need to
+        ;; re-focus the sidebar after the transient exits.
 
         (defun decknix--sidebar-restore-after-transient ()
-          "One-shot hook: re-show and focus the sidebar after a transient exits."
+          "One-shot hook: re-focus the sidebar after a transient exits."
           (remove-hook 'transient-exit-hook #'decknix--sidebar-restore-after-transient)
           (when (and (fboundp 'agent-shell-workspace--in-agents-tab-p)
                      (agent-shell-workspace--in-agents-tab-p))
-            ;; Re-create sidebar if it was destroyed
+            ;; Re-show sidebar if it was somehow destroyed
             (when (fboundp 'agent-shell-workspace-sidebar-show)
               (agent-shell-workspace-sidebar-show))
             ;; Focus the sidebar
@@ -5221,12 +5267,10 @@ Prompts for workspace if auto-detection fails."
               (select-window sw))))
 
         (defun decknix--sidebar-call-transient (cmd)
-          "Invoke transient CMD from the main window to preserve the sidebar."
-          ;; Move to the main window so transient anchors there
-          (let ((main (window-main-window (selected-frame))))
-            (when (and main (window-live-p main))
-              (select-window main)))
-          ;; Arrange to restore the sidebar after the transient exits
+          "Invoke transient CMD from the sidebar without collapsing it.
+Focus stays in the sidebar; transient renders at the bottom of
+the frame (its default `display-buffer-in-side-window' action).
+After the transient exits, focus returns to the sidebar."
           (add-hook 'transient-exit-hook #'decknix--sidebar-restore-after-transient)
           (call-interactively cmd))
 
