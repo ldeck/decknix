@@ -749,6 +749,10 @@ Press q to dismiss."
         (defvar-local decknix--agent-session-workspace nil
           "The workspace root directory for this agent session, if set.")
 
+        (defvar-local decknix--agent-workspace-persisted nil
+          "Non-nil when this buffer's workspace has been persisted to agent-sessions.json.
+Prevents the auto-persist hook from firing repeatedly.")
+
         (defun decknix--agent-session-time-ago (iso-time)
           "Format ISO-TIME as a relative time string (e.g. \"2h ago\")."
           (let* ((time (date-to-time iso-time))
@@ -1704,6 +1708,55 @@ the same conversation."
                              entry)
                     (decknix--agent-tags-write store)))))))
 
+
+        (defun decknix--agent-auto-persist-workspace ()
+          "Auto-persist workspace for the current buffer on first prompt-ready.
+Subscribes to `prompt-ready' so the workspace is stored as soon as the
+conversation key can be derived (i.e., after the first exchange).  This
+is a safety net — sessions created by any path (upstream `c', guided `n',
+quickaction, resumed, etc.) will have their workspace recorded in
+agent-sessions.json even if the user never renames or tags the session."
+          (let ((buf (current-buffer)))
+            (agent-shell-subscribe-to
+             :shell-buffer buf
+             :event 'prompt-ready
+             :on-event
+             (eval `(lambda (_event)
+                      (when (and (buffer-live-p ,buf)
+                                 (not (buffer-local-value
+                                       'decknix--agent-workspace-persisted ,buf)))
+                        (condition-case nil
+                            (with-current-buffer ,buf
+                              ;; Determine the workspace: explicit var > default-directory
+                              (let ((ws (or decknix--agent-session-workspace
+                                           default-directory)))
+                                (when (and ws (stringp ws)
+                                           (not (string-empty-p ws)))
+                                  ;; Derive conv-key from the first user message
+                                  (let* ((ring (and (boundp 'comint-input-ring)
+                                                    comint-input-ring))
+                                         (first-msg
+                                          (when (and ring (ring-p ring)
+                                                     (> (ring-length ring) 0))
+                                            (ring-ref ring (1- (ring-length ring)))))
+                                         (conv-key
+                                          (when (and first-msg
+                                                     (not (string-empty-p first-msg)))
+                                            (decknix--agent-conversation-key first-msg))))
+                                    (when conv-key
+                                      ;; Only store if this conv-key has no workspace yet
+                                      (let* ((store (decknix--agent-tags-read))
+                                             (convs (decknix--agent-tags-conversations store))
+                                             (entry (gethash conv-key convs)))
+                                        (if (and entry (gethash "workspace" entry))
+                                            ;; Already has workspace — mark as done
+                                            (setq-local decknix--agent-workspace-persisted t)
+                                          ;; No workspace stored — persist it
+                                          (decknix--agent-store-metadata-by-conv-key
+                                           conv-key nil ws)
+                                          (setq-local decknix--agent-workspace-persisted t))))))))
+                          (error nil))))
+                   t))))
         (defun decknix-agent-session-new (&optional quick)
           "Start a new agent session with guided setup.
 Prompts for workspace directory, session name, and initial tags.
@@ -6721,6 +6774,10 @@ Priority order:
         (add-hook 'agent-shell-mode-hook
                   (lambda ()
                     (display-line-numbers-mode 0)
+                    ;; Auto-persist workspace on first exchange — safety net
+                    ;; for sessions created via any path (upstream c, resume,
+                    ;; quickaction, etc.) so they never show as "unknown".
+                    (decknix--agent-auto-persist-workspace)
                     ;; Disable cape-file in agent-shell buffers — synchronous
                     ;; filesystem scans freeze the cursor during typing.
                     (setq-local completion-at-point-functions
