@@ -208,6 +208,62 @@ async fn gh_json(args: &[&str]) -> Result<String, String> {
 
 
 // ---------------------------------------------------------------------------
+// Archived repo cache
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
+use tokio::sync::RwLock;
+
+/// Cache of repo name → archived status.  Populated lazily per poll cycle.
+/// Archived status rarely changes, so we cache for the lifetime of the process
+/// and only look up repos we haven't seen before.
+static ARCHIVED_CACHE: OnceLock<RwLock<HashMap<String, bool>>> = OnceLock::new();
+
+fn archived_cache() -> &'static RwLock<HashMap<String, bool>> {
+    ARCHIVED_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Check if a repo is archived (cached).  Returns `true` for archived repos.
+async fn is_repo_archived(repo: &str) -> bool {
+    // Fast path: check cache
+    {
+        let cache = archived_cache().read().await;
+        if let Some(&archived) = cache.get(repo) {
+            return archived;
+        }
+    }
+    // Slow path: query GitHub API
+    let archived = match gh_json(&[
+        "api", &format!("repos/{repo}"),
+        "--jq", ".archived",
+    ]).await {
+        Ok(output) => output.trim() == "true",
+        Err(e) => {
+            eprintln!("hub: failed to check archived status for {repo}: {e}");
+            false // assume not archived on error
+        }
+    };
+    // Store in cache
+    {
+        let mut cache = archived_cache().write().await;
+        cache.insert(repo.to_string(), archived);
+    }
+    archived
+}
+
+/// Filter a list of repo names, returning the set of archived ones.
+async fn find_archived_repos(repos: &[String]) -> std::collections::HashSet<String> {
+    let mut archived = std::collections::HashSet::new();
+    for repo in repos {
+        if is_repo_archived(repo).await {
+            archived.insert(repo.clone());
+        }
+    }
+    archived
+}
+
+// ---------------------------------------------------------------------------
 // GitHub Reviews Adapter
 // ---------------------------------------------------------------------------
 
@@ -321,11 +377,23 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
     let prs: Vec<GhSearchPr> = serde_json::from_str(&output)
         .map_err(|e| format!("parse error: {e}"))?;
 
+    // Collect unique repo names and filter out archived repositories
+    let repo_names: Vec<String> = prs.iter()
+        .filter_map(|pr| pr.repository.as_ref().map(|r| r.name_with_owner.clone()))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let archived = find_archived_repos(&repo_names).await;
+
     let mut items: Vec<ReviewRequest> = Vec::with_capacity(prs.len());
     for pr in &prs {
         let repo = pr.repository.as_ref()
             .map(|r| r.name_with_owner.clone())
             .unwrap_or_default();
+        // Skip PRs from archived repositories
+        if archived.contains(&repo) {
+            continue;
+        }
         // Fetch CI status per PR (parallel would be nicer but gh CLI
         // has rate limits; sequential is safer for a background poller)
         let ci = fetch_pr_ci(&repo, pr.number).await;
@@ -411,6 +479,14 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
     let prs: Vec<GhMyPr> = serde_json::from_str(&output)
         .map_err(|e| format!("parse error: {e}"))?;
 
+    // Collect unique repo names and filter out archived repositories
+    let repo_names: Vec<String> = prs.iter()
+        .filter_map(|pr| pr.repository.as_ref().map(|r| r.name_with_owner.clone()))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let archived = find_archived_repos(&repo_names).await;
+
     // Group by repository
     let mut repo_map: std::collections::BTreeMap<String, Vec<WipPr>> =
         std::collections::BTreeMap::new();
@@ -419,6 +495,10 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
         let repo = pr.repository.as_ref()
             .map(|r| r.name_with_owner.clone())
             .unwrap_or_else(|| "unknown".to_string());
+        // Skip PRs from archived repositories
+        if archived.contains(&repo) {
+            continue;
+        }
         // Fetch branch + CI per PR
         let (branch, ci) = fetch_pr_details(&repo, pr.number).await;
         let entry = repo_map.entry(repo).or_default();
