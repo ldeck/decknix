@@ -4658,49 +4658,52 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
             sym))
 
         ;; -- Item action menus --
+        ;; Uses read-char-choice after a short delay to avoid conflicts
+        ;; with the transient exit hook / sidebar restore.
+
         (defun decknix--nav-hub-item-actions (item)
           "Show an action menu for a hub ITEM (review or WIP PR)."
           (let* ((url (alist-get 'url item))
                  (repo (or (alist-get 'repo item) ""))
                  (number (alist-get 'number item))
                  (type (alist-get 'decknix-type item))
-                 (choice (read-char-choice
-                          (format "%s#%s: [o]pen [c]opy-url [r]eview-session [q]uit"
-                                  (car (last (split-string repo "/")))
-                                  number)
-                          '(?o ?c ?r ?q))))
-            (pcase choice
-              (?o (when url (browse-url url)))
-              (?c (when url
-                    (kill-new url)
-                    (message "Copied: %s" url)))
-              (?r (when url
-                    ;; Launch a PR review quick-action session
-                    (when (fboundp 'decknix--agent-quickaction-pr-review)
-                      (decknix--agent-quickaction-pr-review url))))
-              (?q (message "Cancelled")))))
+                 (short-repo (car (last (split-string repo "/")))))
+            (run-at-time 0.05 nil
+              (eval `(lambda ()
+                       (let ((choice (read-char-choice
+                                      ,(format "%s#%s: [o]pen [c]opy-url [r]eview [q]uit"
+                                               short-repo number)
+                                      '(?o ?c ?r ?q))))
+                         (pcase choice
+                           (?o (when ,url (browse-url ,url)))
+                           (?c (when ,url
+                                 (kill-new ,url)
+                                 (message "Copied: %s" ,url)))
+                           (?r (when ,url
+                                 (when (fboundp 'decknix--agent-quickaction-pr-review)
+                                   (decknix--agent-quickaction-pr-review ,url))))
+                           (?q (message "Cancelled"))))) t))))
 
         (defun decknix--nav-live-item-actions (buf)
           "Show an action menu for a live session buffer BUF."
-          (let ((choice (read-char-choice
-                         (format "%s: [o]pen [k]ill [r]estart [R]ename [q]uit"
-                                 (buffer-name buf))
-                         '(?o ?k ?r ?R ?q))))
-            (pcase choice
-              (?o (pop-to-buffer buf))
-              (?k (when (buffer-live-p buf)
-                    (with-current-buffer buf
-                      (when (fboundp 'agent-shell-workspace-sidebar-kill)
-                        (kill-buffer buf)))
-                    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-                      (agent-shell-workspace-sidebar-refresh))))
-              (?r (when (buffer-live-p buf)
-                    (with-current-buffer buf
-                      (when (fboundp 'agent-shell-restart)
-                        (agent-shell-restart)))))
-              (?R (when (buffer-live-p buf)
-                    (agent-shell-workspace-sidebar-rename)))
-              (?q (message "Cancelled")))))
+          (let ((name (buffer-name buf)))
+            (run-at-time 0.05 nil
+              (eval `(lambda ()
+                       (when (buffer-live-p ,buf)
+                         (let ((choice (read-char-choice
+                                        ,(format "%s: [s]witch [k]ill [r]estart [q]uit" name)
+                                        '(?s ?k ?r ?q))))
+                           (pcase choice
+                             (?s (pop-to-buffer ,buf))
+                             (?k (when (buffer-live-p ,buf)
+                                   (kill-buffer ,buf)
+                                   (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                                     (agent-shell-workspace-sidebar-refresh))))
+                             (?r (when (buffer-live-p ,buf)
+                                   (with-current-buffer ,buf
+                                     (when (fboundp 'agent-shell-restart)
+                                       (agent-shell-restart)))))
+                             (?q (message "Cancelled")))))) t))))
 
         ;; -- Section: Requests --
         (defun decknix--nav-requests-children (_)
