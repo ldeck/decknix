@@ -1233,7 +1233,8 @@ not just augment writing to the session file."
 
         (defun decknix--agent-conversation-preview (conv-group)
           "Format a one-line preview for a conversation CONV-GROUP.
-CONV-GROUP is (CONV-KEY LATEST-SESSION ALL-SESSIONS)."
+CONV-GROUP is (CONV-KEY LATEST-SESSION ALL-SESSIONS).
+Shows: id  age  exchanges  preview [tags] (N sessions) @workspace"
           (let* ((conv-key (car conv-group))
                  (latest (cadr conv-group))
                  (all (caddr conv-group))
@@ -1248,14 +1249,24 @@ CONV-GROUP is (CONV-KEY LATEST-SESSION ALL-SESSIONS)."
                  (count-str (if (> session-count 1)
                                 (format " (%d sessions)" session-count)
                               ""))
+                 (workspace (when conv-key
+                              (decknix--agent-workspace-for-conv-key conv-key)))
+                 (ws-str (if workspace
+                             (let ((abbr (abbreviate-file-name workspace)))
+                               (format " @%s"
+                                       (if (string-match "/\\([^/]+\\)/?$" abbr)
+                                           (match-string 1 abbr)
+                                         abbr)))
+                           ""))
                  (truncated (truncate-string-to-width (or preview "") 50 nil nil "...")))
-            (format "%-8s  %-8s  %4dx  %s%s%s"
+            (format "%-8s  %-8s  %4dx  %s%s%s%s"
                     (substring id 0 (min 8 (length id)))
                     (if modified (decknix--agent-session-time-ago modified) "?")
                     exchanges
                     truncated
                     tag-str
-                    count-str)))
+                    count-str
+                    ws-str)))
 
         ;; ── Session picker (consult--multi) ──────────────────────────
         ;; Modelled after C-x b (consult-buffer): sectioned groups with
@@ -2011,23 +2022,32 @@ conversations (newest first), annotated with workspace and tags."
                                        (match-string 1 (abbreviate-file-name workspace))
                                      (abbreviate-file-name workspace))
                                  "?"))
+                     (tags (when conv-key
+                             (decknix--agent-tags-for-conv-key conv-key)))
+                     (tag-str (if tags
+                                  (mapconcat (lambda (tg) (concat "#" tg)) tags " ")
+                                ""))
                      (live-p (member conv-key live-conv-keys))
                      (label (format "%s%s"
                                     (if live-p "● " "  ")
                                     name)))
-                (push (list label ws-short conv-key latest workspace live-p) candidates)))
+                (push (list label ws-short conv-key latest workspace live-p tag-str)
+                      candidates)))
             (setq candidates (nreverse candidates))
             (unless candidates
               (user-error "No saved sessions found"))
-            ;; Build completion table with annotations
+            ;; Build completion table with annotations (workspace + tags)
             (let* ((max-name (apply #'max (mapcar (lambda (c) (length (car c))) candidates)))
                    (annotator
                     (eval
                      `(lambda (cand)
                         (when-let ((entry (assoc cand ',candidates)))
-                          (format "%s %s"
-                                  (make-string (- ,(+ max-name 2) (length cand)) ?\s)
-                                  (nth 1 entry))))
+                          (let ((ws (nth 1 entry))
+                                (tags (nth 6 entry)))
+                            (format "%s @%-12s %s"
+                                    (make-string (- ,(+ max-name 2) (length cand)) ?\s)
+                                    ws
+                                    tags))))
                      t))
                    (table (decknix--agent-unsorted-table
                            (mapcar #'car candidates)))
@@ -5267,10 +5287,17 @@ Prompts for workspace if auto-detection fails."
               (select-window sw))))
 
         (defun decknix--sidebar-call-transient (cmd)
-          "Invoke transient CMD from the sidebar without collapsing it.
-Focus stays in the sidebar; transient renders at the bottom of
-the frame (its default `display-buffer-in-side-window' action).
-After the transient exits, focus returns to the sidebar."
+          "Invoke transient CMD from the main window to preserve the sidebar.
+Selects the main window so transient anchors there and any buffer
+changes (e.g., session resume) land in the main area instead of
+trying to split the dedicated sidebar.  The isolation advice above
+ensures the transient buffer is allowed in the Agents tab (so the
+sidebar no longer collapses on tab-switch).  After the transient
+exits, focus returns to the sidebar."
+          ;; Select the main window so transient and its actions display there
+          (let ((main (window-main-window (selected-frame))))
+            (when (and main (window-live-p main))
+              (select-window main)))
           (add-hook 'transient-exit-hook #'decknix--sidebar-restore-after-transient)
           (call-interactively cmd))
 
