@@ -13,6 +13,7 @@ in
     ../common/unfree.nix
     ./aerospace.nix
     ./hub.nix
+    ./iap-proxy.nix
   ];
 
   nixpkgs.overlays = [
