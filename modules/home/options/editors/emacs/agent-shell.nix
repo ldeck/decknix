@@ -5326,15 +5326,21 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                   (list
                    (cons 'display-mode decknix--sidebar-display-mode)
                    (cons 'width-state decknix--sidebar-width-state)
+                   (cons 'show-keys decknix--sidebar-show-keys)
                    (cons 'quick-switch
                          (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
                               agent-shell-workspace-sidebar--quick-switch))
                    (cons 'age-filter
                          (when (boundp 'decknix--hub-age-filter)
                            decknix--hub-age-filter))
-                   (cons 'org-hidden
-                         (when (boundp 'decknix--hub-org-hidden)
-                           decknix--hub-org-hidden))
+                   (cons 'org-visibility
+                         (when (and (boundp 'decknix--hub-org-visibility)
+                                    decknix--hub-org-visibility)
+                           ;; Serialise hash-table as alist for prin1
+                           (let (pairs)
+                             (maphash (lambda (k v) (push (cons k v) pairs))
+                                      decknix--hub-org-visibility)
+                             pairs)))
                    (cons 'previous-sessions live-info))))
             (make-directory (file-name-directory decknix--sidebar-state-file) t)
             (with-temp-file decknix--sidebar-state-file
@@ -5353,6 +5359,9 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                     (setq decknix--sidebar-display-mode dm))
                   (when-let ((ws (alist-get 'width-state state)))
                     (setq decknix--sidebar-width-state ws))
+                  (let ((sk (alist-get 'show-keys state 'missing)))
+                    (unless (eq sk 'missing)
+                      (setq decknix--sidebar-show-keys sk)))
                   (let ((qs (alist-get 'quick-switch state)))
                     (when (and qs (boundp 'agent-shell-workspace-sidebar--quick-switch))
                       (setq agent-shell-workspace-sidebar--quick-switch t)))
@@ -5360,17 +5369,29 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                   (let ((af (alist-get 'age-filter state)))
                     (when (and af (boundp 'decknix--hub-age-filter))
                       (setq decknix--hub-age-filter af)))
-                  (when-let ((oh (alist-get 'org-hidden state)))
-                    (when (boundp 'decknix--hub-org-hidden)
-                      (setq decknix--hub-org-hidden oh)))
+                  ;; Org visibility: restore from alist → hash-table
+                  ;; Also supports legacy 'org-hidden key for backward compat
+                  (when-let ((ov (or (alist-get 'org-visibility state)
+                                     (alist-get 'org-hidden state))))
+                    (when (and (listp ov)
+                               (boundp 'decknix--hub-org-visibility))
+                      (let ((ht (make-hash-table :test 'equal)))
+                        (dolist (pair ov)
+                          (when (consp pair)
+                            (puthash (car pair) (cdr pair) ht)))
+                        (setq decknix--hub-org-visibility ht))))
                   (when-let ((prev (alist-get 'previous-sessions state)))
                     (setq decknix--sidebar-previous-sessions prev)))
               (error
                (message "sidebar-state: restore failed: %s" (error-message-string err))))))
 
-        ;; Save on exit, restore on load
+        ;; Save on exit, restore after all modules are loaded.
+        ;; The restore must run AFTER all defvars — hub variables like
+        ;; decknix--hub-age-filter and upstream agent-shell-workspace vars
+        ;; are defined later in the config.  Using emacs-startup-hook
+        ;; ensures everything is bound before we try to set values.
         (add-hook 'kill-emacs-hook #'decknix--sidebar-state-save)
-        (decknix--sidebar-state-restore)
+        (add-hook 'emacs-startup-hook #'decknix--sidebar-state-restore)
 
         ;; -- Previous sessions: sidebar rendering --
         (defun decknix--sidebar-render-previous-sessions (line-num)
