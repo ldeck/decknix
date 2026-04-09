@@ -4,6 +4,7 @@ with lib;
 
 let
   cfg = config.decknix.services.hub;
+  homeDir = config.users.users.${config.system.primaryUser}.home;
 
   # Build the config JSON from Nix options
   hubConfig = {
@@ -73,11 +74,18 @@ in
         StandardErrorPath = "/tmp/decknix-hub.log";
       };
 
-      # Inherit PATH so gh CLI is found
+      # Mirror the standard Nix-first PATH order so Nix-managed tools
+      # are always preferred over system equivalents.
       path = [
         "${pkgs.gh}/bin"
+        "${homeDir}/.nix-profile/bin"
+        "/run/current-system/sw/bin"
+        "/nix/var/nix/profiles/default/bin"
+        "/usr/local/bin"
         "/usr/bin"
         "/bin"
+        "/usr/sbin"
+        "/sbin"
       ];
     };
   };

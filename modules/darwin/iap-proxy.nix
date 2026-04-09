@@ -4,6 +4,7 @@ with lib;
 
 let
   cfg = config.decknix.services.iap-proxy;
+  homeDir = config.users.users.${config.system.primaryUser}.home;
 
   # Build the package from the provided source
   iap-proxy-pkg = pkgs.callPackage ../../pkgs/iap-proxy/default.nix {
@@ -98,6 +99,20 @@ in
     environment.systemPackages = [ iap-proxy-pkg ];
 
     launchd.user.agents.iap-proxy = {
+      # Mirror the standard Nix-first PATH order so Nix-managed tools
+      # are always preferred over system equivalents.
+      # macOS open(1) is needed for AUTO_OPEN_BROWSER on first auth.
+      path = [
+        "${homeDir}/.nix-profile/bin"
+        "/run/current-system/sw/bin"
+        "/nix/var/nix/profiles/default/bin"
+        "/usr/local/bin"
+        "/usr/bin"
+        "/bin"
+        "/usr/sbin"
+        "/sbin"
+      ];
+
       serviceConfig = {
         ProgramArguments = [ "${iap-proxy-pkg}/bin/iap-proxy" ];
         RunAtLoad = true;
