@@ -91,6 +91,16 @@ struct ReviewRequest {
     labels: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ci: Option<CiStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mergeable: Option<String>, // "MERGEABLE", "CONFLICTING", "UNKNOWN"
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CheckDetail {
+    name: String,
+    conclusion: Option<String>, // "SUCCESS", "FAILURE", "ACTION_REQUIRED", etc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -98,6 +108,9 @@ struct CiStatus {
     status: String, // "pass", "fail", "running", "pending"
     #[serde(skip_serializing_if = "Option::is_none")]
     url: Option<String>,
+    /// Individual check results for granular filtering on the consumer side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checks: Option<Vec<CheckDetail>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -116,6 +129,8 @@ struct WipPr {
     draft: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ci: Option<CiStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mergeable: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -300,13 +315,15 @@ struct GhRepo {
 
 #[derive(Debug, Deserialize)]
 struct GhCheck {
+    #[serde(default)]
+    name: Option<String>,
     state: Option<String>,
     conclusion: Option<String>,
     #[serde(rename = "detailsUrl")]
     details_url: Option<String>,
 }
 
-/// Summarise CI checks into a single status.
+/// Summarise CI checks into a single status with individual check details.
 fn summarise_ci(checks: &Option<Vec<GhCheck>>) -> Option<CiStatus> {
     let checks = checks.as_ref()?;
     if checks.is_empty() {
@@ -316,7 +333,14 @@ fn summarise_ci(checks: &Option<Vec<GhCheck>>) -> Option<CiStatus> {
     let mut has_fail = false;
     let mut has_pending = false;
     let mut url = None;
+    let mut details: Vec<CheckDetail> = Vec::with_capacity(checks.len());
     for c in checks {
+        let conc_str = c.conclusion.as_deref().or(c.state.as_deref());
+        details.push(CheckDetail {
+            name: c.name.clone().unwrap_or_else(|| "unknown".into()),
+            conclusion: conc_str.map(|s| s.to_string()),
+            url: c.details_url.clone(),
+        });
         if let Some(ref conc) = c.conclusion {
             match conc.as_str() {
                 "FAILURE" | "ERROR" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED" => {
@@ -343,25 +367,37 @@ fn summarise_ci(checks: &Option<Vec<GhCheck>>) -> Option<CiStatus> {
     Some(CiStatus {
         status: status.to_string(),
         url,
+        checks: if details.is_empty() { None } else { Some(details) },
     })
 }
 
-/// Fetch CI status for a single PR via `gh pr view`.
-async fn fetch_pr_ci(repo: &str, number: u64) -> Option<CiStatus> {
+/// Fetch CI status and mergeable state for a single PR via `gh pr view`.
+/// Returns (ci, mergeable).
+async fn fetch_pr_ci(repo: &str, number: u64) -> (Option<CiStatus>, Option<String>) {
     // gh pr view gives us statusCheckRollup which search doesn't
-    let output = gh_json(&[
+    let output = match gh_json(&[
         "pr", "view",
         &number.to_string(),
         "--repo", repo,
-        "--json", "statusCheckRollup",
-    ]).await.ok()?;
+        "--json", "statusCheckRollup,mergeable,mergeStateStatus",
+    ]).await {
+        Ok(o) => o,
+        Err(_) => return (None, None),
+    };
 
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct PrView { status_check_rollup: Option<Vec<GhCheck>> }
+    struct PrView {
+        status_check_rollup: Option<Vec<GhCheck>>,
+        mergeable: Option<String>,
+        #[allow(dead_code)]
+        merge_state_status: Option<String>,
+    }
 
-    let view: PrView = serde_json::from_str(&output).ok()?;
-    summarise_ci(&view.status_check_rollup)
+    match serde_json::from_str::<PrView>(&output) {
+        Ok(view) => (summarise_ci(&view.status_check_rollup), view.mergeable),
+        Err(_) => (None, None),
+    }
 }
 
 /// Fetch PR reviews assigned to the current user.
@@ -394,9 +430,8 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         if archived.contains(&repo) {
             continue;
         }
-        // Fetch CI status per PR (parallel would be nicer but gh CLI
-        // has rate limits; sequential is safer for a background poller)
-        let ci = fetch_pr_ci(&repo, pr.number).await;
+        // Fetch CI status + mergeable per PR (sequential to avoid rate limits)
+        let (ci, mergeable) = fetch_pr_ci(&repo, pr.number).await;
         items.push(ReviewRequest {
             id: format!("gh:{}#{}", repo, pr.number),
             repo: repo.clone(),
@@ -412,6 +447,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
                 Some(pr.labels.iter().map(|l| l.name.clone()).collect())
             },
             ci,
+            mergeable,
         });
     }
 
@@ -428,16 +464,17 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
 // GitHub WIP Adapter
 // ---------------------------------------------------------------------------
 
-/// Fetch branch name and CI for a PR via `gh pr view`.
-async fn fetch_pr_details(repo: &str, number: u64) -> (Option<String>, Option<CiStatus>) {
+/// Fetch branch name, CI, and mergeable state for a PR via `gh pr view`.
+/// Returns (branch, ci, mergeable).
+async fn fetch_pr_details(repo: &str, number: u64) -> (Option<String>, Option<CiStatus>, Option<String>) {
     let output = match gh_json(&[
         "pr", "view",
         &number.to_string(),
         "--repo", repo,
-        "--json", "headRefName,statusCheckRollup",
+        "--json", "headRefName,statusCheckRollup,mergeable,mergeStateStatus",
     ]).await {
         Ok(o) => o,
-        Err(_) => return (None, None),
+        Err(_) => return (None, None, None),
     };
 
     #[derive(Deserialize)]
@@ -445,11 +482,14 @@ async fn fetch_pr_details(repo: &str, number: u64) -> (Option<String>, Option<Ci
     struct PrDetail {
         head_ref_name: Option<String>,
         status_check_rollup: Option<Vec<GhCheck>>,
+        mergeable: Option<String>,
+        #[allow(dead_code)]
+        merge_state_status: Option<String>,
     }
 
     match serde_json::from_str::<PrDetail>(&output) {
-        Ok(d) => (d.head_ref_name, summarise_ci(&d.status_check_rollup)),
-        Err(_) => (None, None),
+        Ok(d) => (d.head_ref_name, summarise_ci(&d.status_check_rollup), d.mergeable),
+        Err(_) => (None, None, None),
     }
 }
 
@@ -499,8 +539,8 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
         if archived.contains(&repo) {
             continue;
         }
-        // Fetch branch + CI per PR
-        let (branch, ci) = fetch_pr_details(&repo, pr.number).await;
+        // Fetch branch + CI + mergeable per PR
+        let (branch, ci, mergeable) = fetch_pr_details(&repo, pr.number).await;
         let entry = repo_map.entry(repo).or_default();
         let updated_ts = pr.updated_at.as_deref()
             .and_then(|s| s.parse::<DateTime<Utc>>().ok());
@@ -511,6 +551,7 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
             url: pr.url.clone(),
             draft: pr.is_draft,
             ci,
+            mergeable,
             branch,
             updated: updated_ts,
         });
