@@ -4687,6 +4687,13 @@ so RIGHT group starts at column COL-WIDTH."
                              (format "[%s]" label)
                              'face (if (string= label "all")
                                        'font-lock-comment-face
+                                     'font-lock-constant-face)))))
+              (cons "C" (format "ci %s"
+                          (let ((label (decknix--hub-ci-filter-summary)))
+                            (propertize
+                             (format "[%s]" label)
+                             'face (if (string= label "all")
+                                       'font-lock-comment-face
                                      'font-lock-constant-face)))))))))
 
         (defun decknix--sidebar-render-footer ()
@@ -5219,7 +5226,8 @@ Prompts for workspace if auto-detection fails."
                    (items (seq-filter
                            (lambda (item)
                              (and (decknix--hub-item-visible-p (alist-get 'repo item))
-                                  (decknix--hub-age-visible-p (alist-get 'created item))))
+                                  (decknix--hub-age-visible-p (alist-get 'created item))
+                                  (decknix--hub-ci-visible-p item)))
                            (or all-items '())))
                    (keys decknix--nav-keys))
               (append
@@ -5552,6 +5560,9 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                              (maphash (lambda (k v) (push (cons k v) pairs))
                                       decknix--hub-org-visibility)
                              pairs)))
+                   (cons 'ci-filter
+                         (when (boundp 'decknix--hub-ci-filter)
+                           decknix--hub-ci-filter))
                    (cons 'previous-sessions live-info))))
             (make-directory (file-name-directory decknix--sidebar-state-file) t)
             (with-temp-file decknix--sidebar-state-file
@@ -5591,6 +5602,11 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                           (when (consp pair)
                             (puthash (car pair) (cdr pair) ht)))
                         (setq decknix--hub-org-visibility ht))))
+                  ;; CI filter: restore list of visible statuses
+                  (let ((cf (alist-get 'ci-filter state)))
+                    (when (and cf (listp cf)
+                               (boundp 'decknix--hub-ci-filter))
+                      (setq decknix--hub-ci-filter cf)))
                   (when-let ((prev (alist-get 'previous-sessions state)))
                     (setq decknix--sidebar-previous-sessions prev)))
               (error
@@ -5813,7 +5829,9 @@ Re-reads only the changed file and refreshes the sidebar."
           (define-key agent-shell-workspace-sidebar-mode-map
             (kbd "O") #'decknix--hub-org-filter-dispatch)
           (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "F") #'decknix--hub-cycle-age-filter))
+            (kbd "F") #'decknix--hub-cycle-age-filter)
+          (define-key agent-shell-workspace-sidebar-mode-map
+            (kbd "C") #'decknix--hub-cycle-ci-filter))
 
         ;; Add Hub group to the sidebar transient
         ;; -- Hub: org filter (multi-select transient) --
@@ -5988,10 +6006,26 @@ When no filter is active (table is nil), all orgs are visible."
           (interactive)
           (call-interactively #'decknix--hub-cycle-age-filter))
 
+        (transient-define-suffix decknix-sidebar-transient--ci-filter ()
+          :key "C"
+          :description
+          (lambda ()
+            (let ((label (decknix--hub-ci-filter-summary)))
+              (format "CI filter     %s"
+                      (propertize
+                       (format "[%s]" label)
+                       'face (if (string= label "all")
+                                 'font-lock-comment-face
+                               'font-lock-constant-face)))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-cycle-ci-filter))
+
         (transient-append-suffix 'decknix-sidebar-transient "Toggles"
           ["Hub"
            (decknix-sidebar-transient--org-filter)
-           (decknix-sidebar-transient--age-filter)])
+           (decknix-sidebar-transient--age-filter)
+           (decknix-sidebar-transient--ci-filter)])
 
         (defun decknix--hub-item-visible-p (repo-full)
           "Return non-nil if REPO-FULL (owner/repo) passes the org visibility filter."
@@ -6044,6 +6078,81 @@ Always returns t when filter is nil (show all)."
                                          (time-subtract (current-time) then))))
                          (<= age-secs decknix--hub-age-filter))
                      (error t)))))
+
+        ;; -- Hub: CI status filter --
+        ;; Tracks which CI statuses are visible (pass, fail, running, unknown).
+        ;; All visible by default.  C in the sidebar toggles individual statuses.
+
+        (defvar decknix--hub-ci-filter '("pass" "fail" "running" "unknown")
+          "List of visible CI statuses.
+Valid values: \"pass\", \"fail\", \"running\", \"unknown\".
+When all four are present, no filtering occurs.")
+
+        (defun decknix--hub-ci-status-of (item)
+          "Return the normalised CI status string for ITEM."
+          (let ((ci (alist-get 'ci item)))
+            (if ci
+                (or (alist-get 'status ci) "unknown")
+              "unknown")))
+
+        (defun decknix--hub-ci-visible-p (item)
+          "Return non-nil if ITEM's CI status is in the active filter set."
+          (member (decknix--hub-ci-status-of item) decknix--hub-ci-filter))
+
+        (defun decknix--hub-ci-filter-summary ()
+          "Return a compact label for the current CI filter.
+Shows icon characters for enabled statuses, e.g. \"✓⟳?\" when fail is hidden."
+          (if (= (length decknix--hub-ci-filter) 4)
+              "all"
+            (mapconcat
+             (lambda (s)
+               (pcase s
+                 ("pass"    "✓")
+                 ("fail"    "✗")
+                 ("running" "⟳")
+                 ("unknown" "?")
+                 (_         s)))
+             decknix--hub-ci-filter "")))
+
+        (defun decknix--hub-ci-toggle-status (status)
+          "Toggle STATUS in the CI filter set."
+          (if (member status decknix--hub-ci-filter)
+              (progn
+                ;; Don't allow hiding ALL statuses
+                (when (> (length decknix--hub-ci-filter) 1)
+                  (setq decknix--hub-ci-filter
+                        (delete status decknix--hub-ci-filter))))
+            (push status decknix--hub-ci-filter)))
+
+        (defun decknix--hub-cycle-ci-filter ()
+          "Toggle CI status visibility via a quick menu.
+Shows current state of each status and lets you toggle one."
+          (interactive)
+          (let* ((statuses '(("pass" . "✓") ("running" . "⟳")
+                             ("unknown" . "?") ("fail" . "✗")))
+                 (prompt (mapconcat
+                          (lambda (pair)
+                            (let* ((key (car pair))
+                                   (icon (cdr pair))
+                                   (on (member key decknix--hub-ci-filter)))
+                              (if on
+                                  (propertize icon 'face 'success)
+                                (propertize icon 'face 'font-lock-comment-face))))
+                          statuses " "))
+                 (choice (read-char-choice
+                          (format "CI filter [%s]  toggle: (g)reen (y)ellow (?)grey (r)ed (a)ll: "
+                                  prompt)
+                          '(?g ?y ?? ?r ?a))))
+            (pcase choice
+              (?g (decknix--hub-ci-toggle-status "pass"))
+              (?y (decknix--hub-ci-toggle-status "running"))
+              (?? (decknix--hub-ci-toggle-status "unknown"))
+              (?r (decknix--hub-ci-toggle-status "fail"))
+              (?a (setq decknix--hub-ci-filter
+                        '("pass" "fail" "running" "unknown"))))
+            (when (get-buffer "*agent-shell-sidebar*")
+              (agent-shell-workspace-sidebar-refresh))
+            (message "CI filter: %s" (decknix--hub-ci-filter-summary))))
 
         ;; -- Hub: age formatting --
         (defun decknix--hub-format-age (iso-time)
@@ -6111,7 +6220,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                  (items (seq-filter
                          (lambda (item)
                            (and (decknix--hub-item-visible-p (alist-get 'repo item))
-                                (decknix--hub-age-visible-p (alist-get 'created item))))
+                                (decknix--hub-age-visible-p (alist-get 'created item))
+                                (decknix--hub-ci-visible-p item)))
                          (or all-items '()))))
             (when items
               (decknix--sidebar-render-section-header
