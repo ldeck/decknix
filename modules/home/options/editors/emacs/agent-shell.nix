@@ -4648,7 +4648,7 @@ so RIGHT group starts at column COL-WIDTH."
           "Build the Toggles key alist (with live state) for the footer."
           (append
            (list
-            (cons "S" (format "qswitch %s"
+            (cons "S" (format "quick switch %s"
                         (propertize
                          (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
                                   agent-shell-workspace-sidebar--quick-switch)
@@ -4961,6 +4961,10 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                       (unless workspace
                         (setq workspace
                               (read-directory-name "Workspace: " nil nil t)))
+                      ;; Select main window so agent-shell-start displays there
+                      (let ((main (window-main-window (selected-frame))))
+                        (when (and main (window-live-p main))
+                          (select-window main)))
                       (let ((conv-key (decknix--agent-conversation-key
                                        (alist-get 'firstUserMessage
                                                   saved ""))))
@@ -5672,6 +5676,12 @@ session buffer in the main window after a short delay."
                                  name)))
             (if (not sid)
                 (message "Cannot restore: no session ID")
+              ;; Select the main window BEFORE starting the session so that
+              ;; agent-shell-start displays the buffer there instead of
+              ;; splitting when called from the sidebar window.
+              (let ((main (window-main-window (selected-frame))))
+                (when (and main (window-live-p main))
+                  (select-window main)))
               ;; Snapshot buffers before resume to detect the new one
               (let ((before-buffers (buffer-list)))
                 (decknix--agent-session-resume sid 20 display-name workspace conv-key)
@@ -5682,7 +5692,10 @@ session buffer in the main window after a short delay."
                                   decknix--sidebar-previous-sessions))
                 (when (fboundp 'agent-shell-workspace-sidebar-refresh)
                   (agent-shell-workspace-sidebar-refresh))
-                ;; Focus the restored session in the main window
+                ;; Ensure the restored buffer ends up in the main window
+                ;; (agent-shell-start may have used pop-to-buffer which is
+                ;; correct now that we pre-selected main, but the timer still
+                ;; handles rename/prepopulate and final focus)
                 (when focus
                   (run-at-time 2.0 nil
                     (eval `(lambda ()
