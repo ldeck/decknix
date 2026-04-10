@@ -93,6 +93,8 @@ struct ReviewRequest {
     ci: Option<CiStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     mergeable: Option<String>, // "MERGEABLE", "CONFLICTING", "UNKNOWN"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    my_review: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "PENDING", "DISMISSED"
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -371,18 +373,43 @@ fn summarise_ci(checks: &Option<Vec<GhCheck>>) -> Option<CiStatus> {
     })
 }
 
-/// Fetch CI status and mergeable state for a single PR via `gh pr view`.
-/// Returns (ci, mergeable).
-async fn fetch_pr_ci(repo: &str, number: u64) -> (Option<CiStatus>, Option<String>) {
-    // gh pr view gives us statusCheckRollup which search doesn't
+/// Get the current GitHub user login.  Cached after first call.
+async fn get_github_login() -> Option<String> {
+    use std::sync::OnceLock;
+    static LOGIN: OnceLock<Option<String>> = OnceLock::new();
+    // OnceLock::get_or_init is sync — run the async fetch only on first access.
+    if let Some(cached) = LOGIN.get() {
+        return cached.clone();
+    }
+    let result = match gh_json(&["api", "user", "-q", ".login"]).await {
+        Ok(s) => Some(s.trim().trim_matches('"').to_string()),
+        Err(_) => None,
+    };
+    LOGIN.get_or_init(|| result.clone());
+    result
+}
+
+#[derive(Debug, Deserialize)]
+struct GhReview {
+    author: Option<GhAuthor>,
+    state: Option<String>,
+}
+
+/// Fetch CI status, mergeable state, and my latest review for a single PR.
+/// Returns (ci, mergeable, my_review).
+async fn fetch_pr_ci(
+    repo: &str,
+    number: u64,
+    my_login: Option<&str>,
+) -> (Option<CiStatus>, Option<String>, Option<String>) {
     let output = match gh_json(&[
         "pr", "view",
         &number.to_string(),
         "--repo", repo,
-        "--json", "statusCheckRollup,mergeable,mergeStateStatus",
+        "--json", "statusCheckRollup,mergeable,mergeStateStatus,latestReviews",
     ]).await {
         Ok(o) => o,
-        Err(_) => return (None, None),
+        Err(_) => return (None, None, None),
     };
 
     #[derive(Deserialize)]
@@ -392,11 +419,26 @@ async fn fetch_pr_ci(repo: &str, number: u64) -> (Option<CiStatus>, Option<Strin
         mergeable: Option<String>,
         #[allow(dead_code)]
         merge_state_status: Option<String>,
+        latest_reviews: Option<Vec<GhReview>>,
     }
 
     match serde_json::from_str::<PrView>(&output) {
-        Ok(view) => (summarise_ci(&view.status_check_rollup), view.mergeable),
-        Err(_) => (None, None),
+        Ok(view) => {
+            let ci = summarise_ci(&view.status_check_rollup);
+            let mergeable = view.mergeable;
+            // Find my latest review state
+            let my_review = my_login.and_then(|login| {
+                view.latest_reviews.as_ref()?.iter()
+                    .find(|r| {
+                        r.author.as_ref()
+                            .map(|a| a.login.eq_ignore_ascii_case(login))
+                            .unwrap_or(false)
+                    })
+                    .and_then(|r| r.state.clone())
+            });
+            (ci, mergeable, my_review)
+        }
+        Err(_) => (None, None, None),
     }
 }
 
@@ -421,6 +463,9 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         .collect();
     let archived = find_archived_repos(&repo_names).await;
 
+    // Get current user's login for review state lookup
+    let my_login = get_github_login().await;
+
     let mut items: Vec<ReviewRequest> = Vec::with_capacity(prs.len());
     for pr in &prs {
         let repo = pr.repository.as_ref()
@@ -430,8 +475,12 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         if archived.contains(&repo) {
             continue;
         }
-        // Fetch CI status + mergeable per PR (sequential to avoid rate limits)
-        let (ci, mergeable) = fetch_pr_ci(&repo, pr.number).await;
+        // Fetch CI status + mergeable + my review state per PR
+        let (ci, mergeable, my_review) = fetch_pr_ci(
+            &repo,
+            pr.number,
+            my_login.as_deref(),
+        ).await;
         items.push(ReviewRequest {
             id: format!("gh:{}#{}", repo, pr.number),
             repo: repo.clone(),
@@ -448,6 +497,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             },
             ci,
             mergeable,
+            my_review,
         });
     }
 

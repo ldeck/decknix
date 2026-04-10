@@ -5383,6 +5383,10 @@ preventing extra splits when called from the sidebar."
                                (title (or (alist-get 'title item) ""))
                                (ci-str (decknix--hub-ci-icon (alist-get 'ci item)
                                                               (alist-get 'mergeable item)))
+                               (rev-str (decknix--hub-review-icon item))
+                               (status-str (if (string-empty-p rev-str)
+                                               ci-str
+                                             (concat ci-str rev-str)))
                                (short (if (> (length title) 30)
                                           (concat (substring title 0 29) "…")
                                         title))
@@ -5392,15 +5396,85 @@ preventing extra splits when called from the sidebar."
                           (transient-parse-suffix
                            transient--prefix
                            (list key
-                                 (format "%3s %s#%d %s %s" age repo number ci-str short)
+                                 (format "%3s %s#%d %s %s" age repo number status-str short)
                                  cmd))))
                (list (transient-parse-suffix transient--prefix
                        '("q" "Back" transient-quit-one)))))))
 
-        (transient-define-prefix decknix-sidebar-nav-requests ()
-          "Pick a PR review request."
+        (defvar decknix--nav-requests-mode 'keys
+          "Default selection mode for Requests: `keys' (transient) or `consult'.")
+
+        (defun decknix-sidebar-nav-requests-consult ()
+          "Pick a PR review request via consult completion with filtering.
+Each candidate shows age, repo, PR number, CI status, and title."
+          (interactive)
+          (let* ((all-items (when (boundp 'decknix--hub-reviews)
+                              (alist-get 'items decknix--hub-reviews)))
+                 (items (seq-filter
+                         (lambda (item)
+                           (and (decknix--hub-item-visible-p (alist-get 'repo item))
+                                (decknix--hub-age-visible-p (alist-get 'created item))
+                                (decknix--hub-ci-visible-p item)))
+                         (or all-items '()))))
+            (if (not items)
+                (message "No review requests")
+              (let* ((entries
+                      (mapcar
+                       (lambda (item)
+                         (let* ((age (decknix--hub-format-age
+                                      (alist-get 'created item)))
+                                (repo-full (or (alist-get 'repo item) ""))
+                                (repo (car (last (split-string repo-full "/"))))
+                                (number (alist-get 'number item))
+                                (title (or (alist-get 'title item) ""))
+                                (ci-str (decknix--hub-ci-icon
+                                         (alist-get 'ci item)
+                                         (alist-get 'mergeable item)))
+                                (rev-str (decknix--hub-review-icon item))
+                                (status-str (if (string-empty-p rev-str)
+                                                ci-str
+                                              (concat ci-str rev-str)))
+                                (label (format "%3s %s#%d %s %s"
+                                               age repo number status-str title)))
+                           (cons label item)))
+                       items))
+                     (choice (completing-read "Request: "
+                               (mapcar #'car entries) nil t))
+                     (item (cdr (assoc choice entries))))
+                (when item
+                  (let ((tagged (cons (cons 'decknix-type 'review) item)))
+                    (decknix--nav-hub-item-actions tagged)))))))
+
+        (defun decknix-sidebar-nav-requests-dispatch ()
+          "Dispatch to requests listing in the current mode (keys or consult)."
+          (interactive)
+          (pcase decknix--nav-requests-mode
+            ('consult (decknix-sidebar-nav-requests-consult))
+            (_ (decknix-sidebar-nav-requests-keys))))
+
+        (defun decknix-sidebar-nav-requests-switch-to-consult ()
+          "Switch from keys mode to consult completion for this request list."
+          (interactive)
+          (transient-quit-one)
+          (run-at-time 0.05 nil #'decknix-sidebar-nav-requests-consult))
+
+        (defun decknix-sidebar-toggle-requests-mode ()
+          "Toggle default request selection mode between keys and consult."
+          (interactive)
+          (setq decknix--nav-requests-mode
+                (if (eq decknix--nav-requests-mode 'consult) 'keys 'consult))
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (agent-shell-workspace-sidebar-refresh))
+          (message "Request selection: %s"
+                   (if (eq decknix--nav-requests-mode 'consult)
+                       "consult (filter)" "keys (shortcut)")))
+
+        (transient-define-prefix decknix-sidebar-nav-requests-keys ()
+          "Pick a PR review request via shortcut keys.
+Press / to switch to consult filter mode."
           [:class transient-column
-           :setup-children decknix--nav-requests-children])
+           :setup-children decknix--nav-requests-children]
+          ["" ("/" "filter mode" decknix-sidebar-nav-requests-switch-to-consult)])
 
         ;; -- Section: WIP --
         (defun decknix--nav-wip-children (_)
@@ -5596,7 +5670,10 @@ exits, focus returns to the sidebar."
           "Navigate to hub Requests items."
           (interactive)
           (if (and (fboundp 'decknix--hub-has-data-p) (decknix--hub-has-data-p))
-              (decknix--sidebar-call-transient #'decknix-sidebar-nav-requests)
+              (pcase decknix--nav-requests-mode
+                ('consult (decknix-sidebar-nav-requests-consult))
+                (_ (decknix--sidebar-call-transient
+                    #'decknix-sidebar-nav-requests-keys)))
             (message "Hub: no data — enable with decknix.services.hub.enable = true")))
 
         (defun decknix-sidebar-goto-wip ()
@@ -6411,6 +6488,19 @@ When MERGEABLE is \"CONFLICTING\", appends a conflict indicator."
                 (concat ci-icon merge-icon)
               ci-icon)))
 
+        (defun decknix--hub-review-icon (item)
+          "Return a review state icon for ITEM, or empty string if none.
+Shows whether the current user has already responded to this PR.
+  ✎ = commented (cyan), ✓ = approved (green), ✗ = changes requested (red)."
+          (let ((state (alist-get 'my_review item)))
+            (pcase state
+              ("APPROVED"          (propertize "✓" 'face 'success))
+              ("CHANGES_REQUESTED" (propertize "✗" 'face 'error))
+              ("COMMENTED"         (propertize "✎" 'face '(:foreground "#5fafaf")))
+              ("DISMISSED"         (propertize "−" 'face 'font-lock-comment-face))
+              ("PENDING"           (propertize "…" 'face 'warning))
+              (_ ""))))
+
         ;; -- Hub: status hint when daemon not running --
         (defun decknix--hub-has-data-p ()
           "Return non-nil if any hub data files exist and contain data."
@@ -6466,6 +6556,10 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                        (ci (alist-get 'ci item))
                        (mergeable (alist-get 'mergeable item))
                        (ci-str (decknix--hub-ci-icon ci mergeable))
+                       (rev-str (decknix--hub-review-icon item))
+                       (status-str (if (string-empty-p rev-str)
+                                       ci-str
+                                     (concat ci-str rev-str)))
                        (draft (alist-get 'draft item))
                        (url (alist-get 'url item))
                        ;; Truncate title to fit sidebar
@@ -6482,7 +6576,7 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                                      (propertize age 'face age-face)
                                      (propertize (or repo "") 'face 'font-lock-type-face)
                                      number
-                                     ci-str
+                                     status-str
                                      (if draft
                                          (propertize short-title 'face 'font-lock-comment-face)
                                        short-title))))
