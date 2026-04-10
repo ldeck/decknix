@@ -952,12 +952,17 @@ since default.el is evaluated under dynamic binding."
           "Directory containing auggie session JSON files.")
 
         (defun decknix--agent-buffer-session-id (&optional buf)
-          "Return the auggie session ID for BUF (default: current buffer).
-The session ID is stored in agent-shell's internal state map."
+          "Return the auggie CLI session ID for BUF (default: current buffer).
+Reads the buffer-local `decknix--agent-auggie-session-id' first (this is
+the ID needed for --resume).  Falls back to the ACP session ID from
+`agent-shell--state' if the auggie ID is not yet set."
           (with-current-buffer (or buf (current-buffer))
-            (when (fboundp 'agent-shell--state)
-              (ignore-errors
-                (map-nested-elt (agent-shell--state) '(:session :id))))))
+            (or (and (boundp 'decknix--agent-auggie-session-id)
+                     decknix--agent-auggie-session-id)
+                (ignore-errors
+                  (and (boundp 'agent-shell--state)
+                       agent-shell--state
+                       (map-nested-elt agent-shell--state '(:session :id)))))))
 
         (defun decknix--agent-session-list ()
           "Return cached auggie sessions, refreshing async if stale.
@@ -1464,7 +1469,7 @@ Shows: id  age  exchanges  preview [tags] (N sessions) @workspace"
                   (when cand
                     (let ((entry (gethash cand decknix--session-picker-previous-map)))
                       (when entry
-                        (decknix--sidebar-restore-previous-session entry))))))
+                        (decknix--sidebar-restore-previous-session entry t))))))
           "Consult multi-source for previous (restorable) sessions.")
 
         (defvar decknix--session-source-new
@@ -4856,9 +4861,9 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                ;; Hub item: open in xwidget-webkit or browser
                (hub-url
                 (decknix--open-url hub-url))
-               ;; Previous session: restore it
+               ;; Previous session: restore it and focus
                (prev
-                (decknix--sidebar-restore-previous-session prev))
+                (decknix--sidebar-restore-previous-session prev t))
                ;; Saved session
                (saved
                   ;; Resume saved session
@@ -5561,8 +5566,10 @@ Returns updated LINE-NUM."
           line-num)
 
         ;; -- Previous sessions: restore action --
-        (defun decknix--sidebar-restore-previous-session (entry)
-          "Resume the previous session described by ENTRY."
+        (defun decknix--sidebar-restore-previous-session (entry &optional focus)
+          "Resume the previous session described by ENTRY.
+When FOCUS is non-nil (or called interactively), switch to the restored
+session buffer in the main window after a short delay."
           (let* ((sid (alist-get 'session-id entry))
                  (name (alist-get 'name entry))
                  (workspace (alist-get 'workspace entry))
@@ -5573,22 +5580,38 @@ Returns updated LINE-NUM."
                                  name)))
             (if (not sid)
                 (message "Cannot restore: no session ID")
-              (decknix--agent-session-resume sid 20 display-name workspace conv-key)
-              ;; Remove from previous list since it's now live
-              (setq decknix--sidebar-previous-sessions
-                    (seq-filter (lambda (e)
-                                  (not (equal (alist-get 'session-id e) sid)))
-                                decknix--sidebar-previous-sessions))
-              (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-                (agent-shell-workspace-sidebar-refresh)))))
+              ;; Snapshot buffers before resume to detect the new one
+              (let ((before-buffers (buffer-list)))
+                (decknix--agent-session-resume sid 20 display-name workspace conv-key)
+                ;; Remove from previous list since it's now live
+                (setq decknix--sidebar-previous-sessions
+                      (seq-filter (lambda (e)
+                                    (not (equal (alist-get 'session-id e) sid)))
+                                  decknix--sidebar-previous-sessions))
+                (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                  (agent-shell-workspace-sidebar-refresh))
+                ;; Focus the restored session in the main window
+                (when focus
+                  (run-at-time 2.0 nil
+                    (eval `(lambda ()
+                             (let ((new-buf (decknix--agent-find-new-shell-buffer
+                                             ',before-buffers)))
+                               (when new-buf
+                                 (let ((main (window-main-window (selected-frame))))
+                                   (when (and main (window-live-p main))
+                                     (set-window-buffer main new-buf)
+                                     (select-window main)))))) t)))))))
 
         (defun decknix--sidebar-restore-all-previous ()
-          "Restore all previous live sessions."
+          "Restore all previous live sessions.
+Focuses the first restored session in the main window."
           (interactive)
           (let ((entries (copy-sequence decknix--sidebar-previous-sessions)))
             (if (null entries)
                 (message "No previous sessions to restore")
-              (dolist (entry entries)
+              ;; Restore first one with focus, rest without
+              (decknix--sidebar-restore-previous-session (car entries) t)
+              (dolist (entry (cdr entries))
                 (decknix--sidebar-restore-previous-session entry))
               (message "Restored %d sessions" (length entries)))))
 
@@ -5605,7 +5628,7 @@ Returns updated LINE-NUM."
                                                  name))
                                       '(?r ?d ?q))))
                          (pcase choice
-                           (?r (decknix--sidebar-restore-previous-session ',entry))
+                           (?r (decknix--sidebar-restore-previous-session ',entry t))
                            (?d (setq decknix--sidebar-previous-sessions
                                      (seq-filter
                                       (lambda (e)
