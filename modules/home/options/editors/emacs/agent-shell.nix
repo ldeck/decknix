@@ -1410,6 +1410,59 @@ Shows: id  age  exchanges  preview [tags] (N sessions) @workspace"
                            workspace conv-key)))))))
           "Consult multi-source for saved auggie sessions.")
 
+        (defvar decknix--session-picker-previous-map nil
+          "Hash table mapping display strings to previous-session entries.")
+
+        (defvar decknix--session-source-previous
+          (list :name     "Previous"
+                :narrow   ?p
+                :category 'agent-session-previous
+                :face     'shadow
+                :items
+                (lambda ()
+                  (let* ((live-bufs (seq-filter #'buffer-live-p
+                                               (when (fboundp 'agent-shell-buffers)
+                                                 (agent-shell-buffers))))
+                         (live-sids (mapcar
+                                    (lambda (buf)
+                                      (with-current-buffer buf
+                                        (when (boundp 'agent-shell-session-id)
+                                          (symbol-value 'agent-shell-session-id))))
+                                    live-bufs))
+                         (prev (seq-filter
+                                (lambda (e)
+                                  (not (member (alist-get 'session-id e) live-sids)))
+                                (or decknix--sidebar-previous-sessions '())))
+                         (ht (make-hash-table :test 'equal))
+                         (ordered nil))
+                    (dolist (entry prev)
+                      (let* ((name (or (alist-get 'name entry) "unknown"))
+                             (short (if (string-match "\\*Auggie: \\(.*\\)\\*" name)
+                                        (match-string 1 name) name))
+                             (ws (alist-get 'workspace entry))
+                             (tags (alist-get 'tags entry))
+                             (ws-str (if ws
+                                         (let ((abbr (abbreviate-file-name ws)))
+                                           (if (string-match "/\\([^/]+\\)/?$" abbr)
+                                               (match-string 1 abbr) abbr))
+                                       "?"))
+                             (tag-str (if tags
+                                         (mapconcat
+                                          (lambda (tg) (concat "#" tg)) tags " ")
+                                       ""))
+                             (label (format "%s  @%s %s" short ws-str tag-str)))
+                        (puthash label entry ht)
+                        (push label ordered)))
+                    (setq decknix--session-picker-previous-map ht)
+                    (nreverse ordered)))
+                :action
+                (lambda (cand)
+                  (when cand
+                    (let ((entry (gethash cand decknix--session-picker-previous-map)))
+                      (when entry
+                        (decknix--sidebar-restore-previous-session entry))))))
+          "Consult multi-source for previous (restorable) sessions.")
+
         (defvar decknix--session-source-new
           (list :name     "New"
                 :narrow   ?n
@@ -1423,9 +1476,10 @@ Shows: id  age  exchanges  preview [tags] (N sessions) @workspace"
         (defun decknix-agent-session-picker (arg)
           "Pick from live agent-shell buffers and saved auggie sessions.
 Sections are separated by dividers (like `consult-buffer' / C-x b):
-  Live Sessions  — currently running agent buffers (most recent first)
-  Saved Sessions — past conversations from ~/.augment/sessions
-  New            — start a new session (fallback)
+  Live Sessions     — currently running agent buffers (most recent first)
+  Previous          — sessions that were live before last restart (greyed)
+  Saved Sessions    — past conversations from ~/.augment/sessions
+  New               — start a new session (fallback)
 
 By default, saved sessions are collapsed by conversation.
 With \\[universal-argument], shows all individual session snapshots."
@@ -1433,6 +1487,7 @@ With \\[universal-argument], shows all individual session snapshots."
           (require 'consult)
           (setq decknix--session-picker-expand arg)
           (consult--multi (list decknix--session-source-live
+                               decknix--session-source-previous
                                decknix--session-source-saved
                                decknix--session-source-new)
                           :prompt (format "Agent session%s: "
@@ -4934,7 +4989,10 @@ agent-sessions.json to restore."
           ["Sessions"
            ("s" "Search (picker)" decknix-agent-session-picker)
            ("g" "Grep"           decknix-agent-session-grep)
-           ("r" "Recent"         decknix-agent-session-recent)])
+           ("r" "Recent"         decknix-agent-session-recent)]
+          ["Previous"
+           ("p" "Pick previous"   decknix-sidebar-goto-previous)
+           ("A" "Restore all"     decknix--sidebar-restore-all-previous)])
 
         ;; -- Actions prefix keymap (a …) --
         ;; Displaced commands that gave up their top-level keys to
