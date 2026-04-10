@@ -6954,11 +6954,19 @@ Delegates to the unified header which incorporates context data."
 When collapsed, the header shows a compact badge (item count + CI icon).
 When expanded, the full context detail is shown."
           (interactive)
-          (setq decknix--context-header-expanded
-                (not decknix--context-header-expanded))
-          (decknix--header-update)
-          (message "Context header: %s  (C-u C-c I for side panel)"
-                   (if decknix--context-header-expanded "expanded" "collapsed")))
+          (if (and (null decknix--context-items)
+                   (null decknix--context-ci)
+                   (null decknix--context-reviews))
+              (progn
+                (message "No context items tracked yet.  Use C-c i p to pin an issue/PR, or mention a #123 / owner/repo#N in conversation.")
+                ;; Trigger a refresh in case items can be auto-detected
+                (when (fboundp 'decknix--context-full-refresh)
+                  (decknix--context-full-refresh)))
+            (setq decknix--context-header-expanded
+                  (not decknix--context-header-expanded))
+            (decknix--header-update)
+            (message "Context header: %s  (C-u C-c I for side panel)"
+                     (if decknix--context-header-expanded "expanded" "collapsed"))))
 
         (defun decknix-context-toggle-or-panel (arg)
           "Toggle context display.  With prefix ARG, open the full side panel.
@@ -7255,7 +7263,8 @@ busy animation) and appends decknix extras (status icon, tags, context panel)."
           "Update the header-line-format for the current agent-shell buffer."
           (when (derived-mode-p 'agent-shell-mode)
             (setq-local header-line-format
-                        (list (decknix--header-build)))))
+                        (list (decknix--header-build)))
+            (force-mode-line-update)))
 
         (defun decknix--header-start-timer ()
           "Start a buffer-local 2-second timer to refresh the header-line."
