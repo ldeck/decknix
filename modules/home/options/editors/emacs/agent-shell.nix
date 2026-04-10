@@ -951,6 +951,14 @@ since default.el is evaluated under dynamic binding."
           (expand-file-name "~/.augment/sessions")
           "Directory containing auggie session JSON files.")
 
+        (defun decknix--agent-buffer-session-id (&optional buf)
+          "Return the auggie session ID for BUF (default: current buffer).
+The session ID is stored in agent-shell's internal state map."
+          (with-current-buffer (or buf (current-buffer))
+            (when (fboundp 'agent-shell--state)
+              (ignore-errors
+                (map-nested-elt (agent-shell--state) '(:session :id))))))
+
         (defun decknix--agent-session-list ()
           "Return cached auggie sessions, refreshing async if stale.
 On first call (empty cache), falls back to a synchronous fetch."
@@ -1423,12 +1431,8 @@ Shows: id  age  exchanges  preview [tags] (N sessions) @workspace"
                   (let* ((live-bufs (seq-filter #'buffer-live-p
                                                (when (fboundp 'agent-shell-buffers)
                                                  (agent-shell-buffers))))
-                         (live-sids (mapcar
-                                    (lambda (buf)
-                                      (with-current-buffer buf
-                                        (when (boundp 'agent-shell-session-id)
-                                          (symbol-value 'agent-shell-session-id))))
-                                    live-bufs))
+                         (live-sids (mapcar #'decknix--agent-buffer-session-id
+                                            live-bufs))
                          (prev (seq-filter
                                 (lambda (e)
                                   (not (member (alist-get 'session-id e) live-sids)))
@@ -4572,10 +4576,13 @@ Press K to toggle, ? to open full transient menu with live state."
               (progn
                 ;; ── Navigate ──
                 (decknix--sidebar-render-key-group "Navigate"
-                  '(("r"   . "requests")
-                    ("w"   . "wip")
-                    ("l"   . "live")
-                    ("s"   . "sessions…")))
+                  (append
+                   '(("r"   . "requests")
+                     ("w"   . "wip")
+                     ("l"   . "live"))
+                   (when decknix--sidebar-previous-sessions
+                     '(("p"   . "previous")))
+                   '(("s"   . "sessions…"))))
                 ;; ── Quick ──
                 (decknix--sidebar-render-key-group "Quick"
                   '(("RET" . "open")
@@ -5266,12 +5273,8 @@ Prompts for workspace if auto-detection fails."
           (let* ((live-bufs (seq-filter #'buffer-live-p
                                         (when (fboundp 'agent-shell-buffers)
                                           (agent-shell-buffers))))
-                 (live-sids (mapcar
-                             (lambda (buf)
-                               (with-current-buffer buf
-                                 (when (boundp 'agent-shell-session-id)
-                                   (symbol-value 'agent-shell-session-id))))
-                             live-bufs))
+                 (live-sids (mapcar #'decknix--agent-buffer-session-id
+                                     live-bufs))
                  (prev (seq-filter
                         (lambda (e)
                           (not (member (alist-get 'session-id e) live-sids)))
@@ -5438,8 +5441,7 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                   (mapcar
                    (lambda (buf)
                      (with-current-buffer buf
-                       (let* ((sid (when (boundp 'agent-shell-session-id)
-                                     (symbol-value 'agent-shell-session-id)))
+                       (let* ((sid (decknix--agent-buffer-session-id))
                               (conv-key (when sid
                                           (ignore-errors
                                             (decknix--agent-conversation-key-for-session sid))))
@@ -5529,12 +5531,8 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
           "Render greyed-out previous live sessions after the Live section.
 Returns updated LINE-NUM."
           (let* ((live-bufs (seq-filter #'buffer-live-p (agent-shell-buffers)))
-                 (live-sids (mapcar
-                             (lambda (buf)
-                               (with-current-buffer buf
-                                 (when (boundp 'agent-shell-session-id)
-                                   (symbol-value 'agent-shell-session-id))))
-                             live-bufs))
+                 (live-sids (mapcar #'decknix--agent-buffer-session-id
+                                     live-bufs))
                  ;; Filter out sessions that are already live
                  (prev (seq-filter
                         (lambda (entry)
@@ -6462,8 +6460,7 @@ Delegates to the unified header which incorporates context data."
 
         (defun decknix--context-save ()
           "Save pinned context items for the current agent-shell session."
-          (when-let ((session-id (when (boundp 'agent-shell-session-id)
-                                   (symbol-value 'agent-shell-session-id))))
+          (when-let ((session-id (decknix--agent-buffer-session-id)))
             (let* ((store (decknix--agent-tags-read))
                    (entry (or (gethash session-id store)
                               (make-hash-table :test 'equal)))
@@ -6483,8 +6480,7 @@ Delegates to the unified header which incorporates context data."
 
         (defun decknix--context-restore ()
           "Restore pinned context items for the current agent-shell session."
-          (when-let ((session-id (when (boundp 'agent-shell-session-id)
-                                   (symbol-value 'agent-shell-session-id))))
+          (when-let ((session-id (decknix--agent-buffer-session-id)))
             (let* ((store (decknix--agent-tags-read))
                    (entry (gethash session-id store))
                    (saved (and entry (gethash "context" entry))))
