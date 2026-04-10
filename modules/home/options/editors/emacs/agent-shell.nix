@@ -1982,81 +1982,84 @@ batch launches."
               ;; When first-message is known (quickactions), we can derive the
               ;; conversation key NOW and store tags + workspace immediately.
               ;; Otherwise, defer to prompt-ready → first-exchange completion.
-              (when (or tags workspace)
-                (let ((conv-key (when first-message
-                                  (decknix--agent-conversation-key first-message))))
-                  (if conv-key
-                      ;; Immediate storage — we know the conversation key
-                      (progn
-                        (decknix--agent-store-metadata-by-conv-key
-                         conv-key tags workspace)
-                        ;; Store conv-key buffer-locally so header-line can
-                        ;; look up tags immediately without waiting for the
-                        ;; session-list cache to refresh.
-                        (with-current-buffer shell-buf
-                          (setq-local decknix--agent-conv-key conv-key))
-                        (when tags
-                          (message "Tags applied: [%s]"
-                                   (string-join tags ", "))))
-                    ;; Deferred — subscribe to prompt-ready then derive
-                    ;; conv-key from the comint input ring (the user's first
-                    ;; message is there once the agent has responded).
-                    ;; This avoids the stale-cache bug where the async session
-                    ;; list refresh hasn't completed yet.
-                    (agent-shell-subscribe-to
-                     :shell-buffer shell-buf
-                     :event 'prompt-ready
-                     :on-event
-                     (eval `(lambda (_event)
-                              (when (buffer-live-p ,shell-buf)
-                                (condition-case nil
-                                    (with-current-buffer ,shell-buf
-                                      ;; Get session ID
-                                      (let ((sid (or decknix--agent-auggie-session-id
-                                                     (when (and (boundp 'shell-maker--config)
-                                                                shell-maker--config)
-                                                       (map-nested-elt (agent-shell--state)
-                                                                       '(:session :id))))))
-                                        (when (and sid (stringp sid)
-                                                  (not (string-empty-p sid)))
-                                          (setq-local decknix--agent-auggie-session-id sid)
-                                          ;; Derive conv-key from comint input ring
-                                          ;; (the first user message) — reliable even
-                                          ;; when session cache is stale.
-                                          (let* ((ring (and (boundp 'comint-input-ring)
-                                                           comint-input-ring))
-                                                 (first-msg (when (and ring
-                                                                       (ring-p ring)
-                                                                       (> (ring-length ring) 0))
-                                                              ;; Oldest entry = first message
-                                                              (ring-ref ring
-                                                                        (1- (ring-length ring)))))
-                                                 (conv-key (when (and first-msg
-                                                                      (not (string-empty-p first-msg)))
-                                                             (decknix--agent-conversation-key
-                                                              first-msg))))
-                                            (if conv-key
-                                                (progn
-                                                  (decknix--agent-store-metadata-by-conv-key
-                                                   conv-key ',tags ,workspace)
-                                                  ;; Store conv-key buffer-locally
-                                                  (setq-local decknix--agent-conv-key conv-key)
-                                                  ;; Also register session-id under conv-key
-                                                  (decknix--agent-register-session-id
-                                                   conv-key sid)
-                                                  (when ',tags
-                                                    (message "Tags applied: [%s]"
-                                                             (string-join ',tags ", "))))
-                                              ;; Fallback: try the old cache-based path
-                                              (when ',tags
-                                                (decknix--agent-session-tags-for sid ',tags)
-                                                (message "Tags applied: [%s]"
-                                                         (string-join ',tags ", ")))
-                                              (when ,workspace
-                                                (decknix--agent-session-save-workspace
-                                                 sid ,workspace)))))))
-                                  (error nil))))
-                           t))))))))
+              (let ((conv-key (when first-message
+                                (decknix--agent-conversation-key first-message))))
+                (when (and conv-key (or tags workspace))
+                  ;; Immediate storage — we know the conversation key
+                  (decknix--agent-store-metadata-by-conv-key
+                   conv-key tags workspace)
+                  ;; Store conv-key buffer-locally so header-line can
+                  ;; look up tags immediately without waiting for the
+                  ;; session-list cache to refresh.
+                  (with-current-buffer shell-buf
+                    (setq-local decknix--agent-conv-key conv-key))
+                  (when tags
+                    (message "Tags applied: [%s]"
+                             (string-join tags ", "))))
+                ;; ALWAYS subscribe to prompt-ready to set session-id and
+                ;; (when deferred) persist metadata.  The session-id is only
+                ;; available after ACP bootstrapping, which is async — so
+                ;; quickaction sessions (immediate path above) still need
+                ;; this for decknix--agent-auggie-session-id.
+                (agent-shell-subscribe-to
+                 :shell-buffer shell-buf
+                 :event 'prompt-ready
+                 :on-event
+                 (eval `(lambda (_event)
+                          (when (buffer-live-p ,shell-buf)
+                            (condition-case nil
+                                (with-current-buffer ,shell-buf
+                                  ;; Get session ID
+                                  (let ((sid (or decknix--agent-auggie-session-id
+                                                 (when (and (boundp 'shell-maker--config)
+                                                            shell-maker--config)
+                                                   (map-nested-elt (agent-shell--state)
+                                                                   '(:session :id))))))
+                                    (when (and sid (stringp sid)
+                                              (not (string-empty-p sid)))
+                                      (setq-local decknix--agent-auggie-session-id sid)
+                                      ;; Derive conv-key from comint input ring
+                                      ;; (the first user message) — reliable even
+                                      ;; when session cache is stale.
+                                      (let* ((ring (and (boundp 'comint-input-ring)
+                                                       comint-input-ring))
+                                             (first-msg (when (and ring
+                                                                   (ring-p ring)
+                                                                   (> (ring-length ring) 0))
+                                                          ;; Oldest entry = first message
+                                                          (ring-ref ring
+                                                                    (1- (ring-length ring)))))
+                                             (conv-key (when (and first-msg
+                                                                  (not (string-empty-p first-msg)))
+                                                         (decknix--agent-conversation-key
+                                                          first-msg))))
+                                        ;; Set conv-key if not already set (immediate path)
+                                        (unless decknix--agent-conv-key
+                                          (when conv-key
+                                            (setq-local decknix--agent-conv-key conv-key)))
+                                        ;; Register session-id under conv-key
+                                        (when conv-key
+                                          (decknix--agent-register-session-id
+                                           conv-key sid))
+                                        ;; Store metadata if not already done (deferred path)
+                                        (when (and (not ,conv-key) (or ',tags ,workspace))
+                                          (if conv-key
+                                              (progn
+                                                (decknix--agent-store-metadata-by-conv-key
+                                                 conv-key ',tags ,workspace)
+                                                (when ',tags
+                                                  (message "Tags applied: [%s]"
+                                                           (string-join ',tags ", "))))
+                                            ;; Fallback: try the old cache-based path
+                                            (when ',tags
+                                              (decknix--agent-session-tags-for sid ',tags)
+                                              (message "Tags applied: [%s]"
+                                                       (string-join ',tags ", ")))
+                                            (when ,workspace
+                                              (decknix--agent-session-save-workspace
+                                               sid ,workspace))))))))
+                              (error nil))))
+                       t))))))
 
         (defun decknix-agent-session-quit ()
           "Cleanly quit the current agent-shell session.
