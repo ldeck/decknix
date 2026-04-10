@@ -747,6 +747,12 @@ Press q to dismiss."
         (defvar-local decknix--agent-auggie-session-id nil
           "The auggie CLI session ID for this buffer, if known.")
 
+        ;; Buffer-local var to track the conversation key for this session.
+        ;; Set early in post-create (quickactions) so the header-line can
+        ;; look up tags without going through the session-list cache.
+        (defvar-local decknix--agent-conv-key nil
+          "The conversation key for this buffer's session, if known.")
+
         ;; Buffer-local var to track the workspace root for this session
         (defvar-local decknix--agent-session-workspace nil
           "The workspace root directory for this agent session, if set.")
@@ -1177,6 +1183,9 @@ existing conversation entry in the tag store."
                      (if shell-buf
                          (with-current-buffer shell-buf
                            (setq-local decknix--agent-auggie-session-id ,sid)
+                           ;; Store conv-key for fast tag lookup in header-line
+                           (when ,ck
+                             (setq-local decknix--agent-conv-key ,ck))
                            ;; Restore workspace for the session picker display
                            (when ,ws
                              (setq-local decknix--agent-session-workspace ,ws))
@@ -1218,14 +1227,15 @@ commit reviews) that should not appear in user-facing session lists."
             (puthash "hidden" (if hidden t :json-false) entry)
             (decknix--agent-tags-write store)))
 
-        (defun decknix--agent-session-group-by-conversation (sessions)
+        (defun decknix--agent-session-group-by-conversation
+            (sessions &optional include-hidden)
           "Group SESSIONS by conversation (shared firstUserMessage).
 Returns a list of (CONV-KEY LATEST-SESSION ALL-SESSIONS) triples,
 sorted by most recently interacted first.
 
 Hidden conversations (marked with hidden=true in agent-sessions.json)
-are excluded — these are background/automated sessions like git hook
-commit reviews.
+are excluded unless INCLUDE-HIDDEN is non-nil.  Hidden sessions are
+typically background/automated sessions like git hook commit reviews.
 
 Inter-group sort uses max(session.modified, conversation.lastAccessed)
 so that tag/rename/resume operations bump a conversation to the top,
@@ -1235,7 +1245,8 @@ not just augment writing to the session file."
               (let* ((first-msg (alist-get 'firstUserMessage s ""))
                      (conv-key (decknix--agent-conversation-key first-msg)))
                 (when (and conv-key
-                           (not (decknix--agent-conversation-hidden-p conv-key)))
+                           (or include-hidden
+                               (not (decknix--agent-conversation-hidden-p conv-key))))
                   (let ((existing (gethash conv-key groups)))
                     (puthash conv-key (cons s existing) groups)))))
             ;; Build result: (conv-key latest-session all-sessions)
@@ -1860,6 +1871,9 @@ agent-sessions.json even if the user never renames or tags the session."
                                                      (not (string-empty-p first-msg)))
                                             (decknix--agent-conversation-key first-msg))))
                                     (when conv-key
+                                      ;; Set conv-key buffer-locally if not yet set
+                                      (unless decknix--agent-conv-key
+                                        (setq-local decknix--agent-conv-key conv-key))
                                       ;; Only store if this conv-key has no workspace yet
                                       (let* ((store (decknix--agent-tags-read))
                                              (convs (decknix--agent-tags-conversations store))
@@ -1976,6 +1990,11 @@ batch launches."
                       (progn
                         (decknix--agent-store-metadata-by-conv-key
                          conv-key tags workspace)
+                        ;; Store conv-key buffer-locally so header-line can
+                        ;; look up tags immediately without waiting for the
+                        ;; session-list cache to refresh.
+                        (with-current-buffer shell-buf
+                          (setq-local decknix--agent-conv-key conv-key))
                         (when tags
                           (message "Tags applied: [%s]"
                                    (string-join tags ", "))))
@@ -2020,6 +2039,8 @@ batch launches."
                                                 (progn
                                                   (decknix--agent-store-metadata-by-conv-key
                                                    conv-key ',tags ,workspace)
+                                                  ;; Store conv-key buffer-locally
+                                                  (setq-local decknix--agent-conv-key conv-key)
                                                   ;; Also register session-id under conv-key
                                                   (decknix--agent-register-session-id
                                                    conv-key sid)
@@ -4514,6 +4535,18 @@ Like treemacs `W' / extra-wide-toggle."
           (interactive)
           (call-interactively #'decknix-sidebar-cycle-display-mode))
 
+        (transient-define-suffix decknix-sidebar-transient--hidden-toggle ()
+          :key "H"
+          :description
+          (lambda ()
+            (format "Hidden        %s"
+                    (propertize
+                     (if decknix--sidebar-show-hidden "[shown]" "[hidden]")
+                     'face (if decknix--sidebar-show-hidden
+                               'warning 'font-lock-comment-face))))
+          (interactive)
+          (call-interactively #'decknix-sidebar-toggle-hidden))
+
         (transient-define-suffix decknix-sidebar-transient--width ()
           :key "W"
           :description
@@ -4545,6 +4578,7 @@ Like treemacs `W' / extra-wide-toggle."
            ("a d" "Delete killed" agent-shell-workspace-sidebar-delete-killed)
            ("a w" "Set workspace" decknix-sidebar-set-workspace)
            ("a h" "Hide"          decknix-sidebar-hide-conversation)
+           ("a u" "Unhide"        decknix-sidebar-unhide-at-point)
            ("a m" "Set mode"      agent-shell-workspace-sidebar-set-mode)
            ("a a" "Add tile"      agent-shell-workspace-tile-add)
            ("a x" "Remove tile"   agent-shell-workspace-tile-remove)]
@@ -4552,6 +4586,7 @@ Like treemacs `W' / extra-wide-toggle."
            (decknix-sidebar-transient--quick-switch)
            (decknix-sidebar-transient--tile-toggle)
            (decknix-sidebar-transient--display-mode)
+           (decknix-sidebar-transient--hidden-toggle)
            (decknix-sidebar-transient--width)])
 
         ;; -- Enhanced sidebar render: live + saved sessions + key footer --
@@ -4572,12 +4607,55 @@ Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
           "When non-nil, show categorised key listing in the sidebar footer.
 Defaults to t for discoverability; toggle with K.")
 
+        (defvar decknix--sidebar-show-hidden nil
+          "When non-nil, include hidden/background sessions in the Recent list.
+Hidden sessions are marked via `decknix--agent-conversation-set-hidden'.
+Toggle with `H' in the sidebar.")
+
         (defun decknix-sidebar-toggle-keys ()
           "Toggle the inline key listing in the sidebar footer."
           (interactive)
           (setq decknix--sidebar-show-keys (not decknix--sidebar-show-keys))
           (when (fboundp 'agent-shell-workspace-sidebar-refresh)
             (agent-shell-workspace-sidebar-refresh)))
+
+        (defun decknix-sidebar-toggle-hidden ()
+          "Toggle visibility of hidden/background sessions in the sidebar."
+          (interactive)
+          (setq decknix--sidebar-show-hidden (not decknix--sidebar-show-hidden))
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (agent-shell-workspace-sidebar-refresh))
+          (message "Hidden sessions: %s"
+                   (if decknix--sidebar-show-hidden "shown" "hidden")))
+
+        (defun decknix-sidebar-hide-at-point ()
+          "Mark the saved session at point as hidden (background/automated).
+The session will be excluded from the Recent list unless `H' toggle is on."
+          (interactive)
+          (let ((conv-key (get-text-property
+                           (line-beginning-position)
+                           'decknix-sidebar-saved-conv-key)))
+            (if conv-key
+                (progn
+                  (decknix--agent-conversation-set-hidden conv-key t)
+                  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                    (agent-shell-workspace-sidebar-refresh))
+                  (message "Session hidden — press H to show hidden sessions"))
+              (message "No saved session at point"))))
+
+        (defun decknix-sidebar-unhide-at-point ()
+          "Un-hide the saved session at point (make visible again)."
+          (interactive)
+          (let ((conv-key (get-text-property
+                           (line-beginning-position)
+                           'decknix-sidebar-saved-conv-key)))
+            (if conv-key
+                (progn
+                  (decknix--agent-conversation-set-hidden conv-key nil)
+                  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                    (agent-shell-workspace-sidebar-refresh))
+                  (message "Session un-hidden"))
+              (message "No saved session at point"))))
 
         (defun decknix--sidebar-render-key-group (label keys)
           "Insert a group LABEL header and KEYS alist as vertical key lines."
@@ -4683,6 +4761,11 @@ so RIGHT group starts at column COL-WIDTH."
                         (propertize
                          (format "[%s]" (symbol-name decknix--sidebar-display-mode))
                          'face 'font-lock-constant-face)))
+            (cons "H" (format "hidden %s"
+                        (propertize
+                         (if decknix--sidebar-show-hidden "[shown]" "[hidden]")
+                         'face (if decknix--sidebar-show-hidden
+                                   'warning 'font-lock-comment-face))))
             (cons "W" (format "width %s"
                         (propertize
                          (format "[%s]" (symbol-name decknix--sidebar-width-state))
@@ -4762,12 +4845,13 @@ items inline (horizontal).  Press K to toggle, ? for full transient."
 
         (defun decknix--sidebar-saved-sessions ()
           "Return recent saved conversations as alist of (name workspace conv-key session).
-Grouped by workspace, limited to `decknix--sidebar-max-saved'."
+Grouped by workspace, limited to `decknix--sidebar-max-saved'.
+Respects `decknix--sidebar-show-hidden' toggle."
           (condition-case nil
               (let* ((sessions (decknix--agent-session-list))
                      (groups (when sessions
                                (decknix--agent-session-group-by-conversation
-                                sessions)))
+                                sessions decknix--sidebar-show-hidden)))
                      (result nil)
                      (count 0))
                 ;; Collect up to max-saved conversations (already sorted newest first)
@@ -4902,6 +4986,9 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                              (conv-key (nth 2 entry))
                              (session (nth 3 entry))
                              (modified (nth 4 entry))
+                             (hidden-p (and conv-key
+                                            (decknix--agent-conversation-hidden-p
+                                             conv-key)))
                              (tags (when conv-key
                                      (decknix--agent-tags-for-conv-key conv-key)))
                              (time-str (if modified
@@ -4922,6 +5009,11 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                                                     'face 'font-lock-comment-face))
                                          (or name "?")))
                                       (_ (or name "?"))))  ;; 'name mode
+                             ;; Dim hidden sessions with 👻 prefix
+                             (label (if hidden-p
+                                        (propertize (format "👻 %s" label)
+                                                    'face 'shadow)
+                                      label))
                              (display (format "  %4s %s"
                                               (propertize time-str
                                                           'face 'font-lock-comment-face)
@@ -5160,7 +5252,9 @@ agent-sessions.json to restore."
         (defun decknix--nav-hub-start-review (url)
           "Start a PR review session for URL without prompting.
 Auto-detects workspace and generates session name from the URL.
-Prompts for workspace if auto-detection fails."
+Prompts for workspace if auto-detection fails.
+Overrides `agent-shell-display-action' to target the main window,
+preventing extra splits when called from the sidebar."
           (let ((parsed (decknix--agent-parse-pr-url url)))
             (if (not parsed)
                 (message "Not a valid PR URL: %s" url)
@@ -5175,7 +5269,21 @@ Prompts for workspace if auto-detection fails."
                                     (read-directory-name
                                      (format "Workspace for %s/%s: " owner repo)
                                      nil nil t)))
-                     (command (format "/review-service-pr %s" url)))
+                     (command (format "/review-service-pr %s" url))
+                     ;; Target main window to avoid sidebar splits
+                     (main (window-main-window (selected-frame)))
+                     (agent-shell-display-action
+                      (if (and main (window-live-p main))
+                          (eval `(cons (lambda (buffer alist)
+                                         (let ((win ,main))
+                                           (when (window-live-p win)
+                                             (window--display-buffer
+                                              buffer win 'reuse alist))))
+                                       nil)
+                                t)
+                        agent-shell-display-action)))
+                (when (and main (window-live-p main))
+                  (select-window main))
                 (decknix--agent-quickaction-start name tags workspace command)
                 (message "Starting review: %s/%s#%s" owner repo number)))))
 
@@ -5532,6 +5640,8 @@ exits, focus returns to the sidebar."
                       (decknix--sidebar-call-transient #'decknix-sidebar-transient)))
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "K") #'decknix-sidebar-toggle-keys)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "H") #'decknix-sidebar-toggle-hidden)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "W") #'decknix-sidebar-cycle-width)
         (define-key agent-shell-workspace-sidebar-mode-map
@@ -7213,11 +7323,20 @@ otherwise falls back to shell-maker--busy."
             (_              'shadow)))
 
         (defun decknix--header-tags ()
-          "Return the tag list for the current buffer's conversation, or nil."
-          (when (and (boundp 'decknix--agent-auggie-session-id)
-                     decknix--agent-auggie-session-id)
-            (decknix--agent-tags-for-session
-             decknix--agent-auggie-session-id)))
+          "Return the tag list for the current buffer's conversation, or nil.
+Fast path: uses `decknix--agent-conv-key' (set during post-create) to
+look up tags directly, bypassing the session-list cache.  Falls back to
+the session-id-based lookup if conv-key is not set yet."
+          (or
+           ;; Fast path: conv-key available (set during quickaction or
+           ;; deferred prompt-ready) — no session-list cache dependency.
+           (when (bound-and-true-p decknix--agent-conv-key)
+             (decknix--agent-tags-for-conv-key decknix--agent-conv-key))
+           ;; Slow path: look up via session-id → session-list → conv-key
+           (when (and (boundp 'decknix--agent-auggie-session-id)
+                      decknix--agent-auggie-session-id)
+             (decknix--agent-tags-for-session
+              decknix--agent-auggie-session-id))))
 
         (defun decknix--header-workspace-short ()
           "Return an abbreviated workspace path for the header-line."
