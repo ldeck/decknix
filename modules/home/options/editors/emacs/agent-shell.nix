@@ -4573,81 +4573,154 @@ Defaults to t for discoverability; toggle with K.")
                                 'face 'font-lock-comment-face)
                     "\n")))
 
+        (defun decknix--sidebar-render-key-group-inline (label keys)
+          "Insert group LABEL then KEYS alist as a compact horizontal line.
+Format: LABEL  k·desc  k·desc  k·desc"
+          (insert (propertize (format " %s " label) 'face 'bold))
+          (let ((first t))
+            (dolist (kv keys)
+              (unless first (insert " "))
+              (setq first nil)
+              (insert (propertize (car kv) 'face 'font-lock-keyword-face)
+                      (propertize "·" 'face 'font-lock-comment-face)
+                      (propertize (cdr kv) 'face 'font-lock-comment-face))))
+          (insert "\n"))
+
+        (defun decknix--sidebar-render-key-groups-side-by-side (left-label left-keys
+                                                                 right-label right-keys
+                                                                 col-width)
+          "Render LEFT and RIGHT key groups in two columns.
+Each column is COL-WIDTH chars wide.  LEFT group is padded on the right
+so RIGHT group starts at column COL-WIDTH."
+          ;; Build lists of formatted lines for each group
+          (let ((left-lines
+                 (cons (propertize (format " %s" left-label) 'face 'bold)
+                       (mapcar (lambda (kv)
+                                 (concat
+                                  (propertize (format " %3s " (car kv))
+                                              'face 'font-lock-keyword-face)
+                                  (propertize (cdr kv)
+                                              'face 'font-lock-comment-face)))
+                               left-keys)))
+                (right-lines
+                 (cons (propertize (format " %s" right-label) 'face 'bold)
+                       (mapcar (lambda (kv)
+                                 (concat
+                                  (propertize (format " %3s " (car kv))
+                                              'face 'font-lock-keyword-face)
+                                  (propertize (cdr kv)
+                                              'face 'font-lock-comment-face)))
+                               right-keys)))
+                (max-rows (max (length left-lines) (length right-lines))))
+            ;; Pad shorter list
+            (while (< (length left-lines) max-rows)
+              (setq left-lines (append left-lines (list ""))))
+            (while (< (length right-lines) max-rows)
+              (setq right-lines (append right-lines (list ""))))
+            ;; Render side by side
+            (cl-mapc
+             (lambda (l r)
+               (let* ((l-visible (length (substring-no-properties l)))
+                      (pad (max 1 (- col-width l-visible))))
+                 (insert l (make-string pad ?\s) r "\n")))
+             left-lines right-lines)))
+
+        (defun decknix--sidebar-footer-nav-keys ()
+          "Build the Navigate key alist for the footer."
+          (append
+           '(("r"   . "requests")
+             ("w"   . "wip")
+             ("l"   . "live"))
+           (when decknix--sidebar-previous-sessions
+             '(("p"   . "previous")))
+           '(("s"   . "sessions…"))))
+
+        (defun decknix--sidebar-footer-quick-keys ()
+          "Build the Quick key alist for the footer."
+          '(("RET" . "open")
+            ("c"   . "new")
+            ("g"   . "refresh")
+            ("q"   . "quit")
+            ("a"   . "actions…")))
+
+        (defun decknix--sidebar-footer-toggle-keys ()
+          "Build the Toggles key alist (with live state) for the footer."
+          (append
+           (list
+            (cons "S" (format "qswitch %s"
+                        (propertize
+                         (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
+                                  agent-shell-workspace-sidebar--quick-switch)
+                             "[on]" "[off]")
+                         'face (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
+                                        agent-shell-workspace-sidebar--quick-switch)
+                                   'success 'font-lock-comment-face))))
+            (cons "t" (format "tile %s"
+                        (let* ((sb (get-buffer "*agent-shell-sidebar*"))
+                               (tiled (and sb
+                                           (buffer-local-value
+                                            'agent-shell-workspace--tiled sb))))
+                          (propertize (if tiled "[on]" "[off]")
+                                      'face (if tiled 'success 'font-lock-comment-face)))))
+            (cons "M" (format "display %s"
+                        (propertize
+                         (format "[%s]" (symbol-name decknix--sidebar-display-mode))
+                         'face 'font-lock-constant-face)))
+            (cons "W" (format "width %s"
+                        (propertize
+                         (format "[%s]" (symbol-name decknix--sidebar-width-state))
+                         'face 'font-lock-constant-face))))
+           (when (fboundp 'decknix--hub-org-filter-dispatch)
+             (list
+              (cons "O" (format "org %s"
+                          (if (fboundp 'decknix--hub-org-filter-summary)
+                              (let ((summary (decknix--hub-org-filter-summary)))
+                                (propertize
+                                 (format "[%s]" summary)
+                                 'face (if (string= summary "all")
+                                           'font-lock-comment-face
+                                         'font-lock-constant-face)))
+                            (propertize "[off]" 'face 'font-lock-comment-face))))
+              (cons "F" (format "age %s"
+                          (let ((label (decknix--hub-age-filter-label)))
+                            (propertize
+                             (format "[%s]" label)
+                             'face (if (string= label "all")
+                                       'font-lock-comment-face
+                                     'font-lock-constant-face)))))))))
+
         (defun decknix--sidebar-render-footer ()
-          "Insert categorised key listing or compact hint depending on toggle.
-Press K to toggle, ? to open full transient menu with live state."
+          "Insert responsive key listing or compact hint depending on toggle.
+When the sidebar is wide enough (>=48 cols), Navigate and Quick render
+side-by-side with Toggles below.  When narrow, all groups render with
+items inline (horizontal).  Press K to toggle, ? for full transient."
           (insert "\n")
           (if decknix--sidebar-show-keys
-              (progn
-                ;; ── Navigate ──
-                (decknix--sidebar-render-key-group "Navigate"
-                  (append
-                   '(("r"   . "requests")
-                     ("w"   . "wip")
-                     ("l"   . "live"))
-                   (when decknix--sidebar-previous-sessions
-                     '(("p"   . "previous")))
-                   '(("s"   . "sessions…"))))
-                ;; ── Quick ──
-                (decknix--sidebar-render-key-group "Quick"
-                  '(("RET" . "open")
-                    ("c"   . "new session")
-                    ("g"   . "refresh")
-                    ("q"   . "quit")
-                    ("a"   . "actions…")))
-                ;; ── Toggles (with live state) ──
-                (decknix--sidebar-render-key-group "Toggles"
-                  (append
-                   (list
-                    (cons "S" (format "quick-switch %s"
-                                (propertize
-                                 (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
-                                          agent-shell-workspace-sidebar--quick-switch)
-                                     "[on]" "[off]")
-                                 'face (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
-                                                agent-shell-workspace-sidebar--quick-switch)
-                                           'success 'font-lock-comment-face))))
-                    (cons "t" (format "tile %s"
-                                (let* ((sb (get-buffer "*agent-shell-sidebar*"))
-                                       (tiled (and sb
-                                                   (buffer-local-value
-                                                    'agent-shell-workspace--tiled sb))))
-                                  (propertize (if tiled "[on]" "[off]")
-                                              'face (if tiled 'success 'font-lock-comment-face)))))
-                    (cons "M" (format "display %s"
-                                (propertize
-                                 (format "[%s]" (symbol-name decknix--sidebar-display-mode))
-                                 'face 'font-lock-constant-face)))
-                    (cons "W" (format "width %s"
-                                (propertize
-                                 (format "[%s]" (symbol-name decknix--sidebar-width-state))
-                                 'face 'font-lock-constant-face))))
-                   (when (fboundp 'decknix--hub-org-filter-dispatch)
-                     (list
-                      (cons "O" (format "org %s"
-                                  (if (fboundp 'decknix--hub-org-filter-summary)
-                                      (let ((summary (decknix--hub-org-filter-summary)))
-                                        (propertize
-                                         (format "[%s]" summary)
-                                         'face (if (string= summary "all")
-                                                   'font-lock-comment-face
-                                                 'font-lock-constant-face)))
-                                    (propertize "[off]" 'face 'font-lock-comment-face))))
-                      (cons "F" (format "age %s"
-                                  (let ((label (decknix--hub-age-filter-label)))
-                                    (propertize
-                                     (format "[%s]" label)
-                                     'face (if (string= label "all")
-                                               'font-lock-comment-face
-                                             'font-lock-constant-face)))))))))
-                ;; Trailing hint
+              (let* ((win (get-buffer-window (current-buffer)))
+                     (w (if (and win (window-live-p win))
+                            (window-body-width win) 30))
+                     (nav-keys (decknix--sidebar-footer-nav-keys))
+                     (quick-keys (decknix--sidebar-footer-quick-keys))
+                     (toggle-keys (decknix--sidebar-footer-toggle-keys))
+                     (wide-p (>= w 48)))
+                (if wide-p
+                    ;; ── Wide: Navigate | Quick  side by side ──
+                    (let ((col (/ w 2)))
+                      (decknix--sidebar-render-key-groups-side-by-side
+                       "Navigate" nav-keys "Quick" quick-keys col)
+                      (decknix--sidebar-render-key-group "Toggles" toggle-keys))
+                  ;; ── Narrow: all groups inline ──
+                  (decknix--sidebar-render-key-group-inline "Navigate" nav-keys)
+                  (decknix--sidebar-render-key-group-inline "Quick" quick-keys)
+                  (decknix--sidebar-render-key-group-inline "Toggles" toggle-keys))
+                ;; Trailing hint (always)
                 (insert (propertize " K " 'face 'font-lock-keyword-face)
                         (propertize "hide" 'face 'font-lock-comment-face)
                         "  "
                         (propertize "? " 'face 'font-lock-keyword-face)
                         (propertize "all + state" 'face 'font-lock-comment-face)
                         "\n"))
-            ;; Compact: vertical, one key per line, no categories
+            ;; Keys hidden: compact hint
             (insert (propertize " ?" 'face 'font-lock-keyword-face)
                     (propertize " actions  " 'face 'font-lock-comment-face)
                     (propertize "K" 'face 'font-lock-keyword-face)
