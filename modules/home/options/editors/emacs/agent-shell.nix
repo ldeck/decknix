@@ -861,7 +861,8 @@ Switches between ▶ (collapsed) and ▼ (expanded)."
 Inserts just before the prompt, matching the ▶/▼ toggle style of
 agent-shell's built-in sections (Notices, Agent capabilities, etc.).
 User messages shown in `font-lock-keyword-face', assistant responses
-in `font-lock-doc-face'.  Section is expanded by default."
+in `font-lock-doc-face'.  Section is collapsed by default so the
+prompt is immediately visible.  Click or TAB the header to expand."
           (let ((exchanges (decknix--agent-session-extract-history session-id n)))
             (when exchanges
               (let ((inhibit-read-only t))
@@ -878,9 +879,10 @@ in `font-lock-doc-face'.  Section is expanded by default."
                   ;; Move to start of the prompt line
                   (beginning-of-line)
                   (let ((insert-pos (point)))
-                    ;; Header: ▼ Context (N exchanges) — clickable/TAB-able
+                    ;; Header: ▶ Context (N exchanges) — clickable/TAB-able
+                    ;; Starts collapsed (▶); user clicks to expand (▼)
                     (insert (propertize
-                             (format "▼ %s\n"
+                             (format "▶ %s\n"
                                      (propertize
                                       (format "Context (%d exchange%s)"
                                               (length exchanges)
@@ -915,7 +917,13 @@ in `font-lock-doc-face'.  Section is expanded by default."
                       (insert (propertize "\n" 'read-only t 'rear-nonsticky t))
                       ;; Tag the body region for toggling
                       (put-text-property body-start (point)
-                                         'decknix-context-body t))))))))
+                                         'decknix-context-body t)
+                      ;; Start collapsed — hide the body
+                      (put-text-property body-start (point)
+                                         'invisible t)))))
+              ;; Move cursor to the prompt (end of buffer) so it's
+              ;; immediately ready for input, not stuck at the context header
+              (goto-char (point-max)))))
 
         (defun decknix--agent-unsorted-table (candidates)
           "Wrap CANDIDATES in a completion table that preserves list order.
@@ -1179,7 +1187,11 @@ existing conversation entry in the tag store."
                                (format "*Auggie: %s*" ,bname)))
                              (setq-local shell-maker--buffer-name-override
                                          (buffer-name)))
-                           (decknix--agent-session-prepopulate ,sid ,n))
+                           (decknix--agent-session-prepopulate ,sid ,n)
+                           ;; Ensure window shows the prompt, not the context
+                           (let ((win (get-buffer-window shell-buf)))
+                             (when (and win (window-live-p win))
+                               (set-window-point win (point-max)))))
                        (message "Could not find agent-shell buffer for session %s"
                                 (substring ,sid 0 8)))))
                 t)))))
@@ -5709,7 +5721,11 @@ session buffer in the main window after a short delay."
                                  (let ((main (window-main-window (selected-frame))))
                                    (when (and main (window-live-p main))
                                      (set-window-buffer main new-buf)
-                                     (select-window main)))))) t)))))))
+                                     (select-window main)
+                                     ;; Move to prompt so user is ready to type
+                                     (with-current-buffer new-buf
+                                       (goto-char (point-max)))
+                                     (set-window-point main (point-max))))))) t)))))))
 
         (defun decknix--sidebar-restore-all-previous ()
           "Restore all previous live sessions.
@@ -7290,6 +7306,28 @@ busy animation) and appends decknix extras (status icon, tags, context panel)."
                               (not (process-live-p (get-buffer-process (current-buffer)))))
                           (user-error "Agent process not ready — wait for it to start or restart with C-c A a")
                         (apply orig-fn args))))
+
+        ;; -- Auto-scroll: keep windows showing agent output at the bottom --
+        ;; shell-maker's output filter uses `with-current-buffer' + `goto-char
+        ;; (point-max)' which only sets the buffer's point, not the window's
+        ;; point when the buffer is displayed in a non-selected window.
+        ;; This advice scrolls all windows showing the buffer to the bottom,
+        ;; but ONLY if their point was already at or near the end (i.e., the
+        ;; user hadn't scrolled up to read earlier output).
+        (advice-add 'shell-maker--output-filter :after
+                    (lambda (_process _string)
+                      (when (derived-mode-p 'agent-shell-shell-mode)
+                        (let ((buf (current-buffer)))
+                          (dolist (win (get-buffer-window-list buf nil t))
+                            ;; If the window's point was at the end before
+                            ;; the insert, scroll it to the new end.
+                            ;; We check if window-point is within a few chars
+                            ;; of point-max (the insert moved point-max forward,
+                            ;; but the window's old point is now "behind").
+                            (let ((wp (window-point win))
+                                  (pm (point-max)))
+                              (when (>= wp (- pm (length (or _string ""))))
+                                (set-window-point win pm))))))))
 
         ;; TAB dispatch: yas field → corfu complete → yas expand → completion.
         ;; local-set-key overrides both the yas-keymap minor-mode binding
