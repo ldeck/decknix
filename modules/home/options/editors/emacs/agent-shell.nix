@@ -535,7 +535,8 @@ Press q to dismiss."
 
             (propertize "Context  (C-c i …)\n" 'font-lock-face '(:weight bold))
             (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
-            "  C-c I       Full context panel\n"
+            "  C-c I       Toggle context in header\n"
+            "  C-u C-c I   Full context side panel\n"
             "  C-c i i     List tracked issues\n"
             "  C-c i p     List tracked PRs\n"
             "  C-c i c     Show CI status\n"
@@ -624,7 +625,8 @@ Press q to dismiss."
             (propertize "5. Context Awareness\n" 'font-lock-face '(:weight bold))
             (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
             "  The agent auto-detects issue/PR references in conversation.\n"
-            "  C-c I opens the full context panel.\n"
+            "  C-c I toggles context in the header (collapsed by default).\n"
+            "  C-u C-c I opens the full context side panel.\n"
             "  C-c i a pins an issue/PR; C-c i d unpins it.\n"
             "  C-c i g opens the item in your browser.\n"
             "\n"
@@ -3314,10 +3316,12 @@ the toggle."
           (decknix-compose--forward-to-parent 'decknix-session-picker))
 
         (defun decknix-compose-context-panel ()
-          "Open context panel (forwarded to parent)."
+          "Toggle context or open panel (forwarded to parent).
+Without prefix, toggle inline header. With prefix, open side panel."
           (interactive)
-          (when (fboundp 'decknix-context-panel)
-            (decknix-compose--forward-to-parent 'decknix-context-panel)))
+          (when (fboundp 'decknix-context-toggle-or-panel)
+            (decknix-compose--forward-to-parent
+             'decknix-context-toggle-or-panel)))
 
         (defun decknix-compose-tags ()
           "Show session tags (forwarded to parent)."
@@ -6429,6 +6433,11 @@ Respects `decknix--hub-org-visibility'. Shows time since last update."
         ;; Each buffer tracks a set of context items (issues, PRs).
         ;; Items can be auto-detected from conversation text or manually pinned.
 
+        (defvar-local decknix--context-header-expanded nil
+          "Whether context data is expanded in the header-line.
+nil = collapsed (default): show a compact badge with item count.
+t = expanded: show the full issues/PRs/CI/reviews detail.")
+
         (defvar-local decknix--context-items nil
           "Alist of tracked context items for this agent-shell buffer.
 Each entry is (ID . plist) where ID is e.g. \"#49\" or \"NC-1234\".
@@ -6616,8 +6625,41 @@ Preserves pinned items and previously fetched metadata."
       + optionalString cfg.context.enable ''
 
         ;; -- Header-line rendering --
-        (defun decknix--context-header-string ()
-          "Build the header-line string showing tracked context."
+        ;; Context is collapsed by default.  C-c I toggles inline expansion.
+        ;; C-u C-c I opens the full panel in a help-style side window.
+
+        (defun decknix--context-header-badge ()
+          "Build a compact context badge for the collapsed header.
+Shows item count and CI status as a short string, e.g. \"ctx:3 ✓\"."
+          (let* ((n (length decknix--context-items))
+                 (ci-icon (when decknix--context-ci
+                            (let ((st (plist-get decknix--context-ci :status)))
+                              (cond ((string= st "pass")
+                                     (propertize "\u2713" 'face 'success))
+                                    ((string= st "fail")
+                                     (propertize "\u2717" 'face 'error))
+                                    ((string= st "running")
+                                     (propertize "\u27f3" 'face 'warning))
+                                    (t nil)))))
+                 (unres (when decknix--context-reviews
+                          (plist-get decknix--context-reviews :unresolved)))
+                 (parts nil))
+            (when (> n 0)
+              (push (propertize (format "ctx:%d" n)
+                                'face 'font-lock-comment-face)
+                    parts))
+            (when ci-icon (push ci-icon parts))
+            (when (and unres (> unres 0))
+              (push (propertize (format "rev:%d" unres) 'face 'warning)
+                    parts))
+            (when parts
+              (concat " "
+                      (propertize
+                       (mapconcat #'identity (nreverse parts) " ")
+                       'help-echo "C-c I to expand context, C-u C-c I for side panel")))))
+
+        (defun decknix--context-header-expanded-string ()
+          "Build the full (expanded) header-line string showing tracked context."
           (let ((parts nil))
             ;; Issues
             (let ((issues (cl-remove-if-not
@@ -6676,6 +6718,15 @@ Preserves pinned items and previously fetched metadata."
             (if parts
                 (concat " " (mapconcat #'identity (nreverse parts) "  |  "))
               nil)))
+
+        (defun decknix--context-header-string ()
+          "Build the header-line context string.
+When collapsed (default), returns a compact badge (item count + CI icon).
+When expanded, returns the full issues/PRs/CI/reviews detail.
+Toggle with C-c I; C-u C-c I opens the full panel in a side window."
+          (if decknix--context-header-expanded
+              (decknix--context-header-expanded-string)
+            (decknix--context-header-badge)))
 
         (defun decknix--context-update-header ()
           "Update the header-line-format for the current agent-shell buffer.
@@ -6875,8 +6926,34 @@ Delegates to the unified header which incorporates context data."
                                     'font-lock-face 'font-lock-comment-face))
                 (goto-char (point-min))
                 (special-mode)))
-            (display-buffer buf '(display-buffer-at-bottom
-                                  (window-height . fit-window-to-buffer)))))
+            (display-buffer buf
+                           '((display-buffer-in-side-window)
+                             (side . right)
+                             (slot . 0)
+                             (window-width . 0.4)
+                             (preserve-size . (t . nil))))))
+
+        (defun decknix-context-toggle ()
+          "Toggle inline context expansion in the header-line.
+When collapsed, the header shows a compact badge (item count + CI icon).
+When expanded, the full context detail is shown."
+          (interactive)
+          (setq decknix--context-header-expanded
+                (not decknix--context-header-expanded))
+          (decknix--header-update)
+          (message "Context header: %s  (C-u C-c I for side panel)"
+                   (if decknix--context-header-expanded "expanded" "collapsed")))
+
+        (defun decknix-context-toggle-or-panel (arg)
+          "Toggle context display.  With prefix ARG, open the full side panel.
+Without prefix, toggle inline context in the header-line.
+
+  C-c I     — toggle collapsed/expanded header context
+  C-u C-c I — open the full Agent Context panel in a help-style side window"
+          (interactive "P")
+          (if arg
+              (decknix-context-panel)
+            (decknix-context-toggle)))
 
         ;; -- Navigation commands --
         (defun decknix-context-browse ()
@@ -7306,7 +7383,7 @@ Priority order:
                         (define-key map (kbd "g") 'decknix-context-browse)
                         (define-key map (kbd "f") 'decknix-context-forge-visit)
                         (local-set-key (kbd "C-c i") map))
-                      (local-set-key (kbd "C-c I") 'decknix-context-panel)
+                      (local-set-key (kbd "C-c I") 'decknix-context-toggle-or-panel)
                       ;; Restore pinned items from previous session, then refresh
                       (decknix--context-restore)
                       (decknix--context-full-refresh)
