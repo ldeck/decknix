@@ -4977,17 +4977,29 @@ Grouped by workspace, limited to `decknix--sidebar-max-saved'."
                       (unless workspace
                         (setq workspace
                               (read-directory-name "Workspace: " nil nil t)))
-                      ;; Select main window so agent-shell-start displays there
+                      ;; Select main window and override display-action
+                      ;; so agent-shell places the buffer there (not in a
+                      ;; new split).
                       (let ((main (window-main-window (selected-frame))))
                         (when (and main (window-live-p main))
-                          (select-window main)))
-                      (let ((conv-key (decknix--agent-conversation-key
-                                       (alist-get 'firstUserMessage
-                                                  saved ""))))
-                        (decknix--agent-session-resume
-                         session-id
-                         decknix-agent-session-history-count
-                         name workspace conv-key)))))
+                          (select-window main))
+                        (let ((conv-key (decknix--agent-conversation-key
+                                         (alist-get 'firstUserMessage
+                                                    saved "")))
+                              (agent-shell-display-action
+                               (if (and main (window-live-p main))
+                                   (eval `(cons (lambda (buffer alist)
+                                                  (let ((win ,main))
+                                                    (when (window-live-p win)
+                                                      (window--display-buffer
+                                                       buffer win 'reuse alist))))
+                                                nil)
+                                         t)
+                                 agent-shell-display-action)))
+                          (decknix--agent-session-resume
+                           session-id
+                           decknix-agent-session-history-count
+                           name workspace conv-key))))))
                ;; Default: live buffer
                (t (funcall orig-fn))))))
 
@@ -5692,40 +5704,54 @@ session buffer in the main window after a short delay."
                                  name)))
             (if (not sid)
                 (message "Cannot restore: no session ID")
-              ;; Select the main window BEFORE starting the session so that
-              ;; agent-shell-start displays the buffer there instead of
-              ;; splitting when called from the sidebar window.
+              ;; Identify the main (non-sidebar) window for display
               (let ((main (window-main-window (selected-frame))))
                 (when (and main (window-live-p main))
-                  (select-window main)))
-              ;; Snapshot buffers before resume to detect the new one
-              (let ((before-buffers (buffer-list)))
-                (decknix--agent-session-resume sid 20 display-name workspace conv-key)
-                ;; Remove from previous list since it's now live
-                (setq decknix--sidebar-previous-sessions
-                      (seq-filter (lambda (e)
-                                    (not (equal (alist-get 'session-id e) sid)))
-                                  decknix--sidebar-previous-sessions))
-                (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-                  (agent-shell-workspace-sidebar-refresh))
-                ;; Ensure the restored buffer ends up in the main window
-                ;; (agent-shell-start may have used pop-to-buffer which is
-                ;; correct now that we pre-selected main, but the timer still
-                ;; handles rename/prepopulate and final focus)
-                (when focus
-                  (run-at-time 2.0 nil
-                    (eval `(lambda ()
-                             (let ((new-buf (decknix--agent-find-new-shell-buffer
-                                             ',before-buffers)))
-                               (when new-buf
-                                 (let ((main (window-main-window (selected-frame))))
-                                   (when (and main (window-live-p main))
-                                     (set-window-buffer main new-buf)
-                                     (select-window main)
-                                     ;; Move to prompt so user is ready to type
-                                     (with-current-buffer new-buf
-                                       (goto-char (point-max)))
-                                     (set-window-point main (point-max))))))) t)))))))
+                  (select-window main))
+                ;; Snapshot buffers before resume to detect the new one
+                (let ((before-buffers (buffer-list)))
+                  ;; Override display-action so agent-shell--display-buffer
+                  ;; places the new buffer in the main window instead of
+                  ;; splitting or creating an additional window.  The key
+                  ;; insight: `display-buffer-same-window' can fail when
+                  ;; the selected window changes during agent-shell--start,
+                  ;; so we use `display-buffer-use-some-window' with a
+                  ;; predicate that pins to `main'.
+                  (let ((agent-shell-display-action
+                         (if (and main (window-live-p main))
+                             (eval `(cons (lambda (buffer alist)
+                                           (let ((win ,main))
+                                             (when (window-live-p win)
+                                               (window--display-buffer buffer win
+                                                                       'reuse alist))))
+                                         nil)
+                                   t)
+                           agent-shell-display-action)))
+                    (decknix--agent-session-resume sid 20 display-name workspace conv-key))
+                  ;; Remove from previous list since it's now live
+                  (setq decknix--sidebar-previous-sessions
+                        (seq-filter (lambda (e)
+                                      (not (equal (alist-get 'session-id e) sid)))
+                                    decknix--sidebar-previous-sessions))
+                  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                    (agent-shell-workspace-sidebar-refresh))
+                  ;; Ensure the restored buffer ends up in the main window
+                  ;; and receives focus.  The timer fires after agent-shell
+                  ;; has finished async setup (rename, prepopulate).
+                  (when focus
+                    (run-at-time 2.0 nil
+                      (eval `(lambda ()
+                               (let ((new-buf (decknix--agent-find-new-shell-buffer
+                                               ',before-buffers)))
+                                 (when new-buf
+                                   (let ((main (window-main-window (selected-frame))))
+                                     (when (and main (window-live-p main))
+                                       (set-window-buffer main new-buf)
+                                       (select-window main)
+                                       ;; Move to prompt so user is ready to type
+                                       (with-current-buffer new-buf
+                                         (goto-char (point-max)))
+                                       (set-window-point main (point-max))))))) t))))))))
 
         (defun decknix--sidebar-restore-all-previous ()
           "Restore all previous live sessions.
