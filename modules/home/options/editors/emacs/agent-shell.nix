@@ -5240,7 +5240,8 @@ Prompts for workspace if auto-detection fails."
                                (repo (car (last (split-string repo-full "/"))))
                                (number (alist-get 'number item))
                                (title (or (alist-get 'title item) ""))
-                               (ci-str (decknix--hub-ci-icon (alist-get 'ci item)))
+                               (ci-str (decknix--hub-ci-icon (alist-get 'ci item)
+                                                              (alist-get 'mergeable item)))
                                (short (if (> (length title) 30)
                                           (concat (substring title 0 29) "…")
                                         title))
@@ -5290,7 +5291,8 @@ Prompts for workspace if auto-detection fails."
                       (let* ((key (nth idx keys))
                              (number (alist-get 'number pr))
                              (title (or (alist-get 'title pr) ""))
-                             (ci-str (decknix--hub-ci-icon (alist-get 'ci pr)))
+                             (ci-str (decknix--hub-ci-icon (alist-get 'ci pr)
+                                                           (alist-get 'mergeable pr)))
                              (age (decknix--hub-format-age
                                    (alist-get 'updated pr)))
                              (short (if (> (length title) 28)
@@ -6083,17 +6085,17 @@ Always returns t when filter is nil (show all)."
         ;; Tracks which CI statuses are visible (pass, fail, running, unknown).
         ;; All visible by default.  C in the sidebar toggles individual statuses.
 
-        (defvar decknix--hub-ci-filter '("pass" "fail" "running" "unknown")
+        (defvar decknix--hub-ci-filter
+          '("pass" "fail" "soft_fail" "running" "unknown")
           "List of visible CI statuses.
-Valid values: \"pass\", \"fail\", \"running\", \"unknown\".
-When all four are present, no filtering occurs.")
+Valid values: \"pass\", \"fail\", \"soft_fail\", \"running\", \"unknown\".
+\"soft_fail\" = lint/analysis only failures (e.g. Codacy).
+When all five are present, no filtering occurs.")
 
         (defun decknix--hub-ci-status-of (item)
-          "Return the normalised CI status string for ITEM."
-          (let ((ci (alist-get 'ci item)))
-            (if ci
-                (or (alist-get 'status ci) "unknown")
-              "unknown")))
+          "Return the classified CI status string for ITEM.
+Uses individual check details to distinguish soft from hard fails."
+          (decknix--hub-ci-classify (alist-get 'ci item)))
 
         (defun decknix--hub-ci-visible-p (item)
           "Return non-nil if ITEM's CI status is in the active filter set."
@@ -6101,17 +6103,18 @@ When all four are present, no filtering occurs.")
 
         (defun decknix--hub-ci-filter-summary ()
           "Return a compact label for the current CI filter.
-Shows icon characters for enabled statuses, e.g. \"✓⟳?\" when fail is hidden."
-          (if (= (length decknix--hub-ci-filter) 4)
+Shows icon characters for enabled statuses."
+          (if (= (length decknix--hub-ci-filter) 5)
               "all"
             (mapconcat
              (lambda (s)
                (pcase s
-                 ("pass"    "✓")
-                 ("fail"    "✗")
-                 ("running" "⟳")
-                 ("unknown" "?")
-                 (_         s)))
+                 ("pass"      "✓")
+                 ("soft_fail" "⚠")
+                 ("fail"      "✗")
+                 ("running"   "⟳")
+                 ("unknown"   "?")
+                 (_           s)))
              decknix--hub-ci-filter "")))
 
         (defun decknix--hub-ci-toggle-status (status)
@@ -6126,9 +6129,10 @@ Shows icon characters for enabled statuses, e.g. \"✓⟳?\" when fail is hidden
 
         (defun decknix--hub-cycle-ci-filter ()
           "Toggle CI status visibility via a quick menu.
-Shows current state of each status and lets you toggle one."
+Shows current state of each status and lets you toggle one.
+Statuses: (g)reen=pass (l)int=soft_fail (y)ellow=running (?)grey=unknown (r)ed=fail (a)ll."
           (interactive)
-          (let* ((statuses '(("pass" . "✓") ("running" . "⟳")
+          (let* ((statuses '(("pass" . "✓") ("soft_fail" . "⚠") ("running" . "⟳")
                              ("unknown" . "?") ("fail" . "✗")))
                  (prompt (mapconcat
                           (lambda (pair)
@@ -6140,16 +6144,17 @@ Shows current state of each status and lets you toggle one."
                                 (propertize icon 'face 'font-lock-comment-face))))
                           statuses " "))
                  (choice (read-char-choice
-                          (format "CI filter [%s]  toggle: (g)reen (y)ellow (?)grey (r)ed (a)ll: "
+                          (format "CI [%s] toggle: (g)reen (l)int (y)ellow (?)grey (r)ed (a)ll: "
                                   prompt)
-                          '(?g ?y ?? ?r ?a))))
+                          '(?g ?l ?y ?? ?r ?a))))
             (pcase choice
               (?g (decknix--hub-ci-toggle-status "pass"))
+              (?l (decknix--hub-ci-toggle-status "soft_fail"))
               (?y (decknix--hub-ci-toggle-status "running"))
               (?? (decknix--hub-ci-toggle-status "unknown"))
               (?r (decknix--hub-ci-toggle-status "fail"))
               (?a (setq decknix--hub-ci-filter
-                        '("pass" "fail" "running" "unknown"))))
+                        '("pass" "fail" "soft_fail" "running" "unknown"))))
             (when (get-buffer "*agent-shell-sidebar*")
               (agent-shell-workspace-sidebar-refresh))
             (message "CI filter: %s" (decknix--hub-ci-filter-summary))))
@@ -6171,17 +6176,68 @@ Shows current state of each status and lets you toggle one."
                  (t "now")))
             "?"))
 
-        ;; -- Hub: CI status icon --
-        (defun decknix--hub-ci-icon (ci)
-          "Return a short icon for a CI status alist."
-          (if ci
-              (let ((status (alist-get 'status ci)))
-                (pcase status
-                  ("pass"    (propertize "✓" 'face 'success))
-                  ("fail"    (propertize "✗" 'face 'error))
-                  ("running" (propertize "⟳" 'face 'warning))
-                  (_         (propertize "?" 'face 'font-lock-comment-face))))
-            ""))
+        ;; -- Hub: CI classification —
+        ;; Uses individual check details (when available) to distinguish
+        ;; hard build failures from soft lint/analysis failures (e.g. Codacy).
+        ;; Patterns are case-insensitive substrings matched against check names.
+
+        (defvar decknix--hub-ci-soft-patterns
+          '("codacy" "sonarcloud" "sonarqube" "lint" "style" "format"
+            "codecov" "coveralls" "snyk" "dependabot" "renovate")
+          "Check name patterns considered \"soft\" (lint/analysis, not build).
+A CI failure is classified as soft_fail when ALL failing checks
+match one of these patterns (case-insensitive substring match).")
+
+        (defun decknix--hub-ci-check-soft-p (check-name)
+          "Return non-nil if CHECK-NAME matches a soft/lint pattern."
+          (let ((name (downcase (or check-name ""))))
+            (cl-some (lambda (pat) (string-match-p (regexp-quote pat) name))
+                     decknix--hub-ci-soft-patterns)))
+
+        (defun decknix--hub-ci-classify (ci)
+          "Classify a CI status alist into a refined status string.
+Returns \"pass\", \"running\", \"fail\", \"soft_fail\", or \"unknown\".
+\"soft_fail\" means all failing checks are lint/analysis (not build)."
+          (if (not ci)
+              "unknown"
+            (let ((status (or (alist-get 'status ci) "unknown")))
+              (if (not (string= status "fail"))
+                  status
+                ;; It's a fail — check if ALL failures are soft
+                (let ((checks (alist-get 'checks ci)))
+                  (if (not checks)
+                      "fail" ; no detail → assume hard fail
+                    (let* ((failing (seq-filter
+                                    (lambda (c)
+                                      (let ((conc (alist-get 'conclusion c)))
+                                        (member conc '("FAILURE" "ERROR" "TIMED_OUT"
+                                                       "CANCELLED" "ACTION_REQUIRED"))))
+                                    checks))
+                           (all-soft (and failing
+                                         (cl-every
+                                          (lambda (c)
+                                            (decknix--hub-ci-check-soft-p
+                                             (alist-get 'name c)))
+                                          failing))))
+                      (if all-soft "soft_fail" "fail"))))))))
+
+        ;; -- Hub: CI + mergeable icon --
+        (defun decknix--hub-ci-icon (ci &optional mergeable)
+          "Return a short icon string for a CI status alist.
+Uses individual check details to distinguish soft from hard failures.
+When MERGEABLE is \"CONFLICTING\", appends a conflict indicator."
+          (let* ((classified (decknix--hub-ci-classify ci))
+                 (ci-icon (pcase classified
+                            ("pass"      (propertize "✓" 'face 'success))
+                            ("soft_fail" (propertize "⚠" 'face 'warning))
+                            ("fail"      (propertize "✗" 'face 'error))
+                            ("running"   (propertize "⟳" 'face 'warning))
+                            (_           (propertize "?" 'face 'font-lock-comment-face))))
+                 (merge-icon (when (equal mergeable "CONFLICTING")
+                               (propertize "⇌" 'face 'error))))
+            (if merge-icon
+                (concat ci-icon merge-icon)
+              ci-icon)))
 
         ;; -- Hub: status hint when daemon not running --
         (defun decknix--hub-has-data-p ()
@@ -6236,7 +6292,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                        (number (alist-get 'number item))
                        (title (or (alist-get 'title item) ""))
                        (ci (alist-get 'ci item))
-                       (ci-str (decknix--hub-ci-icon ci))
+                       (mergeable (alist-get 'mergeable item))
+                       (ci-str (decknix--hub-ci-icon ci mergeable))
                        (draft (alist-get 'draft item))
                        (url (alist-get 'url item))
                        ;; Truncate title to fit sidebar
@@ -6315,7 +6372,8 @@ Respects `decknix--hub-org-visibility'. Shows time since last update."
                       (let* ((number (alist-get 'number pr))
                              (title (or (alist-get 'title pr) ""))
                              (ci (alist-get 'ci pr))
-                             (ci-str (decknix--hub-ci-icon ci))
+                             (mergeable (alist-get 'mergeable pr))
+                             (ci-str (decknix--hub-ci-icon ci mergeable))
                              (draft (alist-get 'draft pr))
                              (branch (alist-get 'branch pr))
                              (url (alist-get 'url pr))
