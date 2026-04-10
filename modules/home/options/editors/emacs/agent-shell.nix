@@ -4593,25 +4593,26 @@ Format: LABEL  k·desc  k·desc  k·desc"
 Each column is COL-WIDTH chars wide.  LEFT group is padded on the right
 so RIGHT group starts at column COL-WIDTH."
           ;; Build lists of formatted lines for each group
-          (let ((left-lines
-                 (cons (propertize (format " %s" left-label) 'face 'bold)
-                       (mapcar (lambda (kv)
-                                 (concat
-                                  (propertize (format " %3s " (car kv))
-                                              'face 'font-lock-keyword-face)
-                                  (propertize (cdr kv)
-                                              'face 'font-lock-comment-face)))
-                               left-keys)))
-                (right-lines
-                 (cons (propertize (format " %s" right-label) 'face 'bold)
-                       (mapcar (lambda (kv)
-                                 (concat
-                                  (propertize (format " %3s " (car kv))
-                                              'face 'font-lock-keyword-face)
-                                  (propertize (cdr kv)
-                                              'face 'font-lock-comment-face)))
-                               right-keys)))
-                (max-rows (max (length left-lines) (length right-lines))))
+          ;; N.B. must use let* — max-rows depends on left-lines and right-lines
+          (let* ((left-lines
+                  (cons (propertize (format " %s" left-label) 'face 'bold)
+                        (mapcar (lambda (kv)
+                                  (concat
+                                   (propertize (format " %3s " (car kv))
+                                               'face 'font-lock-keyword-face)
+                                   (propertize (cdr kv)
+                                               'face 'font-lock-comment-face)))
+                                left-keys)))
+                 (right-lines
+                  (cons (propertize (format " %s" right-label) 'face 'bold)
+                        (mapcar (lambda (kv)
+                                  (concat
+                                   (propertize (format " %3s " (car kv))
+                                               'face 'font-lock-keyword-face)
+                                   (propertize (cdr kv)
+                                               'face 'font-lock-comment-face)))
+                                right-keys)))
+                 (max-rows (max (length left-lines) (length right-lines))))
             ;; Pad shorter list
             (while (< (length left-lines) max-rows)
               (setq left-lines (append left-lines (list ""))))
@@ -6023,7 +6024,9 @@ When no filter is active (table is nil), all orgs are visible."
           (interactive)
           (call-interactively #'decknix--hub-cycle-ci-filter))
 
-        (transient-append-suffix 'decknix-sidebar-transient "Toggles"
+        ;; Append Hub group after the Toggles group.
+        ;; Use "W" (last key in Toggles) as the insertion anchor.
+        (transient-append-suffix 'decknix-sidebar-transient "W"
           ["Hub"
            (decknix-sidebar-transient--org-filter)
            (decknix-sidebar-transient--age-filter)
