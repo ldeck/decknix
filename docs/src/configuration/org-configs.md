@@ -70,6 +70,36 @@ my-org-config/
 }
 ```
 
+## Per-User Identity
+
+Each user creates an `identity.nix` in their org's config directory. The framework's config loader auto-discovers it and generates `config.<org>.user.*` options available in all Nix modules:
+
+```nix
+# ~/.config/decknix/my-org/identity.nix
+{
+  email = "you@my-org.com";
+  name = "Your Name";
+  githubUser = "your-github";
+  gpgKey = "ABCDEF1234567890";   # optional
+}
+```
+
+Org modules can then reference the identity without any imports:
+
+```nix
+# In org config system.nix:
+{ config, lib, ... }: {
+  decknix.services.hub.jira.email = lib.mkDefault config.my-org.user.email;
+
+  programs.git.includes = [{
+    condition = "gitdir:~/Code/my-org/";
+    contents.user.email = config.my-org.user.email;
+  }];
+}
+```
+
+Org bootstraps should prompt for this identity on first setup and write `identity.nix` automatically. See [Config Loader — Identity Files](../architecture/config-loader.md#identity-files) for full details.
+
 ## Benefits
 
 - **Version pinning** — `flake.lock` pins a known-good version
@@ -77,6 +107,7 @@ my-org-config/
 - **Easy updates** — `nix flake update my-org-config` to pull latest
 - **Automated updates** — Renovate or Dependabot can watch for new versions
 - **Personal overrides** — users can still override anything in `~/.config/decknix/<org-name>/`
+- **Identity wiring** — per-user org identity flows automatically via `identity.nix`
 
 ## Testing Changes
 
@@ -84,9 +115,9 @@ Before merging changes to an org config, test locally:
 
 ```bash
 cd ~/.config/decknix
-decknix switch --dev-path ~/Code/my-org/decknix-config
+decknix switch --override my-org-config=~/Code/my-org/decknix-config
 # Or:
-sudo darwin-rebuild switch --flake .#default --impure \
+nix build .#darwinConfigurations.default.system --impure \
   --override-input my-org-config path:~/Code/my-org/decknix-config
 ```
 

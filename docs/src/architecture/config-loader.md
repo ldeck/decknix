@@ -6,6 +6,7 @@ The config loader (`decknix.lib.configLoader`) is the engine that discovers and 
 
 1. **Scan** `~/.config/decknix/` for all subdirectories
 2. For each directory, look for:
+   - `identity.nix` — org user identity (auto-wired to `config.<org>.user.*`)
    - `home.nix` — home-manager module
    - `system.nix` — nix-darwin module
    - `secrets.nix` — secrets (merged into home-manager)
@@ -17,26 +18,78 @@ The config loader (`decknix.lib.configLoader`) is the engine that discovers and 
 
 ```
 ~/.config/decknix/
-├── local/home.nix          ← loaded
-├── local/system.nix        ← loaded
-├── local/secrets.nix       ← loaded (merged into home)
-├── my-org/home.nix         ← loaded
-├── my-org/home/
-│   └── extra.nix           ← loaded (recursive)
-├── secrets.nix             ← loaded (root-level)
-└── home.nix                ← loaded (root-level)
+├── local/home.nix              ← loaded
+├── local/system.nix            ← loaded
+├── local/secrets.nix           ← loaded (merged into home)
+├── examplecloud/identity.nix   ← auto-wired to config.examplecloud.user.*
+├── examplecloud/home.nix       ← loaded (can reference config.examplecloud.user.*)
+├── examplecloud/system.nix     ← loaded
+├── secrets.nix                 ← loaded (root-level)
+└── home.nix                    ← loaded (root-level)
 ```
 
 All files are merged — ordering within a layer is discovery order (alphabetical by directory name).
+
+## Identity Files
+
+When `<org>/identity.nix` exists, the loader auto-generates NixOS module options under `config.<org>.user.*` and injects them into both darwin and home-manager module systems. This means any Nix module — org configs, personal overrides, or framework modules — can reference the identity without imports.
+
+### Creating an identity file
+
+The file is a plain Nix attrset (not a module):
+
+```nix
+# ~/.config/decknix/examplecloud/identity.nix
+{
+  email = "you@examplecloud.com";
+  name = "Your Name";
+  githubUser = "your-github";
+  gpgKey = "ABCDEF1234567890";   # optional — omit or leave empty
+}
+```
+
+### Using identity in modules
+
+The directory name becomes the option namespace. For a directory named `examplecloud`, the following options are available everywhere:
+
+```nix
+{ config, ... }: {
+  # In any darwin or home-manager module:
+  some.service.email = config.examplecloud.user.email;
+  some.service.name  = config.examplecloud.user.name;
+  # etc.
+}
+```
+
+### Available options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `config.<org>.user.email` | `str` | User email for the organisation |
+| `config.<org>.user.name` | `str` | User full name |
+| `config.<org>.user.githubUser` | `str` | GitHub username |
+| `config.<org>.user.gpgKey` | `str` | GPG signing key ID (empty if not set) |
+
+### Multi-org support
+
+Each org directory can have its own `identity.nix` with different values. A user working across two orgs might have:
+
+```
+~/.config/decknix/
+├── examplecloud/identity.nix   → config.examplecloud.user.email = "me@nc.com"
+└── sideproject/identity.nix    → config.sideproject.user.email = "me@sp.com"
+```
+
+The `local/` directory is excluded from identity discovery — it's for personal overrides only.
 
 ## Trace Output
 
 When you build, the loader traces what it finds:
 
 ```
-[Loader] home + /Users/you/.config/decknix/local/home.nix
-[Loader] home + /Users/you/.config/decknix/my-org/home.nix
+[Loader] identity + /Users/you/.config/decknix/examplecloud/identity.nix
 [Loader] system + /Users/you/.config/decknix/local/system.nix
+[Loader] home + /Users/you/.config/decknix/local/home.nix
 [Loader] No secrets modules found.
 ```
 
@@ -67,10 +120,11 @@ decknix.lib.configLoader {
 ```nix
 {
   modules = {
-    home   = [ ... ];  # List of imported home + secrets modules
-    system = [ ... ];  # List of imported system modules
+    home     = [ ... ];  # List of imported home + secrets modules
+    system   = [ ... ];  # List of imported system modules
+    identity = [ ... ];  # Auto-generated identity modules (config.<org>.user.*)
   };
-  allDirs = [ "local" "my-org" ];  # Discovered directory names
+  allDirs = [ "local" "examplecloud" ];  # Discovered directory names
 }
 ```
 
@@ -94,5 +148,6 @@ decknix.lib.mkSystem {
 The build merges modules in this order:
 1. Framework `darwinModules.default` / `homeModules.default`
 2. Your `darwinModules` / `homeModules` args (org configs)
-3. `configLoader` output (personal overrides from filesystem)
+3. `configLoader` identity modules (config.<org>.user.*)
+4. `configLoader` system/home modules (personal overrides from filesystem)
 
