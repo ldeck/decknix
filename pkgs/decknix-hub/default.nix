@@ -10,7 +10,7 @@ rustPlatform.buildRustPackage {
 
   src = ./.;
 
-  cargoHash = "sha256-lwJ/CV2rvtfXGbj266AGZpkcEYAiXrGwtiekw8YieKM=";
+  cargoHash = "sha256-loixXl17H0/99CCBFPSsBWeg5Xxze6bEZOlnOkG/zGU=";
 
   meta = with lib; {
     description = "Background work-item aggregator — polls GitHub, Jira, CI/CD";

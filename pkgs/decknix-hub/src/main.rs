@@ -4,6 +4,9 @@
 // writes per-adapter JSON files to ~/.config/decknix/hub/.
 // Emacs, CLI, and other consumers read those files (file-notify for live updates).
 
+mod jira;
+mod teamcity;
+
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -41,6 +44,8 @@ struct Cli {
 #[serde(default)]
 struct HubConfig {
     github: GitHubConfig,
+    jira: jira::JiraConfig,
+    teamcity: teamcity::TeamCityConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -57,6 +62,8 @@ impl Default for HubConfig {
     fn default() -> Self {
         Self {
             github: GitHubConfig::default(),
+            jira: jira::JiraConfig::default(),
+            teamcity: teamcity::TeamCityConfig::default(),
         }
     }
 }
@@ -152,11 +159,11 @@ struct WipFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct AdapterStatus {
-    name: String,
-    last_poll: Option<DateTime<Utc>>,
-    last_error: Option<String>,
-    ok: bool,
+pub struct AdapterStatus {
+    pub name: String,
+    pub last_poll: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+    pub ok: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -199,7 +206,7 @@ fn load_config(cli: &Cli) -> HubConfig {
 
 /// Atomic JSON write: write to a temp file, then rename.
 /// This ensures readers never see partial/corrupt JSON.
-async fn atomic_write_json<T: Serialize>(dir: &Path, filename: &str, data: &T) -> std::io::Result<()> {
+pub async fn atomic_write_json<T: Serialize>(dir: &Path, filename: &str, data: &T) -> std::io::Result<()> {
     let target = dir.join(filename);
     let tmp = dir.join(format!(".{}.tmp", filename));
     let json = serde_json::to_string_pretty(data)
@@ -623,7 +630,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Shared meta state that each adapter updates after polling.
-type SharedMeta = Arc<Mutex<Vec<AdapterStatus>>>;
+pub type SharedMeta = Arc<Mutex<Vec<AdapterStatus>>>;
 
 /// Spawn a GitHub reviews adapter task.
 async fn run_reviews_adapter(
@@ -720,7 +727,7 @@ async fn run_wip_adapter(
 }
 
 /// Update the shared meta state and write meta.json.
-async fn update_meta(meta: &SharedMeta, status: AdapterStatus, dir: &Path) {
+pub async fn update_meta(meta: &SharedMeta, status: AdapterStatus, dir: &Path) {
     let mut adapters = meta.lock().await;
     // Replace existing entry for this adapter, or insert
     if let Some(existing) = adapters.iter_mut().find(|a| a.name == status.name) {
@@ -780,6 +787,30 @@ async fn main() {
 
         handles.push(tokio::spawn(run_wip_adapter(
             gh_cfg,
+            dir.clone(),
+            meta.clone(),
+            cli.once,
+        )));
+    }
+
+    // Spawn Jira adapter
+    if config.jira.enabled {
+        eprintln!("hub: jira-tasks adapter: every {}s", config.jira.interval_secs);
+        eprintln!("hub: jira project: {}", config.jira.project);
+        handles.push(tokio::spawn(jira::run_jira_adapter(
+            config.jira,
+            dir.clone(),
+            meta.clone(),
+            cli.once,
+        )));
+    }
+
+    // Spawn TeamCity adapter
+    if config.teamcity.enabled {
+        eprintln!("hub: teamcity adapter: every {}s", config.teamcity.interval_secs);
+        eprintln!("hub: teamcity proxy: {}", config.teamcity.proxy_url);
+        handles.push(tokio::spawn(teamcity::run_teamcity_adapter(
+            config.teamcity,
             dir.clone(),
             meta.clone(),
             cli.once,

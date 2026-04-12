@@ -4917,6 +4917,10 @@ Respects `decknix--sidebar-show-hidden' toggle."
               (when (fboundp 'decknix--hub-render-status-hint)
                 (setq line-num (decknix--hub-render-status-hint line-num)))
 
+              ;; ── Hub: Tasks (Jira) ──
+              (when (fboundp 'decknix--hub-render-tasks)
+                (setq line-num (decknix--hub-render-tasks line-num)))
+
               ;; ── Live Sessions ──
               (decknix--sidebar-render-section-header
                (format "Live (%d)" (length buffers)))
@@ -6003,6 +6007,10 @@ Focuses the first restored session in the main window."
           "Parsed github-wip.json data (alist).")
         (defvar decknix--hub-meta nil
           "Parsed meta.json data (alist).")
+        (defvar decknix--hub-jira-tasks nil
+          "Parsed jira-tasks.json data (alist).")
+        (defvar decknix--hub-teamcity-builds nil
+          "Parsed teamcity-builds.json data (alist).")
         (defvar decknix--hub-watcher nil
           "File-notify descriptor watching the hub directory.")
 
@@ -6039,11 +6047,23 @@ Returns nil on any error (file missing, parse failure, etc.)."
           (setq decknix--hub-meta
                 (decknix--hub-read-json "meta.json")))
 
+        (defun decknix--hub-refresh-jira ()
+          "Re-read jira-tasks.json."
+          (setq decknix--hub-jira-tasks
+                (decknix--hub-read-json "jira-tasks.json")))
+
+        (defun decknix--hub-refresh-teamcity ()
+          "Re-read teamcity-builds.json."
+          (setq decknix--hub-teamcity-builds
+                (decknix--hub-read-json "teamcity-builds.json")))
+
         (defun decknix--hub-refresh-all ()
           "Re-read all hub JSON files."
           (decknix--hub-refresh-reviews)
           (decknix--hub-refresh-wip)
-          (decknix--hub-refresh-meta))
+          (decknix--hub-refresh-meta)
+          (decknix--hub-refresh-jira)
+          (decknix--hub-refresh-teamcity))
 
         (defun decknix--hub-on-file-change (event)
           "Handle a file-notify EVENT for the hub directory.
@@ -6052,9 +6072,11 @@ Re-reads only the changed file and refreshes the sidebar."
             (when (and file (stringp file))
               (let ((name (file-name-nondirectory file)))
                 (pcase name
-                  ("github-reviews.json" (decknix--hub-refresh-reviews))
-                  ("github-wip.json"     (decknix--hub-refresh-wip))
-                  ("meta.json"           (decknix--hub-refresh-meta))
+                  ("github-reviews.json"  (decknix--hub-refresh-reviews))
+                  ("github-wip.json"      (decknix--hub-refresh-wip))
+                  ("meta.json"            (decknix--hub-refresh-meta))
+                  ("jira-tasks.json"      (decknix--hub-refresh-jira))
+                  ("teamcity-builds.json" (decknix--hub-refresh-teamcity))
                   (_ nil))
                 ;; Refresh the sidebar if it exists
                 (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
@@ -6507,7 +6529,8 @@ Shows whether the current user has already responded to this PR.
         ;; -- Hub: status hint when daemon not running --
         (defun decknix--hub-has-data-p ()
           "Return non-nil if any hub data files exist and contain data."
-          (or decknix--hub-reviews decknix--hub-wip))
+          (or decknix--hub-reviews decknix--hub-wip
+              decknix--hub-jira-tasks decknix--hub-teamcity-builds))
 
         (defun decknix--hub-render-status-hint (line-num)
           "Show a setup hint when hub integration is enabled but no data exists.
@@ -6646,6 +6669,15 @@ Respects `decknix--hub-org-visibility'. Shows time since last update."
                              (draft (alist-get 'draft pr))
                              (branch (alist-get 'branch pr))
                              (url (alist-get 'url pr))
+                             ;; TeamCity build status for this branch
+                             (tc-build (when (fboundp 'decknix--hub-tc-build-for-branch)
+                                         (decknix--hub-tc-build-for-branch branch)))
+                             (tc-str (if tc-build
+                                         (decknix--hub-tc-icon tc-build)
+                                       ""))
+                             ;; Combine CI indicators: GH + TC
+                             (ci-str (if (string-empty-p tc-str) ci-str
+                                       (concat ci-str tc-str)))
                              (age (decknix--hub-format-age
                                    (alist-get 'updated pr)))
                              (max-title (max 8 (- (window-width) 20)))
@@ -6668,6 +6700,98 @@ Respects `decknix--hub-org-visibility'. Shows time since last update."
                                            'decknix-hub-branch branch)
                                 "\n")
                         (setq line-num (1+ line-num)))))))
+              (insert "\n")
+              (setq line-num (1+ line-num))))
+          line-num)
+
+        ;; -- TeamCity build status helpers --
+        (defun decknix--hub-tc-build-for-branch (branch)
+          "Find the TeamCity build for BRANCH from hub data.
+Returns nil if no match or no TC data."
+          (when (and branch decknix--hub-teamcity-builds)
+            (let ((builds (alist-get 'builds decknix--hub-teamcity-builds)))
+              (seq-find (lambda (b)
+                          (string= (or (alist-get 'branch b) "") branch))
+                        builds))))
+
+        (defun decknix--hub-tc-icon (build)
+          "Return a TeamCity CI icon string for BUILD."
+          (if (not build) ""
+            (let ((state (or (alist-get 'state build) ""))
+                  (status (or (alist-get 'status build) "")))
+              (cond
+               ((string= state "running")
+                (let ((pct (alist-get 'progress_pct build)))
+                  (propertize (if pct (format "⟳%d%%" pct) "⟳")
+                              'face '(:foreground "#e5c07b"))))
+               ((string= state "queued")
+                (propertize "◌" 'face 'font-lock-comment-face))
+               ((string= status "SUCCESS")
+                (propertize "✓" 'face '(:foreground "#98c379")))
+               ((string= status "FAILURE")
+                (propertize "✗" 'face '(:foreground "#e06c75")))
+               ((string= status "ERROR")
+                (propertize "✗" 'face '(:foreground "#e06c75")))
+               (t (propertize "?" 'face 'font-lock-comment-face))))))
+
+        ;; -- Jira task status icon --
+        (defun decknix--hub-task-status-icon (status)
+          "Return an icon string for Jira STATUS."
+          (pcase (downcase (or status ""))
+            ("in progress"
+             (propertize "●" 'face '(:foreground "#61afef")))
+            ("code review"
+             (propertize "◐" 'face '(:foreground "#c678dd")))
+            ("blocked"
+             (propertize "✕" 'face '(:foreground "#e06c75")))
+            ("ready"
+             (propertize "○" 'face '(:foreground "#98c379")))
+            (_
+             (propertize "·" 'face 'font-lock-comment-face))))
+
+        (defun decknix--hub-render-tasks (line-num)
+          "Render the Tasks (Jira) section. Returns updated LINE-NUM."
+          (let* ((data decknix--hub-jira-tasks)
+                 (items (when data (alist-get 'items data))))
+            (when items
+              (decknix--sidebar-render-section-header
+               (format "Tasks (%d)" (length items)))
+              (setq line-num (1+ line-num))
+              (dolist (item items)
+                (let* ((key (or (alist-get 'key item) ""))
+                       (summary (or (alist-get 'summary item) ""))
+                       (status (or (alist-get 'status item) ""))
+                       (priority (alist-get 'priority item))
+                       (url (alist-get 'url item))
+                       (issue-type (alist-get 'issue_type item))
+                       (parent-key (alist-get 'parent_key item))
+                       (icon (decknix--hub-task-status-icon status))
+                       ;; Truncate summary to fit sidebar
+                       (max-sum (max 8 (- (window-width) 16)))
+                       (short-sum (if (> (length summary) max-sum)
+                                      (concat (substring summary 0 (- max-sum 1)) "…")
+                                    summary))
+                       ;; Short status label
+                       (status-short (pcase (downcase status)
+                                       ("in progress" "WIP")
+                                       ("code review" "CR")
+                                       ("blocked" "BLK")
+                                       ("ready" "RDY")
+                                       (_ (upcase (substring status 0
+                                                             (min 3 (length status)))))))
+                       (line (format " %s %s %s %s"
+                                     icon
+                                     (propertize key 'face 'font-lock-constant-face)
+                                     (propertize status-short
+                                                 'face 'font-lock-comment-face)
+                                     short-sum)))
+                  (insert (propertize line
+                                     'decknix-hub-url url
+                                     'decknix-hub-type 'task
+                                     'decknix-hub-jira-key key
+                                     'decknix-hub-jira-status status)
+                          "\n")
+                  (setq line-num (1+ line-num))))
               (insert "\n")
               (setq line-num (1+ line-num))))
           line-num)
