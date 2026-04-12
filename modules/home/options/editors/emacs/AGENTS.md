@@ -198,6 +198,7 @@ workspace sidebar surface which sessions need attention.
 | Prefix | Purpose |
 |--------|---------|
 | `C-c A` | Agent commands (global) |
+| `C-c A b` | Switch agent buffer — live buffers only, MRU ordered (#96) |
 | `C-c A s` | Session picker (sectioned: Live / Saved / New); `C-u` for all snapshots (#77) |
 | `C-c A g` | Grep sessions — consult + ripgrep full-text search across all session content; `C-u` for all snapshots |
 | `C-c A n` | New session |
@@ -217,14 +218,14 @@ workspace sidebar surface which sessions need attention.
 | `C-c D s` | Show framework status (loaded/current store paths, staleness) |
 | `C-c D d` | Show diff between loaded and current store paths |
 | `C-c D l` | Show reload history log |
+| `C-c b` | Switch agent buffer — live buffers only (#96) |
 | `C-c i` | Context panel (in agent-shell buffers) |
 | `C-c w` | Toggle Agents workspace (in-buffer shortcut) |
 | `C-c j` | Jump to pending session (in-buffer shortcut) |
 
 ### Planned Features
 
-- **Hub: Jira adapter** — WIP tasks assigned to me, linked to PRs by branch name (Planned)
-- **Hub: TeamCity adapter** — Build statuses for branches in WIP (Planned)
+- **Sub-agent tree** — Show spawned sub-agents as children in sidebar (#95) (Planned)
 - **Hub: Slack adapter** — Unread mentions requiring follow-up (Planned)
 - **Hub: Cross-linking** — Associate sessions with work items (reviews, tasks) (Planned)
 - **Hub: Expandable Recent** — Expand a saved session to see related work items (Planned)
