@@ -94,12 +94,17 @@ in
       email = mkOption {
         type = types.str;
         default = "";
-        description = "Jira user email for API authentication.";
+        description = ''
+          Jira user email for API authentication.
+          Typically set by org config (e.g. nc-config wires this from
+          its own user.email option so each team member's identity flows through).
+        '';
       };
 
       apiTokenFile = mkOption {
         type = types.str;
-        default = "";
+        default = "${homeDir}/.config/decknix/local/jira-token";
+        defaultText = literalExpression ''"''${homeDir}/.config/decknix/local/jira-token"'';
         description = "Path to file containing Jira API token (one line, trimmed).";
       };
 
