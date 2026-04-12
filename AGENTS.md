@@ -14,11 +14,12 @@ shell, git, AI tooling, and system configuration with a 3-layer override model
 
 | Path | Purpose |
 |------|---------|
+| `lib/default.nix` | `mkSystem` + `configLoader` (identity discovery, module wiring) |
 | `modules/darwin/` | macOS system-level config (launchd, system packages) |
 | `modules/darwin/hub.nix` | decknix-hub launchd service + Nix options |
 | `modules/home/options/` | home-manager modules (editors, shell, git, AI) |
 | `modules/home/options/editors/emacs/` | Emacs configuration (13+ modules) |
-| `pkgs/decknix-hub/` | Background work-item aggregator (GitHub, Jira, CI) |
+| `pkgs/decknix-hub/` | Background work-item aggregator (GitHub, Jira, TeamCity) |
 | `pkgs/nix-open/` | Nix-aware macOS app launcher/restarter |
 | `cli/` | Rust CLI (`decknix switch`, `decknix update`, etc.) |
 | `docs/` | mdBook documentation |

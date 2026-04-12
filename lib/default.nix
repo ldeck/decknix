@@ -55,6 +55,8 @@
       ]
       # Org/user darwin modules
       ++ darwinModules
+      # Filesystem-discovered identity modules (config.<org>.user.*)
+      ++ loader.modules.identity
       # Filesystem-discovered local system modules
       ++ loader.modules.system
       ++ [
@@ -73,6 +75,8 @@
               decknix.homeModules.default
             ]
             ++ homeModules
+            # Identity modules — same options available in home-manager context
+            ++ loader.modules.identity
             ++ loader.modules.home;
 
             decknix.username = username;
@@ -95,18 +99,26 @@
   #   <org-name>/         — per-org personal overrides (name matches flake input)
   #
   # Each directory supports:
+  #   identity.nix                        — org user identity (auto-wired to config.<org>.user.*)
   #   home.nix, system.nix, secrets.nix   — direct files
   #   home/<anything>.nix                 — recursive subdirectory loading
+  #
+  # Identity files:
+  #   When <org>/identity.nix exists, the loader generates NixOS module
+  #   options under config.<org>.user.* (email, name, githubUser, gpgKey)
+  #   and sets them from the identity file data. These options are available
+  #   in both darwin and home-manager modules, so org configs can reference
+  #   config.<org>.user.email without importing anything.
   #
   # Example layout:
   #   ~/.config/decknix/
   #   ├── local/
   #   │   ├── home.nix           — personal packages, git identity
   #   │   └── system.nix         — machine-specific tweaks
-  #   ├── nc-config/             — overrides for the nc-config flake input
-  #   │   ├── home.nix           — disable a team git hook, etc.
-  #   │   └── home/
-  #   │       └── extra.nix      — recursively loaded
+  #   ├── nurturecloud/
+  #   │   ├── identity.nix       — { email = "you@nurturecloud.com"; name = "..."; }
+  #   │   ├── home.nix           — NC-specific home overrides
+  #   │   └── system.nix         — NC-specific system overrides
   #   └── secrets.nix            — root-level secrets (also supported)
   configLoader = {
     lib,
@@ -143,6 +155,50 @@
         in
           builtins.attrNames (lib.filterAttrs (n: v: v == "directory") contents)
       else [];
+
+    # --- Identity Module Generation ---
+    # For each <org>/identity.nix, generate a module that defines
+    # options.<org>.user.* and sets them from the identity data.
+    # This makes config.<org>.user.email etc. available everywhere.
+    mkIdentityModule = orgName: identityPath:
+      let
+        identity = builtins.trace "  [Loader] identity + ${toString identityPath}" (import identityPath);
+      in
+      { lib, ... }: {
+        options.${orgName}.user = {
+          email = lib.mkOption {
+            type = lib.types.str;
+            default = identity.email or "";
+            description = "User email for the ${orgName} organisation.";
+          };
+          name = lib.mkOption {
+            type = lib.types.str;
+            default = identity.name or "";
+            description = "User full name for the ${orgName} organisation.";
+          };
+          githubUser = lib.mkOption {
+            type = lib.types.str;
+            default = identity.githubUser or "";
+            description = "GitHub username for the ${orgName} organisation.";
+          };
+          gpgKey = lib.mkOption {
+            type = lib.types.str;
+            default = identity.gpgKey or "";
+            description = "GPG signing key ID for the ${orgName} organisation.";
+          };
+        };
+      };
+
+    # Discover all identity files and generate modules
+    identityModules =
+      builtins.concatMap (dir:
+        let
+          identityFile = "${configDir}/${dir}/identity.nix";
+        in
+          if dir != "local" && lib.pathIsRegularFile identityFile
+          then [ (mkIdentityModule dir identityFile) ]
+          else []
+      ) allDirs;
 
     # --- Load Logic ---
     # For a given type (home, system, secrets), gather files from:
@@ -182,6 +238,9 @@
     modules = {
       home = (load "home") ++ (load "secrets");
       system = load "system";
+      # Identity modules — injected into both darwin and home-manager
+      # so config.<org>.user.* is available in both contexts.
+      identity = identityModules;
     };
     inherit allDirs;
   };
