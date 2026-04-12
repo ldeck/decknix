@@ -549,6 +549,7 @@ Press q to dismiss."
 
             (propertize "Extensions\n" 'font-lock-face '(:weight bold))
             (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
+            "  C-c b       Switch agent buffer (live only)\n"
             "  C-c m       Manager dashboard\n"
             "  C-c w       Workspace tab toggle\n"
             "  C-c j       Jump to session needing attention\n"
@@ -558,6 +559,7 @@ Press q to dismiss."
             (propertize "Global  (C-c A …)\n" 'font-lock-face '(:weight bold))
             (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
             "  C-c A a     Start / switch to agent\n"
+            "  C-c A b     Switch agent buffer (live only)\n"
             "  C-c A n     Force new session\n"
             "  C-c A s     Session picker\n"
             "  C-c A h     View history (C-u to pick)\n"
@@ -707,6 +709,7 @@ Press q to dismiss."
             "C-c A"   "Agent"
             "C-c A ?" "Help"
             "C-c A a" "start/switch"
+            "C-c A b" "buffer switch"
             "C-c A n" "new session"
             "C-c A s" "session picker"
             "C-c A g" "grep sessions"
@@ -1528,6 +1531,38 @@ With \\[universal-argument], shows all individual session snapshots."
                                           (if arg " (all snapshots)" ""))
                           :sort nil))
 
+        ;; == Agent buffer switch: C-c b (in-buffer) / C-c A b (global) ==
+        ;; Like C-x b but scoped to live agent-shell buffers only.
+        ;; Uses consult for live narrowing when available, else completing-read.
+        ;; Excludes the current buffer; sorted by MRU. (#96)
+
+        (defun decknix-agent-switch-buffer ()
+          "Switch to another live agent-shell buffer.
+Like \\[switch-to-buffer] but showing only agent-shell buffers.
+Excludes the current buffer. MRU ordering."
+          (interactive)
+          (let* ((bufs (when (fboundp 'agent-shell-buffers)
+                         (agent-shell-buffers)))
+                 (cur (current-buffer))
+                 (others (remq cur bufs)))
+            (cond
+             ((null others)
+              (message "No other agent buffers"))
+             ((= (length others) 1)
+              (switch-to-buffer (car others)))
+             (t
+              (let ((ht (make-hash-table :test 'equal))
+                    (candidates nil))
+                (dolist (buf others)
+                  (let ((label (decknix--agent-session-live-label buf)))
+                    (puthash label buf ht)
+                    (push label candidates)))
+                (setq candidates (nreverse candidates))
+                (let* ((chosen (completing-read "Agent buffer: " candidates nil t))
+                       (buf (gethash chosen ht)))
+                  (when (and buf (buffer-live-p buf))
+                    (switch-to-buffer buf))))))))
+
         ;; == Session grep: consult + ripgrep full-text search ==
         ;; Searches ALL content (user messages, agent responses, code blocks)
         ;; across every session JSON file using ripgrep.
@@ -2238,6 +2273,7 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
             (decknix--agent-session-open-share session-id)))
 
         (define-key decknix-agent-prefix-map (kbd "s") 'decknix-agent-session-picker)        ; Session picker
+        (define-key decknix-agent-prefix-map (kbd "b") 'decknix-agent-switch-buffer)         ; Buffer switch (live only)
         (define-key decknix-agent-prefix-map (kbd "g") 'decknix-agent-session-grep)          ; Grep all session content
         (define-key decknix-agent-prefix-map (kbd "h") 'decknix-agent-session-history)       ; View history (C-u to pick)
 
@@ -7754,6 +7790,7 @@ Priority order:
                     (local-set-key (kbd "<tab>") 'decknix--agent-tab-dwim)
                     ;; Buffer-local bindings — no C-c A prefix needed inside agent-shell.
                     ;; Native bindings: C-c C-c (interrupt), C-c C-v (model), C-c C-m (mode)
+                    (local-set-key (kbd "C-c b") 'decknix-agent-switch-buffer)
                     (local-set-key (kbd "C-c e") 'decknix-agent-compose)
                     (local-set-key (kbd "C-c E") 'decknix-agent-compose-interrupt)
                     (local-set-key (kbd "C-c ?") decknix-agent-help-map)
