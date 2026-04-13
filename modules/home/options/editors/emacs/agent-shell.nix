@@ -5369,25 +5369,77 @@ Applies org, age, and CI visibility filters, then the ready predicate."
         (defun decknix-hub-launch-reviews (n)
           "Launch review sessions for the first N ready review requests.
 With prefix arg, prompts for count.  Without, defaults to 1.
-Ready = CI passing, not conflicting, not draft, not already reviewed."
+Ready = CI passing, not conflicting, not draft, not already reviewed.
+Prompts for layout: (s)plit windows side-by-side, or (r)eplace current buffer."
           (interactive "p")
           (let* ((ready (decknix--hub-review-ready-requests))
                  (count (min n (length ready)))
                  (to-review (seq-take ready count)))
             (if (not to-review)
                 (message "No review-ready requests")
-              (let ((launched 0))
-                (dolist (item to-review)
-                  (let ((url (alist-get 'url item)))
-                    (when url
-                      (decknix--nav-hub-start-review url)
-                      (setq launched (1+ launched))
-                      ;; Small delay between launches to avoid races
-                      (when (> (length to-review) 1)
-                        (sit-for 0.3)))))
-                (message "Launched %d review%s (%d ready)"
-                         launched (if (= launched 1) "" "s")
-                         (length ready))))))
+              ;; Prompt for layout
+              (let* ((choice (read-char-choice
+                              (format "%d review%s: [s]plit side-by-side  [r]eplace buffer  [q]uit "
+                                      count (if (= count 1) "" "s"))
+                              '(?s ?r ?q)))
+                     (split-p (eq choice ?s)))
+                (unless (eq choice ?q)
+                  (let ((launched 0))
+                    (dolist (item to-review)
+                      (let ((url (alist-get 'url item)))
+                        (when url
+                          (if (and split-p (> launched 0))
+                              ;; After the first, split the main window for
+                              ;; subsequent reviews so they tile side-by-side
+                              (decknix--nav-hub-start-review-split url)
+                            (decknix--nav-hub-start-review url))
+                          (setq launched (1+ launched))
+                          ;; Small delay between launches to avoid races
+                          (when (> (length to-review) 1)
+                            (sit-for 0.3)))))
+                    (message "Launched %d review%s (%d ready)%s"
+                             launched (if (= launched 1) "" "s")
+                             (length ready)
+                             (if split-p " [split]" ""))))))))
+
+        (defun decknix--nav-hub-start-review-split (url)
+          "Start a PR review session for URL in a new split window.
+Like `decknix--nav-hub-start-review' but splits the main window so
+the review appears side-by-side with the current buffer."
+          (let ((parsed (decknix--agent-parse-pr-url url)))
+            (if (not parsed)
+                (message "Not a valid PR URL: %s" url)
+              (let* ((owner (alist-get 'owner parsed))
+                     (repo (alist-get 'repo parsed))
+                     (number (alist-get 'number parsed))
+                     (name (format "pr-%s-%s" repo number))
+                     (tags (list "review" repo (format "#%s" number)))
+                     (detected (when (fboundp 'decknix--agent-pr-detect-workspace)
+                                 (decknix--agent-pr-detect-workspace owner repo)))
+                     (workspace (or detected
+                                    (read-directory-name
+                                     (format "Workspace for %s/%s: " owner repo)
+                                     nil nil t)))
+                     (command (format "/review-service-pr %s" url))
+                     ;; Split the main window horizontally (side-by-side)
+                     (main (window-main-window (selected-frame)))
+                     (new-win (when (and main (window-live-p main))
+                                (split-window main nil 'right)))
+                     (agent-shell-display-action
+                      (if (and new-win (window-live-p new-win))
+                          (eval `(cons (lambda (buffer alist)
+                                         (let ((win ,new-win))
+                                           (when (window-live-p win)
+                                             (window--display-buffer
+                                              buffer win 'reuse alist))))
+                                       nil)
+                                t)
+                        agent-shell-display-action)))
+                (when (and new-win (window-live-p new-win))
+                  (select-window new-win))
+                (decknix--agent-quickaction-start name tags workspace command)
+                (message "Starting review (split): %s/%s#%s"
+                         owner repo number)))))
 
         (defun decknix--nav-hub-item-actions (item)
           "Show an action menu for a hub ITEM (review or WIP PR)."
@@ -6657,6 +6709,12 @@ Returns \"pass\", \"running\", \"fail\", \"soft_fail\", or \"unknown\".
                                           failing))))
                       (if all-soft "soft_fail" "fail"))))))))
 
+        ;; -- Hub: sidebar icon helper --
+        (defun decknix--hub-icon (str face)
+          "Create a sidebar icon from STR with FACE, scaled to fit line height.
+Applies a display height property so unicode glyphs don't stretch lines."
+          (propertize str 'face face 'display '(height 0.85)))
+
         ;; -- Hub: CI + mergeable icon --
         (defun decknix--hub-ci-icon (ci &optional mergeable)
           "Return a short icon string for a CI status alist.
@@ -6664,13 +6722,13 @@ Uses individual check details to distinguish soft from hard failures.
 When MERGEABLE is \"CONFLICTING\", appends a conflict indicator."
           (let* ((classified (decknix--hub-ci-classify ci))
                  (ci-icon (pcase classified
-                            ("pass"      (propertize "✓" 'face 'success))
-                            ("soft_fail" (propertize "⚠" 'face 'warning))
-                            ("fail"      (propertize "✗" 'face 'error))
-                            ("running"   (propertize "⟳" 'face 'warning))
-                            (_           (propertize "?" 'face 'font-lock-comment-face))))
+                            ("pass"      (decknix--hub-icon "✓" 'success))
+                            ("soft_fail" (decknix--hub-icon "⚠" 'warning))
+                            ("fail"      (decknix--hub-icon "✗" 'error))
+                            ("running"   (decknix--hub-icon "⟳" 'warning))
+                            (_           (decknix--hub-icon "?" 'font-lock-comment-face))))
                  (merge-icon (when (equal mergeable "CONFLICTING")
-                               (propertize "⇌" 'face 'error))))
+                               (decknix--hub-icon "⇌" 'error))))
             (if merge-icon
                 (concat ci-icon merge-icon)
               ci-icon)))
@@ -6681,11 +6739,11 @@ Shows whether the current user has already responded to this PR.
   ✎ = commented (cyan), ✓ = approved (green), ✗ = changes requested (red)."
           (let ((state (alist-get 'my_review item)))
             (pcase state
-              ("APPROVED"          (propertize "✓" 'face 'success))
-              ("CHANGES_REQUESTED" (propertize "✗" 'face 'error))
-              ("COMMENTED"         (propertize "✎" 'face '(:foreground "#5fafaf")))
-              ("DISMISSED"         (propertize "−" 'face 'font-lock-comment-face))
-              ("PENDING"           (propertize "…" 'face 'warning))
+              ("APPROVED"          (decknix--hub-icon "✓" 'success))
+              ("CHANGES_REQUESTED" (decknix--hub-icon "✗" 'error))
+              ("COMMENTED"         (decknix--hub-icon "✎" '(:foreground "#5fafaf")))
+              ("DISMISSED"         (decknix--hub-icon "−" 'font-lock-comment-face))
+              ("PENDING"           (decknix--hub-icon "…" 'warning))
               (_ ""))))
 
         (defun decknix--hub-wip-review-icon (pr)
@@ -6695,9 +6753,9 @@ Shows the overall review status of the user's own PR:
   ◐ = review required (yellow), (none) = no review policy."
           (let ((decision (alist-get 'review_decision pr)))
             (pcase decision
-              ("APPROVED"          (propertize "✓" 'face 'success))
-              ("CHANGES_REQUESTED" (propertize "✗" 'face 'error))
-              ("REVIEW_REQUIRED"   (propertize "◐" 'face 'warning))
+              ("APPROVED"          (decknix--hub-icon "✓" 'success))
+              ("CHANGES_REQUESTED" (decknix--hub-icon "✗" 'error))
+              ("REVIEW_REQUIRED"   (decknix--hub-icon "◐" 'warning))
               (_ ""))))
 
         (defun decknix--hub-wip-reply-icon (pr)
@@ -6706,7 +6764,7 @@ Shows 💬 when the most recent comment or review on the PR is from
 someone other than the current user (bot or human), indicating it
 needs a response."
           (if (eq (alist-get 'needs_reply pr) t)
-              (propertize "💬" 'face '(:foreground "#d7af5f"))
+              (decknix--hub-icon "💬" '(:foreground "#d7af5f"))
             ""))
 
         ;; -- Hub: status hint when daemon not running --
