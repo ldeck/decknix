@@ -589,7 +589,7 @@ Press q to dismiss."
             "  Type a prompt at the bottom and press RET to send.\n"
             "  Use S-RET to insert a newline without sending.\n"
             "  For longer prompts, press C-c e to open the compose buffer.\n"
-            "  In compose: C-c C-c submit, C-c C-k clear/close.\n"
+            "  In compose: C-c C-c submit (or queue if agent busy), C-c C-k clear/close.\n"
             "  In compose: C-c C-s toggles sticky (stays open) / transient.\n"
             "  In compose: C-c k k interrupts the agent, C-c k C-c interrupts & submits.\n"
             "  In compose: M-p / M-n cycle session prompts; M-P / M-N cycle all sessions.\n"
@@ -3471,9 +3471,61 @@ Resets prompt history navigation state."
             (let ((win (selected-window)))
               (quit-restore-window win 'kill))))
 
+        ;; -- Prompt queue: auto-submit when agent becomes idle --
+        (defvar-local decknix--compose-queued-prompt nil
+          "Pending prompt string queued for submission when the agent is idle.
+Buffer-local on agent-shell buffers.")
+
+        (defvar-local decknix--compose-queue-timer nil
+          "Timer polling `shell-maker--busy' to submit a queued prompt.
+Buffer-local on agent-shell buffers.")
+
+        (defun decknix--compose-queue-poll ()
+          "Check if the agent is idle and submit the queued prompt.
+Called by a repeating timer on the agent-shell buffer."
+          (let ((buf (current-buffer)))
+            (if (not (buffer-live-p buf))
+                ;; Buffer killed — cancel timer
+                (when decknix--compose-queue-timer
+                  (cancel-timer decknix--compose-queue-timer)
+                  (setq decknix--compose-queue-timer nil))
+              (when (and decknix--compose-queued-prompt
+                         (not (bound-and-true-p shell-maker--busy))
+                         (get-buffer-process buf)
+                         (process-live-p (get-buffer-process buf)))
+                ;; Agent is idle — submit the queued prompt
+                (let ((input decknix--compose-queued-prompt))
+                  (setq decknix--compose-queued-prompt nil)
+                  (when decknix--compose-queue-timer
+                    (cancel-timer decknix--compose-queue-timer)
+                    (setq decknix--compose-queue-timer nil))
+                  (goto-char (point-max))
+                  (shell-maker-submit :input input)
+                  (message "Queued prompt submitted"))))))
+
+        (defun decknix--compose-enqueue-prompt (target input)
+          "Queue INPUT for submission on TARGET buffer when the agent is idle."
+          (when (buffer-live-p target)
+            (with-current-buffer target
+              (setq decknix--compose-queued-prompt input)
+              ;; Start a polling timer (every 1s) if not already running
+              (unless (and decknix--compose-queue-timer
+                          (memq decknix--compose-queue-timer timer-list))
+                (setq decknix--compose-queue-timer
+                      (run-at-time
+                       1.0 1.0
+                       (eval `(lambda ()
+                                (when (buffer-live-p ,target)
+                                  (with-current-buffer ,target
+                                    (decknix--compose-queue-poll))))
+                             t)))))))
+
         (defun decknix-agent-compose-submit ()
           "Submit the compose buffer content to the agent-shell.
-If the agent is busy, warns the user and offers to interrupt first.
+If the agent is busy, offers three options:
+  - Interrupt and submit immediately
+  - Queue the prompt (auto-submitted when agent becomes idle)
+  - Cancel
 Use C-c k k to pre-emptively interrupt, then C-c C-c to submit cleanly."
           (interactive)
           (let ((input (string-trim (buffer-string)))
@@ -3484,15 +3536,24 @@ Use C-c k k to pre-emptively interrupt, then C-c C-c to submit cleanly."
               (when (and (buffer-live-p target)
                          (with-current-buffer target
                            (bound-and-true-p shell-maker--busy)))
-                (unless (y-or-n-p
-                         "Agent is busy — interrupt and submit? (C-c k k to pre-interrupt) ")
-                  (user-error "Submit cancelled — agent is still processing"))
-                ;; User said yes — interrupt first
-                (with-current-buffer target
-                  (when (fboundp 'agent-shell-interrupt)
-                    (let ((agent-shell-confirm-interrupt nil))
-                      (agent-shell-interrupt))))
-                (sit-for 0.3))
+                (let ((choice (read-char-choice
+                               "Agent is busy: [i]nterrupt & submit  [q]ueue for later  [c]ancel "
+                               '(?i ?q ?c))))
+                  (pcase choice
+                    (?c (user-error "Submit cancelled — agent is still processing"))
+                    (?q
+                     ;; Queue the prompt and close/clear compose
+                     (decknix--compose-enqueue-prompt target input)
+                     (decknix--compose-finish)
+                     (message "Prompt queued — will submit when agent is ready")
+                     (cl-return-from decknix-agent-compose-submit))
+                    (?i
+                     ;; Interrupt and continue to submit below
+                     (with-current-buffer target
+                       (when (fboundp 'agent-shell-interrupt)
+                         (let ((agent-shell-confirm-interrupt nil))
+                           (agent-shell-interrupt))))
+                     (sit-for 0.3)))))
               ;; Verify the agent process is alive before submitting
               (unless (and (buffer-live-p target)
                            (get-buffer-process target)
@@ -5369,41 +5430,75 @@ Applies org, age, and CI visibility filters, then the ready predicate."
                     (decknix--hub-request-ready-p item)))
              (or all-items '()))))
 
-        (defun decknix-hub-launch-reviews (n)
-          "Launch review sessions for the first N ready review requests.
-With prefix arg, prompts for count.  Without, defaults to 1.
-Ready = CI passing, not conflicting, not draft, not already reviewed.
-Prompts for layout: (s)plit windows side-by-side, or (r)eplace current buffer."
+        (defun decknix-hub-launch-reviews (_n)
+          "Interactively pick review-ready PRs and launch review sessions.
+Shows a consult completion list of ready reviews (most recent first).
+Mark multiple candidates with `embark-select' (SPC or C-SPC in vertico)
+then confirm, or simply pick one.  Then prompts for layout.
+Ready = CI passing (or soft-fail), not conflicting, not draft,
+not already reviewed by me."
           (interactive "p")
           (let* ((ready (decknix--hub-review-ready-requests))
-                 (count (min n (length ready)))
-                 (to-review (seq-take ready count)))
-            (if (not to-review)
+                 ;; Sort most-recent first by created timestamp
+                 (sorted (sort (copy-sequence ready)
+                               (lambda (a b)
+                                 (string> (or (alist-get 'created a) "")
+                                          (or (alist-get 'created b) "")))))
+                 ;; Build labelled candidates
+                 (entries
+                  (mapcar
+                   (lambda (item)
+                     (let* ((age (decknix--hub-format-age
+                                  (alist-get 'created item)))
+                            (repo-full (or (alist-get 'repo item) ""))
+                            (repo (car (last (split-string repo-full "/"))))
+                            (number (alist-get 'number item))
+                            (title (or (alist-get 'title item) ""))
+                            (ci-str (decknix--hub-ci-icon
+                                     (alist-get 'ci item)
+                                     (alist-get 'mergeable item)))
+                            (label (format "%3s %s#%d %s %s"
+                                           age repo number ci-str title)))
+                       (cons label item)))
+                   sorted)))
+            (if (not entries)
                 (message "No review-ready requests")
-              ;; Prompt for layout
-              (let* ((choice (read-char-choice
-                              (format "%d review%s: [s]plit side-by-side  [r]eplace buffer  [q]uit "
-                                      count (if (= count 1) "" "s"))
-                              '(?s ?r ?q)))
-                     (split-p (eq choice ?s)))
-                (unless (eq choice ?q)
-                  (let ((launched 0))
-                    (dolist (item to-review)
-                      (let ((url (alist-get 'url item)))
-                        (when url
-                          (if (and split-p (> launched 0))
-                              ;; After the first, split the main window for
-                              ;; subsequent reviews so they tile side-by-side
-                              (decknix--nav-hub-start-review-split url)
-                            (decknix--nav-hub-start-review url))
-                          (setq launched (1+ launched))
-                          ;; Small delay between launches to avoid races
-                          (when (> (length to-review) 1)
-                            (sit-for 0.3)))))
-                    (message "Launched %d review%s (%d ready)%s"
-                             launched (if (= launched 1) "" "s")
-                             (length ready)
-                             (if split-p " [split]" ""))))))))
+              ;; Use completing-read-multiple for multi-select.
+              ;; In vertico/consult this provides live filtering and
+              ;; SPC/crm-separator to pick multiple candidates.
+              (let* ((crm-separator ",")
+                     (selected (completing-read-multiple
+                                (format "Review (%d ready, pick with comma): "
+                                        (length entries))
+                                (mapcar #'car entries) nil t))
+                     (to-review
+                      (seq-filter
+                       #'identity
+                       (mapcar (lambda (s)
+                                 (cdr (assoc (string-trim s) entries)))
+                               selected)))
+                     (count (length to-review)))
+                (when (> count 0)
+                  ;; Prompt for layout
+                  (let* ((choice (read-char-choice
+                                  (format "%d review%s: [s]plit side-by-side  [r]eplace buffer  [q]uit "
+                                          count (if (= count 1) "" "s"))
+                                  '(?s ?r ?q)))
+                         (split-p (eq choice ?s)))
+                    (unless (eq choice ?q)
+                      (let ((launched 0))
+                        (dolist (item to-review)
+                          (let ((url (alist-get 'url item)))
+                            (when url
+                              (if (and split-p (> launched 0))
+                                  (decknix--nav-hub-start-review-split url)
+                                (decknix--nav-hub-start-review url))
+                              (setq launched (1+ launched))
+                              (when (> count 1) (sit-for 0.3)))))
+                        (message "Launched %d review%s (%d ready)%s"
+                                 launched (if (= launched 1) "" "s")
+                                 (length ready)
+                                 (if split-p " [split]" ""))))))))))
 
         (defun decknix--nav-hub-start-review-split (url)
           "Start a PR review session for URL in a new split window.
