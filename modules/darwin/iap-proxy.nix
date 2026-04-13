@@ -118,6 +118,10 @@ in
         RunAtLoad = true;
         KeepAlive = true;
         ProcessType = "Background";
+        # WorkingDirectory must be writable — the proxy creates
+        # iap_proxy.log via a relative FileHandler.  Without this,
+        # launchd defaults to / which is read-only on macOS.
+        WorkingDirectory = "/tmp";
         StandardOutPath = "/tmp/iap-proxy.log";
         StandardErrorPath = "/tmp/iap-proxy.log";
 
