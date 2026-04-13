@@ -152,6 +152,8 @@ struct WipPr {
     review_decision: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"
     #[serde(skip_serializing_if = "Option::is_none")]
     needs_reply: Option<bool>, // true when latest comment/review is from someone else
+    #[serde(skip_serializing_if = "Option::is_none")]
+    merged_at: Option<DateTime<Utc>>, // when the PR was merged (None for open PRs)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -705,24 +707,59 @@ struct GhMyPr {
     state: String,
     is_draft: Option<bool>,
     updated_at: Option<String>,
+    merged_at: Option<String>,
     repository: Option<GhRepo>,
 }
 
-/// Fetch the current user's open PRs across all repos.
+/// Fetch the current user's open + recently merged PRs across all repos.
+/// Merged PRs are included for up to 7 days after merge, allowing the
+/// sidebar to track them until they are deployed.
 async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
-    let output = gh_json(&[
+    let json_fields = "number,title,url,state,isDraft,updatedAt,mergedAt,repository";
+
+    // 1. Open PRs
+    let open_output = gh_json(&[
         "search", "prs",
         "--author=@me",
         "--state=open",
-        "--json", "number,title,url,state,isDraft,updatedAt,repository",
+        "--json", json_fields,
         "--limit", "50",
     ]).await?;
 
-    let prs: Vec<GhMyPr> = serde_json::from_str(&output)
-        .map_err(|e| format!("parse error: {e}"))?;
+    let open_prs: Vec<GhMyPr> = serde_json::from_str(&open_output)
+        .map_err(|e| format!("parse open: {e}"))?;
+
+    // 2. Recently merged PRs (last 7 days)
+    let cutoff = (Utc::now() - chrono::Duration::days(7))
+        .format("%Y-%m-%d")
+        .to_string();
+    let merged_output = gh_json(&[
+        "search", "prs",
+        "--author=@me",
+        "--state=merged",
+        &format!("--merged=>{cutoff}"),
+        "--json", json_fields,
+        "--limit", "30",
+    ]).await.unwrap_or_else(|_| "[]".to_string());
+
+    let merged_prs: Vec<GhMyPr> = serde_json::from_str(&merged_output)
+        .unwrap_or_default();
+
+    // Combine, deduplicating by (repo, number)
+    let mut seen = std::collections::HashSet::new();
+    let mut all_prs: Vec<GhMyPr> = Vec::new();
+    for pr in open_prs.into_iter().chain(merged_prs.into_iter()) {
+        let key = (
+            pr.repository.as_ref().map(|r| r.name_with_owner.clone()).unwrap_or_default(),
+            pr.number,
+        );
+        if seen.insert(key) {
+            all_prs.push(pr);
+        }
+    }
 
     // Collect unique repo names and filter out archived repositories
-    let repo_names: Vec<String> = prs.iter()
+    let repo_names: Vec<String> = all_prs.iter()
         .filter_map(|pr| pr.repository.as_ref().map(|r| r.name_with_owner.clone()))
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
@@ -736,7 +773,7 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
     let mut repo_map: std::collections::BTreeMap<String, Vec<WipPr>> =
         std::collections::BTreeMap::new();
 
-    for pr in &prs {
+    for pr in &all_prs {
         let repo = pr.repository.as_ref()
             .map(|r| r.name_with_owner.clone())
             .unwrap_or_else(|| "unknown".to_string());
@@ -748,6 +785,8 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
         let details = fetch_pr_details(&repo, pr.number, my_login.as_deref()).await;
         let entry = repo_map.entry(repo).or_default();
         let updated_ts = pr.updated_at.as_deref()
+            .and_then(|s| s.parse::<DateTime<Utc>>().ok());
+        let merged_ts = pr.merged_at.as_deref()
             .and_then(|s| s.parse::<DateTime<Utc>>().ok());
         entry.push(WipPr {
             number: pr.number,
@@ -761,6 +800,7 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
             updated: updated_ts,
             review_decision: details.review_decision,
             needs_reply: details.needs_reply,
+            merged_at: merged_ts,
         });
     }
 

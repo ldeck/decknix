@@ -6920,9 +6920,13 @@ Respects `decknix--hub-org-visibility'. Shows time since last update."
                     (dolist (pr prs)
                       (let* ((number (alist-get 'number pr))
                              (title (or (alist-get 'title pr) ""))
+                             (pr-state (or (alist-get 'state pr) "OPEN"))
+                             (merged-p (string= pr-state "MERGED"))
                              (ci (alist-get 'ci pr))
                              (mergeable (alist-get 'mergeable pr))
-                             (ci-str (decknix--hub-ci-icon ci mergeable))
+                             (ci-str (if merged-p
+                                        (decknix--hub-icon "⏣" 'font-lock-constant-face)
+                                      (decknix--hub-ci-icon ci mergeable)))
                              (draft (alist-get 'draft pr))
                              (branch (alist-get 'branch pr))
                              (url (alist-get 'url pr))
@@ -6936,26 +6940,35 @@ Respects `decknix--hub-org-visibility'. Shows time since last update."
                              (ci-str (if (string-empty-p tc-str) ci-str
                                        (concat ci-str tc-str)))
                              ;; Review decision (approved/changes requested)
-                             (rev-str (decknix--hub-wip-review-icon pr))
-                             (ci-str (if (string-empty-p rev-str) ci-str
-                                       (concat ci-str rev-str)))
+                             (rev-str (unless merged-p
+                                        (decknix--hub-wip-review-icon pr)))
+                             (ci-str (if (and rev-str (not (string-empty-p rev-str)))
+                                        (concat ci-str rev-str)
+                                      ci-str))
                              ;; Reply needed indicator
-                             (reply-str (decknix--hub-wip-reply-icon pr))
-                             (ci-str (if (string-empty-p reply-str) ci-str
-                                       (concat ci-str reply-str)))
+                             (reply-str (unless merged-p
+                                          (decknix--hub-wip-reply-icon pr)))
+                             (ci-str (if (and reply-str (not (string-empty-p reply-str)))
+                                        (concat ci-str reply-str)
+                                      ci-str))
                              (age (decknix--hub-format-age
-                                   (alist-get 'updated pr)))
+                                   (or (alist-get 'merged_at pr)
+                                       (alist-get 'updated pr))))
                              (max-title (max 8 (- (window-width) 20)))
                              (short-title (if (> (length title) max-title)
                                               (concat (substring title 0 (- max-title 1)) "…")
                                             title))
+                             ;; Merged PRs get dimmed styling
+                             (title-face (cond (merged-p 'font-lock-comment-face)
+                                               (draft 'font-lock-comment-face)
+                                               (t nil)))
                              (line (format " %3s #%-4d %s %s"
                                           (propertize age 'face 'font-lock-comment-face)
                                           number
                                           ci-str
-                                          (if draft
+                                          (if title-face
                                               (propertize short-title
-                                                         'face 'font-lock-comment-face)
+                                                         'face title-face)
                                             short-title))))
                         (insert (propertize line
                                            'decknix-hub-url url
