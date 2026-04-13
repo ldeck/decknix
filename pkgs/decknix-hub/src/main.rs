@@ -146,6 +146,8 @@ struct WipPr {
     updated: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     review_decision: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    needs_reply: Option<bool>, // true when latest comment/review is from someone else
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -523,17 +525,46 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
 // GitHub WIP Adapter
 // ---------------------------------------------------------------------------
 
-/// Fetch branch name, CI, mergeable state, and review decision for a PR.
-/// Returns (branch, ci, mergeable, review_decision).
-async fn fetch_pr_details(repo: &str, number: u64) -> (Option<String>, Option<CiStatus>, Option<String>, Option<String>) {
+/// Result of fetching detailed PR information.
+struct PrDetails {
+    branch: Option<String>,
+    ci: Option<CiStatus>,
+    mergeable: Option<String>,
+    review_decision: Option<String>,
+    needs_reply: Option<bool>,
+}
+
+impl Default for PrDetails {
+    fn default() -> Self {
+        Self { branch: None, ci: None, mergeable: None, review_decision: None, needs_reply: None }
+    }
+}
+
+/// Comment/review with author and timestamp for determining reply status.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhComment {
+    author: Option<GhAuthor>,
+    created_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhReviewEntry {
+    author: Option<GhAuthor>,
+    submitted_at: Option<String>,
+}
+
+/// Fetch branch, CI, mergeable, review decision, and reply status for a PR.
+async fn fetch_pr_details(repo: &str, number: u64, my_login: Option<&str>) -> PrDetails {
     let output = match gh_json(&[
         "pr", "view",
         &number.to_string(),
         "--repo", repo,
-        "--json", "headRefName,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision",
+        "--json", "headRefName,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision,comments,reviews",
     ]).await {
         Ok(o) => o,
-        Err(_) => return (None, None, None, None),
+        Err(_) => return PrDetails::default(),
     };
 
     #[derive(Deserialize)]
@@ -545,11 +576,49 @@ async fn fetch_pr_details(repo: &str, number: u64) -> (Option<String>, Option<Ci
         #[allow(dead_code)]
         merge_state_status: Option<String>,
         review_decision: Option<String>,
+        comments: Option<Vec<GhComment>>,
+        reviews: Option<Vec<GhReviewEntry>>,
     }
 
     match serde_json::from_str::<PrDetail>(&output) {
-        Ok(d) => (d.head_ref_name, summarise_ci(&d.status_check_rollup), d.mergeable, d.review_decision),
-        Err(_) => (None, None, None, None),
+        Ok(d) => {
+            let needs_reply = my_login.map(|login| {
+                // Collect all activity with (timestamp_str, is_me) tuples
+                let mut activities: Vec<(&str, bool)> = Vec::new();
+                if let Some(ref comments) = d.comments {
+                    for c in comments {
+                        if let Some(ref ts) = c.created_at {
+                            let is_me = c.author.as_ref()
+                                .map(|a| a.login.eq_ignore_ascii_case(login))
+                                .unwrap_or(false);
+                            activities.push((ts.as_str(), is_me));
+                        }
+                    }
+                }
+                if let Some(ref reviews) = d.reviews {
+                    for r in reviews {
+                        if let Some(ref ts) = r.submitted_at {
+                            let is_me = r.author.as_ref()
+                                .map(|a| a.login.eq_ignore_ascii_case(login))
+                                .unwrap_or(false);
+                            activities.push((ts.as_str(), is_me));
+                        }
+                    }
+                }
+                // Sort by timestamp (ISO 8601 strings sort lexicographically)
+                activities.sort_by_key(|(ts, _)| *ts);
+                // Check if the latest activity is NOT from me
+                activities.last().map(|(_, is_me)| !is_me).unwrap_or(false)
+            });
+            PrDetails {
+                branch: d.head_ref_name,
+                ci: summarise_ci(&d.status_check_rollup),
+                mergeable: d.mergeable,
+                review_decision: d.review_decision,
+                needs_reply,
+            }
+        }
+        Err(_) => PrDetails::default(),
     }
 }
 
@@ -587,6 +656,9 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
         .collect();
     let archived = find_archived_repos(&repo_names).await;
 
+    // Get current user's login for reply detection
+    let my_login = get_github_login().await;
+
     // Group by repository
     let mut repo_map: std::collections::BTreeMap<String, Vec<WipPr>> =
         std::collections::BTreeMap::new();
@@ -599,8 +671,8 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
         if archived.contains(&repo) {
             continue;
         }
-        // Fetch branch + CI + mergeable + review decision per PR
-        let (branch, ci, mergeable, review_decision) = fetch_pr_details(&repo, pr.number).await;
+        // Fetch branch + CI + mergeable + review decision + reply status per PR
+        let details = fetch_pr_details(&repo, pr.number, my_login.as_deref()).await;
         let entry = repo_map.entry(repo).or_default();
         let updated_ts = pr.updated_at.as_deref()
             .and_then(|s| s.parse::<DateTime<Utc>>().ok());
@@ -610,11 +682,12 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
             state: pr.state.clone(),
             url: pr.url.clone(),
             draft: pr.is_draft,
-            ci,
-            mergeable,
-            branch,
+            ci: details.ci,
+            mergeable: details.mergeable,
+            branch: details.branch,
             updated: updated_ts,
-            review_decision,
+            review_decision: details.review_decision,
+            needs_reply: details.needs_reply,
         });
     }
 
