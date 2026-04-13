@@ -1149,11 +1149,29 @@ CONV-KEY, if provided, is used to register the new session-id under the
 existing conversation entry in the tag store."
           ;; Invalidate cache so next picker invocation fetches fresh data
           (setq decknix--agent-session-cache-time 0)
-          (let* ((resume-args (list "--resume" session-id))
+          ;; Capture the target window NOW — before agent-shell-start runs.
+          ;; agent-shell--display-buffer calls (display-buffer buf action)
+          ;; internally.  Without this override, display-buffer-same-window
+          ;; can fail (e.g. after minibuffer exit, or from the sidebar),
+          ;; causing Emacs to split and create an additional window.
+          ;; We pin the display to whichever window the caller intended
+          ;; (typically the selected window, or main window from sidebar).
+          (let* ((target-win (selected-window))
+                 (resume-args (list "--resume" session-id))
                  (ws-args (when (and workspace (file-directory-p workspace))
                             (list "--workspace-root" workspace)))
                  (agent-shell-auggie-acp-command
                   (append agent-shell-auggie-acp-command ws-args resume-args))
+                 (agent-shell-display-action
+                  (eval `(cons (lambda (buffer alist)
+                                 (let ((win ,target-win))
+                                   (if (window-live-p win)
+                                       (window--display-buffer
+                                        buffer win 'reuse alist)
+                                     ;; Fallback: use same-window
+                                     (display-buffer-same-window buffer alist))))
+                               nil)
+                        t))
                  ;; agent-shell-start returns the new buffer synchronously
                  ;; (only the process setup is async).  Capturing it directly
                  ;; avoids the race in `find-new-shell-buffer' when multiple
@@ -3877,6 +3895,7 @@ Creates a new agent session, applies metadata, then subscribes to the
 `prompt-ready' event to send COMMAND as soon as the ACP session is
 fully established.  Returns immediately."
           (let* ((workspace (expand-file-name workspace))
+                 (target-win (selected-window))
                  (before-buffers (buffer-list))
                  (augmented-cmd
                   (append agent-shell-auggie-acp-command
@@ -3897,7 +3916,19 @@ fully established.  Returns immediately."
                                            (error "Invalid Auggie authentication")))
                                     :context-buffer buffer)) t))
                     base)))
-            (let ((default-directory workspace))
+            ;; Override display-action to target the selected window,
+            ;; preventing splits when called from sidebar or after
+            ;; minibuffer exit.
+            (let ((default-directory workspace)
+                  (agent-shell-display-action
+                   (eval `(cons (lambda (buffer alist)
+                                  (let ((win ,target-win))
+                                    (if (window-live-p win)
+                                        (window--display-buffer
+                                         buffer win 'reuse alist)
+                                      (display-buffer-same-window buffer alist))))
+                                nil)
+                         t)))
               (agent-shell-start :config config))
             (setq decknix--agent-session-cache-time 0)
             (decknix--agent-session-new-post-create
@@ -5186,29 +5217,17 @@ Respects `decknix--sidebar-show-hidden' toggle."
                       (unless workspace
                         (setq workspace
                               (read-directory-name "Workspace: " nil nil t)))
-                      ;; Select main window and override display-action
-                      ;; so agent-shell places the buffer there (not in a
-                      ;; new split).
+                      ;; Select main window so resume captures it as target
                       (let ((main (window-main-window (selected-frame))))
                         (when (and main (window-live-p main))
-                          (select-window main))
-                        (let ((conv-key (decknix--agent-conversation-key
-                                         (alist-get 'firstUserMessage
-                                                    saved "")))
-                              (agent-shell-display-action
-                               (if (and main (window-live-p main))
-                                   (eval `(cons (lambda (buffer alist)
-                                                  (let ((win ,main))
-                                                    (when (window-live-p win)
-                                                      (window--display-buffer
-                                                       buffer win 'reuse alist))))
-                                                nil)
-                                         t)
-                                 agent-shell-display-action)))
-                          (decknix--agent-session-resume
-                           session-id
-                           decknix-agent-session-history-count
-                           name workspace conv-key))))))
+                          (select-window main)))
+                      (let ((conv-key (decknix--agent-conversation-key
+                                       (alist-get 'firstUserMessage
+                                                  saved ""))))
+                        (decknix--agent-session-resume
+                         session-id
+                         decknix-agent-session-history-count
+                         name workspace conv-key)))))
                ;; Default: live buffer
                (t (funcall orig-fn))))))
 
@@ -5388,17 +5407,7 @@ preventing extra splits when called from the sidebar."
                                      nil nil t)))
                      (command (format "/review-service-pr %s" url))
                      ;; Target main window to avoid sidebar splits
-                     (main (window-main-window (selected-frame)))
-                     (agent-shell-display-action
-                      (if (and main (window-live-p main))
-                          (eval `(cons (lambda (buffer alist)
-                                         (let ((win ,main))
-                                           (when (window-live-p win)
-                                             (window--display-buffer
-                                              buffer win 'reuse alist))))
-                                       nil)
-                                t)
-                        agent-shell-display-action)))
+                     (main (window-main-window (selected-frame))))
                 (when (and main (window-live-p main))
                   (select-window main))
                 (decknix--agent-quickaction-start name tags workspace command)
@@ -6155,51 +6164,34 @@ session buffer in the main window after a short delay."
                                  name)))
             (if (not sid)
                 (message "Cannot restore: no session ID")
-              ;; Identify the main (non-sidebar) window for display
+              ;; Select main window so resume captures it as the target
               (let ((main (window-main-window (selected-frame))))
                 (when (and main (window-live-p main))
-                  (select-window main))
-                ;; Override display-action so agent-shell--display-buffer
-                ;; places the new buffer in the main window instead of
-                ;; splitting or creating an additional window.
-                (let* ((agent-shell-display-action
-                        (if (and main (window-live-p main))
-                            (eval `(cons (lambda (buffer alist)
-                                          (let ((win ,main))
-                                            (when (window-live-p win)
-                                              (window--display-buffer buffer win
-                                                                      'reuse alist))))
-                                        nil)
-                                  t)
-                          agent-shell-display-action))
-                       ;; resume returns the new buffer directly — no
-                       ;; snapshot/find-new-buffer race when restoring
-                       ;; multiple sessions in quick succession.
-                       (new-buf (decknix--agent-session-resume
-                                 sid 20 display-name workspace conv-key)))
-                  ;; Remove from previous list since it's now live
-                  (setq decknix--sidebar-previous-sessions
-                        (seq-filter (lambda (e)
-                                      (not (equal (alist-get 'session-id e) sid)))
-                                    decknix--sidebar-previous-sessions))
-                  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-                    (agent-shell-workspace-sidebar-refresh))
-                  ;; Ensure the restored buffer ends up in the main window
-                  ;; and receives focus.  The timer fires after agent-shell
-                  ;; has finished async setup (rename, prepopulate).
-                  (when (and focus new-buf)
-                    (run-at-time 2.0 nil
-                      (eval `(lambda ()
-                               (let ((buf ,new-buf))
-                                 (when (and buf (buffer-live-p buf))
-                                   (let ((main (window-main-window (selected-frame))))
-                                     (when (and main (window-live-p main))
-                                       (set-window-buffer main buf)
-                                       (select-window main)
-                                       ;; Move to prompt so user is ready to type
-                                       (with-current-buffer buf
-                                         (goto-char (point-max)))
-                                       (set-window-point main (point-max))))))) t))))))))
+                  (select-window main)))
+              ;; resume now handles display-action override internally
+              (let ((new-buf (decknix--agent-session-resume
+                              sid 20 display-name workspace conv-key)))
+                ;; Remove from previous list since it's now live
+                (setq decknix--sidebar-previous-sessions
+                      (seq-filter (lambda (e)
+                                    (not (equal (alist-get 'session-id e) sid)))
+                                  decknix--sidebar-previous-sessions))
+                (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                  (agent-shell-workspace-sidebar-refresh))
+                ;; Ensure focus moves to the restored buffer after async
+                ;; setup (rename, prepopulate) completes.
+                (when (and focus new-buf)
+                  (run-at-time 2.0 nil
+                    (eval `(lambda ()
+                             (let ((buf ,new-buf))
+                               (when (and buf (buffer-live-p buf))
+                                 (let ((main (window-main-window (selected-frame))))
+                                   (when (and main (window-live-p main))
+                                     (set-window-buffer main buf)
+                                     (select-window main)
+                                     (with-current-buffer buf
+                                       (goto-char (point-max)))
+                                     (set-window-point main (point-max))))))) t)))))))
 
         (defun decknix--sidebar-restore-all-previous ()
           "Restore all previous live sessions.
