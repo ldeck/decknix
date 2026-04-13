@@ -4833,7 +4833,17 @@ so RIGHT group starts at column COL-WIDTH."
                              (format "[%s]" label)
                              'face (if (string= label "all")
                                        'font-lock-comment-face
-                                     'font-lock-constant-face)))))))))
+                                     'font-lock-constant-face)))))
+              (cons "M" (format "@ %s"
+                          (propertize
+                           (if decknix--hub-mention-filter "[on]" "[off]")
+                           'face (if decknix--hub-mention-filter
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
+              (cons "R" (format "review %s"
+                          (propertize
+                           (format "[%d]" (length (decknix--hub-review-ready-requests)))
+                           'face 'font-lock-comment-face)))))))
 
         (defun decknix--sidebar-render-footer ()
           "Insert responsive key listing or compact hint depending on toggle.
@@ -5330,6 +5340,55 @@ preventing extra splits when called from the sidebar."
                 (decknix--agent-quickaction-start name tags workspace command)
                 (message "Starting review: %s/%s#%s" owner repo number)))))
 
+        (defun decknix--hub-request-ready-p (item)
+          "Return non-nil if review request ITEM is ready for review.
+Ready means: CI passing (or soft-fail), not conflicting, not draft,
+and not already reviewed by me (APPROVED or CHANGES_REQUESTED)."
+          (let ((ci-status (decknix--hub-ci-classify (alist-get 'ci item)))
+                (mergeable (alist-get 'mergeable item))
+                (draft (alist-get 'draft item))
+                (my-review (alist-get 'my_review item)))
+            (and (member ci-status '("pass" "soft_fail"))
+                 (not (equal mergeable "CONFLICTING"))
+                 (not (eq draft t))
+                 (not (member my-review '("APPROVED" "CHANGES_REQUESTED"))))))
+
+        (defun decknix--hub-review-ready-requests ()
+          "Return the list of review requests that are ready for review.
+Applies org, age, and CI visibility filters, then the ready predicate."
+          (let* ((data decknix--hub-reviews)
+                 (all-items (when data (alist-get 'items data))))
+            (seq-filter
+             (lambda (item)
+               (and (decknix--hub-item-visible-p (alist-get 'repo item))
+                    (decknix--hub-age-visible-p (alist-get 'created item))
+                    (decknix--hub-ci-visible-p item)
+                    (decknix--hub-request-ready-p item)))
+             (or all-items '()))))
+
+        (defun decknix-hub-launch-reviews (n)
+          "Launch review sessions for the first N ready review requests.
+With prefix arg, prompts for count.  Without, defaults to 1.
+Ready = CI passing, not conflicting, not draft, not already reviewed."
+          (interactive "p")
+          (let* ((ready (decknix--hub-review-ready-requests))
+                 (count (min n (length ready)))
+                 (to-review (seq-take ready count)))
+            (if (not to-review)
+                (message "No review-ready requests")
+              (let ((launched 0))
+                (dolist (item to-review)
+                  (let ((url (alist-get 'url item)))
+                    (when url
+                      (decknix--nav-hub-start-review url)
+                      (setq launched (1+ launched))
+                      ;; Small delay between launches to avoid races
+                      (when (> (length to-review) 1)
+                        (sit-for 0.3)))))
+                (message "Launched %d review%s (%d ready)"
+                         launched (if (= launched 1) "" "s")
+                         (length ready))))))
+
         (defun decknix--nav-hub-item-actions (item)
           "Show an action menu for a hub ITEM (review or WIP PR)."
           (let* ((url (alist-get 'url item))
@@ -5411,7 +5470,8 @@ preventing extra splits when called from the sidebar."
                            (lambda (item)
                              (and (decknix--hub-item-visible-p (alist-get 'repo item))
                                   (decknix--hub-age-visible-p (alist-get 'created item))
-                                  (decknix--hub-ci-visible-p item)))
+                                  (decknix--hub-ci-visible-p item)
+                                  (decknix--hub-mention-visible-p item)))
                            (or all-items '())))
                    (keys decknix--nav-keys))
               (append
@@ -5457,7 +5517,8 @@ Each candidate shows age, repo, PR number, CI status, and title."
                          (lambda (item)
                            (and (decknix--hub-item-visible-p (alist-get 'repo item))
                                 (decknix--hub-age-visible-p (alist-get 'created item))
-                                (decknix--hub-ci-visible-p item)))
+                                (decknix--hub-ci-visible-p item)
+                                (decknix--hub-mention-visible-p item)))
                          (or all-items '()))))
             (if (not items)
                 (message "No review requests")
@@ -5831,6 +5892,9 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                    (cons 'ci-filter
                          (when (boundp 'decknix--hub-ci-filter)
                            decknix--hub-ci-filter))
+                   (cons 'mention-filter
+                         (when (boundp 'decknix--hub-mention-filter)
+                           decknix--hub-mention-filter))
                    (cons 'previous-sessions live-info))))
             (make-directory (file-name-directory decknix--sidebar-state-file) t)
             (with-temp-file decknix--sidebar-state-file
@@ -5875,6 +5939,10 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                     (when (and cf (listp cf)
                                (boundp 'decknix--hub-ci-filter))
                       (setq decknix--hub-ci-filter cf)))
+                  ;; Mention filter: restore toggle
+                  (when (boundp 'decknix--hub-mention-filter)
+                    (setq decknix--hub-mention-filter
+                          (alist-get 'mention-filter state)))
                   (when-let ((prev (alist-get 'previous-sessions state)))
                     (setq decknix--sidebar-previous-sessions prev)))
               (error
@@ -6144,7 +6212,11 @@ Re-reads only the changed file and refreshes the sidebar."
           (define-key agent-shell-workspace-sidebar-mode-map
             (kbd "F") #'decknix--hub-cycle-age-filter)
           (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "C") #'decknix--hub-cycle-ci-filter))
+            (kbd "C") #'decknix--hub-cycle-ci-filter)
+          (define-key agent-shell-workspace-sidebar-mode-map
+            (kbd "R") #'decknix-hub-launch-reviews)
+          (define-key agent-shell-workspace-sidebar-mode-map
+            (kbd "M") #'decknix--hub-toggle-mention-filter))
 
         ;; Add Hub group to the sidebar transient
         ;; -- Hub: org filter (multi-select transient) --
@@ -6334,13 +6406,43 @@ When no filter is active (table is nil), all orgs are visible."
           (interactive)
           (call-interactively #'decknix--hub-cycle-ci-filter))
 
+        (transient-define-suffix decknix-sidebar-transient--launch-reviews ()
+          :key "R"
+          :description
+          (lambda ()
+            (let ((count (length (decknix--hub-review-ready-requests))))
+              (format "Review ready  %s"
+                      (propertize
+                       (format "[%d]" count)
+                       'face (if (> count 0)
+                                 'success
+                               'font-lock-comment-face)))))
+          (interactive)
+          (call-interactively #'decknix-hub-launch-reviews))
+
+        (transient-define-suffix decknix-sidebar-transient--mention-filter ()
+          :key "M"
+          :description
+          (lambda ()
+            (format "@-mention    %s"
+                    (propertize
+                     (if decknix--hub-mention-filter "[on]" "[off]")
+                     'face (if decknix--hub-mention-filter
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-toggle-mention-filter))
+
         ;; Append Hub group after the Toggles group.
         ;; Use "W" (last key in Toggles) as the insertion anchor.
         (transient-append-suffix 'decknix-sidebar-transient "W"
           ["Hub"
            (decknix-sidebar-transient--org-filter)
            (decknix-sidebar-transient--age-filter)
-           (decknix-sidebar-transient--ci-filter)])
+           (decknix-sidebar-transient--ci-filter)
+           (decknix-sidebar-transient--mention-filter)
+           (decknix-sidebar-transient--launch-reviews)])
 
         (defun decknix--hub-item-visible-p (repo-full)
           "Return non-nil if REPO-FULL (owner/repo) passes the org visibility filter."
@@ -6471,6 +6573,27 @@ Statuses: (g)reen=pass (l)int=soft_fail (y)ellow=running (?)grey=unknown (r)ed=f
             (when (get-buffer "*agent-shell-sidebar*")
               (agent-shell-workspace-sidebar-refresh))
             (message "CI filter: %s" (decknix--hub-ci-filter-summary))))
+
+        ;; -- Hub: @-mention filter --
+        ;; When enabled, Requests shows only items where the user was @-mentioned.
+
+        (defvar decknix--hub-mention-filter nil
+          "When non-nil, only show review requests where user was @-mentioned.")
+
+        (defun decknix--hub-toggle-mention-filter ()
+          "Toggle the @-mention filter for Requests."
+          (interactive)
+          (setq decknix--hub-mention-filter (not decknix--hub-mention-filter))
+          (when (get-buffer "*agent-shell-sidebar*")
+            (agent-shell-workspace-sidebar-refresh))
+          (message "Mention filter: %s"
+                   (if decknix--hub-mention-filter "on (@-mentioned only)" "off (all)")))
+
+        (defun decknix--hub-mention-visible-p (item)
+          "Return non-nil if ITEM passes the @-mention filter.
+Always returns t when filter is disabled."
+          (or (not decknix--hub-mention-filter)
+              (eq (alist-get 'mentioned item) t)))
 
         ;; -- Hub: age formatting --
         (defun decknix--hub-format-age (iso-time)
@@ -6625,11 +6748,13 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                          (lambda (item)
                            (and (decknix--hub-item-visible-p (alist-get 'repo item))
                                 (decknix--hub-age-visible-p (alist-get 'created item))
-                                (decknix--hub-ci-visible-p item)))
+                                (decknix--hub-ci-visible-p item)
+                                (decknix--hub-mention-visible-p item)))
                          (or all-items '()))))
             (when items
               (decknix--sidebar-render-section-header
-               (format "Requests (%d)" (length items)))
+               (format "Requests (%d)%s" (length items)
+                       (if decknix--hub-mention-filter " @" "")))
               (setq line-num (1+ line-num))
               (dolist (item items)
                 (let* ((age (decknix--hub-format-age
@@ -6646,6 +6771,20 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                        (status-str (if (string-empty-p rev-str)
                                        ci-str
                                      (concat ci-str rev-str)))
+                       ;; @-mention indicator
+                       (mention-str (if (eq (alist-get 'mentioned item) t)
+                                        (propertize "@" 'face '(:foreground "#d7af5f" :weight bold))
+                                      ""))
+                       (status-str (if (string-empty-p mention-str)
+                                       status-str
+                                     (concat status-str mention-str)))
+                       ;; Reply needed indicator
+                       (reply-str (if (eq (alist-get 'needs_reply item) t)
+                                      (propertize "💬" 'face '(:foreground "#d7af5f"))
+                                    ""))
+                       (status-str (if (string-empty-p reply-str)
+                                       status-str
+                                     (concat status-str reply-str)))
                        (draft (alist-get 'draft item))
                        (url (alist-get 'url item))
                        ;; Truncate title to fit sidebar
