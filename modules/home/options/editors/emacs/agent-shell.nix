@@ -5552,9 +5552,8 @@ Press / to switch to consult filter mode."
                              (ci-str (decknix--hub-ci-icon (alist-get 'ci pr)
                                                            (alist-get 'mergeable pr)))
                              (rev-str (decknix--hub-wip-review-icon pr))
-                             (status-str (if (string-empty-p rev-str)
-                                             ci-str
-                                           (concat ci-str rev-str)))
+                             (reply-str (decknix--hub-wip-reply-icon pr))
+                             (status-str (concat ci-str rev-str reply-str))
                              (age (decknix--hub-format-age
                                    (alist-get 'updated pr)))
                              (short (if (> (length title) 28)
@@ -6578,6 +6577,15 @@ Shows the overall review status of the user's own PR:
               ("REVIEW_REQUIRED"   (propertize "◐" 'face 'warning))
               (_ ""))))
 
+        (defun decknix--hub-wip-reply-icon (pr)
+          "Return a reply-needed icon for a WIP PR, or empty string.
+Shows 💬 when the most recent comment or review on the PR is from
+someone other than the current user (bot or human), indicating it
+needs a response."
+          (if (eq (alist-get 'needs_reply pr) t)
+              (propertize "💬" 'face '(:foreground "#d7af5f"))
+            ""))
+
         ;; -- Hub: status hint when daemon not running --
         (defun decknix--hub-has-data-p ()
           "Return non-nil if any hub data files exist and contain data."
@@ -6734,6 +6742,10 @@ Respects `decknix--hub-org-visibility'. Shows time since last update."
                              (rev-str (decknix--hub-wip-review-icon pr))
                              (ci-str (if (string-empty-p rev-str) ci-str
                                        (concat ci-str rev-str)))
+                             ;; Reply needed indicator
+                             (reply-str (decknix--hub-wip-reply-icon pr))
+                             (ci-str (if (string-empty-p reply-str) ci-str
+                                       (concat ci-str reply-str)))
                              (age (decknix--hub-format-age
                                    (alist-get 'updated pr)))
                              (max-title (max 8 (- (window-width) 20)))
