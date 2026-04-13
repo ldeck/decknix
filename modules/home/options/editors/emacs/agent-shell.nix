@@ -1149,25 +1149,26 @@ CONV-KEY, if provided, is used to register the new session-id under the
 existing conversation entry in the tag store."
           ;; Invalidate cache so next picker invocation fetches fresh data
           (setq decknix--agent-session-cache-time 0)
-          ;; Snapshot existing buffers so we can detect the new one
           (let* ((resume-args (list "--resume" session-id))
                  (ws-args (when (and workspace (file-directory-p workspace))
                             (list "--workspace-root" workspace)))
-                 (before-buffers (buffer-list))
                  (agent-shell-auggie-acp-command
-                  (append agent-shell-auggie-acp-command ws-args resume-args)))
-            ;; Set default-directory so agent-shell-cwd picks up the workspace
-            (let ((default-directory (if (and workspace
-                                              (file-directory-p workspace))
-                                         workspace
-                                       default-directory)))
-              (agent-shell-start
-               :config (agent-shell-auggie-make-agent-config)))
-            ;; agent-shell-start is async — it doesn't switch current-buffer.
-            ;; Use a timer to find the new buffer, rename it, and prepopulate.
+                  (append agent-shell-auggie-acp-command ws-args resume-args))
+                 ;; agent-shell-start returns the new buffer synchronously
+                 ;; (only the process setup is async).  Capturing it directly
+                 ;; avoids the race in `find-new-shell-buffer' when multiple
+                 ;; sessions are restored in quick succession.
+                 (shell-buf
+                  (let ((default-directory (if (and workspace
+                                                    (file-directory-p workspace))
+                                               workspace
+                                             default-directory)))
+                    (agent-shell-start
+                     :config (agent-shell-auggie-make-agent-config)))))
+            ;; Use a timer to rename and prepopulate once the process is ready.
             (let ((sid session-id)
                   (n history-count)
-                  (bufs before-buffers)
+                  (buf shell-buf)
                   (bname display-name)
                   (ws workspace)
                   (ck conv-key))
@@ -1182,8 +1183,8 @@ existing conversation entry in the tag store."
                1.5 nil
                (eval
                 `(lambda ()
-                   (let ((shell-buf (decknix--agent-find-new-shell-buffer ',bufs)))
-                     (if shell-buf
+                   (let ((shell-buf ,buf))
+                     (if (and shell-buf (buffer-live-p shell-buf))
                          (with-current-buffer shell-buf
                            (setq-local decknix--agent-auggie-session-id ,sid)
                            ;; Store conv-key for fast tag lookup in header-line
@@ -1206,7 +1207,9 @@ existing conversation entry in the tag store."
                                (set-window-point win (point-max)))))
                        (message "Could not find agent-shell buffer for session %s"
                                 (substring ,sid 0 8)))))
-                t)))))
+                t))
+              ;; Return the buffer so callers can use it directly
+              shell-buf)))
 
         (defun decknix--agent-conversation-hidden-p (conv-key)
           "Return non-nil if CONV-KEY is marked as hidden in agent-sessions.json.
@@ -6061,26 +6064,24 @@ session buffer in the main window after a short delay."
               (let ((main (window-main-window (selected-frame))))
                 (when (and main (window-live-p main))
                   (select-window main))
-                ;; Snapshot buffers before resume to detect the new one
-                (let ((before-buffers (buffer-list)))
-                  ;; Override display-action so agent-shell--display-buffer
-                  ;; places the new buffer in the main window instead of
-                  ;; splitting or creating an additional window.  The key
-                  ;; insight: `display-buffer-same-window' can fail when
-                  ;; the selected window changes during agent-shell--start,
-                  ;; so we use `display-buffer-use-some-window' with a
-                  ;; predicate that pins to `main'.
-                  (let ((agent-shell-display-action
-                         (if (and main (window-live-p main))
-                             (eval `(cons (lambda (buffer alist)
-                                           (let ((win ,main))
-                                             (when (window-live-p win)
-                                               (window--display-buffer buffer win
-                                                                       'reuse alist))))
-                                         nil)
-                                   t)
-                           agent-shell-display-action)))
-                    (decknix--agent-session-resume sid 20 display-name workspace conv-key))
+                ;; Override display-action so agent-shell--display-buffer
+                ;; places the new buffer in the main window instead of
+                ;; splitting or creating an additional window.
+                (let* ((agent-shell-display-action
+                        (if (and main (window-live-p main))
+                            (eval `(cons (lambda (buffer alist)
+                                          (let ((win ,main))
+                                            (when (window-live-p win)
+                                              (window--display-buffer buffer win
+                                                                      'reuse alist))))
+                                        nil)
+                                  t)
+                          agent-shell-display-action))
+                       ;; resume returns the new buffer directly — no
+                       ;; snapshot/find-new-buffer race when restoring
+                       ;; multiple sessions in quick succession.
+                       (new-buf (decknix--agent-session-resume
+                                 sid 20 display-name workspace conv-key)))
                   ;; Remove from previous list since it's now live
                   (setq decknix--sidebar-previous-sessions
                         (seq-filter (lambda (e)
@@ -6091,18 +6092,17 @@ session buffer in the main window after a short delay."
                   ;; Ensure the restored buffer ends up in the main window
                   ;; and receives focus.  The timer fires after agent-shell
                   ;; has finished async setup (rename, prepopulate).
-                  (when focus
+                  (when (and focus new-buf)
                     (run-at-time 2.0 nil
                       (eval `(lambda ()
-                               (let ((new-buf (decknix--agent-find-new-shell-buffer
-                                               ',before-buffers)))
-                                 (when new-buf
+                               (let ((buf ,new-buf))
+                                 (when (and buf (buffer-live-p buf))
                                    (let ((main (window-main-window (selected-frame))))
                                      (when (and main (window-live-p main))
-                                       (set-window-buffer main new-buf)
+                                       (set-window-buffer main buf)
                                        (select-window main)
                                        ;; Move to prompt so user is ready to type
-                                       (with-current-buffer new-buf
+                                       (with-current-buffer buf
                                          (goto-char (point-max)))
                                        (set-window-point main (point-max))))))) t))))))))
 
@@ -6712,8 +6712,19 @@ Returns \"pass\", \"running\", \"fail\", \"soft_fail\", or \"unknown\".
         ;; -- Hub: sidebar icon helper --
         (defun decknix--hub-icon (str face)
           "Create a sidebar icon from STR with FACE, scaled to fit line height.
-Applies a display height property so unicode glyphs don't stretch lines."
-          (propertize str 'face face 'display '(height 0.85)))
+Applies a display height property so unicode glyphs don't stretch lines.
+Emoji characters (detected by their Unicode range) get a more aggressive
+scale factor since the Apple Color Emoji font renders at ~2x line height."
+          (let* ((ch (and (> (length str) 0) (aref str 0)))
+                 (emoji-p (and ch (or
+                                   ;; Miscellaneous Symbols & Pictographs
+                                   (and (>= ch #x1F300) (<= ch #x1F9FF))
+                                   ;; Emoticons, Transport, Supplemental
+                                   (and (>= ch #x2600) (<= ch #x27BF))
+                                   ;; Dingbats
+                                   (and (>= ch #x2700) (<= ch #x27BF)))))
+                 (scale (if emoji-p 0.7 0.85)))
+            (propertize str 'face face 'display `(height ,scale))))
 
         ;; -- Hub: CI + mergeable icon --
         (defun decknix--hub-ci-icon (ci &optional mergeable)
@@ -6829,16 +6840,16 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                        (status-str (if (string-empty-p rev-str)
                                        ci-str
                                      (concat ci-str rev-str)))
-                       ;; @-mention indicator
+                       ;; @-mention indicator (use hub-icon for consistent line height)
                        (mention-str (if (eq (alist-get 'mentioned item) t)
-                                        (propertize "@" 'face '(:foreground "#d7af5f" :weight bold))
+                                        (decknix--hub-icon "@" '(:foreground "#d7af5f" :weight bold))
                                       ""))
                        (status-str (if (string-empty-p mention-str)
                                        status-str
                                      (concat status-str mention-str)))
-                       ;; Reply needed indicator
+                       ;; Reply needed indicator (use hub-icon for consistent line height)
                        (reply-str (if (eq (alist-get 'needs_reply item) t)
-                                      (propertize "💬" 'face '(:foreground "#d7af5f"))
+                                      (decknix--hub-icon "💬" '(:foreground "#d7af5f"))
                                     ""))
                        (status-str (if (string-empty-p reply-str)
                                        status-str
