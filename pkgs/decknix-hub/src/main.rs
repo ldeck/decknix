@@ -102,6 +102,10 @@ struct ReviewRequest {
     mergeable: Option<String>, // "MERGEABLE", "CONFLICTING", "UNKNOWN"
     #[serde(skip_serializing_if = "Option::is_none")]
     my_review: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "PENDING", "DISMISSED"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mentioned: Option<bool>, // true when @login appears in a comment body
+    #[serde(skip_serializing_if = "Option::is_none")]
+    needs_reply: Option<bool>, // true when latest comment/review is from someone else
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -406,21 +410,35 @@ struct GhReview {
     state: Option<String>,
 }
 
-/// Fetch CI status, mergeable state, and my latest review for a single PR.
-/// Returns (ci, mergeable, my_review).
+/// Result of fetching review-request PR details.
+struct ReviewPrDetails {
+    ci: Option<CiStatus>,
+    mergeable: Option<String>,
+    my_review: Option<String>,
+    mentioned: Option<bool>,
+    needs_reply: Option<bool>,
+}
+
+impl Default for ReviewPrDetails {
+    fn default() -> Self {
+        Self { ci: None, mergeable: None, my_review: None, mentioned: None, needs_reply: None }
+    }
+}
+
+/// Fetch CI status, mergeable state, review state, mention, and reply status.
 async fn fetch_pr_ci(
     repo: &str,
     number: u64,
     my_login: Option<&str>,
-) -> (Option<CiStatus>, Option<String>, Option<String>) {
+) -> ReviewPrDetails {
     let output = match gh_json(&[
         "pr", "view",
         &number.to_string(),
         "--repo", repo,
-        "--json", "statusCheckRollup,mergeable,mergeStateStatus,latestReviews",
+        "--json", "statusCheckRollup,mergeable,mergeStateStatus,latestReviews,comments,reviews",
     ]).await {
         Ok(o) => o,
-        Err(_) => return (None, None, None),
+        Err(_) => return ReviewPrDetails::default(),
     };
 
     #[derive(Deserialize)]
@@ -431,6 +449,8 @@ async fn fetch_pr_ci(
         #[allow(dead_code)]
         merge_state_status: Option<String>,
         latest_reviews: Option<Vec<GhReview>>,
+        comments: Option<Vec<GhComment>>,
+        reviews: Option<Vec<GhReviewEntry>>,
     }
 
     match serde_json::from_str::<PrView>(&output) {
@@ -447,9 +467,58 @@ async fn fetch_pr_ci(
                     })
                     .and_then(|r| r.state.clone())
             });
-            (ci, mergeable, my_review)
+            // Check for @-mentions and needs_reply
+            let (mentioned, needs_reply) = my_login.map(|login| {
+                let mention_pattern = format!("@{}", login);
+                let mention_pattern_lower = mention_pattern.to_lowercase();
+                // Scan comment and review bodies for @login
+                let mut found_mention = false;
+                let mut activities: Vec<(&str, bool)> = Vec::new();
+                if let Some(ref comments) = view.comments {
+                    for c in comments {
+                        if let Some(ref body) = c.body {
+                            if body.to_lowercase().contains(&mention_pattern_lower) {
+                                found_mention = true;
+                            }
+                        }
+                        if let Some(ref ts) = c.created_at {
+                            let is_me = c.author.as_ref()
+                                .map(|a| a.login.eq_ignore_ascii_case(login))
+                                .unwrap_or(false);
+                            activities.push((ts.as_str(), is_me));
+                        }
+                    }
+                }
+                if let Some(ref reviews) = view.reviews {
+                    for r in reviews {
+                        if let Some(ref body) = r.body {
+                            if body.to_lowercase().contains(&mention_pattern_lower) {
+                                found_mention = true;
+                            }
+                        }
+                        if let Some(ref ts) = r.submitted_at {
+                            let is_me = r.author.as_ref()
+                                .map(|a| a.login.eq_ignore_ascii_case(login))
+                                .unwrap_or(false);
+                            activities.push((ts.as_str(), is_me));
+                        }
+                    }
+                }
+                activities.sort_by_key(|(ts, _)| *ts);
+                let reply_needed = activities.last()
+                    .map(|(_, is_me)| !is_me)
+                    .unwrap_or(false);
+                (found_mention, reply_needed)
+            }).unwrap_or((false, false));
+            ReviewPrDetails {
+                ci,
+                mergeable,
+                my_review,
+                mentioned: Some(mentioned),
+                needs_reply: Some(needs_reply),
+            }
         }
-        Err(_) => (None, None, None),
+        Err(_) => ReviewPrDetails::default(),
     }
 }
 
@@ -486,8 +555,8 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         if archived.contains(&repo) {
             continue;
         }
-        // Fetch CI status + mergeable + my review state per PR
-        let (ci, mergeable, my_review) = fetch_pr_ci(
+        // Fetch CI + mergeable + review state + mention + reply status per PR
+        let details = fetch_pr_ci(
             &repo,
             pr.number,
             my_login.as_deref(),
@@ -506,9 +575,11 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             } else {
                 Some(pr.labels.iter().map(|l| l.name.clone()).collect())
             },
-            ci,
-            mergeable,
-            my_review,
+            ci: details.ci,
+            mergeable: details.mergeable,
+            my_review: details.my_review,
+            mentioned: details.mentioned,
+            needs_reply: details.needs_reply,
         });
     }
 
@@ -546,6 +617,7 @@ impl Default for PrDetails {
 struct GhComment {
     author: Option<GhAuthor>,
     created_at: Option<String>,
+    body: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -553,6 +625,7 @@ struct GhComment {
 struct GhReviewEntry {
     author: Option<GhAuthor>,
     submitted_at: Option<String>,
+    body: Option<String>,
 }
 
 /// Fetch branch, CI, mergeable, review decision, and reply status for a PR.
