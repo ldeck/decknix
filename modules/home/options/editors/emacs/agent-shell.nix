@@ -5551,6 +5551,10 @@ Press / to switch to consult filter mode."
                              (title (or (alist-get 'title pr) ""))
                              (ci-str (decknix--hub-ci-icon (alist-get 'ci pr)
                                                            (alist-get 'mergeable pr)))
+                             (rev-str (decknix--hub-wip-review-icon pr))
+                             (status-str (if (string-empty-p rev-str)
+                                             ci-str
+                                           (concat ci-str rev-str)))
                              (age (decknix--hub-format-age
                                    (alist-get 'updated pr)))
                              (short (if (> (length title) 28)
@@ -5566,7 +5570,7 @@ Press / to switch to consult filter mode."
                                transient--prefix
                                (list key
                                      (format "%3s %s#%d %s %s"
-                                             age repo number ci-str short)
+                                             age repo number status-str short)
                                      cmd))
                               children)
                         (setq idx (1+ idx)))))))
@@ -6562,6 +6566,18 @@ Shows whether the current user has already responded to this PR.
               ("PENDING"           (propertize "…" 'face 'warning))
               (_ ""))))
 
+        (defun decknix--hub-wip-review-icon (pr)
+          "Return a review decision icon for a WIP PR, or empty string.
+Shows the overall review status of the user's own PR:
+  ✓ = approved (green), ✗ = changes requested (red),
+  ◐ = review required (yellow), (none) = no review policy."
+          (let ((decision (alist-get 'review_decision pr)))
+            (pcase decision
+              ("APPROVED"          (propertize "✓" 'face 'success))
+              ("CHANGES_REQUESTED" (propertize "✗" 'face 'error))
+              ("REVIEW_REQUIRED"   (propertize "◐" 'face 'warning))
+              (_ ""))))
+
         ;; -- Hub: status hint when daemon not running --
         (defun decknix--hub-has-data-p ()
           "Return non-nil if any hub data files exist and contain data."
@@ -6714,6 +6730,10 @@ Respects `decknix--hub-org-visibility'. Shows time since last update."
                              ;; Combine CI indicators: GH + TC
                              (ci-str (if (string-empty-p tc-str) ci-str
                                        (concat ci-str tc-str)))
+                             ;; Review decision (approved/changes requested)
+                             (rev-str (decknix--hub-wip-review-icon pr))
+                             (ci-str (if (string-empty-p rev-str) ci-str
+                                       (concat ci-str rev-str)))
                              (age (decknix--hub-format-age
                                    (alist-get 'updated pr)))
                              (max-title (max 8 (- (window-width) 20)))

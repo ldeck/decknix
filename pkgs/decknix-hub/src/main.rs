@@ -144,6 +144,8 @@ struct WipPr {
     branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     updated: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    review_decision: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -521,17 +523,17 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
 // GitHub WIP Adapter
 // ---------------------------------------------------------------------------
 
-/// Fetch branch name, CI, and mergeable state for a PR via `gh pr view`.
-/// Returns (branch, ci, mergeable).
-async fn fetch_pr_details(repo: &str, number: u64) -> (Option<String>, Option<CiStatus>, Option<String>) {
+/// Fetch branch name, CI, mergeable state, and review decision for a PR.
+/// Returns (branch, ci, mergeable, review_decision).
+async fn fetch_pr_details(repo: &str, number: u64) -> (Option<String>, Option<CiStatus>, Option<String>, Option<String>) {
     let output = match gh_json(&[
         "pr", "view",
         &number.to_string(),
         "--repo", repo,
-        "--json", "headRefName,statusCheckRollup,mergeable,mergeStateStatus",
+        "--json", "headRefName,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision",
     ]).await {
         Ok(o) => o,
-        Err(_) => return (None, None, None),
+        Err(_) => return (None, None, None, None),
     };
 
     #[derive(Deserialize)]
@@ -542,11 +544,12 @@ async fn fetch_pr_details(repo: &str, number: u64) -> (Option<String>, Option<Ci
         mergeable: Option<String>,
         #[allow(dead_code)]
         merge_state_status: Option<String>,
+        review_decision: Option<String>,
     }
 
     match serde_json::from_str::<PrDetail>(&output) {
-        Ok(d) => (d.head_ref_name, summarise_ci(&d.status_check_rollup), d.mergeable),
-        Err(_) => (None, None, None),
+        Ok(d) => (d.head_ref_name, summarise_ci(&d.status_check_rollup), d.mergeable, d.review_decision),
+        Err(_) => (None, None, None, None),
     }
 }
 
@@ -596,8 +599,8 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
         if archived.contains(&repo) {
             continue;
         }
-        // Fetch branch + CI + mergeable per PR
-        let (branch, ci, mergeable) = fetch_pr_details(&repo, pr.number).await;
+        // Fetch branch + CI + mergeable + review decision per PR
+        let (branch, ci, mergeable, review_decision) = fetch_pr_details(&repo, pr.number).await;
         let entry = repo_map.entry(repo).or_default();
         let updated_ts = pr.updated_at.as_deref()
             .and_then(|s| s.parse::<DateTime<Utc>>().ok());
@@ -611,6 +614,7 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
             mergeable,
             branch,
             updated: updated_ts,
+            review_decision,
         });
     }
 
