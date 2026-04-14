@@ -8759,6 +8759,8 @@ Priority order:
                       (define-key map (kbd "h") 'decknix-agent-session-history)
                       (define-key map (kbd "y") 'decknix-agent-session-copy-id)
                       (define-key map (kbd "d") 'decknix-agent-session-toggle-id-display)
+                      (define-key map (kbd "l") 'decknix-agent-link-pr)
+                      (define-key map (kbd "u") 'decknix-agent-unlink-pr)
                       (local-set-key (kbd "C-c s") map))
                     ;; which-key labels for C-c s session sub-prefix
                     (when (fboundp 'which-key-add-key-based-replacements)
@@ -8769,7 +8771,9 @@ Priority order:
                         "C-c s q" "quit session"
                         "C-c s h" "history"
                         "C-c s y" "copy session ID"
-                        "C-c s d" "toggle ID display"))
+                        "C-c s d" "toggle ID display"
+                        "C-c s l" "link PR"
+                        "C-c s u" "unlink PR"))
                     ;; Conditional bindings (may not be loaded)
                     (when (fboundp 'agent-shell-manager-toggle)
                       (local-set-key (kbd "C-c m") 'agent-shell-manager-toggle))
