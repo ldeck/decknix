@@ -32,7 +32,7 @@ in
 
     port = mkOption {
       type = types.port;
-      default = 8080;
+      default = 58080;
       description = "Port the proxy listens on.";
     };
 
