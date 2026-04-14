@@ -719,6 +719,8 @@ Press q to dismiss."
             "C-c A c" "Commands"
             "C-c A c r" "review PR"
             "C-c A c B" "batch process"
+            "C-c A c l" "link PR"
+            "C-c A c u" "unlink PR"
             "C-c A c c" "run command"
             "C-c A c n" "new command"
             "C-c A c e" "edit command"
@@ -2541,6 +2543,85 @@ conversation that had no workspace stored."
               (puthash conv-key entry convs)
               (decknix--agent-tags-write store))))
 
+        ;; -- PR linking: store/retrieve linked PRs per conversation --
+        ;; Each PR link is a hash-table: {"url": "...", "type": "authored"|"subject",
+        ;;                                 "added": "auto"|"manual", "linked_at": "ISO"}
+
+        (defun decknix--agent-pr-parse-url (url)
+          "Parse a GitHub PR URL into (owner repo number) or nil."
+          (when (and url (string-match
+                         "github\\.com/\\([^/]+\\)/\\([^/]+\\)/pull/\\([0-9]+\\)"
+                         url))
+            (list (match-string 1 url)
+                  (match-string 2 url)
+                  (string-to-number (match-string 3 url)))))
+
+        (defun decknix--agent-linked-prs (conv-key)
+          "Return the list of linked PR alists for CONV-KEY."
+          (when conv-key
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (gethash conv-key convs)))
+              (when (hash-table-p entry)
+                (gethash "linked_prs" entry)))))
+
+        (defun decknix--agent-link-pr (conv-key url &optional pr-type added)
+          "Link PR at URL to conversation CONV-KEY.
+PR-TYPE is \"authored\" or \"subject\" (default: \"authored\").
+ADDED is \"auto\" or \"manual\" (default: \"manual\").
+No-op if URL is already linked."
+          (when (and conv-key url (decknix--agent-pr-parse-url url))
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (or (gethash conv-key convs)
+                              (let ((h (make-hash-table :test 'equal)))
+                                (puthash "tags" nil h)
+                                (puthash "sessions" nil h)
+                                h)))
+                   (existing (gethash "linked_prs" entry))
+                   (already (seq-find
+                             (lambda (pr)
+                               (equal (if (hash-table-p pr)
+                                          (gethash "url" pr)
+                                        (alist-get 'url pr))
+                                      url))
+                             existing)))
+              (unless already
+                (let ((pr-entry (make-hash-table :test 'equal)))
+                  (puthash "url" url pr-entry)
+                  (puthash "type" (or pr-type "authored") pr-entry)
+                  (puthash "added" (or added "manual") pr-entry)
+                  (puthash "linked_at"
+                           (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)
+                           pr-entry)
+                  (puthash "linked_prs" (append existing (list pr-entry)) entry)
+                  (puthash conv-key entry convs)
+                  (decknix--agent-tags-write store)
+                  t)))))
+
+        (defun decknix--agent-unlink-pr (conv-key url)
+          "Remove PR at URL from conversation CONV-KEY."
+          (when (and conv-key url)
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (gethash conv-key convs)))
+              (when (hash-table-p entry)
+                (let ((existing (gethash "linked_prs" entry)))
+                  (puthash "linked_prs"
+                           (seq-filter
+                            (lambda (pr)
+                              (not (equal (if (hash-table-p pr)
+                                              (gethash "url" pr)
+                                            (alist-get 'url pr))
+                                          url)))
+                            existing)
+                           entry)
+                  (decknix--agent-tags-write store))))))
+
+        (defun decknix--agent-pr-url-accessor (pr field)
+          "Get FIELD from PR link (supports both hash-table and alist)."
+          (if (hash-table-p pr) (gethash field pr) (alist-get (intern field) pr)))
+
         (defun decknix--agent-tags-all ()
           "Return a sorted list of all unique tags across all conversations."
           (let* ((store (decknix--agent-tags-read))
@@ -4317,6 +4398,87 @@ Comments start with #."
         (define-key decknix-agent-command-map (kbd "e") 'decknix-agent-command-edit)   ; Edit
         (define-key decknix-agent-command-map (kbd "r") 'decknix-agent-review-pr)      ; PR review
         (define-key decknix-agent-command-map (kbd "B") 'decknix-agent-batch-process)  ; Batch
+        (define-key decknix-agent-command-map (kbd "l") 'decknix-agent-link-pr)        ; Link PR
+        (define-key decknix-agent-command-map (kbd "u") 'decknix-agent-unlink-pr)      ; Unlink PR
+
+        ;; -- PR linking interactive commands --
+
+        (defun decknix--clipboard-github-pr-url ()
+          "Return clipboard content if it looks like a GitHub PR URL, else nil."
+          (let ((clip (ignore-errors
+                        (current-kill 0 t))))
+            (when (and clip (string-match-p
+                             "https://github\\.com/[^/]+/[^/]+/pull/[0-9]+"
+                             clip))
+              (string-trim clip))))
+
+        (defun decknix--agent-current-conv-key ()
+          "Get the conversation key for the current agent-shell buffer."
+          (when (derived-mode-p 'agent-shell-mode)
+            (when-let ((sid decknix--agent-auggie-session-id))
+              (let* ((store (decknix--agent-tags-read))
+                     (convs (decknix--agent-tags-conversations store)))
+                (catch 'found
+                  (maphash
+                   (lambda (key entry)
+                     (when (hash-table-p entry)
+                       (when (member sid (gethash "sessions" entry))
+                         (throw 'found key))))
+                   convs)
+                  nil)))))
+
+        (defun decknix-agent-link-pr ()
+          "Link a GitHub PR to the current session's conversation.
+Prompts for URL (defaults to clipboard if it looks like a PR URL).
+With prefix arg, prompts for PR type (authored/subject)."
+          (interactive)
+          (let* ((conv-key (decknix--agent-current-conv-key))
+                 (_ (unless conv-key
+                      (user-error "Not in an agent session buffer")))
+                 (default-url (decknix--clipboard-github-pr-url))
+                 (url (read-string
+                       (if default-url
+                           (format "PR URL [%s]: "
+                                   (truncate-string-to-width default-url 50))
+                         "PR URL: ")
+                       nil nil default-url))
+                 (_ (unless (decknix--agent-pr-parse-url url)
+                      (user-error "Not a valid GitHub PR URL")))
+                 (pr-type (if current-prefix-arg
+                              (completing-read "Type: " '("authored" "subject")
+                                               nil t nil nil "authored")
+                            "authored")))
+            (if (decknix--agent-link-pr conv-key url pr-type "manual")
+                (progn
+                  (message "Linked %s PR: %s" pr-type url)
+                  (when (get-buffer "*agent-shell-sidebar*")
+                    (agent-shell-workspace-sidebar-refresh)))
+              (message "PR already linked"))))
+
+        (defun decknix-agent-unlink-pr ()
+          "Unlink a GitHub PR from the current session's conversation."
+          (interactive)
+          (let* ((conv-key (decknix--agent-current-conv-key))
+                 (_ (unless conv-key
+                      (user-error "Not in an agent session buffer")))
+                 (linked (decknix--agent-linked-prs conv-key)))
+            (if (not linked)
+                (message "No linked PRs")
+              (let* ((entries (mapcar
+                               (lambda (pr)
+                                 (let ((url (decknix--agent-pr-url-accessor
+                                             pr "url"))
+                                       (tp (decknix--agent-pr-url-accessor
+                                            pr "type")))
+                                   (cons (format "[%s] %s" tp url) url)))
+                               linked))
+                     (choice (completing-read "Unlink PR: "
+                                              (mapcar #'car entries) nil t))
+                     (url (cdr (assoc choice entries))))
+                (decknix--agent-unlink-pr conv-key url)
+                (message "Unlinked: %s" url)
+                (when (get-buffer "*agent-shell-sidebar*")
+                  (agent-shell-workspace-sidebar-refresh))))))
 
         ;; == MCP server listing ==
 
@@ -4962,6 +5124,12 @@ so RIGHT group starts at column COL-WIDTH."
                            'face (if decknix--hub-show-bots
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
+              (cons "E" (format "PRs %s"
+                          (propertize
+                           (if decknix--hub-expand-prs "[expanded]" "[badges]")
+                           'face (if decknix--hub-expand-prs
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
               (cons "R" (format "review %s"
                           (propertize
                            (format "[%d]" (length (decknix--hub-review-ready-requests)))
@@ -5114,14 +5282,28 @@ Respects `decknix--sidebar-show-hidden' toggle."
                               (propertize name-box 'face '(:background "#3a1515"))
                             name-box))
                          (selection-indicator (if (eq buf selected) ">" " "))
+                         ;; PR badge (collapsed) — get conv-key for this buffer
+                         (buf-conv-key
+                          (with-current-buffer buf
+                            (decknix--agent-current-conv-key)))
+                         (pr-badge (if buf-conv-key
+                                       (decknix--hub-pr-badge buf-conv-key)
+                                     ""))
                          (line (concat selection-indicator " "
-                                      logo-box name-box-styled tile-indicator)))
+                                      logo-box name-box-styled tile-indicator
+                                      pr-badge)))
                     (setq line-num (1+ line-num))
                     (when (eq buf selected)
                       (setq target-line line-num))
                     (setq line (propertize line
                                           'agent-shell-workspace-buffer buf))
-                    (insert line "\n"))))
+                    (insert line "\n")
+                    ;; Expanded PR lines when toggle is on
+                    (when (and decknix--hub-expand-prs buf-conv-key)
+                      (let ((prs (decknix--agent-linked-prs buf-conv-key)))
+                        (dolist (pr prs)
+                          (insert (decknix--hub-pr-format-line pr) "\n")
+                          (setq line-num (1+ line-num))))))))
 
               ;; ── Previous sessions (greyed-out, from last exit) ──
               (when (fboundp 'decknix--sidebar-render-previous-sessions)
@@ -6258,6 +6440,9 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                    (cons 'show-bots
                          (when (boundp 'decknix--hub-show-bots)
                            decknix--hub-show-bots))
+                   (cons 'expand-prs
+                         (when (boundp 'decknix--hub-expand-prs)
+                           decknix--hub-expand-prs))
                    (cons 'previous-sessions live-info))))
             (make-directory (file-name-directory decknix--sidebar-state-file) t)
             (with-temp-file decknix--sidebar-state-file
@@ -6310,6 +6495,10 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                   (when (boundp 'decknix--hub-show-bots)
                     (setq decknix--hub-show-bots
                           (alist-get 'show-bots state)))
+                  ;; PR expand: restore toggle
+                  (when (boundp 'decknix--hub-expand-prs)
+                    (setq decknix--hub-expand-prs
+                          (alist-get 'expand-prs state)))
                   (when-let ((prev (alist-get 'previous-sessions state)))
                     (setq decknix--sidebar-previous-sessions prev)))
               (error
@@ -6347,14 +6536,28 @@ Returns updated LINE-NUM."
                        (short (if (string-match "\\*Auggie: \\(.*\\)\\*" name)
                                   (match-string 1 name)
                                 name))
+                       (prev-conv-key (alist-get 'conv-key entry))
+                       (pr-badge (if prev-conv-key
+                                     (decknix--hub-pr-badge prev-conv-key)
+                                   ""))
                        (line (concat "  "
                                      (propertize "○" 'face 'font-lock-comment-face)
                                      " "
-                                     (propertize short 'face 'font-lock-comment-face))))
+                                     (propertize short 'face 'font-lock-comment-face)
+                                     pr-badge)))
                   (setq line (propertize line
                                         'decknix-previous-session entry))
                   (insert line "\n")
-                  (setq line-num (1+ line-num))))))
+                  (setq line-num (1+ line-num))
+                  ;; Expanded PR lines when toggle is on
+                  (when (and decknix--hub-expand-prs prev-conv-key)
+                    (let ((prs (decknix--agent-linked-prs prev-conv-key)))
+                      (dolist (pr prs)
+                        (insert (propertize
+                                 (decknix--hub-pr-format-line pr)
+                                 'face 'font-lock-comment-face)
+                                "\n")
+                        (setq line-num (1+ line-num)))))))))
           line-num)
 
         ;; -- Previous sessions: restore action --
@@ -6565,7 +6768,9 @@ Re-reads only the changed file and refreshes the sidebar."
           (define-key agent-shell-workspace-sidebar-mode-map
             (kbd "M") #'decknix--hub-toggle-mention-filter)
           (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "B") #'decknix--hub-toggle-bot-filter))
+            (kbd "B") #'decknix--hub-toggle-bot-filter)
+          (define-key agent-shell-workspace-sidebar-mode-map
+            (kbd "E") #'decknix--hub-toggle-expand-prs))
 
         ;; Add Hub group to the sidebar transient
         ;; -- Hub: org filter (multi-select transient) --
@@ -6797,6 +7002,20 @@ When no filter is active (table is nil), all orgs are visible."
           (interactive)
           (call-interactively #'decknix--hub-toggle-bot-filter))
 
+        (transient-define-suffix decknix-sidebar-transient--expand-prs ()
+          :key "E"
+          :description
+          (lambda ()
+            (format "session PRs  %s"
+                    (propertize
+                     (if decknix--hub-expand-prs "[expanded]" "[badges]")
+                     'face (if decknix--hub-expand-prs
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-toggle-expand-prs))
+
         ;; Append Hub group after the Toggles group.
         ;; Use "W" (last key in Toggles) as the insertion anchor.
         (transient-append-suffix 'decknix-sidebar-transient "W"
@@ -6806,6 +7025,7 @@ When no filter is active (table is nil), all orgs are visible."
            (decknix-sidebar-transient--ci-filter)
            (decknix-sidebar-transient--mention-filter)
            (decknix-sidebar-transient--bot-filter)
+           (decknix-sidebar-transient--expand-prs)
            (decknix-sidebar-transient--launch-reviews)])
 
         (defun decknix--hub-item-visible-p (repo-full)
@@ -6990,6 +7210,143 @@ Always returns t when `decknix--hub-show-bots' is non-nil."
           (or decknix--hub-show-bots
               (not (decknix--hub-bot-author-p
                     (alist-get 'author item)))))
+
+        ;; -- Hub: PR expand toggle --
+        (defvar decknix--hub-expand-prs nil
+          "When non-nil, show linked PRs expanded under sessions in sidebar.")
+
+        (defun decknix--hub-toggle-expand-prs ()
+          "Toggle expanded/collapsed display of linked PRs under sessions."
+          (interactive)
+          (setq decknix--hub-expand-prs (not decknix--hub-expand-prs))
+          (when (get-buffer "*agent-shell-sidebar*")
+            (agent-shell-workspace-sidebar-refresh))
+          (message "Session PRs: %s"
+                   (if decknix--hub-expand-prs "expanded" "collapsed")))
+
+        ;; -- Hub: WIP join — look up live PR status from hub data --
+        (defun decknix--hub-pr-status (url)
+          "Look up live status of a GitHub PR URL from hub WIP data.
+Returns an alist with keys: state, ci-icon, ci-status, merged_at,
+review_decision, title, branch.  Returns nil if PR not in hub data."
+          (let ((parsed (decknix--agent-pr-parse-url url)))
+            (when parsed
+              (let ((owner (nth 0 parsed))
+                    (repo (nth 1 parsed))
+                    (number (nth 2 parsed))
+                    (full-repo (format "%s/%s" (nth 0 parsed) (nth 1 parsed))))
+                ;; Search WIP repos
+                (catch 'found
+                  (dolist (repo-group (or decknix--hub-wip '()))
+                    (when (equal (alist-get 'repo repo-group) full-repo)
+                      (dolist (pr (alist-get 'prs repo-group))
+                        (when (equal (alist-get 'number pr) number)
+                          (throw 'found
+                                 (list
+                                  (cons 'state (or (alist-get 'state pr) "OPEN"))
+                                  (cons 'ci-status
+                                        (alist-get 'status
+                                                   (alist-get 'ci pr)))
+                                  (cons 'merged_at (alist-get 'merged_at pr))
+                                  (cons 'review_decision
+                                        (alist-get 'review_decision pr))
+                                  (cons 'title (alist-get 'title pr))
+                                  (cons 'branch (alist-get 'branch pr))
+                                  (cons 'mergeable (alist-get 'mergeable pr))))))))
+                  ;; Also search review requests (for subject PRs)
+                  (dolist (item (or decknix--hub-reviews '()))
+                    (when (and (equal (alist-get 'repo item) full-repo)
+                               (equal (alist-get 'number item) number))
+                      (throw 'found
+                             (list
+                              (cons 'state "OPEN")
+                              (cons 'ci-status
+                                    (alist-get 'status
+                                               (alist-get 'ci item)))
+                              (cons 'title (alist-get 'title item))
+                              (cons 'mergeable (alist-get 'mergeable item))))))
+                  nil)))))
+
+        (defun decknix--hub-pr-format-line (pr-link &optional width)
+          "Format a single linked PR for sidebar display.
+PR-LINK is a hash-table or alist from agent-sessions.json.
+WIDTH is the available character width (default 40)."
+          (let* ((url (decknix--agent-pr-url-accessor pr-link "url"))
+                 (pr-type (decknix--agent-pr-url-accessor pr-link "type"))
+                 (parsed (decknix--agent-pr-parse-url url))
+                 (repo (nth 1 parsed))
+                 (number (nth 2 parsed))
+                 (status (decknix--hub-pr-status url))
+                 (state (or (alist-get 'state status) "?"))
+                 (ci (alist-get 'ci-status status))
+                 (merged-at (alist-get 'merged_at status))
+                 (w (or width 40))
+                 ;; Short repo name
+                 (short-repo (if (> (length repo) 15)
+                                 (substring repo 0 15)
+                               repo))
+                 ;; State indicator
+                 (state-str (cond
+                             ((string= state "MERGED")
+                              (propertize "✓merged"
+                                          'face 'font-lock-string-face))
+                             ((string= state "CLOSED")
+                              (propertize "✗closed"
+                                          'face 'font-lock-comment-face))
+                             ((string= state "OPEN")
+                              (propertize "open"
+                                          'face 'font-lock-warning-face))
+                             (t (propertize "?"
+                                            'face 'font-lock-comment-face))))
+                 ;; CI icon for open PRs
+                 (ci-str (when (string= state "OPEN")
+                           (cond
+                            ((string= ci "pass") (propertize "✓" 'face '(:foreground "#50fa7b")))
+                            ((string= ci "fail") (propertize "✗" 'face '(:foreground "#ff5555")))
+                            ((string= ci "running") (propertize "⟳" 'face 'font-lock-warning-face))
+                            (t ""))))
+                 ;; Type prefix for subject PRs
+                 (type-prefix (if (string= pr-type "subject") "⊳ " ""))
+                 ;; Age for merged PRs
+                 (age-str (when merged-at
+                            (concat " " (decknix--hub-format-age merged-at)))))
+            (format "    %s%s#%d %s%s%s"
+                    type-prefix short-repo number
+                    state-str
+                    (or ci-str "")
+                    (or age-str ""))))
+
+        (defun decknix--hub-pr-badge (conv-key)
+          "Return a compact PR badge string for CONV-KEY, or empty string.
+Shows count and summary like [2⬆ 1✓] (2 open, 1 merged)."
+          (let ((prs (decknix--agent-linked-prs conv-key)))
+            (if (not prs)
+                ""
+              (let ((n-open 0) (n-merged 0) (n-other 0))
+                (dolist (pr prs)
+                  (let* ((url (decknix--agent-pr-url-accessor pr "url"))
+                         (status (decknix--hub-pr-status url))
+                         (state (or (alist-get 'state status) "?")))
+                    (cond
+                     ((string= state "MERGED") (cl-incf n-merged))
+                     ((string= state "OPEN") (cl-incf n-open))
+                     (t (cl-incf n-other)))))
+                (let ((parts nil))
+                  (when (> n-open 0)
+                    (push (propertize (format "%d⬆" n-open)
+                                      'face 'font-lock-warning-face)
+                          parts))
+                  (when (> n-merged 0)
+                    (push (propertize (format "%d✓" n-merged)
+                                      'face 'font-lock-string-face)
+                          parts))
+                  (when (> n-other 0)
+                    (push (propertize (format "%d?" n-other)
+                                      'face 'font-lock-comment-face)
+                          parts))
+                  (if parts
+                      (format " [%s]" (string-join (nreverse parts) " "))
+                    ""))))))
 
         ;; -- Hub: age formatting --
         (defun decknix--hub-format-age (iso-time)
