@@ -4935,6 +4935,12 @@ so RIGHT group starts at column COL-WIDTH."
                            'face (if decknix--hub-mention-filter
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
+              (cons "B" (format "bots %s"
+                          (propertize
+                           (if decknix--hub-show-bots "[show]" "[hide]")
+                           'face (if decknix--hub-show-bots
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
               (cons "R" (format "review %s"
                           (propertize
                            (format "[%d]" (length (decknix--hub-review-ready-requests)))
@@ -5436,6 +5442,7 @@ Applies org, age, and CI visibility filters, then the ready predicate."
                (and (decknix--hub-item-visible-p (alist-get 'repo item))
                     (decknix--hub-age-visible-p (alist-get 'created item))
                     (decknix--hub-ci-visible-p item)
+                    (decknix--hub-bot-visible-p item)
                     (decknix--hub-request-ready-p item)))
              (or all-items '()))))
 
@@ -5630,7 +5637,8 @@ the review appears side-by-side with the current buffer."
                              (and (decknix--hub-item-visible-p (alist-get 'repo item))
                                   (decknix--hub-age-visible-p (alist-get 'created item))
                                   (decknix--hub-ci-visible-p item)
-                                  (decknix--hub-mention-visible-p item)))
+                                  (decknix--hub-mention-visible-p item)
+                                  (decknix--hub-bot-visible-p item)))
                            (or all-items '())))
                    (keys decknix--nav-keys))
               (append
@@ -5677,7 +5685,8 @@ Each candidate shows age, repo, PR number, CI status, and title."
                            (and (decknix--hub-item-visible-p (alist-get 'repo item))
                                 (decknix--hub-age-visible-p (alist-get 'created item))
                                 (decknix--hub-ci-visible-p item)
-                                (decknix--hub-mention-visible-p item)))
+                                (decknix--hub-mention-visible-p item)
+                                (decknix--hub-bot-visible-p item)))
                          (or all-items '()))))
             (if (not items)
                 (message "No review requests")
@@ -6054,6 +6063,9 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                    (cons 'mention-filter
                          (when (boundp 'decknix--hub-mention-filter)
                            decknix--hub-mention-filter))
+                   (cons 'show-bots
+                         (when (boundp 'decknix--hub-show-bots)
+                           decknix--hub-show-bots))
                    (cons 'previous-sessions live-info))))
             (make-directory (file-name-directory decknix--sidebar-state-file) t)
             (with-temp-file decknix--sidebar-state-file
@@ -6102,6 +6114,10 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                   (when (boundp 'decknix--hub-mention-filter)
                     (setq decknix--hub-mention-filter
                           (alist-get 'mention-filter state)))
+                  ;; Bot filter: restore toggle
+                  (when (boundp 'decknix--hub-show-bots)
+                    (setq decknix--hub-show-bots
+                          (alist-get 'show-bots state)))
                   (when-let ((prev (alist-get 'previous-sessions state)))
                     (setq decknix--sidebar-previous-sessions prev)))
               (error
@@ -6355,7 +6371,9 @@ Re-reads only the changed file and refreshes the sidebar."
           (define-key agent-shell-workspace-sidebar-mode-map
             (kbd "R") #'decknix-hub-launch-reviews)
           (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "M") #'decknix--hub-toggle-mention-filter))
+            (kbd "M") #'decknix--hub-toggle-mention-filter)
+          (define-key agent-shell-workspace-sidebar-mode-map
+            (kbd "B") #'decknix--hub-toggle-bot-filter))
 
         ;; Add Hub group to the sidebar transient
         ;; -- Hub: org filter (multi-select transient) --
@@ -6573,6 +6591,20 @@ When no filter is active (table is nil), all orgs are visible."
           (interactive)
           (call-interactively #'decknix--hub-toggle-mention-filter))
 
+        (transient-define-suffix decknix-sidebar-transient--bot-filter ()
+          :key "B"
+          :description
+          (lambda ()
+            (format "bots         %s"
+                    (propertize
+                     (if decknix--hub-show-bots "[show]" "[hide]")
+                     'face (if decknix--hub-show-bots
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-toggle-bot-filter))
+
         ;; Append Hub group after the Toggles group.
         ;; Use "W" (last key in Toggles) as the insertion anchor.
         (transient-append-suffix 'decknix-sidebar-transient "W"
@@ -6581,6 +6613,7 @@ When no filter is active (table is nil), all orgs are visible."
            (decknix-sidebar-transient--age-filter)
            (decknix-sidebar-transient--ci-filter)
            (decknix-sidebar-transient--mention-filter)
+           (decknix-sidebar-transient--bot-filter)
            (decknix-sidebar-transient--launch-reviews)])
 
         (defun decknix--hub-item-visible-p (repo-full)
@@ -6733,6 +6766,38 @@ Statuses: (g)reen=pass (l)int=soft_fail (y)ellow=running (?)grey=unknown (r)ed=f
 Always returns t when filter is disabled."
           (or (not decknix--hub-mention-filter)
               (eq (alist-get 'mentioned item) t)))
+
+        ;; -- Hub: bot filter --
+        (defvar decknix--hub-show-bots nil
+          "When nil (default), hide PRs authored by bots (e.g. dependabot).
+When non-nil, show all PRs including bot-authored ones.")
+
+        (defvar decknix--hub-bot-patterns
+          '("\\[bot\\]$" "^dependabot" "^renovate" "^greenkeeper")
+          "Regexps matched against the PR author to detect bot accounts.")
+
+        (defun decknix--hub-bot-author-p (author)
+          "Return non-nil if AUTHOR matches a known bot pattern."
+          (and author
+               (seq-some (lambda (pat)
+                           (string-match-p pat author))
+                         decknix--hub-bot-patterns)))
+
+        (defun decknix--hub-toggle-bot-filter ()
+          "Toggle visibility of bot-authored PRs (e.g. dependabot)."
+          (interactive)
+          (setq decknix--hub-show-bots (not decknix--hub-show-bots))
+          (when (get-buffer "*agent-shell-sidebar*")
+            (agent-shell-workspace-sidebar-refresh))
+          (message "Bot PRs: %s"
+                   (if decknix--hub-show-bots "shown" "hidden")))
+
+        (defun decknix--hub-bot-visible-p (item)
+          "Return non-nil if ITEM passes the bot filter.
+Always returns t when `decknix--hub-show-bots' is non-nil."
+          (or decknix--hub-show-bots
+              (not (decknix--hub-bot-author-p
+                    (alist-get 'author item)))))
 
         ;; -- Hub: age formatting --
         (defun decknix--hub-format-age (iso-time)
@@ -6905,12 +6970,14 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                            (and (decknix--hub-item-visible-p (alist-get 'repo item))
                                 (decknix--hub-age-visible-p (alist-get 'created item))
                                 (decknix--hub-ci-visible-p item)
-                                (decknix--hub-mention-visible-p item)))
+                                (decknix--hub-mention-visible-p item)
+                                (decknix--hub-bot-visible-p item)))
                          (or all-items '()))))
             (when items
               (decknix--sidebar-render-section-header
-               (format "Requests (%d)%s" (length items)
-                       (if decknix--hub-mention-filter " @" "")))
+               (format "Requests (%d)%s%s" (length items)
+                       (if decknix--hub-mention-filter " @" "")
+                       (if decknix--hub-show-bots " 🤖" "")))
               (setq line-num (1+ line-num))
               (dolist (item items)
                 (let* ((age (decknix--hub-format-age
