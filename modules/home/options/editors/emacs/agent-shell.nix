@@ -1393,6 +1393,11 @@ Shows: id  age  exchanges  preview [tags] (N sessions) @workspace"
                   (when cand
                     (let ((buf (gethash cand decknix--session-picker-live-map)))
                       (when (and buf (buffer-live-p buf))
+                        ;; Select main window first so the buffer doesn't
+                        ;; try to display in the dedicated sidebar window.
+                        (let ((main (window-main-window (selected-frame))))
+                          (when (and main (window-live-p main))
+                            (select-window main)))
                         (switch-to-buffer buf))))))
           "Consult multi-source for live agent-shell buffers.")
 
@@ -1465,11 +1470,26 @@ Shows: id  age  exchanges  preview [tags] (N sessions) @workspace"
                             (when (and conv-key workspace)
                               (decknix--agent-session-save-workspace-for-conv-key
                                conv-key workspace)))
-                          (decknix--agent-session-resume
-                           (alist-get 'sessionId session)
-                           decknix-agent-session-history-count
-                           (decknix--agent-session-display-name session)
-                           workspace conv-key)))))))
+                          ;; Select main window and override display-action
+                          ;; so the buffer displays there (not in the sidebar).
+                          (let ((main (window-main-window (selected-frame))))
+                            (when (and main (window-live-p main))
+                              (select-window main))
+                            (let ((agent-shell-display-action
+                                   (if (and main (window-live-p main))
+                                       (eval `(cons (lambda (buffer alist)
+                                                      (let ((win ,main))
+                                                        (when (window-live-p win)
+                                                          (window--display-buffer
+                                                           buffer win 'reuse alist))))
+                                                    nil)
+                                             t)
+                                     agent-shell-display-action)))
+                              (decknix--agent-session-resume
+                               (alist-get 'sessionId session)
+                               decknix-agent-session-history-count
+                               (decknix--agent-session-display-name session)
+                               workspace conv-key)))))))))
           "Consult multi-source for saved auggie sessions.")
 
         (defvar decknix--session-picker-previous-map nil
