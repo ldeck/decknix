@@ -4881,7 +4881,8 @@ so RIGHT group starts at column COL-WIDTH."
              ("w"   . "wip")
              ("l"   . "live"))
            (when decknix--sidebar-previous-sessions
-             '(("p"   . "previous")))
+             '(("p"   . "restore…")
+               ("P"   . "restore all")))
            '(("s"   . "sessions…"))))
 
         (defun decknix--sidebar-footer-quick-keys ()
@@ -5370,8 +5371,8 @@ agent-sessions.json to restore."
            ("g" "Grep"           decknix-agent-session-grep)
            ("r" "Recent"         decknix-agent-session-recent)]
           ["Previous"
-           ("p" "Pick previous"   decknix-sidebar-goto-previous)
-           ("A" "Restore all"     decknix--sidebar-restore-all-previous)])
+           ("p" "Restore…"        decknix-sidebar-goto-previous)
+           ("P" "Restore all"     decknix--sidebar-restore-all-previous)])
 
         ;; -- Actions prefix keymap (a …) --
         ;; Displaced commands that gave up their top-level keys to
@@ -5849,7 +5850,8 @@ Each candidate shows age, repo, PR number, CI status, and title."
                   (decknix--nav-live-item-actions buf))))))
 
         (defun decknix-sidebar-nav-previous-consult ()
-          "Pick a previous session to restore via consult completion."
+          "Pick a previous session to restore via consult completion.
+RET restores the selected session.  C-g cancels."
           (interactive)
           (let* ((live-bufs (seq-filter #'buffer-live-p
                                         (when (fboundp 'agent-shell-buffers)
@@ -5882,11 +5884,11 @@ Each candidate shows age, repo, PR number, CI status, and title."
                    prev)))
             (if (not entries)
                 (message "No previous sessions")
-              (let* ((choice (completing-read "Previous: "
+              (let* ((choice (completing-read "Restore previous (C-g cancel): "
                                (mapcar #'car entries) nil t))
                      (entry (cdr (assoc choice entries))))
                 (when entry
-                  (decknix--nav-previous-item-actions entry))))))
+                  (decknix--sidebar-restore-previous-session entry t))))))
 
         (transient-define-prefix decknix-sidebar-nav-requests-keys ()
           "Pick a PR review request via shortcut keys."
