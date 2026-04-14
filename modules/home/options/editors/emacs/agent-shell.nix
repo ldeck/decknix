@@ -5466,75 +5466,107 @@ Applies org, age, and CI visibility filters, then the ready predicate."
                     (decknix--hub-request-ready-p item)))
              (or all-items '()))))
 
-        (defun decknix-hub-launch-reviews (_n)
-          "Interactively pick review-ready PRs and launch review sessions.
-Shows a consult completion list of ready reviews (most recent first).
-Mark multiple candidates with `embark-select' (SPC or C-SPC in vertico)
-then confirm, or simply pick one.  Then prompts for layout.
-Ready = CI passing (or soft-fail), not conflicting, not draft,
-not already reviewed by me."
-          (interactive "p")
+        (defun decknix--hub-review-entries ()
+          "Build labelled (LABEL . ITEM) entries from ready review requests.
+Sorted most-recent first."
           (let* ((ready (decknix--hub-review-ready-requests))
-                 ;; Sort most-recent first by created timestamp
                  (sorted (sort (copy-sequence ready)
                                (lambda (a b)
                                  (string> (or (alist-get 'created a) "")
-                                          (or (alist-get 'created b) "")))))
-                 ;; Build labelled candidates
-                 (entries
-                  (mapcar
-                   (lambda (item)
-                     (let* ((age (decknix--hub-format-age
-                                  (alist-get 'created item)))
-                            (repo-full (or (alist-get 'repo item) ""))
-                            (repo (car (last (split-string repo-full "/"))))
-                            (number (alist-get 'number item))
-                            (title (or (alist-get 'title item) ""))
-                            (ci-str (decknix--hub-ci-icon
-                                     (alist-get 'ci item)
-                                     (alist-get 'mergeable item)))
-                            (label (format "%3s %s#%d %s %s"
-                                           age repo number ci-str title)))
-                       (cons label item)))
-                   sorted)))
+                                          (or (alist-get 'created b) ""))))))
+            (mapcar
+             (lambda (item)
+               (let* ((age (decknix--hub-format-age
+                            (alist-get 'created item)))
+                      (repo-full (or (alist-get 'repo item) ""))
+                      (repo (car (last (split-string repo-full "/"))))
+                      (number (alist-get 'number item))
+                      (title (or (alist-get 'title item) ""))
+                      (ci-str (decknix--hub-ci-icon
+                               (alist-get 'ci item)
+                               (alist-get 'mergeable item)))
+                      (label (format "%3s %s#%d %s %s"
+                                     age repo number ci-str title)))
+                 (cons label item)))
+             sorted)))
+
+        (defun decknix--hub-launch-review-items (items split-p)
+          "Launch review sessions for ITEMS.
+When SPLIT-P is non-nil, tile subsequent reviews side-by-side."
+          (let ((launched 0)
+                (count (length items)))
+            (dolist (item items)
+              (let ((url (alist-get 'url item)))
+                (when url
+                  (if (and split-p (> launched 0))
+                      (decknix--nav-hub-start-review-split url)
+                    (decknix--nav-hub-start-review url))
+                  (setq launched (1+ launched))
+                  (when (> count 1) (sit-for 0.3)))))
+            (message "Launched %d review%s%s"
+                     launched (if (= launched 1) "" "s")
+                     (if split-p " [split]" ""))))
+
+        (defun decknix-hub-launch-reviews (arg)
+          "Launch review sessions for ready PRs.
+
+R       — pick one via consult, prompt for layout
+C-u R   — launch ALL ready reviews, prompt for layout
+C-u N R — pick N via consult (embark-select to mark, RET to confirm),
+          then prompt for layout."
+          (interactive "P")
+          (let ((entries (decknix--hub-review-entries)))
             (if (not entries)
                 (message "No review-ready requests")
-              ;; Use completing-read-multiple for multi-select.
-              ;; In vertico/consult this provides live filtering and
-              ;; SPC/crm-separator to pick multiple candidates.
-              (let* ((crm-separator ",")
-                     (selected (completing-read-multiple
-                                (format "Review (%d ready, pick with comma): "
-                                        (length entries))
+              (cond
+               ;; C-u: launch all
+               ((equal arg '(4))
+                (let* ((count (length entries))
+                       (choice (read-char-choice
+                                (format "Launch all %d review%s: [s]plit  [r]eplace  [q]uit "
+                                        count (if (= count 1) "" "s"))
+                                '(?s ?r ?q))))
+                  (unless (eq choice ?q)
+                    (decknix--hub-launch-review-items
+                     (mapcar #'cdr entries) (eq choice ?s)))))
+               ;; Numeric prefix (C-u N): multi-select via embark
+               ((and (integerp arg) (> arg 1))
+                (let ((selected nil)
+                      (remaining (mapcar #'car entries)))
+                  ;; Collect up to ARG selections
+                  (catch 'done
+                    (dotimes (i arg)
+                      (if (not remaining)
+                          (throw 'done nil)
+                        (let* ((prompt (format "Review %d/%d (%d ready): "
+                                              (1+ i) arg (length remaining)))
+                               (choice (completing-read prompt remaining nil t)))
+                          (when choice
+                            (push (cdr (assoc choice entries)) selected)
+                            (setq remaining (delete choice remaining)))))))
+                  (setq selected (nreverse selected))
+                  (when selected
+                    (let* ((count (length selected))
+                           (choice (read-char-choice
+                                    (format "%d review%s: [s]plit  [r]eplace  [q]uit "
+                                            count (if (= count 1) "" "s"))
+                                    '(?s ?r ?q))))
+                      (unless (eq choice ?q)
+                        (decknix--hub-launch-review-items
+                         selected (eq choice ?s)))))))
+               ;; No prefix: single pick
+               (t
+                (let* ((choice (completing-read
+                                (format "Review (%d ready): " (length entries))
                                 (mapcar #'car entries) nil t))
-                     (to-review
-                      (seq-filter
-                       #'identity
-                       (mapcar (lambda (s)
-                                 (cdr (assoc (string-trim s) entries)))
-                               selected)))
-                     (count (length to-review)))
-                (when (> count 0)
-                  ;; Prompt for layout
-                  (let* ((choice (read-char-choice
-                                  (format "%d review%s: [s]plit side-by-side  [r]eplace buffer  [q]uit "
-                                          count (if (= count 1) "" "s"))
-                                  '(?s ?r ?q)))
-                         (split-p (eq choice ?s)))
-                    (unless (eq choice ?q)
-                      (let ((launched 0))
-                        (dolist (item to-review)
-                          (let ((url (alist-get 'url item)))
-                            (when url
-                              (if (and split-p (> launched 0))
-                                  (decknix--nav-hub-start-review-split url)
-                                (decknix--nav-hub-start-review url))
-                              (setq launched (1+ launched))
-                              (when (> count 1) (sit-for 0.3)))))
-                        (message "Launched %d review%s (%d ready)%s"
-                                 launched (if (= launched 1) "" "s")
-                                 (length ready)
-                                 (if split-p " [split]" ""))))))))))
+                       (item (cdr (assoc choice entries))))
+                  (when item
+                    (let ((choice (read-char-choice
+                                   "Layout: [s]plit  [r]eplace  [q]uit "
+                                   '(?s ?r ?q))))
+                      (unless (eq choice ?q)
+                        (decknix--hub-launch-review-items
+                         (list item) (eq choice ?s)))))))))))
 
         (defun decknix--nav-hub-start-review-split (url)
           "Start a PR review session for URL in a new split window.
@@ -5691,8 +5723,8 @@ the review appears side-by-side with the current buffer."
                (list (transient-parse-suffix transient--prefix
                        '("q" "Back" transient-quit-one)))))))
 
-        (defvar decknix--nav-requests-mode 'keys
-          "Default selection mode for Requests: `keys' (transient) or `consult'.")
+        ;; -- Consult-based section pickers --
+        ;; All section navigation (r, w, l, p) uses consult for filtering.
 
         (defun decknix-sidebar-nav-requests-consult ()
           "Pick a PR review request via consult completion with filtering.
@@ -5737,36 +5769,129 @@ Each candidate shows age, repo, PR number, CI status, and title."
                   (let ((tagged (cons (cons 'decknix-type 'review) item)))
                     (decknix--nav-hub-item-actions tagged)))))))
 
-        (defun decknix-sidebar-nav-requests-dispatch ()
-          "Dispatch to requests listing in the current mode (keys or consult)."
+        (defun decknix-sidebar-nav-wip-consult ()
+          "Pick a WIP PR via consult completion with filtering."
           (interactive)
-          (pcase decknix--nav-requests-mode
-            ('consult (decknix-sidebar-nav-requests-consult))
-            (_ (decknix-sidebar-nav-requests-keys))))
+          (let* ((data (when (boundp 'decknix--hub-wip) decknix--hub-wip))
+                 (all-repos (when data (alist-get 'repos data)))
+                 (entries nil))
+            ;; Flatten repos → PRs into a single list of labelled entries
+            (dolist (repo-entry all-repos)
+              (let* ((repo-full (or (alist-get 'repo repo-entry) ""))
+                     (repo (car (last (split-string repo-full "/")))))
+                (when (decknix--hub-item-visible-p repo-full)
+                  (dolist (pr (alist-get 'prs repo-entry))
+                    (when (decknix--hub-age-visible-p (alist-get 'updated pr))
+                      (let* ((number (alist-get 'number pr))
+                             (title (or (alist-get 'title pr) ""))
+                             (pr-state (or (alist-get 'state pr) "OPEN"))
+                             (merged-p (string= pr-state "MERGED"))
+                             (ci (alist-get 'ci pr))
+                             (mergeable (alist-get 'mergeable pr))
+                             (ci-str (if merged-p
+                                        (decknix--hub-icon "⏣" 'font-lock-constant-face)
+                                      (decknix--hub-ci-icon ci mergeable)))
+                             (rev-str (unless merged-p
+                                        (decknix--hub-wip-review-icon pr)))
+                             (reply-str (unless merged-p
+                                          (decknix--hub-wip-reply-icon pr)))
+                             (status-str (concat ci-str
+                                                 (or rev-str "")
+                                                 (or reply-str "")))
+                             (age (decknix--hub-format-age
+                                   (or (alist-get 'merged_at pr)
+                                       (alist-get 'updated pr))))
+                             (label (format "%3s %s#%d %s %s"
+                                           age repo number status-str title))
+                             (tagged (append
+                                      (list (cons 'decknix-type 'wip)
+                                            (cons 'repo repo-full))
+                                      pr)))
+                        (push (cons label tagged) entries)))))))
+            (if (not entries)
+                (message "No WIP items")
+              (setq entries (nreverse entries))
+              (let* ((choice (completing-read "WIP: "
+                               (mapcar #'car entries) nil t))
+                     (item (cdr (assoc choice entries))))
+                (when item
+                  (decknix--nav-hub-item-actions item))))))
 
-        (defun decknix-sidebar-nav-requests-switch-to-consult ()
-          "Switch from keys mode to consult completion for this request list."
+        (defun decknix-sidebar-nav-live-consult ()
+          "Pick a live agent-shell session via consult completion."
           (interactive)
-          (transient-quit-one)
-          (run-at-time 0.05 nil #'decknix-sidebar-nav-requests-consult))
+          (let* ((buffers (seq-filter #'buffer-live-p
+                                      (when (fboundp 'agent-shell-buffers)
+                                        (agent-shell-buffers))))
+                 (entries
+                  (mapcar
+                   (lambda (buf)
+                     (let* ((name (buffer-name buf))
+                            (short (replace-regexp-in-string
+                                    "\\`\\*[^:]*: *\\|\\*\\'" "" name))
+                            ;; Add workspace info for disambiguation
+                            (ws (when (buffer-live-p buf)
+                                  (with-current-buffer buf
+                                    (abbreviate-file-name default-directory))))
+                            (label (if ws
+                                       (format "%s  @%s" short
+                                               (if (string-match "/\\([^/]+\\)/?$" ws)
+                                                   (match-string 1 ws) ws))
+                                     short)))
+                       (cons label buf)))
+                   buffers)))
+            (if (not entries)
+                (message "No live sessions")
+              (let* ((choice (completing-read "Live: "
+                               (mapcar #'car entries) nil t))
+                     (buf (cdr (assoc choice entries))))
+                (when buf
+                  (decknix--nav-live-item-actions buf))))))
 
-        (defun decknix-sidebar-toggle-requests-mode ()
-          "Toggle default request selection mode between keys and consult."
+        (defun decknix-sidebar-nav-previous-consult ()
+          "Pick a previous session to restore via consult completion."
           (interactive)
-          (setq decknix--nav-requests-mode
-                (if (eq decknix--nav-requests-mode 'consult) 'keys 'consult))
-          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-            (agent-shell-workspace-sidebar-refresh))
-          (message "Request selection: %s"
-                   (if (eq decknix--nav-requests-mode 'consult)
-                       "consult (filter)" "keys (shortcut)")))
+          (let* ((live-bufs (seq-filter #'buffer-live-p
+                                        (when (fboundp 'agent-shell-buffers)
+                                          (agent-shell-buffers))))
+                 (live-sids (mapcar #'decknix--agent-buffer-session-id
+                                     live-bufs))
+                 (prev (seq-filter
+                        (lambda (e)
+                          (not (member (alist-get 'session-id e) live-sids)))
+                        (or decknix--sidebar-previous-sessions '())))
+                 (entries
+                  (mapcar
+                   (lambda (entry)
+                     (let* ((name (or (alist-get 'name entry) "unknown"))
+                            (short (if (string-match "\\*Auggie: \\(.*\\)\\*" name)
+                                       (match-string 1 name) name))
+                            (ws (alist-get 'workspace entry))
+                            (tags (alist-get 'tags entry))
+                            (ws-str (if ws
+                                        (let ((abbr (abbreviate-file-name ws)))
+                                          (if (string-match "/\\([^/]+\\)/?$" abbr)
+                                              (match-string 1 abbr) abbr))
+                                      "?"))
+                            (tag-str (if tags
+                                        (mapconcat
+                                         (lambda (tg) (concat "#" tg)) tags " ")
+                                      ""))
+                            (label (format "%s  @%s %s" short ws-str tag-str)))
+                       (cons label entry)))
+                   prev)))
+            (if (not entries)
+                (message "No previous sessions")
+              (let* ((choice (completing-read "Previous: "
+                               (mapcar #'car entries) nil t))
+                     (entry (cdr (assoc choice entries))))
+                (when entry
+                  (decknix--nav-previous-item-actions entry))))))
 
         (transient-define-prefix decknix-sidebar-nav-requests-keys ()
-          "Pick a PR review request via shortcut keys.
-Press / to switch to consult filter mode."
+          "Pick a PR review request via shortcut keys."
           [:class transient-column
-           :setup-children decknix--nav-requests-children]
-          ["" ("/" "filter mode" decknix-sidebar-nav-requests-switch-to-consult)])
+           :setup-children decknix--nav-requests-children])
 
         ;; -- Section: WIP --
         (defun decknix--nav-wip-children (_)
@@ -5962,32 +6087,29 @@ exits, focus returns to the sidebar."
 
         ;; -- Dispatch commands for section keys --
         (defun decknix-sidebar-goto-requests ()
-          "Navigate to hub Requests items."
+          "Navigate to hub Requests items via consult."
           (interactive)
           (if (and (fboundp 'decknix--hub-has-data-p) (decknix--hub-has-data-p))
-              (pcase decknix--nav-requests-mode
-                ('consult (decknix-sidebar-nav-requests-consult))
-                (_ (decknix--sidebar-call-transient
-                    #'decknix-sidebar-nav-requests-keys)))
+              (decknix-sidebar-nav-requests-consult)
             (message "Hub: no data — enable with decknix.services.hub.enable = true")))
 
         (defun decknix-sidebar-goto-wip ()
-          "Navigate to hub WIP items."
+          "Navigate to hub WIP items via consult."
           (interactive)
           (if (and (fboundp 'decknix--hub-has-data-p) (decknix--hub-has-data-p))
-              (decknix--sidebar-call-transient #'decknix-sidebar-nav-wip)
+              (decknix-sidebar-nav-wip-consult)
             (message "Hub: no data — enable with decknix.services.hub.enable = true")))
 
         (defun decknix-sidebar-goto-live ()
-          "Navigate to live sessions."
+          "Navigate to live sessions via consult."
           (interactive)
-          (decknix--sidebar-call-transient #'decknix-sidebar-nav-live))
+          (decknix-sidebar-nav-live-consult))
 
         (defun decknix-sidebar-goto-previous ()
-          "Navigate to previous (restorable) sessions."
+          "Navigate to previous (restorable) sessions via consult."
           (interactive)
           (if decknix--sidebar-previous-sessions
-              (decknix--sidebar-call-transient #'decknix-sidebar-nav-previous)
+              (decknix-sidebar-nav-previous-consult)
             (message "No previous sessions")))
 
         ;; -- Bind keys in sidebar mode --
