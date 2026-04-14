@@ -605,11 +605,12 @@ struct PrDetails {
     mergeable: Option<String>,
     review_decision: Option<String>,
     needs_reply: Option<bool>,
+    merged_at: Option<String>,
 }
 
 impl Default for PrDetails {
     fn default() -> Self {
-        Self { branch: None, ci: None, mergeable: None, review_decision: None, needs_reply: None }
+        Self { branch: None, ci: None, mergeable: None, review_decision: None, needs_reply: None, merged_at: None }
     }
 }
 
@@ -636,7 +637,7 @@ async fn fetch_pr_details(repo: &str, number: u64, my_login: Option<&str>) -> Pr
         "pr", "view",
         &number.to_string(),
         "--repo", repo,
-        "--json", "headRefName,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision,comments,reviews",
+        "--json", "headRefName,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision,comments,reviews,mergedAt",
     ]).await {
         Ok(o) => o,
         Err(_) => return PrDetails::default(),
@@ -653,6 +654,7 @@ async fn fetch_pr_details(repo: &str, number: u64, my_login: Option<&str>) -> Pr
         review_decision: Option<String>,
         comments: Option<Vec<GhComment>>,
         reviews: Option<Vec<GhReviewEntry>>,
+        merged_at: Option<String>,
     }
 
     match serde_json::from_str::<PrDetail>(&output) {
@@ -691,6 +693,7 @@ async fn fetch_pr_details(repo: &str, number: u64, my_login: Option<&str>) -> Pr
                 mergeable: d.mergeable,
                 review_decision: d.review_decision,
                 needs_reply,
+                merged_at: d.merged_at,
             }
         }
         Err(_) => PrDetails::default(),
@@ -698,6 +701,8 @@ async fn fetch_pr_details(repo: &str, number: u64, my_login: Option<&str>) -> Pr
 }
 
 /// Intermediate struct for gh search output (WIP PRs).
+/// Note: `mergedAt` is NOT available in `gh search prs` — only in `gh pr view`.
+/// We fetch it from `fetch_pr_details` instead.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GhMyPr {
@@ -707,7 +712,6 @@ struct GhMyPr {
     state: String,
     is_draft: Option<bool>,
     updated_at: Option<String>,
-    merged_at: Option<String>,
     repository: Option<GhRepo>,
 }
 
@@ -715,7 +719,7 @@ struct GhMyPr {
 /// Merged PRs are included for up to 7 days after merge, allowing the
 /// sidebar to track them until they are deployed.
 async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
-    let json_fields = "number,title,url,state,isDraft,updatedAt,mergedAt,repository";
+    let json_fields = "number,title,url,state,isDraft,updatedAt,repository";
 
     // 1. Open PRs
     let open_output = gh_json(&[
@@ -786,7 +790,7 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
         let entry = repo_map.entry(repo).or_default();
         let updated_ts = pr.updated_at.as_deref()
             .and_then(|s| s.parse::<DateTime<Utc>>().ok());
-        let merged_ts = pr.merged_at.as_deref()
+        let merged_ts = details.merged_at.as_deref()
             .and_then(|s| s.parse::<DateTime<Utc>>().ok());
         entry.push(WipPr {
             number: pr.number,
