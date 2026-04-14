@@ -5849,9 +5849,15 @@ Each candidate shows age, repo, PR number, CI status, and title."
                 (when buf
                   (decknix--nav-live-item-actions buf))))))
 
+        (defvar decknix--sidebar-previous-restore-mode nil
+          "Internal flag: nil = single restore, 'all = restore all visible.")
+        (defvar decknix--sidebar-previous-visible-candidates nil
+          "Captured list of visible candidate strings from vertico at M-RET time.")
+
         (defun decknix-sidebar-nav-previous-consult ()
-          "Pick a previous session to restore via consult completion.
-RET restores the selected session.  C-g cancels."
+          "Pick previous sessions to restore via completing-read.
+RET restores the selected session.  M-RET restores all currently
+visible (filtered) candidates.  C-g cancels."
           (interactive)
           (let* ((live-bufs (seq-filter #'buffer-live-p
                                         (when (fboundp 'agent-shell-buffers)
@@ -5884,11 +5890,53 @@ RET restores the selected session.  C-g cancels."
                    prev)))
             (if (not entries)
                 (message "No previous sessions")
-              (let* ((choice (completing-read "Restore previous (C-g cancel): "
-                               (mapcar #'car entries) nil t))
-                     (entry (cdr (assoc choice entries))))
-                (when entry
-                  (decknix--sidebar-restore-previous-session entry t))))))
+              (setq decknix--sidebar-previous-restore-mode nil)
+              (setq decknix--sidebar-previous-visible-candidates nil)
+              (let* ((choice
+                      (minibuffer-with-setup-hook
+                          (lambda ()
+                            (let ((map (make-sparse-keymap)))
+                              (define-key map (kbd "M-RET")
+                                (lambda () (interactive)
+                                  (setq decknix--sidebar-previous-restore-mode 'all)
+                                  ;; Capture vertico's filtered candidates while
+                                  ;; still inside the minibuffer (they are
+                                  ;; buffer-local and vanish on exit).
+                                  (setq decknix--sidebar-previous-visible-candidates
+                                        (when (boundp 'vertico--candidates)
+                                          (copy-sequence vertico--candidates)))
+                                  (exit-minibuffer)))
+                              (use-local-map
+                               (make-composed-keymap map (current-local-map)))))
+                        (completing-read
+                         "Restore (RET=one  M-RET=all visible  C-g=cancel): "
+                         (mapcar #'car entries) nil t)))
+                     (all-labels (mapcar #'car entries)))
+                (if (eq decknix--sidebar-previous-restore-mode 'all)
+                    ;; Restore all candidates that matched the filter at
+                    ;; the time M-RET was pressed.
+                    (let* ((visible (or decknix--sidebar-previous-visible-candidates
+                                       all-labels))
+                           (to-restore (seq-filter
+                                        #'identity
+                                        (mapcar (lambda (lbl)
+                                                  (cdr (assoc lbl entries)))
+                                                visible))))
+                      (if (null to-restore)
+                          (message "No matching sessions")
+                        ;; Restore first with focus, rest without
+                        (decknix--sidebar-restore-previous-session
+                         (car to-restore) t)
+                        (dolist (entry (cdr to-restore))
+                          (decknix--sidebar-restore-previous-session entry))
+                        (message "Restored %d session%s"
+                                 (length to-restore)
+                                 (if (= (length to-restore) 1) "" "s"))))
+                  ;; Single selection: restore just the chosen one
+                  (let ((entry (cdr (assoc choice entries))))
+                    (when entry
+                      (decknix--sidebar-restore-previous-session
+                       entry t))))))))
 
         (transient-define-prefix decknix-sidebar-nav-requests-keys ()
           "Pick a PR review request via shortcut keys."
