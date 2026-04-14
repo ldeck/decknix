@@ -7237,7 +7237,8 @@ review_decision, title, branch.  Returns nil if PR not in hub data."
                     (full-repo (format "%s/%s" (nth 0 parsed) (nth 1 parsed))))
                 ;; Search WIP repos
                 (catch 'found
-                  (dolist (repo-group (or decknix--hub-wip '()))
+                  (dolist (repo-group (when decknix--hub-wip
+                                        (alist-get 'repos decknix--hub-wip)))
                     (when (equal (alist-get 'repo repo-group) full-repo)
                       (dolist (pr (alist-get 'prs repo-group))
                         (when (equal (alist-get 'number pr) number)
@@ -7254,7 +7255,8 @@ review_decision, title, branch.  Returns nil if PR not in hub data."
                                   (cons 'branch (alist-get 'branch pr))
                                   (cons 'mergeable (alist-get 'mergeable pr))))))))
                   ;; Also search review requests (for subject PRs)
-                  (dolist (item (or decknix--hub-reviews '()))
+                  (dolist (item (when decknix--hub-reviews
+                                  (alist-get 'items decknix--hub-reviews)))
                     (when (and (equal (alist-get 'repo item) full-repo)
                                (equal (alist-get 'number item) number))
                       (throw 'found
