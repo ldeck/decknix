@@ -7020,8 +7020,10 @@ When no filter is active (table is nil), all orgs are visible."
           (call-interactively #'decknix--hub-toggle-expand-prs))
 
         ;; Append Hub group after the Toggles group.
-        ;; Use "W" (last key in Toggles) as the insertion anchor.
-        (transient-append-suffix 'decknix-sidebar-transient "W"
+        ;; Use (list -1) to place the new group at the end of the
+        ;; top-level layout — appending after "W" (a suffix) would
+        ;; make the group a sibling of suffixes which transient rejects.
+        (transient-append-suffix 'decknix-sidebar-transient '(-1)
           ["Hub"
            (decknix-sidebar-transient--org-filter)
            (decknix-sidebar-transient--age-filter)
