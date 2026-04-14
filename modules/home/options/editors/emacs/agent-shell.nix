@@ -286,6 +286,9 @@ let
 
       What I've tried:
       - ''${4:steps taken}'';
+
+    pr-review-request = mkSnippet "pr-review-request" "/pr-review" ''
+      Run \`.git-hooks/pr-request-review ''${1:$$$(yas-choose-value '("" "<PR number>" "<PR URL>"))}\` from the repo directory to post a review request to #backend-code-reviews with reviewer @-mentions.''${0}'';
   };
 
   # == Yasnippet templates for batch compose mode ==
@@ -7225,18 +7228,26 @@ Always returns t when `decknix--hub-show-bots' is non-nil."
                    (if decknix--hub-expand-prs "expanded" "collapsed")))
 
         ;; -- Hub: WIP join — look up live PR status from hub data --
-        (defun decknix--hub-pr-status (url)
-          "Look up live status of a GitHub PR URL from hub WIP data.
-Returns an alist with keys: state, ci-icon, ci-status, merged_at,
-review_decision, title, branch.  Returns nil if PR not in hub data."
+
+        (defvar decknix--hub-pr-cache (make-hash-table :test 'equal)
+          "Cache for PR status looked up via `gh pr view'.
+Keys are PR URLs; values are (TIMESTAMP . STATUS-ALIST).")
+
+        (defvar decknix--hub-pr-cache-ttl 300
+          "Time-to-live in seconds for cached PR lookups (default 5 min).")
+
+        (defvar decknix--hub-pr-pending-fetches (make-hash-table :test 'equal)
+          "Set of PR URLs currently being fetched (to avoid duplicate requests).")
+
+        (defun decknix--hub-pr-status-from-hub (url)
+          "Look up PR status from hub WIP and Reviews data only.
+Returns an alist or nil if not found."
           (let ((parsed (decknix--agent-pr-parse-url url)))
             (when parsed
-              (let ((owner (nth 0 parsed))
-                    (repo (nth 1 parsed))
-                    (number (nth 2 parsed))
-                    (full-repo (format "%s/%s" (nth 0 parsed) (nth 1 parsed))))
-                ;; Search WIP repos
+              (let ((full-repo (format "%s/%s" (nth 0 parsed) (nth 1 parsed)))
+                    (number (nth 2 parsed)))
                 (catch 'found
+                  ;; Search WIP repos
                   (dolist (repo-group (when decknix--hub-wip
                                         (alist-get 'repos decknix--hub-wip)))
                     (when (equal (alist-get 'repo repo-group) full-repo)
@@ -7268,6 +7279,94 @@ review_decision, title, branch.  Returns nil if PR not in hub data."
                               (cons 'title (alist-get 'title item))
                               (cons 'mergeable (alist-get 'mergeable item))))))
                   nil)))))
+
+        (defun decknix--hub-pr-cache-get (url)
+          "Return cached status for URL if still valid, else nil."
+          (let ((entry (gethash url decknix--hub-pr-cache)))
+            (when entry
+              (let ((ts (car entry))
+                    (status (cdr entry)))
+                (if (< (- (float-time) ts) decknix--hub-pr-cache-ttl)
+                    status
+                  ;; Expired — remove
+                  (remhash url decknix--hub-pr-cache)
+                  nil)))))
+
+        (defun decknix--hub-pr-fetch-async (url)
+          "Fetch PR status for URL via `gh pr view' asynchronously.
+Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
+          (when (and url (not (gethash url decknix--hub-pr-pending-fetches)))
+            (let ((parsed (decknix--agent-pr-parse-url url)))
+              (when parsed
+                (let* ((full-repo (format "%s/%s" (nth 0 parsed) (nth 1 parsed)))
+                       (number (nth 2 parsed))
+                       (cmd (format "gh pr view %d -R %s --json state,statusCheckRollup,mergeable,mergedAt,title,headRefName 2>/dev/null"
+                                    number full-repo)))
+                  (puthash url t decknix--hub-pr-pending-fetches)
+                  (let ((proc (start-process-shell-command
+                               (format "hub-pr-%s-%d" (nth 1 parsed) number)
+                               (generate-new-buffer " *hub-pr-fetch*")
+                               cmd)))
+                    (set-process-sentinel
+                     proc
+                     (eval `(lambda (proc _event)
+                              (when (memq (process-status proc) '(exit signal))
+                                (remhash ,url decknix--hub-pr-pending-fetches)
+                                (when (= (process-exit-status proc) 0)
+                                  (let ((output (with-current-buffer (process-buffer proc)
+                                                  (buffer-string))))
+                                    (condition-case nil
+                                        (let* ((data (json-parse-string output
+                                                       :object-type 'alist
+                                                       :array-type 'list
+                                                       :null-object nil
+                                                       :false-object nil))
+                                               (state (or (alist-get 'state data) "UNKNOWN"))
+                                               (rollup (alist-get 'statusCheckRollup data))
+                                               (ci-status
+                                                (cond
+                                                 ((null rollup) nil)
+                                                 ((seq-every-p
+                                                   (lambda (c)
+                                                     (member (or (alist-get 'conclusion c)
+                                                                 (alist-get 'status c))
+                                                             '("SUCCESS" "COMPLETED" "NEUTRAL" "SKIPPED")))
+                                                   rollup)
+                                                  "pass")
+                                                 ((seq-some
+                                                   (lambda (c)
+                                                     (member (or (alist-get 'status c) "")
+                                                             '("IN_PROGRESS" "QUEUED" "PENDING")))
+                                                   rollup)
+                                                  "running")
+                                                 (t "fail")))
+                                               (result
+                                                (list
+                                                 (cons 'state state)
+                                                 (cons 'ci-status ci-status)
+                                                 (cons 'merged_at (alist-get 'mergedAt data))
+                                                 (cons 'title (alist-get 'title data))
+                                                 (cons 'branch (alist-get 'headRefName data))
+                                                 (cons 'mergeable (alist-get 'mergeable data)))))
+                                          (puthash ,url (cons (float-time) result)
+                                                   decknix--hub-pr-cache)
+                                          ;; Refresh sidebar to show updated status
+                                          (when (get-buffer "*agent-shell-sidebar*")
+                                            (agent-shell-workspace-sidebar-refresh)))
+                                      (error nil))))
+                                (when (buffer-live-p (process-buffer proc))
+                                  (kill-buffer (process-buffer proc)))))
+                           t))))))))
+
+        (defun decknix--hub-pr-status (url)
+          "Look up live status of a GitHub PR URL.
+First checks hub WIP/Reviews data, then the async cache, and
+kicks off an async `gh pr view' fetch if not found anywhere."
+          (or (decknix--hub-pr-status-from-hub url)
+              (decknix--hub-pr-cache-get url)
+              (progn
+                (decknix--hub-pr-fetch-async url)
+                nil)))
 
         (defun decknix--hub-pr-format-line (pr-link &optional width)
           "Format a single linked PR for sidebar display.
