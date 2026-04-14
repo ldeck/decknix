@@ -142,7 +142,7 @@ in
 
       proxyUrl = mkOption {
         type = types.str;
-        default = "http://localhost:8080";
+        default = "http://localhost:58080";
         description = "TeamCity IAP proxy URL.";
       };
 
