@@ -103,7 +103,7 @@ struct ReviewRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     my_review: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "PENDING", "DISMISSED"
     #[serde(skip_serializing_if = "Option::is_none")]
-    mentioned: Option<bool>, // true when @login appears in a comment body
+    mentioned: Option<bool>, // true when user was directly requested as reviewer (not just via team)
     #[serde(skip_serializing_if = "Option::is_none")]
     needs_reply: Option<bool>, // true when latest comment/review is from someone else
 }
@@ -437,7 +437,7 @@ async fn fetch_pr_ci(
         "pr", "view",
         &number.to_string(),
         "--repo", repo,
-        "--json", "statusCheckRollup,mergeable,mergeStateStatus,latestReviews,comments,reviews",
+        "--json", "statusCheckRollup,mergeable,mergeStateStatus,latestReviews,comments,reviews,reviewRequests",
     ]).await {
         Ok(o) => o,
         Err(_) => return ReviewPrDetails::default(),
@@ -453,6 +453,17 @@ async fn fetch_pr_ci(
         latest_reviews: Option<Vec<GhReview>>,
         comments: Option<Vec<GhComment>>,
         reviews: Option<Vec<GhReviewEntry>>,
+        review_requests: Option<Vec<GhReviewRequestEntry>>,
+    }
+
+    /// A review request entry — can be a User or Team.
+    #[derive(Deserialize)]
+    struct GhReviewRequestEntry {
+        #[serde(rename = "__typename")]
+        typename: Option<String>,
+        login: Option<String>,  // present when typename == "User"
+        #[allow(dead_code)]
+        name: Option<String>,   // present when typename == "Team"
     }
 
     match serde_json::from_str::<PrView>(&output) {
@@ -469,11 +480,21 @@ async fn fetch_pr_ci(
                     })
                     .and_then(|r| r.state.clone())
             });
-            // Check for @-mentions and needs_reply
-            let (mentioned, needs_reply) = my_login.map(|login| {
+            // Check if user was directly requested as a reviewer (not just via team)
+            let directly_requested = my_login.map(|login| {
+                view.review_requests.as_ref()
+                    .map(|rrs| rrs.iter().any(|rr| {
+                        rr.typename.as_deref() == Some("User")
+                            && rr.login.as_ref()
+                                .map(|l| l.eq_ignore_ascii_case(login))
+                                .unwrap_or(false)
+                    }))
+                    .unwrap_or(false)
+            }).unwrap_or(false);
+            // Check for @-mentions in comment/review bodies and needs_reply
+            let (comment_mentioned, needs_reply) = my_login.map(|login| {
                 let mention_pattern = format!("@{}", login);
                 let mention_pattern_lower = mention_pattern.to_lowercase();
-                // Scan comment and review bodies for @login
                 let mut found_mention = false;
                 let mut activities: Vec<(&str, bool)> = Vec::new();
                 if let Some(ref comments) = view.comments {
@@ -512,6 +533,8 @@ async fn fetch_pr_ci(
                     .unwrap_or(false);
                 (found_mention, reply_needed)
             }).unwrap_or((false, false));
+            // mentioned = directly requested OR @-mentioned in a comment
+            let mentioned = directly_requested || comment_mentioned;
             ReviewPrDetails {
                 ci,
                 mergeable,
