@@ -4923,7 +4923,8 @@ Like treemacs `W' / extra-wide-toggle."
            (decknix-sidebar-transient--display-mode)
            (decknix-sidebar-transient--hidden-toggle)]
           ["WIP"
-           (decknix-sidebar-transient--deploy-indicator)])
+           (decknix-sidebar-transient--deploy-indicator)]
+          ["" ("q" "Done" transient-quit-one)])
 
         (transient-define-prefix decknix-sidebar-transient ()
           "Sidebar actions and toggles."
