@@ -5289,6 +5289,25 @@ Respects `decknix--sidebar-show-hidden' toggle."
               (when (fboundp 'decknix--hub-render-tasks)
                 (setq line-num (decknix--hub-render-tasks line-num)))
 
+              ;; Pre-warm: kick off async fetches for all linked PRs
+              ;; before rendering so they run concurrently rather than
+              ;; being triggered sequentially as render encounters each PR.
+              (when (and (boundp 'decknix--hub-expand-prs)
+                         decknix--hub-expand-prs
+                         (fboundp 'decknix--hub-pr-fetch-async))
+                (dolist (buf buffers)
+                  (when (buffer-live-p buf)
+                    (let ((ck (with-current-buffer buf
+                                (decknix--agent-current-conv-key))))
+                      (when ck
+                        (dolist (pr (decknix--agent-linked-prs ck))
+                          (let ((url (decknix--agent-pr-url-accessor pr "url")))
+                            (when url
+                              ;; Only fetch if not already in hub data or cache
+                              (unless (or (decknix--hub-pr-status-from-hub url)
+                                          (decknix--hub-pr-cache-get url))
+                                (decknix--hub-pr-fetch-async url))))))))))
+
               ;; ── Live Sessions ──
               (decknix--sidebar-render-section-header
                (format "Live (%d)" (length buffers)))
@@ -7538,12 +7557,17 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
         (defun decknix--hub-pr-status (url)
           "Look up live status of a GitHub PR URL.
 First checks hub WIP/Reviews data, then the async cache, and
-kicks off an async `gh pr view' fetch if not found anywhere."
+kicks off an async `gh pr view' fetch if not found anywhere.
+Returns a status alist, or a loading sentinel with state=LOADING
+when a fetch is in-flight."
           (or (decknix--hub-pr-status-from-hub url)
               (decknix--hub-pr-cache-get url)
               (progn
                 (decknix--hub-pr-fetch-async url)
-                nil)))
+                ;; Return a loading sentinel so callers can show a spinner
+                ;; instead of a bare "?"
+                (when (gethash url decknix--hub-pr-pending-fetches)
+                  '((state . "LOADING"))))))
 
         (defun decknix--hub-pr-format-line (pr-link &optional width)
           "Format a single linked PR for sidebar display.
@@ -7574,6 +7598,9 @@ WIDTH is the available character width (default 40)."
                              ((string= state "OPEN")
                               (propertize "open"
                                           'face 'font-lock-warning-face))
+                             ((string= state "LOADING")
+                              (propertize "⟳"
+                                          'face '(:foreground "#e5c07b")))
                              (t (propertize "?"
                                             'face 'font-lock-comment-face))))
                  ;; CI icon for open PRs
@@ -7600,7 +7627,7 @@ Shows count and summary like [2⬆ 1✓] (2 open, 1 merged)."
           (let ((prs (decknix--agent-linked-prs conv-key)))
             (if (not prs)
                 ""
-              (let ((n-open 0) (n-merged 0) (n-other 0))
+              (let ((n-open 0) (n-merged 0) (n-loading 0) (n-other 0))
                 (dolist (pr prs)
                   (let* ((url (decknix--agent-pr-url-accessor pr "url"))
                          (status (decknix--hub-pr-status url))
@@ -7608,6 +7635,7 @@ Shows count and summary like [2⬆ 1✓] (2 open, 1 merged)."
                     (cond
                      ((string= state "MERGED") (cl-incf n-merged))
                      ((string= state "OPEN") (cl-incf n-open))
+                     ((string= state "LOADING") (cl-incf n-loading))
                      (t (cl-incf n-other)))))
                 (let ((parts nil))
                   (when (> n-open 0)
@@ -7617,6 +7645,10 @@ Shows count and summary like [2⬆ 1✓] (2 open, 1 merged)."
                   (when (> n-merged 0)
                     (push (propertize (format "%d✓" n-merged)
                                       'face 'font-lock-string-face)
+                          parts))
+                  (when (> n-loading 0)
+                    (push (propertize (format "%d⟳" n-loading)
+                                      'face '(:foreground "#e5c07b"))
                           parts))
                   (when (> n-other 0)
                     (push (propertize (format "%d?" n-other)
