@@ -7340,10 +7340,13 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
                                     number full-repo)))
                   (puthash url t decknix--hub-pr-pending-fetches)
                   (condition-case err
-                      (let ((proc (start-process-shell-command
-                                   (format "hub-pr-%s-%d" (nth 1 parsed) number)
-                                   (generate-new-buffer " *hub-pr-fetch*")
-                                   cmd)))
+                      ;; Use pipe (not PTY) so gh doesn't detect a terminal
+                      ;; and try to open a pager, which hangs in the daemon.
+                      (let* ((process-connection-type nil)
+                             (proc (start-process-shell-command
+                                    (format "hub-pr-%s-%d" (nth 1 parsed) number)
+                                    (generate-new-buffer " *hub-pr-fetch*")
+                                    cmd)))
                         (set-process-sentinel
                          proc
                          (eval `(lambda (proc _event)
