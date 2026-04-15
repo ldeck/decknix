@@ -4872,7 +4872,7 @@ Like treemacs `W' / extra-wide-toggle."
           (call-interactively #'agent-shell-workspace-tile-toggle))
 
         (transient-define-suffix decknix-sidebar-transient--display-mode ()
-          :key "M"
+          :key "d"
           :description
           (lambda ()
             (format "Display mode  %s"
@@ -4905,6 +4905,26 @@ Like treemacs `W' / extra-wide-toggle."
           (interactive)
           (call-interactively #'decknix-sidebar-cycle-width))
 
+        (transient-define-prefix decknix-sidebar-toggles-transient ()
+          "Sidebar toggles grouped by section."
+          :transient-suffix 'transient--do-stay
+          ["Global"
+           (decknix-sidebar-transient--width)
+           (decknix-sidebar-transient--org-filter)]
+          ["Requests"
+           (decknix-sidebar-transient--age-filter)
+           (decknix-sidebar-transient--ci-filter)
+           (decknix-sidebar-transient--mention-filter)
+           (decknix-sidebar-transient--bot-filter)]
+          ["Live"
+           (decknix-sidebar-transient--expand-prs)
+           (decknix-sidebar-transient--quick-switch)
+           (decknix-sidebar-transient--tile-toggle)
+           (decknix-sidebar-transient--display-mode)
+           (decknix-sidebar-transient--hidden-toggle)]
+          ["WIP"
+           (decknix-sidebar-transient--deploy-indicator)])
+
         (transient-define-prefix decknix-sidebar-transient ()
           "Sidebar actions and toggles."
           ["Navigate"
@@ -4917,6 +4937,7 @@ Like treemacs `W' / extra-wide-toggle."
            ("RET" "Open / goto"   agent-shell-workspace-sidebar-goto)
            ("c"   "New session"   agent-shell-workspace-sidebar-new)
            ("g"   "Refresh"       agent-shell-workspace-sidebar-refresh)
+           ("R"   "Review"        decknix-hub-launch-reviews)
            ("q"   "Quit sidebar"  quit-window)]
           ["Actions (a …)"
            ("a r" "Restart"       agent-shell-workspace-sidebar-restart)
@@ -4930,12 +4951,7 @@ Like treemacs `W' / extra-wide-toggle."
            ("a m" "Set mode"      agent-shell-workspace-sidebar-set-mode)
            ("a a" "Add tile"      agent-shell-workspace-tile-add)
            ("a x" "Remove tile"   agent-shell-workspace-tile-remove)]
-          ["Toggles"
-           (decknix-sidebar-transient--quick-switch)
-           (decknix-sidebar-transient--tile-toggle)
-           (decknix-sidebar-transient--display-mode)
-           (decknix-sidebar-transient--hidden-toggle)
-           (decknix-sidebar-transient--width)])
+          ["" ("T" "Toggles…"     decknix-sidebar-toggles-transient)])
 
         ;; -- Enhanced sidebar render: live + saved sessions + key footer --
         ;; Override the upstream render to add saved sessions grouped by
@@ -5097,86 +5113,123 @@ so RIGHT group starts at column COL-WIDTH."
                                           'font-lock-comment-face)))))))))
 
         (defun decknix--sidebar-footer-toggle-keys ()
-          "Build the Toggles key alist (with live state) for the footer."
-          (append
-           (list
-            (cons "S" (format "quick switch %s"
-                        (propertize
-                         (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
-                                  agent-shell-workspace-sidebar--quick-switch)
-                             "[on]" "[off]")
-                         'face (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
-                                        agent-shell-workspace-sidebar--quick-switch)
-                                   'success 'font-lock-comment-face))))
-            (cons "t" (format "tile %s"
-                        (let* ((sb (get-buffer "*agent-shell-sidebar*"))
-                               (tiled (and sb
-                                           (buffer-local-value
-                                            'agent-shell-workspace--tiled sb))))
-                          (propertize (if tiled "[on]" "[off]")
-                                      'face (if tiled 'success 'font-lock-comment-face)))))
-            (cons "M" (format "display %s"
-                        (propertize
-                         (format "[%s]" (symbol-name decknix--sidebar-display-mode))
-                         'face 'font-lock-constant-face)))
-            (cons "H" (format "hidden %s"
-                        (propertize
-                         (if decknix--sidebar-show-hidden "[shown]" "[hidden]")
-                         'face (if decknix--sidebar-show-hidden
-                                   'warning 'font-lock-comment-face))))
-            (cons "W" (format "width %s"
-                        (propertize
-                         (format "[%s]" (symbol-name decknix--sidebar-width-state))
-                         'face 'font-lock-constant-face))))
-           (when (fboundp 'decknix--hub-org-filter-dispatch)
-             (list
-              (cons "O" (format "org %s"
-                          (if (fboundp 'decknix--hub-org-filter-summary)
-                              (let ((summary (decknix--hub-org-filter-summary)))
+          "Build the Toggles sections for the footer.
+Returns a list of (HEADING . KEYS-ALIST) for sectioned display.
+Each section has a heading and its toggle key/value pairs.
+All toggle keys are accessed via the T transient prefix."
+          (let ((global
+                 (list
+                  (cons "W" (format "width %s"
                                 (propertize
-                                 (format "[%s]" summary)
-                                 'face (if (string= summary "all")
-                                           'font-lock-comment-face
-                                         'font-lock-constant-face)))
-                            (propertize "[off]" 'face 'font-lock-comment-face))))
-              (cons "F" (format "age %s"
-                          (let ((label (decknix--hub-age-filter-label)))
-                            (propertize
-                             (format "[%s]" label)
-                             'face (if (string= label "all")
-                                       'font-lock-comment-face
-                                     'font-lock-constant-face)))))
-              (cons "C" (format "ci %s"
-                          (let ((label (decknix--hub-ci-filter-summary)))
-                            (propertize
-                             (format "[%s]" label)
-                             'face (if (string= label "all")
-                                       'font-lock-comment-face
-                                     'font-lock-constant-face)))))
-              (cons "M" (format "@ %s"
-                          (propertize
-                           (if decknix--hub-mention-filter "[on]" "[off]")
-                           'face (if decknix--hub-mention-filter
-                                     'font-lock-constant-face
-                                   'font-lock-comment-face))))
-              (cons "B" (format "bots %s"
-                          (propertize
-                           (if decknix--hub-show-bots "[show]" "[hide]")
-                           'face (if decknix--hub-show-bots
-                                     'font-lock-constant-face
-                                   'font-lock-comment-face))))
-              (cons "P" (format "pipe %s"
-                          (propertize
-                           (if decknix--hub-show-deploys "[show]" "[hide]")
-                           'face (if decknix--hub-show-deploys
-                                     'font-lock-constant-face
-                                   'font-lock-comment-face))))
-              (cons "E" (format "PRs %s"
-                          (propertize
-                           (if decknix--hub-expand-prs "[expanded]" "[badges]")
-                           'face (if decknix--hub-expand-prs
-                                     'font-lock-constant-face
-                                   'font-lock-comment-face))))))))
+                                 (format "[%s]" (symbol-name decknix--sidebar-width-state))
+                                 'face 'font-lock-constant-face)))
+                  (cons "O" (format "org %s"
+                                (if (fboundp 'decknix--hub-org-filter-summary)
+                                    (let ((summary (decknix--hub-org-filter-summary)))
+                                      (propertize
+                                       (format "[%s]" summary)
+                                       'face (if (string= summary "all")
+                                                 'font-lock-comment-face
+                                               'font-lock-constant-face)))
+                                  (propertize "[off]" 'face 'font-lock-comment-face))))))
+                (requests
+                 (when (fboundp 'decknix--hub-org-filter-dispatch)
+                   (list
+                    (cons "F" (format "age %s"
+                                  (let ((label (decknix--hub-age-filter-label)))
+                                    (propertize
+                                     (format "[%s]" label)
+                                     'face (if (string= label "all")
+                                               'font-lock-comment-face
+                                             'font-lock-constant-face)))))
+                    (cons "C" (format "ci %s"
+                                  (let ((label (decknix--hub-ci-filter-summary)))
+                                    (propertize
+                                     (format "[%s]" label)
+                                     'face (if (string= label "all")
+                                               'font-lock-comment-face
+                                             'font-lock-constant-face)))))
+                    (cons "@" (format "mention %s"
+                                  (propertize
+                                   (if decknix--hub-mention-filter "[on]" "[off]")
+                                   'face (if decknix--hub-mention-filter
+                                             'font-lock-constant-face
+                                           'font-lock-comment-face))))
+                    (cons "B" (format "bots %s"
+                                  (propertize
+                                   (if decknix--hub-show-bots "[show]" "[hide]")
+                                   'face (if decknix--hub-show-bots
+                                             'font-lock-constant-face
+                                           'font-lock-comment-face)))))))
+                (live
+                 (list
+                  (cons "E" (format "PRs %s"
+                                (propertize
+                                 (pcase decknix--hub-expand-prs
+                                   ('nil "[off]")
+                                   ('pr "[PR]")
+                                   ('pipeline "[pipe]")
+                                   ('both "[both]")
+                                   (_ "[off]"))
+                                 'face (if decknix--hub-expand-prs
+                                           'font-lock-constant-face
+                                         'font-lock-comment-face))))
+                  (cons "S" (format "quick %s"
+                                (propertize
+                                 (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
+                                          agent-shell-workspace-sidebar--quick-switch)
+                                     "[on]" "[off]")
+                                 'face (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
+                                                agent-shell-workspace-sidebar--quick-switch)
+                                           'success 'font-lock-comment-face))))
+                  (cons "t" (format "tile %s"
+                                (let* ((sb (get-buffer "*agent-shell-sidebar*"))
+                                       (tiled (and sb
+                                                   (buffer-local-value
+                                                    'agent-shell-workspace--tiled sb))))
+                                  (propertize (if tiled "[on]" "[off]")
+                                              'face (if tiled 'success 'font-lock-comment-face)))))
+                  (cons "d" (format "display %s"
+                                (propertize
+                                 (format "[%s]" (symbol-name decknix--sidebar-display-mode))
+                                 'face 'font-lock-constant-face)))
+                  (cons "H" (format "hidden %s"
+                                (propertize
+                                 (if decknix--sidebar-show-hidden "[shown]" "[hidden]")
+                                 'face (if decknix--sidebar-show-hidden
+                                           'warning 'font-lock-comment-face))))))
+                (wip
+                 (list
+                  (cons "P" (format "pipe %s"
+                                (propertize
+                                 (if decknix--hub-show-deploys "[show]" "[hide]")
+                                 'face (if decknix--hub-show-deploys
+                                           'font-lock-constant-face
+                                         'font-lock-comment-face)))))))
+            ;; Return as sectioned list
+            (delq nil
+                  (list
+                   (cons "Global" global)
+                   (when requests (cons "Requests" requests))
+                   (cons "Live" live)
+                   (cons "WIP" wip)))))
+
+        (defun decknix--sidebar-render-toggle-sections (sections)
+          "Render toggle SECTIONS with sub-headings.
+SECTIONS is a list of (HEADING . KEYS-ALIST) from footer-toggle-keys."
+          (insert (propertize " Toggles (T)" 'face 'bold) "\n")
+          (dolist (section sections)
+            (let ((heading (car section))
+                  (keys (cdr section)))
+              (insert (propertize (format "   %s" heading)
+                                  'face '(:inherit font-lock-type-face :weight normal))
+                      "\n")
+              (dolist (kv keys)
+                (insert (propertize (format "   %3s " (car kv))
+                                    'face 'font-lock-keyword-face)
+                        (propertize (cdr kv)
+                                    'face 'font-lock-comment-face)
+                        "\n")))))
 
         (defun decknix--sidebar-render-footer ()
           "Insert responsive key listing or compact hint depending on toggle.
@@ -5190,18 +5243,18 @@ items inline (horizontal).  Press K to toggle, ? for full transient."
                             (window-body-width win) 30))
                      (nav-keys (decknix--sidebar-footer-nav-keys))
                      (quick-keys (decknix--sidebar-footer-quick-keys))
-                     (toggle-keys (decknix--sidebar-footer-toggle-keys))
+                     (toggle-sections (decknix--sidebar-footer-toggle-keys))
                      (wide-p (>= w 48)))
                 (if wide-p
                     ;; ── Wide: Navigate | Quick  side by side ──
                     (let ((col (/ w 2)))
                       (decknix--sidebar-render-key-groups-side-by-side
                        "Navigate" nav-keys "Quick" quick-keys col)
-                      (decknix--sidebar-render-key-group "Toggles" toggle-keys))
+                      (decknix--sidebar-render-toggle-sections toggle-sections))
                   ;; ── Narrow: all groups inline ──
                   (decknix--sidebar-render-key-group-inline "Navigate" nav-keys)
                   (decknix--sidebar-render-key-group-inline "Quick" quick-keys)
-                  (decknix--sidebar-render-key-group-inline "Toggles" toggle-keys))
+                  (decknix--sidebar-render-toggle-sections toggle-sections))
                 ;; Trailing hint (always)
                 (insert (propertize " K " 'face 'font-lock-keyword-face)
                         (propertize "hide" 'face 'font-lock-comment-face)
@@ -5364,7 +5417,8 @@ Respects `decknix--sidebar-show-hidden' toggle."
                     (when (and decknix--hub-expand-prs buf-conv-key)
                       (let ((prs (decknix--agent-linked-prs buf-conv-key)))
                         (dolist (pr prs)
-                          (insert (decknix--hub-pr-format-line pr) "\n")
+                          (insert (decknix--hub-pr-format-line
+                                   pr nil decknix--hub-expand-prs) "\n")
                           (setq line-num (1+ line-num))))))))
 
               ;; ── Previous sessions (greyed-out, from last exit) ──
@@ -6514,16 +6568,12 @@ exits, focus returns to the sidebar."
                       (decknix--sidebar-call-transient #'decknix-sidebar-transient)))
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "K") #'decknix-sidebar-toggle-keys)
-        (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "H") #'decknix-sidebar-toggle-hidden)
-        (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "W") #'decknix-sidebar-cycle-width)
-        (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "M") #'decknix-sidebar-cycle-display-mode)
 
-        ;; S = quick-switch (direct), s = session transient
+        ;; T = toggles transient (sectioned: Global, Requests, Live, WIP)
         (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "S") #'agent-shell-workspace-sidebar-toggle-quick-switch)
+          (kbd "T") (lambda () (interactive)
+                      (decknix--sidebar-call-transient
+                       #'decknix-sidebar-toggles-transient)))
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "s") (lambda () (interactive)
                       (decknix--sidebar-call-transient #'decknix-sidebar-sessions)))
@@ -6710,7 +6760,8 @@ Returns updated LINE-NUM."
                     (let ((prs (decknix--agent-linked-prs prev-conv-key)))
                       (dolist (pr prs)
                         (insert (propertize
-                                 (decknix--hub-pr-format-line pr)
+                                 (decknix--hub-pr-format-line
+                                  pr nil decknix--hub-expand-prs)
                                  'face 'font-lock-comment-face)
                                 "\n")
                         (setq line-num (1+ line-num)))))))))
@@ -6922,24 +6973,11 @@ Re-reads only the changed file and refreshes the sidebar."
         (decknix--hub-refresh-all)
         (decknix--hub-start-watcher)
 
-        ;; Bind O to cycle org filter in sidebar
+        ;; Hub toggle keys now live in the T transient.
+        ;; Keep R (review launcher) as a direct sidebar key — it's an action.
         (with-eval-after-load 'agent-shell-workspace
           (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "O") #'decknix--hub-org-filter-dispatch)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "F") #'decknix--hub-cycle-age-filter)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "C") #'decknix--hub-cycle-ci-filter)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "R") #'decknix-hub-launch-reviews)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "M") #'decknix--hub-toggle-mention-filter)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "B") #'decknix--hub-toggle-bot-filter)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "P") #'decknix--hub-toggle-deploy-indicator)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "E") #'decknix--hub-toggle-expand-prs))
+            (kbd "R") #'decknix-hub-launch-reviews))
 
         ;; Add Hub group to the sidebar transient
         ;; -- Hub: org filter (multi-select transient) --
@@ -7144,7 +7182,7 @@ When no filter is active (table is nil), all orgs are visible."
           (call-interactively #'decknix-hub-launch-reviews))
 
         (transient-define-suffix decknix-sidebar-transient--mention-filter ()
-          :key "M"
+          :key "@"
           :description
           (lambda ()
             (format "@-mention    %s"
@@ -7177,13 +7215,18 @@ When no filter is active (table is nil), all orgs are visible."
           (lambda ()
             (format "session PRs  %s"
                     (propertize
-                     (if decknix--hub-expand-prs "[expanded]" "[badges]")
+                     (pcase decknix--hub-expand-prs
+                       ('nil "[off]")
+                       ('pr "[PR]")
+                       ('pipeline "[pipeline]")
+                       ('both "[PR+pipeline]")
+                       (_ "[off]"))
                      'face (if decknix--hub-expand-prs
                                'font-lock-constant-face
                              'font-lock-comment-face))))
           :transient t
           (interactive)
-          (call-interactively #'decknix--hub-toggle-expand-prs))
+          (call-interactively #'decknix--hub-cycle-expand-prs))
 
         (transient-define-suffix decknix-sidebar-transient--deploy-indicator ()
           :key "P"
@@ -7199,20 +7242,8 @@ When no filter is active (table is nil), all orgs are visible."
           (interactive)
           (call-interactively #'decknix--hub-toggle-deploy-indicator))
 
-        ;; Append Hub group after the Toggles group.
-        ;; Use (list -1) to place the new group at the end of the
-        ;; top-level layout — appending after "W" (a suffix) would
-        ;; make the group a sibling of suffixes which transient rejects.
-        (transient-append-suffix 'decknix-sidebar-transient '(-1)
-          ["Hub"
-           (decknix-sidebar-transient--org-filter)
-           (decknix-sidebar-transient--age-filter)
-           (decknix-sidebar-transient--ci-filter)
-           (decknix-sidebar-transient--mention-filter)
-           (decknix-sidebar-transient--bot-filter)
-           (decknix-sidebar-transient--deploy-indicator)
-           (decknix-sidebar-transient--expand-prs)
-           (decknix-sidebar-transient--launch-reviews)])
+        ;; Hub toggles now live in the T transient
+        ;; (decknix-sidebar-toggles-transient) — no need to append here.
 
         (defun decknix--hub-item-visible-p (repo-full)
           "Return non-nil if REPO-FULL (owner/repo) passes the org visibility filter."
@@ -7427,16 +7458,28 @@ Checks buffer names for the pattern `pr-<repo>-<number>'."
 
         ;; -- Hub: PR expand toggle --
         (defvar decknix--hub-expand-prs nil
-          "When non-nil, show linked PRs expanded under sessions in sidebar.")
+          "How linked PRs are displayed under sessions in sidebar.
+Valid values: nil (badges only), `pr' (PR status lines),
+`pipeline' (deploy indicators only), `both' (PR + pipeline).")
 
-        (defun decknix--hub-toggle-expand-prs ()
-          "Toggle expanded/collapsed display of linked PRs under sessions."
+        (defun decknix--hub-cycle-expand-prs ()
+          "Cycle expanded display of linked PRs: off → pr → pipeline → both."
           (interactive)
-          (setq decknix--hub-expand-prs (not decknix--hub-expand-prs))
+          (setq decknix--hub-expand-prs
+                (pcase decknix--hub-expand-prs
+                  ('nil 'pr)
+                  ('pr 'pipeline)
+                  ('pipeline 'both)
+                  ('both nil)
+                  (_ nil)))
           (when (get-buffer "*agent-shell-sidebar*")
             (agent-shell-workspace-sidebar-refresh))
           (message "Session PRs: %s"
-                   (if decknix--hub-expand-prs "expanded" "collapsed")))
+                   (pcase decknix--hub-expand-prs
+                     ('nil "badges only")
+                     ('pr "PR status")
+                     ('pipeline "pipeline only")
+                     ('both "PR + pipeline"))))
 
         ;; -- Hub: WIP join — look up live PR status from hub data --
 
@@ -7695,10 +7738,12 @@ the cache provides an immediate fallback instead of a bare spinner."
                     (when (gethash url decknix--hub-pr-pending-fetches)
                       '((state . "LOADING"))))))))
 
-        (defun decknix--hub-pr-format-line (pr-link &optional width)
+        (defun decknix--hub-pr-format-line (pr-link &optional width expand-mode)
           "Format a single linked PR for sidebar display.
 PR-LINK is a hash-table or alist from agent-sessions.json.
-WIDTH is the available character width (default 40)."
+WIDTH is the available character width (default 40).
+EXPAND-MODE controls what to show: `pr' (status/CI only),
+`pipeline' (deploy only), `both' (all), or non-nil (all)."
           (let* ((url (decknix--agent-pr-url-accessor pr-link "url"))
                  (pr-type (decknix--agent-pr-url-accessor pr-link "type"))
                  (parsed (decknix--agent-pr-parse-url url))
@@ -7737,8 +7782,11 @@ WIDTH is the available character width (default 40)."
                                           'face '(:foreground "#e5c07b")))
                              (t (propertize "?"
                                             'face 'font-lock-comment-face))))
+                 ;; Resolve expand mode flags
+                 (show-pr (memq expand-mode '(pr both t)))
+                 (show-pipeline (memq expand-mode '(pipeline both t)))
                  ;; CI icon for open PRs — overall summary
-                 (ci-str (when (string= state "OPEN")
+                 (ci-str (when (and show-pr (string= state "OPEN"))
                            (cond
                             ((string= ci "pass") (propertize "✓" 'face '(:foreground "#50fa7b")))
                             ((string= ci "fail") (propertize "✗" 'face '(:foreground "#ff5555")))
@@ -7746,7 +7794,7 @@ WIDTH is the available character width (default 40)."
                             (t ""))))
                  ;; Individual check details — compact per-check icons
                  (checks-str
-                  (if (and checks (string= state "OPEN"))
+                  (if (and show-pr checks (string= state "OPEN"))
                       (let ((parts nil))
                         (dolist (chk checks)
                           (let* ((name (or (alist-get 'name chk) ""))
@@ -7780,15 +7828,16 @@ WIDTH is the available character width (default 40)."
                  (repo-full (when (and owner repo)
                               (format "%s/%s" owner repo)))
                  (deploy-str
-                  (if (and (string= state "OPEN")
+                  (if (and show-pipeline
+                           (string= state "OPEN")
                            repo-full branch
                            (fboundp 'decknix--hub-deploy-indicator))
                       (decknix--hub-deploy-indicator repo-full branch)
                     ""))
                  ;; Type prefix for subject PRs
                  (type-prefix (if (string= pr-type "subject") "⊳ " ""))
-                 ;; Age for merged PRs
-                 (age-str (when merged-at
+                 ;; Age for merged PRs (only in pr/both modes)
+                 (age-str (when (and show-pr merged-at)
                             (concat " " (decknix--hub-format-age merged-at)))))
             (format "   %s%s%s#%d %s%s%s%s%s"
                     refresh-str
