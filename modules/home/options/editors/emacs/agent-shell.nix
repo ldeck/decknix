@@ -7339,67 +7339,89 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
                        (cmd (format "gh pr view %d -R %s --json state,statusCheckRollup,mergeable,mergedAt,title,headRefName"
                                     number full-repo)))
                   (puthash url t decknix--hub-pr-pending-fetches)
-                  (let ((proc (start-process-shell-command
-                               (format "hub-pr-%s-%d" (nth 1 parsed) number)
-                               (generate-new-buffer " *hub-pr-fetch*")
-                               cmd)))
-                    (set-process-sentinel
-                     proc
-                     (eval `(lambda (proc _event)
-                              (when (memq (process-status proc) '(exit signal))
-                                (remhash ,url decknix--hub-pr-pending-fetches)
-                                (let ((exit-code (process-exit-status proc))
-                                      (output (when (buffer-live-p (process-buffer proc))
-                                                (with-current-buffer (process-buffer proc)
-                                                  (buffer-string)))))
-                                  (if (/= exit-code 0)
-                                      (message "hub-pr-fetch: %s exited %d: %s"
-                                               ,url exit-code
-                                               (string-trim (or output "")))
-                                    (condition-case err
-                                        (let* ((data (json-parse-string output
-                                                       :object-type 'alist
-                                                       :array-type 'list
-                                                       :null-object nil
-                                                       :false-object nil))
-                                               (state (or (alist-get 'state data) "UNKNOWN"))
-                                               (rollup (alist-get 'statusCheckRollup data))
-                                               (ci-status
-                                                (cond
-                                                 ((null rollup) nil)
-                                                 ((seq-every-p
-                                                   (lambda (c)
-                                                     (member (or (alist-get 'conclusion c)
-                                                                 (alist-get 'status c))
-                                                             '("SUCCESS" "COMPLETED" "NEUTRAL" "SKIPPED")))
-                                                   rollup)
-                                                  "pass")
-                                                 ((seq-some
-                                                   (lambda (c)
-                                                     (member (or (alist-get 'status c) "")
-                                                             '("IN_PROGRESS" "QUEUED" "PENDING")))
-                                                   rollup)
-                                                  "running")
-                                                 (t "fail")))
-                                               (result
-                                                (list
-                                                 (cons 'state state)
-                                                 (cons 'ci-status ci-status)
-                                                 (cons 'merged_at (alist-get 'mergedAt data))
-                                                 (cons 'title (alist-get 'title data))
-                                                 (cons 'branch (alist-get 'headRefName data))
-                                                 (cons 'mergeable (alist-get 'mergeable data)))))
-                                          (puthash ,url (cons (float-time) result)
-                                                   decknix--hub-pr-cache)
-                                          ;; Refresh sidebar to show updated status
-                                          (when (get-buffer "*agent-shell-sidebar*")
-                                            (agent-shell-workspace-sidebar-refresh)))
-                                      (error
-                                       (message "hub-pr-fetch: parse error for %s: %s"
-                                                ,url (error-message-string err))))))
-                                (when (buffer-live-p (process-buffer proc))
-                                  (kill-buffer (process-buffer proc)))))
-                           t))))))))
+                  (condition-case err
+                      (let ((proc (start-process-shell-command
+                                   (format "hub-pr-%s-%d" (nth 1 parsed) number)
+                                   (generate-new-buffer " *hub-pr-fetch*")
+                                   cmd)))
+                        (set-process-sentinel
+                         proc
+                         (eval `(lambda (proc _event)
+                                  (when (memq (process-status proc) '(exit signal))
+                                    (unwind-protect
+                                        (let ((exit-code (process-exit-status proc))
+                                              (output (when (buffer-live-p (process-buffer proc))
+                                                        (with-current-buffer (process-buffer proc)
+                                                          (buffer-string)))))
+                                          (if (/= exit-code 0)
+                                              (message "hub-pr-fetch: %s exited %d: %s"
+                                                       ,url exit-code
+                                                       (string-trim (or output "")))
+                                            (condition-case err
+                                                (let* ((data (json-parse-string output
+                                                               :object-type 'alist
+                                                               :array-type 'list
+                                                               :null-object nil
+                                                               :false-object nil))
+                                                       (state (or (alist-get 'state data) "UNKNOWN"))
+                                                       (rollup (alist-get 'statusCheckRollup data))
+                                                       (ci-status
+                                                        (cond
+                                                         ((null rollup) nil)
+                                                         ((seq-every-p
+                                                           (lambda (c)
+                                                             (member (or (alist-get 'conclusion c)
+                                                                         (alist-get 'status c))
+                                                                     '("SUCCESS" "COMPLETED" "NEUTRAL" "SKIPPED")))
+                                                           rollup)
+                                                          "pass")
+                                                         ((seq-some
+                                                           (lambda (c)
+                                                             (member (or (alist-get 'status c) "")
+                                                                     '("IN_PROGRESS" "QUEUED" "PENDING")))
+                                                           rollup)
+                                                          "running")
+                                                         (t "fail")))
+                                                       (result
+                                                        (list
+                                                         (cons 'state state)
+                                                         (cons 'ci-status ci-status)
+                                                         (cons 'merged_at (alist-get 'mergedAt data))
+                                                         (cons 'title (alist-get 'title data))
+                                                         (cons 'branch (alist-get 'headRefName data))
+                                                         (cons 'mergeable (alist-get 'mergeable data)))))
+                                                  (puthash ,url (cons (float-time) result)
+                                                           decknix--hub-pr-cache))
+                                              (error
+                                               (message "hub-pr-fetch: parse error for %s: %s"
+                                                        ,url (error-message-string err))))))
+                                      ;; Always clear pending flag and clean up buffer
+                                      (remhash ,url decknix--hub-pr-pending-fetches)
+                                      (when (buffer-live-p (process-buffer proc))
+                                        (kill-buffer (process-buffer proc)))
+                                      ;; Schedule a single deferred sidebar refresh so we
+                                      ;; don't refresh N times for N concurrent fetches.
+                                      ;; The timer coalesces: if one is already pending
+                                      ;; the new one replaces it, so only the last fires.
+                                      (when (get-buffer "*agent-shell-sidebar*")
+                                        (when (timerp decknix--hub-pr-refresh-timer)
+                                          (cancel-timer decknix--hub-pr-refresh-timer))
+                                        (setq decknix--hub-pr-refresh-timer
+                                              (run-at-time 0.3 nil
+                                                (lambda ()
+                                                  (setq decknix--hub-pr-refresh-timer nil)
+                                                  (when (get-buffer "*agent-shell-sidebar*")
+                                                    (ignore-errors
+                                                      (agent-shell-workspace-sidebar-refresh))))))))))
+                               t)))
+                    (error
+                     ;; Process creation failed — clear pending flag
+                     (remhash url decknix--hub-pr-pending-fetches)
+                     (message "hub-pr-fetch: process error for %s: %s"
+                              url (error-message-string err))))))))
+
+        (defvar decknix--hub-pr-refresh-timer nil
+          "Timer for coalesced sidebar refresh after PR status fetches."))
 
         (defun decknix--hub-pr-status (url)
           "Look up live status of a GitHub PR URL.
