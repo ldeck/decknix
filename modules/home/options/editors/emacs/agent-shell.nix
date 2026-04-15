@@ -5156,6 +5156,12 @@ so RIGHT group starts at column COL-WIDTH."
                            'face (if decknix--hub-show-bots
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
+              (cons "P" (format "pipe %s"
+                          (propertize
+                           (if decknix--hub-show-deploys "[show]" "[hide]")
+                           'face (if decknix--hub-show-deploys
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
               (cons "E" (format "PRs %s"
                           (propertize
                            (if decknix--hub-expand-prs "[expanded]" "[badges]")
@@ -6580,6 +6586,9 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                    (cons 'expand-prs
                          (when (boundp 'decknix--hub-expand-prs)
                            decknix--hub-expand-prs))
+                   (cons 'show-deploys
+                         (when (boundp 'decknix--hub-show-deploys)
+                           decknix--hub-show-deploys))
                    (cons 'previous-sessions live-info))))
             (make-directory (file-name-directory decknix--sidebar-state-file) t)
             (with-temp-file decknix--sidebar-state-file
@@ -6636,6 +6645,11 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                   (when (boundp 'decknix--hub-expand-prs)
                     (setq decknix--hub-expand-prs
                           (alist-get 'expand-prs state)))
+                  ;; Deploy indicator: restore toggle
+                  (let ((sd (alist-get 'show-deploys state 'missing)))
+                    (unless (eq sd 'missing)
+                      (when (boundp 'decknix--hub-show-deploys)
+                        (setq decknix--hub-show-deploys sd))))
                   (when-let ((prev (alist-get 'previous-sessions state)))
                     (setq decknix--sidebar-previous-sessions prev)))
               (error
@@ -6805,6 +6819,10 @@ Focuses the first restored session in the main window."
           "Parsed jira-tasks.json data (alist).")
         (defvar decknix--hub-teamcity-builds nil
           "Parsed teamcity-builds.json data (alist).")
+        (defvar decknix--hub-deploys nil
+          "Parsed teamcity-deploys.json data (alist).")
+        (defvar decknix--hub-show-deploys t
+          "When non-nil, show deployment pipeline indicators (DTSP) in WIP section.")
         (defvar decknix--hub-watcher nil
           "File-notify descriptor watching the hub directory.")
 
@@ -6851,13 +6869,19 @@ Returns nil on any error (file missing, parse failure, etc.)."
           (setq decknix--hub-teamcity-builds
                 (decknix--hub-read-json "teamcity-builds.json")))
 
+        (defun decknix--hub-refresh-deploys ()
+          "Re-read teamcity-deploys.json."
+          (setq decknix--hub-deploys
+                (decknix--hub-read-json "teamcity-deploys.json")))
+
         (defun decknix--hub-refresh-all ()
           "Re-read all hub JSON files."
           (decknix--hub-refresh-reviews)
           (decknix--hub-refresh-wip)
           (decknix--hub-refresh-meta)
           (decknix--hub-refresh-jira)
-          (decknix--hub-refresh-teamcity))
+          (decknix--hub-refresh-teamcity)
+          (decknix--hub-refresh-deploys))
 
         (defun decknix--hub-on-file-change (event)
           "Handle a file-notify EVENT for the hub directory.
@@ -6871,6 +6895,7 @@ Re-reads only the changed file and refreshes the sidebar."
                   ("meta.json"            (decknix--hub-refresh-meta))
                   ("jira-tasks.json"      (decknix--hub-refresh-jira))
                   ("teamcity-builds.json" (decknix--hub-refresh-teamcity))
+                  ("teamcity-deploys.json" (decknix--hub-refresh-deploys))
                   (_ nil))
                 ;; Refresh the sidebar if it exists
                 (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
@@ -6906,6 +6931,8 @@ Re-reads only the changed file and refreshes the sidebar."
             (kbd "M") #'decknix--hub-toggle-mention-filter)
           (define-key agent-shell-workspace-sidebar-mode-map
             (kbd "B") #'decknix--hub-toggle-bot-filter)
+          (define-key agent-shell-workspace-sidebar-mode-map
+            (kbd "P") #'decknix--hub-toggle-deploy-indicator)
           (define-key agent-shell-workspace-sidebar-mode-map
             (kbd "E") #'decknix--hub-toggle-expand-prs))
 
@@ -7153,6 +7180,20 @@ When no filter is active (table is nil), all orgs are visible."
           (interactive)
           (call-interactively #'decknix--hub-toggle-expand-prs))
 
+        (transient-define-suffix decknix-sidebar-transient--deploy-indicator ()
+          :key "P"
+          :description
+          (lambda ()
+            (format "pipeline     %s"
+                    (propertize
+                     (if decknix--hub-show-deploys "[show]" "[hide]")
+                     'face (if decknix--hub-show-deploys
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-toggle-deploy-indicator))
+
         ;; Append Hub group after the Toggles group.
         ;; Use (list -1) to place the new group at the end of the
         ;; top-level layout — appending after "W" (a suffix) would
@@ -7164,6 +7205,7 @@ When no filter is active (table is nil), all orgs are visible."
            (decknix-sidebar-transient--ci-filter)
            (decknix-sidebar-transient--mention-filter)
            (decknix-sidebar-transient--bot-filter)
+           (decknix-sidebar-transient--deploy-indicator)
            (decknix-sidebar-transient--expand-prs)
            (decknix-sidebar-transient--launch-reviews)])
 
@@ -7969,9 +8011,15 @@ Respects `decknix--hub-org-visibility'. Shows time since last update."
                              (tc-str (if tc-build
                                          (decknix--hub-tc-icon tc-build)
                                        ""))
-                             ;; Combine CI indicators: GH + TC
-                             (ci-str (if (string-empty-p tc-str) ci-str
-                                       (concat ci-str tc-str)))
+                             ;; Deploy pipeline indicator (DTSP)
+                             (deploy-str
+                              (if (fboundp 'decknix--hub-deploy-indicator)
+                                  (decknix--hub-deploy-indicator repo-full branch)
+                                ""))
+                             ;; Combine CI indicators: GH + TC + Deploy
+                             (ci-str (concat ci-str
+                                            (if (string-empty-p tc-str) "" tc-str)
+                                            deploy-str))
                              ;; Review decision (approved/changes requested)
                              (rev-str (unless merged-p
                                         (decknix--hub-wip-review-icon pr)))
@@ -8044,6 +8092,67 @@ Returns nil if no match or no TC data."
                ((string= status "ERROR")
                 (propertize "✗" 'face '(:foreground "#e06c75")))
                (t (propertize "?" 'face 'font-lock-comment-face))))))
+
+        ;; -- Deploy pipeline indicator (DTSP) --
+        (defun decknix--hub-deploy-indicator (repo-full branch)
+          "Return colored DTSP deploy indicator for REPO-FULL and BRANCH.
+Each letter represents an environment:
+  D=Development T=Testing S=Stable P=Production
+Green=success, Red=failure, Yellow=running, Grey=not deployed."
+          (if (or (not decknix--hub-show-deploys)
+                  (not decknix--hub-deploys))
+              ""
+            (let* ((repos (alist-get 'repos decknix--hub-deploys))
+                   (repo-entry (seq-find
+                                (lambda (r)
+                                  (string= (or (alist-get 'repo r) "") repo-full))
+                                repos))
+                   (branches (when repo-entry (alist-get 'branches repo-entry)))
+                   (branch-entry (when branches
+                                   (seq-find
+                                    (lambda (b)
+                                      (string= (or (alist-get 'branch b) "") branch))
+                                    branches)))
+                   (envs (when branch-entry (alist-get 'environments branch-entry))))
+              (if (not envs)
+                  ""
+                ;; Build the indicator string
+                (let ((letters nil))
+                  (dolist (env-entry envs)
+                    (let* ((env (or (alist-get 'env env-entry) ""))
+                           (status (or (alist-get 'status env-entry) ""))
+                           (state (or (alist-get 'state env-entry) ""))
+                           (letter (cond
+                                    ((string= env "development") "D")
+                                    ((string= env "testing") "T")
+                                    ((string= env "stable") "S")
+                                    ((string= env "production") "P")
+                                    ((string= env "uk_production") "U")
+                                    (t nil)))
+                           (face (cond
+                                  ((string= state "running")
+                                   '(:foreground "#e5c07b" :weight bold))
+                                  ((string= state "queued")
+                                   '(:foreground "#abb2bf"))
+                                  ((string= status "SUCCESS")
+                                   '(:foreground "#98c379" :weight bold))
+                                  ((member status '("FAILURE" "ERROR"))
+                                   '(:foreground "#e06c75" :weight bold))
+                                  (t 'font-lock-comment-face))))
+                      (when letter
+                        (push (propertize letter 'face face) letters))))
+                  (if letters
+                      (concat " " (apply #'concat (nreverse letters)))
+                    ""))))))
+
+        (defun decknix--hub-toggle-deploy-indicator ()
+          "Toggle visibility of deployment pipeline indicators (DTSP) in WIP."
+          (interactive)
+          (setq decknix--hub-show-deploys (not decknix--hub-show-deploys))
+          (when (get-buffer "*agent-shell-sidebar*")
+            (agent-shell-workspace-sidebar-refresh))
+          (message "Deploy indicators: %s"
+                   (if decknix--hub-show-deploys "shown" "hidden")))
 
         ;; -- Jira task status icon --
         (defun decknix--hub-task-status-icon (status)
