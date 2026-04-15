@@ -2334,11 +2334,39 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
           (expand-file-name "~/.config/decknix/agent-sessions.json")
           "Path to the JSON file storing conversation tag metadata.")
 
-        (defun decknix--agent-conversation-key (first-message)
-          "Derive a stable conversation key from FIRST-MESSAGE.
-        Uses SHA-256 hash truncated to 16 chars."
+        (defun decknix--agent-conversation-key-raw (first-message)
+          "Derive the raw conversation key from FIRST-MESSAGE.
+Uses SHA-256 hash truncated to 16 chars.  Does NOT resolve merges —
+use `decknix--agent-conversation-key' for the canonical key."
           (when (and first-message (not (string-empty-p first-message)))
             (substring (secure-hash 'sha256 first-message) 0 16)))
+
+        (defun decknix--agent-conversation-key (first-message)
+          "Derive the canonical conversation key from FIRST-MESSAGE.
+Computes SHA-256 hash truncated to 16 chars, then follows any
+mergedInto redirect in agent-sessions.json so that merged
+conversations resolve to the target conversation key."
+          (let ((raw (decknix--agent-conversation-key-raw first-message)))
+            (if raw (decknix--agent-conv-resolve-key raw) raw)))
+
+        (defun decknix--agent-conv-resolve-key (conv-key)
+          "Resolve CONV-KEY by following mergedInto redirects.
+Returns the canonical conversation key.  Follows at most 5 hops
+to avoid infinite loops from misconfiguration."
+          (let ((store (decknix--agent-tags-read))
+                (key conv-key)
+                (hops 0))
+            (when store
+              (let ((convs (decknix--agent-tags-conversations store)))
+                (while (and key (< hops 5))
+                  (let ((entry (gethash key convs)))
+                    (if (and (hash-table-p entry)
+                             (gethash "mergedInto" entry))
+                        (progn
+                          (setq key (gethash "mergedInto" entry))
+                          (setq hops (1+ hops)))
+                      (setq hops 5))))))  ;; break
+            (or key conv-key)))
 
         (defun decknix--agent-conversation-key-for-session (session-id)
           "Look up the conversation key for SESSION-ID from cached session data."
