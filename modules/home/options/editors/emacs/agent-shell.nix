@@ -7562,6 +7562,7 @@ Returns an alist or nil if not found."
                                     (cons 'ci-status (alist-get 'status ci))
                                     (cons 'checks hub-checks)
                                     (cons 'merged_at (alist-get 'merged_at pr))
+                                    (cons 'updated_at (alist-get 'updated pr))
                                     (cons 'review_decision
                                           (alist-get 'review_decision pr))
                                     (cons 'title (alist-get 'title pr))
@@ -7579,6 +7580,7 @@ Returns an alist or nil if not found."
                                 (cons 'state "OPEN")
                                 (cons 'ci-status (alist-get 'status ci))
                                 (cons 'checks hub-checks)
+                                (cons 'updated_at (alist-get 'created item))
                                 (cons 'title (alist-get 'title item))
                                 (cons 'mergeable (alist-get 'mergeable item)))))))
                   nil)))))
@@ -7609,7 +7611,7 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
               (when parsed
                 (let* ((full-repo (format "%s/%s" (nth 0 parsed) (nth 1 parsed)))
                        (number (nth 2 parsed))
-                       (cmd (format "gh pr view %d -R %s --json state,statusCheckRollup,mergeable,mergedAt,title,headRefName"
+                       (cmd (format "gh pr view %d -R %s --json state,statusCheckRollup,mergeable,mergedAt,updatedAt,title,headRefName"
                                     number full-repo)))
                   (puthash url t decknix--hub-pr-pending-fetches)
                   (condition-case err
@@ -7678,6 +7680,7 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
                                                          (cons 'ci-status ci-status)
                                                          (cons 'checks check-details)
                                                          (cons 'merged_at (alist-get 'mergedAt data))
+                                                         (cons 'updated_at (alist-get 'updatedAt data))
                                                          (cons 'title (alist-get 'title data))
                                                          (cons 'branch (alist-get 'headRefName data))
                                                          (cons 'mergeable (alist-get 'mergeable data)))))
@@ -7786,44 +7789,70 @@ EXPAND-MODE controls what to show: `pr' (status/CI only),
                  ;; Resolve expand mode flags
                  (show-pr (memq expand-mode '(pr both t)))
                  (show-pipeline (memq expand-mode '(pipeline both t)))
-                 ;; CI icon for open PRs — overall summary
-                 (ci-str (when (and show-pr (string= state "OPEN"))
-                           (cond
-                            ((string= ci "pass") (propertize "✓" 'face '(:foreground "#50fa7b")))
-                            ((string= ci "fail") (propertize "✗" 'face '(:foreground "#ff5555")))
-                            ((string= ci "running") (propertize "⟳" 'face 'font-lock-warning-face))
-                            (t ""))))
-                 ;; Individual check details — compact per-check icons
-                 (checks-str
-                  (if (and show-pr checks (string= state "OPEN"))
-                      (let ((parts nil))
-                        (dolist (chk checks)
-                          (let* ((name (or (alist-get 'name chk) ""))
-                                 (conclusion (or (alist-get 'conclusion chk) ""))
-                                 ;; Short name: first word or abbreviated
-                                 (short (car (split-string name "[ /]")))
-                                 (short (if (> (length short) 10)
-                                            (substring short 0 10)
-                                          short))
-                                 (icon (cond
-                                        ((member conclusion
-                                                 '("SUCCESS" "COMPLETED" "NEUTRAL" "SKIPPED"))
-                                         (propertize "✓" 'face '(:foreground "#50fa7b")))
-                                        ((member conclusion
-                                                 '("FAILURE" "TIMED_OUT" "CANCELLED"
-                                                   "ACTION_REQUIRED" "STALE" "ERROR"))
-                                         (propertize "✗" 'face '(:foreground "#ff5555")))
-                                        ((member conclusion
-                                                 '("IN_PROGRESS" "QUEUED" "PENDING" "WAITING" "REQUESTED"))
-                                         (propertize "⟳" 'face 'font-lock-warning-face))
-                                        (t (propertize "?" 'face 'font-lock-comment-face)))))
-                            (push (format "%s%s" icon
-                                          (propertize short 'face 'font-lock-comment-face))
-                                  parts)))
-                        (when parts
-                          (concat " " (string-join (nreverse parts) " "))))
+                 ;; Age — always shown; use merged_at for merged, updated for
+                 ;; open PRs, fall back to nothing if unavailable
+                 (updated-at (alist-get 'updated_at status))
+                 (age-ts (cond (merged-at merged-at)
+                               (updated-at updated-at)
+                               (t nil)))
+                 (age-str (if age-ts
+                              (propertize
+                               (decknix--hub-format-age age-ts)
+                               'face 'font-lock-comment-face)
+                            ""))
+                 ;; PR status badges (state + CI) — shown in pr/both modes
+                 (pr-str
+                  (if show-pr
+                      (let* (;; Overall CI icon for open PRs
+                             (ci-icon
+                              (when (string= state "OPEN")
+                                (cond
+                                 ((string= ci "pass") (propertize "✓" 'face '(:foreground "#50fa7b")))
+                                 ((string= ci "fail") (propertize "✗" 'face '(:foreground "#ff5555")))
+                                 ((string= ci "running") (propertize "⟳" 'face 'font-lock-warning-face))
+                                 (t nil))))
+                             ;; Individual check details
+                             (chk-str
+                              (if (and checks (string= state "OPEN"))
+                                  (let ((parts nil))
+                                    (dolist (chk checks)
+                                      (let* ((name (or (alist-get 'name chk) ""))
+                                             (conclusion (or (alist-get 'conclusion chk) ""))
+                                             (short (car (split-string name "[ /]")))
+                                             (short (if (> (length short) 10)
+                                                        (substring short 0 10)
+                                                      short))
+                                             (icon (cond
+                                                    ((member conclusion
+                                                             '("SUCCESS" "COMPLETED" "NEUTRAL" "SKIPPED"))
+                                                     (propertize "✓" 'face '(:foreground "#50fa7b")))
+                                                    ((member conclusion
+                                                             '("FAILURE" "TIMED_OUT" "CANCELLED"
+                                                               "ACTION_REQUIRED" "STALE" "ERROR"))
+                                                     (propertize "✗" 'face '(:foreground "#ff5555")))
+                                                    ((member conclusion
+                                                             '("IN_PROGRESS" "QUEUED" "PENDING" "WAITING" "REQUESTED"))
+                                                     (propertize "⟳" 'face 'font-lock-warning-face))
+                                                    (t (propertize "?" 'face 'font-lock-comment-face)))))
+                                        (push (format "%s%s" icon
+                                                      (propertize short 'face 'font-lock-comment-face))
+                                              parts)))
+                                    (when parts
+                                      (string-join (nreverse parts) " ")))
+                                ""))
+                             ;; Mergeable indicator
+                             (mergeable (alist-get 'mergeable status))
+                             (conflict-str (if (string= (or mergeable "") "CONFLICTING")
+                                               (propertize "⇌" 'face '(:foreground "#ff5555"))
+                                             "")))
+                        (concat " " state-str
+                                (if ci-icon (concat " " ci-icon) "")
+                                conflict-str
+                                (if (not (string-empty-p chk-str))
+                                    (concat " " chk-str)
+                                  "")))
                     ""))
-                 ;; Deploy pipeline indicator (DTSP) for open PRs
+                 ;; Deploy pipeline indicator for open PRs
                  (branch (alist-get 'branch status))
                  (owner (nth 0 parsed))
                  (repo-full (when (and owner repo)
@@ -7833,21 +7862,18 @@ EXPAND-MODE controls what to show: `pr' (status/CI only),
                            (string= state "OPEN")
                            repo-full branch
                            (fboundp 'decknix--hub-deploy-indicator))
-                      (decknix--hub-deploy-indicator repo-full branch)
+                      (concat " " (decknix--hub-deploy-indicator repo-full branch))
                     ""))
                  ;; Type prefix for subject PRs
-                 (type-prefix (if (string= pr-type "subject") "⊳ " ""))
-                 ;; Age for merged PRs (only in pr/both modes)
-                 (age-str (when (and show-pr merged-at)
-                            (concat " " (decknix--hub-format-age merged-at)))))
-            (format "   %s%s%s#%d %s%s%s%s%s"
+                 (type-prefix (if (string= pr-type "subject") "⊳ " "")))
+            (format "   %s%s%s#%d %s%s%s"
                     refresh-str
                     type-prefix short-repo number
-                    state-str
-                    (or ci-str "")
-                    deploy-str
-                    checks-str
-                    (or age-str ""))))
+                    (if (not (string-empty-p age-str))
+                        (concat " " age-str)
+                      "")
+                    pr-str
+                    deploy-str)))
 
         (defun decknix--hub-pr-badge (conv-key)
           "Return a compact PR badge string for CONV-KEY, or empty string.
