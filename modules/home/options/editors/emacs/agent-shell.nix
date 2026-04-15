@@ -7163,26 +7163,38 @@ Statuses: (g)reen=pass (l)int=soft_fail (y)ellow=running (?)grey=unknown (r)ed=f
               (agent-shell-workspace-sidebar-refresh))
             (message "CI filter: %s" (decknix--hub-ci-filter-summary))))
 
-        ;; -- Hub: @-mention filter --
-        ;; When enabled, Requests shows only items where the user was @-mentioned.
+        ;; -- Hub: direct-mention filter --
+        ;; When enabled, Requests shows only items where the user's attention
+        ;; was specifically requested: either individually added as a reviewer
+        ;; or @-mentioned in a comment/review body.
 
         (defvar decknix--hub-mention-filter nil
-          "When non-nil, only show review requests where user was @-mentioned.")
+          "When non-nil, only show review requests targeting the user directly.
+This filters to PRs where the user was individually added as a reviewer
+or @-mentioned in a comment — excluding PRs that only appear because of
+team membership or CODEOWNERS rules.")
 
         (defun decknix--hub-toggle-mention-filter ()
-          "Toggle the @-mention filter for Requests."
+          "Toggle filtering to only directly-targeted reviews."
           (interactive)
           (setq decknix--hub-mention-filter (not decknix--hub-mention-filter))
-          (when (get-buffer "*agent-shell-sidebar*")
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
             (agent-shell-workspace-sidebar-refresh))
-          (message "Mention filter: %s"
-                   (if decknix--hub-mention-filter "on (@-mentioned only)" "off (all)")))
+          (message "Direct mention filter: %s"
+                   (if decknix--hub-mention-filter
+                       "on (directly requested / @-mentioned only)"
+                     "off (all)")))
 
         (defun decknix--hub-mention-visible-p (item)
-          "Return non-nil if ITEM passes the @-mention filter.
+          "Return non-nil if ITEM passes the direct-mention filter.
 Always returns t when filter is disabled."
           (or (not decknix--hub-mention-filter)
               (eq (alist-get 'mentioned item) t)))
+
+        (defun decknix--hub-item-mentioned-p (item)
+          "Return non-nil if ITEM has the `mentioned' flag set.
+Used to show the bell indicator when the filter is off."
+          (eq (alist-get 'mentioned item) t))
 
         ;; -- Hub: bot filter --
         (defvar decknix--hub-show-bots nil
@@ -7302,7 +7314,7 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
               (when parsed
                 (let* ((full-repo (format "%s/%s" (nth 0 parsed) (nth 1 parsed)))
                        (number (nth 2 parsed))
-                       (cmd (format "gh pr view %d -R %s --json state,statusCheckRollup,mergeable,mergedAt,title,headRefName 2>/dev/null"
+                       (cmd (format "gh pr view %d -R %s --json state,statusCheckRollup,mergeable,mergedAt,title,headRefName"
                                     number full-repo)))
                   (puthash url t decknix--hub-pr-pending-fetches)
                   (let ((proc (start-process-shell-command
@@ -7314,10 +7326,15 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
                      (eval `(lambda (proc _event)
                               (when (memq (process-status proc) '(exit signal))
                                 (remhash ,url decknix--hub-pr-pending-fetches)
-                                (when (= (process-exit-status proc) 0)
-                                  (let ((output (with-current-buffer (process-buffer proc)
-                                                  (buffer-string))))
-                                    (condition-case nil
+                                (let ((exit-code (process-exit-status proc))
+                                      (output (when (buffer-live-p (process-buffer proc))
+                                                (with-current-buffer (process-buffer proc)
+                                                  (buffer-string)))))
+                                  (if (/= exit-code 0)
+                                      (message "hub-pr-fetch: %s exited %d: %s"
+                                               ,url exit-code
+                                               (string-trim (or output "")))
+                                    (condition-case err
                                         (let* ((data (json-parse-string output
                                                        :object-type 'alist
                                                        :array-type 'list
@@ -7355,7 +7372,9 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
                                           ;; Refresh sidebar to show updated status
                                           (when (get-buffer "*agent-shell-sidebar*")
                                             (agent-shell-workspace-sidebar-refresh)))
-                                      (error nil))))
+                                      (error
+                                       (message "hub-pr-fetch: parse error for %s: %s"
+                                                ,url (error-message-string err))))))
                                 (when (buffer-live-p (process-buffer proc))
                                   (kill-buffer (process-buffer proc)))))
                            t))))))))
@@ -7646,8 +7665,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                        (status-str (if (string-empty-p rev-str)
                                        ci-str
                                      (concat ci-str rev-str)))
-                       ;; @-mention indicator (use hub-icon for consistent line height)
-                       (mention-str (if (eq (alist-get 'mentioned item) t)
+                       ;; @ indicator for directly-requested / @-mentioned PRs
+                       (mention-str (if (decknix--hub-item-mentioned-p item)
                                         (decknix--hub-icon "@" '(:foreground "#d7af5f" :weight bold))
                                       ""))
                        (status-str (if (string-empty-p mention-str)
