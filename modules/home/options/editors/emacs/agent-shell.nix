@@ -7442,8 +7442,54 @@ Keys are PR URLs; values are (TIMESTAMP . STATUS-ALIST).")
         (defvar decknix--hub-pr-cache-ttl 300
           "Time-to-live in seconds for cached PR lookups (default 5 min).")
 
+        (defvar decknix--hub-pr-cache-file
+          (expand-file-name "~/.config/decknix/hub/pr-cache.el")
+          "File for persisting PR cache across Emacs restarts.")
+
         (defvar decknix--hub-pr-pending-fetches (make-hash-table :test 'equal)
           "Set of PR URLs currently being fetched (to avoid duplicate requests).")
+
+        (defun decknix--hub-pr-cache-save ()
+          "Persist the PR cache to disk for fast restoration on restart."
+          (when (> (hash-table-count decknix--hub-pr-cache) 0)
+            (condition-case err
+                (let ((entries nil))
+                  (maphash (lambda (url val)
+                             (push (cons url val) entries))
+                           decknix--hub-pr-cache)
+                  (make-directory (file-name-directory decknix--hub-pr-cache-file) t)
+                  (with-temp-file decknix--hub-pr-cache-file
+                    (insert ";; Auto-generated PR cache — do not edit\n")
+                    (prin1 entries (current-buffer))
+                    (insert "\n")))
+              (error
+               (message "hub-pr-cache: save failed: %s"
+                        (error-message-string err))))))
+
+        (defun decknix--hub-pr-cache-restore ()
+          "Restore the PR cache from disk.
+Entries are loaded with their original timestamps so TTL expiry
+still applies.  For entries older than TTL, they are kept as stale
+data (available via `decknix--hub-pr-cache-get-stale') but an async
+refresh is triggered."
+          (when (file-exists-p decknix--hub-pr-cache-file)
+            (condition-case err
+                (let ((entries (with-temp-buffer
+                                 (insert-file-contents decknix--hub-pr-cache-file)
+                                 (read (current-buffer)))))
+                  (when (listp entries)
+                    (dolist (entry entries)
+                      (when (consp entry)
+                        (puthash (car entry) (cdr entry) decknix--hub-pr-cache)))))
+              (error
+               (message "hub-pr-cache: restore failed: %s"
+                        (error-message-string err))))))
+
+        ;; Save cache periodically (every 2 min) and on kill
+        (run-with-timer 120 120 #'decknix--hub-pr-cache-save)
+        (add-hook 'kill-emacs-hook #'decknix--hub-pr-cache-save)
+        ;; Restore on startup
+        (decknix--hub-pr-cache-restore)
 
         (defun decknix--hub-pr-status-from-hub (url)
           "Look up PR status from hub WIP and Reviews data only.
@@ -7459,44 +7505,52 @@ Returns an alist or nil if not found."
                     (when (equal (alist-get 'repo repo-group) full-repo)
                       (dolist (pr (alist-get 'prs repo-group))
                         (when (equal (alist-get 'number pr) number)
-                          (throw 'found
-                                 (list
-                                  (cons 'state (or (alist-get 'state pr) "OPEN"))
-                                  (cons 'ci-status
-                                        (alist-get 'status
-                                                   (alist-get 'ci pr)))
-                                  (cons 'merged_at (alist-get 'merged_at pr))
-                                  (cons 'review_decision
-                                        (alist-get 'review_decision pr))
-                                  (cons 'title (alist-get 'title pr))
-                                  (cons 'branch (alist-get 'branch pr))
-                                  (cons 'mergeable (alist-get 'mergeable pr))))))))
+                          (let* ((ci (alist-get 'ci pr))
+                                 (hub-checks (alist-get 'checks ci)))
+                            (throw 'found
+                                   (list
+                                    (cons 'state (or (alist-get 'state pr) "OPEN"))
+                                    (cons 'ci-status (alist-get 'status ci))
+                                    (cons 'checks hub-checks)
+                                    (cons 'merged_at (alist-get 'merged_at pr))
+                                    (cons 'review_decision
+                                          (alist-get 'review_decision pr))
+                                    (cons 'title (alist-get 'title pr))
+                                    (cons 'branch (alist-get 'branch pr))
+                                    (cons 'mergeable (alist-get 'mergeable pr)))))))))
                   ;; Also search review requests (for subject PRs)
                   (dolist (item (when decknix--hub-reviews
                                   (alist-get 'items decknix--hub-reviews)))
                     (when (and (equal (alist-get 'repo item) full-repo)
                                (equal (alist-get 'number item) number))
-                      (throw 'found
-                             (list
-                              (cons 'state "OPEN")
-                              (cons 'ci-status
-                                    (alist-get 'status
-                                               (alist-get 'ci item)))
-                              (cons 'title (alist-get 'title item))
-                              (cons 'mergeable (alist-get 'mergeable item))))))
+                      (let* ((ci (alist-get 'ci item))
+                             (hub-checks (alist-get 'checks ci)))
+                        (throw 'found
+                               (list
+                                (cons 'state "OPEN")
+                                (cons 'ci-status (alist-get 'status ci))
+                                (cons 'checks hub-checks)
+                                (cons 'title (alist-get 'title item))
+                                (cons 'mergeable (alist-get 'mergeable item)))))))
                   nil)))))
 
         (defun decknix--hub-pr-cache-get (url)
-          "Return cached status for URL if still valid, else nil."
+          "Return cached status for URL if still valid, else nil.
+When the entry is stale (older than TTL), returns the cached data
+with a `(stale . t)' marker appended and kicks off an async refresh.
+This lets callers show the old data with a refresh indicator instead
+of a bare loading spinner."
           (let ((entry (gethash url decknix--hub-pr-cache)))
             (when entry
               (let ((ts (car entry))
                     (status (cdr entry)))
                 (if (< (- (float-time) ts) decknix--hub-pr-cache-ttl)
                     status
-                  ;; Expired — remove
-                  (remhash url decknix--hub-pr-cache)
-                  nil)))))
+                  ;; Stale — return data with stale marker, trigger refresh
+                  (let ((stale-status (append status '((stale . t)))))
+                    ;; Kick off background refresh (won't duplicate)
+                    (decknix--hub-pr-fetch-async url)
+                    stale-status))))))
 
         (defun decknix--hub-pr-fetch-async (url)
           "Fetch PR status for URL via `gh pr view' asynchronously.
@@ -7555,10 +7609,25 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
                                                            rollup)
                                                           "running")
                                                          (t "fail")))
+                                                       ;; Extract individual check details
+                                                       (check-details
+                                                        (when rollup
+                                                          (mapcar
+                                                           (lambda (c)
+                                                             (list
+                                                              (cons 'name (or (alist-get 'name c)
+                                                                              (alist-get 'context c)
+                                                                              "?"))
+                                                              (cons 'conclusion
+                                                                    (or (alist-get 'conclusion c)
+                                                                        (alist-get 'status c)
+                                                                        "UNKNOWN"))))
+                                                           rollup)))
                                                        (result
                                                         (list
                                                          (cons 'state state)
                                                          (cons 'ci-status ci-status)
+                                                         (cons 'checks check-details)
                                                          (cons 'merged_at (alist-get 'mergedAt data))
                                                          (cons 'title (alist-get 'title data))
                                                          (cons 'branch (alist-get 'headRefName data))
@@ -7623,12 +7692,19 @@ WIDTH is the available character width (default 40)."
                  (status (decknix--hub-pr-status url))
                  (state (or (alist-get 'state status) "?"))
                  (ci (alist-get 'ci-status status))
+                 (checks (alist-get 'checks status))
+                 (stale (alist-get 'stale status))
                  (merged-at (alist-get 'merged_at status))
                  (w (or width 40))
                  ;; Short repo name
                  (short-repo (if (> (length repo) 15)
                                  (substring repo 0 15)
                                repo))
+                 ;; Stale refresh indicator — dim ↻ appended when showing
+                 ;; cached data while a background refresh is in flight
+                 (refresh-str (if stale
+                                  (propertize "↻" 'face 'font-lock-comment-face)
+                                ""))
                  ;; State indicator
                  (state-str (cond
                              ((string= state "MERGED")
@@ -7645,22 +7721,54 @@ WIDTH is the available character width (default 40)."
                                           'face '(:foreground "#e5c07b")))
                              (t (propertize "?"
                                             'face 'font-lock-comment-face))))
-                 ;; CI icon for open PRs
+                 ;; CI icon for open PRs — overall summary
                  (ci-str (when (string= state "OPEN")
                            (cond
                             ((string= ci "pass") (propertize "✓" 'face '(:foreground "#50fa7b")))
                             ((string= ci "fail") (propertize "✗" 'face '(:foreground "#ff5555")))
                             ((string= ci "running") (propertize "⟳" 'face 'font-lock-warning-face))
                             (t ""))))
+                 ;; Individual check details — compact per-check icons
+                 (checks-str
+                  (if (and checks (string= state "OPEN"))
+                      (let ((parts nil))
+                        (dolist (chk checks)
+                          (let* ((name (or (alist-get 'name chk) ""))
+                                 (conclusion (or (alist-get 'conclusion chk) ""))
+                                 ;; Short name: first word or abbreviated
+                                 (short (car (split-string name "[ /]")))
+                                 (short (if (> (length short) 10)
+                                            (substring short 0 10)
+                                          short))
+                                 (icon (cond
+                                        ((member conclusion
+                                                 '("SUCCESS" "COMPLETED" "NEUTRAL" "SKIPPED"))
+                                         (propertize "✓" 'face '(:foreground "#50fa7b")))
+                                        ((member conclusion
+                                                 '("FAILURE" "TIMED_OUT" "CANCELLED"
+                                                   "ACTION_REQUIRED" "STALE" "ERROR"))
+                                         (propertize "✗" 'face '(:foreground "#ff5555")))
+                                        ((member conclusion
+                                                 '("IN_PROGRESS" "QUEUED" "PENDING" "WAITING" "REQUESTED"))
+                                         (propertize "⟳" 'face 'font-lock-warning-face))
+                                        (t (propertize "?" 'face 'font-lock-comment-face)))))
+                            (push (format "%s%s" icon
+                                          (propertize short 'face 'font-lock-comment-face))
+                                  parts)))
+                        (when parts
+                          (concat " " (string-join (nreverse parts) " "))))
+                    ""))
                  ;; Type prefix for subject PRs
                  (type-prefix (if (string= pr-type "subject") "⊳ " ""))
                  ;; Age for merged PRs
                  (age-str (when merged-at
                             (concat " " (decknix--hub-format-age merged-at)))))
-            (format "    %s%s#%d %s%s%s"
+            (format "    %s%s#%d %s%s%s%s%s"
                     type-prefix short-repo number
                     state-str
+                    refresh-str
                     (or ci-str "")
+                    checks-str
                     (or age-str ""))))
 
         (defun decknix--hub-pr-badge (conv-key)
