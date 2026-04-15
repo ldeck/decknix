@@ -470,7 +470,10 @@ async fn poll_deploy_status(
         let repo_slug = repo.split('/').last().unwrap_or(repo);
         let tc_project = match repo_tc_map.get(repo_slug) {
             Some(p) => p.clone(),
-            None => continue, // No TC project for this repo
+            None => {
+                eprintln!("hub: tc deploys: no TC project for repo {repo} (slug: {repo_slug})");
+                continue;
+            }
         };
 
         let mut branch_statuses = Vec::new();
@@ -493,6 +496,10 @@ async fn poll_deploy_status(
 
             // For each environment, find the most recent deploy build
             let mut env_statuses: HashMap<&str, EnvDeployStatus> = HashMap::new();
+
+            if builds.is_empty() {
+                eprintln!("hub: tc deploys {repo}/{tc_project}:{branch}: 0 builds found");
+            }
 
             for b in &builds {
                 let bt_id = b.build_type_id.as_deref().unwrap_or("");
