@@ -2628,6 +2628,9 @@ No-op if URL is already linked."
                   (puthash "linked_prs" (append existing (list pr-entry)) entry)
                   (puthash conv-key entry convs)
                   (decknix--agent-tags-write store)
+                  ;; Update linked-prs.json for the hub daemon
+                  (when (fboundp 'decknix--hub-write-linked-prs)
+                    (decknix--hub-write-linked-prs))
                   t)))))
 
         (defun decknix--agent-unlink-pr (conv-key url)
@@ -2647,7 +2650,10 @@ No-op if URL is already linked."
                                           url)))
                             existing)
                            entry)
-                  (decknix--agent-tags-write store))))))
+                  (decknix--agent-tags-write store)
+                  ;; Update linked-prs.json for the hub daemon
+                  (when (fboundp 'decknix--hub-write-linked-prs)
+                    (decknix--hub-write-linked-prs)))))))
 
         (defun decknix--agent-pr-url-accessor (pr field)
           "Get FIELD from PR link (supports both hash-table and alist)."
@@ -5373,6 +5379,11 @@ Respects `decknix--sidebar-show-hidden' toggle."
                                           (decknix--hub-pr-cache-get url))
                                 (decknix--hub-pr-fetch-async url))))))))))
 
+              ;; Write linked-prs.json so the hub daemon can poll
+              ;; deploy status for linked PR branches (not just WIP).
+              (when (fboundp 'decknix--hub-write-linked-prs)
+                (decknix--hub-write-linked-prs))
+
               ;; ── Live Sessions ──
               (decknix--sidebar-render-section-header
                (format "Live (%d)" (length buffers)))
@@ -7716,7 +7727,58 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
                               url (error-message-string err))))))))
 
         (defvar decknix--hub-pr-refresh-timer nil
-          "Timer for coalesced sidebar refresh after PR status fetches."))
+          "Timer for coalesced sidebar refresh after PR status fetches.")
+
+        (defun decknix--hub-write-linked-prs ()
+          "Write linked-prs.json to the hub directory for the daemon.
+Collects linked PRs from all live agent-shell sessions, resolves
+their branches from the PR cache, and writes a JSON file in the
+same format as github-wip.json so the hub daemon can poll deploy
+status for these branches."
+          (when (and (fboundp 'agent-shell-buffers)
+                     (bound-and-true-p decknix--hub-dir))
+            (let ((repo-map (make-hash-table :test 'equal)))
+              ;; Collect linked PRs from all live sessions
+              (dolist (buf (agent-shell-buffers))
+                (when (buffer-live-p buf)
+                  (let ((ck (with-current-buffer buf
+                              (decknix--agent-current-conv-key))))
+                    (when ck
+                      (dolist (pr (decknix--agent-linked-prs ck))
+                        (let* ((url (decknix--agent-pr-url-accessor pr "url"))
+                               (parsed (when url (decknix--agent-pr-parse-url url))))
+                          (when parsed
+                            (let* ((owner (nth 0 parsed))
+                                   (repo (nth 1 parsed))
+                                   (number (nth 2 parsed))
+                                   (full-repo (format "%s/%s" owner repo))
+                                   ;; Get branch from PR cache
+                                   (status (when url (decknix--hub-pr-cache-get url)))
+                                   (branch (when status (alist-get 'branch status))))
+                              (when branch
+                                (let ((existing (gethash full-repo repo-map)))
+                                  (puthash full-repo
+                                           (cons (list (cons 'number number)
+                                                       (cons 'branch branch))
+                                                 existing)
+                                           repo-map)))))))))))
+              ;; Build JSON structure matching github-wip.json format
+              (let ((repos nil))
+                (maphash (lambda (repo prs)
+                           (push (list (cons 'repo repo)
+                                       (cons 'prs prs))
+                                 repos))
+                         repo-map)
+                (let ((json-data (json-encode
+                                  (list (cons 'repos repos)))))
+                  (condition-case err
+                      (with-temp-file (expand-file-name "linked-prs.json"
+                                                        decknix--hub-dir)
+                        (insert json-data "\n"))
+                    (error
+                     (message "hub: write linked-prs.json: %s"
+                              (error-message-string err))))))))))
+
 
         (defun decknix--hub-pr-status (url)
           "Look up live status of a GitHub PR URL.

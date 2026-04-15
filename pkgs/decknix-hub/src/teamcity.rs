@@ -242,20 +242,29 @@ async fn get_build_type_name(client: &Client, base: &str, bt_id: &str) -> String
 
 pub fn load_wip_branch_map(dir: &Path) -> HashMap<String, (String, u64)> {
     let mut map = HashMap::new();
-    let wip_path = dir.join("github-wip.json");
-    if let Ok(contents) = std::fs::read_to_string(&wip_path) {
-        #[derive(Deserialize)]
-        struct WipFile { repos: Option<Vec<WipRepo>> }
-        #[derive(Deserialize)]
-        struct WipRepo { repo: String, prs: Vec<WipPr> }
-        #[derive(Deserialize)]
-        struct WipPr { number: u64, branch: Option<String> }
 
-        if let Ok(wip) = serde_json::from_str::<WipFile>(&contents) {
-            for repo in wip.repos.unwrap_or_default() {
-                for pr in &repo.prs {
-                    if let Some(ref branch) = pr.branch {
-                        map.insert(branch.clone(), (repo.repo.clone(), pr.number));
+    // Shared structs — both github-wip.json and linked-prs.json use
+    // the same {repos: [{repo, prs: [{number, branch}]}]} shape.
+    #[derive(Deserialize)]
+    struct RepoFile { repos: Option<Vec<RepoEntry>> }
+    #[derive(Deserialize)]
+    struct RepoEntry { repo: String, prs: Vec<PrEntry> }
+    #[derive(Deserialize)]
+    struct PrEntry { number: u64, branch: Option<String> }
+
+    // Read from both files — linked-prs.json (written by Emacs for
+    // live-session linked PRs) supplements github-wip.json (the user's
+    // own open PRs).
+    for filename in &["github-wip.json", "linked-prs.json"] {
+        let path = dir.join(filename);
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            if let Ok(data) = serde_json::from_str::<RepoFile>(&contents) {
+                for repo in data.repos.unwrap_or_default() {
+                    for pr in &repo.prs {
+                        if let Some(ref branch) = pr.branch {
+                            map.entry(branch.clone())
+                                .or_insert_with(|| (repo.repo.clone(), pr.number));
+                        }
                     }
                 }
             }
@@ -454,9 +463,10 @@ async fn poll_deploy_status(
     repo_tc_map: &HashMap<String, String>,
 ) -> TeamCityDeploysFile {
     let branch_map = load_wip_branch_map(hub_dir);
+    eprintln!("hub: tc deploys: tracking {} branches (wip + linked)", branch_map.len());
     let mut repos: HashMap<String, RepoDeployStatus> = HashMap::new();
 
-    // Group WIP branches by repo
+    // Group branches by repo (from both WIP and linked-prs)
     let mut repo_branches: HashMap<String, Vec<(String, u64)>> = HashMap::new();
     for (branch, (repo, pr_num)) in &branch_map {
         repo_branches
