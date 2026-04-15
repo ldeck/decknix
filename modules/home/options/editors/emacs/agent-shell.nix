@@ -7764,8 +7764,8 @@ EXPAND-MODE controls what to show: `pr' (status/CI only),
                  ;; when displaying cached data while a background refresh
                  ;; is in flight.  Takes the place of leading whitespace.
                  (refresh-str (if stale
-                                  (propertize "↻" 'face 'font-lock-comment-face)
-                                " "))
+                                  (concat (propertize "↻" 'face 'font-lock-comment-face) " ")
+                                "  "))
                  ;; State indicator
                  (state-str (cond
                              ((string= state "MERGED")
