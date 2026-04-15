@@ -5081,11 +5081,20 @@ so RIGHT group starts at column COL-WIDTH."
 
         (defun decknix--sidebar-footer-quick-keys ()
           "Build the Quick key alist for the footer."
-          '(("RET" . "open")
-            ("c"   . "new")
-            ("g"   . "refresh")
-            ("q"   . "quit")
-            ("a"   . "actions…")))
+          (append
+           '(("RET" . "open")
+             ("c"   . "new")
+             ("g"   . "refresh")
+             ("q"   . "quit")
+             ("a"   . "actions…"))
+           (when (fboundp 'decknix-hub-launch-reviews)
+             (let ((count (length (decknix--hub-review-ready-requests))))
+               (list (cons "R" (format "review %s"
+                                 (propertize
+                                  (format "(%d)" count)
+                                  'face (if (> count 0)
+                                            'success
+                                          'font-lock-comment-face)))))))))
 
         (defun decknix--sidebar-footer-toggle-keys ()
           "Build the Toggles key alist (with live state) for the footer."
@@ -5167,11 +5176,7 @@ so RIGHT group starts at column COL-WIDTH."
                            (if decknix--hub-expand-prs "[expanded]" "[badges]")
                            'face (if decknix--hub-expand-prs
                                      'font-lock-constant-face
-                                   'font-lock-comment-face))))
-              (cons "R" (format "review %s"
-                          (propertize
-                           (format "[%d]" (length (decknix--hub-review-ready-requests)))
-                           'face 'font-lock-comment-face)))))))
+                                   'font-lock-comment-face))))))))
 
         (defun decknix--sidebar-render-footer ()
           "Insert responsive key listing or compact hint depending on toggle.
@@ -7710,11 +7715,12 @@ WIDTH is the available character width (default 40)."
                  (short-repo (if (> (length repo) 15)
                                  (substring repo 0 15)
                                repo))
-                 ;; Stale refresh indicator — dim ↻ appended when showing
-                 ;; cached data while a background refresh is in flight
+                 ;; Stale refresh indicator — dim ↻ shown at the left edge
+                 ;; when displaying cached data while a background refresh
+                 ;; is in flight.  Takes the place of leading whitespace.
                  (refresh-str (if stale
                                   (propertize "↻" 'face 'font-lock-comment-face)
-                                ""))
+                                " "))
                  ;; State indicator
                  (state-str (cond
                              ((string= state "MERGED")
@@ -7773,10 +7779,10 @@ WIDTH is the available character width (default 40)."
                  ;; Age for merged PRs
                  (age-str (when merged-at
                             (concat " " (decknix--hub-format-age merged-at)))))
-            (format "    %s%s#%d %s%s%s%s%s"
+            (format "   %s%s%s#%d %s%s%s%s"
+                    refresh-str
                     type-prefix short-repo number
                     state-str
-                    refresh-str
                     (or ci-str "")
                     checks-str
                     (or age-str ""))))

@@ -100,7 +100,7 @@
   #
   # Each directory supports:
   #   identity.nix                        — org user identity (auto-wired to config.<org>.user.*)
-  #   home.nix, system.nix, secrets.nix   — direct files
+  #   home.nix, system.nix, secrets.nix   — direct files (secrets loaded into both layers)
   #   home/<anything>.nix                 — recursive subdirectory loading
   #
   # Identity files:
@@ -114,12 +114,19 @@
   #   ~/.config/decknix/
   #   ├── local/
   #   │   ├── home.nix           — personal packages, git identity
-  #   │   └── system.nix         — machine-specific tweaks
+  #   │   ├── system.nix         — machine-specific tweaks
+  #   │   └── secrets.nix        — personal secrets (e.g., .authinfo)
   #   ├── nurturecloud/
   #   │   ├── identity.nix       — { email = "you@nurturecloud.com"; name = "..."; }
   #   │   ├── home.nix           — NC-specific home overrides
-  #   │   └── system.nix         — NC-specific system overrides
-  #   └── secrets.nix            — root-level secrets (also supported)
+  #   │   ├── system.nix         — NC-specific system overrides
+  #   │   └── secrets.nix        — NC-specific secrets (e.g., TeamCity token)
+  #   └── secrets.nix            — root-level secrets (loaded into both home & system layers)
+  #
+  # Secrets files are loaded into BOTH home-manager AND darwin/system contexts.
+  # Use `lib.optionalAttrs (options ? <namespace>)` guards for context-specific
+  # options (e.g., home.file only exists in home-manager, decknix.services only
+  # exists in darwin).
   configLoader = {
     lib,
     username,
@@ -237,7 +244,7 @@
   in {
     modules = {
       home = (load "home") ++ (load "secrets");
-      system = load "system";
+      system = (load "system") ++ (load "secrets");
       # Identity modules — injected into both darwin and home-manager
       # so config.<org>.user.* is available in both contexts.
       identity = identityModules;
