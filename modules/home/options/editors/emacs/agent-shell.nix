@@ -7774,16 +7774,28 @@ WIDTH is the available character width (default 40)."
                         (when parts
                           (concat " " (string-join (nreverse parts) " "))))
                     ""))
+                 ;; Deploy pipeline indicator (DTSP) for open PRs
+                 (branch (alist-get 'branch status))
+                 (owner (nth 0 parsed))
+                 (repo-full (when (and owner repo)
+                              (format "%s/%s" owner repo)))
+                 (deploy-str
+                  (if (and (string= state "OPEN")
+                           repo-full branch
+                           (fboundp 'decknix--hub-deploy-indicator))
+                      (decknix--hub-deploy-indicator repo-full branch)
+                    ""))
                  ;; Type prefix for subject PRs
                  (type-prefix (if (string= pr-type "subject") "⊳ " ""))
                  ;; Age for merged PRs
                  (age-str (when merged-at
                             (concat " " (decknix--hub-format-age merged-at)))))
-            (format "   %s%s%s#%d %s%s%s%s"
+            (format "   %s%s%s#%d %s%s%s%s%s"
                     refresh-str
                     type-prefix short-repo number
                     state-str
                     (or ci-str "")
+                    deploy-str
                     checks-str
                     (or age-str ""))))
 
