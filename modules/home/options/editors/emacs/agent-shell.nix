@@ -5895,6 +5895,12 @@ the review appears side-by-side with the current buffer."
                                (status-str (if (string-empty-p rev-str)
                                                ci-str
                                              (concat ci-str rev-str)))
+                               (active-str (if (decknix--hub-request-has-live-session-p item)
+                                               (decknix--hub-icon "◉" '(:foreground "#87d7ff"))
+                                             ""))
+                               (status-str (if (string-empty-p active-str)
+                                               status-str
+                                             (concat status-str active-str)))
                                (short (if (> (length title) 30)
                                           (concat (substring title 0 29) "…")
                                         title))
@@ -7228,6 +7234,22 @@ Always returns t when `decknix--hub-show-bots' is non-nil."
               (not (decknix--hub-bot-author-p
                     (alist-get 'author item)))))
 
+        ;; -- Hub: active review detection --
+        ;; Cross-references request items against live agent-shell buffers
+        ;; to detect PRs that already have a review session open.
+        (defun decknix--hub-request-has-live-session-p (item)
+          "Return non-nil if ITEM's PR has a live agent-shell review session.
+Checks buffer names for the pattern `pr-<repo>-<number>'."
+          (let* ((repo-full (or (alist-get 'repo item) ""))
+                 (repo (car (last (split-string repo-full "/"))))
+                 (number (alist-get 'number item))
+                 (needle (format "pr-%s-%s" repo number)))
+            (and (fboundp 'agent-shell-buffers)
+                 (seq-some (lambda (buf)
+                             (string-match-p (regexp-quote needle)
+                                             (buffer-name buf)))
+                           (agent-shell-buffers)))))
+
         ;; -- Hub: PR expand toggle --
         (defvar decknix--hub-expand-prs nil
           "When non-nil, show linked PRs expanded under sessions in sidebar.")
@@ -7534,10 +7556,10 @@ Returns \"pass\", \"running\", \"fail\", \"soft_fail\", or \"unknown\".
 
         ;; -- Hub: sidebar icon helper --
         (defun decknix--hub-icon (str face)
-          "Create a sidebar icon from STR with FACE, scaled to fit line height.
-Applies a display height property so unicode glyphs don't stretch lines.
-Emoji characters (detected by their Unicode range) get a more aggressive
-scale factor since the Apple Color Emoji font renders at ~2x line height."
+          "Create a sidebar icon from STR with FACE.
+Only applies a display height property for emoji characters to prevent
+them from stretching line height.  Plain text symbols (✓, ✗, @, ⟳, etc.)
+are left at normal size for readability."
           (let* ((ch (and (> (length str) 0) (aref str 0)))
                  (emoji-p (and ch (or
                                    ;; Miscellaneous Symbols & Pictographs
@@ -7545,9 +7567,10 @@ scale factor since the Apple Color Emoji font renders at ~2x line height."
                                    ;; Emoticons, Transport, Supplemental
                                    (and (>= ch #x2600) (<= ch #x27BF))
                                    ;; Dingbats
-                                   (and (>= ch #x2700) (<= ch #x27BF)))))
-                 (scale (if emoji-p 0.7 0.85)))
-            (propertize str 'face face 'display `(height ,scale))))
+                                   (and (>= ch #x2700) (<= ch #x27BF))))))
+            (if emoji-p
+                (propertize str 'face face 'display '(height 0.7))
+              (propertize str 'face face))))
 
         ;; -- Hub: CI + mergeable icon --
         (defun decknix--hub-ci-icon (ci &optional mergeable)
@@ -7679,6 +7702,14 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                        (status-str (if (string-empty-p reply-str)
                                        status-str
                                      (concat status-str reply-str)))
+                       ;; Active review indicator — shows when a live
+                       ;; agent session is already reviewing this PR
+                       (active-str (if (decknix--hub-request-has-live-session-p item)
+                                       (decknix--hub-icon "◉" '(:foreground "#87d7ff"))
+                                     ""))
+                       (status-str (if (string-empty-p active-str)
+                                       status-str
+                                     (concat status-str active-str)))
                        (draft (alist-get 'draft item))
                        (url (alist-get 'url item))
                        ;; Truncate title to fit sidebar
