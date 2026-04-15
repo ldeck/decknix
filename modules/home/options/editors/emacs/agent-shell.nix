@@ -7670,15 +7670,25 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
 First checks hub WIP/Reviews data, then the async cache, and
 kicks off an async `gh pr view' fetch if not found anywhere.
 Returns a status alist, or a loading sentinel with state=LOADING
-when a fetch is in-flight."
-          (or (decknix--hub-pr-status-from-hub url)
-              (decknix--hub-pr-cache-get url)
-              (progn
-                (decknix--hub-pr-fetch-async url)
-                ;; Return a loading sentinel so callers can show a spinner
-                ;; instead of a bare "?"
-                (when (gethash url decknix--hub-pr-pending-fetches)
-                  '((state . "LOADING"))))))
+when a fetch is in-flight.
+
+Hub results are mirrored into `decknix--hub-pr-cache' so that on
+restart (before hub data loads or after the PR leaves WIP/Reviews)
+the cache provides an immediate fallback instead of a bare spinner."
+          (let ((hub-result (decknix--hub-pr-status-from-hub url)))
+            (if hub-result
+                (progn
+                  ;; Mirror hub data into cache so it survives restarts
+                  (puthash url (cons (float-time) hub-result)
+                           decknix--hub-pr-cache)
+                  hub-result)
+              (or (decknix--hub-pr-cache-get url)
+                  (progn
+                    (decknix--hub-pr-fetch-async url)
+                    ;; Return a loading sentinel so callers can show a spinner
+                    ;; instead of a bare "?"
+                    (when (gethash url decknix--hub-pr-pending-fetches)
+                      '((state . "LOADING"))))))))
 
         (defun decknix--hub-pr-format-line (pr-link &optional width)
           "Format a single linked PR for sidebar display.
