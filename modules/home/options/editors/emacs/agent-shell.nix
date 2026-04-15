@@ -6696,10 +6696,11 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                   (when (boundp 'decknix--hub-show-bots)
                     (setq decknix--hub-show-bots
                           (alist-get 'show-bots state)))
-                  ;; PR expand: restore toggle
+                  ;; PR expand: restore toggle (normalise legacy boolean t → pr)
                   (when (boundp 'decknix--hub-expand-prs)
-                    (setq decknix--hub-expand-prs
-                          (alist-get 'expand-prs state)))
+                    (let ((val (alist-get 'expand-prs state)))
+                      (setq decknix--hub-expand-prs
+                            (if (eq val t) 'pr val))))
                   ;; Deploy indicator: restore toggle
                   (let ((sd (alist-get 'show-deploys state 'missing)))
                     (unless (eq sd 'missing)
