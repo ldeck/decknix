@@ -110,7 +110,7 @@ in
     # the daemon already loaded the fresh config.  If the daemon is still
     # running (config-only change), this picks up the new default.el.
     system.activationScripts.postActivation.text = lib.mkAfter ''
-      if ${emacsPackage}/bin/emacsclient -e '(boundp (quote deckmacs-reload))' 2>/dev/null | grep -q t; then
+      if ${emacsPackage}/bin/emacsclient -e '(fboundp (quote deckmacs-reload))' 2>/dev/null | grep -q t; then
         ${emacsPackage}/bin/emacsclient -e '(deckmacs-reload)' 2>/dev/null && \
           echo "emacs: config hot-reloaded (deckmacs-reload)" || true
       fi
