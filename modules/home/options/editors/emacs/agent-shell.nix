@@ -4926,6 +4926,7 @@ Like treemacs `W' / extra-wide-toggle."
            ("a w" "Set workspace" decknix-sidebar-set-workspace)
            ("a h" "Hide"          decknix-sidebar-hide-conversation)
            ("a u" "Unhide"        decknix-sidebar-unhide-at-point)
+           ("a M" "Merge conv"    decknix-sidebar-merge-conversation)
            ("a m" "Set mode"      agent-shell-workspace-sidebar-set-mode)
            ("a a" "Add tile"      agent-shell-workspace-tile-add)
            ("a x" "Remove tile"   agent-shell-workspace-tile-remove)]
@@ -5576,6 +5577,85 @@ agent-sessions.json to restore."
               (agent-shell-workspace-sidebar-refresh)
               (message "Conversation hidden"))))
 
+        (defun decknix-sidebar-merge-conversation ()
+          "Merge the conversation at point into another conversation.
+Sets a mergedInto redirect so the source conversation resolves to
+the target.  Sessions and tags are moved to the target."
+          (interactive)
+          (let ((source-key
+                 (or (get-text-property (line-beginning-position)
+                                        'decknix-sidebar-saved-conv-key)
+                     (let ((prev (get-text-property (line-beginning-position)
+                                                    'decknix-previous-session)))
+                       (when prev (alist-get 'conv-key prev))))))
+            (unless source-key
+              (user-error "No conversation at point"))
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   ;; Build completion candidates: all conversations except source
+                   ;; and those that already have mergedInto set (avoid chains)
+                   (candidates nil))
+              (maphash
+               (lambda (key val)
+                 (when (and (hash-table-p val)
+                            (not (string= key source-key))
+                            (not (gethash "mergedInto" val))
+                            (not (gethash "hidden" val)))
+                   (let* ((tags (gethash "tags" val))
+                          (ws (gethash "workspace" val))
+                          (nsessions (length (gethash "sessions" val)))
+                          (label (format "%s  %s  (%d sessions)"
+                                         (if tags
+                                             (mapconcat (lambda (tag) (concat "#" tag))
+                                                        tags " ")
+                                           "(no tags)")
+                                         (or ws "")
+                                         nsessions)))
+                     (push (cons label key) candidates))))
+               convs)
+              (unless candidates
+                (user-error "No other conversations to merge into"))
+              ;; Sort by label
+              (setq candidates (sort candidates
+                                     (lambda (a b) (string< (car a) (car b)))))
+              (let* ((choice (completing-read "Merge into: " candidates nil t))
+                     (target-key (cdr (assoc choice candidates))))
+                (when (yes-or-no-p
+                       (format "Merge this conversation into %s? " choice))
+                  (let* ((src-entry (gethash source-key convs))
+                         (tgt-entry (gethash target-key convs))
+                         ;; Move sessions
+                         (src-sessions (when (hash-table-p src-entry)
+                                         (gethash "sessions" src-entry)))
+                         (tgt-sessions (when (hash-table-p tgt-entry)
+                                         (gethash "sessions" tgt-entry)))
+                         ;; Merge tags
+                         (src-tags (when (hash-table-p src-entry)
+                                    (gethash "tags" src-entry)))
+                         (tgt-tags (when (hash-table-p tgt-entry)
+                                     (gethash "tags" tgt-entry))))
+                    ;; Add source sessions to target
+                    (dolist (sid (or src-sessions '()))
+                      (cl-pushnew sid tgt-sessions :test #'string=))
+                    (puthash "sessions" tgt-sessions tgt-entry)
+                    ;; Merge tags
+                    (dolist (tag (or src-tags '()))
+                      (cl-pushnew tag tgt-tags :test #'string=))
+                    (puthash "tags" tgt-tags tgt-entry)
+                    ;; Set redirect
+                    (puthash "mergedInto" target-key src-entry)
+                    (decknix--agent-tags-write store)
+                    ;; Also update previous-sessions list if the source
+                    ;; was a previous session — remove it since it now
+                    ;; resolves to the target
+                    (setq decknix--sidebar-previous-sessions
+                          (seq-filter
+                           (lambda (e)
+                             (not (equal (alist-get 'conv-key e) source-key)))
+                           decknix--sidebar-previous-sessions))
+                    (agent-shell-workspace-sidebar-refresh)
+                    (message "Conversation merged")))))))
+
         ;; -- Session transient --
         (transient-define-prefix decknix-sidebar-sessions ()
           "Session operations."
@@ -5599,6 +5679,7 @@ agent-sessions.json to restore."
            ("d" "Delete killed" agent-shell-workspace-sidebar-delete-killed)
            ("w" "Set workspace" decknix-sidebar-set-workspace)
            ("h" "Hide"          decknix-sidebar-hide-conversation)
+           ("M" "Merge conv"    decknix-sidebar-merge-conversation)
            ("m" "Set mode"      agent-shell-workspace-sidebar-set-mode)]
           ["Tiling"
            ("a" "Add tile"      agent-shell-workspace-tile-add)
