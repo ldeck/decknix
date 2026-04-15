@@ -171,9 +171,13 @@ The `decknix--context-update-header` function delegates to the unified header
 - Sidebar sections (top to bottom): **Requests** → **WIP** → **Live** →
   **Recent** → **Keys/Toggles** footer.
 - Agent management: `c` new, `k` kill, `r` restart, `R` rename, `d` delete killed.
-- Tiling controls: `a` add, `x` remove, `t` toggle.
-- Quick-switch mode (`S`): moving up/down in sidebar previews the agent in the
-  main area without stealing focus.
+- Tiling controls: `a a` add, `a x` remove.
+- Toggles transient (`T`): Opens sectioned menu grouped by sidebar section:
+  - **Global**: `W` width, `O` org filter
+  - **Requests**: `F` age, `C` ci, `@` mention, `B` bots
+  - **Live**: `E` PRs (4-way cycle: off/PR/pipeline/both), `S` quick-switch,
+    `t` tile, `d` display mode, `H` hidden
+  - **WIP**: `P` pipeline/deploy indicators
 - Session ops prefix (`s`): `s s` picker, `s g` grep, `s r` recent.
 - Auto-refreshes every 2 seconds (live sessions) plus instant refresh on hub
   file changes.
