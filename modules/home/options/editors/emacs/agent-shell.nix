@@ -5525,6 +5525,15 @@ Respects `decknix--sidebar-show-hidden' toggle."
             (let ((hub-url (get-text-property
                             (line-beginning-position)
                             'decknix-hub-url))
+                  (hub-type (get-text-property
+                              (line-beginning-position)
+                              'decknix-hub-type))
+                  (hub-repo (get-text-property
+                              (line-beginning-position)
+                              'decknix-hub-repo))
+                  (hub-number (get-text-property
+                                (line-beginning-position)
+                                'decknix-hub-number))
                   (prev (get-text-property
                           (line-beginning-position)
                           'decknix-previous-session))
@@ -5532,7 +5541,14 @@ Respects `decknix--sidebar-show-hidden' toggle."
                           (line-beginning-position)
                           'decknix-sidebar-saved-session)))
               (cond
-               ;; Hub item: open in xwidget-webkit or browser
+               ;; WIP PR: show action menu (merge/close/comment/open)
+               ((and hub-url (eq hub-type 'wip) hub-repo hub-number)
+                (let ((item (list (cons 'url hub-url)
+                                  (cons 'repo hub-repo)
+                                  (cons 'number hub-number)
+                                  (cons 'decknix-type 'wip))))
+                  (decknix--nav-hub-item-actions item)))
+               ;; Other hub item (requests): open in xwidget-webkit or browser
                (hub-url
                 (decknix--open-url hub-url))
                ;; Previous session: restore it and focus
@@ -5999,18 +6015,26 @@ the review appears side-by-side with the current buffer."
                          owner repo number)))))
 
         (defun decknix--nav-hub-item-actions (item)
-          "Show an action menu for a hub ITEM (review or WIP PR)."
+          "Show an action menu for a hub ITEM (review or WIP PR).
+When ITEM type is `wip', additional actions are available:
+merge, close, and comment."
           (let* ((url (alist-get 'url item))
                  (repo (or (alist-get 'repo item) ""))
                  (number (alist-get 'number item))
                  (type (alist-get 'decknix-type item))
+                 (wip-p (eq type 'wip))
                  (short-repo (car (last (split-string repo "/")))))
             (run-at-time 0.05 nil
               (eval `(lambda ()
-                       (let ((choice (read-char-choice
-                                      ,(format "%s#%s: [o]pen [b]rowser [c]opy-url [r]eview [q]uit"
-                                               short-repo number)
-                                      '(?o ?b ?c ?r ?q))))
+                       (let* ((prompt ,(if wip-p
+                                          (format "%s#%s: [o]pen [b]rowser [c]opy-url [r]eview [m]erge c[l]ose co[M]ment [q]uit"
+                                                  short-repo number)
+                                        (format "%s#%s: [o]pen [b]rowser [c]opy-url [r]eview [q]uit"
+                                                short-repo number)))
+                              (keys ,(if wip-p
+                                         (list ?o ?b ?c ?r ?m ?l ?M ?q)
+                                       (list ?o ?b ?c ?r ?q)))
+                              (choice (read-char-choice prompt keys)))
                          (pcase choice
                            (?o (when ,url (decknix--open-url ,url)))
                            (?b (when ,url (browse-url ,url)))
@@ -6019,7 +6043,83 @@ the review appears side-by-side with the current buffer."
                                  (message "Copied: %s" ,url)))
                            (?r (when ,url
                                  (decknix--nav-hub-start-review ,url)))
+                           (?m (decknix--hub-wip-merge ,repo ,number))
+                           (?l (decknix--hub-wip-close ,repo ,number))
+                           (?M (decknix--hub-wip-comment ,repo ,number))
                            (?q (message "Cancelled"))))) t))))
+
+        ;; -- WIP PR actions via gh CLI --
+
+        (defun decknix--hub-wip-merge (repo number)
+          "Merge PR NUMBER in REPO via gh CLI.
+Prompts for merge method: rebase, squash, or merge commit."
+          (let* ((method (read-char-choice
+                          (format "Merge %s#%d: [r]ebase [s]quash [m]erge [q]uit"
+                                  (car (last (split-string repo "/"))) number)
+                          '(?r ?s ?m ?q))))
+            (pcase method
+              (?q (message "Cancelled"))
+              (_
+               (let ((flag (pcase method
+                             (?r "--rebase")
+                             (?s "--squash")
+                             (?m "--merge"))))
+                 (when (yes-or-no-p
+                        (format "Merge %s#%d with %s?"
+                                repo number (substring flag 2)))
+                   (decknix--hub-gh-async
+                    "merge" repo number
+                    (list "pr" "merge" (number-to-string number)
+                          "-R" repo flag "--delete-branch"))))))))
+
+        (defun decknix--hub-wip-close (repo number)
+          "Close PR NUMBER in REPO via gh CLI."
+          (when (yes-or-no-p (format "Close %s#%d?" repo number))
+            (decknix--hub-gh-async
+             "close" repo number
+             (list "pr" "close" (number-to-string number)
+                   "-R" repo))))
+
+        (defun decknix--hub-wip-comment (repo number)
+          "Add a comment to PR NUMBER in REPO via gh CLI."
+          (let ((body (read-string
+                       (format "Comment on %s#%d: "
+                               (car (last (split-string repo "/")))
+                               number))))
+            (when (and body (not (string-empty-p body)))
+              (decknix--hub-gh-async
+               "comment" repo number
+               (list "pr" "comment" (number-to-string number)
+                     "-R" repo "--body" body)))))
+
+        (defun decknix--hub-gh-async (action repo number args)
+          "Run gh CLI with ARGS asynchronously for ACTION on REPO#NUMBER.
+Shows result in the echo area and triggers a hub refresh on success."
+          (let* ((short-repo (car (last (split-string repo "/"))))
+                 (label (format "%s %s#%d" action short-repo number))
+                 (buf-name (format " *hub-%s*" label)))
+            (message "%s: running..." label)
+            (let ((proc (apply #'start-process
+                               buf-name buf-name "gh" args)))
+              (set-process-sentinel
+               proc
+               (eval `(lambda (proc event)
+                        (let ((exit-code (process-exit-status proc))
+                              (output (with-current-buffer (process-buffer proc)
+                                        (string-trim (buffer-string)))))
+                          (if (= exit-code 0)
+                              (progn
+                                (message "%s: done%s" ,label
+                                         (if (string-empty-p output) ""
+                                           (format " — %s" output)))
+                                ;; Trigger hub refresh to update sidebar
+                                (when (fboundp 'decknix--hub-refresh-all)
+                                  (run-at-time 2 nil #'decknix--hub-refresh-all)))
+                            (message "%s: failed (exit %d) %s"
+                                     ,label exit-code output))
+                          (when (buffer-live-p (process-buffer proc))
+                            (kill-buffer (process-buffer proc)))))
+                     t)))))
 
         (defun decknix--nav-display-in-main (buf)
           "Display BUF in the main (non-side) window, matching sidebar RET behaviour."
