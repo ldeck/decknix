@@ -6223,9 +6223,14 @@ Shows result in the echo area and triggers a hub refresh on success."
         ;; -- Consult-based section pickers --
         ;; All section navigation (r, w, l, p) uses consult for filtering.
 
-        (defun decknix-sidebar-nav-requests-consult ()
+        (defun decknix-sidebar-nav-requests-consult (&optional mention-only limit)
           "Pick a PR review request via consult completion with filtering.
-Each candidate shows age, repo, PR number, CI status, and title."
+Each candidate shows age, repo, PR number, CI status, and title —
+matching the sidebar rendering style.
+When MENTION-ONLY is non-nil, show only @-mentioned items.
+When LIMIT is a positive integer, show at most that many items.
+Interactively: \\[universal-argument] N r limits to N items;
+               \\[universal-argument] \\[universal-argument] r shows @-mentioned only."
           (interactive)
           (let* ((all-items (when (boundp 'decknix--hub-reviews)
                               (alist-get 'items decknix--hub-reviews)))
@@ -6235,10 +6240,18 @@ Each candidate shows age, repo, PR number, CI status, and title."
                                 (decknix--hub-age-visible-p (alist-get 'created item))
                                 (decknix--hub-ci-visible-p item)
                                 (decknix--hub-mention-visible-p item)
-                                (decknix--hub-bot-visible-p item)))
-                         (or all-items '()))))
+                                (decknix--hub-bot-visible-p item)
+                                ;; Extra @-mention filter when requested
+                                (or (not mention-only)
+                                    (eq (alist-get 'mentioned item) t))))
+                         (or all-items '())))
+                 ;; Apply count limit
+                 (items (if (and limit (integerp limit) (> limit 0))
+                            (seq-take items limit)
+                          items)))
             (if (not items)
-                (message "No review requests")
+                (message "No review requests%s"
+                         (if mention-only " (with @-mention)" ""))
               (let* ((entries
                       (mapcar
                        (lambda (item)
@@ -6255,11 +6268,42 @@ Each candidate shows age, repo, PR number, CI status, and title."
                                 (status-str (if (string-empty-p rev-str)
                                                 ci-str
                                               (concat ci-str rev-str)))
-                                (label (format "%3s %s#%d %s %s"
-                                               age repo number status-str title)))
+                                ;; @-mention indicator
+                                (mention-str (if (eq (alist-get 'mentioned item) t)
+                                                 (propertize "@"
+                                                   'face '(:foreground "#d7af5f" :weight bold))
+                                               ""))
+                                (status-str (if (string-empty-p mention-str)
+                                                status-str
+                                              (concat status-str mention-str)))
+                                ;; Active session indicator
+                                (active-str (if (decknix--hub-request-has-live-session-p item)
+                                                (propertize "◉"
+                                                  'face '(:foreground "#87d7ff"))
+                                              ""))
+                                (status-str (if (string-empty-p active-str)
+                                                status-str
+                                              (concat status-str active-str)))
+                                ;; Age colouring matching sidebar
+                                (age-face (cond
+                                           ((string-match-p "d$" age)
+                                            (if (>= (string-to-number age) 3)
+                                                'error 'warning))
+                                           (t 'font-lock-comment-face)))
+                                (label (format " %3s %s#%d %s %s"
+                                               (propertize age 'face age-face)
+                                               (propertize (or repo "") 'face 'font-lock-type-face)
+                                               number
+                                               status-str
+                                               title)))
                            (cons label item)))
                        items))
-                     (choice (completing-read "Request: "
+                     (prompt (format "Request%s%s: "
+                                     (if mention-only " @" "")
+                                     (if (and limit (integerp limit) (> limit 0))
+                                         (format " [≤%d]" limit)
+                                       "")))
+                     (choice (completing-read prompt
                                (mapcar #'car entries) nil t))
                      (item (cdr (assoc choice entries))))
                 (when item
@@ -6632,11 +6676,15 @@ exits, focus returns to the sidebar."
           (call-interactively cmd))
 
         ;; -- Dispatch commands for section keys --
-        (defun decknix-sidebar-goto-requests ()
-          "Navigate to hub Requests items via consult."
-          (interactive)
+        (defun decknix-sidebar-goto-requests (arg)
+          "Navigate to hub Requests items via consult.
+With \\[universal-argument] N, show at most N items.
+With \\[universal-argument] \\[universal-argument], show @-mentioned only."
+          (interactive "P")
           (if (and (fboundp 'decknix--hub-has-data-p) (decknix--hub-has-data-p))
-              (decknix-sidebar-nav-requests-consult)
+              (let ((mention-only (equal arg '(16)))  ;; C-u C-u
+                    (limit (and (integerp arg) arg)))  ;; C-u N
+                (decknix-sidebar-nav-requests-consult mention-only limit))
             (message "Hub: no data — enable with decknix.services.hub.enable = true")))
 
         (defun decknix-sidebar-goto-wip ()
