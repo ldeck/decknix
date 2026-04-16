@@ -5958,63 +5958,75 @@ R         — pick one via consult, prompt for layout
 C-u R     — launch ALL ready reviews, prompt for layout
 C-u N R   — pick N via consult (embark-select to mark, RET to confirm),
             then prompt for layout
-C-u C-u R — like R but filtered to @-mentioned items only."
+C-u C-u R — like R but filtered to @-mentioned items only.
+Press M-m during completion to toggle @-mention filter live."
           (interactive "P")
-          (let* ((mention-only (equal arg '(16)))  ;; C-u C-u
-                 (entries (decknix--hub-review-entries mention-only)))
-            (if (not entries)
-                (message "No review-ready requests%s"
-                         (if mention-only " (with @-mention)" ""))
-              (let ((tag (if mention-only " @" "")))
-                (cond
-                 ;; C-u: launch all
-                 ((equal arg '(4))
-                  (let* ((count (length entries))
-                         (choice (read-char-choice
-                                  (format "Launch all %d review%s: [s]plit  [r]eplace  [q]uit "
-                                          count (if (= count 1) "" "s"))
-                                  '(?s ?r ?q))))
-                    (unless (eq choice ?q)
-                      (decknix--hub-launch-review-items
-                       (mapcar #'cdr entries) (eq choice ?s)))))
-                 ;; Numeric prefix (C-u N): multi-select via embark
-                 ((and (integerp arg) (> arg 1))
-                  (let ((selected nil)
-                        (remaining (mapcar #'car entries)))
-                    ;; Collect up to ARG selections
-                    (catch 'done
-                      (dotimes (i arg)
-                        (if (not remaining)
-                            (throw 'done nil)
-                          (let* ((prompt (format "Review%s %d/%d (%d ready): "
-                                                tag (1+ i) arg (length remaining)))
-                                 (choice (completing-read prompt remaining nil t)))
-                            (when choice
-                              (push (cdr (assoc choice entries)) selected)
-                              (setq remaining (delete choice remaining)))))))
-                    (setq selected (nreverse selected))
-                    (when selected
-                      (let* ((count (length selected))
+          (let ((decknix--rev-mention-only (equal arg '(16))))  ;; C-u C-u
+            (catch 'decknix--rev-done
+              (while t
+                (let ((entries (decknix--hub-review-entries
+                                decknix--rev-mention-only)))
+                  (if (not entries)
+                      (progn
+                        (message "No review-ready requests%s"
+                                 (if decknix--rev-mention-only
+                                     " (with @-mention)" ""))
+                        (throw 'decknix--rev-done nil))
+                    (cond
+                     ;; C-u: launch all
+                     ((equal arg '(4))
+                      (let* ((count (length entries))
                              (choice (read-char-choice
-                                      (format "%d review%s: [s]plit  [r]eplace  [q]uit "
+                                      (format "Launch all %d review%s: [s]plit  [r]eplace  [q]uit "
                                               count (if (= count 1) "" "s"))
                                       '(?s ?r ?q))))
                         (unless (eq choice ?q)
                           (decknix--hub-launch-review-items
-                           selected (eq choice ?s)))))))
-                 ;; No prefix (or C-u C-u): single pick
-                 (t
-                  (let* ((choice (completing-read
-                                  (format "Review%s (%d ready): " tag (length entries))
-                                  (mapcar #'car entries) nil t))
-                         (item (cdr (assoc choice entries))))
-                    (when item
-                      (let ((choice (read-char-choice
-                                     "Layout: [s]plit  [r]eplace  [q]uit "
-                                     '(?s ?r ?q))))
-                        (unless (eq choice ?q)
-                          (decknix--hub-launch-review-items
-                           (list item) (eq choice ?s))))))))))))
+                           (mapcar #'cdr entries) (eq choice ?s))))
+                      (throw 'decknix--rev-done nil))
+                     ;; Numeric prefix (C-u N): multi-select via embark
+                     ((and (integerp arg) (> arg 1))
+                      (let ((selected nil)
+                            (remaining (mapcar #'car entries)))
+                        ;; Collect up to ARG selections
+                        (catch 'done
+                          (dotimes (i arg)
+                            (if (not remaining)
+                                (throw 'done nil)
+                              (let* ((prompt (format "Review %d/%d (%d ready): "
+                                                    (1+ i) arg (length remaining)))
+                                     (choice (completing-read prompt remaining nil t)))
+                                (when choice
+                                  (push (cdr (assoc choice entries)) selected)
+                                  (setq remaining (delete choice remaining)))))))
+                        (setq selected (nreverse selected))
+                        (when selected
+                          (let* ((count (length selected))
+                                 (choice (read-char-choice
+                                          (format "%d review%s: [s]plit  [r]eplace  [q]uit "
+                                                  count (if (= count 1) "" "s"))
+                                          '(?s ?r ?q))))
+                            (unless (eq choice ?q)
+                              (decknix--hub-launch-review-items
+                               selected (eq choice ?s))))))
+                      (throw 'decknix--rev-done nil))
+                     ;; No prefix (or C-u C-u): single pick with M-m toggle
+                     (t
+                      (let* ((prompt (format "Review (%d ready): "
+                                             (length entries)))
+                             (result (decknix--hub-completing-read-with-mention-toggle
+                                      prompt entries 'decknix--rev-mention-only)))
+                        (if (not result)
+                            (throw 'decknix--rev-done nil)
+                          (let ((item (cdr (assoc (car result) entries))))
+                            (when item
+                              (let ((choice (read-char-choice
+                                             "Layout: [s]plit  [r]eplace  [q]uit "
+                                             '(?s ?r ?q))))
+                                (unless (eq choice ?q)
+                                  (decknix--hub-launch-review-items
+                                   (list item) (eq choice ?s)))))
+                            (throw 'decknix--rev-done nil))))))))))))
 
         (defun decknix--nav-hub-start-review-split (url)
           "Start a PR review session for URL in a new split window.
@@ -6264,92 +6276,133 @@ Shows result in the echo area and triggers a hub refresh on success."
         ;; -- Consult-based section pickers --
         ;; All section navigation (r, w, l, p) uses consult for filtering.
 
+        (defun decknix--hub-completing-read-with-mention-toggle
+            (prompt entries mention-only-var)
+          "Run `completing-read' on ENTRIES with M-m to toggle @-mention filter.
+PROMPT is the base prompt string.  MENTION-ONLY-VAR is a symbol naming
+the variable that holds the current mention-only state; when M-m is
+pressed, it is toggled and the completion restarts with re-filtered
+candidates.  Returns (CHOICE . MENTION-ONLY) or nil if cancelled."
+          (catch 'decknix--mention-result
+            (while t
+              (let* ((mo (symbol-value mention-only-var))
+                     (full-prompt (format "%s%s(M-m toggle @) "
+                                         prompt
+                                         (if mo "@ " "")))
+                     (map (make-sparse-keymap)))
+                (set-keymap-parent map minibuffer-local-completion-map)
+                (define-key map (kbd "M-m")
+                  (eval `(lambda ()
+                           (interactive)
+                           (set ',mention-only-var (not (symbol-value ',mention-only-var)))
+                           (abort-recursive-edit))
+                        t))
+                (condition-case nil
+                    (let ((choice (minibuffer-with-setup-hook
+                                     (eval `(lambda ()
+                                              (use-local-map ,map))
+                                           t)
+                                   (completing-read full-prompt
+                                     (mapcar #'car entries) nil t))))
+                      (throw 'decknix--mention-result (cons choice mo)))
+                  (quit (throw 'decknix--mention-result nil)))))))
+
         (defun decknix-sidebar-nav-requests-consult (&optional mention-only limit)
           "Pick a PR review request via consult completion with filtering.
 Each candidate shows age, repo, PR number, CI status, and title —
 matching the sidebar rendering style.
 When MENTION-ONLY is non-nil, show only @-mentioned items.
 When LIMIT is a positive integer, show at most that many items.
+Press M-m during completion to toggle @-mention filter live.
 Interactively: \\[universal-argument] N r limits to N items;
                \\[universal-argument] \\[universal-argument] r shows @-mentioned only."
           (interactive)
-          (let* ((all-items (when (boundp 'decknix--hub-reviews)
-                              (alist-get 'items decknix--hub-reviews)))
-                 (items (seq-filter
-                         (lambda (item)
-                           (and (decknix--hub-item-visible-p (alist-get 'repo item))
-                                (decknix--hub-age-visible-p (alist-get 'created item))
-                                (decknix--hub-ci-visible-p item)
-                                (decknix--hub-mention-visible-p item)
-                                (decknix--hub-bot-visible-p item)
-                                ;; Extra @-mention filter when requested
-                                (or (not mention-only)
-                                    (eq (alist-get 'mentioned item) t))))
-                         (or all-items '())))
-                 ;; Apply count limit
-                 (items (if (and limit (integerp limit) (> limit 0))
-                            (seq-take items limit)
-                          items)))
-            (if (not items)
-                (message "No review requests%s"
-                         (if mention-only " (with @-mention)" ""))
-              (let* ((entries
-                      (mapcar
-                       (lambda (item)
-                         (let* ((age (decknix--hub-format-age
-                                      (alist-get 'created item)))
-                                (repo-full (or (alist-get 'repo item) ""))
-                                (repo (car (last (split-string repo-full "/"))))
-                                (number (alist-get 'number item))
-                                (title (or (alist-get 'title item) ""))
-                                (ci-str (decknix--hub-ci-icon
-                                         (alist-get 'ci item)
-                                         (alist-get 'mergeable item)))
-                                (rev-str (decknix--hub-review-icon item))
-                                (status-str (if (string-empty-p rev-str)
-                                                ci-str
-                                              (concat ci-str rev-str)))
-                                ;; @-mention indicator
-                                (mention-str (if (eq (alist-get 'mentioned item) t)
-                                                 (propertize "@"
-                                                   'face '(:foreground "#d7af5f" :weight bold))
-                                               ""))
-                                (status-str (if (string-empty-p mention-str)
-                                                status-str
-                                              (concat status-str mention-str)))
-                                ;; Active session indicator
-                                (active-str (if (decknix--hub-request-has-live-session-p item)
-                                                (propertize "◉"
-                                                  'face '(:foreground "#87d7ff"))
-                                              ""))
-                                (status-str (if (string-empty-p active-str)
-                                                status-str
-                                              (concat status-str active-str)))
-                                ;; Age colouring matching sidebar
-                                (age-face (cond
-                                           ((string-match-p "d$" age)
-                                            (if (>= (string-to-number age) 3)
-                                                'error 'warning))
-                                           (t 'font-lock-comment-face)))
-                                (label (format " %3s %s#%d %s %s"
-                                               (propertize age 'face age-face)
-                                               (propertize (or repo "") 'face 'font-lock-type-face)
-                                               number
-                                               status-str
-                                               title)))
-                           (cons label item)))
-                       items))
-                     (prompt (format "Request%s%s: "
-                                     (if mention-only " @" "")
-                                     (if (and limit (integerp limit) (> limit 0))
-                                         (format " [≤%d]" limit)
-                                       "")))
-                     (choice (completing-read prompt
-                               (mapcar #'car entries) nil t))
-                     (item (cdr (assoc choice entries))))
-                (when item
-                  (let ((tagged (cons (cons 'decknix-type 'review) item)))
-                    (decknix--nav-hub-item-actions tagged)))))))
+          ;; Use a mutable variable for the mention toggle loop
+          (let ((decknix--req-mention-only mention-only))
+            (catch 'decknix--req-done
+              (while t
+                (let* ((mo decknix--req-mention-only)
+                       (all-items (when (boundp 'decknix--hub-reviews)
+                                    (alist-get 'items decknix--hub-reviews)))
+                       (items (seq-filter
+                               (lambda (item)
+                                 (and (decknix--hub-item-visible-p (alist-get 'repo item))
+                                      (decknix--hub-age-visible-p (alist-get 'created item))
+                                      (decknix--hub-ci-visible-p item)
+                                      (decknix--hub-mention-visible-p item)
+                                      (decknix--hub-bot-visible-p item)
+                                      ;; Extra @-mention filter when requested
+                                      (or (not mo)
+                                          (eq (alist-get 'mentioned item) t))))
+                               (or all-items '())))
+                       ;; Apply count limit
+                       (items (if (and limit (integerp limit) (> limit 0))
+                                  (seq-take items limit)
+                                items)))
+                  (if (not items)
+                      (progn
+                        (message "No review requests%s"
+                                 (if mo " (with @-mention)" ""))
+                        (throw 'decknix--req-done nil))
+                    (let* ((entries
+                            (mapcar
+                             (lambda (item)
+                               (let* ((age (decknix--hub-format-age
+                                            (alist-get 'created item)))
+                                      (repo-full (or (alist-get 'repo item) ""))
+                                      (repo (car (last (split-string repo-full "/"))))
+                                      (number (alist-get 'number item))
+                                      (title (or (alist-get 'title item) ""))
+                                      (ci-str (decknix--hub-ci-icon
+                                               (alist-get 'ci item)
+                                               (alist-get 'mergeable item)))
+                                      (rev-str (decknix--hub-review-icon item))
+                                      (status-str (if (string-empty-p rev-str)
+                                                      ci-str
+                                                    (concat ci-str rev-str)))
+                                      ;; @-mention indicator
+                                      (mention-str (if (eq (alist-get 'mentioned item) t)
+                                                       (propertize "@"
+                                                         'face '(:foreground "#d7af5f" :weight bold))
+                                                     ""))
+                                      (status-str (if (string-empty-p mention-str)
+                                                      status-str
+                                                    (concat status-str mention-str)))
+                                      ;; Active session indicator
+                                      (active-str (if (decknix--hub-request-has-live-session-p item)
+                                                      (propertize "◉"
+                                                        'face '(:foreground "#87d7ff"))
+                                                    ""))
+                                      (status-str (if (string-empty-p active-str)
+                                                      status-str
+                                                    (concat status-str active-str)))
+                                      ;; Age colouring matching sidebar
+                                      (age-face (cond
+                                                 ((string-match-p "d$" age)
+                                                  (if (>= (string-to-number age) 3)
+                                                      'error 'warning))
+                                                 (t 'font-lock-comment-face)))
+                                      (label (format " %3s %s#%d %s %s"
+                                                     (propertize age 'face age-face)
+                                                     (propertize (or repo "") 'face 'font-lock-type-face)
+                                                     number
+                                                     status-str
+                                                     title)))
+                                 (cons label item)))
+                             items))
+                           (prompt (format "Request%s: "
+                                           (if (and limit (integerp limit) (> limit 0))
+                                               (format " [≤%d]" limit)
+                                             "")))
+                           (result (decknix--hub-completing-read-with-mention-toggle
+                                    prompt entries 'decknix--req-mention-only)))
+                      (if (not result)
+                          (throw 'decknix--req-done nil)
+                        (let ((item (cdr (assoc (car result) entries))))
+                          (when item
+                            (let ((tagged (cons (cons 'decknix-type 'review) item)))
+                              (decknix--nav-hub-item-actions tagged)))
+                          (throw 'decknix--req-done nil))))))))))
 
         (defun decknix-sidebar-nav-wip-consult ()
           "Pick a WIP PR via consult completion with filtering."
