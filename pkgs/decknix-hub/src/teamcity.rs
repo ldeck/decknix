@@ -552,6 +552,55 @@ async fn poll_deploy_status(
             }
         }
 
+        // Also fetch default branch deploy status for this repo.
+        // After a PR merges, deployments run on the default branch —
+        // this lets merged PRs show DTSP based on post-merge deploys.
+        {
+            let url = format!(
+                "{}/app/rest/builds?locator=affectedProject:{},branch:default:any,defaultFilter:true,state:any,count:30",
+                base, tc_project
+            );
+            match fetch_tc_builds(client, &url).await {
+                Ok(builds) => {
+                    let mut env_statuses: HashMap<&str, EnvDeployStatus> = HashMap::new();
+                    for b in &builds {
+                        let bt_id = b.build_type_id.as_deref().unwrap_or("");
+                        if let Some((env_key, step)) = extract_env_from_bt_id(bt_id, &tc_project) {
+                            env_statuses.entry(env_key).or_insert_with(|| {
+                                EnvDeployStatus {
+                                    env: env_key.to_string(),
+                                    status: b.status.clone().unwrap_or_else(|| "UNKNOWN".into()),
+                                    state: b.state.clone().unwrap_or_else(|| "unknown".into()),
+                                    build_id: b.id,
+                                    url: b.web_url.clone().unwrap_or_else(|| {
+                                        format!("{}/viewLog.html?buildId={}", base, b.id)
+                                    }),
+                                    finished: b.finish_date.as_deref().and_then(parse_tc_date),
+                                    deploy_type: step.to_string(),
+                                }
+                            });
+                        }
+                    }
+                    if !env_statuses.is_empty() {
+                        let mut envs: Vec<EnvDeployStatus> = env_statuses.into_values().collect();
+                        let env_order = |e: &str| match e {
+                            "development" => 0, "testing" => 1, "stable" => 2,
+                            "production" => 3, "uk_production" => 4, _ => 5,
+                        };
+                        envs.sort_by_key(|e| env_order(&e.env));
+                        branch_statuses.push(BranchDeployStatus {
+                            branch: "__default__".to_string(),
+                            pr_number: None,
+                            environments: envs,
+                        });
+                    }
+                }
+                Err(e) => {
+                    eprintln!("hub: tc deploys {repo}/{tc_project}:default: {e}");
+                }
+            }
+        }
+
         if !branch_statuses.is_empty() {
             repos.insert(repo.clone(), RepoDeployStatus {
                 repo: repo.clone(),

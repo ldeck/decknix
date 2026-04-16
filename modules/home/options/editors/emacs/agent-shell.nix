@@ -8116,11 +8116,14 @@ EXPAND-MODE controls what to show: `pr' (status/CI only),
                                'face 'font-lock-comment-face)
                             ""))
                  ;; PR status badges (state + CI) — shown in pr/both modes
+                 ;; CI info is useful for both OPEN and MERGED PRs:
+                 ;; - OPEN: did the build pass? can we merge?
+                 ;; - MERGED: did CI pass before merge? (audit trail)
                  (pr-str
                   (if show-pr
-                      (let* (;; Overall CI icon for open PRs
+                      (let* (;; Overall CI icon for open and merged PRs
                              (ci-icon
-                              (when (string= state "OPEN")
+                              (when (member state '("OPEN" "MERGED"))
                                 (cond
                                  ((string= ci "pass") (propertize "✓" 'face '(:foreground "#50fa7b")))
                                  ((string= ci "fail") (propertize "✗" 'face '(:foreground "#ff5555")))
@@ -8128,7 +8131,7 @@ EXPAND-MODE controls what to show: `pr' (status/CI only),
                                  (t nil))))
                              ;; Individual check details
                              (chk-str
-                              (if (and checks (string= state "OPEN"))
+                              (if (and checks (member state '("OPEN" "MERGED")))
                                   (let ((parts nil))
                                     (dolist (chk checks)
                                       (let* ((name (or (alist-get 'name chk) ""))
@@ -8155,9 +8158,10 @@ EXPAND-MODE controls what to show: `pr' (status/CI only),
                                     (when parts
                                       (string-join (nreverse parts) " ")))
                                 ""))
-                             ;; Mergeable indicator
+                             ;; Mergeable indicator (only relevant for open PRs)
                              (mergeable (alist-get 'mergeable status))
-                             (conflict-str (if (string= (or mergeable "") "CONFLICTING")
+                             (conflict-str (if (and (string= state "OPEN")
+                                                    (string= (or mergeable "") "CONFLICTING"))
                                                (propertize "⇌" 'face '(:foreground "#ff5555"))
                                              "")))
                         (concat " " state-str
@@ -8167,17 +8171,25 @@ EXPAND-MODE controls what to show: `pr' (status/CI only),
                                     (concat " " chk-str)
                                   "")))
                     ""))
-                 ;; Deploy pipeline indicator for open PRs
+                 ;; Deploy pipeline indicator — shown for open PRs
+                 ;; (feature branch deploys) and merged PRs (default
+                 ;; branch deploys post-merge).
                  (branch (alist-get 'branch status))
                  (owner (nth 0 parsed))
                  (repo-full (when (and owner repo)
                               (format "%s/%s" owner repo)))
+                 ;; For merged PRs, look up default-branch deploys
+                 ;; since deployments run on main/master after merge.
+                 ;; For open PRs, look up the feature branch deploys.
+                 (deploy-branch (if (string= state "MERGED")
+                                    "__default__"
+                                  branch))
                  (deploy-str
                   (if (and show-pipeline
-                           (string= state "OPEN")
-                           repo-full branch
+                           (member state '("OPEN" "MERGED"))
+                           repo-full deploy-branch
                            (fboundp 'decknix--hub-deploy-indicator))
-                      (concat " " (decknix--hub-deploy-indicator repo-full branch))
+                      (concat " " (decknix--hub-deploy-indicator repo-full deploy-branch))
                     ""))
                  ;; Type prefix for subject PRs
                  (type-prefix (if (string= pr-type "subject") "⊳ " "")))
