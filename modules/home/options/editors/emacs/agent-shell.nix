@@ -3609,6 +3609,80 @@ C-c k k interrupt agent, C-c k C-c interrupt & submit."
           :lighter (:eval (if decknix--compose-sticky " Compose[sticky]" " Compose"))
           :keymap decknix-agent-compose-mode-map)
 
+        ;; -- Compose buffer: slash command + file completion --
+        ;; Delegates to agent-shell's completion machinery via the
+        ;; compose buffer's target agent-shell buffer.
+
+        (defun decknix--compose-command-completion-at-point ()
+          "Complete slash commands in the compose buffer.
+Looks up available commands from the target agent-shell buffer."
+          (when-let* ((target (and (boundp 'decknix--compose-target-buffer)
+                                   decknix--compose-target-buffer))
+                      ((buffer-live-p target))
+                      (bounds (save-excursion
+                                (let* ((end (progn (skip-chars-forward "[:alnum:]_-") (point)))
+                                       (start (progn (skip-chars-backward "[:alnum:]_-") (point))))
+                                  (when (eq (char-before start) ?/)
+                                    (list start end)))))
+                      (commands (with-current-buffer target
+                                  (when (boundp 'agent-shell--state)
+                                    (map-elt agent-shell--state :available-commands))))
+                      (descriptions (mapcar (lambda (c)
+                                              (cons (map-elt c 'name)
+                                                    (map-elt c 'description)))
+                                            commands)))
+            (list (nth 0 bounds) (nth 1 bounds)
+                  (mapcar #'car descriptions)
+                  :exclusive t
+                  :annotation-function
+                  (lambda (name)
+                    (when-let* ((desc (map-elt descriptions name)))
+                      (concat "  " desc)))
+                  :company-kind (lambda (_) 'function)
+                  :exit-function (lambda (_string _status) (insert " ")))))
+
+        (defun decknix--compose-file-completion-at-point ()
+          "Complete project files after @ in the compose buffer.
+Uses the target agent-shell buffer's project context."
+          (when-let* ((target (and (boundp 'decknix--compose-target-buffer)
+                                   decknix--compose-target-buffer))
+                      ((buffer-live-p target))
+                      (bounds (save-excursion
+                                (let* ((end (progn (skip-chars-forward "[:alnum:]/_.-") (point)))
+                                       (start (progn (skip-chars-backward "[:alnum:]/_.-") (point))))
+                                  (when (eq (char-before start) ?@)
+                                    (list start end)))))
+                      (files (with-current-buffer target
+                               (when (fboundp 'agent-shell--project-files)
+                                 (agent-shell--project-files)))))
+            (list (nth 0 bounds) (nth 1 bounds)
+                  files
+                  :exclusive 'no
+                  :company-kind (lambda (f) (if (string-suffix-p "/" f) 'folder 'file))
+                  :exit-function (lambda (_string _status) (insert " ")))))
+
+        (defun decknix--compose-trigger-completion ()
+          "Trigger completion in compose buffer when / or @ is typed.
+Only triggers at line start or after whitespace."
+          (when (and (memq (char-before) '(?/ ?@))
+                     (or (= (point) (1+ (line-beginning-position)))
+                         (memq (char-before (1- (point))) '(?\s ?\t ?\n))))
+            (cond
+             ((and (eq (char-before) ?/)
+                   (decknix--compose-command-completion-at-point))
+              (completion-at-point))
+             ((eq (char-before) ?@)
+              (completion-at-point)))))
+
+        (defun decknix--compose-setup-completion ()
+          "Set up slash command and file completion in the compose buffer."
+          (add-hook 'completion-at-point-functions
+                    #'decknix--compose-file-completion-at-point nil t)
+          (add-hook 'completion-at-point-functions
+                    #'decknix--compose-command-completion-at-point nil t)
+          (add-hook 'post-self-insert-hook
+                    #'decknix--compose-trigger-completion nil t))
+
         (defun decknix--compose-finish ()
           "Finish a compose action: clear if sticky, close if transient.
 Resets prompt history navigation state."
@@ -3879,6 +3953,8 @@ If a compose buffer already exists and is visible, just select it."
                     (yas-activate-extra-mode 'agent-shell-mode))
                   (setq-local decknix--compose-target-buffer target)
                   (setq-local decknix--compose-sticky decknix-agent-compose-sticky)
+                  ;; Enable slash command (/) and file (@) completion
+                  (decknix--compose-setup-completion)
                   (decknix--compose-update-header-line)
                   (set-buffer-modified-p nil))
                 compose-buf))))
