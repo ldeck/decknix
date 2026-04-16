@@ -7570,7 +7570,9 @@ Returns an alist or nil if not found."
                                  (hub-checks (alist-get 'checks ci)))
                             (throw 'found
                                    (list
-                                    (cons 'state (or (alist-get 'state pr) "OPEN"))
+                                    ;; Upcase state — hub JSON uses lowercase
+                                    ;; ("open") but display code expects "OPEN"
+                                    (cons 'state (upcase (or (alist-get 'state pr) "OPEN")))
                                     (cons 'ci-status (alist-get 'status ci))
                                     (cons 'checks hub-checks)
                                     (cons 'merged_at (alist-get 'merged_at pr))
