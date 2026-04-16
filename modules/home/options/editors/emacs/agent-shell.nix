@@ -5873,11 +5873,18 @@ Applies org, age, and CI visibility filters, then the ready predicate."
                     (decknix--hub-request-ready-p item)))
              (or all-items '()))))
 
-        (defun decknix--hub-review-entries ()
+        (defun decknix--hub-review-entries (&optional mention-only)
           "Build labelled (LABEL . ITEM) entries from ready review requests.
-Sorted most-recent first."
+Sorted most-recent first, with propertized labels matching sidebar style.
+When MENTION-ONLY is non-nil, include only @-mentioned items."
           (let* ((ready (decknix--hub-review-ready-requests))
-                 (sorted (sort (copy-sequence ready)
+                 (filtered (if mention-only
+                               (seq-filter
+                                (lambda (item)
+                                  (eq (alist-get 'mentioned item) t))
+                                ready)
+                             ready))
+                 (sorted (sort (copy-sequence filtered)
                                (lambda (a b)
                                  (string> (or (alist-get 'created a) "")
                                           (or (alist-get 'created b) ""))))))
@@ -5892,8 +5899,38 @@ Sorted most-recent first."
                       (ci-str (decknix--hub-ci-icon
                                (alist-get 'ci item)
                                (alist-get 'mergeable item)))
-                      (label (format "%3s %s#%d %s %s"
-                                     age repo number ci-str title)))
+                      (rev-str (decknix--hub-review-icon item))
+                      (status-str (if (string-empty-p rev-str)
+                                      ci-str
+                                    (concat ci-str rev-str)))
+                      ;; @-mention indicator
+                      (mention-str (if (eq (alist-get 'mentioned item) t)
+                                       (propertize "@"
+                                         'face '(:foreground "#d7af5f" :weight bold))
+                                     ""))
+                      (status-str (if (string-empty-p mention-str)
+                                      status-str
+                                    (concat status-str mention-str)))
+                      ;; Active session indicator
+                      (active-str (if (decknix--hub-request-has-live-session-p item)
+                                      (propertize "◉"
+                                        'face '(:foreground "#87d7ff"))
+                                    ""))
+                      (status-str (if (string-empty-p active-str)
+                                      status-str
+                                    (concat status-str active-str)))
+                      ;; Age colouring matching sidebar
+                      (age-face (cond
+                                 ((string-match-p "d$" age)
+                                  (if (>= (string-to-number age) 3)
+                                      'error 'warning))
+                                 (t 'font-lock-comment-face)))
+                      (label (format " %3s %s#%d %s %s"
+                                     (propertize age 'face age-face)
+                                     (propertize (or repo "") 'face 'font-lock-type-face)
+                                     number
+                                     status-str
+                                     title)))
                  (cons label item)))
              sorted)))
 
@@ -5917,63 +5954,67 @@ When SPLIT-P is non-nil, tile subsequent reviews side-by-side."
         (defun decknix-hub-launch-reviews (arg)
           "Launch review sessions for ready PRs.
 
-R       — pick one via consult, prompt for layout
-C-u R   — launch ALL ready reviews, prompt for layout
-C-u N R — pick N via consult (embark-select to mark, RET to confirm),
-          then prompt for layout."
+R         — pick one via consult, prompt for layout
+C-u R     — launch ALL ready reviews, prompt for layout
+C-u N R   — pick N via consult (embark-select to mark, RET to confirm),
+            then prompt for layout
+C-u C-u R — like R but filtered to @-mentioned items only."
           (interactive "P")
-          (let ((entries (decknix--hub-review-entries)))
+          (let* ((mention-only (equal arg '(16)))  ;; C-u C-u
+                 (entries (decknix--hub-review-entries mention-only)))
             (if (not entries)
-                (message "No review-ready requests")
-              (cond
-               ;; C-u: launch all
-               ((equal arg '(4))
-                (let* ((count (length entries))
-                       (choice (read-char-choice
-                                (format "Launch all %d review%s: [s]plit  [r]eplace  [q]uit "
-                                        count (if (= count 1) "" "s"))
-                                '(?s ?r ?q))))
-                  (unless (eq choice ?q)
-                    (decknix--hub-launch-review-items
-                     (mapcar #'cdr entries) (eq choice ?s)))))
-               ;; Numeric prefix (C-u N): multi-select via embark
-               ((and (integerp arg) (> arg 1))
-                (let ((selected nil)
-                      (remaining (mapcar #'car entries)))
-                  ;; Collect up to ARG selections
-                  (catch 'done
-                    (dotimes (i arg)
-                      (if (not remaining)
-                          (throw 'done nil)
-                        (let* ((prompt (format "Review %d/%d (%d ready): "
-                                              (1+ i) arg (length remaining)))
-                               (choice (completing-read prompt remaining nil t)))
-                          (when choice
-                            (push (cdr (assoc choice entries)) selected)
-                            (setq remaining (delete choice remaining)))))))
-                  (setq selected (nreverse selected))
-                  (when selected
-                    (let* ((count (length selected))
-                           (choice (read-char-choice
-                                    (format "%d review%s: [s]plit  [r]eplace  [q]uit "
-                                            count (if (= count 1) "" "s"))
-                                    '(?s ?r ?q))))
-                      (unless (eq choice ?q)
-                        (decknix--hub-launch-review-items
-                         selected (eq choice ?s)))))))
-               ;; No prefix: single pick
-               (t
-                (let* ((choice (completing-read
-                                (format "Review (%d ready): " (length entries))
-                                (mapcar #'car entries) nil t))
-                       (item (cdr (assoc choice entries))))
-                  (when item
-                    (let ((choice (read-char-choice
-                                   "Layout: [s]plit  [r]eplace  [q]uit "
-                                   '(?s ?r ?q))))
-                      (unless (eq choice ?q)
-                        (decknix--hub-launch-review-items
-                         (list item) (eq choice ?s)))))))))))
+                (message "No review-ready requests%s"
+                         (if mention-only " (with @-mention)" ""))
+              (let ((tag (if mention-only " @" "")))
+                (cond
+                 ;; C-u: launch all
+                 ((equal arg '(4))
+                  (let* ((count (length entries))
+                         (choice (read-char-choice
+                                  (format "Launch all %d review%s: [s]plit  [r]eplace  [q]uit "
+                                          count (if (= count 1) "" "s"))
+                                  '(?s ?r ?q))))
+                    (unless (eq choice ?q)
+                      (decknix--hub-launch-review-items
+                       (mapcar #'cdr entries) (eq choice ?s)))))
+                 ;; Numeric prefix (C-u N): multi-select via embark
+                 ((and (integerp arg) (> arg 1))
+                  (let ((selected nil)
+                        (remaining (mapcar #'car entries)))
+                    ;; Collect up to ARG selections
+                    (catch 'done
+                      (dotimes (i arg)
+                        (if (not remaining)
+                            (throw 'done nil)
+                          (let* ((prompt (format "Review%s %d/%d (%d ready): "
+                                                tag (1+ i) arg (length remaining)))
+                                 (choice (completing-read prompt remaining nil t)))
+                            (when choice
+                              (push (cdr (assoc choice entries)) selected)
+                              (setq remaining (delete choice remaining)))))))
+                    (setq selected (nreverse selected))
+                    (when selected
+                      (let* ((count (length selected))
+                             (choice (read-char-choice
+                                      (format "%d review%s: [s]plit  [r]eplace  [q]uit "
+                                              count (if (= count 1) "" "s"))
+                                      '(?s ?r ?q))))
+                        (unless (eq choice ?q)
+                          (decknix--hub-launch-review-items
+                           selected (eq choice ?s)))))))
+                 ;; No prefix (or C-u C-u): single pick
+                 (t
+                  (let* ((choice (completing-read
+                                  (format "Review%s (%d ready): " tag (length entries))
+                                  (mapcar #'car entries) nil t))
+                         (item (cdr (assoc choice entries))))
+                    (when item
+                      (let ((choice (read-char-choice
+                                     "Layout: [s]plit  [r]eplace  [q]uit "
+                                     '(?s ?r ?q))))
+                        (unless (eq choice ?q)
+                          (decknix--hub-launch-review-items
+                           (list item) (eq choice ?s))))))))))))
 
         (defun decknix--nav-hub-start-review-split (url)
           "Start a PR review session for URL in a new split window.
