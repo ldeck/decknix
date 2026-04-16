@@ -7884,28 +7884,36 @@ status for these branches."
 
         (defun decknix--hub-pr-status (url)
           "Look up live status of a GitHub PR URL.
-First checks hub WIP/Reviews data, then the async cache, and
-kicks off an async `gh pr view' fetch if not found anywhere.
-Returns a status alist, or a loading sentinel with state=LOADING
-when a fetch is in-flight.
+Checks hub WIP/Reviews data and the async cache, preferring whichever
+is more up-to-date.  Terminal states (MERGED, CLOSED) from the cache
+always win over hub data showing OPEN, since the hub daemon may not
+have polled GitHub yet after a merge/close.  Kicks off an async
+`gh pr view' fetch if not found anywhere.
 
 Hub results are mirrored into `decknix--hub-pr-cache' so that on
 restart (before hub data loads or after the PR leaves WIP/Reviews)
 the cache provides an immediate fallback instead of a bare spinner."
-          (let ((hub-result (decknix--hub-pr-status-from-hub url)))
-            (if hub-result
-                (progn
-                  ;; Mirror hub data into cache so it survives restarts
-                  (puthash url (cons (float-time) hub-result)
-                           decknix--hub-pr-cache)
-                  hub-result)
-              (or (decknix--hub-pr-cache-get url)
-                  (progn
-                    (decknix--hub-pr-fetch-async url)
-                    ;; Return a loading sentinel so callers can show a spinner
-                    ;; instead of a bare "?"
-                    (when (gethash url decknix--hub-pr-pending-fetches)
-                      '((state . "LOADING"))))))))
+          (let ((hub-result (decknix--hub-pr-status-from-hub url))
+                (cache-result (decknix--hub-pr-cache-get url)))
+            (cond
+             ;; Cache has a terminal state (MERGED/CLOSED) — always prefer it
+             ;; over hub data, which may still show OPEN due to stale polling.
+             ((and cache-result
+                   (member (alist-get 'state cache-result) '("MERGED" "CLOSED")))
+              cache-result)
+             ;; Hub data available — use it and mirror to cache
+             (hub-result
+              (puthash url (cons (float-time) hub-result)
+                       decknix--hub-pr-cache)
+              hub-result)
+             ;; Cache only (hub has no data for this PR)
+             (cache-result cache-result)
+             ;; Nothing found — kick off async fetch
+             (t
+              (decknix--hub-pr-fetch-async url)
+              ;; Return a loading sentinel so callers can show a spinner
+              (when (gethash url decknix--hub-pr-pending-fetches)
+                '((state . "LOADING")))))))
 
         (defun decknix--hub-pr-format-line (pr-link &optional width expand-mode)
           "Format a single linked PR for sidebar display.
