@@ -6376,7 +6376,7 @@ candidates.  Returns (CHOICE . MENTION-ONLY) or nil if cancelled."
                 (condition-case nil
                     (let ((choice (minibuffer-with-setup-hook
                                      (eval `(lambda ()
-                                              (use-local-map ,map))
+                                              (use-local-map ',map))
                                            t)
                                    (completing-read full-prompt
                                      (mapcar #'car entries) nil t))))
