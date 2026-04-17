@@ -5000,6 +5000,8 @@ Like treemacs `W' / extra-wide-toggle."
            (decknix-sidebar-transient--bot-filter)]
           ["Live"
            (decknix-sidebar-transient--expand-prs)
+           (decknix-sidebar-transient--symbol-style)
+           (decknix-sidebar-transient--repo-name-cap)
            (decknix-sidebar-transient--quick-switch)
            (decknix-sidebar-transient--tile-toggle)
            (decknix-sidebar-transient--display-mode)
@@ -5501,13 +5503,12 @@ Respects `decknix--sidebar-show-hidden' toggle."
                     (setq line (propertize line
                                           'agent-shell-workspace-buffer buf))
                     (insert line "\n")
-                    ;; Expanded PR lines when toggle is on
+                    ;; Expanded PR lines when toggle is on — grouped by repo
                     (when (and decknix--hub-expand-prs buf-conv-key)
-                      (let ((prs (decknix--agent-linked-prs buf-conv-key)))
-                        (dolist (pr prs)
-                          (insert (decknix--hub-pr-format-line
-                                   pr nil decknix--hub-expand-prs) "\n")
-                          (setq line-num (1+ line-num))))))))
+                      (setq line-num
+                            (+ line-num
+                               (decknix--hub-render-session-prs
+                                buf-conv-key decknix--hub-expand-prs)))))))
 
               ;; ── Previous sessions (greyed-out, from last exit) ──
               (when (fboundp 'decknix--sidebar-render-previous-sessions)
@@ -7086,16 +7087,13 @@ Returns updated LINE-NUM."
                                         'decknix-previous-session entry))
                   (insert line "\n")
                   (setq line-num (1+ line-num))
-                  ;; Expanded PR lines when toggle is on
+                  ;; Expanded PR lines when toggle is on — grouped by repo
                   (when (and decknix--hub-expand-prs prev-conv-key)
-                    (let ((prs (decknix--agent-linked-prs prev-conv-key)))
-                      (dolist (pr prs)
-                        (insert (propertize
-                                 (decknix--hub-pr-format-line
-                                  pr nil decknix--hub-expand-prs)
-                                 'face 'font-lock-comment-face)
-                                "\n")
-                        (setq line-num (1+ line-num)))))))))
+                    (setq line-num
+                          (+ line-num
+                             (decknix--hub-render-session-prs
+                              prev-conv-key decknix--hub-expand-prs
+                              'font-lock-comment-face))))))))
           line-num)
 
         ;; -- Previous sessions: restore action --
@@ -7572,6 +7570,28 @@ When no filter is active (table is nil), all orgs are visible."
           (interactive)
           (call-interactively #'decknix--hub-toggle-deploy-indicator))
 
+        (transient-define-suffix decknix-sidebar-transient--symbol-style ()
+          :key "y"
+          :description
+          (lambda ()
+            (format "symbols      %s"
+                    (propertize (format "[%s]" decknix--hub-symbol-style)
+                                'face 'font-lock-constant-face)))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-toggle-symbol-style))
+
+        (transient-define-suffix decknix-sidebar-transient--repo-name-cap ()
+          :key "N"
+          :description
+          (lambda ()
+            (format "repo name    %s"
+                    (propertize (format "[%s]" decknix--hub-repo-name-cap)
+                                'face 'font-lock-constant-face)))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-cycle-repo-name-cap))
+
         ;; Hub toggles now live in the T transient
         ;; (decknix-sidebar-toggles-transient) — no need to append here.
 
@@ -7901,6 +7921,76 @@ Valid values: nil (badges only), `pr' (PR status lines),
                      ('pipeline "pipeline only")
                      ('both "PR + pipeline"))))
 
+        ;; -- Hub: symbol style (ascii vs emoji) --
+        (defvar decknix--hub-symbol-style 'ascii
+          "Symbol set used in expanded PR lines.
+`ascii' = compact glyphs (existing look: ✓merged ✓ ✗).
+`emoji' = coloured emoji (🔀 ✅ ❌ 🟡 ❔ ⚠).")
+
+        (defun decknix--hub-sym (key)
+          "Return the symbol string for KEY honouring `decknix--hub-symbol-style'.
+KEY is one of: merged closed open loading pass fail running unknown conflict."
+          (let ((emoji '((merged   . "🔀")
+                         (closed   . "🚫")
+                         (open     . "◍")
+                         (loading  . "⟳")
+                         (pass     . "✅")
+                         (fail     . "❌")
+                         (running  . "🟡")
+                         (unknown  . "❔")
+                         (conflict . "⚠")))
+                (ascii '((merged   . "✓merged")
+                         (closed   . "✗closed")
+                         (open     . "open")
+                         (loading  . "⟳")
+                         (pass     . "✓")
+                         (fail     . "✗")
+                         (running  . "⟳")
+                         (unknown  . "?")
+                         (conflict . "⇌"))))
+            (or (alist-get key (if (eq decknix--hub-symbol-style 'emoji)
+                                   emoji ascii))
+                "?")))
+
+        (defun decknix--hub-toggle-symbol-style ()
+          "Toggle the expanded PR symbol style between `ascii' and `emoji'."
+          (interactive)
+          (setq decknix--hub-symbol-style
+                (if (eq decknix--hub-symbol-style 'emoji) 'ascii 'emoji))
+          (when (get-buffer "*agent-shell-sidebar*")
+            (agent-shell-workspace-sidebar-refresh))
+          (message "PR symbols: %s" decknix--hub-symbol-style))
+
+        ;; -- Hub: repo-name cap in ungrouped PR lines --
+        (defvar decknix--hub-repo-name-cap 'short
+          "Cap for the repo segment of an ungrouped PR line.
+`short' = 12 chars, `medium' = 20 chars, `none' = uncapped.
+Irrelevant when PRs are grouped under a repo sub-header.")
+
+        (defun decknix--hub-repo-name-apply (repo)
+          "Truncate REPO per `decknix--hub-repo-name-cap'."
+          (let* ((limit (pcase decknix--hub-repo-name-cap
+                          ('short  12)
+                          ('medium 20)
+                          ('none   nil)
+                          (_       12))))
+            (if (and limit (> (length repo) limit))
+                (substring repo 0 limit)
+              repo)))
+
+        (defun decknix--hub-cycle-repo-name-cap ()
+          "Cycle the repo-name cap: short → medium → none → short."
+          (interactive)
+          (setq decknix--hub-repo-name-cap
+                (pcase decknix--hub-repo-name-cap
+                  ('short  'medium)
+                  ('medium 'none)
+                  ('none   'short)
+                  (_       'short)))
+          (when (get-buffer "*agent-shell-sidebar*")
+            (agent-shell-workspace-sidebar-refresh))
+          (message "Repo name cap: %s" decknix--hub-repo-name-cap))
+
         ;; -- Hub: WIP join — look up live PR status from hub data --
 
         (defvar decknix--hub-pr-cache (make-hash-table :test 'equal)
@@ -8222,12 +8312,14 @@ the cache provides an immediate fallback instead of a bare spinner."
               (when (gethash url decknix--hub-pr-pending-fetches)
                 '((state . "LOADING")))))))
 
-        (defun decknix--hub-pr-format-line (pr-link &optional width expand-mode)
+        (defun decknix--hub-pr-format-line (pr-link &optional width expand-mode grouped)
           "Format a single linked PR for sidebar display.
 PR-LINK is a hash-table or alist from agent-sessions.json.
 WIDTH is the available character width (default 40).
 EXPAND-MODE controls what to show: `pr' (status/CI only),
-`pipeline' (deploy only), `both' (all), or non-nil (all)."
+`pipeline' (deploy only), `both' (all), or non-nil (all).
+When GROUPED is non-nil the caller is rendering a repo sub-header
+already, so the repo prefix is omitted from the line."
           (let* ((url (decknix--agent-pr-url-accessor pr-link "url"))
                  (pr-type (decknix--agent-pr-url-accessor pr-link "type"))
                  (parsed (decknix--agent-pr-parse-url url))
@@ -8236,35 +8328,34 @@ EXPAND-MODE controls what to show: `pr' (status/CI only),
                  (status (decknix--hub-pr-status url))
                  (state (or (alist-get 'state status) "?"))
                  (ci (alist-get 'ci-status status))
-                 (checks (alist-get 'checks status))
                  (stale (alist-get 'stale status))
                  (merged-at (alist-get 'merged_at status))
                  (w (or width 40))
-                 ;; Short repo name
-                 (short-repo (if (> (length repo) 15)
-                                 (substring repo 0 15)
-                               repo))
+                 ;; Repo label — capped when ungrouped, omitted when grouped
+                 (repo-label (if grouped
+                                 ""
+                               (decknix--hub-repo-name-apply repo)))
                  ;; Stale refresh indicator — dim ↻ shown at the left edge
                  ;; when displaying cached data while a background refresh
                  ;; is in flight.  Takes the place of leading whitespace.
                  (refresh-str (if stale
                                   (concat (propertize "↻" 'face 'font-lock-comment-face) " ")
                                 "  "))
-                 ;; State indicator
+                 ;; State indicator — honours symbol-style toggle
                  (state-str (cond
                              ((string= state "MERGED")
-                              (propertize "✓merged"
+                              (propertize (decknix--hub-sym 'merged)
                                           'face 'font-lock-string-face))
                              ((string= state "CLOSED")
-                              (propertize "✗closed"
+                              (propertize (decknix--hub-sym 'closed)
                                           'face 'font-lock-comment-face))
                              ((string= state "OPEN")
-                              (propertize "open"
+                              (propertize (decknix--hub-sym 'open)
                                           'face 'font-lock-warning-face))
                              ((string= state "LOADING")
-                              (propertize "⟳"
+                              (propertize (decknix--hub-sym 'loading)
                                           'face '(:foreground "#e5c07b")))
-                             (t (propertize "?"
+                             (t (propertize (decknix--hub-sym 'unknown)
                                             'face 'font-lock-comment-face))))
                  ;; Resolve expand mode flags
                  (show-pr (memq expand-mode '(pr both t)))
@@ -8280,61 +8371,33 @@ EXPAND-MODE controls what to show: `pr' (status/CI only),
                                (decknix--hub-format-age age-ts)
                                'face 'font-lock-comment-face)
                             ""))
-                 ;; PR status badges (state + CI) — shown in pr/both modes
-                 ;; CI info is useful for both OPEN and MERGED PRs:
-                 ;; - OPEN: did the build pass? can we merge?
-                 ;; - MERGED: did CI pass before merge? (audit trail)
+                 ;; PR status badges (state + overall CI + conflict)
+                 ;; Per-check detail removed — use `RET' on the PR line to
+                 ;; echo failing checks (future work).
                  (pr-str
                   (if show-pr
-                      (let* (;; Overall CI icon for open and merged PRs
-                             (ci-icon
+                      (let* ((ci-icon
                               (when (member state '("OPEN" "MERGED"))
                                 (cond
-                                 ((string= ci "pass") (propertize "✓" 'face '(:foreground "#50fa7b")))
-                                 ((string= ci "fail") (propertize "✗" 'face '(:foreground "#ff5555")))
-                                 ((string= ci "running") (propertize "⟳" 'face 'font-lock-warning-face))
+                                 ((string= ci "pass")
+                                  (propertize (decknix--hub-sym 'pass)
+                                              'face '(:foreground "#50fa7b")))
+                                 ((string= ci "fail")
+                                  (propertize (decknix--hub-sym 'fail)
+                                              'face '(:foreground "#ff5555")))
+                                 ((string= ci "running")
+                                  (propertize (decknix--hub-sym 'running)
+                                              'face 'font-lock-warning-face))
                                  (t nil))))
-                             ;; Individual check details
-                             (chk-str
-                              (if (and checks (member state '("OPEN" "MERGED")))
-                                  (let ((parts nil))
-                                    (dolist (chk checks)
-                                      (let* ((name (or (alist-get 'name chk) ""))
-                                             (conclusion (or (alist-get 'conclusion chk) ""))
-                                             (short (car (split-string name "[ /]")))
-                                             (short (if (> (length short) 10)
-                                                        (substring short 0 10)
-                                                      short))
-                                             (icon (cond
-                                                    ((member conclusion
-                                                             '("SUCCESS" "COMPLETED" "NEUTRAL" "SKIPPED"))
-                                                     (propertize "✓" 'face '(:foreground "#50fa7b")))
-                                                    ((member conclusion
-                                                             '("FAILURE" "TIMED_OUT" "CANCELLED"
-                                                               "ACTION_REQUIRED" "STALE" "ERROR"))
-                                                     (propertize "✗" 'face '(:foreground "#ff5555")))
-                                                    ((member conclusion
-                                                             '("IN_PROGRESS" "QUEUED" "PENDING" "WAITING" "REQUESTED"))
-                                                     (propertize "⟳" 'face 'font-lock-warning-face))
-                                                    (t (propertize "?" 'face 'font-lock-comment-face)))))
-                                        (push (format "%s%s" icon
-                                                      (propertize short 'face 'font-lock-comment-face))
-                                              parts)))
-                                    (when parts
-                                      (string-join (nreverse parts) " ")))
-                                ""))
-                             ;; Mergeable indicator (only relevant for open PRs)
                              (mergeable (alist-get 'mergeable status))
                              (conflict-str (if (and (string= state "OPEN")
                                                     (string= (or mergeable "") "CONFLICTING"))
-                                               (propertize "⇌" 'face '(:foreground "#ff5555"))
+                                               (propertize (decknix--hub-sym 'conflict)
+                                                           'face '(:foreground "#ff5555"))
                                              "")))
                         (concat " " state-str
                                 (if ci-icon (concat " " ci-icon) "")
-                                conflict-str
-                                (if (not (string-empty-p chk-str))
-                                    (concat " " chk-str)
-                                  "")))
+                                (if (string-empty-p conflict-str) "" (concat " " conflict-str))))
                     ""))
                  ;; Deploy pipeline indicator — shown for open PRs
                  ;; (feature branch deploys) and merged PRs (default
@@ -8358,14 +8421,70 @@ EXPAND-MODE controls what to show: `pr' (status/CI only),
                     ""))
                  ;; Type prefix for subject PRs
                  (type-prefix (if (string= pr-type "subject") "⊳ " "")))
-            (format "   %s%s%s#%d %s%s%s"
-                    refresh-str
-                    type-prefix short-repo number
-                    (if (not (string-empty-p age-str))
-                        (concat " " age-str)
-                      "")
-                    pr-str
-                    deploy-str)))
+            (if grouped
+                (format "     %s%s#%d%s%s%s"
+                        refresh-str
+                        type-prefix number
+                        (if (string-empty-p age-str) "" (concat " " age-str))
+                        pr-str
+                        deploy-str)
+              (format "   %s%s%s#%d%s%s%s"
+                      refresh-str
+                      type-prefix repo-label number
+                      (if (string-empty-p age-str) "" (concat " " age-str))
+                      pr-str
+                      deploy-str))))
+
+        (defun decknix--hub-group-prs-by-repo (prs)
+          "Group PRS (list of pr-link records) by owner/repo.
+Returns a list of (REPO-FULL . PR-LIST) pairs, preserving input order."
+          (let ((groups nil))
+            (dolist (pr prs)
+              (let* ((url (decknix--agent-pr-url-accessor pr "url"))
+                     (parsed (decknix--agent-pr-parse-url url))
+                     (owner (nth 0 parsed))
+                     (repo (nth 1 parsed))
+                     (key (if (and owner repo)
+                              (format "%s/%s" owner repo)
+                            "unknown")))
+                (let ((cell (assoc key groups)))
+                  (if cell
+                      (setcdr cell (append (cdr cell) (list pr)))
+                    (setq groups (append groups (list (cons key (list pr)))))))))
+            groups))
+
+        (defun decknix--hub-render-session-prs (conv-key expand-mode
+                                                         &optional line-face extra-indent)
+          "Insert grouped expanded-PR lines for CONV-KEY.
+EXPAND-MODE is forwarded to `decknix--hub-pr-format-line'.
+LINE-FACE, if non-nil, is applied uniformly to every inserted line
+(used e.g. to dim lines for previous/greyed-out sessions).
+EXTRA-INDENT is added to the repo sub-header indent.
+Returns the number of lines inserted."
+          (let ((inserted 0)
+                (groups (decknix--hub-group-prs-by-repo
+                         (decknix--agent-linked-prs conv-key)))
+                (indent (or extra-indent "")))
+            (dolist (g groups)
+              (let* ((repo-full (car g))
+                     (repo (car (last (split-string repo-full "/"))))
+                     (header (concat indent
+                                     (propertize (format "   %s" repo)
+                                                 'face 'font-lock-type-face))))
+                (insert (if line-face
+                            (propertize header 'face line-face)
+                          header)
+                        "\n")
+                (setq inserted (1+ inserted))
+                (dolist (pr (cdr g))
+                  (let ((line (decknix--hub-pr-format-line
+                               pr nil expand-mode t)))
+                    (insert (if line-face
+                                (propertize line 'face line-face)
+                              line)
+                            "\n")
+                    (setq inserted (1+ inserted))))))
+            inserted))
 
         (defun decknix--hub-pr-badge (conv-key)
           "Return a compact PR badge string for CONV-KEY, or empty string.
