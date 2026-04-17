@@ -455,6 +455,81 @@ async fn discover_repo_tc_mapping(client: &Client, base: &str) -> HashMap<String
 // Deploy status polling
 // ---------------------------------------------------------------------------
 
+/// Canonical order of environments in the deploy pipeline.
+fn env_order(e: &str) -> u8 {
+    match e {
+        "development" => 0,
+        "testing" => 1,
+        "stable" => 2,
+        "production" => 3,
+        "uk_production" => 4,
+        _ => 5,
+    }
+}
+
+/// Build an `EnvDeployStatus` from a raw `TcBuild`.
+fn tc_build_to_env_status(
+    b: &TcBuild,
+    env_key: &str,
+    step: &str,
+    base: &str,
+) -> EnvDeployStatus {
+    EnvDeployStatus {
+        env: env_key.to_string(),
+        status: b.status.clone().unwrap_or_else(|| "UNKNOWN".into()),
+        state: b.state.clone().unwrap_or_else(|| "unknown".into()),
+        build_id: b.id,
+        url: b.web_url.clone().unwrap_or_else(|| {
+            format!("{}/viewLog.html?buildId={}", base, b.id)
+        }),
+        finished: b.finish_date.as_deref().and_then(parse_tc_date),
+        deploy_type: step.to_string(),
+    }
+}
+
+/// Fetch the most recent default-branch deploy for each known
+/// (env × step) combination in TC_PROJECT. Build configurations that
+/// do not exist in the project simply yield empty results and are
+/// skipped. When both AppDeploy and TerraformApply exist for the same
+/// env, the first match in DEPLOY_STEPS order wins (AppDeploy before
+/// TerraformApply), matching the previous behaviour.
+async fn fetch_default_branch_envs(
+    client: &Client,
+    base: &str,
+    tc_project: &str,
+) -> Vec<EnvDeployStatus> {
+    let mut env_statuses: HashMap<&'static str, EnvDeployStatus> = HashMap::new();
+    for &(env_key, env_pattern) in ENV_PATTERNS {
+        for &step in DEPLOY_STEPS {
+            if env_statuses.contains_key(env_key) {
+                break; // earlier step already matched for this env
+            }
+            let bt_id = format!("{}_{}{}", tc_project, env_pattern, step);
+            let url = format!(
+                "{}/app/rest/builds?locator=buildType:(id:{}),branch:default:any,defaultFilter:true,state:any,count:1",
+                base, bt_id
+            );
+            match fetch_tc_builds(client, &url).await {
+                Ok(builds) => {
+                    if let Some(b) = builds.first() {
+                        env_statuses.insert(
+                            env_key,
+                            tc_build_to_env_status(b, env_key, step, base),
+                        );
+                    }
+                }
+                Err(e) => {
+                    // 404 / missing build config is expected; log quietly.
+                    eprintln!("hub: tc deploys {tc_project}:{bt_id}: {e}");
+                }
+            }
+        }
+    }
+    let mut envs: Vec<EnvDeployStatus> = env_statuses.into_values().collect();
+    envs.sort_by_key(|e| env_order(&e.env));
+    envs
+}
+
 /// For each WIP branch, query all builds in the TC project and extract deploy status per env.
 async fn poll_deploy_status(
     client: &Client,
@@ -516,17 +591,7 @@ async fn poll_deploy_status(
                 if let Some((env_key, step)) = extract_env_from_bt_id(bt_id, &tc_project) {
                     // Keep the most recent (first encountered, since TC returns newest first)
                     env_statuses.entry(env_key).or_insert_with(|| {
-                        EnvDeployStatus {
-                            env: env_key.to_string(),
-                            status: b.status.clone().unwrap_or_else(|| "UNKNOWN".into()),
-                            state: b.state.clone().unwrap_or_else(|| "unknown".into()),
-                            build_id: b.id,
-                            url: b.web_url.clone().unwrap_or_else(|| {
-                                format!("{}/viewLog.html?buildId={}", base, b.id)
-                            }),
-                            finished: b.finish_date.as_deref().and_then(parse_tc_date),
-                            deploy_type: step.to_string(),
-                        }
+                        tc_build_to_env_status(b, env_key, step, base)
                     });
                 }
             }
@@ -534,14 +599,6 @@ async fn poll_deploy_status(
             if !env_statuses.is_empty() {
                 // Sort environments in pipeline order
                 let mut envs: Vec<EnvDeployStatus> = env_statuses.into_values().collect();
-                let env_order = |e: &str| match e {
-                    "development" => 0,
-                    "testing" => 1,
-                    "stable" => 2,
-                    "production" => 3,
-                    "uk_production" => 4,
-                    _ => 5,
-                };
                 envs.sort_by_key(|e| env_order(&e.env));
 
                 branch_statuses.push(BranchDeployStatus {
@@ -555,49 +612,18 @@ async fn poll_deploy_status(
         // Also fetch default branch deploy status for this repo.
         // After a PR merges, deployments run on the default branch —
         // this lets merged PRs show DTSP based on post-merge deploys.
+        //
+        // We query each (env × step) build configuration directly with
+        // count:1 so that infrequent deploys (Production, UK) are always
+        // found regardless of how many Dev/Test builds have run since.
         {
-            let url = format!(
-                "{}/app/rest/builds?locator=affectedProject:{},branch:default:any,defaultFilter:true,state:any,count:30",
-                base, tc_project
-            );
-            match fetch_tc_builds(client, &url).await {
-                Ok(builds) => {
-                    let mut env_statuses: HashMap<&str, EnvDeployStatus> = HashMap::new();
-                    for b in &builds {
-                        let bt_id = b.build_type_id.as_deref().unwrap_or("");
-                        if let Some((env_key, step)) = extract_env_from_bt_id(bt_id, &tc_project) {
-                            env_statuses.entry(env_key).or_insert_with(|| {
-                                EnvDeployStatus {
-                                    env: env_key.to_string(),
-                                    status: b.status.clone().unwrap_or_else(|| "UNKNOWN".into()),
-                                    state: b.state.clone().unwrap_or_else(|| "unknown".into()),
-                                    build_id: b.id,
-                                    url: b.web_url.clone().unwrap_or_else(|| {
-                                        format!("{}/viewLog.html?buildId={}", base, b.id)
-                                    }),
-                                    finished: b.finish_date.as_deref().and_then(parse_tc_date),
-                                    deploy_type: step.to_string(),
-                                }
-                            });
-                        }
-                    }
-                    if !env_statuses.is_empty() {
-                        let mut envs: Vec<EnvDeployStatus> = env_statuses.into_values().collect();
-                        let env_order = |e: &str| match e {
-                            "development" => 0, "testing" => 1, "stable" => 2,
-                            "production" => 3, "uk_production" => 4, _ => 5,
-                        };
-                        envs.sort_by_key(|e| env_order(&e.env));
-                        branch_statuses.push(BranchDeployStatus {
-                            branch: "__default__".to_string(),
-                            pr_number: None,
-                            environments: envs,
-                        });
-                    }
-                }
-                Err(e) => {
-                    eprintln!("hub: tc deploys {repo}/{tc_project}:default: {e}");
-                }
+            let envs = fetch_default_branch_envs(client, base, &tc_project).await;
+            if !envs.is_empty() {
+                branch_statuses.push(BranchDeployStatus {
+                    branch: "__default__".to_string(),
+                    pr_number: None,
+                    environments: envs,
+                });
             }
         }
 
