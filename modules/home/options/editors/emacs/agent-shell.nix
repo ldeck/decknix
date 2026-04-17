@@ -5007,7 +5007,8 @@ Like treemacs `W' / extra-wide-toggle."
            (decknix-sidebar-transient--display-mode)
            (decknix-sidebar-transient--hidden-toggle)]
           ["WIP"
-           (decknix-sidebar-transient--deploy-indicator)]
+           (decknix-sidebar-transient--deploy-indicator)
+           (decknix-sidebar-transient--wip-hide-linked)]
           ["" ("q" "Done" transient-quit-one)])
 
         (transient-define-prefix decknix-sidebar-transient ()
@@ -7592,6 +7593,20 @@ When no filter is active (table is nil), all orgs are visible."
           (interactive)
           (call-interactively #'decknix--hub-cycle-repo-name-cap))
 
+        (transient-define-suffix decknix-sidebar-transient--wip-hide-linked ()
+          :key "L"
+          :description
+          (lambda ()
+            (format "hide linked  %s"
+                    (propertize
+                     (if decknix--hub-wip-hide-linked "[on]" "[off]")
+                     'face (if decknix--hub-wip-hide-linked
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-toggle-wip-hide-linked))
+
         ;; Hub toggles now live in the T transient
         ;; (decknix-sidebar-toggles-transient) — no need to append here.
 
@@ -7896,6 +7911,38 @@ Checks buffer names for the pattern `pr-<repo>-<number>'."
                                              (buffer-name buf)))
                            (agent-shell-buffers)))))
 
+        ;; -- Hub: live-linked PR set --
+        ;; Build a hash table of "owner/repo#number" keys for every PR
+        ;; linked to any live agent-shell session. Used to hide WIP PRs
+        ;; already being reviewed / worked on in a live session.
+        (defun decknix--hub-live-linked-pr-set ()
+          "Return a hash table of live-linked PR keys.
+Each key is the string \"OWNER/REPO#NUMBER\"; value is t.
+Returns an empty table when no live sessions exist."
+          (let ((set (make-hash-table :test 'equal)))
+            (when (fboundp 'agent-shell-buffers)
+              (dolist (buf (agent-shell-buffers))
+                (when (buffer-live-p buf)
+                  (let ((ck (with-current-buffer buf
+                              (decknix--agent-current-conv-key))))
+                    (when ck
+                      (dolist (pr (decknix--agent-linked-prs ck))
+                        (let* ((url (decknix--agent-pr-url-accessor pr "url"))
+                               (parsed (decknix--agent-pr-parse-url url)))
+                          (when parsed
+                            (let ((owner (nth 0 parsed))
+                                  (repo (nth 1 parsed))
+                                  (num (nth 2 parsed)))
+                              (puthash (format "%s/%s#%d" owner repo num)
+                                       t set))))))))))
+            set))
+
+        (defun decknix--hub-wip-pr-live-linked-p (repo-full number set)
+          "Return non-nil if PR REPO-FULL#NUMBER is present in SET.
+SET is a hash table as produced by `decknix--hub-live-linked-pr-set'."
+          (and set number repo-full
+               (gethash (format "%s#%d" repo-full number) set)))
+
         ;; -- Hub: PR expand toggle --
         (defvar decknix--hub-expand-prs nil
           "How linked PRs are displayed under sessions in sidebar.
@@ -7990,6 +8037,23 @@ Irrelevant when PRs are grouped under a repo sub-header.")
           (when (get-buffer "*agent-shell-sidebar*")
             (agent-shell-workspace-sidebar-refresh))
           (message "Repo name cap: %s" decknix--hub-repo-name-cap))
+
+        ;; -- Hub: WIP de-dupe toggle --
+        ;; When non-nil, WIP omits PRs already linked to a live session so
+        ;; the user only sees each active PR in one place.
+        (defvar decknix--hub-wip-hide-linked t
+          "When non-nil, hide WIP PRs that are linked to a live session.
+They still appear under their owning live session (when expanded).")
+
+        (defun decknix--hub-toggle-wip-hide-linked ()
+          "Toggle hiding of live-session-linked PRs from the WIP section."
+          (interactive)
+          (setq decknix--hub-wip-hide-linked
+                (not decknix--hub-wip-hide-linked))
+          (when (get-buffer "*agent-shell-sidebar*")
+            (agent-shell-workspace-sidebar-refresh))
+          (message "WIP hide linked: %s"
+                   (if decknix--hub-wip-hide-linked "on" "off")))
 
         ;; -- Hub: WIP join — look up live PR status from hub data --
 
@@ -8776,24 +8840,35 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
 
         (defun decknix--hub-render-wip (line-num)
           "Render the WIP (my open PRs) section. Returns updated LINE-NUM.
-Respects `decknix--hub-org-visibility'. Shows time since last update."
+Respects `decknix--hub-org-visibility'. Shows time since last update.
+Honours `decknix--hub-wip-hide-linked' — PRs linked to a live
+session are hidden (both from the header count and the listing)."
           (let* ((data decknix--hub-wip)
                  (all-repos (when data (alist-get 'repos data)))
-                 ;; Filter repos by org, then filter PRs by age
+                 ;; Compute live-linked set once; empty when toggle is off.
+                 (linked-set (when decknix--hub-wip-hide-linked
+                               (decknix--hub-live-linked-pr-set)))
+                 (pr-visible-p
+                  (lambda (repo-full pr)
+                    (and (decknix--hub-age-visible-p (alist-get 'updated pr))
+                         (not (decknix--hub-wip-pr-live-linked-p
+                               repo-full (alist-get 'number pr) linked-set)))))
+                 ;; Filter repos by org, then filter PRs by age + link status
                  (repos (seq-filter
                          (lambda (r)
                            (and (decknix--hub-item-visible-p (alist-get 'repo r))
-                                ;; Keep repo only if it has age-visible PRs
                                 (seq-some
                                  (lambda (pr)
-                                   (decknix--hub-age-visible-p (alist-get 'updated pr)))
+                                   (funcall pr-visible-p
+                                            (alist-get 'repo r) pr))
                                  (alist-get 'prs r))))
                          (or all-repos '())))
                  (total (cl-reduce #'+ (mapcar
                                         (lambda (r)
                                           (cl-count-if
                                            (lambda (pr)
-                                             (decknix--hub-age-visible-p (alist-get 'updated pr)))
+                                             (funcall pr-visible-p
+                                                      (alist-get 'repo r) pr))
                                            (alist-get 'prs r)))
                                         repos)
                                    :initial-value 0)))
@@ -8805,8 +8880,7 @@ Respects `decknix--hub-org-visibility'. Shows time since last update."
                 (let* ((repo-full (or (alist-get 'repo repo-entry) ""))
                        (repo (car (last (split-string repo-full "/"))))
                        (prs (seq-filter
-                             (lambda (pr)
-                               (decknix--hub-age-visible-p (alist-get 'updated pr)))
+                             (lambda (pr) (funcall pr-visible-p repo-full pr))
                              (alist-get 'prs repo-entry))))
                   (when prs
                     ;; Repo sub-header
