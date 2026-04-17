@@ -7494,9 +7494,8 @@ When no filter is active (table is nil), all orgs are visible."
                        'face (if (string= label "all")
                                  'font-lock-comment-face
                                'font-lock-constant-face)))))
-          :transient t
           (interactive)
-          (call-interactively #'decknix--hub-cycle-ci-filter))
+          (call-interactively #'decknix-hub-ci-filter-transient))
 
         (transient-define-suffix decknix-sidebar-transient--launch-reviews ()
           :key "R"
@@ -7651,60 +7650,150 @@ Uses individual check details to distinguish soft from hard fails."
         (defun decknix--hub-ci-filter-summary ()
           "Return a compact label for the current CI filter.
 Shows icon characters for enabled statuses."
-          (if (= (length decknix--hub-ci-filter) 5)
-              "all"
-            (mapconcat
-             (lambda (s)
-               (pcase s
-                 ("pass"      "✓")
-                 ("soft_fail" "⚠")
-                 ("fail"      "✗")
-                 ("running"   "⟳")
-                 ("unknown"   "?")
-                 (_           s)))
-             decknix--hub-ci-filter "")))
+          (cond
+           ((null decknix--hub-ci-filter) "none")
+           ((= (length decknix--hub-ci-filter) 5) "all")
+           (t (mapconcat
+               (lambda (s)
+                 (pcase s
+                   ("pass"      "✓")
+                   ("soft_fail" "⚠")
+                   ("fail"      "✗")
+                   ("running"   "⟳")
+                   ("unknown"   "?")
+                   (_           s)))
+               decknix--hub-ci-filter ""))))
 
         (defun decknix--hub-ci-toggle-status (status)
-          "Toggle STATUS in the CI filter set."
+          "Toggle STATUS in the CI filter set.
+Individual statuses can all be hidden; use the transient's `a' key
+to restore all when the list has been emptied."
           (if (member status decknix--hub-ci-filter)
-              (progn
-                ;; Don't allow hiding ALL statuses
-                (when (> (length decknix--hub-ci-filter) 1)
-                  (setq decknix--hub-ci-filter
-                        (delete status decknix--hub-ci-filter))))
+              (setq decknix--hub-ci-filter
+                    (delete status decknix--hub-ci-filter))
             (push status decknix--hub-ci-filter)))
 
-        (defun decknix--hub-cycle-ci-filter ()
-          "Toggle CI status visibility via a quick menu.
-Shows current state of each status and lets you toggle one.
-Statuses: (g)reen=pass (l)int=soft_fail (y)ellow=running (?)grey=unknown (r)ed=fail (a)ll."
+        (defun decknix--hub-ci-filter-refresh ()
+          "Refresh the sidebar after a CI filter change."
+          (when (get-buffer "*agent-shell-sidebar*")
+            (agent-shell-workspace-sidebar-refresh)))
+
+        (defun decknix--hub-ci-filter-toggle-pass ()
+          "Toggle visibility of passing CI."
           (interactive)
-          (let* ((statuses '(("pass" . "✓") ("soft_fail" . "⚠") ("running" . "⟳")
-                             ("unknown" . "?") ("fail" . "✗")))
-                 (prompt (mapconcat
-                          (lambda (pair)
-                            (let* ((key (car pair))
-                                   (icon (cdr pair))
-                                   (on (member key decknix--hub-ci-filter)))
-                              (if on
-                                  (propertize icon 'face 'success)
-                                (propertize icon 'face 'font-lock-comment-face))))
-                          statuses " "))
-                 (choice (read-char-choice
-                          (format "CI [%s] toggle: (g)reen (l)int (y)ellow (?)grey (r)ed (a)ll: "
-                                  prompt)
-                          '(?g ?l ?y ?? ?r ?a))))
-            (pcase choice
-              (?g (decknix--hub-ci-toggle-status "pass"))
-              (?l (decknix--hub-ci-toggle-status "soft_fail"))
-              (?y (decknix--hub-ci-toggle-status "running"))
-              (?? (decknix--hub-ci-toggle-status "unknown"))
-              (?r (decknix--hub-ci-toggle-status "fail"))
-              (?a (setq decknix--hub-ci-filter
-                        '("pass" "fail" "soft_fail" "running" "unknown"))))
-            (when (get-buffer "*agent-shell-sidebar*")
-              (agent-shell-workspace-sidebar-refresh))
-            (message "CI filter: %s" (decknix--hub-ci-filter-summary))))
+          (decknix--hub-ci-toggle-status "pass")
+          (decknix--hub-ci-filter-refresh))
+
+        (defun decknix--hub-ci-filter-toggle-soft ()
+          "Toggle visibility of soft-fail CI (lint/analysis only)."
+          (interactive)
+          (decknix--hub-ci-toggle-status "soft_fail")
+          (decknix--hub-ci-filter-refresh))
+
+        (defun decknix--hub-ci-filter-toggle-running ()
+          "Toggle visibility of running CI."
+          (interactive)
+          (decknix--hub-ci-toggle-status "running")
+          (decknix--hub-ci-filter-refresh))
+
+        (defun decknix--hub-ci-filter-toggle-unknown ()
+          "Toggle visibility of items with no CI data."
+          (interactive)
+          (decknix--hub-ci-toggle-status "unknown")
+          (decknix--hub-ci-filter-refresh))
+
+        (defun decknix--hub-ci-filter-toggle-fail ()
+          "Toggle visibility of hard-fail CI (build/test failures)."
+          (interactive)
+          (decknix--hub-ci-toggle-status "fail")
+          (decknix--hub-ci-filter-refresh))
+
+        (defun decknix--hub-ci-filter-show-all ()
+          "Show items with any CI status."
+          (interactive)
+          (setq decknix--hub-ci-filter
+                '("pass" "fail" "soft_fail" "running" "unknown"))
+          (decknix--hub-ci-filter-refresh)
+          (message "CI filter: all"))
+
+        (defun decknix--hub-ci-filter-show-none ()
+          "Hide items with any CI status (empties the visible set)."
+          (interactive)
+          (setq decknix--hub-ci-filter nil)
+          (decknix--hub-ci-filter-refresh)
+          (message "CI filter: none (use `a' to restore)"))
+
+        (defun decknix--hub-ci-filter-status-desc (status icon label)
+          "Return a transient description for STATUS with ICON and LABEL."
+          (let ((on (member status decknix--hub-ci-filter)))
+            (format "%s %s %s"
+                    (if on
+                        (propertize "[x]" 'face 'success)
+                      (propertize "[ ]" 'face 'font-lock-comment-face))
+                    (propertize icon
+                                'face (if on 'success 'font-lock-comment-face))
+                    label)))
+
+        (transient-define-suffix decknix--hub-ci-filter--pass ()
+          :key "g"
+          :description (lambda () (decknix--hub-ci-filter-status-desc
+                                   "pass" "✓" "green   (pass)"))
+          :transient t
+          (interactive)
+          (decknix--hub-ci-filter-toggle-pass))
+
+        (transient-define-suffix decknix--hub-ci-filter--soft ()
+          :key "l"
+          :description (lambda () (decknix--hub-ci-filter-status-desc
+                                   "soft_fail" "⚠" "lint    (soft-fail)"))
+          :transient t
+          (interactive)
+          (decknix--hub-ci-filter-toggle-soft))
+
+        (transient-define-suffix decknix--hub-ci-filter--running ()
+          :key "y"
+          :description (lambda () (decknix--hub-ci-filter-status-desc
+                                   "running" "⟳" "yellow  (running)"))
+          :transient t
+          (interactive)
+          (decknix--hub-ci-filter-toggle-running))
+
+        (transient-define-suffix decknix--hub-ci-filter--unknown ()
+          :key "?"
+          :description (lambda () (decknix--hub-ci-filter-status-desc
+                                   "unknown" "?" "grey    (unknown)"))
+          :transient t
+          (interactive)
+          (decknix--hub-ci-filter-toggle-unknown))
+
+        (transient-define-suffix decknix--hub-ci-filter--fail ()
+          :key "r"
+          :description (lambda () (decknix--hub-ci-filter-status-desc
+                                   "fail" "✗" "red     (hard-fail)"))
+          :transient t
+          (interactive)
+          (decknix--hub-ci-filter-toggle-fail))
+
+        (transient-define-prefix decknix-hub-ci-filter-transient ()
+          "Toggle visibility of CI statuses in the Requests list.
+
+Each status can be turned on or off independently.  Combine them to
+show, for example, only hard failures and unknowns while hiding
+lint-only failures and still-running checks."
+          [:description
+           (lambda ()
+             (format "CI filter  [%s]"
+                     (propertize (decknix--hub-ci-filter-summary)
+                                 'face 'font-lock-constant-face)))
+           (decknix--hub-ci-filter--pass)
+           (decknix--hub-ci-filter--soft)
+           (decknix--hub-ci-filter--running)
+           (decknix--hub-ci-filter--unknown)
+           (decknix--hub-ci-filter--fail)]
+          [""
+           ("a" "Show all" decknix--hub-ci-filter-show-all :transient t)
+           ("n" "Show none" decknix--hub-ci-filter-show-none :transient t)
+           ("q" "Done" transient-quit-one)])
 
         ;; -- Hub: direct-mention filter --
         ;; When enabled, Requests shows only items where the user's attention
