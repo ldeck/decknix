@@ -6908,16 +6908,6 @@ With \\[universal-argument] \\[universal-argument], show @-mentioned only."
           (kbd "s") (lambda () (interactive)
                       (decknix--sidebar-call-transient #'decknix-sidebar-sessions)))
 
-        ;; Direct bindings for footer-advertised toggles (also in T transient).
-        ;; Omitted here (T-only, due to conflicts): t (upstream tile — already
-        ;; does the right thing), d (upstream delete-killed), P (restore-all).
-        (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "W") #'decknix-sidebar-cycle-width)
-        (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "S") #'agent-shell-workspace-sidebar-toggle-quick-switch)
-        (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "H") #'decknix-sidebar-toggle-hidden)
-
         ;; == Sidebar state persistence ==
         ;; Saves toggle states and previous live sessions across restarts.
         ;; File: ~/.config/decknix/sidebar-state.el (s-expression format).
@@ -7314,25 +7304,11 @@ Re-reads only the changed file and refreshes the sidebar."
         (decknix--hub-refresh-all)
         (decknix--hub-start-watcher)
 
-        ;; Hub toggle keys are available via the T transient and also bound
-        ;; directly in the sidebar mode map to match the footer advertisements.
-        ;; R (review launcher) is an action, not a toggle.
-        ;; P (deploy indicator) stays T-only — our `P` key is restore-all-previous.
+        ;; Hub toggle keys now live in the T transient.
+        ;; Keep R (review launcher) as a direct sidebar key — it's an action.
         (with-eval-after-load 'agent-shell-workspace
           (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "R") #'decknix-hub-launch-reviews)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "O") #'decknix--hub-org-filter-dispatch)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "F") #'decknix--hub-cycle-age-filter)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "C") #'decknix--hub-cycle-ci-filter)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "@") #'decknix--hub-toggle-mention-filter)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "B") #'decknix--hub-toggle-bot-filter)
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "E") #'decknix--hub-cycle-expand-prs))
+            (kbd "R") #'decknix-hub-launch-reviews))
 
         ;; Add Hub group to the sidebar transient
         ;; -- Hub: org filter (multi-select transient) --
