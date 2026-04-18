@@ -6409,7 +6409,8 @@ the target.  Sessions and tags are moved to the target."
            ("w" "Set workspace" decknix-sidebar-set-workspace)
            ("h" "Hide"          decknix-sidebar-hide-conversation)
            ("M" "Merge conv"    decknix-sidebar-merge-conversation)
-           ("m" "Set mode"      agent-shell-workspace-sidebar-set-mode)]
+           ("m" "Set mode"      agent-shell-workspace-sidebar-set-mode)
+           ("v" "Review"        decknix-sidebar-review-at-point)]
           ["Tiling"
            ("a" "Add tile"      agent-shell-workspace-tile-add)
            ("x" "Remove tile"   agent-shell-workspace-tile-remove)])
@@ -7448,6 +7449,24 @@ With \\[universal-argument] \\[universal-argument], show @-mentioned only."
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "s") (lambda () (interactive)
                       (decknix--sidebar-call-transient #'decknix-sidebar-sessions)))
+
+        ;; v = review the last exchange of the live session at point.
+        ;; C-u v captures the full session history instead of just the
+        ;; last prompt/response.  Delegates to `decknix-agent-review'
+        ;; with the sidebar's buffer-at-point as the current buffer so
+        ;; session/workspace context are picked up correctly.
+        (defun decknix-sidebar-review-at-point (&optional all)
+          "Open a review buffer for the agent session at point.
+With prefix ALL, capture the full history (see `decknix-agent-review')."
+          (interactive "P")
+          (let ((buffer (agent-shell-workspace-sidebar--buffer-at-point)))
+            (unless (and buffer (buffer-live-p buffer))
+              (user-error "No live agent buffer at point"))
+            (with-current-buffer buffer
+              (decknix-agent-review all))))
+
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "v") #'decknix-sidebar-review-at-point)
 
         ;; == Sidebar state persistence ==
         ;; Saves toggle states and previous live sessions across restarts.
