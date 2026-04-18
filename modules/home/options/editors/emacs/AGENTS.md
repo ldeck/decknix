@@ -197,6 +197,30 @@ buffer has its own process. Switching away from a session does NOT pause it —
 the agent continues working in the background. The attention indicator and
 workspace sidebar surface which sessions need attention.
 
+### Inline Review (`decknix-agent-review-mode`)
+- Derived from `markdown-mode`. Captures the last exchange (prompt +
+  response) from an agent session into a `*agent-review: <name>*` buffer
+  with a read-only preamble describing the Option-1 reply contract.
+- Entry points: `C-c A v` / `C-c v` in a session buffer, or `v` on a live
+  row in the workspace sidebar (also reachable via `a v`). Prefix arg
+  captures the full history instead of just the last exchange.
+- Annotation snippets (yasnippet, `,` prefix, TAB to expand):
+  `,c` comment, `,a` approve, `,r` reject, `,o` option, `,A` agent reply,
+  `,m` mention (consult-style picker over persisted collaborators),
+  `,f` follow-up. Identity resolves via `user-login-name`; collaborators
+  are persisted to `~/.config/decknix/review-collaborators.el`.
+- Follow-up stash: `C-c C-f` flags the paragraph near point and records a
+  JSON entry in `~/.config/decknix/review-followups.json` with id, ts,
+  session, workspace, author, title, and status. `C-c C-l` lists stashed
+  items via completing-read with sub-actions `[d]one / [o]pen / [x]delete
+  / [c]opy-id`.
+- Submit/route (`C-c C-c`): `a` sends back to the source agent-shell
+  (reusing compose's busy-prompt interrupt/queue dance), `p` copies to
+  the kill-ring for PR comments, `j` writes a draft under
+  `~/.config/decknix/review-jira-drafts/`, `f` saves to a user-chosen
+  path. `q` cancels. The agent route strips the `🧭 review meta` header
+  but preserves the `📋 instructions` block.
+
 ### Key Prefix Map
 
 | Prefix | Purpose |
@@ -215,6 +239,7 @@ workspace sidebar surface which sessions need attention.
 | `C-c A c e` | Edit custom command |
 | `C-c A w` | Toggle Agents workspace tab (tab-bar with sidebar) |
 | `C-c A j` | Jump to next session needing attention; `C-u` to pick, `C-u C-u` dashboard |
+| `C-c A v` | Review last exchange (inline review buffer); `C-u` for full history |
 | `C-c A T` | Tags — global (list/filter conversations, rename, delete, cleanup) |
 | `C-c T` | Tags — conversation-scoped (show, add, remove) — in-buffer only (#78) |
 | `C-c D` | Deckmacs — framework management (reload, status, diff, log) (#85) |
@@ -226,6 +251,10 @@ workspace sidebar surface which sessions need attention.
 | `C-c i` | Context panel (in agent-shell buffers) |
 | `C-c w` | Toggle Agents workspace (in-buffer shortcut) |
 | `C-c j` | Jump to pending session (in-buffer shortcut) |
+| `C-c v` | Review last exchange (in-buffer shortcut for `C-c A v`) |
+| `C-c C-c` | Route review (review-mode only) |
+| `C-c C-f` | Flag paragraph as follow-up (review-mode only) |
+| `C-c C-l` | List stashed follow-ups (review-mode only) |
 
 ### Planned Features
 
