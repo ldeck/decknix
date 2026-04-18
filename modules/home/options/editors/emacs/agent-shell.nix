@@ -4719,15 +4719,159 @@ the last exchange."
           (when (yes-or-no-p "Abandon this review buffer? ")
             (kill-buffer (current-buffer))))
 
-        (defun decknix-agent-review-flag-followup ()
-          "Flag the current paragraph as a follow-up."
-          (interactive)
-          (user-error "Follow-up stash not yet implemented (coming in E3)"))
+        ;; -- Follow-up stash (local JSON; future: GitHub / Jira routes) --
+
+        (defvar decknix-agent-review-followups-file
+          (expand-file-name "~/.config/decknix/review-followups.json")
+          "JSON file storing follow-ups flagged during review sessions.
+A list of objects with keys: id, ts, session, workspace, author,
+title, body, route (\"local\"|\"github\"|\"jira\"), status
+(\"open\"|\"done\").")
+
+        (defun decknix--agent-review-followups-read ()
+          "Return the current follow-ups list (may be empty)."
+          (let ((f decknix-agent-review-followups-file))
+            (if (file-exists-p f)
+                (condition-case err
+                    (let ((json-array-type 'list)
+                          (json-object-type 'alist)
+                          (json-key-type 'symbol))
+                      (json-read-file f))
+                  (error
+                   (message "review-followups: failed to read %s — %s"
+                            f (error-message-string err))
+                   nil))
+              nil)))
+
+        (defun decknix--agent-review-followups-write (items)
+          "Persist ITEMS to `decknix-agent-review-followups-file'."
+          (let ((f decknix-agent-review-followups-file))
+            (make-directory (file-name-directory f) t)
+            (with-temp-file f
+              (insert (json-encode items))
+              (insert "\n"))))
+
+        (defun decknix--agent-review-followup-id ()
+          "Generate a short, time-ordered id for a follow-up."
+          (format "fu-%s-%04x"
+                  (format-time-string "%Y%m%d%H%M%S")
+                  (random 65536)))
+
+        (defun decknix-agent-review-flag-followup (title)
+          "Flag the current paragraph as a follow-up.
+Records an entry in `decknix-agent-review-followups-file' and
+inserts a 🚩 annotation at point referencing its id.  TITLE is
+prompted for — defaults to the first non-blank line near point."
+          (interactive
+           (list
+            (let* ((default
+                    (save-excursion
+                      (goto-char (line-beginning-position))
+                      (when (looking-at "[[:space:]]*$")
+                        (forward-line 1))
+                      (string-trim
+                       (buffer-substring-no-properties
+                        (line-beginning-position)
+                        (line-end-position))))))
+              (read-string (if (and default (not (string-empty-p default)))
+                               (format "Follow-up title [%s]: " default)
+                             "Follow-up title: ")
+                           nil nil default))))
+          (when (or (null title) (string-empty-p (string-trim title)))
+            (user-error "Empty title — nothing recorded"))
+          (let* ((items (decknix--agent-review-followups-read))
+                 (id (decknix--agent-review-followup-id))
+                 (entry `((id . ,id)
+                          (ts . ,(format-time-string "%Y-%m-%dT%H:%M:%S%z"))
+                          (session . ,(or (and (buffer-live-p
+                                                decknix--agent-review-source-buffer)
+                                               (buffer-name
+                                                decknix--agent-review-source-buffer))
+                                          ""))
+                          (workspace . ,(or decknix--agent-review-workspace ""))
+                          (author . ,(decknix--agent-review-author))
+                          (title . ,(string-trim title))
+                          (body . "")
+                          (route . "local")
+                          (status . "open"))))
+            (decknix--agent-review-followups-write (append items (list entry)))
+            ;; Insert a linked annotation at point so the review buffer
+            ;; shows where the follow-up came from.
+            (save-excursion
+              (end-of-line)
+              (insert (format "\n> 🚩 **%s:** follow-up [%s] — %s\n"
+                              (decknix--agent-review-author)
+                              id
+                              (string-trim title))))
+            (message "Recorded follow-up %s — %s" id title)))
+
+        (defun decknix--agent-review-followup-describe (entry)
+          "Return a single-line label for follow-up ENTRY."
+          (format "%s  %-7s  %s  %s"
+                  (or (alist-get 'id entry) "?")
+                  (propertize (or (alist-get 'status entry) "open")
+                              'face (if (string= (alist-get 'status entry) "done")
+                                        'font-lock-comment-face
+                                      'font-lock-warning-face))
+                  (format-time-string "%Y-%m-%d"
+                                      (ignore-errors
+                                        (date-to-time
+                                         (alist-get 'ts entry ""))))
+                  (or (alist-get 'title entry) "(untitled)")))
 
         (defun decknix-agent-review-list-followups ()
-          "List stashed follow-ups."
+          "List stashed follow-ups via `completing-read'.
+Selecting an entry offers a sub-action: mark-done / re-open / delete
+/ copy-id / cancel."
           (interactive)
-          (user-error "Follow-up list not yet implemented (coming in E3)"))
+          (let* ((items (decknix--agent-review-followups-read)))
+            (unless items
+              (user-error "No follow-ups recorded yet"))
+            (let* ((candidates
+                    (mapcar (lambda (e)
+                              (cons (decknix--agent-review-followup-describe e)
+                                    e))
+                            items))
+                   (pick (completing-read "Follow-up: " candidates nil t))
+                   (entry (cdr (assoc pick candidates)))
+                   (action (read-char-choice
+                            "[d]one  [o]pen  [x]delete  [c]opy id  [q]uit: "
+                            '(?d ?o ?x ?c ?q))))
+              (pcase action
+                (?d (decknix--agent-review-followup-set-status entry "done"))
+                (?o (decknix--agent-review-followup-set-status entry "open"))
+                (?x (decknix--agent-review-followup-delete entry))
+                (?c (let ((id (alist-get 'id entry)))
+                      (kill-new id)
+                      (message "Copied: %s" id)))
+                (?q (message "Cancelled"))))))
+
+        (defun decknix--agent-review-followup-set-status (entry status)
+          "Update ENTRY's status to STATUS and persist."
+          (let* ((id (alist-get 'id entry))
+                 (items (decknix--agent-review-followups-read))
+                 (updated
+                  (mapcar
+                   (lambda (e)
+                     (if (string= (alist-get 'id e) id)
+                         (cons (cons 'status status)
+                               (assq-delete-all 'status (copy-sequence e)))
+                       e))
+                   items)))
+            (decknix--agent-review-followups-write updated)
+            (message "Follow-up %s → %s" id status)))
+
+        (defun decknix--agent-review-followup-delete (entry)
+          "Remove ENTRY from the stash (after confirm)."
+          (when (yes-or-no-p (format "Delete follow-up %s? "
+                                     (alist-get 'id entry)))
+            (let* ((id (alist-get 'id entry))
+                   (items (decknix--agent-review-followups-read))
+                   (filtered (seq-remove
+                              (lambda (e) (string= (alist-get 'id e) id))
+                              items)))
+              (decknix--agent-review-followups-write filtered)
+              (message "Deleted follow-up %s" id))))
 
         (defun decknix-agent-review-add-collaborator ()
           "Add a collaborator to the local mention list."
