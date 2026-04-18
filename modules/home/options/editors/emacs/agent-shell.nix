@@ -214,6 +214,7 @@ let
   # Note: ''${ escapes Nix interpolation to produce literal ${ for yasnippet fields
   snippetDir = ".emacs.d/snippets/agent-shell-mode";
   batchSnippetDir = ".emacs.d/snippets/decknix-batch-compose-mode";
+  reviewSnippetDir = ".emacs.d/snippets/decknix-agent-review-mode";
 
   mkSnippet = name: key: body: ''
     # -*- mode: snippet -*-
@@ -302,6 +303,34 @@ let
       https://github.com/''${1:owner}/''${2:repo}/pull/''${3:number}''${0}'';
   };
 
+  # == Yasnippet templates for the inline review buffer ==
+  # Deployed to ~/.emacs.d/snippets/decknix-agent-review-mode/ via home.file.
+  # Option-1 annotation patterns. Authoring identity resolves via
+  # `decknix--agent-review-author', so `user-login-name' is the default
+  # but can be overridden per-session with `decknix-agent-review-author'.
+  reviewSnippets = {
+    comment = mkSnippet "comment" ",c" ''
+      > 💬 **''${1:`(decknix--agent-review-author)`}:** ''${0}'';
+
+    approve = mkSnippet "approve" ",a" ''
+      > ✅ **''${1:`(decknix--agent-review-author)`}:** approved''${0:.}'';
+
+    reject = mkSnippet "reject" ",r" ''
+      > ❌ **''${1:`(decknix--agent-review-author)`}:** reject — ''${2:reason}''${0}'';
+
+    option = mkSnippet "option-pick" ",o" ''
+      > 🔀 **''${1:`(decknix--agent-review-author)`}:** option ''${2:B}''${0: — reason}'';
+
+    mention = mkSnippet "mention" ",m" ''
+      > 💬 **''${1:$$(decknix--agent-review-read-collaborator)}:** ''${0}'';
+
+    followup = mkSnippet "follow-up" ",f" ''
+      > 🚩 **''${1:`(decknix--agent-review-author)`}:** follow-up — ''${2:title}''${0}'';
+
+    agent = mkSnippet "agent-response" ",A" ''
+      > 💬 **agent:** ''${0}'';
+  };
+
 in
 {
   options.programs.emacs.decknix.agentShell = {
@@ -379,6 +408,12 @@ in
         (mapAttrs'
           (name: text: nameValuePair "${batchSnippetDir}/${name}" { inherit text; })
           batchSnippets))
+      //
+      # Review-mode snippets → ~/.emacs.d/snippets/decknix-agent-review-mode/
+      (optionalAttrs cfg.templates.enable
+        (mapAttrs'
+          (name: text: nameValuePair "${reviewSnippetDir}/${name}" { inherit text; })
+          reviewSnippets))
       //
       # Auggie custom commands → ~/.augment/commands/
       (optionalAttrs cfg.commands.enable
@@ -4703,6 +4738,38 @@ the last exchange."
                           :test #'string=)
               (decknix--agent-review-save-collaborators)
               (message "Added collaborator: %s" name))))
+
+        (defun decknix--agent-review-read-collaborator ()
+          "Prompt for a collaborator name and persist any new entry.
+Used by the `,m' yasnippet to populate the mention field.  Returns
+the chosen name, or falls back to the review author when cancelled.
+Selecting `new…' prompts for a fresh name and adds it to the list."
+          (decknix--agent-review-load-collaborators)
+          (let* ((author (decknix--agent-review-author))
+                 (others (seq-remove (lambda (c) (string= c author))
+                                     decknix-agent-review-collaborators))
+                 (choice (completing-read
+                          "Mention: "
+                          (append others (list "new…"))
+                          nil nil)))
+            (cond
+             ((or (null choice) (string-empty-p choice))
+              author)
+             ((string= choice "new…")
+              (let ((new (string-trim
+                          (read-string "New collaborator name: "))))
+                (if (string-empty-p new)
+                    author
+                  (cl-pushnew new decknix-agent-review-collaborators
+                              :test #'string=)
+                  (decknix--agent-review-save-collaborators)
+                  new)))
+             (t
+              (unless (member choice decknix-agent-review-collaborators)
+                (cl-pushnew choice decknix-agent-review-collaborators
+                            :test #'string=)
+                (decknix--agent-review-save-collaborators))
+              choice))))
 
         (define-key decknix-agent-prefix-map (kbd "v") 'decknix-agent-review)
 
