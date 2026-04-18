@@ -4503,6 +4503,209 @@ Comments start with #."
                       "# C-c C-c to launch, C-c C-k to cancel.\n\n")
               (set-buffer-modified-p nil))))
 
+        ;; == Inline review buffer (decknix-agent-review-mode) ==
+        ;; Capture an agent-shell exchange into a dedicated markdown buffer
+        ;; where you can annotate with Option-1 preamble style
+        ;; (> ✅ approved, > ❌ reject, > 🔀 option B, > 💬 comment).
+        ;; Annotations are routed back to the source session (or to Jira /
+        ;; a PR-comment / a file) via `C-c C-c`.
+        ;;
+        ;; E1 (this commit): scaffolding — mode, capture, preamble, open cmd.
+        ;; E2 adds yasnippets + collaborator picker + persistence.
+        ;; E3 adds the follow-up stash.
+        ;; E4 adds the submit/route transient.
+
+        (defvar decknix-agent-review-author nil
+          "Name used to author annotations in the review buffer.
+When nil, defaults to `user-login-name'.")
+
+        (defvar decknix-agent-review-collaborators '()
+          "Collaborators available in the review buffer's @mention picker.
+Populated on demand; persisted to
+`decknix-agent-review-collaborators-file'.")
+
+        (defvar decknix-agent-review-collaborators-file
+          (expand-file-name "~/.config/decknix/review-collaborators.el")
+          "File used to persist known collaborators across Emacs sessions.")
+
+        (defvar-local decknix--agent-review-source-buffer nil
+          "Agent-shell buffer that this review buffer was created from.")
+
+        (defvar-local decknix--agent-review-session-id nil
+          "Auggie session-id captured at the time of review.")
+
+        (defvar-local decknix--agent-review-workspace nil
+          "Workspace root captured from the source buffer.")
+
+        (defvar decknix-agent-review-mode-map
+          (let ((map (make-sparse-keymap)))
+            (define-key map (kbd "C-c C-c") #'decknix-agent-review-submit)
+            (define-key map (kbd "C-c C-k") #'decknix-agent-review-cancel)
+            (define-key map (kbd "C-c C-f") #'decknix-agent-review-flag-followup)
+            (define-key map (kbd "C-c C-l") #'decknix-agent-review-list-followups)
+            (define-key map (kbd "C-c C-m") #'decknix-agent-review-add-collaborator)
+            map)
+          "Keymap for `decknix-agent-review-mode'.")
+
+        (defun decknix--agent-review-author ()
+          "Return the annotation author name."
+          (or decknix-agent-review-author user-login-name "me"))
+
+        (defun decknix--agent-review-load-collaborators ()
+          "Read persisted collaborators into `decknix-agent-review-collaborators'."
+          (let ((f decknix-agent-review-collaborators-file))
+            (when (file-exists-p f)
+              (condition-case nil
+                  (let ((data (with-temp-buffer
+                                (insert-file-contents f)
+                                (read (current-buffer)))))
+                    (when (listp data)
+                      (setq decknix-agent-review-collaborators data)))
+                (error nil)))))
+
+        (defun decknix--agent-review-save-collaborators ()
+          "Persist `decknix-agent-review-collaborators' to disk."
+          (let ((f decknix-agent-review-collaborators-file))
+            (make-directory (file-name-directory f) t)
+            (with-temp-file f
+              (prin1 decknix-agent-review-collaborators (current-buffer)))))
+
+        (define-derived-mode decknix-agent-review-mode markdown-mode "AgentReview"
+          "Major mode for annotating agent-shell exchanges.
+Supports inline Option-1 annotations (💬 ✅ ❌ 🔀 🚩) and routing
+the review back to the source agent-shell session.
+\\{decknix-agent-review-mode-map}"
+          (setq-local fill-column 100)
+          (setq-local truncate-lines nil)
+          (visual-line-mode 1)
+          (when (fboundp 'yas-minor-mode)
+            (yas-minor-mode 1))
+          (decknix--agent-review-load-collaborators))
+
+        (defun decknix--agent-review-quote (text)
+          "Prefix each line of TEXT with `> ' for a markdown blockquote."
+          (if (or (null text) (string-empty-p text))
+              "> _(empty)_"
+            (mapconcat (lambda (line) (concat "> " line))
+                       (split-string text "\n")
+                       "\n")))
+
+        (defun decknix--agent-review-capture-exchange (source-buffer n)
+          "Return the last N exchanges from SOURCE-BUFFER's session, oldest first.
+Each exchange is (USER-MSG . ASSISTANT-RESP).  Returns nil on failure."
+          (with-current-buffer source-buffer
+            (when-let ((sid (decknix--agent-buffer-session-id)))
+              (decknix--agent-session-extract-history sid n))))
+
+        (defun decknix--agent-review-render-preamble (source-buffer)
+          "Build the preamble string for a review of SOURCE-BUFFER."
+          (let* ((session-name (buffer-name source-buffer))
+                 (workspace (with-current-buffer source-buffer
+                              (or decknix--agent-session-workspace
+                                  default-directory)))
+                 (author (decknix--agent-review-author))
+                 (collabs (cons author
+                                (seq-remove
+                                 (lambda (c) (string= c author))
+                                 decknix-agent-review-collaborators))))
+            (concat
+             "> 🧭 **review meta**\n"
+             (format "> session: %s\n" session-name)
+             (format "> workspace: %s\n"
+                     (abbreviate-file-name (or workspace "")))
+             (format "> collaborators: %s\n"
+                     (mapconcat #'identity collabs ", "))
+             "> route: agent  (C-c C-c submits to source session)\n"
+             ">\n"
+             "> 📋 **instructions for the agent** (Option 1):\n"
+             "> Respond inline using `> 💬 **agent:** …` immediately after\n"
+             "> each of my annotations. Keep order. Don't collapse multiple\n"
+             "> annotations into one reply. For ❌ rejections, propose a\n"
+             "> concrete change. For 🔀 option picks, acknowledge the chosen\n"
+             "> option and update prior assumptions.\n"
+             "\n")))
+
+        (defun decknix--agent-review-format-exchanges (exchanges)
+          "Render EXCHANGES as markdown blockquote sections.
+EXCHANGES is a list of (USER-MSG . ASSISTANT-RESP) cons cells."
+          (mapconcat
+           (lambda (ex)
+             (let ((user (car ex))
+                   (resp (cdr ex)))
+               (concat
+                "## prompt\n\n"
+                (decknix--agent-review-quote (or user "")) "\n\n"
+                "## agent response\n\n"
+                (decknix--agent-review-quote (or resp "")) "\n\n"
+                "## annotations\n\n"
+                "<!-- ,c ,a ,r ,o ,m ,f ,A — annotate here -->\n\n")))
+           exchanges
+           "\n---\n\n"))
+
+        (defun decknix-agent-review (&optional all)
+          "Open a review buffer for the current agent-shell session.
+With prefix ALL, capture the full session history rather than just
+the last exchange."
+          (interactive "P")
+          (unless (decknix--agent-buffer-session-id)
+            (user-error "Not in an agent-shell buffer with a known session"))
+          (let* ((src (current-buffer))
+                 (n (if all 20 1))
+                 (exchanges (decknix--agent-review-capture-exchange src n))
+                 (sid (decknix--agent-buffer-session-id))
+                 (ws (or decknix--agent-session-workspace default-directory))
+                 (buf-name (format "*agent-review: %s*" (buffer-name src)))
+                 (buf (get-buffer-create buf-name)))
+            (unless exchanges
+              (user-error "No exchanges found for this session yet"))
+            (with-current-buffer buf
+              (decknix-agent-review-mode)
+              (setq decknix--agent-review-source-buffer src)
+              (setq decknix--agent-review-session-id sid)
+              (setq decknix--agent-review-workspace ws)
+              (let ((inhibit-read-only t))
+                (erase-buffer)
+                (insert (decknix--agent-review-render-preamble src))
+                (insert (decknix--agent-review-format-exchanges exchanges))
+                (goto-char (point-min))
+                (when (re-search-forward "^## annotations" nil t)
+                  (forward-line 2))))
+            (pop-to-buffer buf)))
+
+        ;; Stubs — fleshed out in E2-E4.
+        (defun decknix-agent-review-submit ()
+          "Submit review annotations back to the source agent-shell."
+          (interactive)
+          (user-error "Review submit not yet implemented (coming in E4)"))
+
+        (defun decknix-agent-review-cancel ()
+          "Abandon the current review buffer."
+          (interactive)
+          (when (yes-or-no-p "Abandon this review buffer? ")
+            (kill-buffer (current-buffer))))
+
+        (defun decknix-agent-review-flag-followup ()
+          "Flag the current paragraph as a follow-up."
+          (interactive)
+          (user-error "Follow-up stash not yet implemented (coming in E3)"))
+
+        (defun decknix-agent-review-list-followups ()
+          "List stashed follow-ups."
+          (interactive)
+          (user-error "Follow-up list not yet implemented (coming in E3)"))
+
+        (defun decknix-agent-review-add-collaborator ()
+          "Add a collaborator to the local mention list."
+          (interactive)
+          (let ((name (read-string "Collaborator name: ")))
+            (when (and name (not (string-empty-p name)))
+              (cl-pushnew name decknix-agent-review-collaborators
+                          :test #'string=)
+              (decknix--agent-review-save-collaborators)
+              (message "Added collaborator: %s" name))))
+
+        (define-key decknix-agent-prefix-map (kbd "v") 'decknix-agent-review)
+
         ;; C-c A c — commands sub-prefix ("Commands")
         (define-prefix-command 'decknix-agent-command-map)
         (define-key decknix-agent-prefix-map (kbd "c") 'decknix-agent-command-map)
