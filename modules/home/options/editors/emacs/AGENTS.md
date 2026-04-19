@@ -92,6 +92,12 @@ The largest module (~4400 lines). Key subsystems:
 - **Workspace persistence**: Workspace directory is stored per conversation in
   `~/.config/decknix/agent-sessions.json` alongside tags. Saved on session
   creation, restored on resume.
+- **Model persistence** (`C-c C-v`): The global default model for new sessions
+  is configured via `decknix.cli.auggie.settings.model` (written to
+  `~/.augment/settings.json`). When the user picks a different model mid-session
+  with `C-c C-v`, the choice is persisted against the conversation in
+  `agent-sessions.json`. On resume, that override is passed to auggie as
+  `--model <id>` so the session continues on the same model.
 
 ### Quick Actions
 - **PR review** (`C-c A c r`): DWIM workflow — prompts for GitHub PR URL
