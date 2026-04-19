@@ -182,8 +182,13 @@ The `decknix--context-update-header` function delegates to the unified header
   - **Global**: `W` width, `O` org filter
   - **Requests**: `F` age, `C` ci, `@` mention, `B` bots
   - **Live**: `E` PRs (4-way cycle: off/PR/pipeline/both), `S` quick-switch,
-    `t` tile, `d` display mode, `H` hidden
-  - **WIP**: `P` pipeline/deploy indicators
+    `t` tile, `d` display mode, `H` hidden, `y` symbol style (ascii/emoji),
+    `N` repo-name cap (short/medium/full)
+  - **WIP**: `P` pipeline/deploy indicators, `L` hide linked (PRs that are
+    already live as sessions)
+- All toggles are advertised in the sidebar footer (press `K` to hide).  When
+  the sidebar is wide (≥48 cols), Global+Requests and Live+WIP sections
+  render side-by-side so the footer does not push content off-screen.
 - Session ops prefix (`s`): `s s` picker, `s g` grep, `s r` recent.
 - Auto-refreshes every 2 seconds (live sessions) plus instant refresh on hub
   file changes.
