@@ -43,8 +43,19 @@ in {
       model = mkOption {
         type = types.nullOr types.str;
         default = null;
-        example = "opus4.6";
-        description = "Default model for auggie sessions.";
+        example = "opus4.7";
+        description = ''
+          Default model for new auggie sessions. Written to the
+          `model` key of `~/.augment/settings.json`; auggie uses
+          this when no `--model` flag is supplied on the command
+          line. Run `auggie model list` to see available ids
+          (e.g. `opus4.7`, `sonnet4.6`).
+
+          Per-session overrides (set via `C-c C-v` inside an
+          agent-shell buffer) are persisted separately in
+          `~/.config/decknix/agent-sessions.json` and take
+          precedence on session resume.
+        '';
       };
 
       indexingAllowDirs = mkOption {

@@ -567,7 +567,7 @@ Press q to dismiss."
 
             (propertize "Model & Mode\n" 'font-lock-face '(:weight bold))
             (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
-            "  C-c C-v     Pick model\n"
+            "  C-c C-v     Pick model (persisted for this conversation)\n"
             "  C-c C-m     Pick mode\n"
             "\n"
 
@@ -1200,8 +1200,16 @@ existing conversation entry in the tag store."
                  (resume-args (list "--resume" session-id))
                  (ws-args (when (and workspace (file-directory-p workspace))
                             (list "--workspace-root" workspace)))
+                 ;; Per-conversation model override (set mid-session
+                 ;; via C-c C-v).  When absent, omit --model so auggie
+                 ;; falls back to the global default in settings.json.
+                 (saved-model (decknix--agent-session-model-for-conv-key
+                               conv-key))
+                 (model-args (when saved-model
+                               (list "--model" saved-model)))
                  (agent-shell-auggie-acp-command
-                  (append agent-shell-auggie-acp-command ws-args resume-args))
+                  (append agent-shell-auggie-acp-command
+                          ws-args model-args resume-args))
                  (agent-shell-display-action
                   (eval `(cons (lambda (buffer alist)
                                  (let ((win ,target-win))
@@ -2608,6 +2616,58 @@ conversation that had no workspace stored."
               (puthash "workspace" workspace entry)
               (puthash conv-key entry convs)
               (decknix--agent-tags-write store))))
+
+        ;; -- Per-session model persistence --
+        ;; The global default model lives in ~/.augment/settings.json
+        ;; (declared via decknix.cli.auggie.settings.model).  Any
+        ;; per-session override the user makes with C-c C-v is stored
+        ;; here so that resume-time we can pass --model <id> and get
+        ;; back the same agent the user was working with.
+
+        (defun decknix--agent-session-model-for-conv-key (conv-key)
+          "Return saved auggie model-id for CONV-KEY, or nil."
+          (when conv-key
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (gethash conv-key convs)))
+              (when (hash-table-p entry)
+                (gethash "model" entry)))))
+
+        (defun decknix--agent-session-save-model-for-conv-key
+            (conv-key model-id)
+          "Persist auggie MODEL-ID for CONV-KEY in agent-sessions.json."
+          (when (and conv-key model-id)
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (or (gethash conv-key convs)
+                              (let ((h (make-hash-table :test 'equal)))
+                                (puthash "tags" nil h)
+                                (puthash "sessions" nil h)
+                                h))))
+              (puthash "model" model-id entry)
+              (puthash conv-key entry convs)
+              (decknix--agent-tags-write store))))
+
+        (defun decknix-agent-set-session-model ()
+          "Change the model for the current agent-shell session and persist it.
+Wraps `agent-shell-set-session-model' with an on-success callback
+that records the new model-id against the current conversation in
+agent-sessions.json so subsequent resumes pass `--model <id>' to
+auggie."
+          (interactive)
+          (agent-shell-set-session-model
+           (eval `(lambda ()
+                    (let ((model-id (map-nested-elt
+                                     (agent-shell--state)
+                                     '(:session :model-id)))
+                          (conv-key (bound-and-true-p
+                                     decknix--agent-conv-key)))
+                      (when (and conv-key model-id)
+                        (decknix--agent-session-save-model-for-conv-key
+                         conv-key model-id)
+                        (message "Model %s saved for this conversation"
+                                 model-id))))
+                 t)))
 
         ;; -- PR linking: store/retrieve linked PRs per conversation --
         ;; Each PR link is a hash-table: {"url": "...", "type": "authored"|"subject",
@@ -10652,6 +10712,9 @@ Priority order:
                     (local-set-key (kbd "<tab>") 'decknix--agent-tab-dwim)
                     ;; Buffer-local bindings — no C-c A prefix needed inside agent-shell.
                     ;; Native bindings: C-c C-c (interrupt), C-c C-v (model), C-c C-m (mode)
+                    ;; Override C-c C-v so model changes are persisted to
+                    ;; agent-sessions.json and survive session resume.
+                    (local-set-key (kbd "C-c C-v") 'decknix-agent-set-session-model)
                     (local-set-key (kbd "C-c b") 'decknix-agent-switch-buffer)
                     (local-set-key (kbd "C-c e") 'decknix-agent-compose)
                     (local-set-key (kbd "C-c E") 'decknix-agent-compose-interrupt)
