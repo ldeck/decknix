@@ -5827,13 +5827,14 @@ All toggle keys are accessed via the T transient prefix."
                                      'face (if (string= label "all")
                                                'font-lock-comment-face
                                              'font-lock-constant-face)))))
-                    (cons "C" (format "ci %s"
-                                  (let ((label (decknix--hub-ci-filter-summary)))
-                                    (propertize
-                                     (format "[%s]" label)
-                                     'face (if (string= label "all")
-                                               'font-lock-comment-face
-                                             'font-lock-constant-face)))))
+                    (cons "C" (concat
+                                "ci "
+                                (propertize "[" 'face 'font-lock-comment-face)
+                                ;; Summary already carries per-icon faces
+                                ;; (status colour when enabled, shadow when
+                                ;; disabled) — don't re-propertize.
+                                (decknix--hub-ci-filter-summary)
+                                (propertize "]" 'face 'font-lock-comment-face)))
                     (cons "@" (format "mention %s"
                                   (propertize
                                    (if decknix--hub-mention-filter "[on]" "[off]")
@@ -8350,22 +8351,35 @@ Uses individual check details to distinguish soft from hard fails."
           "Return non-nil if ITEM's CI status is in the active filter set."
           (member (decknix--hub-ci-status-of item) decknix--hub-ci-filter))
 
+        (defvar decknix--hub-ci-filter-order
+          '(("pass"      "✓" success)
+            ("soft_fail" "⚠" warning)
+            ("fail"      "✗" error)
+            ("running"   "⟳" warning)
+            ("unknown"   "?" default))
+          "Canonical render order for CI filter summary.
+Each entry is (STATUS ICON ENABLED-FACE).  Used by the sidebar footer
+and the filter transient so both show every possible toggle state —
+enabled icons in their status colour, disabled icons dimmed — rather
+than hiding disabled options.")
+
         (defun decknix--hub-ci-filter-summary ()
-          "Return a compact label for the current CI filter.
-Shows icon characters for enabled statuses."
-          (cond
-           ((null decknix--hub-ci-filter) "none")
-           ((= (length decknix--hub-ci-filter) 5) "all")
-           (t (mapconcat
-               (lambda (s)
-                 (pcase s
-                   ("pass"      "✓")
-                   ("soft_fail" "⚠")
-                   ("fail"      "✗")
-                   ("running"   "⟳")
-                   ("unknown"   "?")
-                   (_           s)))
-               decknix--hub-ci-filter ""))))
+          "Return a propertized summary of the current CI filter.
+All five icons render in a fixed order.  Enabled statuses carry
+their status-specific face (green/yellow/red/yellow/default);
+disabled statuses render with `shadow' so they remain visible but
+dim.  The returned string already has per-icon text properties —
+callers must not re-`propertize' the whole result or the per-icon
+faces will be overwritten."
+          (mapconcat
+           (lambda (entry)
+             (let* ((status (nth 0 entry))
+                    (icon   (nth 1 entry))
+                    (on-face (nth 2 entry))
+                    (on     (member status decknix--hub-ci-filter)))
+               (propertize icon 'face (if on on-face 'shadow))))
+           decknix--hub-ci-filter-order
+           ""))
 
         (defun decknix--hub-ci-toggle-status (status)
           "Toggle STATUS in the CI filter set.
@@ -8427,14 +8441,18 @@ to restore all when the list has been emptied."
           (message "CI filter: none (use `a' to restore)"))
 
         (defun decknix--hub-ci-filter-status-desc (status icon label)
-          "Return a transient description for STATUS with ICON and LABEL."
-          (let ((on (member status decknix--hub-ci-filter)))
+          "Return a transient description for STATUS with ICON and LABEL.
+Enabled icons carry the status-specific face from
+`decknix--hub-ci-filter-order' so the transient mirrors what the
+sidebar footer shows; disabled icons dim to `shadow'."
+          (let* ((on (member status decknix--hub-ci-filter))
+                 (entry (assoc status decknix--hub-ci-filter-order))
+                 (on-face (or (nth 2 entry) 'default)))
             (format "%s %s %s"
                     (if on
                         (propertize "[x]" 'face 'success)
-                      (propertize "[ ]" 'face 'font-lock-comment-face))
-                    (propertize icon
-                                'face (if on 'success 'font-lock-comment-face))
+                      (propertize "[ ]" 'face 'shadow))
+                    (propertize icon 'face (if on on-face 'shadow))
                     label)))
 
         (transient-define-suffix decknix--hub-ci-filter--pass ()
@@ -8485,9 +8503,11 @@ show, for example, only hard failures and unknowns while hiding
 lint-only failures and still-running checks."
           [:description
            (lambda ()
-             (format "CI filter  [%s]"
-                     (propertize (decknix--hub-ci-filter-summary)
-                                 'face 'font-lock-constant-face)))
+             ;; Summary already carries per-icon faces — must not
+             ;; re-propertize or the status colours are overwritten.
+             (concat "CI filter  ["
+                     (decknix--hub-ci-filter-summary)
+                     "]"))
            (decknix--hub-ci-filter--pass)
            (decknix--hub-ci-filter--soft)
            (decknix--hub-ci-filter--running)
