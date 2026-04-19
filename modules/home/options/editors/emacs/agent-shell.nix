@@ -5968,30 +5968,47 @@ All toggle keys are accessed via the T transient prefix."
         (defun decknix--sidebar-render-toggle-sections (sections &optional col-width)
           "Render toggle SECTIONS with sub-headings.
 SECTIONS is a list of (HEADING . KEYS-ALIST) from footer-toggle-keys.
-When COL-WIDTH is non-nil and >= 24, adjacent sections are paired and
-rendered side-by-side so vertical growth does not push content off the
-bottom of the sidebar.  When nil, sections stack vertically (compact)."
+When COL-WIDTH is non-nil and >= 24, sections are split into two
+independent columns (odd-indexed left, even-indexed right) that flow
+without padding — each column's sub-headings appear immediately after
+the previous section in that same column, regardless of the other
+column's height.  When nil, sections stack vertically (compact)."
           (insert (propertize " Toggles (T)" 'face 'bold) "\n")
           (if (and col-width (>= col-width 24))
-              ;; Paired 2-column rendering
-              (let ((pending sections))
-                (while pending
-                  (let* ((left  (pop pending))
-                         (right (pop pending)))
-                    (if right
-                        (decknix--sidebar-render-key-groups-side-by-side
-                         (car left)  (cdr left)
-                         (car right) (cdr right)
-                         col-width)
-                      ;; Odd section out — render solo (vertical)
-                      (insert (propertize (format " %s" (car left))
-                                          'face 'bold) "\n")
-                      (dolist (kv (cdr left))
-                        (insert (propertize (format " %3s " (car kv))
-                                            'face 'font-lock-keyword-face)
-                                (propertize (cdr kv)
-                                            'face 'font-lock-comment-face)
-                                "\n"))))))
+              ;; Two-column rendering with independent flow.
+              ;; Split sections into left (0, 2, …) and right (1, 3, …).
+              (let (left-lines right-lines)
+                (seq-do-indexed
+                 (lambda (section idx)
+                   (let* ((heading (car section))
+                          (keys (cdr section))
+                          (lines
+                           (cons (propertize (format " %s" heading) 'face 'bold)
+                                 (mapcar
+                                  (lambda (kv)
+                                    (concat
+                                     (propertize (format " %3s " (car kv))
+                                                 'face 'font-lock-keyword-face)
+                                     (propertize (cdr kv)
+                                                 'face 'font-lock-comment-face)))
+                                  keys))))
+                     (if (= (% idx 2) 0)
+                         (setq left-lines (append left-lines lines))
+                       (setq right-lines (append right-lines lines)))))
+                 sections)
+                ;; Pad the shorter column
+                (let ((max-rows (max (length left-lines) (length right-lines))))
+                  (while (< (length left-lines) max-rows)
+                    (setq left-lines (append left-lines (list ""))))
+                  (while (< (length right-lines) max-rows)
+                    (setq right-lines (append right-lines (list "")))))
+                ;; Render side by side
+                (cl-mapc
+                 (lambda (l r)
+                   (let* ((l-visible (length (substring-no-properties l)))
+                          (pad (max 1 (- col-width l-visible))))
+                     (insert l (make-string pad ?\s) r "\n")))
+                 left-lines right-lines))
             ;; Compact vertical fallback (indented sub-headings)
             (dolist (section sections)
               (let ((heading (car section))
