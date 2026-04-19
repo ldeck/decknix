@@ -6822,14 +6822,17 @@ Press M-m during completion to toggle @-mention filter live."
                                       prompt entries 'decknix--rev-mention-only)))
                         (if (not result)
                             (throw 'decknix--rev-done nil)
-                          (let ((item (cdr (assoc (car result) entries))))
+                          ;; Single-pick path: hand off to the rich action
+                          ;; transient so Review / Review (split) / Open /
+                          ;; Browser / Copy URL / WIP ops are all one keypress
+                          ;; away.  Batch mode (C-u R, numeric prefix) keeps
+                          ;; the compact [s]plit/[r]eplace prompt above.
+                          (let* ((base (cdr (assoc (car result) entries)))
+                                 (item (if (assq 'decknix-type base) base
+                                         (cons (cons 'decknix-type 'review)
+                                               base))))
                             (when item
-                              (let ((choice (read-char-choice
-                                             "Layout: [s]plit  [r]eplace  [q]uit "
-                                             '(?s ?r ?q))))
-                                (unless (eq choice ?q)
-                                  (decknix--hub-launch-review-items
-                                   (list item) (eq choice ?s)))))
+                              (decknix--nav-hub-item-actions item))
                             (throw 'decknix--rev-done nil))))))))))))
 
         (defun decknix--nav-hub-start-review-split (url)
@@ -6871,39 +6874,118 @@ the review appears side-by-side with the current buffer."
                 (message "Starting review (split): %s/%s#%s"
                          owner repo number)))))
 
+        ;; -- Hub item action transient --
+        ;; Restores the rich sub-option menu that appears after picking an item
+        ;; from the Requests / WIP pickers or from the sidebar RET handler.
+        ;; The selected item is stashed in `decknix--hub-action-item' so suffix
+        ;; commands can read it without needing closure support (default.el is
+        ;; evaluated under dynamic binding).
+
+        (defvar decknix--hub-action-item nil
+          "Hub item currently driving `decknix--hub-item-transient'.")
+
+        (defun decknix--hub-action-wip-p ()
+          "Return non-nil when the current hub action item is a WIP PR."
+          (eq (alist-get 'decknix-type decknix--hub-action-item) 'wip))
+
+        (defun decknix--hub-action-description ()
+          "Return a short header string describing the current hub action item."
+          (let* ((repo (or (alist-get 'repo decknix--hub-action-item) ""))
+                 (short (car (last (split-string repo "/"))))
+                 (number (alist-get 'number decknix--hub-action-item))
+                 (title (or (alist-get 'title decknix--hub-action-item) ""))
+                 (trim (if (> (length title) 60)
+                           (concat (substring title 0 59) "…")
+                         title)))
+            (format "%s#%s  %s"
+                    (propertize short 'face 'font-lock-type-face)
+                    number
+                    (propertize trim 'face 'italic))))
+
+        (transient-define-suffix decknix--hub-action-open ()
+          "Open the current hub item in Emacs (xwidget-webkit or EWW)."
+          :description "Open here"
+          (interactive)
+          (when-let ((url (alist-get 'url decknix--hub-action-item)))
+            (decknix--open-url url)))
+
+        (transient-define-suffix decknix--hub-action-browser ()
+          "Open the current hub item in an external browser."
+          :description "Open in browser"
+          (interactive)
+          (when-let ((url (alist-get 'url decknix--hub-action-item)))
+            (browse-url url)))
+
+        (transient-define-suffix decknix--hub-action-copy-url ()
+          "Copy the current hub item's URL to the kill ring."
+          :description "Copy URL"
+          (interactive)
+          (when-let ((url (alist-get 'url decknix--hub-action-item)))
+            (kill-new url)
+            (message "Copied: %s" url)))
+
+        (transient-define-suffix decknix--hub-action-review ()
+          "Start a PR review session for the current hub item."
+          :description "Start review"
+          (interactive)
+          (when-let ((url (alist-get 'url decknix--hub-action-item)))
+            (decknix--nav-hub-start-review url)))
+
+        (transient-define-suffix decknix--hub-action-review-split ()
+          "Start a PR review session in a split window."
+          :description "Start review (split)"
+          (interactive)
+          (when-let ((url (alist-get 'url decknix--hub-action-item)))
+            (decknix--nav-hub-start-review-split url)))
+
+        (transient-define-suffix decknix--hub-action-merge ()
+          "Merge the current WIP PR via gh CLI."
+          :description "Merge"
+          (interactive)
+          (decknix--hub-wip-merge
+           (alist-get 'repo decknix--hub-action-item)
+           (alist-get 'number decknix--hub-action-item)))
+
+        (transient-define-suffix decknix--hub-action-close ()
+          "Close the current WIP PR via gh CLI."
+          :description "Close"
+          (interactive)
+          (decknix--hub-wip-close
+           (alist-get 'repo decknix--hub-action-item)
+           (alist-get 'number decknix--hub-action-item)))
+
+        (transient-define-suffix decknix--hub-action-comment ()
+          "Add a comment to the current WIP PR via gh CLI."
+          :description "Comment"
+          (interactive)
+          (decknix--hub-wip-comment
+           (alist-get 'repo decknix--hub-action-item)
+           (alist-get 'number decknix--hub-action-item)))
+
+        (transient-define-prefix decknix--hub-item-transient ()
+          "Actions for the hub item stored in `decknix--hub-action-item'."
+          [:description decknix--hub-action-description
+           ["Navigate"
+            ("o" decknix--hub-action-open)
+            ("b" decknix--hub-action-browser)
+            ("c" decknix--hub-action-copy-url)]
+           ["Review"
+            ("r" decknix--hub-action-review)
+            ("s" decknix--hub-action-review-split)]
+           ["WIP"
+            :if decknix--hub-action-wip-p
+            ("m" decknix--hub-action-merge)
+            ("l" decknix--hub-action-close)
+            ("M" decknix--hub-action-comment)]]
+          [("q" "Cancel" transient-quit-one)])
+
         (defun decknix--nav-hub-item-actions (item)
-          "Show an action menu for a hub ITEM (review or WIP PR).
-When ITEM type is `wip', additional actions are available:
-merge, close, and comment."
-          (let* ((url (alist-get 'url item))
-                 (repo (or (alist-get 'repo item) ""))
-                 (number (alist-get 'number item))
-                 (type (alist-get 'decknix-type item))
-                 (wip-p (eq type 'wip))
-                 (short-repo (car (last (split-string repo "/")))))
-            (run-at-time 0.05 nil
-              (eval `(lambda ()
-                       (let* ((prompt ,(if wip-p
-                                          (format "%s#%s: [o]pen [b]rowser [c]opy-url [r]eview [m]erge c[l]ose co[M]ment [q]uit"
-                                                  short-repo number)
-                                        (format "%s#%s: [o]pen [b]rowser [c]opy-url [r]eview [q]uit"
-                                                short-repo number)))
-                              (keys ,(if wip-p
-                                         (list ?o ?b ?c ?r ?m ?l ?M ?q)
-                                       (list ?o ?b ?c ?r ?q)))
-                              (choice (read-char-choice prompt keys)))
-                         (pcase choice
-                           (?o (when ,url (decknix--open-url ,url)))
-                           (?b (when ,url (browse-url ,url)))
-                           (?c (when ,url
-                                 (kill-new ,url)
-                                 (message "Copied: %s" ,url)))
-                           (?r (when ,url
-                                 (decknix--nav-hub-start-review ,url)))
-                           (?m (decknix--hub-wip-merge ,repo ,number))
-                           (?l (decknix--hub-wip-close ,repo ,number))
-                           (?M (decknix--hub-wip-comment ,repo ,number))
-                           (?q (message "Cancelled"))))) t))))
+          "Show the action transient for a hub ITEM (review or WIP PR).
+Defers the transient by a small delay so the picker's minibuffer is
+fully torn down before the menu appears (otherwise the transient can
+fight with vertico/consult cleanup and fail to display)."
+          (setq decknix--hub-action-item item)
+          (run-at-time 0.05 nil #'decknix--hub-item-transient))
 
         ;; -- WIP PR actions via gh CLI --
 
@@ -7088,12 +7170,20 @@ PROMPT is the base prompt string.  MENTION-ONLY-VAR is a symbol naming
 the variable that holds the current mention-only state; when M-m is
 pressed, it is toggled and the completion restarts with re-filtered
 candidates.  Returns (CHOICE . MENTION-ONLY) or nil if cancelled."
+          ;; M-m toggles the mention filter; M-b toggles the global bot
+          ;; visibility filter.  Both abort the current completing-read and
+          ;; restart it so the candidate list re-filters live.  Vertico's
+          ;; arrow-key navigation and orderless live search already work on
+          ;; the candidate list itself — no special handling needed.
           (catch 'decknix--mention-result
             (while t
               (let* ((mo (symbol-value mention-only-var))
-                     (full-prompt (format "%s%s(M-m toggle @) "
-                                         prompt
-                                         (if mo "@ " "")))
+                     (bots (and (boundp 'decknix--hub-show-bots)
+                                decknix--hub-show-bots))
+                     (hints (concat (if mo "@ " "")
+                                    (if bots "🤖 " "")))
+                     (full-prompt (format "%s%s(M-m@ M-b🤖) "
+                                          prompt hints))
                      (map (make-sparse-keymap)))
                 (set-keymap-parent map minibuffer-local-completion-map)
                 (define-key map (kbd "M-m")
@@ -7102,6 +7192,13 @@ candidates.  Returns (CHOICE . MENTION-ONLY) or nil if cancelled."
                            (set ',mention-only-var (not (symbol-value ',mention-only-var)))
                            (abort-recursive-edit))
                         t))
+                (define-key map (kbd "M-b")
+                  (lambda ()
+                    (interactive)
+                    (when (boundp 'decknix--hub-show-bots)
+                      (setq decknix--hub-show-bots
+                            (not decknix--hub-show-bots)))
+                    (abort-recursive-edit)))
                 (condition-case nil
                     (let ((choice (minibuffer-with-setup-hook
                                      (eval `(lambda ()
