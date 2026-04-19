@@ -179,25 +179,32 @@ The `decknix--context-update-header` function delegates to the unified header
   aligns with the Navigate `s` key so the label matches the shortcut.
 - Agent management: `c` new, `k` kill, `r` restart, `R` rename, `d` delete killed.
 - Tiling controls: `a a` add, `a x` remove.
-- Toggles transient (`T`): Opens sectioned menu grouped by sidebar section:
-  - **Global**: `W` width, `O` org filter
-  - **Requests**: `F` age, `C` ci, `@` mention, `B` bot-authors
-    (dependabot/renovate PRs), `c` 💬 comments (hide PRs whose latest
-    non-bot activity is someone else), `b` 🤖 bot-review (hide PRs
-    where a bot posted last — default on, since a fix is likely needed
-    before approving sticks), `M` ↩ replies-to-me (show only PRs where
-    a human replied in a thread I participated in)
-  - **Live**: `E` PRs (4-way cycle: off/PR/pipeline/both), `S` quick-switch,
-    `t` tile, `d` display mode, `H` hidden, `y` symbol style (ascii/emoji),
-    `N` repo-name cap (short/medium/full)
-  - **WIP**: `P` pipeline/deploy indicators, `L` hide linked (PRs that are
-    already live as sessions), `n` 💬 comments, `u` 🤖 bot-review,
-    `r` ↩ replies-to-me (parallel to the Requests triad, independent
-    state because WIP is about my own PRs — I usually want to see 🤖
-    so I can push a fix)
-- All toggles are advertised in the sidebar footer (press `K` to hide).  When
-  the sidebar is wide (≥48 cols), Global+Requests and Live+WIP sections
-  render side-by-side so the footer does not push content off-screen.
+- Toggles transient (`T`): Opens sectioned menu grouped by sidebar
+  section. Suffixes within each section are ordered alphabetically by
+  their display label (case-insensitive) to match the sidebar footer,
+  which advertises the same toggles by label only (no keys shown).
+  - **Global**: `O` org filter, `W` width
+  - **Requests**: `@` mention, `F` age, `b` 🤖 bot-review (hide PRs where
+    a bot posted last — default on, since a fix is likely needed before
+    approving sticks), `B` bot-authors (dependabot/renovate PRs),
+    `C` ci, `c` 💬 comments (hide PRs whose latest non-bot activity is
+    someone else), `M` ↩ replies-to-me (show only PRs where a human
+    replied in a thread I participated in)
+  - **Live**: `d` display mode, `H` hidden, `S` quick-switch,
+    `N` repo-name cap (short/medium/full),
+    `E` PRs (4-way cycle: off/PR/pipeline/both),
+    `y` symbol style (ascii/emoji), `t` tile
+  - **WIP**: `L` hide linked (PRs that are already live as sessions),
+    `P` pipeline/deploy indicators, `r` ↩ replies-to-me (parallel to
+    the Requests triad, independent state because WIP is about my own
+    PRs — I usually want to see 🤖 so I can push a fix), `n` 💬 comments,
+    `u` 🤖 bot-review
+- All toggles are advertised in the sidebar footer under a `Toggles`
+  heading (press `K` to hide).  Footer items are sorted by the same
+  short labels (keys omitted — press `T` for the interactive transient).
+  When the sidebar is wide (≥48 cols), Global+Requests and Live+WIP
+  sections render side-by-side so the footer does not push content
+  off-screen.
 - Session ops prefix (`s`): `s s` picker, `s g` grep, `s r` recent.
 - Auto-refreshes every 2 seconds (live sessions) plus instant refresh on hub
   file changes.

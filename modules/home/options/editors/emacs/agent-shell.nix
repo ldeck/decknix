@@ -5587,33 +5587,36 @@ Like treemacs `W' / extra-wide-toggle."
           (call-interactively #'decknix-sidebar-cycle-width))
 
         (transient-define-prefix decknix-sidebar-toggles-transient ()
-          "Sidebar toggles grouped by section."
+          "Sidebar toggles grouped by section.
+Suffixes within each section are ordered alphabetically by their
+display label (case-insensitive) to match the sidebar footer,
+which advertises toggles by label only (no keys)."
           :transient-suffix 'transient--do-stay
           ["Global"
-           (decknix-sidebar-transient--width)
-           (decknix-sidebar-transient--org-filter)]
+           (decknix-sidebar-transient--org-filter)       ;; Org filter
+           (decknix-sidebar-transient--width)]           ;; Width
           ["Requests"
-           (decknix-sidebar-transient--age-filter)
-           (decknix-sidebar-transient--ci-filter)
-           (decknix-sidebar-transient--mention-filter)
-           (decknix-sidebar-transient--bot-filter)
-           (decknix-sidebar-transient--req-needs-reply)
-           (decknix-sidebar-transient--req-bot-pending)
-           (decknix-sidebar-transient--req-my-replies)]
+           (decknix-sidebar-transient--mention-filter)   ;; @-mention
+           (decknix-sidebar-transient--age-filter)       ;; Age filter
+           (decknix-sidebar-transient--req-bot-pending)  ;; bot review
+           (decknix-sidebar-transient--bot-filter)       ;; bots
+           (decknix-sidebar-transient--ci-filter)        ;; CI filter
+           (decknix-sidebar-transient--req-needs-reply)  ;; comments
+           (decknix-sidebar-transient--req-my-replies)]  ;; replies
           ["Live"
-           (decknix-sidebar-transient--expand-prs)
-           (decknix-sidebar-transient--symbol-style)
-           (decknix-sidebar-transient--repo-name-cap)
-           (decknix-sidebar-transient--quick-switch)
-           (decknix-sidebar-transient--tile-toggle)
-           (decknix-sidebar-transient--display-mode)
-           (decknix-sidebar-transient--hidden-toggle)]
+           (decknix-sidebar-transient--display-mode)     ;; Display mode
+           (decknix-sidebar-transient--hidden-toggle)    ;; Hidden
+           (decknix-sidebar-transient--quick-switch)     ;; Quick-switch
+           (decknix-sidebar-transient--repo-name-cap)    ;; repo name
+           (decknix-sidebar-transient--expand-prs)       ;; session PRs
+           (decknix-sidebar-transient--symbol-style)     ;; symbols
+           (decknix-sidebar-transient--tile-toggle)]     ;; Tile toggle
           ["WIP"
-           (decknix-sidebar-transient--deploy-indicator)
-           (decknix-sidebar-transient--wip-hide-linked)
-           (decknix-sidebar-transient--wip-needs-reply)
-           (decknix-sidebar-transient--wip-bot-pending)
-           (decknix-sidebar-transient--wip-my-replies)]
+           (decknix-sidebar-transient--wip-bot-pending)  ;; bot review
+           (decknix-sidebar-transient--wip-needs-reply)  ;; comments
+           (decknix-sidebar-transient--wip-hide-linked)  ;; hide linked
+           (decknix-sidebar-transient--deploy-indicator) ;; pipeline
+           (decknix-sidebar-transient--wip-my-replies)]  ;; replies
           ["" ("q" "Done" transient-quit-one)])
 
         (transient-define-prefix decknix-sidebar-transient ()
@@ -5625,11 +5628,12 @@ Like treemacs `W' / extra-wide-toggle."
            ("p"   "Previous"      decknix-sidebar-goto-previous)
            ("s"   "Sessions…"     decknix-sidebar-sessions)]
           ["Quick"
-           ("RET" "Open / goto"   agent-shell-workspace-sidebar-goto)
+           ;; Sorted alphabetically by description (case-insensitive).
            ("c"   "New session"   agent-shell-workspace-sidebar-new)
+           ("RET" "Open / goto"   agent-shell-workspace-sidebar-goto)
+           ("q"   "Quit sidebar"  quit-window)
            ("g"   "Refresh"       agent-shell-workspace-sidebar-refresh)
-           ("R"   "Review"        decknix-hub-launch-reviews)
-           ("q"   "Quit sidebar"  quit-window)]
+           ("R"   "Review"        decknix-hub-launch-reviews)]
           ["Actions (a …)"
            ("a r" "Restart"       agent-shell-workspace-sidebar-restart)
            ("a R" "Rename"        agent-shell-workspace-sidebar-rename)
@@ -5809,12 +5813,12 @@ so RIGHT group starts at column COL-WIDTH."
 Returns a list of (HEADING . KEYS-ALIST) for sectioned display.
 Each section has a heading and its toggle key/value pairs.
 All toggle keys are accessed via the T transient prefix."
+          ;; Items within each section are ordered alphabetically by
+          ;; their short label (the text shown in the sidebar); the key
+          ;; is intentionally hidden in the footer (press T for keys).
+          ;; Emoji-only labels sort after text labels by code-point.
           (let ((global
                  (list
-                  (cons "W" (format "width %s"
-                                (propertize
-                                 (format "[%s]" (symbol-name decknix--sidebar-width-state))
-                                 'face 'font-lock-constant-face)))
                   (cons "O" (format "org %s"
                                 (if (fboundp 'decknix--hub-org-filter-summary)
                                     (let ((summary (decknix--hub-org-filter-summary)))
@@ -5823,7 +5827,11 @@ All toggle keys are accessed via the T transient prefix."
                                        'face (if (string= summary "all")
                                                  'font-lock-comment-face
                                                'font-lock-constant-face)))
-                                  (propertize "[off]" 'face 'font-lock-comment-face))))))
+                                  (propertize "[off]" 'face 'font-lock-comment-face))))
+                  (cons "W" (format "width %s"
+                                (propertize
+                                 (format "[%s]" (symbol-name decknix--sidebar-width-state))
+                                 'face 'font-lock-constant-face)))))
                 (requests
                  (when (fboundp 'decknix--hub-org-filter-dispatch)
                    (list
@@ -5834,6 +5842,12 @@ All toggle keys are accessed via the T transient prefix."
                                      'face (if (string= label "all")
                                                'font-lock-comment-face
                                              'font-lock-constant-face)))))
+                    (cons "B" (format "bots %s"
+                                  (propertize
+                                   (if decknix--hub-show-bots "[show]" "[hide]")
+                                   'face (if decknix--hub-show-bots
+                                             'font-lock-constant-face
+                                           'font-lock-comment-face))))
                     (cons "C" (concat
                                 "ci "
                                 (propertize "[" 'face 'font-lock-comment-face)
@@ -5848,10 +5862,10 @@ All toggle keys are accessed via the T transient prefix."
                                    'face (if decknix--hub-mention-filter
                                              'font-lock-constant-face
                                            'font-lock-comment-face))))
-                    (cons "B" (format "bots %s"
+                    (cons "M" (format "↩ %s"
                                   (propertize
-                                   (if decknix--hub-show-bots "[show]" "[hide]")
-                                   'face (if decknix--hub-show-bots
+                                   (if decknix--hub-requests-only-my-replies "[only]" "[all]")
+                                   'face (if decknix--hub-requests-only-my-replies
                                              'font-lock-constant-face
                                            'font-lock-comment-face))))
                     (cons "c" (format "%s %s"
@@ -5867,15 +5881,18 @@ All toggle keys are accessed via the T transient prefix."
                                    (if decknix--hub-requests-hide-bot-pending "[hide]" "[show]")
                                    'face (if decknix--hub-requests-hide-bot-pending
                                              'font-lock-constant-face
-                                           'font-lock-comment-face))))
-                    (cons "M" (format "↩ %s"
-                                  (propertize
-                                   (if decknix--hub-requests-only-my-replies "[only]" "[all]")
-                                   'face (if decknix--hub-requests-only-my-replies
-                                             'font-lock-constant-face
                                            'font-lock-comment-face)))))))
                 (live
                  (list
+                  (cons "d" (format "display %s"
+                                (propertize
+                                 (format "[%s]" (symbol-name decknix--sidebar-display-mode))
+                                 'face 'font-lock-constant-face)))
+                  (cons "H" (format "hidden %s"
+                                (propertize
+                                 (if decknix--sidebar-show-hidden "[shown]" "[hidden]")
+                                 'face (if decknix--sidebar-show-hidden
+                                           'warning 'font-lock-comment-face))))
                   (cons "E" (format "PRs %s"
                                 (propertize
                                  (pcase decknix--hub-expand-prs
@@ -5895,22 +5912,13 @@ All toggle keys are accessed via the T transient prefix."
                                  'face (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
                                                 agent-shell-workspace-sidebar--quick-switch)
                                            'success 'font-lock-comment-face))))
-                  (cons "t" (format "tile %s"
-                                (let* ((sb (get-buffer "*agent-shell-sidebar*"))
-                                       (tiled (and sb
-                                                   (buffer-local-value
-                                                    'agent-shell-workspace--tiled sb))))
-                                  (propertize (if tiled "[on]" "[off]")
-                                              'face (if tiled 'success 'font-lock-comment-face)))))
-                  (cons "d" (format "display %s"
+                  (cons "N" (format "repo %s"
                                 (propertize
-                                 (format "[%s]" (symbol-name decknix--sidebar-display-mode))
+                                 (format "[%s]"
+                                         (if (boundp 'decknix--hub-repo-name-cap)
+                                             decknix--hub-repo-name-cap
+                                           "short"))
                                  'face 'font-lock-constant-face)))
-                  (cons "H" (format "hidden %s"
-                                (propertize
-                                 (if decknix--sidebar-show-hidden "[shown]" "[hidden]")
-                                 'face (if decknix--sidebar-show-hidden
-                                           'warning 'font-lock-comment-face))))
                   (cons "y" (format "symbols %s"
                                 (propertize
                                  (format "[%s]"
@@ -5918,21 +5926,15 @@ All toggle keys are accessed via the T transient prefix."
                                              decknix--hub-symbol-style
                                            "ascii"))
                                  'face 'font-lock-constant-face)))
-                  (cons "N" (format "repo %s"
-                                (propertize
-                                 (format "[%s]"
-                                         (if (boundp 'decknix--hub-repo-name-cap)
-                                             decknix--hub-repo-name-cap
-                                           "short"))
-                                 'face 'font-lock-constant-face)))))
+                  (cons "t" (format "tile %s"
+                                (let* ((sb (get-buffer "*agent-shell-sidebar*"))
+                                       (tiled (and sb
+                                                   (buffer-local-value
+                                                    'agent-shell-workspace--tiled sb))))
+                                  (propertize (if tiled "[on]" "[off]")
+                                              'face (if tiled 'success 'font-lock-comment-face)))))))
                 (wip
                  (list
-                  (cons "P" (format "pipe %s"
-                                (propertize
-                                 (if decknix--hub-show-deploys "[show]" "[hide]")
-                                 'face (if decknix--hub-show-deploys
-                                           'font-lock-constant-face
-                                         'font-lock-comment-face))))
                   (cons "L" (format "linked %s"
                                 (propertize
                                  (if (and (boundp 'decknix--hub-wip-hide-linked)
@@ -5940,6 +5942,18 @@ All toggle keys are accessed via the T transient prefix."
                                      "[hide]" "[show]")
                                  'face (if (and (boundp 'decknix--hub-wip-hide-linked)
                                                 decknix--hub-wip-hide-linked)
+                                           'font-lock-constant-face
+                                         'font-lock-comment-face))))
+                  (cons "P" (format "pipe %s"
+                                (propertize
+                                 (if decknix--hub-show-deploys "[show]" "[hide]")
+                                 'face (if decknix--hub-show-deploys
+                                           'font-lock-constant-face
+                                         'font-lock-comment-face))))
+                  (cons "r" (format "↩ %s"
+                                (propertize
+                                 (if decknix--hub-wip-only-my-replies "[only]" "[all]")
+                                 'face (if decknix--hub-wip-only-my-replies
                                            'font-lock-constant-face
                                          'font-lock-comment-face))))
                   (cons "n" (format "%s %s"
@@ -5954,12 +5968,6 @@ All toggle keys are accessed via the T transient prefix."
                                 (propertize
                                  (if decknix--hub-wip-hide-bot-pending "[hide]" "[show]")
                                  'face (if decknix--hub-wip-hide-bot-pending
-                                           'font-lock-constant-face
-                                         'font-lock-comment-face))))
-                  (cons "r" (format "↩ %s"
-                                (propertize
-                                 (if decknix--hub-wip-only-my-replies "[only]" "[all]")
-                                 'face (if decknix--hub-wip-only-my-replies
                                            'font-lock-constant-face
                                          'font-lock-comment-face)))))))
             ;; Return as sectioned list
@@ -5978,7 +5986,7 @@ independent columns (odd-indexed left, even-indexed right) that flow
 without padding — each column's sub-headings appear immediately after
 the previous section in that same column, regardless of the other
 column's height.  When nil, sections stack vertically (compact)."
-          (insert (propertize " Toggles (T)" 'face 'bold) "\n")
+          (insert (propertize " Toggles" 'face 'bold) "\n")
           (if (and col-width (>= col-width 24))
               ;; Two-column rendering with independent flow.
               ;; Split sections into left (0, 2, …) and right (1, 3, …).
