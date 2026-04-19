@@ -277,8 +277,21 @@ pub fn load_wip_branch_map(dir: &Path) -> HashMap<String, (String, u64)> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// TC's default `/app/rest/builds` listing omits startDate/finishDate and
+/// several other fields. We must request them explicitly via `fields=` to
+/// populate EnvDeployStatus.finished (used for "was this PR deployed?"
+/// temporal comparisons) and TeamCityBuild.started/finished.
+const TC_BUILD_FIELDS: &str = "build(id,buildTypeId,number,status,state,\
+branchName,defaultBranch,percentageComplete,webUrl,startDate,finishDate)";
+
 async fn fetch_tc_builds(client: &Client, url: &str) -> Result<Vec<TcBuild>, String> {
-    let resp = client.get(url).header("Accept", "application/json").send().await
+    let url_with_fields = if url.contains("fields=") {
+        url.to_string()
+    } else {
+        let sep = if url.contains('?') { '&' } else { '?' };
+        format!("{url}{sep}fields={TC_BUILD_FIELDS}")
+    };
+    let resp = client.get(&url_with_fields).header("Accept", "application/json").send().await
         .map_err(|e| format!("TC HTTP: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("TC API {}", resp.status()));
