@@ -9034,12 +9034,18 @@ already, so the repo prefix is omitted from the line."
                  (deploy-branch (if (string= state "MERGED")
                                     "__default__"
                                   branch))
+                 ;; Pass merged_at so envs whose latest deploy finished
+                 ;; before the PR merged are rendered as not-deployed
+                 ;; (grey), preventing false-positive green indicators
+                 ;; for PRs not yet promoted past a given environment.
+                 (deploy-merged-at (when (string= state "MERGED") merged-at))
                  (deploy-str
                   (if (and show-pipeline
                            (member state '("OPEN" "MERGED"))
                            repo-full deploy-branch
                            (fboundp 'decknix--hub-deploy-indicator))
-                      (concat " " (decknix--hub-deploy-indicator repo-full deploy-branch))
+                      (concat " " (decknix--hub-deploy-indicator
+                                   repo-full deploy-branch deploy-merged-at))
                     ""))
                  ;; Type prefix for subject PRs
                  (type-prefix (if (string= pr-type "subject") "⊳ " "")))
@@ -9466,10 +9472,15 @@ session are hidden (both from the header count and the listing)."
                              (tc-str (if tc-build
                                          (decknix--hub-tc-icon tc-build)
                                        ""))
-                             ;; Deploy pipeline indicator (DTSP)
+                             ;; Deploy pipeline indicator (DTSP).  Pass
+                             ;; merged_at for merged PRs so envs whose
+                             ;; last deploy predates the merge render as
+                             ;; grey (not-yet-deployed).
                              (deploy-str
                               (if (fboundp 'decknix--hub-deploy-indicator)
-                                  (decknix--hub-deploy-indicator repo-full branch)
+                                  (decknix--hub-deploy-indicator
+                                   repo-full branch
+                                   (when merged-p (alist-get 'merged_at pr)))
                                 ""))
                              ;; Combine CI indicators: GH + TC + Deploy
                              (ci-str (concat ci-str
@@ -9549,11 +9560,15 @@ Returns nil if no match or no TC data."
                (t (propertize "?" 'face 'font-lock-comment-face))))))
 
         ;; -- Deploy pipeline indicator (DTSP) --
-        (defun decknix--hub-deploy-indicator (repo-full branch)
+        (defun decknix--hub-deploy-indicator (repo-full branch &optional merged-at)
           "Return colored DTSP deploy indicator for REPO-FULL and BRANCH.
 Each letter represents an environment:
   D=Development T=Testing S=Stable P=Production
-Green=success, Red=failure, Yellow=running, Grey=not deployed."
+Green=success, Red=failure, Yellow=running, Grey=not deployed.
+
+When MERGED-AT (ISO-8601 UTC timestamp) is non-nil and an environment's
+deploy finished BEFORE the PR merged, render that env as grey — the
+deployed artefact predates the merge so it cannot contain this PR."
           (if (or (not decknix--hub-show-deploys)
                   (not decknix--hub-deploys))
               ""
@@ -9577,6 +9592,13 @@ Green=success, Red=failure, Yellow=running, Grey=not deployed."
                     (let* ((env (or (alist-get 'env env-entry) ""))
                            (status (or (alist-get 'status env-entry) ""))
                            (state (or (alist-get 'state env-entry) ""))
+                           (finished (alist-get 'finished env-entry))
+                           ;; Deploy predates merge — this env does not
+                           ;; yet contain the PR's code.  ISO-8601 UTC
+                           ;; timestamps compare correctly as strings.
+                           (stale (and merged-at finished
+                                       (stringp merged-at) (stringp finished)
+                                       (string< finished merged-at)))
                            (letter (cond
                                     ((string= env "development") "D")
                                     ((string= env "testing") "T")
@@ -9585,6 +9607,7 @@ Green=success, Red=failure, Yellow=running, Grey=not deployed."
                                     ((string= env "uk_production") "U")
                                     (t nil)))
                            (face (cond
+                                  (stale 'font-lock-comment-face)
                                   ((string= state "running")
                                    '(:foreground "#e5c07b" :weight bold))
                                   ((string= state "queued")
