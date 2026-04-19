@@ -5854,13 +5854,15 @@ All toggle keys are accessed via the T transient prefix."
                                    'face (if decknix--hub-show-bots
                                              'font-lock-constant-face
                                            'font-lock-comment-face))))
-                    (cons "c" (format "💬 %s"
+                    (cons "c" (format "%s %s"
+                                  (decknix--hub-icon "💬" 'default)
                                   (propertize
                                    (if decknix--hub-requests-hide-needs-reply "[hide]" "[show]")
                                    'face (if decknix--hub-requests-hide-needs-reply
                                              'font-lock-constant-face
                                            'font-lock-comment-face))))
-                    (cons "b" (format "🤖 %s"
+                    (cons "b" (format "%s %s"
+                                  (decknix--hub-icon "🤖" 'default)
                                   (propertize
                                    (if decknix--hub-requests-hide-bot-pending "[hide]" "[show]")
                                    'face (if decknix--hub-requests-hide-bot-pending
@@ -5940,13 +5942,15 @@ All toggle keys are accessed via the T transient prefix."
                                                 decknix--hub-wip-hide-linked)
                                            'font-lock-constant-face
                                          'font-lock-comment-face))))
-                  (cons "n" (format "💬 %s"
+                  (cons "n" (format "%s %s"
+                                (decknix--hub-icon "💬" 'default)
                                 (propertize
                                  (if decknix--hub-wip-hide-needs-reply "[hide]" "[show]")
                                  'face (if decknix--hub-wip-hide-needs-reply
                                            'font-lock-constant-face
                                          'font-lock-comment-face))))
-                  (cons "u" (format "🤖 %s"
+                  (cons "u" (format "%s %s"
+                                (decknix--hub-icon "🤖" 'default)
                                 (propertize
                                  (if decknix--hub-wip-hide-bot-pending "[hide]" "[show]")
                                  'face (if decknix--hub-wip-hide-bot-pending
@@ -5990,7 +5994,11 @@ column's height.  When nil, sections stack vertically (compact)."
                                   (lambda (kv)
                                     ;; Show only the value (label + state),
                                     ;; not the shortcut key — press T for keys.
-                                    (format "  %s" (cdr kv)))
+                                    ;; Indent items 2 spaces beyond heading and
+                                    ;; scale down so items are visually smaller
+                                    ;; than sub-headings.
+                                    (propertize (format "   %s" (cdr kv))
+                                                'display '(height 0.85)))
                                   keys))))
                      (if (= (% idx 2) 0)
                          (setq left-lines (append left-lines lines))
@@ -6018,7 +6026,9 @@ column's height.  When nil, sections stack vertically (compact)."
                                     'face '(:inherit font-lock-type-face :weight normal))
                         "\n")
                 (dolist (kv keys)
-                  (insert (format "   %s" (cdr kv)) "\n"))))))
+                  (insert (propertize (format "     %s" (cdr kv))
+                                      'display '(height 0.85))
+                          "\n"))))))
 
         (defun decknix--sidebar-render-footer ()
           "Insert responsive key listing or compact hint depending on toggle.
@@ -8273,7 +8283,8 @@ When no filter is active (table is nil), all orgs are visible."
           :key "c"
           :description
           (lambda ()
-            (format "comments 💬  %s"
+            (format "comments %s  %s"
+                    (decknix--hub-icon "💬" 'default)
                     (propertize
                      (if decknix--hub-requests-hide-needs-reply "[hide]" "[show]")
                      'face (if decknix--hub-requests-hide-needs-reply
@@ -8287,7 +8298,8 @@ When no filter is active (table is nil), all orgs are visible."
           :key "b"
           :description
           (lambda ()
-            (format "bot review 🤖 %s"
+            (format "bot review %s %s"
+                    (decknix--hub-icon "🤖" 'default)
                     (propertize
                      (if decknix--hub-requests-hide-bot-pending "[hide]" "[show]")
                      'face (if decknix--hub-requests-hide-bot-pending
@@ -8315,7 +8327,8 @@ When no filter is active (table is nil), all orgs are visible."
           :key "n"
           :description
           (lambda ()
-            (format "comments 💬  %s"
+            (format "comments %s  %s"
+                    (decknix--hub-icon "💬" 'default)
                     (propertize
                      (if decknix--hub-wip-hide-needs-reply "[hide]" "[show]")
                      'face (if decknix--hub-wip-hide-needs-reply
@@ -8329,7 +8342,8 @@ When no filter is active (table is nil), all orgs are visible."
           :key "u"
           :description
           (lambda ()
-            (format "bot review 🤖 %s"
+            (format "bot review %s %s"
+                    (decknix--hub-icon "🤖" 'default)
                     (propertize
                      (if decknix--hub-wip-hide-bot-pending "[hide]" "[show]")
                      'face (if decknix--hub-wip-hide-bot-pending
@@ -9755,7 +9769,9 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
               (decknix--sidebar-render-section-header
                (format "Requests (%d)%s%s" (length items)
                        (if decknix--hub-mention-filter " @" "")
-                       (if decknix--hub-show-bots " 🤖" "")))
+                       (if decknix--hub-show-bots
+                           (concat " " (decknix--hub-icon "🤖" 'default))
+                         "")))
               (setq line-num (1+ line-num))
               (dolist (item items)
                 (let* ((age (decknix--hub-format-age
