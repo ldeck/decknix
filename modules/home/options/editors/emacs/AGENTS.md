@@ -175,7 +175,8 @@ The `decknix--context-update-header` function delegates to the unified header
 ### Workspace (`agent-shell-workspace`)
 - Dedicated `Agents` tab-bar tab with buffer isolation (`C-c w` to toggle).
 - Sidebar sections (top to bottom): **Requests** → **WIP** → **Live** →
-  **Recent** → **Keys/Toggles** footer.
+  **Sessions** → **Keys/Toggles** footer.  The **Sessions** heading
+  aligns with the Navigate `s` key so the label matches the shortcut.
 - Agent management: `c` new, `k` kill, `r` restart, `R` rename, `d` delete killed.
 - Tiling controls: `a a` add, `a x` remove.
 - Toggles transient (`T`): Opens sectioned menu grouped by sidebar section:
