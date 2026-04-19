@@ -105,7 +105,11 @@ struct ReviewRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     mentioned: Option<bool>, // true when user was directly requested as reviewer (not just via team)
     #[serde(skip_serializing_if = "Option::is_none")]
-    needs_reply: Option<bool>, // true when latest comment/review is from someone else
+    needs_reply: Option<bool>, // true when latest comment/review is from someone else (bot or human)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bot_pending: Option<bool>, // true when the latest comment/review is from a bot
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replies_to_me: Option<bool>, // true when a non-bot human posted after one of my comments/reviews
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -151,7 +155,11 @@ struct WipPr {
     #[serde(skip_serializing_if = "Option::is_none")]
     review_decision: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"
     #[serde(skip_serializing_if = "Option::is_none")]
-    needs_reply: Option<bool>, // true when latest comment/review is from someone else
+    needs_reply: Option<bool>, // true when latest comment/review is from someone else (bot or human)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bot_pending: Option<bool>, // true when the latest comment/review is from a bot
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replies_to_me: Option<bool>, // true when a non-bot human posted after one of my comments/reviews
     #[serde(skip_serializing_if = "Option::is_none")]
     merged_at: Option<DateTime<Utc>>, // when the PR was merged (None for open PRs)
 }
@@ -324,6 +332,27 @@ struct GhLabel {
 #[derive(Debug, Deserialize)]
 struct GhAuthor {
     login: String,
+    /// GitHub marks App accounts with `is_bot: true` on `gh` output.
+    /// Not always present, so we also fall back to the `[bot]` suffix
+    /// convention used by all GitHub Apps.
+    #[serde(default)]
+    is_bot: Option<bool>,
+}
+
+/// Classification of a comment/review author relative to the current user.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum Actor {
+    Me,
+    Bot,
+    Other,
+}
+
+fn classify_author(author: Option<&GhAuthor>, my_login: &str) -> Actor {
+    match author {
+        Some(a) if a.login.eq_ignore_ascii_case(my_login) => Actor::Me,
+        Some(a) if a.is_bot.unwrap_or(false) || a.login.ends_with("[bot]") => Actor::Bot,
+        _ => Actor::Other,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -419,11 +448,16 @@ struct ReviewPrDetails {
     my_review: Option<String>,
     mentioned: Option<bool>,
     needs_reply: Option<bool>,
+    bot_pending: Option<bool>,
+    replies_to_me: Option<bool>,
 }
 
 impl Default for ReviewPrDetails {
     fn default() -> Self {
-        Self { ci: None, mergeable: None, my_review: None, mentioned: None, needs_reply: None }
+        Self {
+            ci: None, mergeable: None, my_review: None, mentioned: None,
+            needs_reply: None, bot_pending: None, replies_to_me: None,
+        }
     }
 }
 
@@ -491,12 +525,15 @@ async fn fetch_pr_ci(
                     }))
                     .unwrap_or(false)
             }).unwrap_or(false);
-            // Check for @-mentions in comment/review bodies and needs_reply
-            let (comment_mentioned, needs_reply) = my_login.map(|login| {
+            // Check for @-mentions in comment/review bodies and classify the
+            // trailing activity stream into needs_reply / bot_pending /
+            // replies_to_me.  All four signals share the same pass.
+            let (comment_mentioned, needs_reply, bot_pending, replies_to_me) =
+                my_login.map(|login| {
                 let mention_pattern = format!("@{}", login);
                 let mention_pattern_lower = mention_pattern.to_lowercase();
                 let mut found_mention = false;
-                let mut activities: Vec<(&str, bool)> = Vec::new();
+                let mut activities: Vec<(&str, Actor)> = Vec::new();
                 if let Some(ref comments) = view.comments {
                     for c in comments {
                         if let Some(ref body) = c.body {
@@ -505,10 +542,8 @@ async fn fetch_pr_ci(
                             }
                         }
                         if let Some(ref ts) = c.created_at {
-                            let is_me = c.author.as_ref()
-                                .map(|a| a.login.eq_ignore_ascii_case(login))
-                                .unwrap_or(false);
-                            activities.push((ts.as_str(), is_me));
+                            activities.push((ts.as_str(),
+                                             classify_author(c.author.as_ref(), login)));
                         }
                     }
                 }
@@ -520,19 +555,32 @@ async fn fetch_pr_ci(
                             }
                         }
                         if let Some(ref ts) = r.submitted_at {
-                            let is_me = r.author.as_ref()
-                                .map(|a| a.login.eq_ignore_ascii_case(login))
-                                .unwrap_or(false);
-                            activities.push((ts.as_str(), is_me));
+                            activities.push((ts.as_str(),
+                                             classify_author(r.author.as_ref(), login)));
                         }
                     }
                 }
                 activities.sort_by_key(|(ts, _)| *ts);
+                // Latest non-self activity (bot or human) means a reply has
+                // landed since my turn — matches the original semantics.
                 let reply_needed = activities.last()
-                    .map(|(_, is_me)| !is_me)
+                    .map(|(_, a)| *a != Actor::Me)
                     .unwrap_or(false);
-                (found_mention, reply_needed)
-            }).unwrap_or((false, false));
+                // Bot activity at the head of the stream signals the author
+                // likely needs to push a fix (Codacy/CI/etc.) before further
+                // review makes sense.
+                let bot_pending = activities.last()
+                    .map(|(_, a)| *a == Actor::Bot)
+                    .unwrap_or(false);
+                // A human replied *after* one of my comments — worth a look
+                // because they engaged with something I said specifically.
+                let replies_to_me = activities.iter()
+                    .rposition(|(_, a)| *a == Actor::Me)
+                    .map(|i| activities.iter().skip(i + 1)
+                         .any(|(_, a)| *a == Actor::Other))
+                    .unwrap_or(false);
+                (found_mention, reply_needed, bot_pending, replies_to_me)
+            }).unwrap_or((false, false, false, false));
             // mentioned = directly requested OR @-mentioned in a comment
             let mentioned = directly_requested || comment_mentioned;
             ReviewPrDetails {
@@ -541,6 +589,8 @@ async fn fetch_pr_ci(
                 my_review,
                 mentioned: Some(mentioned),
                 needs_reply: Some(needs_reply),
+                bot_pending: Some(bot_pending),
+                replies_to_me: Some(replies_to_me),
             }
         }
         Err(_) => ReviewPrDetails::default(),
@@ -605,6 +655,8 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             my_review: details.my_review,
             mentioned: details.mentioned,
             needs_reply: details.needs_reply,
+            bot_pending: details.bot_pending,
+            replies_to_me: details.replies_to_me,
         });
     }
 
@@ -628,12 +680,18 @@ struct PrDetails {
     mergeable: Option<String>,
     review_decision: Option<String>,
     needs_reply: Option<bool>,
+    bot_pending: Option<bool>,
+    replies_to_me: Option<bool>,
     merged_at: Option<String>,
 }
 
 impl Default for PrDetails {
     fn default() -> Self {
-        Self { branch: None, ci: None, mergeable: None, review_decision: None, needs_reply: None, merged_at: None }
+        Self {
+            branch: None, ci: None, mergeable: None, review_decision: None,
+            needs_reply: None, bot_pending: None, replies_to_me: None,
+            merged_at: None,
+        }
     }
 }
 
@@ -682,40 +740,51 @@ async fn fetch_pr_details(repo: &str, number: u64, my_login: Option<&str>) -> Pr
 
     match serde_json::from_str::<PrDetail>(&output) {
         Ok(d) => {
-            let needs_reply = my_login.map(|login| {
-                // Collect all activity with (timestamp_str, is_me) tuples
-                let mut activities: Vec<(&str, bool)> = Vec::new();
+            // Classify the trailing activity stream into needs_reply /
+            // bot_pending / replies_to_me.  Same logic as fetch_pr_ci so
+            // that WIP and Requests share a consistent reading of the PR.
+            let (needs_reply, bot_pending, replies_to_me) =
+                my_login.map(|login| {
+                let mut activities: Vec<(&str, Actor)> = Vec::new();
                 if let Some(ref comments) = d.comments {
                     for c in comments {
                         if let Some(ref ts) = c.created_at {
-                            let is_me = c.author.as_ref()
-                                .map(|a| a.login.eq_ignore_ascii_case(login))
-                                .unwrap_or(false);
-                            activities.push((ts.as_str(), is_me));
+                            activities.push((ts.as_str(),
+                                             classify_author(c.author.as_ref(), login)));
                         }
                     }
                 }
                 if let Some(ref reviews) = d.reviews {
                     for r in reviews {
                         if let Some(ref ts) = r.submitted_at {
-                            let is_me = r.author.as_ref()
-                                .map(|a| a.login.eq_ignore_ascii_case(login))
-                                .unwrap_or(false);
-                            activities.push((ts.as_str(), is_me));
+                            activities.push((ts.as_str(),
+                                             classify_author(r.author.as_ref(), login)));
                         }
                     }
                 }
-                // Sort by timestamp (ISO 8601 strings sort lexicographically)
+                // ISO-8601 strings sort lexicographically — same order as chrono.
                 activities.sort_by_key(|(ts, _)| *ts);
-                // Check if the latest activity is NOT from me
-                activities.last().map(|(_, is_me)| !is_me).unwrap_or(false)
-            });
+                let needs_reply = activities.last()
+                    .map(|(_, a)| *a != Actor::Me)
+                    .unwrap_or(false);
+                let bot_pending = activities.last()
+                    .map(|(_, a)| *a == Actor::Bot)
+                    .unwrap_or(false);
+                let replies_to_me = activities.iter()
+                    .rposition(|(_, a)| *a == Actor::Me)
+                    .map(|i| activities.iter().skip(i + 1)
+                         .any(|(_, a)| *a == Actor::Other))
+                    .unwrap_or(false);
+                (Some(needs_reply), Some(bot_pending), Some(replies_to_me))
+            }).unwrap_or((None, None, None));
             PrDetails {
                 branch: d.head_ref_name,
                 ci: summarise_ci(&d.status_check_rollup),
                 mergeable: d.mergeable,
                 review_decision: d.review_decision,
                 needs_reply,
+                bot_pending,
+                replies_to_me,
                 merged_at: d.merged_at,
             }
         }
@@ -827,6 +896,8 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
             updated: updated_ts,
             review_decision: details.review_decision,
             needs_reply: details.needs_reply,
+            bot_pending: details.bot_pending,
+            replies_to_me: details.replies_to_me,
             merged_at: merged_ts,
         });
     }

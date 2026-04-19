@@ -5596,7 +5596,10 @@ Like treemacs `W' / extra-wide-toggle."
            (decknix-sidebar-transient--age-filter)
            (decknix-sidebar-transient--ci-filter)
            (decknix-sidebar-transient--mention-filter)
-           (decknix-sidebar-transient--bot-filter)]
+           (decknix-sidebar-transient--bot-filter)
+           (decknix-sidebar-transient--req-needs-reply)
+           (decknix-sidebar-transient--req-bot-pending)
+           (decknix-sidebar-transient--req-my-replies)]
           ["Live"
            (decknix-sidebar-transient--expand-prs)
            (decknix-sidebar-transient--symbol-style)
@@ -5607,7 +5610,10 @@ Like treemacs `W' / extra-wide-toggle."
            (decknix-sidebar-transient--hidden-toggle)]
           ["WIP"
            (decknix-sidebar-transient--deploy-indicator)
-           (decknix-sidebar-transient--wip-hide-linked)]
+           (decknix-sidebar-transient--wip-hide-linked)
+           (decknix-sidebar-transient--wip-needs-reply)
+           (decknix-sidebar-transient--wip-bot-pending)
+           (decknix-sidebar-transient--wip-my-replies)]
           ["" ("q" "Done" transient-quit-one)])
 
         (transient-define-prefix decknix-sidebar-transient ()
@@ -5846,6 +5852,24 @@ All toggle keys are accessed via the T transient prefix."
                                    (if decknix--hub-show-bots "[show]" "[hide]")
                                    'face (if decknix--hub-show-bots
                                              'font-lock-constant-face
+                                           'font-lock-comment-face))))
+                    (cons "c" (format "💬 %s"
+                                  (propertize
+                                   (if decknix--hub-requests-hide-needs-reply "[hide]" "[show]")
+                                   'face (if decknix--hub-requests-hide-needs-reply
+                                             'font-lock-constant-face
+                                           'font-lock-comment-face))))
+                    (cons "b" (format "🤖 %s"
+                                  (propertize
+                                   (if decknix--hub-requests-hide-bot-pending "[hide]" "[show]")
+                                   'face (if decknix--hub-requests-hide-bot-pending
+                                             'font-lock-constant-face
+                                           'font-lock-comment-face))))
+                    (cons "M" (format "↩ %s"
+                                  (propertize
+                                   (if decknix--hub-requests-only-my-replies "[only]" "[all]")
+                                   'face (if decknix--hub-requests-only-my-replies
+                                             'font-lock-constant-face
                                            'font-lock-comment-face)))))))
                 (live
                  (list
@@ -5913,6 +5937,24 @@ All toggle keys are accessed via the T transient prefix."
                                      "[hide]" "[show]")
                                  'face (if (and (boundp 'decknix--hub-wip-hide-linked)
                                                 decknix--hub-wip-hide-linked)
+                                           'font-lock-constant-face
+                                         'font-lock-comment-face))))
+                  (cons "n" (format "💬 %s"
+                                (propertize
+                                 (if decknix--hub-wip-hide-needs-reply "[hide]" "[show]")
+                                 'face (if decknix--hub-wip-hide-needs-reply
+                                           'font-lock-constant-face
+                                         'font-lock-comment-face))))
+                  (cons "u" (format "🤖 %s"
+                                (propertize
+                                 (if decknix--hub-wip-hide-bot-pending "[hide]" "[show]")
+                                 'face (if decknix--hub-wip-hide-bot-pending
+                                           'font-lock-constant-face
+                                         'font-lock-comment-face))))
+                  (cons "r" (format "↩ %s"
+                                (propertize
+                                 (if decknix--hub-wip-only-my-replies "[only]" "[all]")
+                                 'face (if decknix--hub-wip-only-my-replies
                                            'font-lock-constant-face
                                          'font-lock-comment-face)))))))
             ;; Return as sectioned list
@@ -6599,6 +6641,7 @@ Applies org, age, and CI visibility filters, then the ready predicate."
                     (decknix--hub-age-visible-p (alist-get 'created item))
                     (decknix--hub-ci-visible-p item)
                     (decknix--hub-bot-visible-p item)
+                    (decknix--hub-requests-attention-visible-p item)
                     (decknix--hub-request-ready-p item)))
              (or all-items '()))))
 
@@ -6963,7 +7006,8 @@ Shows result in the echo area and triggers a hub refresh on success."
                                   (decknix--hub-age-visible-p (alist-get 'created item))
                                   (decknix--hub-ci-visible-p item)
                                   (decknix--hub-mention-visible-p item)
-                                  (decknix--hub-bot-visible-p item)))
+                                  (decknix--hub-bot-visible-p item)
+                                  (decknix--hub-requests-attention-visible-p item)))
                            (or all-items '())))
                    (keys decknix--nav-keys))
               (append
@@ -7060,6 +7104,7 @@ Interactively: \\[universal-argument] N r limits to N items;
                                       (decknix--hub-ci-visible-p item)
                                       (decknix--hub-mention-visible-p item)
                                       (decknix--hub-bot-visible-p item)
+                                      (decknix--hub-requests-attention-visible-p item)
                                       ;; Extra @-mention filter when requested
                                       (or (not mo)
                                           (eq (alist-get 'mentioned item) t))))
@@ -7145,7 +7190,8 @@ Interactively: \\[universal-argument] N r limits to N items;
                      (repo (car (last (split-string repo-full "/")))))
                 (when (decknix--hub-item-visible-p repo-full)
                   (dolist (pr (alist-get 'prs repo-entry))
-                    (when (decknix--hub-age-visible-p (alist-get 'updated pr))
+                    (when (and (decknix--hub-age-visible-p (alist-get 'updated pr))
+                               (decknix--hub-wip-attention-visible-p pr))
                       (let* ((number (alist-get 'number pr))
                              (title (or (alist-get 'title pr) ""))
                              (pr-state (or (alist-get 'state pr) "OPEN"))
@@ -7318,7 +7364,8 @@ visible (filtered) candidates.  C-g cancels."
                              (and (decknix--hub-item-visible-p (alist-get 'repo r))
                                   (seq-some
                                    (lambda (pr)
-                                     (decknix--hub-age-visible-p (alist-get 'updated pr)))
+                                     (and (decknix--hub-age-visible-p (alist-get 'updated pr))
+                                          (decknix--hub-wip-attention-visible-p pr)))
                                    (alist-get 'prs r))))
                            (or all-repos '())))
                    (keys decknix--nav-keys)
@@ -7330,7 +7377,8 @@ visible (filtered) candidates.  C-g cancels."
                        (repo (car (last (split-string repo-full "/")))))
                   (dolist (pr (seq-filter
                                (lambda (pr)
-                                 (decknix--hub-age-visible-p (alist-get 'updated pr)))
+                                 (and (decknix--hub-age-visible-p (alist-get 'updated pr))
+                                      (decknix--hub-wip-attention-visible-p pr)))
                                (alist-get 'prs repo-entry)))
                     (when (< idx (length keys))
                       (let* ((key (nth idx keys))
@@ -8207,6 +8255,90 @@ When no filter is active (table is nil), all orgs are visible."
           (interactive)
           (call-interactively #'decknix--hub-toggle-bot-filter))
 
+        (transient-define-suffix decknix-sidebar-transient--req-needs-reply ()
+          :key "c"
+          :description
+          (lambda ()
+            (format "comments 💬  %s"
+                    (propertize
+                     (if decknix--hub-requests-hide-needs-reply "[hide]" "[show]")
+                     'face (if decknix--hub-requests-hide-needs-reply
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-toggle-requests-hide-needs-reply))
+
+        (transient-define-suffix decknix-sidebar-transient--req-bot-pending ()
+          :key "b"
+          :description
+          (lambda ()
+            (format "bot review 🤖 %s"
+                    (propertize
+                     (if decknix--hub-requests-hide-bot-pending "[hide]" "[show]")
+                     'face (if decknix--hub-requests-hide-bot-pending
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-toggle-requests-hide-bot-pending))
+
+        (transient-define-suffix decknix-sidebar-transient--req-my-replies ()
+          :key "M"
+          :description
+          (lambda ()
+            (format "replies ↩   %s"
+                    (propertize
+                     (if decknix--hub-requests-only-my-replies "[only]" "[all]")
+                     'face (if decknix--hub-requests-only-my-replies
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-toggle-requests-only-my-replies))
+
+        (transient-define-suffix decknix-sidebar-transient--wip-needs-reply ()
+          :key "n"
+          :description
+          (lambda ()
+            (format "comments 💬  %s"
+                    (propertize
+                     (if decknix--hub-wip-hide-needs-reply "[hide]" "[show]")
+                     'face (if decknix--hub-wip-hide-needs-reply
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-toggle-wip-hide-needs-reply))
+
+        (transient-define-suffix decknix-sidebar-transient--wip-bot-pending ()
+          :key "u"
+          :description
+          (lambda ()
+            (format "bot review 🤖 %s"
+                    (propertize
+                     (if decknix--hub-wip-hide-bot-pending "[hide]" "[show]")
+                     'face (if decknix--hub-wip-hide-bot-pending
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-toggle-wip-hide-bot-pending))
+
+        (transient-define-suffix decknix-sidebar-transient--wip-my-replies ()
+          :key "r"
+          :description
+          (lambda ()
+            (format "replies ↩   %s"
+                    (propertize
+                     (if decknix--hub-wip-only-my-replies "[only]" "[all]")
+                     'face (if decknix--hub-wip-only-my-replies
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-toggle-wip-only-my-replies))
+
         (transient-define-suffix decknix-sidebar-transient--expand-prs ()
           :key "E"
           :description
@@ -8582,6 +8714,134 @@ Always returns t when `decknix--hub-show-bots' is non-nil."
           (or decknix--hub-show-bots
               (not (decknix--hub-bot-author-p
                     (alist-get 'author item)))))
+
+        ;; -- Hub: attention filters (needs-reply / bot-pending / replies-to-me) --
+        ;;
+        ;; These three orthogonal signals come from the hub daemon.  Each
+        ;; section (Requests, WIP) owns its own toggle state so a PR can be
+        ;; filtered out of one list while remaining visible in the other —
+        ;; e.g. hiding bot-pending PRs from Requests (not review-ready) but
+        ;; keeping them visible in WIP (so I can see my own PRs needing a
+        ;; push).
+
+        (defvar decknix--hub-requests-hide-needs-reply nil
+          "When non-nil, hide Requests PRs carrying the 💬 icon.
+Suppresses PRs where the latest non-bot activity is from someone
+other than me — i.e. the ball is in another reviewer's or the
+author's court and nothing is waiting on me.  Toggle with `c'.")
+
+        (defvar decknix--hub-requests-hide-bot-pending t
+          "When non-nil (default), hide Requests PRs carrying the 🤖 icon.
+A bot posted the latest comment/review, typically a lint/CI/coverage
+signal the author must address with another commit.  Approving before
+that lands risks stale-review dismissal, so the PR isn't review-ready.
+Toggle with `b'.")
+
+        (defvar decknix--hub-requests-only-my-replies nil
+          "When non-nil, only show Requests PRs carrying the ↩ icon.
+Filters IN PRs where a human posted a reply after one of my own
+comments or reviews.  Toggle with `M'.")
+
+        (defvar decknix--hub-wip-hide-needs-reply nil
+          "When non-nil, hide WIP PRs carrying the 💬 icon.
+Suppresses PRs where reviewers posted the latest activity — useful
+when I want to focus on PRs still awaiting first review.  Toggle
+with `n'.")
+
+        (defvar decknix--hub-wip-hide-bot-pending nil
+          "When non-nil, hide WIP PRs carrying the 🤖 icon.
+Suppresses my own PRs where a bot posted the latest activity.
+Defaults to off because as the author I usually want to see these
+so I can push a fix.  Toggle with `u'.")
+
+        (defvar decknix--hub-wip-only-my-replies nil
+          "When non-nil, only show WIP PRs carrying the ↩ icon.
+Filters IN my PRs where a reviewer replied to one of my comments.
+Toggle with `r'.")
+
+        (defun decknix--hub-attention-visible-p (item hide-reply hide-bot only-my)
+          "Return non-nil if ITEM passes the three attention filters.
+HIDE-REPLY, HIDE-BOT, and ONLY-MY are the three toggle states for
+the owning section."
+          (let ((needs-reply   (eq (alist-get 'needs_reply item) t))
+                (bot-pending   (eq (alist-get 'bot_pending item) t))
+                (replies-to-me (eq (alist-get 'replies_to_me item) t)))
+            (and
+             ;; Hide needs-reply suppresses only the non-bot case
+             ;; (bot-pending is handled by its own toggle so we don't
+             ;; double-suppress when both are true).
+             (or (not hide-reply)
+                 (not (and needs-reply (not bot-pending))))
+             (or (not hide-bot)
+                 (not bot-pending))
+             (or (not only-my)
+                 replies-to-me))))
+
+        (defun decknix--hub-requests-attention-visible-p (item)
+          "Return non-nil if ITEM passes the Requests attention filters."
+          (decknix--hub-attention-visible-p
+           item
+           decknix--hub-requests-hide-needs-reply
+           decknix--hub-requests-hide-bot-pending
+           decknix--hub-requests-only-my-replies))
+
+        (defun decknix--hub-wip-attention-visible-p (pr)
+          "Return non-nil if PR passes the WIP attention filters."
+          (decknix--hub-attention-visible-p
+           pr
+           decknix--hub-wip-hide-needs-reply
+           decknix--hub-wip-hide-bot-pending
+           decknix--hub-wip-only-my-replies))
+
+        (defun decknix--hub-toggle-and-refresh (sym message-fmt)
+          "Flip SYM and refresh the sidebar, messaging MESSAGE-FMT with the new value."
+          (set sym (not (symbol-value sym)))
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (agent-shell-workspace-sidebar-refresh))
+          (message message-fmt
+                   (if (symbol-value sym) "on" "off")))
+
+        (defun decknix--hub-toggle-requests-hide-needs-reply ()
+          "Toggle hiding Requests PRs with 💬 (non-bot trailing activity)."
+          (interactive)
+          (decknix--hub-toggle-and-refresh
+           'decknix--hub-requests-hide-needs-reply
+           "Requests 💬 filter: %s"))
+
+        (defun decknix--hub-toggle-requests-hide-bot-pending ()
+          "Toggle hiding Requests PRs with 🤖 (latest activity from a bot)."
+          (interactive)
+          (decknix--hub-toggle-and-refresh
+           'decknix--hub-requests-hide-bot-pending
+           "Requests 🤖 filter: %s"))
+
+        (defun decknix--hub-toggle-requests-only-my-replies ()
+          "Toggle showing only Requests PRs with ↩ (human reply in my thread)."
+          (interactive)
+          (decknix--hub-toggle-and-refresh
+           'decknix--hub-requests-only-my-replies
+           "Requests ↩ only-my-replies: %s"))
+
+        (defun decknix--hub-toggle-wip-hide-needs-reply ()
+          "Toggle hiding WIP PRs with 💬."
+          (interactive)
+          (decknix--hub-toggle-and-refresh
+           'decknix--hub-wip-hide-needs-reply
+           "WIP 💬 filter: %s"))
+
+        (defun decknix--hub-toggle-wip-hide-bot-pending ()
+          "Toggle hiding WIP PRs with 🤖."
+          (interactive)
+          (decknix--hub-toggle-and-refresh
+           'decknix--hub-wip-hide-bot-pending
+           "WIP 🤖 filter: %s"))
+
+        (defun decknix--hub-toggle-wip-only-my-replies ()
+          "Toggle showing only WIP PRs with ↩."
+          (interactive)
+          (decknix--hub-toggle-and-refresh
+           'decknix--hub-wip-only-my-replies
+           "WIP ↩ only-my-replies: %s"))
 
         ;; -- Hub: active review detection --
         ;; Cross-references request items against live agent-shell buffers
@@ -9404,14 +9664,34 @@ Shows the overall review status of the user's own PR:
               ("REVIEW_REQUIRED"   (decknix--hub-icon "◐" 'warning))
               (_ ""))))
 
+        (defun decknix--hub-activity-icons (pr)
+          "Return concatenated attention icons for PR.
+
+Shows, in order:
+- 🤖 (bot-pending) when the latest comment/review is from a bot —
+  supersedes 💬 so the two aren't shown together for the same event.
+- 💬 (needs-reply) when the latest non-bot activity is from someone
+  else and no bot posted after them.
+- ↩ (replies-to-me) when a human posted after one of my own comments
+  or reviews; co-exists with 🤖/💬 because it is a distinct signal
+  about a thread I participated in."
+          (let ((needs-reply   (eq (alist-get 'needs_reply pr) t))
+                (bot-pending   (eq (alist-get 'bot_pending pr) t))
+                (replies-to-me (eq (alist-get 'replies_to_me pr) t)))
+            (concat
+             (cond
+              (bot-pending
+               (decknix--hub-icon "🤖" '(:foreground "#af5f87")))
+              (needs-reply
+               (decknix--hub-icon "💬" '(:foreground "#d7af5f")))
+              (t ""))
+             (if replies-to-me
+                 (decknix--hub-icon "↩" '(:foreground "#87d7af" :weight bold))
+               ""))))
+
         (defun decknix--hub-wip-reply-icon (pr)
-          "Return a reply-needed icon for a WIP PR, or empty string.
-Shows 💬 when the most recent comment or review on the PR is from
-someone other than the current user (bot or human), indicating it
-needs a response."
-          (if (eq (alist-get 'needs_reply pr) t)
-              (decknix--hub-icon "💬" '(:foreground "#d7af5f"))
-            ""))
+          "Back-compat shim: return `decknix--hub-activity-icons' for PR."
+          (decknix--hub-activity-icons pr))
 
         ;; -- Hub: status hint when daemon not running --
         (defun decknix--hub-has-data-p ()
@@ -9454,7 +9734,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                                 (decknix--hub-age-visible-p (alist-get 'created item))
                                 (decknix--hub-ci-visible-p item)
                                 (decknix--hub-mention-visible-p item)
-                                (decknix--hub-bot-visible-p item)))
+                                (decknix--hub-bot-visible-p item)
+                                (decknix--hub-requests-attention-visible-p item)))
                          (or all-items '()))))
             (when items
               (decknix--sidebar-render-section-header
@@ -9484,10 +9765,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                        (status-str (if (string-empty-p mention-str)
                                        status-str
                                      (concat status-str mention-str)))
-                       ;; Reply needed indicator (use hub-icon for consistent line height)
-                       (reply-str (if (eq (alist-get 'needs_reply item) t)
-                                      (decknix--hub-icon "💬" '(:foreground "#d7af5f"))
-                                    ""))
+                       ;; Activity icons: 🤖 bot-pending, 💬 needs-reply, ↩ replies-to-me
+                       (reply-str (decknix--hub-activity-icons item))
                        (status-str (if (string-empty-p reply-str)
                                        status-str
                                      (concat status-str reply-str)))
@@ -9545,6 +9824,7 @@ session are hidden (both from the header count and the listing)."
                  (pr-visible-p
                   (lambda (repo-full pr)
                     (and (decknix--hub-age-visible-p (alist-get 'updated pr))
+                         (decknix--hub-wip-attention-visible-p pr)
                          (not (decknix--hub-wip-pr-live-linked-p
                                repo-full (alist-get 'number pr) linked-set)))))
                  ;; Filter repos by org, then filter PRs by age + link status
