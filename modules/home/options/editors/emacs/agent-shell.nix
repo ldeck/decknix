@@ -5994,11 +5994,11 @@ column's height.  When nil, sections stack vertically (compact)."
                                   (lambda (kv)
                                     ;; Show only the value (label + state),
                                     ;; not the shortcut key — press T for keys.
-                                    ;; Indent items 2 spaces beyond heading and
-                                    ;; scale down so items are visually smaller
-                                    ;; than sub-headings.
+                                    ;; Indent items 2 spaces beyond heading;
+                                    ;; use comment face to match Navigate/Quick
+                                    ;; item sizing.
                                     (propertize (format "   %s" (cdr kv))
-                                                'display '(height 0.85)))
+                                                'face 'font-lock-comment-face))
                                   keys))))
                      (if (= (% idx 2) 0)
                          (setq left-lines (append left-lines lines))
@@ -6027,7 +6027,7 @@ column's height.  When nil, sections stack vertically (compact)."
                         "\n")
                 (dolist (kv keys)
                   (insert (propertize (format "     %s" (cdr kv))
-                                      'display '(height 0.85))
+                                      'face 'font-lock-comment-face)
                           "\n"))))))
 
         (defun decknix--sidebar-render-footer ()
