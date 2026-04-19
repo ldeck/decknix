@@ -5793,7 +5793,8 @@ so RIGHT group starts at column COL-WIDTH."
              ("c"   . "new")
              ("g"   . "refresh")
              ("q"   . "quit")
-             ("a"   . "actions…"))
+             ("a"   . "actions…")
+             ("T"   . "toggles"))
            (when (fboundp 'decknix-hub-launch-reviews)
              (let ((count (length (decknix--hub-review-ready-requests))))
                (list (cons "R" (format "review %s"
@@ -5977,6 +5978,7 @@ column's height.  When nil, sections stack vertically (compact)."
           (if (and col-width (>= col-width 24))
               ;; Two-column rendering with independent flow.
               ;; Split sections into left (0, 2, …) and right (1, 3, …).
+              ;; Keys are omitted — the T transient shows them interactively.
               (let (left-lines right-lines)
                 (seq-do-indexed
                  (lambda (section idx)
@@ -5986,11 +5988,9 @@ column's height.  When nil, sections stack vertically (compact)."
                            (cons (propertize (format " %s" heading) 'face 'success)
                                  (mapcar
                                   (lambda (kv)
-                                    (concat
-                                     (propertize (format " %3s " (car kv))
-                                                 'face 'font-lock-keyword-face)
-                                     (propertize (cdr kv)
-                                                 'face 'font-lock-comment-face)))
+                                    ;; Show only the value (label + state),
+                                    ;; not the shortcut key — press T for keys.
+                                    (format "  %s" (cdr kv)))
                                   keys))))
                      (if (= (% idx 2) 0)
                          (setq left-lines (append left-lines lines))
@@ -6010,6 +6010,7 @@ column's height.  When nil, sections stack vertically (compact)."
                      (insert l (make-string pad ?\s) r "\n")))
                  left-lines right-lines))
             ;; Compact vertical fallback (indented sub-headings)
+            ;; Keys omitted here too — press T for the interactive transient.
             (dolist (section sections)
               (let ((heading (car section))
                     (keys (cdr section)))
@@ -6017,11 +6018,7 @@ column's height.  When nil, sections stack vertically (compact)."
                                     'face '(:inherit font-lock-type-face :weight normal))
                         "\n")
                 (dolist (kv keys)
-                  (insert (propertize (format "   %3s " (car kv))
-                                      'face 'font-lock-keyword-face)
-                          (propertize (cdr kv)
-                                      'face 'font-lock-comment-face)
-                          "\n"))))))
+                  (insert (format "   %s" (cdr kv)) "\n"))))))
 
         (defun decknix--sidebar-render-footer ()
           "Insert responsive key listing or compact hint depending on toggle.
