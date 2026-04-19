@@ -5882,13 +5882,36 @@ All toggle keys are accessed via the T transient prefix."
                                 (propertize
                                  (if decknix--sidebar-show-hidden "[shown]" "[hidden]")
                                  'face (if decknix--sidebar-show-hidden
-                                           'warning 'font-lock-comment-face))))))
+                                           'warning 'font-lock-comment-face))))
+                  (cons "y" (format "symbols %s"
+                                (propertize
+                                 (format "[%s]"
+                                         (if (boundp 'decknix--hub-symbol-style)
+                                             decknix--hub-symbol-style
+                                           "ascii"))
+                                 'face 'font-lock-constant-face)))
+                  (cons "N" (format "repo %s"
+                                (propertize
+                                 (format "[%s]"
+                                         (if (boundp 'decknix--hub-repo-name-cap)
+                                             decknix--hub-repo-name-cap
+                                           "short"))
+                                 'face 'font-lock-constant-face)))))
                 (wip
                  (list
                   (cons "P" (format "pipe %s"
                                 (propertize
                                  (if decknix--hub-show-deploys "[show]" "[hide]")
                                  'face (if decknix--hub-show-deploys
+                                           'font-lock-constant-face
+                                         'font-lock-comment-face))))
+                  (cons "L" (format "linked %s"
+                                (propertize
+                                 (if (and (boundp 'decknix--hub-wip-hide-linked)
+                                          decknix--hub-wip-hide-linked)
+                                     "[hide]" "[show]")
+                                 'face (if (and (boundp 'decknix--hub-wip-hide-linked)
+                                                decknix--hub-wip-hide-linked)
                                            'font-lock-constant-face
                                          'font-lock-comment-face)))))))
             ;; Return as sectioned list
@@ -5899,22 +5922,46 @@ All toggle keys are accessed via the T transient prefix."
                    (cons "Live" live)
                    (cons "WIP" wip)))))
 
-        (defun decknix--sidebar-render-toggle-sections (sections)
+        (defun decknix--sidebar-render-toggle-sections (sections &optional col-width)
           "Render toggle SECTIONS with sub-headings.
-SECTIONS is a list of (HEADING . KEYS-ALIST) from footer-toggle-keys."
+SECTIONS is a list of (HEADING . KEYS-ALIST) from footer-toggle-keys.
+When COL-WIDTH is non-nil and >= 24, adjacent sections are paired and
+rendered side-by-side so vertical growth does not push content off the
+bottom of the sidebar.  When nil, sections stack vertically (compact)."
           (insert (propertize " Toggles (T)" 'face 'bold) "\n")
-          (dolist (section sections)
-            (let ((heading (car section))
-                  (keys (cdr section)))
-              (insert (propertize (format "   %s" heading)
-                                  'face '(:inherit font-lock-type-face :weight normal))
-                      "\n")
-              (dolist (kv keys)
-                (insert (propertize (format "   %3s " (car kv))
-                                    'face 'font-lock-keyword-face)
-                        (propertize (cdr kv)
-                                    'face 'font-lock-comment-face)
-                        "\n")))))
+          (if (and col-width (>= col-width 24))
+              ;; Paired 2-column rendering
+              (let ((pending sections))
+                (while pending
+                  (let* ((left  (pop pending))
+                         (right (pop pending)))
+                    (if right
+                        (decknix--sidebar-render-key-groups-side-by-side
+                         (car left)  (cdr left)
+                         (car right) (cdr right)
+                         col-width)
+                      ;; Odd section out — render solo (vertical)
+                      (insert (propertize (format " %s" (car left))
+                                          'face 'bold) "\n")
+                      (dolist (kv (cdr left))
+                        (insert (propertize (format " %3s " (car kv))
+                                            'face 'font-lock-keyword-face)
+                                (propertize (cdr kv)
+                                            'face 'font-lock-comment-face)
+                                "\n"))))))
+            ;; Compact vertical fallback (indented sub-headings)
+            (dolist (section sections)
+              (let ((heading (car section))
+                    (keys (cdr section)))
+                (insert (propertize (format "   %s" heading)
+                                    'face '(:inherit font-lock-type-face :weight normal))
+                        "\n")
+                (dolist (kv keys)
+                  (insert (propertize (format "   %3s " (car kv))
+                                      'face 'font-lock-keyword-face)
+                          (propertize (cdr kv)
+                                      'face 'font-lock-comment-face)
+                          "\n"))))))
 
         (defun decknix--sidebar-render-footer ()
           "Insert responsive key listing or compact hint depending on toggle.
@@ -5931,12 +5978,15 @@ items inline (horizontal).  Press K to toggle, ? for full transient."
                      (toggle-sections (decknix--sidebar-footer-toggle-keys))
                      (wide-p (>= w 48)))
                 (if wide-p
-                    ;; ── Wide: Navigate | Quick  side by side ──
+                    ;; ── Wide: Navigate | Quick  side by side, then toggle
+                    ;;   sections paired 2-wide so Global+Requests and
+                    ;;   Live+WIP fit on shared rows. ──
                     (let ((col (/ w 2)))
                       (decknix--sidebar-render-key-groups-side-by-side
                        "Navigate" nav-keys "Quick" quick-keys col)
-                      (decknix--sidebar-render-toggle-sections toggle-sections))
-                  ;; ── Narrow: all groups inline ──
+                      (decknix--sidebar-render-toggle-sections
+                       toggle-sections col))
+                  ;; ── Narrow: all groups inline, toggles stack vertically ──
                   (decknix--sidebar-render-key-group-inline "Navigate" nav-keys)
                   (decknix--sidebar-render-key-group-inline "Quick" quick-keys)
                   (decknix--sidebar-render-toggle-sections toggle-sections))
