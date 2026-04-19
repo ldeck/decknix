@@ -181,12 +181,20 @@ The `decknix--context-update-header` function delegates to the unified header
 - Tiling controls: `a a` add, `a x` remove.
 - Toggles transient (`T`): Opens sectioned menu grouped by sidebar section:
   - **Global**: `W` width, `O` org filter
-  - **Requests**: `F` age, `C` ci, `@` mention, `B` bots
+  - **Requests**: `F` age, `C` ci, `@` mention, `B` bot-authors
+    (dependabot/renovate PRs), `c` 💬 comments (hide PRs whose latest
+    non-bot activity is someone else), `b` 🤖 bot-review (hide PRs
+    where a bot posted last — default on, since a fix is likely needed
+    before approving sticks), `M` ↩ replies-to-me (show only PRs where
+    a human replied in a thread I participated in)
   - **Live**: `E` PRs (4-way cycle: off/PR/pipeline/both), `S` quick-switch,
     `t` tile, `d` display mode, `H` hidden, `y` symbol style (ascii/emoji),
     `N` repo-name cap (short/medium/full)
   - **WIP**: `P` pipeline/deploy indicators, `L` hide linked (PRs that are
-    already live as sessions)
+    already live as sessions), `n` 💬 comments, `u` 🤖 bot-review,
+    `r` ↩ replies-to-me (parallel to the Requests triad, independent
+    state because WIP is about my own PRs — I usually want to see 🤖
+    so I can push a fix)
 - All toggles are advertised in the sidebar footer (press `K` to hide).  When
   the sidebar is wide (≥48 cols), Global+Requests and Live+WIP sections
   render side-by-side so the footer does not push content off-screen.
