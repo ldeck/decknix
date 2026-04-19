@@ -5657,7 +5657,7 @@ Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
 Defaults to t for discoverability; toggle with K.")
 
         (defvar decknix--sidebar-show-hidden nil
-          "When non-nil, include hidden/background sessions in the Recent list.
+          "When non-nil, include hidden/background sessions in the Sessions list.
 Hidden sessions are marked via `decknix--agent-conversation-set-hidden'.
 Toggle with `H' in the sidebar.")
 
@@ -5679,7 +5679,7 @@ Toggle with `H' in the sidebar.")
 
         (defun decknix-sidebar-hide-at-point ()
           "Mark the saved session at point as hidden (background/automated).
-The session will be excluded from the Recent list unless `H' toggle is on."
+The session will be excluded from the Sessions list unless `H' toggle is on."
           (interactive)
           (let ((conv-key (get-text-property
                            (line-beginning-position)
@@ -6171,7 +6171,7 @@ Respects `decknix--sidebar-show-hidden' toggle."
                 (insert "\n")
                 (setq line-num (1+ line-num)) ;; blank line
                 (decknix--sidebar-render-section-header
-                 (format "Recent (%d)" (length saved)))
+                 (format "Sessions (%d)" (length saved)))
                 (setq line-num (1+ line-num)) ;; section header
                 ;; Group by ABBREVIATED workspace name so differently-stored
                 ;; paths (~/Code/foo vs /Users/x/Code/foo) merge under one heading
