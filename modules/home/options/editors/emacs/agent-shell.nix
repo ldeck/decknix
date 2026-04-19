@@ -5983,7 +5983,7 @@ column's height.  When nil, sections stack vertically (compact)."
                    (let* ((heading (car section))
                           (keys (cdr section))
                           (lines
-                           (cons (propertize (format " %s" heading) 'face 'bold)
+                           (cons (propertize (format " %s" heading) 'face 'success)
                                  (mapcar
                                   (lambda (kv)
                                     (concat
