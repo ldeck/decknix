@@ -42,14 +42,20 @@ in {
     settings = {
       model = mkOption {
         type = types.nullOr types.str;
-        default = null;
-        example = "opus4.7";
+        default = "opus4.7";
+        example = "sonnet4.6";
         description = ''
           Default model for new auggie sessions. Written to the
           `model` key of `~/.augment/settings.json`; auggie uses
           this when no `--model` flag is supplied on the command
           line. Run `auggie model list` to see available ids
           (e.g. `opus4.7`, `sonnet4.6`).
+
+          The framework default tracks the current recommended
+          flagship model (bumped as new releases land). Org and
+          personal layers can override via plain assignment or
+          `lib.mkDefault`; set to `null` to omit the key entirely
+          and fall back to auggie's own built-in default.
 
           Per-session overrides (set via `C-c C-v` inside an
           agent-shell buffer) are persisted separately in
