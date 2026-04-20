@@ -179,6 +179,15 @@ The `decknix--context-update-header` function delegates to the unified header
   aligns with the Navigate `s` key so the label matches the shortcut.
 - Agent management: `c` new, `k` kill, `r` restart, `R` rename, `d` delete killed.
 - Tiling controls: `a a` add, `a x` remove.
+- **Session attention icons** (Live + Previous rows): linked PRs drive
+  an `inbox/sent` aggregate parallel to the Requests signals:
+  - `📥 N` — N linked PRs awaiting my action (review request not yet
+    submitted, WIP with `needs_reply` or `CHANGES_REQUESTED`).
+  - `📤 N` — N linked PRs where I have acted (review submitted, WIP
+    pushed with no pending reply).
+  - `↩` — shown once when any linked PR has `replies_to_me`.
+  - Terminal PRs (MERGED/CLOSED) are excluded so stale links do not add
+    noise. Rendered immediately after the `[N⬆ N✓]` count badge.
 - Toggles transient (`T`): Opens sectioned menu grouped by sidebar
   section. Suffixes within each section are ordered alphabetically by
   their display label (case-insensitive) to match the sidebar footer,

@@ -6219,9 +6219,13 @@ Respects `decknix--sidebar-show-hidden' toggle."
                          (pr-badge (if buf-conv-key
                                        (decknix--hub-pr-badge buf-conv-key)
                                      ""))
+                         (attention-icons
+                          (if buf-conv-key
+                              (decknix--hub-session-attention-icons buf-conv-key)
+                            ""))
                          (line (concat selection-indicator " "
                                       logo-box name-box-styled tile-indicator
-                                      pr-badge)))
+                                      pr-badge attention-icons)))
                     (setq line-num (1+ line-num))
                     (when (eq buf selected)
                       (setq target-line line-num))
@@ -7925,11 +7929,15 @@ Returns updated LINE-NUM."
                        (pr-badge (if prev-conv-key
                                      (decknix--hub-pr-badge prev-conv-key)
                                    ""))
+                       (attention-icons
+                        (if prev-conv-key
+                            (decknix--hub-session-attention-icons prev-conv-key)
+                          ""))
                        (line (concat "  "
                                      (propertize "○" 'face 'font-lock-comment-face)
                                      " "
                                      (propertize short 'face 'font-lock-comment-face)
-                                     pr-badge)))
+                                     pr-badge attention-icons)))
                   (setq line (propertize line
                                         'decknix-previous-session entry))
                   (insert line "\n")
@@ -9212,6 +9220,9 @@ Returns an alist or nil if not found."
                                  (hub-checks (alist-get 'checks ci)))
                             (throw 'found
                                    (list
+                                    ;; Origin file — lets callers distinguish
+                                    ;; PRs I authored (wip) from PRs I review (review).
+                                    (cons 'kind 'wip)
                                     ;; Upcase state — hub JSON uses lowercase
                                     ;; ("open") but display code expects "OPEN"
                                     (cons 'state (upcase (or (alist-get 'state pr) "OPEN")))
@@ -9221,6 +9232,9 @@ Returns an alist or nil if not found."
                                     (cons 'updated_at (alist-get 'updated pr))
                                     (cons 'review_decision
                                           (alist-get 'review_decision pr))
+                                    (cons 'needs_reply (alist-get 'needs_reply pr))
+                                    (cons 'bot_pending (alist-get 'bot_pending pr))
+                                    (cons 'replies_to_me (alist-get 'replies_to_me pr))
                                     (cons 'title (alist-get 'title pr))
                                     (cons 'branch (alist-get 'branch pr))
                                     (cons 'mergeable (alist-get 'mergeable pr)))))))))
@@ -9233,10 +9247,15 @@ Returns an alist or nil if not found."
                              (hub-checks (alist-get 'checks ci)))
                         (throw 'found
                                (list
+                                (cons 'kind 'review)
                                 (cons 'state "OPEN")
                                 (cons 'ci-status (alist-get 'status ci))
                                 (cons 'checks hub-checks)
                                 (cons 'updated_at (alist-get 'created item))
+                                (cons 'my_review (alist-get 'my_review item))
+                                (cons 'needs_reply (alist-get 'needs_reply item))
+                                (cons 'bot_pending (alist-get 'bot_pending item))
+                                (cons 'replies_to_me (alist-get 'replies_to_me item))
                                 (cons 'title (alist-get 'title item))
                                 (cons 'mergeable (alist-get 'mergeable item)))))))
                   nil)))))
@@ -9673,6 +9692,71 @@ Shows count and summary like [2⬆ 1✓] (2 open, 1 merged)."
                   (if parts
                       (format " [%s]" (string-join (nreverse parts) " "))
                     ""))))))
+
+        ;; -- Hub: session attention icons (📥 inbox / 📤 sent) --
+        ;; Parallels the attention signals rendered on Requests/WIP rows, but
+        ;; aggregated across all PRs linked to a conversation.  Surfaces
+        ;; whether the live session still needs my input (review not yet
+        ;; submitted, WIP has unanswered comments or CHANGES_REQUESTED) or
+        ;; whether I have done my part and the ball is in the other court
+        ;; (review submitted, WIP pushed and quiet).  Terminal PRs
+        ;; (MERGED/CLOSED) are ignored so stale linked PRs do not add noise.
+        (defun decknix--hub-session-attention-icons (conv-key)
+          "Return attention icons for a conversation's linked PRs.
+
+Aggregates across every PR linked to CONV-KEY:
+- 📥 N : N linked PRs awaiting my action (review pending, WIP needs reply
+  or has CHANGES_REQUESTED).
+- 📤 N : N linked PRs where I have acted and am awaiting others (review
+  submitted, WIP pushed with no pending reply).
+- ↩    : shown once when any linked PR has replies-to-me (cross-cutting).
+
+Returns a leading-space string suitable for concatenation onto a sidebar
+row, or an empty string when no linked PR is attention-worthy."
+          (let ((prs (decknix--agent-linked-prs conv-key))
+                (n-inbox 0)
+                (n-sent 0)
+                (any-replies nil))
+            (when prs
+              (dolist (pr prs)
+                (let* ((url (decknix--agent-pr-url-accessor pr "url"))
+                       (status (and url (decknix--hub-pr-status-from-hub url)))
+                       (state (or (alist-get 'state status) ""))
+                       (kind (alist-get 'kind status)))
+                  ;; Skip terminal and unknown PRs — only active ones count
+                  (when (and status (member state '("OPEN" "DRAFT")))
+                    (when (eq (alist-get 'replies_to_me status) t)
+                      (setq any-replies t))
+                    (pcase kind
+                      ('review
+                       (if (alist-get 'my_review status)
+                           (cl-incf n-sent)
+                         (cl-incf n-inbox)))
+                      ('wip
+                       (let ((needs-reply (eq (alist-get 'needs_reply status) t))
+                             (decision (alist-get 'review_decision status)))
+                         (if (or needs-reply
+                                 (equal decision "CHANGES_REQUESTED"))
+                             (cl-incf n-inbox)
+                           (cl-incf n-sent)))))))))
+            (let ((parts nil))
+              (when (> n-inbox 0)
+                (push (concat (decknix--hub-icon "📥" 'warning)
+                              (propertize (format "%d" n-inbox)
+                                          'face 'warning))
+                      parts))
+              (when (> n-sent 0)
+                (push (concat (decknix--hub-icon "📤" 'success)
+                              (propertize (format "%d" n-sent)
+                                          'face 'success))
+                      parts))
+              (when any-replies
+                (push (decknix--hub-icon
+                       "↩" '(:foreground "#87d7af" :weight bold))
+                      parts))
+              (if parts
+                  (concat " " (string-join (nreverse parts) " "))
+                ""))))
 
         ;; -- Hub: age formatting --
         (defun decknix--hub-format-age (iso-time)
