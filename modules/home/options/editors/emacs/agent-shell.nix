@@ -520,6 +520,7 @@ Press q to dismiss."
             "  C-c s n     New session (guided)\n"
             "  C-c s q     Quit session (saves automatically)\n"
             "  C-c s h     View history (C-u to pick any session)\n"
+            "  C-c s c     Toggle Context history section (▶/▼)\n"
             "  C-c s y     Copy session ID (C-u for full ID)\n"
             "  C-c s d     Toggle short/full ID in header\n"
             "\n"
@@ -877,7 +878,9 @@ exchange, which are the user-facing summary strings."
 
         (defun decknix--agent-context-toggle ()
           "Toggle the visibility of the Context history section.
-Switches between ▶ (collapsed) and ▼ (expanded)."
+Switches between ▶ (collapsed) and ▼ (expanded).  When no Context
+section is present (e.g., fresh session with no restored history),
+reports that fact instead of silently no-opping."
           (interactive)
           (let* ((inhibit-read-only t)
                  ;; Find the body region tagged with our symbol
@@ -886,16 +889,21 @@ Switches between ▶ (collapsed) and ▼ (expanded)."
                  (body-end (when body-start
                              (next-single-property-change
                               body-start 'decknix-context-body))))
-            (when (and body-start body-end)
-              (let ((currently-hidden (get-text-property body-start 'invisible)))
-                ;; Toggle invisible
-                (put-text-property body-start body-end
-                                  'invisible (not currently-hidden))
-                ;; Swap the arrow in the header
-                (save-excursion
-                  (goto-char (point-min))
-                  (when (re-search-forward "[▼▶]" body-start t)
-                    (replace-match (if currently-hidden "▼" "▶"))))))))
+            (if (and body-start body-end)
+                (let ((currently-hidden (get-text-property body-start 'invisible)))
+                  ;; Toggle invisible
+                  (put-text-property body-start body-end
+                                    'invisible (not currently-hidden))
+                  ;; Swap the arrow in the header
+                  (save-excursion
+                    (goto-char (point-min))
+                    (when (re-search-forward "[▼▶]" body-start t)
+                      (replace-match (if currently-hidden "▼" "▶"))))
+                  (when (called-interactively-p 'interactive)
+                    (message "Context history: %s"
+                             (if currently-hidden "expanded" "collapsed"))))
+              (when (called-interactively-p 'interactive)
+                (message "No Context history section in this buffer.")))))
 
         (defvar decknix--agent-context-header-map
           (let ((map (make-sparse-keymap)))
@@ -11295,6 +11303,7 @@ Priority order:
                       (define-key map (kbd "n") 'decknix-agent-session-new)
                       (define-key map (kbd "q") 'decknix-agent-session-quit)
                       (define-key map (kbd "h") 'decknix-agent-session-history)
+                      (define-key map (kbd "c") 'decknix--agent-context-toggle)
                       (define-key map (kbd "y") 'decknix-agent-session-copy-id)
                       (define-key map (kbd "d") 'decknix-agent-session-toggle-id-display)
                       (define-key map (kbd "l") 'decknix-agent-link-pr)
@@ -11308,6 +11317,7 @@ Priority order:
                         "C-c s n" "new session"
                         "C-c s q" "quit session"
                         "C-c s h" "history"
+                        "C-c s c" "toggle context history"
                         "C-c s y" "copy session ID"
                         "C-c s d" "toggle ID display"
                         "C-c s l" "link PR"
