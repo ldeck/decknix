@@ -188,6 +188,19 @@ The `decknix--context-update-header` function delegates to the unified header
   - `↩` — shown once when any linked PR has `replies_to_me`.
   - Terminal PRs (MERGED/CLOSED) are excluded so stale links do not add
     noise. Rendered immediately after the `[N⬆ N✓]` count badge.
+- **Linked PR rows** (expanded under a session when PRs toggle is on):
+  alongside the state/CI glyphs, rows now also show approval and
+  activity signals for active PRs (OPEN/DRAFT):
+  - Review decision: `✓` approved (green), `✗` changes requested (red),
+    `◐` review required (yellow). Sourced from `review_decision` for
+    WIP kind (my own PR) and from `my_review` for review kind (a PR
+    I am reviewing).
+  - Activity: `🤖` bot-pending, `💬` needs-reply (latest non-bot
+    activity is someone else), `↩` replies-to-me (a human replied on a
+    thread I participated in). Parity with Requests/WIP row indicators.
+  - Nothing is shown for terminal (MERGED/CLOSED) PRs, and fields that
+    are unavailable (e.g. cache-only fallback from `gh pr view`)
+    degrade gracefully to no icon.
 - Toggles transient (`T`): Opens sectioned menu grouped by sidebar
   section. Suffixes within each section are ordered alphabetically by
   their display label (case-insensitive) to match the sidebar footer,
