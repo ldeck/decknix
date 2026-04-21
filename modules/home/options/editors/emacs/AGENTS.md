@@ -284,6 +284,7 @@ workspace sidebar surface which sessions need attention.
 | `C-c D d` | Show diff between loaded and current store paths |
 | `C-c D l` | Show reload history log |
 | `C-c b` | Switch agent buffer — live buffers only (#96) |
+| `C-c s c` | Toggle inline Context history section (▶/▼) — in-buffer only |
 | `C-c i` | Context panel (in agent-shell buffers) |
 | `C-c w` | Toggle Agents workspace (in-buffer shortcut) |
 | `C-c j` | Jump to pending session (in-buffer shortcut) |
