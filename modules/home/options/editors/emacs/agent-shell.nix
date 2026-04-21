@@ -9543,9 +9543,16 @@ already, so the repo prefix is omitted from the line."
                                (decknix--hub-format-age age-ts)
                                'face 'font-lock-comment-face)
                             ""))
-                 ;; PR status badges (state + overall CI + conflict)
-                 ;; Per-check detail removed — use `RET' on the PR line to
-                 ;; echo failing checks (future work).
+                 ;; PR status badges (state + overall CI + conflict +
+                 ;; review decision + activity).
+                 ;; Review decision reflects the PR's approval state:
+                 ;; WIP (my own PR) uses `review_decision' (APPROVED /
+                 ;; CHANGES_REQUESTED / REVIEW_REQUIRED) via
+                 ;; `decknix--hub-wip-review-icon'; review-kind (PR I am
+                 ;; reviewing) uses `my_review' (my own submitted state)
+                 ;; via `decknix--hub-review-icon'.  Activity icons
+                 ;; (🤖/💬/↩) surface comments needing a reply and threads
+                 ;; I participated in — parallel to Requests/WIP rows.
                  (pr-str
                   (if show-pr
                       (let* ((ci-icon
@@ -9566,10 +9573,26 @@ already, so the repo prefix is omitted from the line."
                                                     (string= (or mergeable "") "CONFLICTING"))
                                                (propertize (decknix--hub-sym 'conflict)
                                                            'face '(:foreground "#ff5555"))
+                                             ""))
+                             ;; Review decision icon — only for active PRs
+                             (kind (alist-get 'kind status))
+                             (review-icon (if (member state '("OPEN" "DRAFT"))
+                                              (pcase kind
+                                                ('wip (decknix--hub-wip-review-icon
+                                                       status))
+                                                ('review (decknix--hub-review-icon
+                                                          status))
+                                                (_ ""))
+                                            ""))
+                             ;; Activity icons (🤖/💬/↩) — only for active PRs
+                             (activity-str (if (member state '("OPEN" "DRAFT"))
+                                               (decknix--hub-activity-icons status)
                                              "")))
                         (concat " " state-str
                                 (if ci-icon (concat " " ci-icon) "")
-                                (if (string-empty-p conflict-str) "" (concat " " conflict-str))))
+                                (if (string-empty-p conflict-str) "" (concat " " conflict-str))
+                                (if (string-empty-p review-icon) "" (concat " " review-icon))
+                                (if (string-empty-p activity-str) "" (concat " " activity-str))))
                     ""))
                  ;; Deploy pipeline indicator — shown for open PRs
                  ;; (feature branch deploys) and merged PRs (default
