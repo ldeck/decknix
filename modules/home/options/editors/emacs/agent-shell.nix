@@ -1186,6 +1186,23 @@ Uses tags if available, otherwise truncates the first user message."
              ;; Fallback to session ID prefix
              (t (substring sid 0 (min 8 (length sid)))))))
 
+        (defun decknix--agent-find-live-buffer-for-conv-key (conv-key)
+          "Return the first live agent-shell buffer whose conv-key matches CONV-KEY.
+Returns nil when CONV-KEY is nil or no live buffer is bound to it.
+Used by `decknix--agent-session-resume' to dedupe: spawning a second
+buffer for a conversation that is already live produces a confusing
+`*Auggie: ...*<2>' pair where one buffer holds stale context."
+          (when conv-key
+            (seq-find
+             (lambda (buf)
+               (and (buffer-live-p buf)
+                    (with-current-buffer buf
+                      (and (derived-mode-p 'agent-shell-mode)
+                           (bound-and-true-p decknix--agent-conv-key)
+                           (equal decknix--agent-conv-key conv-key)))))
+             (when (fboundp 'agent-shell-buffers)
+               (agent-shell-buffers)))))
+
         (defun decknix--agent-session-resume (session-id history-count
                                               &optional display-name workspace
                                               conv-key)
@@ -1194,9 +1211,38 @@ DISPLAY-NAME, if provided, is used to rename the buffer to *Auggie: NAME*.
 WORKSPACE, if provided, sets --workspace-root and default-directory so the
 agent operates in the original project directory.
 CONV-KEY, if provided, is used to register the new session-id under the
-existing conversation entry in the tag store."
+existing conversation entry in the tag store.
+
+When CONV-KEY is non-nil and a live agent-shell buffer already holds
+that conversation, this function switches to that buffer in the
+target window rather than spawning a duplicate.  The live buffer is
+the authoritative in-memory state of the conversation; creating a
+second buffer from an on-disk snapshot would produce `*Auggie: ...*'
+and `*Auggie: ...*<2>' side by side and confuse the user about which
+one is current."
           ;; Invalidate cache so next picker invocation fetches fresh data
           (setq decknix--agent-session-cache-time 0)
+          ;; Dedupe: if this conversation is already live, return the
+          ;; existing buffer (and reuse the target window) instead of
+          ;; starting a second agent-shell.
+          (let ((existing (decknix--agent-find-live-buffer-for-conv-key conv-key)))
+            (if existing
+                (let ((target-win (selected-window)))
+                  (when (window-live-p target-win)
+                    (set-window-buffer target-win existing))
+                  (message "Already live: switched to %s"
+                           (buffer-name existing))
+                  existing)
+              (decknix--agent-session-resume--new
+               session-id history-count display-name workspace conv-key))))
+
+        (defun decknix--agent-session-resume--new (session-id history-count
+                                                   &optional display-name
+                                                   workspace conv-key)
+          "Internal: start a fresh agent-shell for SESSION-ID.
+See `decknix--agent-session-resume' for argument semantics.  This
+helper carries the original resume logic; the public entry point
+dedupes against live buffers before calling here."
           ;; Capture the target window NOW — before agent-shell-start runs.
           ;; agent-shell--display-buffer calls (display-buffer buf action)
           ;; internally.  Without this override, display-buffer-same-window
@@ -1246,6 +1292,14 @@ existing conversation entry in the tag store."
                   (bname display-name)
                   (ws workspace)
                   (ck conv-key))
+              ;; Stamp conv-key synchronously on the new buffer so a
+              ;; same-tick resume for the same conversation (e.g. batch
+              ;; restore, grep-then-select) can see it and dedupe via
+              ;; `decknix--agent-find-live-buffer-for-conv-key'.  The
+              ;; async timer below still re-sets it for defensive reasons.
+              (when (and ck (buffer-live-p shell-buf))
+                (with-current-buffer shell-buf
+                  (setq-local decknix--agent-conv-key ck)))
               ;; Register new session-id under the conversation immediately
               ;; so it appears in the session picker even before the buffer
               ;; is fully set up.
@@ -2197,32 +2251,32 @@ batch launches."
           "Cleanly quit the current agent-shell session.
 Kills the buffer (which sends SIGHUP to auggie, saving the session).
 
-If other live agent-shell sessions exist, offers to switch to one
-via the session picker. Otherwise returns to the welcome screen
-or *scratch*."
+If other live agent-shell sessions exist, switches to the most
+recently used one (no prompt).  Use `C-c A s' afterwards to pick a
+different session.  If this was the last session, returns to the
+welcome screen or *scratch*."
           (interactive)
           (unless (derived-mode-p 'agent-shell-mode)
             (user-error "Not in an agent-shell buffer"))
           (when (y-or-n-p "Quit this agent session? ")
             (let* ((buf (current-buffer))
+                   ;; agent-shell-buffers is MRU-first; after removing the
+                   ;; current buffer, (car other-bufs) is the most recently
+                   ;; used remaining live agent-shell buffer.
                    (other-bufs (remq buf
                                      (when (fboundp 'agent-shell-buffers)
                                        (agent-shell-buffers)))))
+              (kill-buffer buf)
               (cond
-               ;; Other live sessions exist — offer to switch
+               ;; Switch to MRU agent-shell buffer — natural "next session"
+               ;; flow, no picker prompt.  User can hit `C-c A s' to choose.
                (other-bufs
-                (kill-buffer buf)
-                (if (= (length other-bufs) 1)
-                    ;; Only one other — switch directly
-                    (switch-to-buffer (car other-bufs))
-                  ;; Multiple — open the session picker
-                  (decknix-agent-session-picker nil)))
+                (switch-to-buffer (car other-bufs)))
                ;; Last session — return to welcome or scratch
+               ((fboundp 'decknix-welcome)
+                (decknix-welcome))
                (t
-                (kill-buffer buf)
-                (if (fboundp 'decknix-welcome)
-                    (decknix-welcome)
-                  (switch-to-buffer (get-buffer-create "*scratch*"))))))))
+                (switch-to-buffer (get-buffer-create "*scratch*")))))))
 
         (defun decknix-agent-session-recent ()
           "Quickly pick from recently used conversations.
@@ -2428,6 +2482,30 @@ to avoid infinite loops from misconfiguration."
             (when match
               (decknix--agent-conversation-key
                (alist-get 'firstUserMessage match "")))))
+
+        (defun decknix--agent-latest-session-id-for-conv-key (conv-key)
+          "Return the session-id of the most recently modified snapshot for CONV-KEY.
+Returns nil when CONV-KEY is nil or no session matches.  Auggie writes
+a fresh session file whenever a conversation is interrupted/composed,
+so a single conv-key typically owns many session-ids; this picks the
+latest so resume flows pull in the full recent context, not an older
+snapshot."
+          (when conv-key
+            (let* ((sessions (decknix--agent-session-list))
+                   (matches
+                    (seq-filter
+                     (lambda (s)
+                       (let ((fm (alist-get 'firstUserMessage s "")))
+                         (and (not (string-empty-p fm))
+                              (string= (decknix--agent-conversation-key fm)
+                                       conv-key))))
+                     sessions))
+                   (sorted (sort (copy-sequence matches)
+                                 (lambda (a b)
+                                   (string> (or (alist-get 'modified a) "")
+                                            (or (alist-get 'modified b) ""))))))
+              (when sorted
+                (alist-get 'sessionId (car sorted))))))
 
         ;; In-memory cache for the tag store to avoid repeated json-read-file.
         ;; Each call to decknix--agent-tags-read was doing disk I/O (called 29+
@@ -4210,9 +4288,22 @@ Handles: https://github.com/OWNER/REPO/pull/NUMBER[/...]"
           "Start a quick-action session with NAME, TAGS, WORKSPACE, and auto-send COMMAND.
 Creates a new agent session, applies metadata, then subscribes to the
 `prompt-ready' event to send COMMAND as soon as the ACP session is
-fully established.  Returns immediately."
+fully established.  Returns immediately.
+When invoked from a dedicated or side window (e.g., the sidebar), the
+new session is displayed in the frame's main window instead of
+replacing the caller, preserving the sidebar."
           (let* ((workspace (expand-file-name workspace))
-                 (target-win (selected-window))
+                 (cur (selected-window))
+                 (sidebar-buf (or (bound-and-true-p
+                                   agent-shell-workspace-sidebar-buffer-name)
+                                  "*agent-shell-sidebar*"))
+                 (cur-is-sidebar (or (window-parameter cur 'window-side)
+                                     (window-dedicated-p cur)
+                                     (string= (buffer-name (window-buffer cur))
+                                              sidebar-buf)))
+                 (target-win (if cur-is-sidebar
+                                 (or (window-main-window (selected-frame)) cur)
+                               cur))
                  (before-buffers (buffer-list))
                  (augmented-cmd
                   (append agent-shell-auggie-acp-command
@@ -7963,11 +8054,22 @@ Returns updated LINE-NUM."
         (defun decknix--sidebar-restore-previous-session (entry &optional focus)
           "Resume the previous session described by ENTRY.
 When FOCUS is non-nil (or called interactively), switch to the restored
-session buffer in the main window after a short delay."
-          (let* ((sid (alist-get 'session-id entry))
+session buffer in the main window after a short delay.
+
+The stored `session-id' in ENTRY is a snapshot of the conversation at
+save time; auggie writes a new session file on every interrupt/compose
+so by the time the user restores, a newer snapshot for the same
+conv-key usually exists.  Resuming the stored session-id would drop
+anything added after save, so we first resolve conv-key → latest
+session-id and pass that to `--resume'.  The stored sid is used only
+as a fallback when no newer snapshot is found (e.g. conv-key missing
+or the session list is stale)."
+          (let* ((stored-sid (alist-get 'session-id entry))
                  (name (alist-get 'name entry))
                  (workspace (alist-get 'workspace entry))
                  (conv-key (alist-get 'conv-key entry))
+                 (sid (or (decknix--agent-latest-session-id-for-conv-key conv-key)
+                          stored-sid))
                  ;; Strip *Auggie: ... * wrapper
                  (display-name (if (and name (string-match "\\*Auggie: \\(.*\\)\\*" name))
                                    (match-string 1 name)
@@ -7981,10 +8083,15 @@ session buffer in the main window after a short delay."
               ;; resume now handles display-action override internally
               (let ((new-buf (decknix--agent-session-resume
                               sid 20 display-name workspace conv-key)))
-                ;; Remove from previous list since it's now live
+                ;; Remove from previous list since it's now live.  Match on
+                ;; the stored sid (that is what the entry carries) as well
+                ;; as the resolved sid, so the entry is cleared regardless
+                ;; of which one was actually resumed.
                 (setq decknix--sidebar-previous-sessions
                       (seq-filter (lambda (e)
-                                    (not (equal (alist-get 'session-id e) sid)))
+                                    (let ((esid (alist-get 'session-id e)))
+                                      (not (or (equal esid stored-sid)
+                                               (equal esid sid)))))
                                   decknix--sidebar-previous-sessions))
                 (when (fboundp 'agent-shell-workspace-sidebar-refresh)
                   (agent-shell-workspace-sidebar-refresh))
