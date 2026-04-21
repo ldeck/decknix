@@ -5701,7 +5701,8 @@ which advertises toggles by label only (no keys)."
            (decknix-sidebar-transient--bot-filter)       ;; bots
            (decknix-sidebar-transient--ci-filter)        ;; CI filter
            (decknix-sidebar-transient--req-needs-reply)  ;; comments
-           (decknix-sidebar-transient--req-my-replies)]  ;; replies
+           (decknix-sidebar-transient--req-my-replies)   ;; replies
+           (decknix-sidebar-transient--req-sort)]        ;; sort ⇅
           ["Live"
            (decknix-sidebar-transient--display-mode)     ;; Display mode
            (decknix-sidebar-transient--hidden-toggle)    ;; Hidden
@@ -5979,6 +5980,12 @@ All toggle keys are accessed via the T transient prefix."
                                   (propertize
                                    (if decknix--hub-requests-hide-bot-pending "[hide]" "[show]")
                                    'face (if decknix--hub-requests-hide-bot-pending
+                                             'font-lock-constant-face
+                                           'font-lock-comment-face))))
+                    (cons "s" (format "sort %s"
+                                  (propertize
+                                   (if decknix--hub-requests-sort-reverse "[new→old]" "[old→new]")
+                                   'face (if decknix--hub-requests-sort-reverse
                                              'font-lock-constant-face
                                            'font-lock-comment-face)))))))
                 (live
@@ -6782,8 +6789,10 @@ Applies org, age, and CI visibility filters, then the ready predicate."
 
         (defun decknix--hub-review-entries (&optional mention-only)
           "Build labelled (LABEL . ITEM) entries from ready review requests.
-Sorted most-recent first, with propertized labels matching sidebar style.
-When MENTION-ONLY is non-nil, include only @-mentioned items."
+Ordering follows `decknix--hub-requests-sort-reverse' via
+`decknix--hub-sort-requests' so the picker matches the sidebar
+Requests section exactly.  When MENTION-ONLY is non-nil, include
+only @-mentioned items."
           (let* ((ready (decknix--hub-review-ready-requests))
                  (filtered (if mention-only
                                (seq-filter
@@ -6791,10 +6800,7 @@ When MENTION-ONLY is non-nil, include only @-mentioned items."
                                   (eq (alist-get 'mentioned item) t))
                                 ready)
                              ready))
-                 (sorted (sort (copy-sequence filtered)
-                               (lambda (a b)
-                                 (string> (or (alist-get 'created a) "")
-                                          (or (alist-get 'created b) ""))))))
+                 (sorted (decknix--hub-sort-requests filtered)))
             (mapcar
              (lambda (item)
                (let* ((age (decknix--hub-format-age
@@ -6866,9 +6872,18 @@ C-u R     — launch ALL ready reviews, prompt for layout
 C-u N R   — pick N via consult (embark-select to mark, RET to confirm),
             then prompt for layout
 C-u C-u R — like R but filtered to @-mentioned items only.
-Press M-m during completion to toggle @-mention filter live."
+During completion: M-m toggles @-mention, M-b toggles bots, M-s
+reverses sort direction.  All three are scoped to the picker."
           (interactive "P")
-          (let ((decknix--rev-mention-only (equal arg '(16))))  ;; C-u C-u
+          ;; Shadow the three toggle variables so M-m / M-b / M-s mutations
+          ;; stay local to this picker session and never leak into the
+          ;; sidebar's global filter or sort state.
+          (let ((decknix--rev-mention-only (equal arg '(16)))  ;; C-u C-u
+                (decknix--hub-show-bots (and (boundp 'decknix--hub-show-bots)
+                                             decknix--hub-show-bots))
+                (decknix--hub-requests-sort-reverse
+                 (and (boundp 'decknix--hub-requests-sort-reverse)
+                      decknix--hub-requests-sort-reverse)))
             (catch 'decknix--rev-done
               (while t
                 (let ((entries (decknix--hub-review-entries
@@ -6917,26 +6932,52 @@ Press M-m during completion to toggle @-mention filter live."
                               (decknix--hub-launch-review-items
                                selected (eq choice ?s))))))
                       (throw 'decknix--rev-done nil))
-                     ;; No prefix (or C-u C-u): single pick with M-m toggle
+                     ;; No prefix (or C-u C-u): single pick with M-m / M-b toggles
                      (t
                       (let* ((prompt (format "Review (%d ready): "
                                              (length entries)))
                              (result (decknix--hub-completing-read-with-mention-toggle
                                       prompt entries 'decknix--rev-mention-only)))
-                        (if (not result)
-                            (throw 'decknix--rev-done nil)
-                          ;; Single-pick path: hand off to the rich action
-                          ;; transient so Review / Review (split) / Open /
-                          ;; Browser / Copy URL / WIP ops are all one keypress
-                          ;; away.  Batch mode (C-u R, numeric prefix) keeps
-                          ;; the compact [s]plit/[r]eplace prompt above.
+                        (cond
+                         ;; M-m / M-b: loop so the outer `while' rebuilds
+                         ;; `entries' with the updated filter state.
+                         ((eq result 'retry) nil)
+                         ;; C-g / ESC: exit cleanly.
+                         ((null result)
+                          (throw 'decknix--rev-done nil))
+                         ;; C-SPC multi-select: launch reviews for every
+                         ;; marked candidate with one aggregate confirmation.
+                         ((eq (car-safe result) 'multi)
+                          (let* ((labels (cdr result))
+                                 (items (delq nil
+                                              (mapcar
+                                               (lambda (lbl)
+                                                 (cdr (assoc lbl entries)))
+                                               labels)))
+                                 (count (length items))
+                                 (choice (and (> count 0)
+                                              (read-char-choice
+                                               (format "Launch %d review%s: [s]plit  [r]eplace  [q]uit "
+                                                       count
+                                                       (if (= count 1) "" "s"))
+                                               '(?s ?r ?q)))))
+                            (when (and choice (not (eq choice ?q)))
+                              (decknix--hub-launch-review-items
+                               items (eq choice ?s))))
+                          (throw 'decknix--rev-done nil))
+                         ;; RET: hand off to the rich action transient so
+                         ;; Review / Review (split) / Open / Browser /
+                         ;; Copy URL / WIP ops are all one keypress away.
+                         ;; Batch mode (C-u R, numeric prefix) keeps the
+                         ;; compact [s]plit/[r]eplace prompt above.
+                         (t
                           (let* ((base (cdr (assoc (car result) entries)))
                                  (item (if (assq 'decknix-type base) base
                                          (cons (cons 'decknix-type 'review)
                                                base))))
                             (when item
                               (decknix--nav-hub-item-actions item))
-                            (throw 'decknix--rev-done nil))))))))))))
+                            (throw 'decknix--rev-done nil)))))))))))))
 
         (defun decknix--nav-hub-start-review-split (url)
           "Start a PR review session for URL in a new split window.
@@ -7086,9 +7127,25 @@ the review appears side-by-side with the current buffer."
           "Show the action transient for a hub ITEM (review or WIP PR).
 Defers the transient by a small delay so the picker's minibuffer is
 fully torn down before the menu appears (otherwise the transient can
-fight with vertico/consult cleanup and fail to display)."
+fight with vertico/consult cleanup and fail to display).  Selects the
+main window before showing the transient so it anchors there rather
+than the dedicated sidebar (where it cannot open a buffer) — matches
+the pattern used by `decknix--sidebar-call-transient'.
+
+The transient is invoked via `call-interactively' from the timer so
+transient gets the interactive command context it needs; calling the
+prefix as a plain function from a timer can leave the transient
+unable to display."
           (setq decknix--hub-action-item item)
-          (run-at-time 0.05 nil #'decknix--hub-item-transient))
+          (run-at-time
+           0.05 nil
+           (lambda ()
+             (let ((main (window-main-window (selected-frame))))
+               (when (and main (window-live-p main))
+                 (select-window main)))
+             (add-hook 'transient-exit-hook
+                       #'decknix--sidebar-restore-after-transient)
+             (call-interactively #'decknix--hub-item-transient))))
 
         ;; -- WIP PR actions via gh CLI --
 
@@ -7266,51 +7323,110 @@ Shows result in the echo area and triggers a hub refresh on success."
         ;; -- Consult-based section pickers --
         ;; All section navigation (r, w, l, p) uses consult for filtering.
 
+        (defvar decknix--hub-picker-captured-selections nil
+          "Transient capture cell for `embark-selected-candidates'.
+Set by a minibuffer-exit-hook inside
+`decknix--hub-completing-read-with-mention-toggle' and read back by
+the caller after `completing-read' returns.  Reset at the start of
+each picker invocation so stale values never leak across calls.")
+
         (defun decknix--hub-completing-read-with-mention-toggle
             (prompt entries mention-only-var)
-          "Run `completing-read' on ENTRIES with M-m to toggle @-mention filter.
+          "Run `completing-read' on ENTRIES with M-m / M-b / M-s live toggles.
 PROMPT is the base prompt string.  MENTION-ONLY-VAR is a symbol naming
-the variable that holds the current mention-only state; when M-m is
-pressed, it is toggled and the completion restarts with re-filtered
-candidates.  Returns (CHOICE . MENTION-ONLY) or nil if cancelled."
-          ;; M-m toggles the mention filter; M-b toggles the global bot
-          ;; visibility filter.  Both abort the current completing-read and
-          ;; restart it so the candidate list re-filters live.  Vertico's
-          ;; arrow-key navigation and orderless live search already work on
-          ;; the candidate list itself — no special handling needed.
-          (catch 'decknix--mention-result
-            (while t
-              (let* ((mo (symbol-value mention-only-var))
-                     (bots (and (boundp 'decknix--hub-show-bots)
-                                decknix--hub-show-bots))
-                     (hints (concat (if mo "@ " "")
-                                    (if bots "🤖 " "")))
-                     (full-prompt (format "%s%s(M-m@ M-b🤖) "
-                                          prompt hints))
-                     (map (make-sparse-keymap)))
-                (set-keymap-parent map minibuffer-local-completion-map)
-                (define-key map (kbd "M-m")
+the variable that holds the current mention-only state.
+
+M-m toggles MENTION-ONLY-VAR; M-b toggles `decknix--hub-show-bots';
+M-s toggles `decknix--hub-requests-sort-reverse'.  All three abort the
+current completing-read and return the sentinel symbol `retry' so the
+caller can rebuild ENTRIES and re-invoke this function.
+
+C-SPC marks the current candidate via `embark-select' (multi-select).
+When selections exist on RET the function returns a `multi' result so
+callers can iterate the chosen action over every selected item.
+
+Callers should let-bind `decknix--hub-show-bots' and
+`decknix--hub-requests-sort-reverse' before invoking this function so
+M-b / M-s toggles stay picker-scoped and do not leak into the global
+sidebar filter or sort state.
+
+Returns one of:
+  (CHOICE . MENTION-ONLY)    on a single selection,
+  (multi . LABELS)           on a multi-select (>=1 marked),
+  `retry'                    when M-m / M-b / M-s was pressed,
+  nil                        when the user cancelled (C-g / ESC)."
+          (setq decknix--hub-picker-captured-selections nil)
+          (let* ((mo (symbol-value mention-only-var))
+                 (bots (and (boundp 'decknix--hub-show-bots)
+                            decknix--hub-show-bots))
+                 (rev (and (boundp 'decknix--hub-requests-sort-reverse)
+                           decknix--hub-requests-sort-reverse))
+                 (hints (concat (if mo "@ " "")
+                                (if bots "🤖 " "")
+                                (if rev "⇅ " "")))
+                 (full-prompt (format "%s%s(M-m@ M-b🤖 M-s⇅ C-SPC✓) "
+                                      prompt hints))
+                 (retry nil)
+                 (mention-fn
                   (eval `(lambda ()
                            (interactive)
-                           (set ',mention-only-var (not (symbol-value ',mention-only-var)))
+                           (set ',mention-only-var
+                                (not (symbol-value ',mention-only-var)))
+                           (setq retry t)
                            (abort-recursive-edit))
                         t))
-                (define-key map (kbd "M-b")
+                 (bot-fn
                   (lambda ()
                     (interactive)
                     (when (boundp 'decknix--hub-show-bots)
                       (setq decknix--hub-show-bots
                             (not decknix--hub-show-bots)))
+                    (setq retry t)
                     (abort-recursive-edit)))
-                (condition-case nil
-                    (let ((choice (minibuffer-with-setup-hook
-                                     (eval `(lambda ()
-                                              (use-local-map ',map))
-                                           t)
-                                   (completing-read full-prompt
-                                     (mapcar #'car entries) nil t))))
-                      (throw 'decknix--mention-result (cons choice mo)))
-                  (quit (throw 'decknix--mention-result nil)))))))
+                 (sort-fn
+                  (lambda ()
+                    (interactive)
+                    (when (boundp 'decknix--hub-requests-sort-reverse)
+                      (setq decknix--hub-requests-sort-reverse
+                            (not decknix--hub-requests-sort-reverse)))
+                    (setq retry t)
+                    (abort-recursive-edit)))
+                 ;; Attach bindings to the *existing* minibuffer map (the
+                 ;; one Vertico has already installed) rather than replacing
+                 ;; it.  Replacing the map stripped Vertico's next-line /
+                 ;; previous-line remaps, causing up/down to fall through
+                 ;; to minibuffer history navigation instead of cycling
+                 ;; candidates.
+                 (setup-fn
+                  (eval `(lambda ()
+                           (local-set-key (kbd "M-m") ,mention-fn)
+                           (local-set-key (kbd "M-b") ,bot-fn)
+                           (local-set-key (kbd "M-s") ,sort-fn)
+                           (when (fboundp 'embark-select)
+                             (local-set-key (kbd "C-SPC") 'embark-select))
+                           ;; Capture embark selections at exit time;
+                           ;; `embark-selected-candidates' is buffer-local
+                           ;; to the minibuffer so we must read it before
+                           ;; completing-read returns.
+                           (add-hook 'minibuffer-exit-hook
+                             (lambda ()
+                               (when (fboundp 'embark-selected-candidates)
+                                 (setq decknix--hub-picker-captured-selections
+                                       (embark-selected-candidates))))
+                             nil t))
+                        t)))
+            (condition-case nil
+                (let ((choice (minibuffer-with-setup-hook setup-fn
+                                (completing-read full-prompt
+                                  (mapcar #'car entries) nil t)))
+                      (sel decknix--hub-picker-captured-selections))
+                  (setq decknix--hub-picker-captured-selections nil)
+                  (cond
+                   ;; One or more candidates marked with C-SPC.
+                   ((and sel (listp sel) (> (length sel) 0))
+                    (cons 'multi sel))
+                   (t (cons choice mo))))
+              (quit (if retry 'retry nil)))))
 
         (defun decknix-sidebar-nav-requests-consult (&optional mention-only limit)
           "Pick a PR review request via consult completion with filtering.
@@ -7318,33 +7434,45 @@ Each candidate shows age, repo, PR number, CI status, and title —
 matching the sidebar rendering style.
 When MENTION-ONLY is non-nil, show only @-mentioned items.
 When LIMIT is a positive integer, show at most that many items.
-Press M-m during completion to toggle @-mention filter live.
+During completion: M-m toggles @-mention, M-b toggles bot-author
+visibility (dependabot/renovate), M-s reverses sort direction.  All
+three toggles are scoped to this picker session and never leak into
+the sidebar's global filters or sort state.
 Interactively: \\[universal-argument] N r limits to N items;
                \\[universal-argument] \\[universal-argument] r shows @-mentioned only."
           (interactive)
-          ;; Use a mutable variable for the mention toggle loop
-          (let ((decknix--req-mention-only mention-only))
+          ;; Shadow the three toggle variables so M-m / M-b / M-s mutations
+          ;; stay local to this picker session — the sidebar's own filter
+          ;; and sort state is restored as soon as this `let' unwinds.
+          (let ((decknix--req-mention-only mention-only)
+                (decknix--hub-show-bots (and (boundp 'decknix--hub-show-bots)
+                                             decknix--hub-show-bots))
+                (decknix--hub-requests-sort-reverse
+                 (and (boundp 'decknix--hub-requests-sort-reverse)
+                      decknix--hub-requests-sort-reverse)))
             (catch 'decknix--req-done
               (while t
                 (let* ((mo decknix--req-mention-only)
                        (all-items (when (boundp 'decknix--hub-reviews)
                                     (alist-get 'items decknix--hub-reviews)))
-                       (items (seq-filter
-                               (lambda (item)
-                                 (and (decknix--hub-item-visible-p (alist-get 'repo item))
-                                      (decknix--hub-age-visible-p (alist-get 'created item))
-                                      (decknix--hub-ci-visible-p item)
-                                      (decknix--hub-mention-visible-p item)
-                                      (decknix--hub-bot-visible-p item)
-                                      (decknix--hub-requests-attention-visible-p item)
-                                      ;; Extra @-mention filter when requested
-                                      (or (not mo)
-                                          (eq (alist-get 'mentioned item) t))))
-                               (or all-items '())))
+                       (filtered (seq-filter
+                                  (lambda (item)
+                                    (and (decknix--hub-item-visible-p (alist-get 'repo item))
+                                         (decknix--hub-age-visible-p (alist-get 'created item))
+                                         (decknix--hub-ci-visible-p item)
+                                         (decknix--hub-mention-visible-p item)
+                                         (decknix--hub-bot-visible-p item)
+                                         (decknix--hub-requests-attention-visible-p item)
+                                         ;; Extra @-mention filter when requested
+                                         (or (not mo)
+                                             (eq (alist-get 'mentioned item) t))))
+                                  (or all-items '())))
+                       ;; Apply shared sort so picker and sidebar stay aligned.
+                       (sorted (decknix--hub-sort-requests filtered))
                        ;; Apply count limit
                        (items (if (and limit (integerp limit) (> limit 0))
-                                  (seq-take items limit)
-                                items)))
+                                  (seq-take sorted limit)
+                                sorted)))
                   (if (not items)
                       (progn
                         (message "No review requests%s"
@@ -7402,13 +7530,46 @@ Interactively: \\[universal-argument] N r limits to N items;
                                              "")))
                            (result (decknix--hub-completing-read-with-mention-toggle
                                     prompt entries 'decknix--req-mention-only)))
-                      (if (not result)
-                          (throw 'decknix--req-done nil)
+                      (cond
+                       ;; M-m / M-b: loop so the outer `while' rebuilds
+                       ;; `entries' with the updated filter state and
+                       ;; re-opens the picker with fresh candidates.
+                       ((eq result 'retry) nil)
+                       ;; C-g / ESC: exit cleanly.
+                       ((null result)
+                        (throw 'decknix--req-done nil))
+                       ;; C-SPC multi-select: launch reviews for every marked
+                       ;; candidate with one aggregate confirmation.
+                       ((eq (car-safe result) 'multi)
+                        (let* ((labels (cdr result))
+                               (items
+                                (delq nil
+                                      (mapcar
+                                       (lambda (lbl)
+                                         (let ((base (cdr (assoc lbl entries))))
+                                           (when base
+                                             (if (assq 'decknix-type base) base
+                                               (cons (cons 'decknix-type 'review)
+                                                     base)))))
+                                       labels)))
+                               (count (length items))
+                               (choice (and (> count 0)
+                                            (read-char-choice
+                                             (format "Launch %d review%s: [s]plit  [r]eplace  [q]uit "
+                                                     count
+                                                     (if (= count 1) "" "s"))
+                                             '(?s ?r ?q)))))
+                          (when (and choice (not (eq choice ?q)))
+                            (decknix--hub-launch-review-items
+                             items (eq choice ?s))))
+                        (throw 'decknix--req-done nil))
+                       ;; RET: hand off to the rich action transient.
+                       (t
                         (let ((item (cdr (assoc (car result) entries))))
                           (when item
                             (let ((tagged (cons (cons 'decknix-type 'review) item)))
                               (decknix--nav-hub-item-actions tagged)))
-                          (throw 'decknix--req-done nil))))))))))
+                          (throw 'decknix--req-done nil)))))))))))
 
         (defun decknix-sidebar-nav-wip-consult ()
           "Pick a WIP PR via consult completion with filtering."
@@ -7919,6 +8080,9 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                    (cons 'show-bots
                          (when (boundp 'decknix--hub-show-bots)
                            decknix--hub-show-bots))
+                   (cons 'requests-sort-reverse
+                         (when (boundp 'decknix--hub-requests-sort-reverse)
+                           decknix--hub-requests-sort-reverse))
                    (cons 'expand-prs
                          (when (boundp 'decknix--hub-expand-prs)
                            decknix--hub-expand-prs))
@@ -7977,6 +8141,10 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                   (when (boundp 'decknix--hub-show-bots)
                     (setq decknix--hub-show-bots
                           (alist-get 'show-bots state)))
+                  ;; Requests sort direction: restore toggle
+                  (when (boundp 'decknix--hub-requests-sort-reverse)
+                    (setq decknix--hub-requests-sort-reverse
+                          (alist-get 'requests-sort-reverse state)))
                   ;; PR expand: restore toggle (normalise legacy boolean t → pr)
                   (when (boundp 'decknix--hub-expand-prs)
                     (let ((val (alist-get 'expand-prs state)))
@@ -8551,6 +8719,20 @@ When no filter is active (table is nil), all orgs are visible."
           (interactive)
           (call-interactively #'decknix--hub-toggle-requests-only-my-replies))
 
+        (transient-define-suffix decknix-sidebar-transient--req-sort ()
+          :key "s"
+          :description
+          (lambda ()
+            (format "sort ⇅      %s"
+                    (propertize
+                     (if decknix--hub-requests-sort-reverse "[new→old]" "[old→new]")
+                     'face (if decknix--hub-requests-sort-reverse
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix--hub-toggle-requests-sort-reverse))
+
         (transient-define-suffix decknix-sidebar-transient--wip-needs-reply ()
           :key "n"
           :description
@@ -8998,6 +9180,34 @@ Toggle with `b'.")
 Filters IN PRs where a human posted a reply after one of my own
 comments or reviews.  Toggle with `M'.")
 
+        (defvar decknix--hub-requests-sort-reverse nil
+          "When nil (default), Requests are sorted oldest-first.
+When non-nil, the order is reversed (newest-first).  The same
+ordering applies to both the sidebar Requests section and the
+`R' review picker so the two stay in sync.  Toggle with `s' in the
+sidebar toggles transient or with M-s live inside the picker
+(picker toggles are let-scoped and do not persist).")
+
+        (defun decknix--hub-sort-requests (items)
+          "Return ITEMS sorted by `created' ascending (oldest first).
+When `decknix--hub-requests-sort-reverse' is non-nil, sort descending
+(newest first) instead.  Items without a `created' field sort last
+regardless of direction.  Uses a stable sort on a fresh copy so the
+caller's list is never mutated."
+          (let ((reverse (and (boundp 'decknix--hub-requests-sort-reverse)
+                              decknix--hub-requests-sort-reverse)))
+            (sort (copy-sequence (or items '()))
+                  (lambda (a b)
+                    (let ((ca (alist-get 'created a))
+                          (cb (alist-get 'created b)))
+                      (cond
+                       ;; Items without a created timestamp drift to the end.
+                       ((and (null ca) (null cb)) nil)
+                       ((null ca) nil)
+                       ((null cb) t)
+                       (reverse (string> ca cb))
+                       (t       (string< ca cb))))))))
+
         (defvar decknix--hub-wip-hide-needs-reply nil
           "When non-nil, hide WIP PRs carrying the 💬 icon.
 Suppresses PRs where reviewers posted the latest activity — useful
@@ -9077,6 +9287,16 @@ the owning section."
           (decknix--hub-toggle-and-refresh
            'decknix--hub-requests-only-my-replies
            "Requests ↩ only-my-replies: %s"))
+
+        (defun decknix--hub-toggle-requests-sort-reverse ()
+          "Toggle Requests sort direction (oldest↔newest) in the sidebar.
+The review picker honours the same flag so pressing `R' from the
+sidebar shows items in the same order.  Use M-s inside the picker
+for an ephemeral flip that does not persist."
+          (interactive)
+          (decknix--hub-toggle-and-refresh
+           'decknix--hub-requests-sort-reverse
+           "Requests sort: %s"))
 
         (defun decknix--hub-toggle-wip-hide-needs-reply ()
           "Toggle hiding WIP PRs with 💬."
@@ -10083,22 +10303,24 @@ Returns updated LINE-NUM."
 Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
           (let* ((data decknix--hub-reviews)
                  (all-items (when data (alist-get 'items data)))
-                 (items (seq-filter
-                         (lambda (item)
-                           (and (decknix--hub-item-visible-p (alist-get 'repo item))
-                                (decknix--hub-age-visible-p (alist-get 'created item))
-                                (decknix--hub-ci-visible-p item)
-                                (decknix--hub-mention-visible-p item)
-                                (decknix--hub-bot-visible-p item)
-                                (decknix--hub-requests-attention-visible-p item)))
-                         (or all-items '()))))
+                 (filtered (seq-filter
+                            (lambda (item)
+                              (and (decknix--hub-item-visible-p (alist-get 'repo item))
+                                   (decknix--hub-age-visible-p (alist-get 'created item))
+                                   (decknix--hub-ci-visible-p item)
+                                   (decknix--hub-mention-visible-p item)
+                                   (decknix--hub-bot-visible-p item)
+                                   (decknix--hub-requests-attention-visible-p item)))
+                            (or all-items '())))
+                 (items (decknix--hub-sort-requests filtered)))
             (when items
               (decknix--sidebar-render-section-header
-               (format "Requests (%d)%s%s" (length items)
+               (format "Requests (%d)%s%s%s" (length items)
                        (if decknix--hub-mention-filter " @" "")
                        (if decknix--hub-show-bots
                            (concat " " (decknix--hub-icon "🤖" 'default))
-                         "")))
+                         "")
+                       (if decknix--hub-requests-sort-reverse " ⇅" "")))
               (setq line-num (1+ line-num))
               (dolist (item items)
                 (let* ((age (decknix--hub-format-age

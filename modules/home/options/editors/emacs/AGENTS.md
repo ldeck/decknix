@@ -157,9 +157,14 @@ The `decknix--context-update-header` function delegates to the unified header
 ### Hub Integration (`decknix-hub`)
 - Surfaces data from the `decknix-hub` background daemon in the workspace
   sidebar — zero Emacs CPU overhead (all polling happens in the Rust daemon).
-- **Requests** section: PR reviews assigned to me, ordered oldest first.
-  Shows age (color-coded: 3d+ = red, <3d = yellow), repo, PR number, CI
-  status icon (✓/✗/⟳), and title. `RET` opens the PR in the browser.
+- **Requests** section: PR reviews assigned to me, ordered oldest first
+  by default.  Flip direction with `s` in the sidebar toggles transient
+  (`T`) — the section header grows a `⇅` badge while reversed.  The same
+  flag governs the `R` / `r` pickers so the sidebar and picker stay in
+  sync; inside either picker, `M-s` flips the order ephemerally without
+  touching the persisted state.  Shows age (color-coded: 3d+ = red,
+  <3d = yellow), repo, PR number, CI status icon (✓/✗/⟳), and title.
+  `RET` opens the PR in the browser.
 - **WIP** section: My open PRs grouped by repository, with CI status and
   branch names. `RET` opens the PR in the browser.
 - Data is read from `~/.config/decknix/hub/` JSON files via
@@ -211,7 +216,9 @@ The `decknix--context-update-header` function delegates to the unified header
     approving sticks), `B` bot-authors (dependabot/renovate PRs),
     `C` ci, `c` 💬 comments (hide PRs whose latest non-bot activity is
     someone else), `M` ↩ replies-to-me (show only PRs where a human
-    replied in a thread I participated in)
+    replied in a thread I participated in), `s` sort ⇅ (flip
+    oldest→newest; picker honours the same flag, `M-s` inside a picker
+    flips it ephemerally)
   - **Live**: `d` display mode, `H` hidden, `S` quick-switch,
     `N` repo-name cap (short/medium/full),
     `E` PRs (4-way cycle: off/PR/pipeline/both),
