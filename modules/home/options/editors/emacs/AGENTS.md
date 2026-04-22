@@ -196,6 +196,11 @@ The `decknix--context-update-header` function delegates to the unified header
 - **Linked PR rows** (expanded under a session when PRs toggle is on):
   alongside the state/CI glyphs, rows now also show approval and
   activity signals for active PRs (OPEN/DRAFT):
+  - State glyph: `open` / `◍` (open for review, warning face),
+    `draft` / `📝` (draft, dimmed comment face), `✓merged` / `🔀`
+    (merged), `✗closed` / `🚫` (closed). Drafts also render the `#N`
+    in the comment face so the whole row reads as dimmed, mirroring
+    the Reviews/WIP sections. Symbol set follows the `y` toggle.
   - Review decision: `✓` approved (green), `✗` changes requested (red),
     `◐` review required (yellow). Sourced from `review_decision` for
     WIP kind (my own PR) and from `my_review` for review kind (a PR

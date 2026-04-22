@@ -9481,10 +9481,12 @@ Valid values: nil (badges only), `pr' (PR status lines),
 
         (defun decknix--hub-sym (key)
           "Return the symbol string for KEY honouring `decknix--hub-symbol-style'.
-KEY is one of: merged closed open loading pass fail running unknown conflict."
+KEY is one of: merged closed open draft loading pass fail running
+unknown conflict."
           (let ((emoji '((merged   . "🔀")
                          (closed   . "🚫")
                          (open     . "◍")
+                         (draft    . "📝")
                          (loading  . "⟳")
                          (pass     . "✅")
                          (fail     . "❌")
@@ -9494,6 +9496,7 @@ KEY is one of: merged closed open loading pass fail running unknown conflict."
                 (ascii '((merged   . "✓merged")
                          (closed   . "✗closed")
                          (open     . "open")
+                         (draft    . "draft")
                          (loading  . "⟳")
                          (pass     . "✓")
                          (fail     . "✗")
@@ -9642,6 +9645,13 @@ Returns an alist or nil if not found."
                                     ;; Upcase state — hub JSON uses lowercase
                                     ;; ("open") but display code expects "OPEN"
                                     (cons 'state (upcase (or (alist-get 'state pr) "OPEN")))
+                                    ;; `draft' is orthogonal to `state' — GitHub
+                                    ;; models draft PRs as state=OPEN with a
+                                    ;; separate isDraft flag.  We preserve that
+                                    ;; so downstream state checks (deploys, CI
+                                    ;; gating) keep working, while renderers can
+                                    ;; surface the draft distinction.
+                                    (cons 'draft (eq (alist-get 'draft pr) t))
                                     (cons 'ci-status (alist-get 'status ci))
                                     (cons 'checks hub-checks)
                                     (cons 'merged_at (alist-get 'merged_at pr))
@@ -9665,6 +9675,7 @@ Returns an alist or nil if not found."
                                (list
                                 (cons 'kind 'review)
                                 (cons 'state "OPEN")
+                                (cons 'draft (eq (alist-get 'draft item) t))
                                 (cons 'ci-status (alist-get 'status ci))
                                 (cons 'checks hub-checks)
                                 (cons 'updated_at (alist-get 'created item))
@@ -9702,7 +9713,7 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
               (when parsed
                 (let* ((full-repo (format "%s/%s" (nth 0 parsed) (nth 1 parsed)))
                        (number (nth 2 parsed))
-                       (cmd (format "gh pr view %d -R %s --json state,statusCheckRollup,mergeable,mergedAt,updatedAt,title,headRefName"
+                       (cmd (format "gh pr view %d -R %s --json state,statusCheckRollup,mergeable,mergedAt,updatedAt,title,headRefName,isDraft"
                                     number full-repo)))
                   (puthash url t decknix--hub-pr-pending-fetches)
                   (condition-case err
@@ -9768,6 +9779,7 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
                                                        (result
                                                         (list
                                                          (cons 'state state)
+                                                         (cons 'draft (eq (alist-get 'isDraft data) t))
                                                          (cons 'ci-status ci-status)
                                                          (cons 'checks check-details)
                                                          (cons 'merged_at (alist-get 'mergedAt data))
@@ -9914,6 +9926,7 @@ already, so the repo prefix is omitted from the line."
                  (number (nth 2 parsed))
                  (status (decknix--hub-pr-status url))
                  (state (or (alist-get 'state status) "?"))
+                 (draft (eq (alist-get 'draft status) t))
                  (ci (alist-get 'ci-status status))
                  (stale (alist-get 'stale status))
                  (merged-at (alist-get 'merged_at status))
@@ -9928,13 +9941,19 @@ already, so the repo prefix is omitted from the line."
                  (refresh-str (if stale
                                   (concat (propertize "↻" 'face 'font-lock-comment-face) " ")
                                 "  "))
-                 ;; State indicator — honours symbol-style toggle
+                 ;; State indicator — honours symbol-style toggle.  Drafts
+                 ;; render with a distinct glyph in the comment face to
+                 ;; mirror the WIP/Reviews sections, where drafts are
+                 ;; already dimmed.  Draft is orthogonal to state="OPEN".
                  (state-str (cond
                              ((string= state "MERGED")
                               (propertize (decknix--hub-sym 'merged)
                                           'face 'font-lock-string-face))
                              ((string= state "CLOSED")
                               (propertize (decknix--hub-sym 'closed)
+                                          'face 'font-lock-comment-face))
+                             ((and (string= state "OPEN") draft)
+                              (propertize (decknix--hub-sym 'draft)
                                           'face 'font-lock-comment-face))
                              ((string= state "OPEN")
                               (propertize (decknix--hub-sym 'open)
@@ -10036,17 +10055,23 @@ already, so the repo prefix is omitted from the line."
                                    repo-full deploy-branch deploy-merged-at))
                     ""))
                  ;; Type prefix for subject PRs
-                 (type-prefix (if (string= pr-type "subject") "⊳ " "")))
+                 (type-prefix (if (string= pr-type "subject") "⊳ " ""))
+                 ;; Draft PRs dim the #N to mirror the comment-face
+                 ;; treatment in the WIP/Reviews sidebar sections.
+                 (num-str (if draft
+                              (propertize (format "#%d" number)
+                                          'face 'font-lock-comment-face)
+                            (format "#%d" number))))
             (if grouped
-                (format "     %s%s#%d%s%s%s"
+                (format "     %s%s%s%s%s%s"
                         refresh-str
-                        type-prefix number
+                        type-prefix num-str
                         (if (string-empty-p age-str) "" (concat " " age-str))
                         pr-str
                         deploy-str)
-              (format "   %s%s%s#%d%s%s%s"
+              (format "   %s%s%s%s%s%s%s"
                       refresh-str
-                      type-prefix repo-label number
+                      type-prefix repo-label num-str
                       (if (string-empty-p age-str) "" (concat " " age-str))
                       pr-str
                       deploy-str))))
