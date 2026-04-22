@@ -1617,10 +1617,25 @@ Shows: id  age  exchanges  preview [tags] (N sessions) @workspace"
                                                  (agent-shell-buffers))))
                          (live-sids (mapcar #'decknix--agent-buffer-session-id
                                             live-bufs))
-                         (prev (seq-filter
-                                (lambda (e)
-                                  (not (member (alist-get 'session-id e) live-sids)))
-                                (or decknix--sidebar-previous-sessions '())))
+                         (live-conv-keys
+                          (delq nil
+                                (mapcar (lambda (b)
+                                          (with-current-buffer b
+                                            (and (bound-and-true-p decknix--agent-conv-key)
+                                                 decknix--agent-conv-key)))
+                                        live-bufs)))
+                         ;; Same filter as the sidebar renderer.  Collapse
+                         ;; by conv-key so the picker never shows two rows
+                         ;; for the same conversation (identical labels
+                         ;; confuse completing-read / assoc lookup).
+                         (prev (decknix--sidebar-previous-dedupe
+                                (seq-filter
+                                 (lambda (e)
+                                   (let ((sid (alist-get 'session-id e))
+                                         (ck (alist-get 'conv-key e)))
+                                     (and (not (member sid live-sids))
+                                          (not (and ck (member ck live-conv-keys))))))
+                                 (or decknix--sidebar-previous-sessions '()))))
                          (ht (make-hash-table :test 'equal))
                          (ordered nil))
                     (dolist (entry prev)
@@ -7666,10 +7681,23 @@ visible (filtered) candidates.  C-g cancels."
                                           (agent-shell-buffers))))
                  (live-sids (mapcar #'decknix--agent-buffer-session-id
                                      live-bufs))
-                 (prev (seq-filter
-                        (lambda (e)
-                          (not (member (alist-get 'session-id e) live-sids)))
-                        (or decknix--sidebar-previous-sessions '())))
+                 (live-conv-keys
+                  (delq nil
+                        (mapcar (lambda (b)
+                                  (with-current-buffer b
+                                    (and (bound-and-true-p decknix--agent-conv-key)
+                                         decknix--agent-conv-key)))
+                                live-bufs)))
+                 ;; Same filter as the sidebar renderer: drop live, dedupe
+                 ;; by conv-key so each conversation shows exactly once.
+                 (prev (decknix--sidebar-previous-dedupe
+                        (seq-filter
+                         (lambda (e)
+                           (let ((sid (alist-get 'session-id e))
+                                 (ck (alist-get 'conv-key e)))
+                             (and (not (member sid live-sids))
+                                  (not (and ck (member ck live-conv-keys))))))
+                         (or decknix--sidebar-previous-sessions '()))))
                  (entries
                   (mapcar
                    (lambda (entry)
@@ -8032,26 +8060,47 @@ With prefix ALL, capture the full history (see `decknix-agent-review')."
           "List of sessions that were live when Emacs last exited.
 Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
 
+        (defun decknix--sidebar-previous-dedupe (entries)
+          "Return ENTRIES with at most one entry per conv-key.
+auggie writes a fresh session file on every interrupt/compose, so a
+single conversation can own several session-ids on disk.  When the
+Previous list (persisted or in-memory) carries two entries sharing a
+conv-key, they both resolve to the same latest snapshot at restore
+time and render as visually identical rows — this helper collapses
+them down to the first occurrence, keeping render/picker/restore
+flows in sync.  Entries without a conv-key fall back to
+session-id-based uniqueness so they are never accidentally merged."
+          (let ((seen (make-hash-table :test 'equal))
+                (out nil))
+            (dolist (e entries)
+              (let* ((ck (alist-get 'conv-key e))
+                     (key (or ck (cons 'sid (alist-get 'session-id e)))))
+                (unless (gethash key seen)
+                  (puthash key t seen)
+                  (push e out))))
+            (nreverse out)))
+
         (defun decknix--sidebar-state-save ()
           "Save sidebar toggle states and current live sessions to disk."
           (let* ((live-info
-                  (mapcar
-                   (lambda (buf)
-                     (with-current-buffer buf
-                       (let* ((sid (decknix--agent-buffer-session-id))
-                              (conv-key (when sid
-                                          (ignore-errors
-                                            (decknix--agent-conversation-key-for-session sid))))
-                              (tags (when conv-key
-                                      (decknix--agent-tags-for-conv-key conv-key)))
-                              (ws (when conv-key
-                                    (decknix--agent-workspace-for-conv-key conv-key))))
-                         (list (cons 'session-id sid)
-                               (cons 'name (buffer-name buf))
-                               (cons 'workspace (or ws (expand-file-name default-directory)))
-                               (cons 'conv-key conv-key)
-                               (cons 'tags tags)))))
-                   (seq-filter #'buffer-live-p (agent-shell-buffers))))
+                  (decknix--sidebar-previous-dedupe
+                   (mapcar
+                    (lambda (buf)
+                      (with-current-buffer buf
+                        (let* ((sid (decknix--agent-buffer-session-id))
+                               (conv-key (when sid
+                                           (ignore-errors
+                                             (decknix--agent-conversation-key-for-session sid))))
+                               (tags (when conv-key
+                                       (decknix--agent-tags-for-conv-key conv-key)))
+                               (ws (when conv-key
+                                     (decknix--agent-workspace-for-conv-key conv-key))))
+                          (list (cons 'session-id sid)
+                                (cons 'name (buffer-name buf))
+                                (cons 'workspace (or ws (expand-file-name default-directory)))
+                                (cons 'conv-key conv-key)
+                                (cons 'tags tags)))))
+                    (seq-filter #'buffer-live-p (agent-shell-buffers)))))
                  (state
                   (list
                    (cons 'display-mode decknix--sidebar-display-mode)
@@ -8156,7 +8205,11 @@ Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
                       (when (boundp 'decknix--hub-show-deploys)
                         (setq decknix--hub-show-deploys sd))))
                   (when-let ((prev (alist-get 'previous-sessions state)))
-                    (setq decknix--sidebar-previous-sessions prev)))
+                    ;; Collapse duplicates on load — existing state files
+                    ;; written before dedup landed can carry multiple
+                    ;; entries for the same conv-key.
+                    (setq decknix--sidebar-previous-sessions
+                          (decknix--sidebar-previous-dedupe prev))))
               (error
                (message "sidebar-state: restore failed: %s" (error-message-string err))))))
 
@@ -8175,11 +8228,25 @@ Returns updated LINE-NUM."
           (let* ((live-bufs (seq-filter #'buffer-live-p (agent-shell-buffers)))
                  (live-sids (mapcar #'decknix--agent-buffer-session-id
                                      live-bufs))
-                 ;; Filter out sessions that are already live
-                 (prev (seq-filter
-                        (lambda (entry)
-                          (not (member (alist-get 'session-id entry) live-sids)))
-                        decknix--sidebar-previous-sessions)))
+                 (live-conv-keys
+                  (delq nil
+                        (mapcar (lambda (b)
+                                  (with-current-buffer b
+                                    (and (bound-and-true-p decknix--agent-conv-key)
+                                         decknix--agent-conv-key)))
+                                live-bufs)))
+                 ;; Filter out sessions that are already live (match by sid
+                 ;; OR conv-key — a live buffer may hold a newer snapshot
+                 ;; than the saved stored-sid), then collapse duplicates
+                 ;; sharing a conv-key down to one row.
+                 (prev (decknix--sidebar-previous-dedupe
+                        (seq-filter
+                         (lambda (entry)
+                           (let ((sid (alist-get 'session-id entry))
+                                 (ck (alist-get 'conv-key entry)))
+                             (and (not (member sid live-sids))
+                                  (not (and ck (member ck live-conv-keys))))))
+                         decknix--sidebar-previous-sessions))))
             (when prev
               (insert "\n")
               (setq line-num (1+ line-num))
@@ -8251,14 +8318,20 @@ or the session list is stale)."
               ;; resume now handles display-action override internally
               (let ((new-buf (decknix--agent-session-resume
                               sid 20 display-name workspace conv-key)))
-                ;; Remove from previous list since it's now live.  Match on
-                ;; the stored sid (that is what the entry carries) as well
-                ;; as the resolved sid, so the entry is cleared regardless
-                ;; of which one was actually resumed.
+                ;; Remove from previous list since it's now live.  When
+                ;; the entry has a conv-key, clear ALL entries sharing
+                ;; that key — auggie writes multiple on-disk snapshots
+                ;; per conversation, so the saved state file may carry
+                ;; two rows (different sids, same conv-key) that both
+                ;; resolve to the same live buffer.  Sid matching is
+                ;; kept as a fallback for conv-key-less entries.
                 (setq decknix--sidebar-previous-sessions
                       (seq-filter (lambda (e)
-                                    (let ((esid (alist-get 'session-id e)))
-                                      (not (or (equal esid stored-sid)
+                                    (let ((esid (alist-get 'session-id e))
+                                          (eck (alist-get 'conv-key e)))
+                                      (not (or (and conv-key eck
+                                                    (equal eck conv-key))
+                                               (equal esid stored-sid)
                                                (equal esid sid)))))
                                   decknix--sidebar-previous-sessions))
                 (when (fboundp 'agent-shell-workspace-sidebar-refresh)
