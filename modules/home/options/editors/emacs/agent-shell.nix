@@ -2827,6 +2827,14 @@ No-op if URL is already linked."
                   ;; Update linked-prs.json for the hub daemon
                   (when (fboundp 'decknix--hub-write-linked-prs)
                     (decknix--hub-write-linked-prs))
+                  ;; Force a fresh PR-state fetch.  The hub's WIP adapter only
+                  ;; tracks open PRs, so a PR that merged/closed between the
+                  ;; last hub poll and this link call would otherwise stay
+                  ;; stuck at its cached state for up to the cache TTL.
+                  (when (fboundp 'decknix--hub-pr-fetch-async)
+                    (when (boundp 'decknix--hub-pr-cache)
+                      (remhash url decknix--hub-pr-cache))
+                    (decknix--hub-pr-fetch-async url))
                   t)))))
 
         (defun decknix--agent-unlink-pr (conv-key url)
@@ -9875,8 +9883,15 @@ the cache provides an immediate fallback instead of a bare spinner."
               (puthash url (cons (float-time) hub-result)
                        decknix--hub-pr-cache)
               hub-result)
-             ;; Cache only (hub has no data for this PR)
-             (cache-result cache-result)
+             ;; Cache only (hub has no data for this PR).  If the cached
+             ;; state is non-terminal, the PR has likely merged/closed
+             ;; and fallen off the hub's WIP/Reviews lists — kick off an
+             ;; async refresh so the cache picks up the new terminal state.
+             (cache-result
+              (unless (member (alist-get 'state cache-result)
+                              '("MERGED" "CLOSED"))
+                (decknix--hub-pr-fetch-async url))
+              cache-result)
              ;; Nothing found — kick off async fetch
              (t
               (decknix--hub-pr-fetch-async url)
