@@ -9689,21 +9689,23 @@ Returns an alist or nil if not found."
 
         (defun decknix--hub-pr-cache-get (url)
           "Return cached status for URL if still valid, else nil.
-When the entry is stale (older than TTL), returns the cached data
-with a `(stale . t)' marker appended and kicks off an async refresh.
-This lets callers show the old data with a refresh indicator instead
-of a bare loading spinner."
+When the entry is stale (older than TTL) returns the cached data with
+a `(stale . t)' marker appended so callers can show the old data with
+a refresh indicator instead of a bare loading spinner.
+
+This function is side-effect free by design.  Staleness-triggered
+background refresh is the responsibility of `decknix--hub-pr-status'
+(which TTL-gates its self-heal branch) so that callers invoking
+`decknix--hub-pr-cache-get' from hot paths — e.g. sort predicates in
+`decknix--hub-render-session-prs' — do not schedule O(N log N) async
+fetches per render (see commit message for #hub-loop)."
           (let ((entry (gethash url decknix--hub-pr-cache)))
             (when entry
               (let ((ts (car entry))
                     (status (cdr entry)))
                 (if (< (- (float-time) ts) decknix--hub-pr-cache-ttl)
                     status
-                  ;; Stale — return data with stale marker, trigger refresh
-                  (let ((stale-status (append status '((stale . t)))))
-                    ;; Kick off background refresh (won't duplicate)
-                    (decknix--hub-pr-fetch-async url)
-                    stale-status))))))
+                  (append status '((stale . t))))))))
 
         (defun decknix--hub-pr-fetch-async (url)
           "Fetch PR status for URL via `gh pr view' asynchronously.
