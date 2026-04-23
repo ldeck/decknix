@@ -6520,16 +6520,56 @@ Respects `decknix--sidebar-show-hidden' toggle."
                (t (funcall orig-fn))))))
 
         ;; -- Summary header-line --
+        ;; The header-line `:eval' form runs on *every* redisplay of any
+        ;; visible sidebar buffer (many times per second under typing /
+        ;; window-configuration churn).  Computing `saved-count' directly
+        ;; calls `decknix--agent-session-group-by-conversation', which
+        ;; iterates every known session and, per session, invokes
+        ;; `decknix--agent-conv-resolve-key' and
+        ;; `decknix--agent-conversation-hidden-p' — both of which call
+        ;; `decknix--agent-tags-read', which runs `file-exists-p' +
+        ;; `file-attributes' to mtime-check the tag store on every call
+        ;; (even when the in-memory cache is warm).  With N saved
+        ;; conversations that becomes O(N) stat syscalls + regex-heavy
+        ;; `expand-file-name'/`find-file-name-handler' work per redisplay,
+        ;; and the sidebar frame pegs at 100% CPU (see #hub-loop / sample
+        ;; showing 1618/2237 samples inside this chain).
+        ;;
+        ;; Cache the scalar count with a short TTL.  The sidebar itself
+        ;; refreshes every 2s and on hub file-notify events, so a 2s TTL
+        ;; matches the user-visible refresh cadence while capping the
+        ;; redisplay-driven recomputes at 0.5 Hz.
+        (defvar decknix--sidebar-saved-count-cache nil
+          "Cached length of `decknix--agent-session-group-by-conversation'.
+Refreshed lazily by `decknix--sidebar-saved-count'; see the header-line
+comment for why this is cached.")
+
+        (defvar decknix--sidebar-saved-count-cache-time 0.0
+          "`float-time' when `decknix--sidebar-saved-count-cache' was last set.")
+
+        (defconst decknix--sidebar-saved-count-ttl 2.0
+          "Seconds to trust the cached saved-count before recomputing.")
+
+        (defun decknix--sidebar-saved-count ()
+          "Return the number of saved conversations, cached with a short TTL."
+          (if (and decknix--sidebar-saved-count-cache
+                   (< (- (float-time) decknix--sidebar-saved-count-cache-time)
+                      decknix--sidebar-saved-count-ttl))
+              decknix--sidebar-saved-count-cache
+            (setq decknix--sidebar-saved-count-cache-time (float-time))
+            (setq decknix--sidebar-saved-count-cache
+                  (condition-case nil
+                      (length (decknix--agent-session-group-by-conversation
+                               (decknix--agent-session-list)))
+                    (error 0)))))
+
         (add-hook 'agent-shell-workspace-sidebar-mode-hook
           (lambda ()
             (setq header-line-format
                   '(:eval
                     (let* ((live (length (seq-filter #'buffer-live-p
                                                      (agent-shell-buffers))))
-                           (saved-count (condition-case nil
-                                            (length (decknix--agent-session-group-by-conversation
-                                                     (decknix--agent-session-list)))
-                                          (error 0))))
+                           (saved-count (decknix--sidebar-saved-count)))
                       (let* ((reviews (when (boundp 'decknix--hub-reviews)
                                         (length (alist-get 'items
                                                            decknix--hub-reviews))))
