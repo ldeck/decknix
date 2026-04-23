@@ -7927,9 +7927,20 @@ Returns one of:
                              nil t))
                         t)))
             (condition-case nil
+                ;; Wrap the candidate labels in an unsorted completion
+                ;; table so Vertico/orderless do not re-sort them — the
+                ;; caller has already applied the shared
+                ;; `decknix--hub-sort-requests' ordering (honouring
+                ;; `decknix--hub-requests-sort-reverse', which M-s
+                ;; flips ephemerally).  Without this wrapper, the
+                ;; picker's display order would ignore the let-bound
+                ;; sort flag even though the prompt hint correctly
+                ;; reflects it.
                 (let ((choice (minibuffer-with-setup-hook setup-fn
                                 (completing-read full-prompt
-                                  (mapcar #'car entries) nil t)))
+                                  (decknix--agent-unsorted-table
+                                   (mapcar #'car entries))
+                                  nil t)))
                       (sel decknix--hub-picker-captured-selections))
                   (setq decknix--hub-picker-captured-selections nil)
                   (cond
