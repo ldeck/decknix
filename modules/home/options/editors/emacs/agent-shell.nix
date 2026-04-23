@@ -2530,40 +2530,61 @@ snapshot."
           "In-memory cache of the tag store hash-table.")
         (defvar decknix--agent-tags-cache-mtime nil
           "File modification time when cache was last populated.")
+        (defvar decknix--agent-tags-cache-checked-at 0.0
+          "`float-time' when we last validated the tag-store cache on disk.
+Used to throttle `file-exists-p' / `file-attributes' syscalls and the
+v1→v2 migration walk on hot paths (sidebar refresh, group-by-conv).")
+        (defconst decknix--agent-tags-cache-ttl 1.0
+          "Seconds to trust `decknix--agent-tags-cache' without re-checking disk.
+The sidebar refresh timer calls `decknix--agent-tags-read' O(N) times per
+cycle via `decknix--agent-session-group-by-conversation'; statting the
+tag file plus walking the store for v1 migrations N times per refresh
+would saturate a core (see #hub-loop).  The mtime check still fires
+after the TTL elapses, so external edits converge within one second.")
 
         (defun decknix--agent-tags-read ()
           "Read the tag store, returning an in-memory cached hash-table.
 Re-reads from disk only if the file has been modified externally.
-Auto-migrates v1 (session-keyed) format to v2 (conversation-keyed)."
-          ;; Check if cache is valid (file hasn't changed)
-          (let ((current-mtime (and (file-exists-p decknix--agent-tags-file)
-                                    (file-attribute-modification-time
-                                     (file-attributes decknix--agent-tags-file)))))
-            (when (or (null decknix--agent-tags-cache)
-                      (not (equal current-mtime decknix--agent-tags-cache-mtime)))
-              ;; Cache miss — read from disk
-              (setq decknix--agent-tags-cache
-                    (if (file-exists-p decknix--agent-tags-file)
-                        (condition-case err
-                            (let* ((json-object-type 'hash-table)
-                                   (json-array-type 'list)
-                                   (json-key-type 'string))
-                              (json-read-file decknix--agent-tags-file))
-                          (error
-                           (message "Warning: could not read tag store: %s"
-                                    (error-message-string err))
-                           (make-hash-table :test 'equal)))
-                      (make-hash-table :test 'equal)))
-              (setq decknix--agent-tags-cache-mtime current-mtime)))
-          (let ((store decknix--agent-tags-cache))
-            ;; Auto-migrate v1 format: session-keyed entries → conversation-keyed.
-            ;; Handles both initial migration (no "conversations" key) and
-            ;; incremental migration (orphaned v1 entries coexisting with v2).
-            (let ((convs (or (gethash "conversations" store)
+Auto-migrates v1 (session-keyed) format to v2 (conversation-keyed).
+
+When called repeatedly inside `decknix--agent-tags-cache-ttl' seconds
+the cached hash-table is returned directly without stat-ing the file
+or walking the store for orphaned v1 entries."
+          ;; Fast path: recent cache hit — skip stat + migration walk.
+          (if (and decknix--agent-tags-cache
+                   (< (- (float-time) decknix--agent-tags-cache-checked-at)
+                      decknix--agent-tags-cache-ttl))
+              decknix--agent-tags-cache
+            (setq decknix--agent-tags-cache-checked-at (float-time))
+            ;; Check if cache is valid (file hasn't changed)
+            (let ((current-mtime (and (file-exists-p decknix--agent-tags-file)
+                                      (file-attribute-modification-time
+                                       (file-attributes decknix--agent-tags-file)))))
+              (when (or (null decknix--agent-tags-cache)
+                        (not (equal current-mtime decknix--agent-tags-cache-mtime)))
+                ;; Cache miss — read from disk
+                (setq decknix--agent-tags-cache
+                      (if (file-exists-p decknix--agent-tags-file)
+                          (condition-case err
+                              (let* ((json-object-type 'hash-table)
+                                     (json-array-type 'list)
+                                     (json-key-type 'string))
+                                (json-read-file decknix--agent-tags-file))
+                            (error
+                             (message "Warning: could not read tag store: %s"
+                                      (error-message-string err))
                              (make-hash-table :test 'equal)))
-                  (sessions (decknix--agent-session-list))
-                  (old-entries nil)
-                  (migrated 0))
+                        (make-hash-table :test 'equal)))
+                (setq decknix--agent-tags-cache-mtime current-mtime)))
+            (let ((store decknix--agent-tags-cache))
+              ;; Auto-migrate v1 format: session-keyed entries → conversation-keyed.
+              ;; Handles both initial migration (no "conversations" key) and
+              ;; incremental migration (orphaned v1 entries coexisting with v2).
+              (let ((convs (or (gethash "conversations" store)
+                               (make-hash-table :test 'equal)))
+                    (sessions (decknix--agent-session-list))
+                    (old-entries nil)
+                    (migrated 0))
               ;; Collect orphaned session-keyed entries (UUID keys with tags)
               (maphash (lambda (key val)
                          (when (and (hash-table-p val)
@@ -2610,7 +2631,7 @@ Auto-migrates v1 (session-keyed) format to v2 (conversation-keyed)."
                   (puthash "bookmarks" (make-hash-table :test 'equal) store))
                 (decknix--agent-tags-write store)
                 (message "Migrated %d v1 tag entries to conversation format" migrated)))
-            store))
+              store)))
 
         (defun decknix--agent-tags-write (store)
           "Write STORE (hash-table) to the tag file and update in-memory cache."
