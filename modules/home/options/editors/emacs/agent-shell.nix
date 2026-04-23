@@ -9899,10 +9899,20 @@ the cache provides an immediate fallback instead of a bare spinner."
              ;; state is non-terminal, the PR has likely merged/closed
              ;; and fallen off the hub's WIP/Reviews lists — kick off an
              ;; async refresh so the cache picks up the new terminal state.
+             ;; Honour `decknix--hub-pr-cache-ttl': only fetch when the
+             ;; entry is actually stale, otherwise each sidebar render
+             ;; (2s + every hub-file change + every fetch completion)
+             ;; spawns a fresh `gh pr view' per non-terminal PR and the
+             ;; fetch-completion sentinel re-renders the sidebar, which
+             ;; pegs Emacs at 100% CPU with 10+ linked PRs.
              (cache-result
-              (unless (member (alist-get 'state cache-result)
-                              '("MERGED" "CLOSED"))
-                (decknix--hub-pr-fetch-async url))
+              (let ((entry (gethash url decknix--hub-pr-cache)))
+                (when (and entry
+                           (>= (- (float-time) (car entry))
+                               decknix--hub-pr-cache-ttl)
+                           (not (member (alist-get 'state cache-result)
+                                        '("MERGED" "CLOSED"))))
+                  (decknix--hub-pr-fetch-async url)))
               cache-result)
              ;; Nothing found — kick off async fetch
              (t
