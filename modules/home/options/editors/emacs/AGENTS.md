@@ -160,11 +160,25 @@ The `decknix--context-update-header` function delegates to the unified header
 - **Requests** section: PR reviews assigned to me, ordered oldest first
   by default.  Flip direction with `s` in the sidebar toggles transient
   (`T`) — the section header grows a `⇅` badge while reversed.  The same
-  flag governs the `R` / `r` pickers so the sidebar and picker stay in
-  sync; inside either picker, `M-s` flips the order ephemerally without
-  touching the persisted state.  Shows age (color-coded: 3d+ = red,
-  <3d = yellow), repo, PR number, CI status icon (✓/✗/⟳), and title.
-  `RET` opens the PR in the browser.
+  flag seeds the `r` picker so the sidebar and picker start in sync;
+  inside the picker, `M-s` flips the order ephemerally without touching
+  the persisted state.  Shows age (color-coded: 3d+ = red, <3d = yellow),
+  repo, PR number, CI status icon (✓/✗/⟳), and title.  `RET` opens the
+  PR in the browser.
+- **Requests picker (`r`)**: a single entry-point for navigating reviews.
+  Toggles are all minibuffer-local and never leak into the sidebar's
+  global filters (a refresh-suspend flag freezes sidebar re-renders
+  during the picker's `recursive-edit` so timer ticks can't paint the
+  sidebar with the picker's local state):
+  - `M-m` — @-mention only
+  - `M-r` — ready-for-review only (CI passing, not conflicting, not
+    draft, not yet reviewed by me) — replaces the old `R` key
+  - `M-b` — show bot-authored PRs (dependabot/renovate)
+  - `M-s` — reverse sort
+  - `C-SPC` — multi-select (launch reviews for every marked item)
+  When a toggle filters the list to zero items, the picker stays open
+  with a dimmed placeholder so the user can adjust toggles or `C-g` to
+  quit — it no longer closes on them.
 - **WIP** section: My open PRs grouped by repository, with CI status and
   branch names. `RET` opens the PR in the browser.
 - Data is read from `~/.config/decknix/hub/` JSON files via
@@ -194,23 +208,72 @@ The `decknix--context-update-header` function delegates to the unified header
   - Terminal PRs (MERGED/CLOSED) are excluded so stale links do not add
     noise. Rendered immediately after the `[N⬆ N✓]` count badge.
 - **Linked PR rows** (expanded under a session when PRs toggle is on):
-  alongside the state/CI glyphs, rows now also show approval and
-  activity signals for active PRs (OPEN/DRAFT):
-  - State glyph: `open` / `◍` (open for review, warning face),
-    `draft` / `📝` (draft, dimmed comment face), `✓merged` / `🔀`
-    (merged), `✗closed` / `🚫` (closed). Drafts also render the `#N`
-    in the comment face so the whole row reads as dimmed, mirroring
-    the Reviews/WIP sections. Symbol set follows the `y` toggle.
-  - Review decision: `✓` approved (green), `✗` changes requested (red),
-    `◐` review required (yellow). Sourced from `review_decision` for
-    WIP kind (my own PR) and from `my_review` for review kind (a PR
-    I am reviewing).
-  - Activity: `🤖` bot-pending, `💬` needs-reply (latest non-bot
-    activity is someone else), `↩` replies-to-me (a human replied on a
-    thread I participated in). Parity with Requests/WIP row indicators.
-  - Nothing is shown for terminal (MERGED/CLOSED) PRs, and fields that
-    are unavailable (e.g. cache-only fallback from `gh pr view`)
-    degrade gracefully to no icon.
+  rendered as fixed-width columns so pipeline progress stays scannable
+  across every expand mode:
+  ```
+  #N  age  state  CI b c ✓ [⚠] DTSP
+  ```
+  (Two spaces separate the state word from the signal zone; columns
+  inside the signal zone are single-spaced for compactness.)
+  - State word: `open` (light blue `#61afef`), `draft` (yellow),
+    `merged` (green), `closed` (dim). Left-padded to 6 chars so the
+    downstream columns line up. Drafts also render `#N` in the comment
+    face to mirror the Reviews/WIP sections.
+  - `CI` = `⟳` glyph tinted green (pass) / yellow (running) / red
+    (fail) / grey (idle). Always shown so pipeline mode still carries
+    build state.
+  - `b` = bot review column. Yellow when a bot posted last and the
+    action is still pending (`bot_pending`); dim otherwise. Phase 1a
+    will refine this with a per-bot signature list
+    (`copilot-pull-request-reviewer[bot]`, `augment-code[bot]`,
+    `dependabot[bot]`, `github-actions[bot]`).
+  - `c` = human comments column. Yellow when a human posted last and
+    no reply has gone back (`needs_reply`); green-ish when a human
+    replied in a thread I participated in (`replies_to_me`); dim
+    otherwise.
+  - `✓` = approval column. Green `✓` = APPROVED, red `✗` =
+    CHANGES_REQUESTED, yellow `?` = review required / commented /
+    pending, dim `?` otherwise. Sourced from `review_decision` for
+    WIP kind and `my_review` for review kind.
+  - `⚠` = merge-conflict flag (red), rendered only when GitHub reports
+    `mergeable = CONFLICTING` on OPEN rows (draft or not). Non-conflict
+    rows omit it entirely so the DTSP column stays put for the common
+    case; a conflict shifts DTSP one slot right, which is the intended
+    visual cue. MERGED can't conflict; CLOSED short-circuits earlier.
+  - `DTSP` = deploy indicator (only in `pipeline` / `both` modes).
+    For merged PRs the review columns collapse to dim `·` placeholders
+    since bot/human/approval signals are moot post-merge; CI still
+    reflects the default-branch build.
+  - Closed PRs stop at the state word — every downstream signal is
+    moot and rendering them as dim glyphs just adds noise.
+  - Symbol-style toggle (`y`) still swaps non-column glyphs (Requests
+    / WIP sections) between ascii and emoji; the columnar PR rows use
+    ASCII always because Emacs faces cannot tint colour-emoji.
+- **Linked repo rows** (for repos you work on by pushing directly to a
+  branch — e.g. `decknix` / `decknix-config` — linked via `C-c A c L`
+  or `C-c s L`). Intermixed with PR rows under the same repo group
+  header, sorted by most-recent-activity first:
+  ```
+  <branch> <sha7> <age>  CI  DTSP
+  ```
+  - `<branch>` — tracked branch name in keyword face (e.g. `main`).
+  - `<sha7>` — first 7 chars of the HEAD commit SHA, dim.
+  - `<age>` — time since that commit, right-aligned to 3 chars to
+    line up with PR rows in the same group.
+  - `CI` = same `⟳` column as PR rows, tinted by the combined
+    status-check rollup for the HEAD commit.
+  - `DTSP` works identically (driven by repo+branch lookup in
+    `teamcity-deploys.json`).
+  - Repo rows intentionally have no state-word / bot / cmt /
+    approval / conflict columns — there's no PR to review.
+  - Data is fetched on demand via `gh api graphql`, cached per
+    `OWNER/REPO#BRANCH` with a 5-minute TTL, and persisted to
+    `~/.config/decknix/hub/repo-cache.el` so the sidebar re-renders
+    instantly at startup while a background refresh runs.
+  - Link multiple branches per repo by invoking `C-c A c L` again
+    with a different branch.  Unlink via `C-c A c u` — the picker
+    surfaces both PRs and repos with `[repo:main]` / `[authored]`
+    prefixes so the type of the item being removed is always clear.
 - Toggles transient (`T`): Opens sectioned menu grouped by sidebar
   section. Suffixes within each section are ordered alphabetically by
   their display label (case-insensitive) to match the sidebar footer,
@@ -233,6 +296,14 @@ The `decknix--context-update-header` function delegates to the unified header
     the Requests triad, independent state because WIP is about my own
     PRs — I usually want to see 🤖 so I can push a fix), `n` 💬 comments,
     `u` 🤖 bot-review
+  - **Sessions**: `a` age filter (cycles `all/1d/3d/7d/14d/30d`,
+    shares presets with Requests `F`), `V` live-backed (default `[dim]`
+    — saved rows whose conversation is currently live render shadowed
+    as context; flip to `[hide]` to drop them entirely so Live owns
+    them), `U` unknown-ws (hide saved rows whose workspace can't be
+    resolved). Active filters surface in the `Sessions (N)` heading
+    as a `[age: Nd]` badge; filter state persists via
+    `decknix--sidebar-state-file`.
 - All toggles are advertised in the sidebar footer under a `Toggles`
   heading (press `K` to hide).  Footer items are sorted by the same
   short labels (keys omitted — press `T` for the interactive transient).

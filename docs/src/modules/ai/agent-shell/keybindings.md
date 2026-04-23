@@ -61,6 +61,9 @@ The `C-c A` prefix is labelled "Agent" in which-key.
 | `e` | Edit existing command |
 | `r` | Review PR (quick action) |
 | `B` | Batch process (multi-session launcher) |
+| `l` | Link PR to session |
+| `L` | Link repo+branch to session (direct-push repos) |
+| `u` | Unlink PR or repo (single picker) |
 
 ## Tags (`C-c T` / `C-c A T`)
 
