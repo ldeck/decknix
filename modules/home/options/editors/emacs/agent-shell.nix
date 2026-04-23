@@ -759,7 +759,8 @@ Press q to dismiss."
             "C-c A c r" "review PR"
             "C-c A c B" "batch process"
             "C-c A c l" "link PR"
-            "C-c A c u" "unlink PR"
+            "C-c A c L" "link repo+branch"
+            "C-c A c u" "unlink PR / repo"
             "C-c A c c" "run command"
             "C-c A c n" "new command"
             "C-c A c e" "edit command"
@@ -2791,9 +2792,13 @@ auggie."
                                  model-id))))
                  t)))
 
-        ;; -- PR linking: store/retrieve linked PRs per conversation --
-        ;; Each PR link is a hash-table: {"url": "...", "type": "authored"|"subject",
-        ;;                                 "added": "auto"|"manual", "linked_at": "ISO"}
+        ;; -- PR / repo linking: store/retrieve linked items per conversation --
+        ;; All link records live under the same "linked_prs" key for
+        ;; backward compatibility.  Two record shapes are supported:
+        ;;   PR link   : {"url": ".../pull/N", "type": "authored"|"subject",
+        ;;                "added": "auto"|"manual", "linked_at": "ISO"}
+        ;;   Repo link : {"url": "...github.com/OWNER/REPO", "type": "repo",
+        ;;                "branch": "main", "added": ..., "linked_at": "ISO"}
 
         (defun decknix--agent-pr-parse-url (url)
           "Parse a GitHub PR URL into (owner repo number) or nil."
@@ -2804,14 +2809,46 @@ auggie."
                   (match-string 2 url)
                   (string-to-number (match-string 3 url)))))
 
-        (defun decknix--agent-linked-prs (conv-key)
-          "Return the list of linked PR alists for CONV-KEY."
+        (defun decknix--agent-repo-parse-url (url)
+          "Parse github.com/OWNER/REPO from URL and return (OWNER REPO).
+Rejects pull-request URLs (those route through `decknix--agent-pr-parse-url').
+Strips any trailing slash, query, fragment, or .git suffix."
+          (when (and url
+                     (stringp url)
+                     (not (string-match-p "/pull/[0-9]+" url))
+                     (string-match
+                      "github\\.com/\\([^/]+\\)/\\([^/?#]+\\)"
+                      url))
+            (let ((owner (match-string 1 url))
+                  (repo (match-string 2 url)))
+              (when (string-suffix-p ".git" repo)
+                (setq repo (substring repo 0 -4)))
+              (list owner repo))))
+
+        (defun decknix--agent-linked-items (conv-key)
+          "Return all linked items (PRs and repos) for CONV-KEY, insertion order."
           (when conv-key
             (let* ((store (decknix--agent-tags-read))
                    (convs (decknix--agent-tags-conversations store))
                    (entry (gethash conv-key convs)))
               (when (hash-table-p entry)
                 (gethash "linked_prs" entry)))))
+
+        (defun decknix--agent-linked-prs (conv-key)
+          "Return linked PR records for CONV-KEY (excludes repo-type links).
+PR records have type \"authored\" or \"subject\"; repo records are
+surfaced via `decknix--agent-linked-repos' or `decknix--agent-linked-items'."
+          (seq-remove
+           (lambda (rec)
+             (equal (decknix--agent-pr-url-accessor rec "type") "repo"))
+           (decknix--agent-linked-items conv-key)))
+
+        (defun decknix--agent-linked-repos (conv-key)
+          "Return linked repo records for CONV-KEY (type \"repo\" only)."
+          (seq-filter
+           (lambda (rec)
+             (equal (decknix--agent-pr-url-accessor rec "type") "repo"))
+           (decknix--agent-linked-items conv-key)))
 
         (defun decknix--agent-link-pr (conv-key url &optional pr-type added)
           "Link PR at URL to conversation CONV-KEY.
@@ -2859,7 +2896,8 @@ No-op if URL is already linked."
                   t)))))
 
         (defun decknix--agent-unlink-pr (conv-key url)
-          "Remove PR at URL from conversation CONV-KEY."
+          "Remove PR at URL from conversation CONV-KEY.
+Leaves repo-type links for the same URL untouched."
           (when (and conv-key url)
             (let* ((store (decknix--agent-tags-read))
                    (convs (decknix--agent-tags-conversations store))
@@ -2867,12 +2905,11 @@ No-op if URL is already linked."
               (when (hash-table-p entry)
                 (let ((existing (gethash "linked_prs" entry)))
                   (puthash "linked_prs"
-                           (seq-filter
-                            (lambda (pr)
-                              (not (equal (if (hash-table-p pr)
-                                              (gethash "url" pr)
-                                            (alist-get 'url pr))
-                                          url)))
+                           (seq-remove
+                            (lambda (rec)
+                              (and (equal (decknix--agent-pr-url-accessor rec "url") url)
+                                   (not (equal (decknix--agent-pr-url-accessor rec "type")
+                                               "repo"))))
                             existing)
                            entry)
                   (decknix--agent-tags-write store)
@@ -2880,9 +2917,136 @@ No-op if URL is already linked."
                   (when (fboundp 'decknix--hub-write-linked-prs)
                     (decknix--hub-write-linked-prs)))))))
 
+        (defun decknix--agent-link-repo (conv-key url branch &optional added)
+          "Link repo at URL with BRANCH to conversation CONV-KEY.
+URL is a `https://github.com/OWNER/REPO' URL (pull-request URLs are
+rejected — use `decknix--agent-link-pr' for those).
+ADDED is \"auto\" or \"manual\" (default: \"manual\").
+No-op if URL+BRANCH is already linked as a repo."
+          (when (and conv-key url branch
+                     (decknix--agent-repo-parse-url url))
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (or (gethash conv-key convs)
+                              (let ((h (make-hash-table :test 'equal)))
+                                (puthash "tags" nil h)
+                                (puthash "sessions" nil h)
+                                h)))
+                   (existing (gethash "linked_prs" entry))
+                   (already (seq-find
+                             (lambda (rec)
+                               (and (equal (decknix--agent-pr-url-accessor rec "url") url)
+                                    (equal (decknix--agent-pr-url-accessor rec "type") "repo")
+                                    (equal (decknix--agent-pr-url-accessor rec "branch") branch)))
+                             existing)))
+              (unless already
+                (let ((rec (make-hash-table :test 'equal)))
+                  (puthash "url" url rec)
+                  (puthash "type" "repo" rec)
+                  (puthash "branch" branch rec)
+                  (puthash "added" (or added "manual") rec)
+                  (puthash "linked_at"
+                           (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)
+                           rec)
+                  (puthash "linked_prs" (append existing (list rec)) entry)
+                  (puthash conv-key entry convs)
+                  (decknix--agent-tags-write store)
+                  ;; Force a fresh repo status fetch so the new row lights up
+                  ;; without waiting for the next sidebar refresh cycle.
+                  (when (fboundp 'decknix--hub-repo-fetch-async)
+                    (decknix--hub-repo-fetch-async url branch))
+                  t)))))
+
+        (defun decknix--agent-unlink-repo (conv-key url branch)
+          "Remove repo link for URL+BRANCH from conversation CONV-KEY."
+          (when (and conv-key url branch)
+            (let* ((store (decknix--agent-tags-read))
+                   (convs (decknix--agent-tags-conversations store))
+                   (entry (gethash conv-key convs)))
+              (when (hash-table-p entry)
+                (let ((existing (gethash "linked_prs" entry)))
+                  (puthash "linked_prs"
+                           (seq-remove
+                            (lambda (rec)
+                              (and (equal (decknix--agent-pr-url-accessor rec "url") url)
+                                   (equal (decknix--agent-pr-url-accessor rec "type") "repo")
+                                   (equal (decknix--agent-pr-url-accessor rec "branch") branch)))
+                            existing)
+                           entry)
+                  (decknix--agent-tags-write store))))))
+
         (defun decknix--agent-pr-url-accessor (pr field)
           "Get FIELD from PR link (supports both hash-table and alist)."
           (if (hash-table-p pr) (gethash field pr) (alist-get (intern field) pr)))
+
+        ;; -- VCS detection helpers (used by repo-linking commands) --
+
+        (defun decknix--vcs-kind (dir)
+          "Return a symbol describing the VCS managing DIR, or nil.
+One of: `git', `pijul', `jj', or nil when no recognised VCS is present.
+Handles git worktrees (where .git is a file pointing into the main repo)."
+          (let ((dir (file-name-as-directory (expand-file-name dir))))
+            (cond
+             ((or (file-directory-p (expand-file-name ".git" dir))
+                  (file-exists-p (expand-file-name ".git" dir))) 'git)
+             ((file-directory-p (expand-file-name ".pijul" dir)) 'pijul)
+             ((file-directory-p (expand-file-name ".jj" dir)) 'jj)
+             (t nil))))
+
+        (defun decknix--git-remote-url (dir)
+          "Return the github.com/OWNER/REPO URL for DIR's origin remote, or nil.
+Converts SSH form (git@github.com:OWNER/REPO.git) to HTTPS and strips
+any trailing .git suffix.  Returns nil unless the remote is on github.com."
+          (let* ((default-directory (file-name-as-directory
+                                      (expand-file-name dir)))
+                 (raw (condition-case nil
+                          (string-trim
+                           (shell-command-to-string
+                            "git config --get remote.origin.url"))
+                        (error ""))))
+            (when (and raw (not (string-empty-p raw)))
+              (let ((url raw))
+                (when (string-match "^git@github\\.com:\\(.+\\)$" url)
+                  (setq url (concat "https://github.com/"
+                                    (match-string 1 url))))
+                (when (string-suffix-p ".git" url)
+                  (setq url (substring url 0 -4)))
+                (when (string-match-p "github\\.com/" url) url)))))
+
+        (defun decknix--detect-default-branch (dir)
+          "Return the default branch name for the repo at DIR, as a string.
+Uses `gh repo view' first (authoritative for GitHub), falls back to
+origin HEAD and `init.defaultBranch' for git, `pijul channel' for
+pijul, and returns \"main\" as last-resort fallback for jj and
+unknown VCSes."
+          (let* ((default-directory (file-name-as-directory
+                                      (expand-file-name dir)))
+                 (vcs (decknix--vcs-kind dir))
+                 (try (lambda (cmd re group)
+                        (let ((out (condition-case nil
+                                       (string-trim
+                                        (shell-command-to-string
+                                         (concat cmd " 2>/dev/null")))
+                                     (error ""))))
+                          (when (and out (not (string-empty-p out)))
+                            (if re
+                                (when (string-match re out)
+                                  (match-string group out))
+                              out))))))
+            (or (pcase vcs
+                  ('git
+                   (or (funcall try
+                        "gh repo view --json defaultBranchRef -q .defaultBranchRef.name"
+                        nil nil)
+                       (funcall try
+                        "git symbolic-ref --short refs/remotes/origin/HEAD"
+                        "^origin/\\(.+\\)$" 1)
+                       (funcall try
+                        "git config init.defaultBranch" nil nil)))
+                  ('pijul
+                   (funcall try "pijul channel" "^\\* \\(\\S-+\\)" 1))
+                  (_ nil))
+                "main")))
 
         (defun decknix--agent-tags-all ()
           "Return a sorted list of all unique tags across all conversations."
@@ -3747,16 +3911,19 @@ Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
 
         (defun decknix-compose-workspace-toggle ()
           "Toggle Agents workspace from a compose buffer.
-Close the compose side-window first so the tab switch happens
-cleanly (side-windows persist across tab switches and corrupt
-the layout otherwise).  Focus returns to the agent buffer before
-the toggle."
+Hide the compose side-window first so the tab switch happens
+cleanly (side-windows persist across tab switches and corrupt the
+layout otherwise).  The compose buffer itself is buried, not killed,
+so any in-flight prompt text is preserved and restored the next time
+the user opens compose (`C-c e') against the same target.  Focus
+returns to the agent buffer before the toggle."
           (interactive)
           (if (fboundp 'agent-shell-workspace-toggle)
               (let ((target decknix--compose-target-buffer)
                     (compose-win (selected-window)))
-                ;; Close the compose side-window (kill the buffer)
-                (quit-restore-window compose-win 'kill)
+                ;; Hide the compose side-window but keep the buffer alive
+                ;; so the user's partially-typed prompt survives the toggle.
+                (quit-restore-window compose-win 'bury)
                 ;; Move focus to the target agent buffer if it's visible
                 (when (and target (buffer-live-p target))
                   (let ((target-win (get-buffer-window target)))
@@ -5254,9 +5421,10 @@ Selecting `new…' prompts for a fresh name and adds it to the list."
         (define-key decknix-agent-command-map (kbd "r") 'decknix-agent-review-pr)      ; PR review
         (define-key decknix-agent-command-map (kbd "B") 'decknix-agent-batch-process)  ; Batch
         (define-key decknix-agent-command-map (kbd "l") 'decknix-agent-link-pr)        ; Link PR
-        (define-key decknix-agent-command-map (kbd "u") 'decknix-agent-unlink-pr)      ; Unlink PR
+        (define-key decknix-agent-command-map (kbd "L") 'decknix-agent-link-repo)      ; Link Repo
+        (define-key decknix-agent-command-map (kbd "u") 'decknix-agent-unlink-pr)      ; Unlink PR / repo
 
-        ;; -- PR linking interactive commands --
+        ;; -- PR / repo linking interactive commands --
 
         (defun decknix--clipboard-github-pr-url ()
           "Return clipboard content if it looks like a GitHub PR URL, else nil."
@@ -5265,6 +5433,17 @@ Selecting `new…' prompts for a fresh name and adds it to the list."
             (when (and clip (string-match-p
                              "https://github\\.com/[^/]+/[^/]+/pull/[0-9]+"
                              clip))
+              (string-trim clip))))
+
+        (defun decknix--clipboard-github-repo-url ()
+          "Return clipboard content if it looks like a GitHub repo URL.
+Rejects pull-request URLs — those belong to `decknix--clipboard-github-pr-url'."
+          (let ((clip (ignore-errors (current-kill 0 t))))
+            (when (and clip
+                       (stringp clip)
+                       (string-match-p "https://github\\.com/[^/]+/[^/?#]+"
+                                       clip)
+                       (not (string-match-p "/pull/[0-9]+" clip)))
               (string-trim clip))))
 
         (defun decknix--agent-current-conv-key ()
@@ -5310,27 +5489,79 @@ With prefix arg, prompts for PR type (authored/subject)."
                     (agent-shell-workspace-sidebar-refresh)))
               (message "PR already linked"))))
 
-        (defun decknix-agent-unlink-pr ()
-          "Unlink a GitHub PR from the current session's conversation."
+        (defun decknix-agent-link-repo ()
+          "Link a GitHub repo + branch to the current session's conversation.
+Prompts for repo URL (defaults: clipboard if it looks like a repo URL,
+or the session's workspace remote if it points at github.com) and
+branch (defaulted via `decknix--detect-default-branch').
+
+Use this for repos where work goes directly to a branch (no PR) — the
+sidebar will show a commit row with HEAD SHA, age, CI status and DTSP
+deploy indicator, sorted intermixed with PR rows by recency."
           (interactive)
           (let* ((conv-key (decknix--agent-current-conv-key))
                  (_ (unless conv-key
                       (user-error "Not in an agent session buffer")))
-                 (linked (decknix--agent-linked-prs conv-key)))
+                 (workspace (decknix--agent-workspace-for-conv-key conv-key))
+                 (ws-remote (when (and workspace (file-directory-p workspace))
+                              (decknix--git-remote-url workspace)))
+                 (clip-url (decknix--clipboard-github-repo-url))
+                 (default-url (or clip-url ws-remote))
+                 (url (read-string
+                       (if default-url
+                           (format "Repo URL [%s]: "
+                                   (truncate-string-to-width default-url 50))
+                         "Repo URL: ")
+                       nil nil default-url))
+                 (_ (unless (decknix--agent-repo-parse-url url)
+                      (user-error "Not a valid GitHub repo URL (maybe a PR URL?)")))
+                 (default-branch
+                   (or (when (and workspace (file-directory-p workspace))
+                         (decknix--detect-default-branch workspace))
+                       "main"))
+                 (branch (read-string (format "Branch [%s]: " default-branch)
+                                      nil nil default-branch)))
+            (if (decknix--agent-link-repo conv-key url branch "manual")
+                (progn
+                  (message "Linked repo: %s@%s" url branch)
+                  (when (get-buffer "*agent-shell-sidebar*")
+                    (agent-shell-workspace-sidebar-refresh)))
+              (message "Repo+branch already linked"))))
+
+        (defun decknix-agent-unlink-pr ()
+          "Unlink a GitHub PR or repo from the current session's conversation.
+Both PRs and repo links surface in the same picker so you can unlink
+either via a single command."
+          (interactive)
+          (let* ((conv-key (decknix--agent-current-conv-key))
+                 (_ (unless conv-key
+                      (user-error "Not in an agent session buffer")))
+                 (linked (decknix--agent-linked-items conv-key)))
             (if (not linked)
-                (message "No linked PRs")
-              (let* ((entries (mapcar
-                               (lambda (pr)
-                                 (let ((url (decknix--agent-pr-url-accessor
-                                             pr "url"))
-                                       (tp (decknix--agent-pr-url-accessor
-                                            pr "type")))
-                                   (cons (format "[%s] %s" tp url) url)))
-                               linked))
-                     (choice (completing-read "Unlink PR: "
+                (message "No linked items")
+              (let* ((entries
+                      (mapcar
+                       (lambda (rec)
+                         (let* ((url (decknix--agent-pr-url-accessor rec "url"))
+                                (tp (or (decknix--agent-pr-url-accessor rec "type")
+                                        "authored"))
+                                (branch (decknix--agent-pr-url-accessor rec "branch"))
+                                (label (if (equal tp "repo")
+                                           (format "[repo:%s] %s"
+                                                   (or branch "?") url)
+                                         (format "[%s] %s" tp url))))
+                           (cons label (cons rec url))))
+                       linked))
+                     (choice (completing-read "Unlink item: "
                                               (mapcar #'car entries) nil t))
-                     (url (cdr (assoc choice entries))))
-                (decknix--agent-unlink-pr conv-key url)
+                     (pair (cdr (assoc choice entries)))
+                     (rec (car pair))
+                     (url (cdr pair))
+                     (tp (decknix--agent-pr-url-accessor rec "type"))
+                     (branch (decknix--agent-pr-url-accessor rec "branch")))
+                (if (equal tp "repo")
+                    (decknix--agent-unlink-repo conv-key url branch)
+                  (decknix--agent-unlink-pr conv-key url))
                 (message "Unlinked: %s" url)
                 (when (get-buffer "*agent-shell-sidebar*")
                   (agent-shell-workspace-sidebar-refresh))))))
@@ -5718,6 +5949,49 @@ Like treemacs `W' / extra-wide-toggle."
           (interactive)
           (call-interactively #'decknix-sidebar-toggle-hidden))
 
+        (transient-define-suffix decknix-sidebar-transient--sessions-age ()
+          :key "a"
+          :description
+          (lambda ()
+            (let ((label (decknix--sidebar-sessions-age-label)))
+              (format "age           %s"
+                      (propertize
+                       (format "[%s]" label)
+                       'face (if (string= label "all")
+                                 'font-lock-comment-face
+                               'font-lock-constant-face)))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix-sidebar-cycle-sessions-age-filter))
+
+        (transient-define-suffix decknix-sidebar-transient--sessions-hide-live ()
+          :key "V"
+          :description
+          (lambda ()
+            (format "live-backed   %s"
+                    (propertize
+                     (if decknix--sidebar-sessions-hide-live "[hidden]" "[dim]")
+                     'face (if decknix--sidebar-sessions-hide-live
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix-sidebar-toggle-sessions-hide-live))
+
+        (transient-define-suffix decknix-sidebar-transient--sessions-hide-unknown ()
+          :key "U"
+          :description
+          (lambda ()
+            (format "unknown-ws    %s"
+                    (propertize
+                     (if decknix--sidebar-sessions-hide-unknown "[hide]" "[show]")
+                     'face (if decknix--sidebar-sessions-hide-unknown
+                               'font-lock-constant-face
+                             'font-lock-comment-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix-sidebar-toggle-sessions-hide-unknown))
+
         (transient-define-suffix decknix-sidebar-transient--width ()
           :key "W"
           :description
@@ -5761,6 +6035,10 @@ which advertises toggles by label only (no keys)."
            (decknix-sidebar-transient--wip-hide-linked)  ;; hide linked
            (decknix-sidebar-transient--deploy-indicator) ;; pipeline
            (decknix-sidebar-transient--wip-my-replies)]  ;; replies
+          ["Sessions"
+           (decknix-sidebar-transient--sessions-age)          ;; age
+           (decknix-sidebar-transient--sessions-hide-live)    ;; live-backed
+           (decknix-sidebar-transient--sessions-hide-unknown)];; unknown-ws
           ["" ("q" "Done" transient-quit-one)])
 
         (transient-define-prefix decknix-sidebar-transient ()
@@ -5776,8 +6054,7 @@ which advertises toggles by label only (no keys)."
            ("c"   "New session"   agent-shell-workspace-sidebar-new)
            ("RET" "Open / goto"   agent-shell-workspace-sidebar-goto)
            ("q"   "Quit sidebar"  quit-window)
-           ("g"   "Refresh"       agent-shell-workspace-sidebar-refresh)
-           ("R"   "Review"        decknix-hub-launch-reviews)]
+           ("g"   "Refresh"       agent-shell-workspace-sidebar-refresh)]
           ["Actions (a …)"
            ("a r" "Restart"       agent-shell-workspace-sidebar-restart)
            ("a R" "Rename"        agent-shell-workspace-sidebar-rename)
@@ -5803,8 +6080,14 @@ which advertises toggles by label only (no keys)."
 Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
 
         (defun decknix--sidebar-render-section-header (title)
-          "Insert a section header TITLE into the sidebar."
-          (insert (propertize (concat " " title) 'face 'bold) "\n"))
+          "Insert a section header TITLE into the sidebar.
+Composes `bold' with any inner face properties on TITLE so callers
+can propertize sub-regions (e.g. a coloured age badge) without the
+header's bold wiping them."
+          (let ((start (point)))
+            (insert " " title "\n")
+            ;; (1- (point)) excludes the trailing newline from the face span
+            (add-face-text-property start (1- (point)) 'bold)))
 
         (defvar decknix--sidebar-show-keys t
           "When non-nil, show categorised key listing in the sidebar footer.
@@ -5814,6 +6097,32 @@ Defaults to t for discoverability; toggle with K.")
           "When non-nil, include hidden/background sessions in the Sessions list.
 Hidden sessions are marked via `decknix--agent-conversation-set-hidden'.
 Toggle with `H' in the sidebar.")
+
+        (defvar decknix--sidebar-sessions-hide-live nil
+          "When non-nil, hide saved sessions whose conversation is currently live.
+Default nil so live-backed conversations appear dimmed as context
+without competing with the Live section above.  Toggle with `V'
+in the Toggles transient.")
+
+        (defvar decknix--sidebar-sessions-age-filter nil
+          "Age cutoff in seconds for saved Sessions list; nil = no limit.
+Cycles through the same presets as Requests
+(`decknix--hub-age-presets').  Toggle with `a' in the Toggles
+transient.")
+
+        (defvar decknix--sidebar-sessions-hide-unknown nil
+          "When non-nil, hide saved sessions whose workspace can't be resolved.
+These render under the \"unknown\" workspace group today.  Toggle
+with `U' in the Toggles transient.")
+
+        (defun decknix--sidebar-sessions-age-label ()
+          "Return a short label for the current sessions age filter.
+Reuses the shared `decknix--hub-age-presets' alist so the Sessions
+and Requests age toggles share vocabulary."
+          (or (and (boundp 'decknix--hub-age-presets)
+                   (alist-get decknix--sidebar-sessions-age-filter
+                              decknix--hub-age-presets))
+              "all"))
 
         (defun decknix-sidebar-toggle-keys ()
           "Toggle the inline key listing in the sidebar footer."
@@ -5830,6 +6139,47 @@ Toggle with `H' in the sidebar.")
             (agent-shell-workspace-sidebar-refresh))
           (message "Hidden sessions: %s"
                    (if decknix--sidebar-show-hidden "shown" "hidden")))
+
+        (defun decknix-sidebar-toggle-sessions-hide-live ()
+          "Toggle whether live-backed saved sessions are hidden in the sidebar.
+When off (default), live-backed conversations render dimmed as
+recent context.  When on, they are filtered out entirely (the
+Live section above is then the only place they appear)."
+          (interactive)
+          (setq decknix--sidebar-sessions-hide-live
+                (not decknix--sidebar-sessions-hide-live))
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (agent-shell-workspace-sidebar-refresh))
+          (message "Sessions: live-backed rows %s"
+                   (if decknix--sidebar-sessions-hide-live "hidden" "dimmed")))
+
+        (defun decknix-sidebar-toggle-sessions-hide-unknown ()
+          "Toggle whether sessions with unresolved workspace are hidden."
+          (interactive)
+          (setq decknix--sidebar-sessions-hide-unknown
+                (not decknix--sidebar-sessions-hide-unknown))
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (agent-shell-workspace-sidebar-refresh))
+          (message "Sessions: unknown-workspace rows %s"
+                   (if decknix--sidebar-sessions-hide-unknown "hidden" "shown")))
+
+        (defun decknix-sidebar-cycle-sessions-age-filter ()
+          "Cycle the saved-Sessions age filter through presets.
+Reuses `decknix--hub-age-presets' so the Sessions and Requests age
+toggles share vocabulary (all/1d/3d/7d/14d/30d)."
+          (interactive)
+          (let* ((presets (if (boundp 'decknix--hub-age-presets)
+                              decknix--hub-age-presets
+                            '((nil . "all"))))
+                 (keys (mapcar #'car presets))
+                 (pos (cl-position decknix--sidebar-sessions-age-filter
+                                   keys :test #'equal))
+                 (next-pos (mod (1+ (or pos 0)) (length keys))))
+            (setq decknix--sidebar-sessions-age-filter (nth next-pos keys))
+            (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+              (agent-shell-workspace-sidebar-refresh))
+            (message "Sessions age filter: %s"
+                     (decknix--sidebar-sessions-age-label))))
 
         (defun decknix-sidebar-hide-at-point ()
           "Mark the saved session at point as hidden (background/automated).
@@ -5935,22 +6285,15 @@ so RIGHT group starts at column COL-WIDTH."
            '(("s"   . "sessions…"))))
 
         (defun decknix--sidebar-footer-quick-keys ()
-          "Build the Quick key alist for the footer."
-          (append
-           '(("RET" . "open")
-             ("c"   . "new")
-             ("g"   . "refresh")
-             ("q"   . "quit")
-             ("a"   . "actions…")
-             ("T"   . "toggles"))
-           (when (fboundp 'decknix-hub-launch-reviews)
-             (let ((count (length (decknix--hub-review-ready-requests))))
-               (list (cons "R" (format "review %s"
-                                 (propertize
-                                  (format "(%d)" count)
-                                  'face (if (> count 0)
-                                            'success
-                                          'font-lock-comment-face)))))))))
+          "Build the Quick key alist for the footer.
+Sorted alphabetically by label; review launching is merged into
+the `r' (requests) picker via its `M-r' toggle."
+          '(("a"   . "actions…")
+            ("c"   . "new")
+            ("RET" . "open")
+            ("q"   . "quit")
+            ("g"   . "refresh")
+            ("T"   . "toggles")))
 
         (defun decknix--sidebar-footer-toggle-keys ()
           "Build the Toggles sections for the footer.
@@ -6119,6 +6462,27 @@ All toggle keys are accessed via the T transient prefix."
                                  (if decknix--hub-wip-hide-bot-pending "[hide]" "[show]")
                                  'face (if decknix--hub-wip-hide-bot-pending
                                            'font-lock-constant-face
+                                         'font-lock-comment-face))))))
+                (sessions
+                 (list
+                  (cons "a" (format "age %s"
+                                (let ((label (decknix--sidebar-sessions-age-label)))
+                                  (propertize
+                                   (format "[%s]" label)
+                                   'face (if (string= label "all")
+                                             'font-lock-comment-face
+                                           'font-lock-constant-face)))))
+                  (cons "V" (format "live-backed %s"
+                                (propertize
+                                 (if decknix--sidebar-sessions-hide-live "[hide]" "[dim]")
+                                 'face (if decknix--sidebar-sessions-hide-live
+                                           'font-lock-constant-face
+                                         'font-lock-comment-face))))
+                  (cons "U" (format "unknown-ws %s"
+                                (propertize
+                                 (if decknix--sidebar-sessions-hide-unknown "[hide]" "[show]")
+                                 'face (if decknix--sidebar-sessions-hide-unknown
+                                           'font-lock-constant-face
                                          'font-lock-comment-face)))))))
             ;; Return as sectioned list
             (delq nil
@@ -6126,7 +6490,8 @@ All toggle keys are accessed via the T transient prefix."
                    (cons "Global" global)
                    (when requests (cons "Requests" requests))
                    (cons "Live" live)
-                   (cons "WIP" wip)))))
+                   (cons "WIP" wip)
+                   (cons "Sessions" sessions)))))
 
         (defun decknix--sidebar-render-toggle-sections (sections &optional col-width)
           "Render toggle SECTIONS with sub-headings.
@@ -6238,10 +6603,36 @@ items inline (horizontal).  Press K to toggle, ? for full transient."
                   (match-string 1 abbr)
                 abbr))))
 
+        (defun decknix--sidebar-session-age-visible-p (modified)
+          "Return non-nil if MODIFIED passes the sessions age filter.
+Always t when the filter is nil (show all).  MODIFIED may be nil
+\(e.g. malformed session files); such entries are kept when the
+filter is off and dropped when a cutoff is active."
+          (cond
+           ((null decknix--sidebar-sessions-age-filter) t)
+           ((null modified) nil)
+           (t (condition-case nil
+                  (let* ((then (encode-time (iso8601-parse modified)))
+                         (age (float-time (time-subtract (current-time) then))))
+                    (<= age decknix--sidebar-sessions-age-filter))
+                (error t)))))
+
         (defun decknix--sidebar-saved-sessions ()
-          "Return recent saved conversations as alist of (name workspace conv-key session).
-Grouped by workspace, limited to `decknix--sidebar-max-saved'.
-Respects `decknix--sidebar-show-hidden' toggle."
+          "Return recent saved conversations as list of tuples.
+Each tuple is (NAME WORKSPACE CONV-KEY SESSION MODIFIED LIVE-P),
+where LIVE-P is non-nil when the conversation is already backed by
+a live buffer.
+
+Respects these toggles:
+- `decknix--sidebar-show-hidden' — include hidden conversations.
+- `decknix--sidebar-sessions-hide-live' — drop live-backed entries.
+- `decknix--sidebar-sessions-age-filter' — drop entries older than
+  the configured window.
+- `decknix--sidebar-sessions-hide-unknown' — drop entries without a
+  resolvable workspace.
+
+Cap of `decknix--sidebar-max-saved' applied after all filters so
+the visible count matches the heading."
           (condition-case nil
               (let* ((sessions (decknix--agent-session-list))
                      (groups (when sessions
@@ -6249,7 +6640,6 @@ Respects `decknix--sidebar-show-hidden' toggle."
                                 sessions decknix--sidebar-show-hidden)))
                      (result nil)
                      (count 0))
-                ;; Collect up to max-saved conversations (already sorted newest first)
                 (dolist (group groups)
                   (when (< count decknix--sidebar-max-saved)
                     (let* ((conv-key (car group))
@@ -6258,19 +6648,22 @@ Respects `decknix--sidebar-show-hidden' toggle."
                            (workspace (when conv-key
                                         (decknix--agent-workspace-for-conv-key
                                          conv-key)))
-                           (modified (alist-get 'modified latest)))
-                      ;; Skip if this conversation is already live
-                      (unless (seq-find
-                               (lambda (buf)
-                                 (when (buffer-live-p buf)
-                                   (with-current-buffer buf
-                                     (when (boundp 'agent-shell--state)
-                                       (let* ((fm (alist-get 'firstUserMessage latest ""))
-                                              (ck (decknix--agent-conversation-key fm)))
-                                         (equal ck (ignore-errors
-                                                     (decknix--session-conv-id))))))))
-                               (agent-shell-buffers))
-                        (push (list name workspace conv-key latest modified) result)
+                           (modified (alist-get 'modified latest))
+                           (live-p (and conv-key
+                                        (decknix--agent-find-live-buffer-for-conv-key
+                                         conv-key))))
+                      (when (and
+                             ;; hide-live filter
+                             (or (not decknix--sidebar-sessions-hide-live)
+                                 (not live-p))
+                             ;; age filter
+                             (decknix--sidebar-session-age-visible-p modified)
+                             ;; unknown-workspace filter
+                             (or (not decknix--sidebar-sessions-hide-unknown)
+                                 workspace))
+                        (push (list name workspace conv-key latest modified
+                                    (and live-p t))
+                              result)
                         (setq count (1+ count))))))
                 (nreverse result))
             (error nil)))
@@ -6398,8 +6791,15 @@ Respects `decknix--sidebar-show-hidden' toggle."
               (when saved
                 (insert "\n")
                 (setq line-num (1+ line-num)) ;; blank line
-                (decknix--sidebar-render-section-header
-                 (format "Sessions (%d)" (length saved)))
+                (let* ((age-label (decknix--sidebar-sessions-age-label))
+                       (age-active (and decknix--sidebar-sessions-age-filter
+                                        (not (string= age-label "all"))))
+                       (title (concat
+                               (format "Sessions (%d)" (length saved))
+                               (when age-active
+                                 (propertize (format "  [age: %s]" age-label)
+                                             'face 'font-lock-constant-face)))))
+                  (decknix--sidebar-render-section-header title))
                 (setq line-num (1+ line-num)) ;; section header
                 ;; Group by ABBREVIATED workspace name so differently-stored
                 ;; paths (~/Code/foo vs /Users/x/Code/foo) merge under one heading
@@ -6427,6 +6827,7 @@ Respects `decknix--sidebar-show-hidden' toggle."
                              (conv-key (nth 2 entry))
                              (session (nth 3 entry))
                              (modified (nth 4 entry))
+                             (live-p (nth 5 entry))
                              (hidden-p (and conv-key
                                             (decknix--agent-conversation-hidden-p
                                              conv-key)))
@@ -6458,11 +6859,19 @@ Respects `decknix--sidebar-show-hidden' toggle."
                              (display (format "  %4s %s"
                                               (propertize time-str
                                                           'face 'font-lock-comment-face)
-                                              label)))
-                        (insert (propertize display
-                                           'decknix-sidebar-saved-session session
-                                           'decknix-sidebar-saved-conv-key conv-key
-                                           'decknix-sidebar-saved-workspace (nth 1 entry))
+                                              label))
+                             (with-props
+                              (propertize display
+                                          'decknix-sidebar-saved-session session
+                                          'decknix-sidebar-saved-conv-key conv-key
+                                          'decknix-sidebar-saved-workspace (nth 1 entry)
+                                          'decknix-sidebar-saved-live live-p)))
+                        ;; Dim the whole row when the conversation is already
+                        ;; live elsewhere — the Live section above owns the
+                        ;; actionable signal; this row is just recent-context.
+                        (insert (if live-p
+                                    (propertize with-props 'face 'shadow)
+                                  with-props)
                                 "\n")
                         (setq line-num (1+ line-num)))))))
 
@@ -7415,15 +7824,18 @@ the caller after `completing-read' returns.  Reset at the start of
 each picker invocation so stale values never leak across calls.")
 
         (defun decknix--hub-completing-read-with-mention-toggle
-            (prompt entries mention-only-var)
-          "Run `completing-read' on ENTRIES with M-m / M-b / M-s live toggles.
+            (prompt entries mention-only-var &optional ready-only-var)
+          "Run `completing-read' on ENTRIES with live filter toggles.
 PROMPT is the base prompt string.  MENTION-ONLY-VAR is a symbol naming
-the variable that holds the current mention-only state.
+the variable that holds the current mention-only state.  READY-ONLY-VAR,
+when non-nil, names a variable holding the `ready-for-review' filter
+state — enabling M-r as an additional live toggle.
 
-M-m toggles MENTION-ONLY-VAR; M-b toggles `decknix--hub-show-bots';
-M-s toggles `decknix--hub-requests-sort-reverse'.  All three abort the
-current completing-read and return the sentinel symbol `retry' so the
-caller can rebuild ENTRIES and re-invoke this function.
+M-m toggles MENTION-ONLY-VAR; M-r (when enabled) toggles READY-ONLY-VAR;
+M-b toggles `decknix--hub-show-bots'; M-s toggles
+`decknix--hub-requests-sort-reverse'.  Each aborts the current
+completing-read and returns the sentinel symbol `retry' so the caller
+can rebuild ENTRIES and re-invoke this function.
 
 C-SPC marks the current candidate via `embark-select' (multi-select).
 When selections exist on RET the function returns a `multi' result so
@@ -7437,19 +7849,23 @@ sidebar filter or sort state.
 Returns one of:
   (CHOICE . MENTION-ONLY)    on a single selection,
   (multi . LABELS)           on a multi-select (>=1 marked),
-  `retry'                    when M-m / M-b / M-s was pressed,
+  `retry'                    when any toggle was pressed,
   nil                        when the user cancelled (C-g / ESC)."
           (setq decknix--hub-picker-captured-selections nil)
           (let* ((mo (symbol-value mention-only-var))
+                 (ro (and ready-only-var
+                          (symbol-value ready-only-var)))
                  (bots (and (boundp 'decknix--hub-show-bots)
                             decknix--hub-show-bots))
                  (rev (and (boundp 'decknix--hub-requests-sort-reverse)
                            decknix--hub-requests-sort-reverse))
                  (hints (concat (if mo "@ " "")
+                                (if ro "✓ " "")
                                 (if bots "🤖 " "")
                                 (if rev "⇅ " "")))
-                 (full-prompt (format "%s%s(M-m@ M-b🤖 M-s⇅ C-SPC✓) "
-                                      prompt hints))
+                 (full-prompt (format "%s%s(M-m@ %sM-b🤖 M-s⇅ C-SPC✓) "
+                                      prompt hints
+                                      (if ready-only-var "M-r✓ " "")))
                  (retry nil)
                  (mention-fn
                   (eval `(lambda ()
@@ -7459,6 +7875,15 @@ Returns one of:
                            (setq retry t)
                            (abort-recursive-edit))
                         t))
+                 (ready-fn
+                  (when ready-only-var
+                    (eval `(lambda ()
+                             (interactive)
+                             (set ',ready-only-var
+                                  (not (symbol-value ',ready-only-var)))
+                             (setq retry t)
+                             (abort-recursive-edit))
+                          t)))
                  (bot-fn
                   (lambda ()
                     (interactive)
@@ -7484,6 +7909,8 @@ Returns one of:
                  (setup-fn
                   (eval `(lambda ()
                            (local-set-key (kbd "M-m") ,mention-fn)
+                           ,(when ready-fn
+                              `(local-set-key (kbd "M-r") ,ready-fn))
                            (local-set-key (kbd "M-b") ,bot-fn)
                            (local-set-key (kbd "M-s") ,sort-fn)
                            (when (fboundp 'embark-select)
@@ -7518,17 +7945,23 @@ Each candidate shows age, repo, PR number, CI status, and title —
 matching the sidebar rendering style.
 When MENTION-ONLY is non-nil, show only @-mentioned items.
 When LIMIT is a positive integer, show at most that many items.
-During completion: M-m toggles @-mention, M-b toggles bot-author
-visibility (dependabot/renovate), M-s reverses sort direction.  All
-three toggles are scoped to this picker session and never leak into
-the sidebar's global filters or sort state.
+During completion: M-m toggles @-mention, M-r toggles ready-for-review
+(CI passing, not conflicting, not draft, not yet reviewed by me),
+M-b toggles bot-author visibility (dependabot/renovate), M-s reverses
+sort direction.  All four toggles are scoped to this picker session
+and never leak into the sidebar's global filters or sort state.
 Interactively: \\[universal-argument] N r limits to N items;
                \\[universal-argument] \\[universal-argument] r shows @-mentioned only."
           (interactive)
-          ;; Shadow the three toggle variables so M-m / M-b / M-s mutations
+          ;; Shadow the toggle variables so M-m / M-r / M-b / M-s mutations
           ;; stay local to this picker session — the sidebar's own filter
           ;; and sort state is restored as soon as this `let' unwinds.
-          (let ((decknix--req-mention-only mention-only)
+          ;; `decknix--sidebar-refresh-suspended' freezes sidebar re-renders
+          ;; while the picker is open so 2-second timer ticks don't paint
+          ;; the sidebar with the picker's local toggle state.
+          (let ((decknix--sidebar-refresh-suspended t)
+                (decknix--req-mention-only mention-only)
+                (decknix--req-ready-only nil)
                 (decknix--hub-show-bots (and (boundp 'decknix--hub-show-bots)
                                              decknix--hub-show-bots))
                 (decknix--hub-requests-sort-reverse
@@ -7537,6 +7970,7 @@ Interactively: \\[universal-argument] N r limits to N items;
             (catch 'decknix--req-done
               (while t
                 (let* ((mo decknix--req-mention-only)
+                       (ro decknix--req-ready-only)
                        (all-items (when (boundp 'decknix--hub-reviews)
                                     (alist-get 'items decknix--hub-reviews)))
                        (filtered (seq-filter
@@ -7549,7 +7983,10 @@ Interactively: \\[universal-argument] N r limits to N items;
                                          (decknix--hub-requests-attention-visible-p item)
                                          ;; Extra @-mention filter when requested
                                          (or (not mo)
-                                             (eq (alist-get 'mentioned item) t))))
+                                             (eq (alist-get 'mentioned item) t))
+                                         ;; Extra ready-for-review filter
+                                         (or (not ro)
+                                             (decknix--hub-request-ready-p item))))
                                   (or all-items '())))
                        ;; Apply shared sort so picker and sidebar stay aligned.
                        (sorted (decknix--hub-sort-requests filtered))
@@ -7558,10 +7995,31 @@ Interactively: \\[universal-argument] N r limits to N items;
                                   (seq-take sorted limit)
                                 sorted)))
                   (if (not items)
-                      (progn
-                        (message "No review requests%s"
-                                 (if mo " (with @-mention)" ""))
-                        (throw 'decknix--req-done nil))
+                      ;; Keep the picker open with a synthetic placeholder so
+                      ;; the user can adjust M-m / M-r / M-b / M-s toggles or
+                      ;; C-g to quit — instead of the picker closing on them
+                      ;; the moment a filter produces zero matches.
+                      (let* ((entries
+                              (list (cons (propertize
+                                           "(no matches — M-m/M-r/M-b/M-s to adjust, C-g to quit)"
+                                           'face 'font-lock-comment-face)
+                                          nil)))
+                             (prompt (format "Request [0%s%s]: "
+                                             (if mo " @" "")
+                                             (if ro " ✓" "")))
+                             (result (decknix--hub-completing-read-with-mention-toggle
+                                      prompt entries
+                                      'decknix--req-mention-only
+                                      'decknix--req-ready-only)))
+                        (cond
+                         ;; Toggle pressed — loop to rebuild.
+                         ((eq result 'retry) nil)
+                         ;; C-g / ESC — exit cleanly.
+                         ((null result)
+                          (throw 'decknix--req-done nil))
+                         ;; RET on the placeholder — loop so the user can
+                         ;; pick a toggle.
+                         (t nil)))
                     (let* ((entries
                             (mapcar
                              (lambda (item)
@@ -7608,16 +8066,21 @@ Interactively: \\[universal-argument] N r limits to N items;
                                                      title)))
                                  (cons label item)))
                              items))
-                           (prompt (format "Request%s: "
+                           (prompt (format "Request [%d%s%s%s]: "
+                                           (length items)
                                            (if (and limit (integerp limit) (> limit 0))
-                                               (format " [≤%d]" limit)
-                                             "")))
+                                               (format " ≤%d" limit)
+                                             "")
+                                           (if mo " @" "")
+                                           (if ro " ✓" "")))
                            (result (decknix--hub-completing-read-with-mention-toggle
-                                    prompt entries 'decknix--req-mention-only)))
+                                    prompt entries
+                                    'decknix--req-mention-only
+                                    'decknix--req-ready-only)))
                       (cond
-                       ;; M-m / M-b: loop so the outer `while' rebuilds
-                       ;; `entries' with the updated filter state and
-                       ;; re-opens the picker with fresh candidates.
+                       ;; M-m / M-r / M-b / M-s: loop so the outer `while'
+                       ;; rebuilds `entries' with the updated filter state
+                       ;; and re-opens the picker with fresh candidates.
                        ((eq result 'retry) nil)
                        ;; C-g / ESC: exit cleanly.
                        ((null result)
@@ -8207,6 +8670,12 @@ session-id-based uniqueness so they are never accidentally merged."
                    (cons 'show-deploys
                          (when (boundp 'decknix--hub-show-deploys)
                            decknix--hub-show-deploys))
+                   (cons 'sessions-hide-live
+                         decknix--sidebar-sessions-hide-live)
+                   (cons 'sessions-age-filter
+                         decknix--sidebar-sessions-age-filter)
+                   (cons 'sessions-hide-unknown
+                         decknix--sidebar-sessions-hide-unknown)
                    (cons 'previous-sessions live-info))))
             (make-directory (file-name-directory decknix--sidebar-state-file) t)
             (with-temp-file decknix--sidebar-state-file
@@ -8289,6 +8758,15 @@ session-id-based uniqueness so they are never accidentally merged."
         ;; ensures everything is bound before we try to set values.
         (add-hook 'kill-emacs-hook #'decknix--sidebar-state-save)
         (add-hook 'emacs-startup-hook #'decknix--sidebar-state-restore)
+
+        ;; Periodic idle-timer save so toggle state and previous-sessions
+        ;; survive force-quit / daemon crashes.  `kill-emacs-hook' alone
+        ;; loses everything when the daemon locks up and is force-killed,
+        ;; which means user-set toggles like `decknix--hub-expand-prs'
+        ;; silently revert on next start.  The 30 s idle threshold keeps
+        ;; this out of the hot path during active use; repeat=t fires once
+        ;; per idle period, not every 30 s of idleness.
+        (run-with-idle-timer 30 t #'decknix--sidebar-state-save)
 
         ;; -- Previous sessions: sidebar rendering --
         (defun decknix--sidebar-render-previous-sessions (line-num)
@@ -8582,11 +9060,24 @@ Re-reads only the changed file and refreshes the sidebar."
         (decknix--hub-refresh-all)
         (decknix--hub-start-watcher)
 
-        ;; Hub toggle keys now live in the T transient.
-        ;; Keep R (review launcher) as a direct sidebar key — it's an action.
+        ;; Hub toggle keys now live in the T transient.  Review launching
+        ;; is merged into the `r' (requests) picker — M-r inside the picker
+        ;; toggles the ready-for-review filter, replacing the old `R' key.
+
+        (defvar decknix--sidebar-refresh-suspended nil
+          "When non-nil, `agent-shell-workspace-sidebar-refresh' is a no-op.
+Pickers that let-bind global filter vars (bot-visibility, sort direction,
+etc.) set this so 2-second refresh timers and file-notify callbacks firing
+during the picker's `recursive-edit' do not re-render the sidebar with the
+picker's local toggle state.  Restored to nil automatically when the
+picker's dynamic binding unwinds.")
+
         (with-eval-after-load 'agent-shell-workspace
-          (define-key agent-shell-workspace-sidebar-mode-map
-            (kbd "R") #'decknix-hub-launch-reviews))
+          (advice-add 'agent-shell-workspace-sidebar-refresh :around
+            (lambda (orig-fn &rest args)
+              "Skip refresh when a picker has suspended sidebar updates."
+              (unless decknix--sidebar-refresh-suspended
+                (apply orig-fn args)))))
 
         ;; Add Hub group to the sidebar transient
         ;; -- Hub: org filter (multi-select transient) --
@@ -8774,20 +9265,6 @@ When no filter is active (table is nil), all orgs are visible."
                                'font-lock-constant-face)))))
           (interactive)
           (call-interactively #'decknix-hub-ci-filter-transient))
-
-        (transient-define-suffix decknix-sidebar-transient--launch-reviews ()
-          :key "R"
-          :description
-          (lambda ()
-            (let ((count (length (decknix--hub-review-ready-requests))))
-              (format "Review ready  %s"
-                      (propertize
-                       (format "[%d]" count)
-                       'face (if (> count 0)
-                                 'success
-                               'font-lock-comment-face)))))
-          (interactive)
-          (call-interactively #'decknix-hub-launch-reviews))
 
         (transient-define-suffix decknix-sidebar-transient--mention-filter ()
           :key "@"
@@ -9883,6 +10360,232 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
         (defvar decknix--hub-pr-refresh-timer nil
           "Timer for coalesced sidebar refresh after PR status fetches.")
 
+        ;; -- Repo HEAD status fetch (on-demand) --
+        ;;
+        ;; Linked repos (type=\"repo\") don't flow through the hub daemon;
+        ;; we fetch their HEAD commit + combined CI state directly via
+        ;; `gh api graphql' and cache the result per (repo, branch).
+
+        (defvar decknix--hub-repo-cache (make-hash-table :test 'equal)
+          "Cache for repo+branch HEAD status.
+Keys are \"OWNER/REPO#BRANCH\"; values are (TIMESTAMP . STATUS-ALIST).")
+
+        (defvar decknix--hub-repo-cache-ttl 300
+          "Time-to-live in seconds for cached repo+branch lookups.")
+
+        (defvar decknix--hub-repo-cache-file
+          (expand-file-name "~/.config/decknix/hub/repo-cache.el")
+          "File for persisting repo cache across Emacs restarts.")
+
+        (defvar decknix--hub-repo-pending-fetches (make-hash-table :test 'equal)
+          "Set of repo+branch keys currently being fetched.")
+
+        (defun decknix--hub-repo-cache-key (url branch)
+          "Return the canonical cache key for URL + BRANCH, or nil."
+          (let ((parsed (decknix--agent-repo-parse-url url)))
+            (when (and parsed branch)
+              (format "%s/%s#%s" (nth 0 parsed) (nth 1 parsed) branch))))
+
+        (defun decknix--hub-repo-cache-save ()
+          "Persist the repo cache to disk."
+          (when (> (hash-table-count decknix--hub-repo-cache) 0)
+            (condition-case err
+                (let (entries)
+                  (maphash (lambda (k v) (push (cons k v) entries))
+                           decknix--hub-repo-cache)
+                  (make-directory (file-name-directory
+                                   decknix--hub-repo-cache-file) t)
+                  (with-temp-file decknix--hub-repo-cache-file
+                    (insert ";; Auto-generated repo cache — do not edit\n")
+                    (prin1 entries (current-buffer))
+                    (insert "\n")))
+              (error
+               (message "hub-repo-cache: save failed: %s"
+                        (error-message-string err))))))
+
+        (defun decknix--hub-repo-cache-restore ()
+          "Restore the repo cache from disk."
+          (when (file-exists-p decknix--hub-repo-cache-file)
+            (condition-case err
+                (let ((entries (with-temp-buffer
+                                 (insert-file-contents
+                                  decknix--hub-repo-cache-file)
+                                 (read (current-buffer)))))
+                  (when (listp entries)
+                    (dolist (entry entries)
+                      (when (consp entry)
+                        (puthash (car entry) (cdr entry)
+                                 decknix--hub-repo-cache)))))
+              (error
+               (message "hub-repo-cache: restore failed: %s"
+                        (error-message-string err))))))
+
+        (run-with-timer 120 120 #'decknix--hub-repo-cache-save)
+        (add-hook 'kill-emacs-hook #'decknix--hub-repo-cache-save)
+        (decknix--hub-repo-cache-restore)
+
+        (defun decknix--hub-repo-cache-get (url branch)
+          "Return cached HEAD status for URL+BRANCH if valid, else nil.
+Stale entries return with `(stale . t)' and trigger an async refresh,
+matching the `decknix--hub-pr-cache-get' pattern."
+          (let* ((key (decknix--hub-repo-cache-key url branch))
+                 (entry (and key (gethash key decknix--hub-repo-cache))))
+            (when entry
+              (let ((ts (car entry))
+                    (status (cdr entry)))
+                (if (< (- (float-time) ts) decknix--hub-repo-cache-ttl)
+                    status
+                  (let ((stale-status (append status '((stale . t)))))
+                    (decknix--hub-repo-fetch-async url branch)
+                    stale-status))))))
+
+        (defun decknix--hub-repo-status (url branch)
+          "Return the current HEAD status alist for URL+BRANCH.
+Consults the cache first; on miss/stale kicks off an async fetch and
+returns either stale data (with `(stale . t)') or a loading sentinel."
+          (let ((key (decknix--hub-repo-cache-key url branch)))
+            (when key
+              (or (decknix--hub-repo-cache-get url branch)
+                  (progn
+                    (decknix--hub-repo-fetch-async url branch)
+                    (when (gethash key decknix--hub-repo-pending-fetches)
+                      '((state . "LOADING"))))))))
+
+        (defun decknix--hub-repo--handle-fetch-result (proc url branch key)
+          "Parse PROC output, populate repo cache for URL+BRANCH under KEY.
+Clears the pending flag and schedules a coalesced sidebar refresh.
+Split out so the sentinel closure stays small — backquote capture of
+large bodies is expensive under dynamic binding."
+          (unwind-protect
+              (let* ((exit-code (process-exit-status proc))
+                     (output (when (buffer-live-p (process-buffer proc))
+                               (with-current-buffer (process-buffer proc)
+                                 (buffer-string)))))
+                (if (/= exit-code 0)
+                    (message "hub-repo-fetch: %s@%s exited %d: %s"
+                             url branch exit-code
+                             (string-trim (or output "")))
+                  (condition-case err
+                      (let* ((data (json-parse-string output
+                                     :object-type 'alist
+                                     :array-type 'list
+                                     :null-object nil
+                                     :false-object nil))
+                             (target (alist-get 'target
+                                      (alist-get 'ref
+                                       (alist-get 'repository
+                                        (alist-get 'data data)))))
+                             (oid (alist-get 'oid target))
+                             (committed-at (alist-get 'committedDate target))
+                             (msg (alist-get 'messageHeadline target))
+                             (rollup (alist-get 'statusCheckRollup target))
+                             (rollup-state (and rollup
+                                                (alist-get 'state rollup)))
+                             (contexts (and rollup
+                                            (alist-get 'nodes
+                                             (alist-get 'contexts rollup))))
+                             (ci-status
+                              (pcase rollup-state
+                                ("SUCCESS" "pass")
+                                ("FAILURE" "fail")
+                                ("ERROR" "fail")
+                                ("PENDING" "running")
+                                ("EXPECTED" "running")
+                                (_ nil)))
+                             (check-details
+                              (when contexts
+                                (mapcar
+                                 (lambda (c)
+                                   (list
+                                    (cons 'name (or (alist-get 'name c)
+                                                    (alist-get 'context c)
+                                                    "?"))
+                                    (cons 'conclusion
+                                          (or (alist-get 'conclusion c)
+                                              (alist-get 'state c)
+                                              "UNKNOWN"))))
+                                 contexts)))
+                             (result
+                              (list
+                               (cons 'sha oid)
+                               (cons 'updated_at committed-at)
+                               (cons 'title msg)
+                               (cons 'branch branch)
+                               (cons 'ci-status ci-status)
+                               (cons 'checks check-details)
+                               ;; Sentinel state so the renderer can
+                               ;; distinguish repo rows from PR rows.
+                               (cons 'state "HEAD"))))
+                        (when oid
+                          (puthash key (cons (float-time) result)
+                                   decknix--hub-repo-cache)))
+                    (error
+                     (message "hub-repo-fetch: parse error for %s@%s: %s"
+                              url branch (error-message-string err))))))
+            (remhash key decknix--hub-repo-pending-fetches)
+            (when (buffer-live-p (process-buffer proc))
+              (kill-buffer (process-buffer proc)))
+            ;; Coalesced refresh — shared with the PR-fetch timer so a
+            ;; burst of PR+repo fetches collapses to a single redraw.
+            (when (get-buffer "*agent-shell-sidebar*")
+              (when (timerp decknix--hub-pr-refresh-timer)
+                (cancel-timer decknix--hub-pr-refresh-timer))
+              (setq decknix--hub-pr-refresh-timer
+                    (run-at-time 0.3 nil
+                      (lambda ()
+                        (setq decknix--hub-pr-refresh-timer nil)
+                        (when (get-buffer "*agent-shell-sidebar*")
+                          (ignore-errors
+                            (agent-shell-workspace-sidebar-refresh)))))))))
+
+        (defun decknix--hub-repo-fetch-async (url branch)
+          "Fetch HEAD commit + combined CI state for URL+BRANCH asynchronously.
+Populates `decknix--hub-repo-cache' and refreshes the sidebar on
+completion.  Uses `gh api graphql' (one round-trip) and parses the
+rollup into the same shape PR records use so downstream renderers
+(CI column, DTSP) can consume it without branching."
+          (let* ((key (decknix--hub-repo-cache-key url branch))
+                 (parsed (decknix--agent-repo-parse-url url)))
+            (when (and key parsed branch
+                       (not (gethash key decknix--hub-repo-pending-fetches)))
+              (let* ((owner (nth 0 parsed))
+                     (repo (nth 1 parsed))
+                     (gql (concat
+                           "query($owner:String!,$repo:String!,$ref:String!){"
+                           "repository(owner:$owner,name:$repo){"
+                           "ref(qualifiedName:$ref){target{"
+                           "... on Commit{oid committedDate messageHeadline "
+                           "statusCheckRollup{state contexts(first:50){nodes{"
+                           "__typename "
+                           "... on CheckRun{name conclusion} "
+                           "... on StatusContext{context state}"
+                           "}}}}}}}}")))
+                (puthash key t decknix--hub-repo-pending-fetches)
+                (condition-case err
+                    (let ((proc (make-process
+                                 :name (format "hub-repo-%s-%s-%s"
+                                               owner repo branch)
+                                 :buffer (generate-new-buffer
+                                          " *hub-repo-fetch*")
+                                 :connection-type 'pipe
+                                 :command
+                                 (list "gh" "api" "graphql"
+                                       "-F" (format "owner=%s" owner)
+                                       "-F" (format "repo=%s" repo)
+                                       "-F" (format "ref=refs/heads/%s" branch)
+                                       "-f" (format "query=%s" gql)))))
+                      (set-process-sentinel
+                       proc
+                       (eval `(lambda (proc _event)
+                                (when (memq (process-status proc) '(exit signal))
+                                  (decknix--hub-repo--handle-fetch-result
+                                   proc ,url ,branch ,key)))
+                             t)))
+                  (error
+                   (remhash key decknix--hub-repo-pending-fetches)
+                   (message "hub-repo-fetch: process error for %s@%s: %s"
+                            url branch (error-message-string err))))))))
+
         (defun decknix--hub-write-linked-prs ()
           "Write linked-prs.json to the hub directory for the daemon.
 Collects linked PRs from all live agent-shell sessions, resolves
@@ -9984,17 +10687,141 @@ the cache provides an immediate fallback instead of a bare spinner."
               (when (gethash url decknix--hub-pr-pending-fetches)
                 '((state . "LOADING")))))))
 
+        ;; -- Hub: columnar PR row helpers --
+        ;;
+        ;; Column semantics (see /tmp/pr-row-mockups-v3.html):
+        ;;   #N age state-word  CI  b  c  ✓  [⚠]  DTSP
+        ;; State-word, age, and CI are always shown (even in pipeline mode);
+        ;; bot/cmt/approval are only shown in `pr' or `both' mode;
+        ;; DTSP is only shown in `pipeline' or `both' mode.
+        ;; ⚠ is a conditional trailing flag on OPEN rows when GitHub reports
+        ;; `mergeable = CONFLICTING'; it is omitted on non-conflict rows so
+        ;; the DTSP column stays put for the common case.
+        ;; Closed PRs render only the state word (all downstream columns
+        ;; collapse because none of the signals apply).
+
+        (defun decknix--hub-state-word (state draft)
+          "Return a padded, coloured state word for STATE and DRAFT.
+OPEN renders in light blue (`#61afef'); DRAFT yellow; MERGED green;
+CLOSED dim.  The returned string is padded to 6 columns so the
+downstream glyph slots line up."
+          (let* ((raw (cond ((string= state "MERGED")  "merged")
+                            ((string= state "CLOSED")  "closed")
+                            ((and (string= state "OPEN") draft) "draft")
+                            ((string= state "OPEN")    "open")
+                            ((string= state "LOADING") "load")
+                            (t                         "?")))
+                 (face (cond ((string= state "MERGED")
+                              '(:foreground "#98c379"))
+                             ((string= state "CLOSED")
+                              'font-lock-comment-face)
+                             ((and (string= state "OPEN") draft)
+                              '(:foreground "#e5c07b" :weight bold))
+                             ((string= state "OPEN")
+                              '(:foreground "#61afef" :weight bold))
+                             ((string= state "LOADING")
+                              'font-lock-comment-face)
+                             (t 'font-lock-comment-face))))
+            (propertize (format "%-6s" raw) 'face face)))
+
+        (defun decknix--hub-ci-column (_state ci)
+          "Return the CI column glyph (`⟳') coloured by CI state.
+Green = pass, red = fail, yellow = running, grey = idle/unknown.
+For MERGED rows callers still get the real `ci-status' so an
+in-flight default-branch build reads as yellow until cached."
+          (let ((face (cond ((string= ci "pass")
+                             '(:foreground "#98c379" :weight bold))
+                            ((string= ci "fail")
+                             '(:foreground "#e06c75" :weight bold))
+                            ((string= ci "running")
+                             '(:foreground "#e5c07b" :weight bold))
+                            (t 'font-lock-comment-face))))
+            (propertize "⟳" 'face face)))
+
+        (defun decknix--hub-bot-column (status)
+          "Return the bot column glyph (`b') coloured by STATUS signals.
+Yellow when a bot posted last and the action is still pending;
+dim otherwise.  Phase 1a will extend this with explicit green/red
+derived from per-bot review signatures."
+          (let* ((state (or (alist-get 'state status) ""))
+                 (bot-pending (eq (alist-get 'bot_pending status) t))
+                 (face (cond ((string= state "MERGED")
+                              'font-lock-comment-face)
+                             (bot-pending
+                              '(:foreground "#e5c07b" :weight bold))
+                             (t 'font-lock-comment-face))))
+            (propertize "b" 'face face)))
+
+        (defun decknix--hub-cmt-column (status)
+          "Return the comments column glyph (`c') coloured by STATUS signals.
+Yellow when a human posted last and no reply has been sent;
+green-ish when a human replied to one of my threads; dim otherwise."
+          (let* ((state (or (alist-get 'state status) ""))
+                 (needs-reply (eq (alist-get 'needs_reply status) t))
+                 (replies-to-me (eq (alist-get 'replies_to_me status) t))
+                 (bot-pending (eq (alist-get 'bot_pending status) t))
+                 (face (cond ((string= state "MERGED")
+                              'font-lock-comment-face)
+                             ;; needs-reply dominates when it's a human
+                             ;; asking something (bot-pending already
+                             ;; covers the bot-is-last case).
+                             ((and needs-reply (not bot-pending))
+                              '(:foreground "#e5c07b" :weight bold))
+                             (replies-to-me
+                              '(:foreground "#87d7af" :weight bold))
+                             (t 'font-lock-comment-face))))
+            (propertize "c" 'face face)))
+
+        (defun decknix--hub-approval-column (status)
+          "Return the approval glyph (`✓'/`✗'/`?') coloured by STATUS.
+Green `✓' = APPROVED, red `✗' = CHANGES_REQUESTED, yellow `?' =
+review required / commented, dim `?' otherwise."
+          (let* ((state (or (alist-get 'state status) ""))
+                 (kind (alist-get 'kind status))
+                 ;; Prefer the decision relevant to this PR's kind:
+                 ;; WIP (my PR) → overall review_decision
+                 ;; Review (their PR) → my own submitted state
+                 (decision (cond ((eq kind 'wip)
+                                  (alist-get 'review_decision status))
+                                 ((eq kind 'review)
+                                  (alist-get 'my_review status))
+                                 (t (or (alist-get 'review_decision status)
+                                        (alist-get 'my_review status)))))
+                 (glyph (cond ((equal decision "APPROVED")          "✓")
+                              ((equal decision "CHANGES_REQUESTED") "✗")
+                              (t                                    "?")))
+                 (face (cond ((string= state "MERGED")
+                              'font-lock-comment-face)
+                             ((equal decision "APPROVED")
+                              '(:foreground "#98c379" :weight bold))
+                             ((equal decision "CHANGES_REQUESTED")
+                              '(:foreground "#e06c75" :weight bold))
+                             ((member decision '("REVIEW_REQUIRED"
+                                                 "COMMENTED"
+                                                 "PENDING"))
+                              '(:foreground "#e5c07b" :weight bold))
+                             (t 'font-lock-comment-face))))
+            (propertize glyph 'face face)))
+
         (defun decknix--hub-pr-format-line (pr-link &optional width expand-mode grouped)
           "Format a single linked PR for sidebar display.
 PR-LINK is a hash-table or alist from agent-sessions.json.
 WIDTH is the available character width (default 40).
-EXPAND-MODE controls what to show: `pr' (status/CI only),
+EXPAND-MODE controls what to show: `pr' (review columns only),
 `pipeline' (deploy only), `both' (all), or non-nil (all).
 When GROUPED is non-nil the caller is rendering a repo sub-header
-already, so the repo prefix is omitted from the line."
+already, so the repo prefix is omitted from the line.
+
+Layout:
+  <indent> #N <age> <state>  <CI>  <b> <c> <✓>  [⚠]  <DTSP>
+CI and state are always shown; review columns follow in `pr'/`both',
+DTSP follows in `pipeline'/`both'.  A trailing ⚠ appears on OPEN rows
+when GitHub reports `mergeable = CONFLICTING'.  Closed PRs render only
+the state word since every downstream signal is moot."
           (let* ((url (decknix--agent-pr-url-accessor pr-link "url"))
                  (pr-type (decknix--agent-pr-url-accessor pr-link "type"))
                  (parsed (decknix--agent-pr-parse-url url))
+                 (owner (nth 0 parsed))
                  (repo (nth 1 parsed))
                  (number (nth 2 parsed))
                  (status (decknix--hub-pr-status url))
@@ -10003,7 +10830,12 @@ already, so the repo prefix is omitted from the line."
                  (ci (alist-get 'ci-status status))
                  (stale (alist-get 'stale status))
                  (merged-at (alist-get 'merged_at status))
-                 (w (or width 40))
+                 (_ (or width 40))
+                 ;; Resolve expand mode flags — state + age + CI always
+                 ;; visible; bot/cmt/approval only in `pr'/`both';
+                 ;; DTSP only in `pipeline'/`both'.
+                 (show-pr (memq expand-mode '(pr both t)))
+                 (show-pipeline (memq expand-mode '(pipeline both t)))
                  ;; Repo label — capped when ungrouped, omitted when grouped
                  (repo-label (if grouped
                                  ""
@@ -10014,118 +10846,44 @@ already, so the repo prefix is omitted from the line."
                  (refresh-str (if stale
                                   (concat (propertize "↻" 'face 'font-lock-comment-face) " ")
                                 "  "))
-                 ;; State indicator — honours symbol-style toggle.  Drafts
-                 ;; render with a distinct glyph in the comment face to
-                 ;; mirror the WIP/Reviews sections, where drafts are
-                 ;; already dimmed.  Draft is orthogonal to state="OPEN".
-                 (state-str (cond
-                             ((string= state "MERGED")
-                              (propertize (decknix--hub-sym 'merged)
-                                          'face 'font-lock-string-face))
-                             ((string= state "CLOSED")
-                              (propertize (decknix--hub-sym 'closed)
-                                          'face 'font-lock-comment-face))
-                             ((and (string= state "OPEN") draft)
-                              (propertize (decknix--hub-sym 'draft)
-                                          'face 'font-lock-comment-face))
-                             ((string= state "OPEN")
-                              (propertize (decknix--hub-sym 'open)
-                                          'face 'font-lock-warning-face))
-                             ((string= state "LOADING")
-                              (propertize (decknix--hub-sym 'loading)
-                                          'face '(:foreground "#e5c07b")))
-                             (t (propertize (decknix--hub-sym 'unknown)
-                                            'face 'font-lock-comment-face))))
-                 ;; Resolve expand mode flags
-                 (show-pr (memq expand-mode '(pr both t)))
-                 (show-pipeline (memq expand-mode '(pipeline both t)))
-                 ;; Age — always shown; use merged_at for merged, updated for
-                 ;; open PRs, fall back to nothing if unavailable
+                 ;; Age — right-aligned to 3 chars so everything after
+                 ;; lines up regardless of m/h/d suffix.
                  (updated-at (alist-get 'updated_at status))
-                 (age-ts (cond (merged-at merged-at)
-                               (updated-at updated-at)
-                               (t nil)))
-                 (age-str (if age-ts
-                              (propertize
-                               (decknix--hub-format-age age-ts)
-                               'face 'font-lock-comment-face)
-                            ""))
-                 ;; PR status badges (state + overall CI + conflict +
-                 ;; review decision + activity).
-                 ;; Review decision reflects the PR's approval state:
-                 ;; WIP (my own PR) uses `review_decision' (APPROVED /
-                 ;; CHANGES_REQUESTED / REVIEW_REQUIRED) via
-                 ;; `decknix--hub-wip-review-icon'; review-kind (PR I am
-                 ;; reviewing) uses `my_review' (my own submitted state)
-                 ;; via `decknix--hub-review-icon'.  Activity icons
-                 ;; (🤖/💬/↩) surface comments needing a reply and threads
-                 ;; I participated in — parallel to Requests/WIP rows.
-                 (pr-str
-                  (if show-pr
-                      (let* ((ci-icon
-                              (when (member state '("OPEN" "MERGED"))
-                                (cond
-                                 ((string= ci "pass")
-                                  (propertize (decknix--hub-sym 'pass)
-                                              'face '(:foreground "#50fa7b")))
-                                 ((string= ci "fail")
-                                  (propertize (decknix--hub-sym 'fail)
-                                              'face '(:foreground "#ff5555")))
-                                 ((string= ci "running")
-                                  (propertize (decknix--hub-sym 'running)
-                                              'face 'font-lock-warning-face))
-                                 (t nil))))
-                             (mergeable (alist-get 'mergeable status))
-                             (conflict-str (if (and (string= state "OPEN")
-                                                    (string= (or mergeable "") "CONFLICTING"))
-                                               (propertize (decknix--hub-sym 'conflict)
-                                                           'face '(:foreground "#ff5555"))
-                                             ""))
-                             ;; Review decision icon — only for active PRs
-                             (kind (alist-get 'kind status))
-                             (review-icon (if (member state '("OPEN" "DRAFT"))
-                                              (pcase kind
-                                                ('wip (decknix--hub-wip-review-icon
-                                                       status))
-                                                ('review (decknix--hub-review-icon
-                                                          status))
-                                                (_ ""))
-                                            ""))
-                             ;; Activity icons (🤖/💬/↩) — only for active PRs
-                             (activity-str (if (member state '("OPEN" "DRAFT"))
-                                               (decknix--hub-activity-icons status)
-                                             "")))
-                        (concat " " state-str
-                                (if ci-icon (concat " " ci-icon) "")
-                                (if (string-empty-p conflict-str) "" (concat " " conflict-str))
-                                (if (string-empty-p review-icon) "" (concat " " review-icon))
-                                (if (string-empty-p activity-str) "" (concat " " activity-str))))
-                    ""))
-                 ;; Deploy pipeline indicator — shown for open PRs
-                 ;; (feature branch deploys) and merged PRs (default
-                 ;; branch deploys post-merge).
+                 (age-ts (or merged-at updated-at))
+                 (raw-age (if age-ts (decknix--hub-format-age age-ts) ""))
+                 (age-str (propertize (format "%3s" raw-age)
+                                      'face 'font-lock-comment-face))
+                 ;; Columns
+                 (state-word (decknix--hub-state-word state draft))
+                 (ci-col (decknix--hub-ci-column state ci))
+                 (bot-col (decknix--hub-bot-column status))
+                 (cmt-col (decknix--hub-cmt-column status))
+                 (approval-col (decknix--hub-approval-column status))
+                 ;; Conflict flag — trailing ⚠ on OPEN rows (draft or
+                 ;; not) when GitHub reports `mergeable = CONFLICTING'.
+                 ;; MERGED can't conflict; CLOSED short-circuits earlier.
+                 (mergeable (alist-get 'mergeable status))
+                 (conflict-col (when (and (equal mergeable "CONFLICTING")
+                                          (string= state "OPEN"))
+                                 (propertize "⚠" 'face 'error)))
+                 ;; Deploy pipeline indicator — feature-branch for OPEN,
+                 ;; default-branch for MERGED.  Pass merged_at so envs
+                 ;; whose latest deploy finished before the PR merged
+                 ;; render grey (prevents false-positive greens).
                  (branch (alist-get 'branch status))
-                 (owner (nth 0 parsed))
                  (repo-full (when (and owner repo)
                               (format "%s/%s" owner repo)))
-                 ;; For merged PRs, look up default-branch deploys
-                 ;; since deployments run on main/master after merge.
-                 ;; For open PRs, look up the feature branch deploys.
                  (deploy-branch (if (string= state "MERGED")
                                     "__default__"
                                   branch))
-                 ;; Pass merged_at so envs whose latest deploy finished
-                 ;; before the PR merged are rendered as not-deployed
-                 ;; (grey), preventing false-positive green indicators
-                 ;; for PRs not yet promoted past a given environment.
                  (deploy-merged-at (when (string= state "MERGED") merged-at))
                  (deploy-str
                   (if (and show-pipeline
                            (member state '("OPEN" "MERGED"))
                            repo-full deploy-branch
                            (fboundp 'decknix--hub-deploy-indicator))
-                      (concat " " (decknix--hub-deploy-indicator
-                                   repo-full deploy-branch deploy-merged-at))
+                      (decknix--hub-deploy-indicator
+                       repo-full deploy-branch deploy-merged-at)
                     ""))
                  ;; Type prefix for subject PRs
                  (type-prefix (if (string= pr-type "subject") "⊳ " ""))
@@ -10134,28 +10892,138 @@ already, so the repo prefix is omitted from the line."
                  (num-str (if draft
                               (propertize (format "#%d" number)
                                           'face 'font-lock-comment-face)
-                            (format "#%d" number))))
+                            (format "#%d" number)))
+                 ;; Assemble the signal zone (everything after the
+                 ;; state word).  Closed PRs skip it entirely; merged
+                 ;; PRs show dim placeholders until we implement the
+                 ;; supersede-detection cache (Phase 4).
+                 (dim-dot (propertize "·" 'face 'font-lock-comment-face))
+                 (signal-zone
+                  (cond
+                   ((string= state "CLOSED") "")
+                   ((string= state "MERGED")
+                    ;; CI still reflects the default-branch build for
+                    ;; the merge commit; review columns collapse since
+                    ;; bot/human/approval signals are moot post-merge.
+                    ;; Single-space separators keep the latter half
+                    ;; compact; `deploy-str' already has a leading space.
+                    (concat "  " ci-col
+                            (if show-pr
+                                (concat " " dim-dot " " dim-dot " " dim-dot)
+                              "")
+                            (if (and show-pipeline
+                                     (not (string-empty-p deploy-str)))
+                                deploy-str
+                              "")))
+                   (t
+                    (concat "  " ci-col
+                            (if show-pr
+                                (concat " " bot-col
+                                        " " cmt-col
+                                        " " approval-col)
+                              "")
+                            (if conflict-col
+                                (concat " " conflict-col)
+                              "")
+                            (if (and show-pipeline
+                                     (not (string-empty-p deploy-str)))
+                                deploy-str
+                              ""))))))
             (if grouped
-                (format "     %s%s%s%s%s%s"
+                (format "     %s%s%s %s %s%s"
                         refresh-str
                         type-prefix num-str
-                        (if (string-empty-p age-str) "" (concat " " age-str))
-                        pr-str
-                        deploy-str)
-              (format "   %s%s%s%s%s%s%s"
+                        age-str
+                        state-word
+                        signal-zone)
+              (format "   %s%s%s%s %s %s%s"
                       refresh-str
                       type-prefix repo-label num-str
-                      (if (string-empty-p age-str) "" (concat " " age-str))
-                      pr-str
-                      deploy-str))))
+                      age-str
+                      state-word
+                      signal-zone))))
 
-        (defun decknix--hub-group-prs-by-repo (prs)
-          "Group PRS (list of pr-link records) by owner/repo.
-Returns a list of (REPO-FULL . PR-LIST) pairs, preserving input order."
-          (let ((groups nil))
-            (dolist (pr prs)
-              (let* ((url (decknix--agent-pr-url-accessor pr "url"))
-                     (parsed (decknix--agent-pr-parse-url url))
+        (defun decknix--hub-repo-format-line (repo-link &optional _width expand-mode grouped)
+          "Format a single linked repo row for sidebar display.
+REPO-LINK is a hash-table/alist with type=\"repo\" and a branch field.
+EXPAND-MODE mirrors the PR formatter signature: `pipeline' / `both' / t
+render the DTSP deploy column; `pr' / nil skip it (repos have no
+bot/cmt/approval columns — there's no PR to review).
+GROUPED=t omits the repo prefix (caller emits a repo sub-header).
+
+Layout:
+  grouped:    <indent> <branch> <sha7> <age>  <CI>  <DTSP>
+  ungrouped:  <indent> <repo>   <branch> <sha7> <age>  <CI>  <DTSP>"
+          (let* ((url (decknix--agent-pr-url-accessor repo-link "url"))
+                 (branch (or (decknix--agent-pr-url-accessor repo-link "branch")
+                             "main"))
+                 (parsed (decknix--agent-repo-parse-url url))
+                 (owner (nth 0 parsed))
+                 (repo (nth 1 parsed))
+                 (repo-full (when (and owner repo)
+                              (format "%s/%s" owner repo)))
+                 ;; Defensive: guard against early sidebar timers / stale
+                 ;; .eln caches where the repo-status subsystem isn't loaded yet.
+                 (status (and url
+                              (fboundp 'decknix--hub-repo-status)
+                              (decknix--hub-repo-status url branch)))
+                 (sha (alist-get 'sha status))
+                 (sha7 (if sha
+                           (substring sha 0 (min 7 (length sha)))
+                         "·······"))
+                 (ci (alist-get 'ci-status status))
+                 (stale (alist-get 'stale status))
+                 (committed-at (alist-get 'updated_at status))
+                 (raw-age (if committed-at
+                              (decknix--hub-format-age committed-at)
+                            ""))
+                 (age-str (propertize (format "%3s" raw-age)
+                                      'face 'font-lock-comment-face))
+                 (show-pipeline (memq expand-mode '(pipeline both t)))
+                 (repo-label (if grouped
+                                 ""
+                               (decknix--hub-repo-name-apply repo)))
+                 (refresh-str (if stale
+                                  (concat (propertize "↻" 'face
+                                                      'font-lock-comment-face)
+                                          " ")
+                                "  "))
+                 ;; Branch name dim-keyword-ish so it reads as an
+                 ;; identifier but doesn't compete with the sha.
+                 (branch-str (propertize branch
+                                         'face 'font-lock-keyword-face))
+                 (sha7-str (propertize sha7 'face 'font-lock-comment-face))
+                 (ci-col (decknix--hub-ci-column "HEAD" ci))
+                 (deploy-str
+                  (if (and show-pipeline repo-full branch
+                           (fboundp 'decknix--hub-deploy-indicator))
+                      (decknix--hub-deploy-indicator repo-full branch nil)
+                    ""))
+                 (signal-zone
+                  (concat "  " ci-col
+                          (if (and show-pipeline
+                                   (not (string-empty-p deploy-str)))
+                              deploy-str
+                            ""))))
+            (if grouped
+                (format "     %s%s %s %s%s"
+                        refresh-str branch-str sha7-str age-str signal-zone)
+              (format "   %s%s %s %s %s%s"
+                      refresh-str repo-label branch-str sha7-str age-str
+                      signal-zone))))
+
+        (defun decknix--hub-group-items-by-repo (items)
+          "Group ITEMS (PR + repo link records) by owner/repo.
+Returns a list of (REPO-FULL . ITEM-LIST) pairs, preserving input order.
+Repo records use `decknix--agent-repo-parse-url'; PR records use
+`decknix--agent-pr-parse-url'."
+          (let (groups)
+            (dolist (rec items)
+              (let* ((url (decknix--agent-pr-url-accessor rec "url"))
+                     (tp (decknix--agent-pr-url-accessor rec "type"))
+                     (parsed (if (equal tp "repo")
+                                 (decknix--agent-repo-parse-url url)
+                               (decknix--agent-pr-parse-url url)))
                      (owner (nth 0 parsed))
                      (repo (nth 1 parsed))
                      (key (if (and owner repo)
@@ -10163,25 +11031,78 @@ Returns a list of (REPO-FULL . PR-LIST) pairs, preserving input order."
                             "unknown")))
                 (let ((cell (assoc key groups)))
                   (if cell
-                      (setcdr cell (append (cdr cell) (list pr)))
-                    (setq groups (append groups (list (cons key (list pr)))))))))
+                      (setcdr cell (append (cdr cell) (list rec)))
+                    (setq groups
+                          (append groups (list (cons key (list rec)))))))))
             groups))
+
+        ;; Alias preserved for existing callers that only deal with PRs.
+        (defalias 'decknix--hub-group-prs-by-repo
+          'decknix--hub-group-items-by-repo)
+
+        (defun decknix--hub-item-recency-key (rec)
+          "Return an ISO-8601 timestamp string for sorting REC by recency, or \"\".
+For PRs uses `updated_at' from the live/cache status; for repos uses
+`updated_at' (commit date) from the repo cache.  Missing / unfetched
+items sort last."
+          (let* ((url (decknix--agent-pr-url-accessor rec "url"))
+                 (tp (decknix--agent-pr-url-accessor rec "type"))
+                 ;; Guard against early sidebar timers firing before the repo
+                 ;; status subsystem is fully loaded (stale .eln caches, or a
+                 ;; daemon running pre-Phase-2 code that never saw these defuns).
+                 (status (cond
+                          ((and (equal tp "repo")
+                                (fboundp 'decknix--hub-repo-status))
+                           (decknix--hub-repo-status
+                            url
+                            (or (decknix--agent-pr-url-accessor rec "branch")
+                                "main")))
+                          ((fboundp 'decknix--hub-pr-status)
+                           (decknix--hub-pr-status url))
+                          (t nil))))
+            (or (alist-get 'updated_at status)
+                (alist-get 'merged_at status)
+                "")))
 
         (defun decknix--hub-render-session-prs (conv-key expand-mode
                                                          &optional line-face extra-indent)
-          "Insert grouped expanded-PR lines for CONV-KEY.
-EXPAND-MODE is forwarded to `decknix--hub-pr-format-line'.
+          "Insert grouped expanded linked-item lines for CONV-KEY.
+Renders both linked PRs and linked repos, grouped by owner/repo.
+Within each group, items are sorted by most-recent-activity first
+(via `decknix--hub-item-recency-key').
+
+EXPAND-MODE is forwarded to `decknix--hub-pr-format-line' and
+`decknix--hub-repo-format-line'.
 LINE-FACE, if non-nil, is applied uniformly to every inserted line
 (used e.g. to dim lines for previous/greyed-out sessions).
 EXTRA-INDENT is added to the repo sub-header indent.
 Returns the number of lines inserted."
           (let ((inserted 0)
-                (groups (decknix--hub-group-prs-by-repo
-                         (decknix--agent-linked-prs conv-key)))
+                (groups (decknix--hub-group-items-by-repo
+                         (decknix--agent-linked-items conv-key)))
                 (indent (or extra-indent "")))
             (dolist (g groups)
               (let* ((repo-full (car g))
                      (repo (car (last (split-string repo-full "/"))))
+                     ;; Sort items within this group by recency (most
+                     ;; recent first).  ISO-8601 sorts lexicographically.
+                     ;; Use the Schwartzian / decorate-sort-undecorate
+                     ;; pattern so `decknix--hub-item-recency-key' is
+                     ;; evaluated exactly once per item (O(N)) rather
+                     ;; than from inside the sort predicate (O(N log N)).
+                     ;; Recency-key dispatches to `decknix--hub-pr-status'
+                     ;; / `decknix--hub-repo-status' and is not free; the
+                     ;; naive predicate was the hot path that pegged the
+                     ;; frame at 100% CPU whenever a repo group had a
+                     ;; handful of linked items (see #hub-loop).
+                     (items (mapcar #'cdr
+                                    (sort (mapcar
+                                           (lambda (rec)
+                                             (cons (decknix--hub-item-recency-key rec)
+                                                   rec))
+                                           (cdr g))
+                                          (lambda (a b)
+                                            (string> (car a) (car b))))))
                      (header (concat indent
                                      (propertize (format "   %s" repo)
                                                  'face 'font-lock-type-face))))
@@ -10190,9 +11111,13 @@ Returns the number of lines inserted."
                           header)
                         "\n")
                 (setq inserted (1+ inserted))
-                (dolist (pr (cdr g))
-                  (let ((line (decknix--hub-pr-format-line
-                               pr nil expand-mode t)))
+                (dolist (rec items)
+                  (let* ((tp (decknix--agent-pr-url-accessor rec "type"))
+                         (line (if (equal tp "repo")
+                                   (decknix--hub-repo-format-line
+                                    rec nil expand-mode t)
+                                 (decknix--hub-pr-format-line
+                                  rec nil expand-mode t))))
                     (insert (if line-face
                                 (propertize line 'face line-face)
                               line)
@@ -11845,6 +12770,7 @@ Priority order:
                       (define-key map (kbd "y") 'decknix-agent-session-copy-id)
                       (define-key map (kbd "d") 'decknix-agent-session-toggle-id-display)
                       (define-key map (kbd "l") 'decknix-agent-link-pr)
+                      (define-key map (kbd "L") 'decknix-agent-link-repo)
                       (define-key map (kbd "u") 'decknix-agent-unlink-pr)
                       (local-set-key (kbd "C-c s") map))
                     ;; which-key labels for C-c s session sub-prefix
@@ -11859,7 +12785,8 @@ Priority order:
                         "C-c s y" "copy session ID"
                         "C-c s d" "toggle ID display"
                         "C-c s l" "link PR"
-                        "C-c s u" "unlink PR"))
+                        "C-c s L" "link repo+branch"
+                        "C-c s u" "unlink PR / repo"))
                     ;; Conditional bindings (may not be loaded)
                     (when (fboundp 'agent-shell-manager-toggle)
                       (local-set-key (kbd "C-c m") 'agent-shell-manager-toggle))
