@@ -118,7 +118,7 @@ knows what they're acting on.
 | Align Jira status with code       | `A`   | —   | —   | •    | —            | —            |
 | Analyze (AI)                      | `y`   | —   | —   | •    | —            | —            |
 | Define/update spec                | `S`   | —   | —   | •    | —            | —            |
-| Show local worktree               | `W`   | —   | —   | —    | —            | •            |
+| Worktree… (nested transient)      | `w`   | •   | •   | —    | •            | •            |
 | Reveal in Sessions picker         | `L`   | •   | •   | —    | •            | •            |
 
 Notes:
@@ -131,6 +131,12 @@ Notes:
   session, useful from a linked-PR row under Live/Previous.
 - `R` vs `M` distinguishes "PR review comment" from "generic comment/issue
   comment" — needed because they're different gh subcommands.
+- `w` opens the **worktree submenu** (§3.6) — unified across every row that
+  carries a branch. Supersedes the earlier linked-repo-only `W` "show local
+  worktree" verb; `W` is now free on hub rows.
+- Tasks deliberately skip `w`: a Jira ticket has no branch of its own. If the
+  ticket is linked to a PR the relevant row to act on is the linked PR, not
+  the task.
 
 #### 3.2.2 Session rows (Live, Previous, Saved)
 
@@ -150,6 +156,7 @@ Notes:
 | Copy conv-key                     | `c`   | •    | •    | •     |
 | Reveal in Sessions picker         | `L`   | •    | •    | •     |
 | Open session dir                  | `o`   | •    | •    | •     |
+| Worktree… (nested transient)      | `w`   | ∘    | ∘    | ∘     |
 
 Notes:
 - "Rename" on a live row renames the live buffer; on saved/previous it updates
@@ -158,6 +165,13 @@ Notes:
   — cross-links the two conv-keys and collapses their linked-item sets.
 - `W` changes the session's workspace tag (affects sub-header grouping under
   Sessions).
+- `w` surfaces the **worktree submenu** (§3.6) scoped to the session's workspace.
+  `∘` = only offered when the session's `workspace` directory is inside a git
+  checkout (the common case). If the workspace is plain (no `.git`, not a
+  worktree) the verb is hidden, not greyed. When the workspace *is* a git
+  checkout the submenu exposes worktree ops for **that repo's branches**, not
+  just the current one — so you can jump to the merged-branch worktree from a
+  feature-branch session without leaving the sidebar.
 
 #### 3.2.3 Section-header rows
 
@@ -186,8 +200,14 @@ RET opens a short transient:
 | Edit AI config (AGENTS.md / CLAUDE.md) | `A`   |
 | Scope Sessions picker to workspace   | `L`   |
 | Copy workspace path                  | `c`   |
+| Worktree… (nested transient)         | `w`   |
 
 `M-RET` = "Open workspace directory" (the primary action).
+
+The sub-header label itself grows a `⎇` badge when the workspace is a git
+worktree rather than the repo's primary checkout (detection in §3.6.2).  The
+`w` submenu is always offered on this row — unlike session rows, the
+sub-header is only rendered for git-backed workspaces to begin with.
 
 ### 3.3 RET vs M-RET (resolved)
 
@@ -212,6 +232,9 @@ Rows that currently have no properties need them. Minimum set per row type:
 - `decknix-hub-pr-state` (OPEN / MERGED / CLOSED — hides merge/close when moot)
 - `decknix-hub-ci-status` (feeds `C` jump-to-CI)
 - `decknix-hub-deploy-url` when present (feeds `D`)
+- `decknix-hub-head-repo` (owner/repo of the PR head — may differ from
+  `decknix-hub-repo` for forks; feeds `w` worktree submenu)
+- `decknix-hub-head-branch` (branch name on the head repo; feeds `w`)
 
 **Linked repo rows** (live + previous, expanded):
 - `decknix-hub-type` = `linked-repo`
@@ -220,9 +243,15 @@ Rows that currently have no properties need them. Minimum set per row type:
 - `decknix-hub-sha` (for Copy URL → permalink; feeds `C` for CI on sha)
 - `decknix-hub-conv-key`
 - `decknix-hub-linked-kind` = `'authored | 'subject`
+- `decknix-hub-head-repo` = `decknix-hub-repo` (mirrored so the worktree
+  submenu has a uniform key to read on any row type).
+- `decknix-hub-head-branch` = `decknix-hub-branch` (same rationale).
 
 **Requests rows** already have `decknix-hub-url` + type — add:
 - `decknix-hub-repo`, `decknix-hub-number` (needed for `M` / `R` / `C`).
+- `decknix-hub-head-repo`, `decknix-hub-head-branch` (feeds `w` — for
+  requests these usually point at a fork; the worktree submenu handles the
+  fork-vs-upstream distinction at action time).
 
 **Tasks (Jira) rows** already have key + status — add:
 - `decknix-hub-jira-type` (Story / Bug / Task — feeds transition targets).
@@ -251,6 +280,124 @@ Every actionable row must survive being discoverable through:
 - Each transient's header renders the row label so the user always knows what
   they are acting on, including whether a linked PR is authored vs subject.
 
+### 3.6 Worktree awareness
+
+Many rows the sidebar surfaces are, one way or another, about a **branch in a
+repo** — WIP PRs, Requests, Linked PRs, Linked Repos, and session workspaces
+rooted at a clone.  Git worktrees let that branch live in its own checkout
+alongside the primary one, so the user can review a PR or run an agent session
+without disturbing whatever is in the main working copy.  The sidebar should
+treat worktrees as first-class: show whether a branch already has a local
+worktree, and let the user create / jump to / remove one from the same action
+menu that opens the PR.
+
+This section defines the data model and the `w` submenu those rows share.
+
+#### 3.6.1 Clone registry and cache
+
+The submenu needs to answer two questions:
+
+1. **Is there a local clone of `owner/repo` on this machine?**  If not,
+   "open worktree" is moot and the submenu collapses to "create worktree".
+2. **For a given clone, is `branch` checked out in a worktree?  Where?**
+
+Both answers come from a small cache Emacs maintains at
+`~/.config/decknix/hub/worktrees.el`:
+
+```elisp
+;; keyed by (owner/repo) — canonicalised lowercase
+((\"raywhite/decknix\"
+  :primary \"/Users/ldeck/tools/decknix\"
+  :worktrees ((\"main\"                . \"/Users/ldeck/tools/decknix\")
+              (\"spec/sidebar-ret\"    . \"/Users/ldeck/tools/decknix-spec-sidebar-ret\")))
+ ...)
+```
+
+The registry is seeded three ways, in priority order:
+
+- **Explicit** `decknix-hub-clones` defcustom — an alist the user maintains in
+  their personal `decknix-config`.
+- **Sessions** — every persisted `agent-sessions.json` workspace is probed
+  once and, if a git checkout, folded in.
+- **project.el / projectile** known projects — same probe, same folding.
+
+Entries are refreshed lazily: the first time a row with `decknix-hub-head-repo`
+needs worktree data the registry is consulted, and each entry is revalidated
+against `git worktree list --porcelain` with a 60 s TTL.  All IO is
+`make-process`-based so a stale NFS mount can't wedge redisplay.
+
+#### 3.6.2 Workspace-is-worktree detection
+
+For a session row's workspace path `$P`:
+
+- `git -C $P rev-parse --git-common-dir` vs `git -C $P rev-parse --git-dir` —
+  different paths ⇒ `$P` is a worktree, not the primary checkout.
+- `git -C $P rev-parse --show-toplevel` gives the worktree root (so the
+  label's `⎇` badge can tag **this** session's workspace).
+- Result is memoised on the session's workspace entry in the registry
+  alongside the worktree list.
+
+#### 3.6.3 The `w` submenu
+
+Opened from any row that resolves a `(head-repo, head-branch)` pair, or from
+a session workspace that lives in a git checkout.  Verbs:
+
+| Verb                             | Key | Notes                                                                         |
+|----------------------------------|-----|-------------------------------------------------------------------------------|
+| Open worktree                    | `o` | Only when a worktree for the branch already exists.  Runs `dired` there.      |
+| Create worktree                  | `n` | Prompts for path (default: sibling of primary, suffixed `-<branch-slug>`).    |
+| Start session in worktree        | `s` | Creates the worktree if missing, then launches an agent-shell rooted there.   |
+| Remove worktree                  | `x` | Refuses if dirty unless `C-u`; confirms before `git worktree remove --force`. |
+| Reveal worktree in Finder        | `r` | Only when a worktree exists.                                                  |
+| Prune stale worktrees (for repo) | `p` | Runs `git worktree prune` on the primary clone; reports removed entries.      |
+| Status summary                   | `d` | Ephemeral buffer with `git status --short` + `git log --oneline -5` + ahead/behind counts. |
+| Copy worktree path               | `c` | Clipboard; only when a worktree exists.                                       |
+
+Suffixes hide themselves rather than dim, so the submenu always reflects the
+reachable ops for the row in hand.  The header of the nested transient echoes
+`owner/repo @ branch — <state>` so the user can see at a glance whether the
+branch is already checked out and where.
+
+#### 3.6.4 What worktrees mean for each row type
+
+- **Request rows** — head is usually a fork.  Creating a worktree uses
+  `gh pr checkout` under the hood so the fork's remote is configured
+  correctly; the worktree branch is named `pr/<number>` by default to avoid
+  colliding with the user's own branches.
+- **WIP / authored Linked-PR rows** — head is owned by the user.  Worktree
+  branch name is the PR head branch verbatim; `x` warns if the branch is
+  also the primary checkout's current HEAD.
+- **Subject Linked-PR rows** (I was added as reviewer from a session) — same
+  fork handling as Request rows, but "Start session in worktree" pre-populates
+  the session tags `review #<number>` for symmetry with `C-c A c r`.
+- **Linked-Repo rows** — simplest case: the branch exists on the upstream
+  and `gh pr checkout` is not involved.  `n` does a plain `git worktree add`.
+- **Session workspace rows (via sub-header and session `w`)** — scope is the
+  repo that owns the workspace, but the submenu lists *all* that repo's
+  worktrees, not only the current one, so you can jump from a feature-branch
+  session to the `main` worktree without leaving the sidebar.
+- **Tasks rows** — deliberately excluded (§3.2.1).  A Jira ticket has no
+  branch of its own; the linked PR row is the right place to act.
+
+#### 3.6.5 Worktree lifecycle hooks
+
+Worktree creation/removal needs to stay consistent with the Sessions state so
+stale workspace paths don't accumulate:
+
+- When `s` "Start session in worktree" creates a new worktree it records the
+  workspace in `agent-sessions.json` as usual — no new path.
+- When `x` removes a worktree that is referenced by any saved session's
+  workspace, the user is shown the affected sessions and offered to
+  **rewire** them to the primary clone, **archive** them, or **abort** the
+  removal.  Default is abort.
+- `git worktree prune` is plumbed through so Emacs notices externally
+  removed worktrees on the next registry refresh; affected session rows
+  render with the workspace path struck through and a `⚠ stale` hint until
+  the user resolves them.
+
+This dovetails with the planned #69 "worktree-aware sessions" work — that
+issue can build on this registry rather than introduce its own.
+
 ## 4. Out of scope for this spec
 
 - Changing the `r` / `w` pickers themselves (already stable).
@@ -263,13 +410,16 @@ Every actionable row must survive being discoverable through:
 
 ## 5. Candidate issues (raise after review)
 
-Ordered by dependency. The first three propertise rows so subsequent issues
-can land without needing to re-walk the renderer.
+Ordered by dependency.  The first three propertise rows so subsequent issues
+can land without needing to re-walk the renderer; the worktree work forms a
+short, optional track that can slot in after the dispatcher (#4) lands.
 
 1. **`feat(sidebar): propertize linked PR rows for RET dispatch`** (§3.4) —
-   no behaviour change, prerequisite for #3/#4.
+   no behaviour change, prerequisite for #4.  Includes `decknix-hub-head-repo`
+   and `decknix-hub-head-branch` so the worktree submenu can read them later.
 2. **`feat(sidebar): propertize linked repo rows for RET dispatch`** (§3.4) —
-   mirror of #1.
+   mirror of #1.  Sets `decknix-hub-head-repo` / `-head-branch` as aliases of
+   the row's repo/branch.
 3. **`feat(sidebar): propertize section + workspace headers`** (§3.4) —
    prerequisite for #6.
 4. **`feat(sidebar): unified RET opens action transient for every actionable
@@ -284,14 +434,23 @@ can land without needing to re-walk the renderer.
 8. **`feat(sidebar): session row action transient (rename/kill/archive/…)`**
    (§3.2.2) — can land independently of the hub-row work; session rows
    already carry enough data.
-9. **`feat(hub): tasks picker (mirrors `r`/`w` for Jira)`** — prerequisite
-   for #6's Tasks-header routing; flagged in §4 as out of scope for *this*
-   spec but tracked here so the dependency is visible.
-10. **`feat(hub): Jira transition / align-with-code / analyze verbs`**
+9. **`feat(hub): worktree registry + cache`** (§3.6.1) — clone discovery,
+   `git worktree list --porcelain` probe via `make-process`,
+   `~/.config/decknix/hub/worktrees.el`.  No UI surface yet; sets up the
+   data layer for #10.  Independent of #4 — can land first or last.
+10. **`feat(sidebar): worktree submenu on hub + session rows`** (§3.6.3,
+    §3.6.4) — the shared `w` transient.  Needs #9 for the registry and #4
+    for the dispatcher plumbing.  Builds on but does **not** block #69.
+11. **`feat(sidebar): workspace-is-worktree badge on sub-header`** (§3.6.2)
+    — cheap, can ship with #7 or separately.
+12. **`feat(hub): tasks picker (mirrors `r`/`w` for Jira)`** — prerequisite
+    for #6's Tasks-header routing; flagged in §4 as out of scope for *this*
+    spec but tracked here so the dependency is visible.
+13. **`feat(hub): Jira transition / align-with-code / analyze verbs`**
     (§3.2.1 task column) — separable; depends on MCP/Jira tooling already
     wired up for agent-shell.
-11. **`docs(agent-shell): document sidebar RET / M-RET contract in AGENTS.md`**
-    — ships alongside #4.
+14. **`docs(agent-shell): document sidebar RET / M-RET + worktree contract
+    in AGENTS.md`** — ships alongside #4 and #10.
 
 ## 6. Open questions
 
@@ -299,9 +458,9 @@ can land without needing to re-walk the renderer.
    for review-start on PR-ish rows and `i` for investigate-start on
    Task/Linked-Repo. Keeping them separate avoids overloading `r`, but the
    user may prefer a single mnemonic. **Lean: keep split.**
-2. Linked-repo `W` "show local worktree" — useful or bloat? Depends on the
-   git-worktree integration in #69 landing. **Lean: defer, reintroduce when
-   #69 ships.**
+2. **Resolved** — retired.  The earlier "show local worktree" verb has been
+   absorbed into the §3.6 worktree submenu on every branch-bearing row,
+   including linked repos.  No need to defer to #69.
 3. Jump-to-CI `C` and jump-to-deploy `D` — do we have enough info in hub
    data today to build URLs without a round-trip to `gh`? If not, these
    verbs block on a hub-data extension.
@@ -319,3 +478,28 @@ can land without needing to re-walk the renderer.
    `Previous` header because sessions are grouped by workspace under
    `Sessions (N)`. Confirm this is still correct (no separate previous
    header needed).
+8. Worktree default path (§3.6.3 `n`) — sibling of the primary checkout
+   (`../<repo>-<branch-slug>`) or a central directory
+   (`~/worktrees/<owner>/<repo>/<branch-slug>`)?  Sibling is what I use now
+   and keeps `cd ..` intuitive; a central dir is tidier but breaks that
+   muscle memory.  **Lean: sibling, with a `decknix.worktree.root`
+   defcustom to override.**
+9. Request-row worktrees for forks — `gh pr checkout` configures a remote
+   named after the fork owner.  Do we delete that remote on `x` "remove
+   worktree", leave it, or leave it and just prune on demand?  **Lean:
+   leave it; a future clean-fork-remotes command handles the hygiene.**
+10. Worktree removal interlocked with sessions (§3.6.5) — the spec proposes
+    **abort** as the default when a saved session references the worktree
+    being removed.  Aggressive alternative: **rewire** by default and tell
+    the user.  **Lean: abort; the user's state is worth more than a
+    convenience save.**
+11. Clone registry seeding — do we auto-probe every `agent-sessions.json`
+    workspace on daemon start (bounded, but could be dozens of
+    `git rev-parse` processes) or lazily per-row?  **Lean: lazy per-row
+    with a 60 s TTL; the registry warms naturally as the user browses.**
+12. Worktree caching on an NFS / cloud-mounted clone — probing with
+    `git worktree list` can stall on unresponsive mounts.  The
+    `make-process` IO in §3.6.1 sidesteps the UI block, but stale entries
+    stay cached until the next successful probe.  Is a time-bounded
+    "last seen healthy" badge worth it?  **Lean: no — surface it via the
+    status summary (`d`) on demand.**
