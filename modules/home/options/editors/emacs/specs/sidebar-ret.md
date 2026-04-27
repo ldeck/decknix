@@ -83,6 +83,19 @@ to happen on plain RET before this spec. The mapping is explicit in §2
 (column "Desired M-RET"). This preserves muscle memory for "open the thing"
 and "switch to the session" without the cost of a transient keystroke.
 
+**Stable menu shape.** Two rows of the same type MUST open transients with the
+same verbs in the same key positions, regardless of the row's current state
+(worktree present or not, PR open or merged, session live or saved).
+State-conditional verbs are **dimmed** (`transient`'s `:inapt-if`), not
+hidden, so the user's muscle memory survives across rows and the menu doubles
+as a discoverability aid: a dimmed `o` Open worktree on a no-worktree row
+still teaches the user that `o` is the verb to remember once a worktree
+exists. Verbs that are **categorically inapplicable** for a row type
+(e.g. `m` Merge on a Linked Repo row) are absent from the matrix and from
+the rendered transient — that is a row-type decision, not a state decision.
+The row itself carries visual cues (§3.6.3) that advertise state at a
+glance, so the dimmed verbs corroborate rather than reveal.
+
 RET on an unpropertized line (placeholder, footer help) gives a **quiet**
 `message "No action at point"` — not a `user-error` — so the user can probe
 the sidebar with RET without triggering a bell.
@@ -94,7 +107,9 @@ copy URL) have fixed keys across all transients; row-specific verbs are grouped
 separately. Every transient's header is the row's one-line label so the user
 knows what they're acting on.
 
-**Legend:** `•` always shown · `∘` shown conditionally (noted) · `—` absent.
+**Legend:** `•` always shown and enabled · `∘ <cond>` always shown,
+**dimmed** unless `<cond>` is true · `—` absent from this row type's matrix
+(hidden because categorically irrelevant, not state-dependent).
 
 #### 3.2.1 Hub rows (Requests, WIP, Task, Linked PR, Linked Repo)
 
@@ -122,9 +137,11 @@ knows what they're acting on.
 | Reveal in Sessions picker         | `L`   | •   | •   | —    | •            | •            |
 
 Notes:
-- `∘ authored` = only when the current user is the PR author. The transient
-  hides the suffix when the data says otherwise, so the menu is context-aware
-  for authored vs subject-of-review linked PRs.
+- `∘ authored` = only enabled when the current user is the PR author. The
+  suffix is rendered **dimmed** (not hidden) on subject-of-review linked PRs
+  so the menu shape stays identical between authored and subject rows; the
+  row's visual cues (§3.6.3) and the transient header tell the user which
+  variant they are looking at.
 - `D` (jump to deploy) is conditional on the PR having deploy metadata in
   hub data. Still flagged as an open question (§6.5).
 - `L` (reveal) = open the Sessions picker pre-filtered to this PR's owning
@@ -279,6 +296,10 @@ Every actionable row must survive being discoverable through:
   action; no per-row memorisation required.
 - Each transient's header renders the row label so the user always knows what
   they are acting on, including whether a linked PR is authored vs subject.
+- Menu shape is **stable across state** (§3.1): the same row type always
+  shows the same verbs in the same positions; state-conditional verbs are
+  dimmed rather than hidden. The row's badges (§3.6.3) advertise state on
+  the row itself so the user can read it without opening the transient.
 
 ### 3.6 Worktree awareness
 
@@ -337,28 +358,73 @@ For a session row's workspace path `$P`:
 - Result is memoised on the session's workspace entry in the registry
   alongside the worktree list.
 
-#### 3.6.3 The `w` submenu
+#### 3.6.3 Row badges and visual cues
+
+Branch state is communicated **on the row** so the user does not have to open
+the worktree submenu to know where a branch lives.  The badge appears in a
+fixed position immediately before the row's primary identifier (`#N` for PR
+rows, `<branch>` for Linked Repo rows, the session label for session rows),
+costs one column, and falls back to a single space when no badge applies so
+downstream columns line up across rows of the same type.
+
+| Badge | Meaning                                                                                       | Face                  |
+|-------|-----------------------------------------------------------------------------------------------|-----------------------|
+| `⎇`   | Branch is checked out in a **separate worktree** of the local clone.                          | `font-lock-keyword-face` |
+| `⎇*`  | Branch is checked out in a worktree **and** that worktree is the current session's workspace. | `font-lock-keyword-face` + bold |
+| `●`   | Branch **is** the primary clone's current HEAD (so `n` Create would clash with primary).      | `shadow`              |
+| ` `   | Branch exists in the local clone as a ref but is not checked out anywhere.                    | —                     |
+| `↓`   | No local clone of the repo on this machine yet (worktree submenu collapses to "create+clone"). | `shadow`              |
+
+Notes:
+
+- The Workspace sub-header (§3.2.4) reuses the same `⎇` glyph so the convention
+  is uniform across sections; that earlier reference resolves to this table.
+- Detection is cheap enough to run on every render: the registry already knows
+  `(repo, branch) → worktree-path` and the session's workspace path is a
+  property on the row, so the badge is a hash lookup, not a process invocation.
+  Stale clone-presence answers come from the §3.6.1 60 s TTL and never block.
+- Badges never replace the existing draft `#` marker on Linked-PR rows or the
+  state-word colour — they sit *before* `#N` so both signals coexist.
+- The Linked Repo row layout (`<branch> <sha7> <age> CI DTSP`) reserves the
+  badge slot before `<branch>` for the same reason.
+- Tooltip / `help-echo` text on the badge spells out the state (e.g. `⎇ in
+  worktree at /Users/ldeck/tools/decknix-spec-sidebar-ret`) so a hover (or
+  `M-x what-cursor-position`) discloses the path without a transient.
+
+#### 3.6.4 The `w` submenu
 
 Opened from any row that resolves a `(head-repo, head-branch)` pair, or from
 a session workspace that lives in a git checkout.  Verbs:
 
-| Verb                             | Key | Notes                                                                         |
-|----------------------------------|-----|-------------------------------------------------------------------------------|
-| Open worktree                    | `o` | Only when a worktree for the branch already exists.  Runs `dired` there.      |
-| Create worktree                  | `n` | Prompts for path (default: sibling of primary, suffixed `-<branch-slug>`).    |
-| Start session in worktree        | `s` | Creates the worktree if missing, then launches an agent-shell rooted there.   |
-| Remove worktree                  | `x` | Refuses if dirty unless `C-u`; confirms before `git worktree remove --force`. |
-| Reveal worktree in Finder        | `r` | Only when a worktree exists.                                                  |
-| Prune stale worktrees (for repo) | `p` | Runs `git worktree prune` on the primary clone; reports removed entries.      |
-| Status summary                   | `d` | Ephemeral buffer with `git status --short` + `git log --oneline -5` + ahead/behind counts. |
-| Copy worktree path               | `c` | Clipboard; only when a worktree exists.                                       |
+| Verb                             | Key | Always shown? | Enabled when                                              |
+|----------------------------------|-----|---------------|-----------------------------------------------------------|
+| Open worktree                    | `o` | yes           | a worktree exists for `(repo, branch)`                    |
+| Create worktree                  | `n` | yes           | clone exists locally **and** branch has no worktree yet   |
+| Start session in worktree        | `s` | yes           | always (creates worktree first if missing)                |
+| Remove worktree                  | `x` | yes           | a worktree exists; `C-u` to override "dirty" guard        |
+| Reveal worktree in Finder        | `r` | yes           | a worktree exists                                          |
+| Prune stale worktrees (for repo) | `p` | yes           | clone exists locally                                       |
+| Status summary                   | `d` | yes           | clone exists locally (operates on worktree if present)     |
+| Copy worktree path               | `c` | yes           | a worktree exists                                          |
 
-Suffixes hide themselves rather than dim, so the submenu always reflects the
-reachable ops for the row in hand.  The header of the nested transient echoes
-`owner/repo @ branch — <state>` so the user can see at a glance whether the
-branch is already checked out and where.
+Per the §3.1 stable-menu-shape rule, every verb above is **always rendered**;
+verbs that are not currently enabled are **dimmed** via `transient`'s
+`:inapt-if`, not hidden.  This keeps the submenu shape constant across rows
+and states so muscle memory survives, and the dimmed verbs continue to teach
+the user what is reachable once state changes (e.g. a dimmed `o` Open on a
+no-worktree row signals "this is the verb to remember; use `n` first").
 
-#### 3.6.4 What worktrees mean for each row type
+The header of the nested transient echoes `owner/repo @ branch — <state>` so
+the user can see at a glance which combination of badges applies; the state
+string mirrors the badge palette (§3.6.3): `in worktree`, `primary HEAD`,
+`branch ref only`, or `no local clone`.
+
+Verbs do **not dispatch** when dimmed — they show a one-line minibuffer
+explanation pointing to the next reachable verb (e.g. `o`: "no worktree yet —
+press `n` to create one").  This is `transient`'s standard inapt behaviour
+and matches how Magit handles state-dependent verbs in its own menus.
+
+#### 3.6.5 What worktrees mean for each row type
 
 - **Request rows** — head is usually a fork.  Creating a worktree uses
   `gh pr checkout` under the hood so the fork's remote is configured
@@ -379,7 +445,7 @@ branch is already checked out and where.
 - **Tasks rows** — deliberately excluded (§3.2.1).  A Jira ticket has no
   branch of its own; the linked PR row is the right place to act.
 
-#### 3.6.5 Worktree lifecycle hooks
+#### 3.6.6 Worktree lifecycle hooks
 
 Worktree creation/removal needs to stay consistent with the Sessions state so
 stale workspace paths don't accumulate:
@@ -438,11 +504,16 @@ short, optional track that can slot in after the dispatcher (#4) lands.
    `git worktree list --porcelain` probe via `make-process`,
    `~/.config/decknix/hub/worktrees.el`.  No UI surface yet; sets up the
    data layer for #10.  Independent of #4 — can land first or last.
-10. **`feat(sidebar): worktree submenu on hub + session rows`** (§3.6.3,
-    §3.6.4) — the shared `w` transient.  Needs #9 for the registry and #4
-    for the dispatcher plumbing.  Builds on but does **not** block #69.
-11. **`feat(sidebar): workspace-is-worktree badge on sub-header`** (§3.6.2)
-    — cheap, can ship with #7 or separately.
+10. **`feat(sidebar): worktree submenu on hub + session rows`** (§3.6.4,
+    §3.6.5) — the shared `w` transient with the dim-not-hide policy from
+    §3.1.  Needs #9 for the registry and #4 for the dispatcher plumbing.
+    Builds on but does **not** block #69.
+11. **`feat(sidebar): row badges for worktree / HEAD / no-clone state`**
+    (§3.6.3) — cheap, depends only on the registry (#9); ships
+    independently of the submenu so users get the visual cue first.
+    Subsumes the earlier "workspace-is-worktree badge on sub-header"
+    item by generalising it to every branch-bearing row, with the
+    sub-header reusing the same `⎇` glyph.
 12. **`feat(hub): tasks picker (mirrors `r`/`w` for Jira)`** — prerequisite
     for #6's Tasks-header routing; flagged in §4 as out of scope for *this*
     spec but tracked here so the dependency is visible.
@@ -478,7 +549,7 @@ short, optional track that can slot in after the dispatcher (#4) lands.
    `Previous` header because sessions are grouped by workspace under
    `Sessions (N)`. Confirm this is still correct (no separate previous
    header needed).
-8. Worktree default path (§3.6.3 `n`) — sibling of the primary checkout
+8. Worktree default path (§3.6.4 `n`) — sibling of the primary checkout
    (`../<repo>-<branch-slug>`) or a central directory
    (`~/worktrees/<owner>/<repo>/<branch-slug>`)?  Sibling is what I use now
    and keeps `cd ..` intuitive; a central dir is tidier but breaks that
@@ -488,7 +559,7 @@ short, optional track that can slot in after the dispatcher (#4) lands.
    named after the fork owner.  Do we delete that remote on `x` "remove
    worktree", leave it, or leave it and just prune on demand?  **Lean:
    leave it; a future clean-fork-remotes command handles the hygiene.**
-10. Worktree removal interlocked with sessions (§3.6.5) — the spec proposes
+10. Worktree removal interlocked with sessions (§3.6.6) — the spec proposes
     **abort** as the default when a saved session references the worktree
     being removed.  Aggressive alternative: **rewire** by default and tell
     the user.  **Lean: abort; the user's state is worth more than a
@@ -503,3 +574,24 @@ short, optional track that can slot in after the dispatcher (#4) lands.
     stay cached until the next successful probe.  Is a time-bounded
     "last seen healthy" badge worth it?  **Lean: no — surface it via the
     status summary (`d`) on demand.**
+13. Row badge palette (§3.6.3) — the proposed glyphs are `⎇` (worktree),
+    `⎇*` (worktree = current session's workspace), `●` (primary HEAD),
+    `↓` (no local clone), space otherwise.  Open sub-questions: (a) is
+    `●` worth the column cost or should "primary HEAD" stay implicit
+    until the user opens the submenu? (b) is `↓` (no local clone) more
+    misleading than helpful given a row's mere presence usually means
+    the data came from `gh`, not from local git?  **Lean: keep `⎇` and
+    `⎇*`; drop `●` (rare collision, and the submenu's `n` already
+    surfaces the conflict); make `↓` opt-in via a defcustom default
+    off, since most users will never have rows for repos they have not
+    cloned.**
+14. Stable menu shape vs verb sprawl (§3.1) — dimming inapplicable verbs
+    rather than hiding them keeps the menu uniform but means a
+    "no worktree, no clone" row shows seven dimmed verbs and one live
+    one (`n` Create, which itself has to clone first).  Is that a
+    feature (predictable layout, every key teaches you something) or
+    a usability cliff (eight greyed-out lines for an action you cannot
+    yet perform)?  **Lean: feature — `transient` already prints inapt
+    rationale in the echo area, so dimmed verbs guide rather than
+    block.  Revisit if user feedback says the noise outweighs the
+    consistency.**
