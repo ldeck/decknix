@@ -10940,19 +10940,46 @@ the state word since every downstream signal is moot."
                                      (not (string-empty-p deploy-str)))
                                 deploy-str
                               ""))))))
-            (if grouped
-                (format "     %s%s%s %s %s%s"
-                        refresh-str
-                        type-prefix num-str
-                        age-str
-                        state-word
-                        signal-zone)
-              (format "   %s%s%s%s %s %s%s"
-                      refresh-str
-                      type-prefix repo-label num-str
-                      age-str
-                      state-word
-                      signal-zone))))
+            ;; Build the line then attach text properties for the unified
+            ;; sidebar dispatcher (see specs/sidebar-ret.md §3.4).  Properties
+            ;; cover every character including leading indent so that
+            ;; (get-text-property (line-beginning-position) ...) resolves on
+            ;; any column.  The conv-key property is set at the insertion
+            ;; site since this formatter has no conversation context.
+            ;; head-repo defaults to repo-full; fork PRs need daemon support
+            ;; (headRepositoryOwner) before this can distinguish them — see #120.
+            (let ((line (if grouped
+                            (format "     %s%s%s %s %s%s"
+                                    refresh-str
+                                    type-prefix num-str
+                                    age-str
+                                    state-word
+                                    signal-zone)
+                          (format "   %s%s%s%s %s %s%s"
+                                  refresh-str
+                                  type-prefix repo-label num-str
+                                  age-str
+                                  state-word
+                                  signal-zone))))
+              (propertize line
+                          'decknix-hub-type 'linked-pr
+                          'decknix-hub-url url
+                          'decknix-hub-repo repo-full
+                          'decknix-hub-number number
+                          'decknix-hub-linked-kind (pcase pr-type
+                                                     ("authored" 'authored)
+                                                     ("subject" 'subject)
+                                                     (_ nil))
+                          'decknix-hub-pr-state (pcase state
+                                                  ("OPEN" (if draft 'draft 'open))
+                                                  ("DRAFT" 'draft)
+                                                  ("MERGED" 'merged)
+                                                  ("CLOSED" 'closed)
+                                                  (_ nil))
+                          'decknix-hub-ci-status ci
+                          'decknix-hub-deploy-url nil
+                          'decknix-hub-head-repo repo-full
+                          'decknix-hub-head-branch branch))))
 
         (defun decknix--hub-repo-format-line (repo-link &optional _width expand-mode grouped)
           "Format a single linked repo row for sidebar display.
@@ -11128,11 +11155,18 @@ Returns the number of lines inserted."
                                    (decknix--hub-repo-format-line
                                     rec nil expand-mode t)
                                  (decknix--hub-pr-format-line
-                                  rec nil expand-mode t))))
+                                  rec nil expand-mode t)))
+                         (start (point)))
                     (insert (if line-face
                                 (propertize line 'face line-face)
                               line)
                             "\n")
+                    ;; Annotate row with its owning conversation so the
+                    ;; sidebar dispatcher can resolve session context from
+                    ;; any linked PR / repo row.  See specs/sidebar-ret.md §3.4.
+                    (when conv-key
+                      (put-text-property start (1- (point))
+                                         'decknix-hub-conv-key conv-key))
                     (setq inserted (1+ inserted))))))
             inserted))
 
