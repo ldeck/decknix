@@ -105,6 +105,8 @@ struct ReviewRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     mentioned: Option<bool>, // true when user was directly requested as reviewer (not just via team)
     #[serde(skip_serializing_if = "Option::is_none")]
+    team_requested: Option<bool>, // true when one of user's teams was requested as reviewer
+    #[serde(skip_serializing_if = "Option::is_none")]
     needs_reply: Option<bool>, // true when latest comment/review is from someone else (bot or human)
     #[serde(skip_serializing_if = "Option::is_none")]
     bot_pending: Option<bool>, // true when the latest comment/review is from a bot
@@ -133,6 +135,11 @@ struct CiStatus {
 #[derive(Debug, Serialize, Deserialize)]
 struct ReviewsFile {
     updated: DateTime<Utc>,
+    /// GitHub login of the viewer this file was generated for.  Lets the
+    /// consumer (Emacs sidebar) cheaply exclude self-authored PRs when
+    /// applying the @-mention / team filters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    viewer: Option<String>,
     items: Vec<ReviewRequest>,
 }
 
@@ -389,19 +396,27 @@ fn summarise_ci(checks: &Option<Vec<GhCheck>>) -> Option<CiStatus> {
             conclusion: conc_str.map(|s| s.to_string()),
             url: c.details_url.clone(),
         });
-        if let Some(ref conc) = c.conclusion {
-            match conc.as_str() {
-                "FAILURE" | "ERROR" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED" => {
-                    has_fail = true;
-                    if url.is_none() {
-                        url = c.details_url.clone();
-                    }
+        // Two GraphQL node shapes feed this list: `CheckRun` carries
+        // `conclusion` once complete (and `status` while in progress), while
+        // `StatusContext` only ever carries `state` (no `conclusion`) with
+        // values like SUCCESS/FAILURE/ERROR/PENDING. Combine both so a
+        // FAILURE/ERROR is treated as a fail regardless of source field.
+        let combined = c.conclusion.as_deref().or(c.state.as_deref());
+        match combined {
+            Some("FAILURE") | Some("ERROR") | Some("TIMED_OUT")
+            | Some("CANCELLED") | Some("ACTION_REQUIRED") => {
+                has_fail = true;
+                if url.is_none() {
+                    url = c.details_url.clone();
                 }
-                _ => {}
             }
-        } else if let Some(ref state) = c.state {
-            if state != "SUCCESS" && state != "NEUTRAL" && state != "SKIPPED" {
-                has_pending = true;
+            Some("SUCCESS") | Some("NEUTRAL") | Some("SKIPPED") => {}
+            // Anything else (PENDING / IN_PROGRESS / QUEUED / EXPECTED / …)
+            // is still in-flight.
+            Some(_) | None => {
+                if c.conclusion.is_none() {
+                    has_pending = true;
+                }
             }
         }
     }
@@ -447,6 +462,7 @@ struct ReviewPrDetails {
     mergeable: Option<String>,
     my_review: Option<String>,
     mentioned: Option<bool>,
+    team_requested: Option<bool>,
     needs_reply: Option<bool>,
     bot_pending: Option<bool>,
     replies_to_me: Option<bool>,
@@ -456,7 +472,8 @@ impl Default for ReviewPrDetails {
     fn default() -> Self {
         Self {
             ci: None, mergeable: None, my_review: None, mentioned: None,
-            needs_reply: None, bot_pending: None, replies_to_me: None,
+            team_requested: None, needs_reply: None, bot_pending: None,
+            replies_to_me: None,
         }
     }
 }
@@ -525,6 +542,14 @@ async fn fetch_pr_ci(
                     }))
                     .unwrap_or(false)
             }).unwrap_or(false);
+            // Check if any of the user's teams was requested as a reviewer.
+            // We can't validate team membership cheaply here, but `gh search
+            // prs --review-requested=@me` already constrains to PRs where the
+            // user (or one of their teams) is requested, so any Team entry on
+            // such a PR is implicitly one of the user's teams.
+            let team_requested = view.review_requests.as_ref()
+                .map(|rrs| rrs.iter().any(|rr| rr.typename.as_deref() == Some("Team")))
+                .unwrap_or(false);
             // Check for @-mentions in comment/review bodies and classify the
             // trailing activity stream into needs_reply / bot_pending /
             // replies_to_me.  All four signals share the same pass.
@@ -588,6 +613,7 @@ async fn fetch_pr_ci(
                 mergeable,
                 my_review,
                 mentioned: Some(mentioned),
+                team_requested: Some(team_requested),
                 needs_reply: Some(needs_reply),
                 bot_pending: Some(bot_pending),
                 replies_to_me: Some(replies_to_me),
@@ -654,6 +680,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             mergeable: details.mergeable,
             my_review: details.my_review,
             mentioned: details.mentioned,
+            team_requested: details.team_requested,
             needs_reply: details.needs_reply,
             bot_pending: details.bot_pending,
             replies_to_me: details.replies_to_me,
@@ -665,6 +692,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
 
     Ok(ReviewsFile {
         updated: Utc::now(),
+        viewer: my_login,
         items,
     })
 }
