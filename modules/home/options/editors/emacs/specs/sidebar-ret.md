@@ -40,6 +40,7 @@ quick "primary action" shortcut where relevant.
 | Section header `Tasks (N)`                               | Nothing                                   | Open tasks picker (new)                                  | —                          | ❌     |
 | Section header `Live (N)`                                | Nothing                                   | `C-c A b` (MRU buffer switcher)                          | —                          | ❌     |
 | Section header `Sessions (N)`                            | Nothing                                   | `C-c A s` (session picker)                               | —                          | ❌     |
+| Section header `Previous (N)`                            | Nothing                                   | `C-c A s` (session picker, previous group focused)       | —                          | ❌     |
 | Workspace sub-header under Sessions                      | Nothing                                   | Action menu (AI config, open dir, project.el, scope…)    | Open workspace dir         | ❌     |
 | `(none)` placeholder                                     | Nothing                                   | Quiet no-op                                              | —                          | ✅     |
 | Footer keys / toggles lines                              | Nothing                                   | Quiet no-op                                              | —                          | ✅     |
@@ -142,8 +143,12 @@ Notes:
   so the menu shape stays identical between authored and subject rows; the
   row's visual cues (§3.6.3) and the transient header tell the user which
   variant they are looking at.
-- `D` (jump to deploy) is conditional on the PR having deploy metadata in
-  hub data. Still flagged as an open question (§6.5).
+- `C` (jump to CI run) and `D` (jump to deploy) live **inside** the row
+  transient, not as top-level sidebar keys.  Capitalised to avoid colliding
+  with the row's `c` Copy URL; the mnemonic stays "C for CI, D for
+  deployment" once the transient is open.  `D` is conditional on the PR
+  having deploy metadata in hub data — dimmed when absent per §3.1's
+  stable-menu-shape rule.
 - `L` (reveal) = open the Sessions picker pre-filtered to this PR's owning
   session, useful from a linked-PR row under Live/Previous.
 - `R` vs `M` distinguishes "PR review comment" from "generic comment/issue
@@ -202,6 +207,13 @@ transient — the existing picker is already the action menu.
 | `Tasks (N)`      | `decknix-sidebar-nav-tasks-consult`    (new; §5)            |
 | `Live (N)`       | `C-c A b` — MRU buffer switcher                             |
 | `Sessions (N)`   | `C-c A s` — session picker                                  |
+| `Previous (N)`   | `C-c A s` — session picker (Previous group focused)         |
+
+The `Previous (N)` header is rendered when sessions were live before the
+daemon last restarted; the rows beneath it carry the same action menu as
+saved-session rows (resume / rename / delete / archive / merge / tag) — see
+§3.2.2.  Routing the header to `C-c A s` keeps a single canonical entry
+point for resuming previous work.
 
 #### 3.2.4 Workspace sub-header
 
@@ -347,6 +359,13 @@ needs worktree data the registry is consulted, and each entry is revalidated
 against `git worktree list --porcelain` with a 60 s TTL.  All IO is
 `make-process`-based so a stale NFS mount can't wedge redisplay.
 
+A `decknix.sidebar.eager-clone-probe` defcustom (default `nil`) opts into a
+hybrid seeding strategy for users with many sessions: when `t`, the daemon
+schedules an idle-time pass (after startup completes) that probes every
+`agent-sessions.json` workspace and folds the result into the registry, so
+the first sidebar render already has a warm cache.  Lazy per-row probing
+remains the fallback when the eager pass hasn't run yet.
+
 #### 3.6.2 Workspace-is-worktree detection
 
 For a session row's workspace path `$P`:
@@ -424,6 +443,14 @@ explanation pointing to the next reachable verb (e.g. `o`: "no worktree yet —
 press `n` to create one").  This is `transient`'s standard inapt behaviour
 and matches how Magit handles state-dependent verbs in its own menus.
 
+**Fork-remote cleanup on `x`.** When the worktree being removed was created
+via `gh pr checkout` against a fork, `x` deletes the per-fork remote *iff*
+no other worktree on the same clone references it; otherwise the remote is
+left in place.  This keeps clones tidy without surprising users mid-review
+when a sibling worktree on the same fork still depends on the remote.  A
+separate `decknix-clean-fork-remotes` hygiene command (§5) handles batch
+cleanup for the leftover cases the automatic rule could not safely remove.
+
 #### 3.6.5 What worktrees mean for each row type
 
 - **Request rows** — head is usually a fork.  Creating a worktree uses
@@ -453,9 +480,15 @@ stale workspace paths don't accumulate:
 - When `s` "Start session in worktree" creates a new worktree it records the
   workspace in `agent-sessions.json` as usual — no new path.
 - When `x` removes a worktree that is referenced by any saved session's
-  workspace, the user is shown the affected sessions and offered to
-  **rewire** them to the primary clone, **archive** them, or **abort** the
-  removal.  Default is abort.
+  workspace, removal is **aborted by default** with a one-line minibuffer
+  explanation listing the affected sessions; the user resolves them
+  manually (rename / archive / change-workspace) and reissues `x`.  A
+  prefix arg (`C-u x`) opens the alternative path: a prompt offering
+  **rewire** (point the session at the primary clone) or **archive** (mark
+  the session archived) per affected entry.  Power users opt in; everyone
+  else stays safe by default.
+- The fork-remote rule from §3.6.4 fires here too: after a successful `x`
+  the per-fork remote is dropped iff no other worktree references it.
 - `git worktree prune` is plumbed through so Emacs notices externally
   removed worktrees on the next registry refresh; affected session rows
   render with the workspace path struck through and a `⚠ stale` hint until
@@ -520,78 +553,93 @@ short, optional track that can slot in after the dispatcher (#4) lands.
 13. **`feat(hub): Jira transition / align-with-code / analyze verbs`**
     (§3.2.1 task column) — separable; depends on MCP/Jira tooling already
     wired up for agent-shell.
-14. **`docs(agent-shell): document sidebar RET / M-RET + worktree contract
+14. **`feat(hub): clean-fork-remotes hygiene command`** (§3.6.4, §6 Q9)
+    — `M-x decknix-clean-fork-remotes` walks every clone in the registry,
+    lists fork-derived remotes (`pr/<owner>` style or detected via
+    `gh pr checkout` markers) with no live worktree referencing them, and
+    offers a multi-select for batch deletion.  Complements the automatic
+    rule from #10's `x` verb: that rule runs eagerly per removal, this
+    command sweeps the leftovers.
+15. **`docs(agent-shell): document sidebar RET / M-RET + worktree contract
     in AGENTS.md`** — ships alongside #4 and #10.
 
-## 6. Open questions
+## 6. Resolutions
 
-1. Task-row `r` vs `i` for "start session" — §3.2.1 currently reserves `r`
-   for review-start on PR-ish rows and `i` for investigate-start on
-   Task/Linked-Repo. Keeping them separate avoids overloading `r`, but the
-   user may prefer a single mnemonic. **Lean: keep split.**
-2. **Resolved** — retired.  The earlier "show local worktree" verb has been
-   absorbed into the §3.6 worktree submenu on every branch-bearing row,
-   including linked repos.  No need to defer to #69.
-3. Jump-to-CI `C` and jump-to-deploy `D` — do we have enough info in hub
-   data today to build URLs without a round-trip to `gh`? If not, these
-   verbs block on a hub-data extension.
-4. Session transient `m` (merge into another session) — semantics of
-   "merge": does it combine linked items only, or also fold chat history?
-   Proposal: linked items + tags only; chat history stays per-session.
-5. Workspace sub-header `A` (edit AI config) — single file or picker between
-   `AGENTS.md` / `CLAUDE.md` / `.cursorrules` / `.augment-guidelines`?
-   **Lean: picker, falling back to `AGENTS.md` if only one exists.**
-6. Should `M-RET` on a linked PR row open **here** (xwidget) or in the
-   session's existing review pane if one is open? The latter is more useful
-   when you're already mid-review; the former is simpler. **Lean: prefer
-   existing review pane when present, else open here.**
-7. RET on the `Previous (N)` header — the matrix in §2 doesn't list a
-   `Previous` header because sessions are grouped by workspace under
-   `Sessions (N)`. Confirm this is still correct (no separate previous
-   header needed).
-8. Worktree default path (§3.6.4 `n`) — sibling of the primary checkout
-   (`../<repo>-<branch-slug>`) or a central directory
-   (`~/worktrees/<owner>/<repo>/<branch-slug>`)?  Sibling is what I use now
-   and keeps `cd ..` intuitive; a central dir is tidier but breaks that
-   muscle memory.  **Lean: sibling, with a `decknix.worktree.root`
-   defcustom to override.**
-9. Request-row worktrees for forks — `gh pr checkout` configures a remote
-   named after the fork owner.  Do we delete that remote on `x` "remove
-   worktree", leave it, or leave it and just prune on demand?  **Lean:
-   leave it; a future clean-fork-remotes command handles the hygiene.**
-10. Worktree removal interlocked with sessions (§3.6.6) — the spec proposes
-    **abort** as the default when a saved session references the worktree
-    being removed.  Aggressive alternative: **rewire** by default and tell
-    the user.  **Lean: abort; the user's state is worth more than a
-    convenience save.**
-11. Clone registry seeding — do we auto-probe every `agent-sessions.json`
-    workspace on daemon start (bounded, but could be dozens of
-    `git rev-parse` processes) or lazily per-row?  **Lean: lazy per-row
-    with a 60 s TTL; the registry warms naturally as the user browses.**
-12. Worktree caching on an NFS / cloud-mounted clone — probing with
-    `git worktree list` can stall on unresponsive mounts.  The
-    `make-process` IO in §3.6.1 sidesteps the UI block, but stale entries
-    stay cached until the next successful probe.  Is a time-bounded
-    "last seen healthy" badge worth it?  **Lean: no — surface it via the
-    status summary (`d`) on demand.**
-13. Row badge palette (§3.6.3) — the proposed glyphs are `⎇` (worktree),
-    `⎇*` (worktree = current session's workspace), `●` (primary HEAD),
-    `↓` (no local clone), space otherwise.  Open sub-questions: (a) is
-    `●` worth the column cost or should "primary HEAD" stay implicit
-    until the user opens the submenu? (b) is `↓` (no local clone) more
-    misleading than helpful given a row's mere presence usually means
-    the data came from `gh`, not from local git?  **Lean: keep `⎇` and
-    `⎇*`; drop `●` (rare collision, and the submenu's `n` already
-    surfaces the conflict); make `↓` opt-in via a defcustom default
-    off, since most users will never have rows for repos they have not
-    cloned.**
-14. Stable menu shape vs verb sprawl (§3.1) — dimming inapplicable verbs
-    rather than hiding them keeps the menu uniform but means a
-    "no worktree, no clone" row shows seven dimmed verbs and one live
-    one (`n` Create, which itself has to clone first).  Is that a
-    feature (predictable layout, every key teaches you something) or
-    a usability cliff (eight greyed-out lines for an action you cannot
-    yet perform)?  **Lean: feature — `transient` already prints inapt
-    rationale in the echo area, so dimmed verbs guide rather than
-    block.  Revisit if user feedback says the noise outweighs the
-    consistency.**
+The fourteen open questions raised across earlier drafts have been
+resolved as follows.  Picks recorded against §6 itself rather than
+inlined into the affected sections so the trail of decisions stays
+auditable.  Numbering mirrors the original Q1–Q14 so prior commits
+still reference the same items.
+
+1. **Task-row `r` vs `i`** — Resolved: **A (keep split)**.  `r` is
+   review-start on PR-ish rows; `i` is investigate-start on Task /
+   Linked-Repo rows.  Both verbs live inside the RET transient, not as
+   top-level sidebar keys, so users meet them through the action menu
+   and don't have to pre-memorise the split.
+2. *(retired in `d42821d`)* — the earlier "show local worktree" verb
+   was absorbed into the §3.6 worktree submenu on every branch-bearing
+   row, including linked repos.
+3. **Jump-to-CI `C` and jump-to-deploy `D`** — Resolved: **in-transient,
+   not top-level**.  Both verbs surface only after RET on the row.
+   Capitalised because lowercase `c` is `Copy URL` on hub rows; the
+   user's "C for CI / D for deployment" mnemonic is preserved by the
+   menu layout.  Hub-data sufficiency for building URLs without a `gh`
+   round-trip remains a sub-question for #10's implementation.
+4. **Session merge semantics** — Resolved: **B (linked items + tags
+   only; chat history stays per-session)**.  Avoids destroying
+   chronology and keeps merge reversible.
+5. **AI-config picker** — Resolved: **C (picker on ≥ 2 files,
+   auto-open when only one exists, quietly create `AGENTS.md` when
+   none exist)**.  First-run users get a useful default; veterans get
+   a chooser.
+6. **`M-RET` on linked PR row** — Resolved: **B (reuse existing review
+   pane if one is open for this session, else open here in xwidget)**.
+   Mid-review context is preserved without making the behaviour
+   silently mode-dependent.
+7. **`Previous (N)` header** — Resolved: **header exists today and is
+   now in the matrix**.  Confirmed against `agent-shell.nix:8812`: the
+   `Previous (%d)` block surfaces sessions that were live before the
+   daemon last restarted (greyed) so they can be resumed quickly.
+   §2 and §3.2.3 now route RET on the header to `C-c A s` (session
+   picker, Previous group focused); rows beneath inherit the
+   saved-session transient from §3.2.2 (resume / rename / delete /
+   archive / merge / tag).
+8. **Worktree default path** — Resolved: **C (sibling by default with
+   a `decknix.worktree.root` defcustom for users who want a central
+   `~/worktrees/<owner>/<repo>/<slug>` layout)**.  Best of both.
+9. **Fork-remote cleanup on `x`** — Resolved: **B + C hybrid**.  When
+   `x` removes a fork-checkout worktree, the per-fork remote is
+   deleted *iff* no other worktree on the same clone references it;
+   otherwise it stays.  In addition, a separate
+   `decknix-clean-fork-remotes` hygiene command (§5 issue #14) sweeps
+   leftover remotes for batch cleanup.  Spec details in §3.6.4 and
+   §3.6.6.
+10. **Worktree removal interlocked with sessions** — Resolved: **A
+    (abort by default)**.  `C-u x` opts in to the prompt path
+    (rewire / archive) for power users.  The user's saved state is
+    worth more than removal convenience.
+11. **Clone registry seeding** — Resolved: **B by default + opt-in
+    C**.  Lazy per-row with a 60 s TTL is the default seed strategy;
+    a `decknix.sidebar.eager-clone-probe` defcustom (default `nil`)
+    flips the registry into "probe known sessions on daemon idle"
+    mode for users with many sessions who want a warm cache up front.
+    Spec detail folded into §3.6.1.
+12. **NFS / cloud-mount staleness badge** — Resolved: **A (surface on
+    demand via the `d` status summary)**.  No ambient "stale" glyph;
+    `make-process` IO in §3.6.1 already keeps the UI responsive.
+13. **Row badge palette** — Resolved: **B (lean) for now**, with the
+    door open for **A (full)** or **D (verbose)** as enhancements.
+    Initial implementation lights up `⎇` (worktree) and `⎇*` (worktree
+    = current session's workspace); `●` (primary HEAD) and `↓` (no
+    local clone) are not rendered, and the dirty (`⎇⚠`) / stale
+    (`⎇⊘`) extensions from D are deferred until use confirms they're
+    worth the extra column.  A `decknix.sidebar.show-no-clone-badge`
+    defcustom (default `nil`) re-enables `↓` for users who want it
+    now; the full palette graduates once feedback validates the
+    column cost.  Spec detail in §3.6.3 unchanged — only the initial
+    rendering set is reduced.
+14. **Stable menu shape vs verb sprawl** — Resolved: **feature**.
+    Dimming inapplicable verbs is the right trade: predictable
+    layout, every key teaches, `transient`'s inapt rationale in the
+    echo area explains why a key is greyed.  Revisit only if user
+    feedback says the noise outweighs the consistency.
