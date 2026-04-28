@@ -6013,14 +6013,17 @@ which advertises toggles by label only (no keys)."
            (decknix-sidebar-transient--org-filter)       ;; Org filter
            (decknix-sidebar-transient--width)]           ;; Width
           ["Requests"
-           (decknix-sidebar-transient--mention-filter)   ;; @-mention
-           (decknix-sidebar-transient--age-filter)       ;; Age filter
-           (decknix-sidebar-transient--req-bot-pending)  ;; bot review
+           ;; Order matches the sidebar footer: alphabetical text labels
+           ;; (age, bots, ci, mention, sort) then emoji-led labels by
+           ;; code-point (↩, 💬, 🤖).
+           (decknix-sidebar-transient--age-filter)       ;; age
            (decknix-sidebar-transient--bot-filter)       ;; bots
-           (decknix-sidebar-transient--ci-filter)        ;; CI filter
-           (decknix-sidebar-transient--req-needs-reply)  ;; comments
-           (decknix-sidebar-transient--req-my-replies)   ;; replies
-           (decknix-sidebar-transient--req-sort)]        ;; sort ⇅
+           (decknix-sidebar-transient--ci-filter)        ;; ci
+           (decknix-sidebar-transient--mention-filter)   ;; mention
+           (decknix-sidebar-transient--req-sort)         ;; sort
+           (decknix-sidebar-transient--req-my-replies)   ;; ↩
+           (decknix-sidebar-transient--req-needs-reply)  ;; 💬
+           (decknix-sidebar-transient--req-bot-pending)] ;; 🤖
           ["Live"
            (decknix-sidebar-transient--display-mode)     ;; Display mode
            (decknix-sidebar-transient--hidden-toggle)    ;; Hidden
@@ -6328,15 +6331,20 @@ All toggle keys are accessed via the T transient prefix."
                                  'face 'font-lock-constant-face)))))
                 (requests
                  (when (fboundp 'decknix--hub-org-filter-dispatch)
+                   ;; Canonical Requests order: alphabetical text labels
+                   ;; first (age, bots, ci, mention, sort) then emoji-led
+                   ;; labels by code-point (↩, 💬, 🤖).  The transient mirrors
+                   ;; the same sequence so the footer and the `T' menu look
+                   ;; identical except for the visible shortcut keys.
                    (list
-                    (cons "F" (format "age %s"
+                    (cons "F" (concat "age "
                                   (let ((label (decknix--hub-age-filter-label)))
                                     (propertize
                                      (format "[%s]" label)
                                      'face (if (string= label "all")
                                                'font-lock-comment-face
                                              'font-lock-constant-face)))))
-                    (cons "B" (format "bots %s"
+                    (cons "B" (concat "bots "
                                   (propertize
                                    (if decknix--hub-show-bots "[show]" "[hide]")
                                    'face (if decknix--hub-show-bots
@@ -6350,36 +6358,39 @@ All toggle keys are accessed via the T transient prefix."
                                 ;; disabled) — don't re-propertize.
                                 (decknix--hub-ci-filter-summary)
                                 (propertize "]" 'face 'font-lock-comment-face)))
-                    (cons "@" (format "mention %s"
+                    (cons "@" (concat "mention "
+                                  (let ((label (decknix--hub-mention-filter-label)))
+                                    (propertize
+                                     (format "[%s]" label)
+                                     'face (if (string= label "off")
+                                               'font-lock-comment-face
+                                             'font-lock-constant-face)))))
+                    (cons "s" (concat "sort "
                                   (propertize
-                                   (if decknix--hub-mention-filter "[on]" "[off]")
-                                   'face (if decknix--hub-mention-filter
+                                   (if decknix--hub-requests-sort-reverse "[new→old]" "[old→new]")
+                                   'face (if decknix--hub-requests-sort-reverse
                                              'font-lock-constant-face
                                            'font-lock-comment-face))))
-                    (cons "M" (format "↩ %s"
+                    (cons "M" (concat "↩ "
                                   (propertize
                                    (if decknix--hub-requests-only-my-replies "[only]" "[all]")
                                    'face (if decknix--hub-requests-only-my-replies
                                              'font-lock-constant-face
                                            'font-lock-comment-face))))
-                    (cons "c" (format "%s %s"
+                    (cons "c" (concat
                                   (decknix--hub-icon "💬" 'default)
+                                  " "
                                   (propertize
                                    (if decknix--hub-requests-hide-needs-reply "[hide]" "[show]")
                                    'face (if decknix--hub-requests-hide-needs-reply
                                              'font-lock-constant-face
                                            'font-lock-comment-face))))
-                    (cons "b" (format "%s %s"
+                    (cons "b" (concat
                                   (decknix--hub-icon "🤖" 'default)
+                                  " "
                                   (propertize
                                    (if decknix--hub-requests-hide-bot-pending "[hide]" "[show]")
                                    'face (if decknix--hub-requests-hide-bot-pending
-                                             'font-lock-constant-face
-                                           'font-lock-comment-face))))
-                    (cons "s" (format "sort %s"
-                                  (propertize
-                                   (if decknix--hub-requests-sort-reverse "[new→old]" "[old→new]")
-                                   'face (if decknix--hub-requests-sort-reverse
                                              'font-lock-constant-face
                                            'font-lock-comment-face)))))))
                 (live
@@ -6524,11 +6535,23 @@ column's height.  When nil, sections stack vertically (compact)."
                                   (lambda (kv)
                                     ;; Show only the value (label + state),
                                     ;; not the shortcut key — press T for keys.
-                                    ;; Indent items 2 spaces beyond heading;
+                                    ;; Indent items 3 spaces beyond heading;
                                     ;; use comment face to match Navigate/Quick
-                                    ;; item sizing.
-                                    (propertize (format "   %s" (cdr kv))
-                                                'face 'font-lock-comment-face))
+                                    ;; item sizing.  Build via `concat' so any
+                                    ;; per-glyph faces inside the value (CI
+                                    ;; status icons, mention indicator) are
+                                    ;; preserved instead of being clobbered by
+                                    ;; a wrapping `propertize'.  Append the
+                                    ;; comment face so it only fills the
+                                    ;; un-faced portions (the indent and any
+                                    ;; plain text); explicit per-icon faces
+                                    ;; already on the inner string take
+                                    ;; precedence.
+                                    (let ((line (concat "   " (cdr kv))))
+                                      (add-face-text-property
+                                       0 (length line)
+                                       'font-lock-comment-face t line)
+                                      line))
                                   keys))))
                      (if (= (% idx 2) 0)
                          (setq left-lines (append left-lines lines))
@@ -6556,9 +6579,12 @@ column's height.  When nil, sections stack vertically (compact)."
                                     'face '(:inherit font-lock-type-face :weight normal))
                         "\n")
                 (dolist (kv keys)
-                  (insert (propertize (format "     %s" (cdr kv))
-                                      'face 'font-lock-comment-face)
-                          "\n"))))))
+                  ;; Same face-preserving construction as the wide branch.
+                  (let ((line (concat "     " (cdr kv))))
+                    (add-face-text-property
+                     0 (length line)
+                     'font-lock-comment-face t line)
+                    (insert line "\n")))))))
 
         (defun decknix--sidebar-render-footer ()
           "Insert responsive key listing or compact hint depending on toggle.
@@ -9098,10 +9124,13 @@ session-id-based uniqueness so they are never accidentally merged."
                     (when (and cf (listp cf)
                                (boundp 'decknix--hub-ci-filter))
                       (setq decknix--hub-ci-filter cf)))
-                  ;; Mention filter: restore toggle
+                  ;; Mention filter: restore toggle (4-state cycle).
+                  ;; Migrates legacy boolean state via normalize helper:
+                  ;; `t' → `me'; anything unrecognised → `nil'.
                   (when (boundp 'decknix--hub-mention-filter)
                     (setq decknix--hub-mention-filter
-                          (alist-get 'mention-filter state)))
+                          (decknix--hub-mention-filter-normalize
+                           (alist-get 'mention-filter state))))
                   ;; Bot filter: restore toggle
                   (when (boundp 'decknix--hub-show-bots)
                     (setq decknix--hub-show-bots
@@ -9635,13 +9664,13 @@ When no filter is active (table is nil), all orgs are visible."
           :key "C"
           :description
           (lambda ()
-            (let ((label (decknix--hub-ci-filter-summary)))
-              (format "CI filter     %s"
-                      (propertize
-                       (format "[%s]" label)
-                       'face (if (string= label "all")
-                                 'font-lock-comment-face
-                               'font-lock-constant-face)))))
+            ;; Mirror the footer construction: build with `concat' so the
+            ;; per-icon faces inside the summary survive (a wrapping
+            ;; `propertize'/`format' clobbers them).
+            (concat "ci            "
+                    (propertize "[" 'face 'font-lock-comment-face)
+                    (decknix--hub-ci-filter-summary)
+                    (propertize "]" 'face 'font-lock-comment-face)))
           (interactive)
           (call-interactively #'decknix-hub-ci-filter-transient))
 
@@ -9649,15 +9678,16 @@ When no filter is active (table is nil), all orgs are visible."
           :key "@"
           :description
           (lambda ()
-            (format "@-mention    %s"
-                    (propertize
-                     (if decknix--hub-mention-filter "[on]" "[off]")
-                     'face (if decknix--hub-mention-filter
-                               'font-lock-constant-face
-                             'font-lock-comment-face))))
+            (let ((label (decknix--hub-mention-filter-label)))
+              (format "mention       %s"
+                      (propertize
+                       (format "[%s]" label)
+                       'face (if (string= label "off")
+                                 'font-lock-comment-face
+                               'font-lock-constant-face)))))
           :transient t
           (interactive)
-          (call-interactively #'decknix--hub-toggle-mention-filter))
+          (call-interactively #'decknix--hub-cycle-mention-filter))
 
         (transient-define-suffix decknix-sidebar-transient--bot-filter ()
           :key "B"
@@ -9673,12 +9703,15 @@ When no filter is active (table is nil), all orgs are visible."
           (interactive)
           (call-interactively #'decknix--hub-toggle-bot-filter))
 
+        ;; Requests row labels are icon-led to match the sidebar footer:
+        ;; the comparable text-only labels (age, bots, ci, mention, sort)
+        ;; sort first, then ↩, 💬, 🤖 by code-point.
         (transient-define-suffix decknix-sidebar-transient--req-needs-reply ()
           :key "c"
           :description
           (lambda ()
-            (format "comments %s  %s"
-                    (decknix--hub-icon "💬" 'default)
+            (concat (decknix--hub-icon "💬" 'default)
+                    "             "
                     (propertize
                      (if decknix--hub-requests-hide-needs-reply "[hide]" "[show]")
                      'face (if decknix--hub-requests-hide-needs-reply
@@ -9692,8 +9725,8 @@ When no filter is active (table is nil), all orgs are visible."
           :key "b"
           :description
           (lambda ()
-            (format "bot review %s %s"
-                    (decknix--hub-icon "🤖" 'default)
+            (concat (decknix--hub-icon "🤖" 'default)
+                    "             "
                     (propertize
                      (if decknix--hub-requests-hide-bot-pending "[hide]" "[show]")
                      'face (if decknix--hub-requests-hide-bot-pending
@@ -9707,7 +9740,7 @@ When no filter is active (table is nil), all orgs are visible."
           :key "M"
           :description
           (lambda ()
-            (format "replies ↩   %s"
+            (format "↩             %s"
                     (propertize
                      (if decknix--hub-requests-only-my-replies "[only]" "[all]")
                      'face (if decknix--hub-requests-only-my-replies
@@ -9721,7 +9754,7 @@ When no filter is active (table is nil), all orgs are visible."
           :key "s"
           :description
           (lambda ()
-            (format "sort ⇅      %s"
+            (format "sort          %s"
                     (propertize
                      (if decknix--hub-requests-sort-reverse "[new→old]" "[old→new]")
                      'face (if decknix--hub-requests-sort-reverse
@@ -10092,32 +10125,93 @@ lint-only failures and still-running checks."
         ;; or @-mentioned in a comment/review body.
 
         (defvar decknix--hub-mention-filter nil
-          "When non-nil, only show review requests targeting the user directly.
-This filters to PRs where the user was individually added as a reviewer
-or @-mentioned in a comment — excluding PRs that only appear because of
-team membership or CODEOWNERS rules.")
+          "Mention-filter state for the Requests section.
+A symbol with one of these values:
+  nil       — no filtering (all visible).
+  me        — only PRs where I am directly requested or @-mentioned.
+  team      — only PRs where one of my teams is requested
+              (and I am not directly requested / mentioned).
+  me+team   — union of `me' and `team'.
 
-        (defun decknix--hub-toggle-mention-filter ()
-          "Toggle filtering to only directly-targeted reviews."
+In every non-nil state, PRs I authored are excluded.
+
+For backward compatibility, a legacy boolean `t' is migrated to `me'.")
+
+        (defvar decknix--hub-mention-filter-cycle
+          '(nil me team me+team)
+          "Cycle order for `decknix--hub-cycle-mention-filter'.")
+
+        (defun decknix--hub-mention-filter-normalize (val)
+          "Coerce a persisted VAL into a valid mention-filter state.
+Migrates legacy boolean state: `t' → `me', `nil' stays `nil'."
+          (cond
+           ((memq val decknix--hub-mention-filter-cycle) val)
+           ((eq val t) 'me)
+           (t nil)))
+
+        (defun decknix--hub-mention-filter-label ()
+          "Return a short label for the current mention-filter state."
+          (pcase decknix--hub-mention-filter
+            ('me      "me")
+            ('team    "team")
+            ('me+team "me+team")
+            (_        "off")))
+
+        (defun decknix--hub-cycle-mention-filter ()
+          "Cycle the mention filter through off → me → team → me+team → off."
           (interactive)
-          (setq decknix--hub-mention-filter (not decknix--hub-mention-filter))
+          (let* ((cycle decknix--hub-mention-filter-cycle)
+                 (cur (or (memq decknix--hub-mention-filter cycle) cycle))
+                 (next (or (cadr cur) (car cycle))))
+            (setq decknix--hub-mention-filter next))
           (when (fboundp 'agent-shell-workspace-sidebar-refresh)
             (agent-shell-workspace-sidebar-refresh))
-          (message "Direct mention filter: %s"
-                   (if decknix--hub-mention-filter
-                       "on (directly requested / @-mentioned only)"
-                     "off (all)")))
+          (message "Mention filter: %s" (decknix--hub-mention-filter-label)))
 
-        (defun decknix--hub-mention-visible-p (item)
-          "Return non-nil if ITEM passes the direct-mention filter.
-Always returns t when filter is disabled."
-          (or (not decknix--hub-mention-filter)
-              (eq (alist-get 'mentioned item) t)))
+        ;; Backwards-compat alias for any caller / keybinding that still
+        ;; refers to the old binary toggle name.
+        (defalias 'decknix--hub-toggle-mention-filter
+          'decknix--hub-cycle-mention-filter)
+
+        (defun decknix--hub-item-author-p (item)
+          "Return non-nil if ITEM was authored by the current viewer.
+Uses the `viewer' field from the reviews JSON file when available;
+falls back to a no-op (returns nil) when the field is missing so
+the filter remains permissive on older hub versions."
+          (let ((viewer (and (boundp 'decknix--hub-reviews)
+                             decknix--hub-reviews
+                             (alist-get 'viewer decknix--hub-reviews)))
+                (author (alist-get 'author item)))
+            (and viewer author
+                 (string-equal-ignore-case viewer author))))
 
         (defun decknix--hub-item-mentioned-p (item)
           "Return non-nil if ITEM has the `mentioned' flag set.
-Used to show the bell indicator when the filter is off."
+Used to show the @ indicator and to filter when the mention state
+includes `me'."
           (eq (alist-get 'mentioned item) t))
+
+        (defun decknix--hub-item-team-requested-p (item)
+          "Return non-nil if ITEM has the `team_requested' flag set.
+True when one of the viewer's teams was requested as a reviewer."
+          (eq (alist-get 'team_requested item) t))
+
+        (defun decknix--hub-mention-visible-p (item)
+          "Return non-nil if ITEM passes the current mention filter.
+Always returns t when filter is `nil'.  When filtering, PRs I
+authored are excluded so I never see them under any mention state."
+          (let ((state decknix--hub-mention-filter))
+            (cond
+             ((null state) t)
+             ((decknix--hub-item-author-p item) nil)
+             (t
+              (let ((me (decknix--hub-item-mentioned-p item))
+                    (team (decknix--hub-item-team-requested-p item)))
+                (pcase state
+                  ('me      me)
+                  ('team    (and team (not me)))
+                  ('me+team (or me team))
+                  (_        t)))))))
 
         ;; -- Hub: bot filter --
         (defvar decknix--hub-show-bots nil
@@ -11856,12 +11950,27 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                  (items (decknix--hub-sort-requests filtered)))
             (when items
               (decknix--sidebar-render-section-header
-               (format "Requests (%d)%s%s%s" (length items)
-                       (if decknix--hub-mention-filter " @" "")
-                       (if decknix--hub-show-bots
-                           (concat " " (decknix--hub-icon "🤖" 'default))
-                         "")
-                       (if decknix--hub-requests-sort-reverse " ⇅" ""))
+               (concat
+                (format "Requests (%d)" (length items))
+                ;; Mention badge — colour reflects current state:
+                ;; me = yellow, team = blue, me+team = both glyphs.
+                (pcase decknix--hub-mention-filter
+                  ('me      (concat " "
+                                    (decknix--hub-icon
+                                     "@" '(:foreground "#d7af5f" :weight bold))))
+                  ('team    (concat " "
+                                    (decknix--hub-icon
+                                     "@" '(:foreground "#61afef" :weight bold))))
+                  ('me+team (concat " "
+                                    (decknix--hub-icon
+                                     "@" '(:foreground "#d7af5f" :weight bold))
+                                    (decknix--hub-icon
+                                     "@" '(:foreground "#61afef" :weight bold))))
+                  (_        ""))
+                (if decknix--hub-show-bots
+                    (concat " " (decknix--hub-icon "🤖" 'default))
+                  "")
+                (if decknix--hub-requests-sort-reverse " ⇅" ""))
                'requests)
               (setq line-num (1+ line-num))
               (dolist (item items)
@@ -11879,10 +11988,21 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                        (status-str (if (string-empty-p rev-str)
                                        ci-str
                                      (concat ci-str rev-str)))
-                       ;; @ indicator for directly-requested / @-mentioned PRs
-                       (mention-str (if (decknix--hub-item-mentioned-p item)
-                                        (decknix--hub-icon "@" '(:foreground "#d7af5f" :weight bold))
-                                      ""))
+                       ;; @ indicator — yellow when I am directly
+                       ;; requested / @-mentioned (`me'); blue when only
+                       ;; one of my teams is requested (`team').  When
+                       ;; both are true, prefer yellow (me precedence).
+                       (mention-me (decknix--hub-item-mentioned-p item))
+                       (mention-team (decknix--hub-item-team-requested-p item))
+                       (mention-str
+                        (cond
+                         (mention-me
+                          (decknix--hub-icon
+                           "@" '(:foreground "#d7af5f" :weight bold)))
+                         (mention-team
+                          (decknix--hub-icon
+                           "@" '(:foreground "#61afef" :weight bold)))
+                         (t "")))
                        (status-str (if (string-empty-p mention-str)
                                        status-str
                                      (concat status-str mention-str)))
