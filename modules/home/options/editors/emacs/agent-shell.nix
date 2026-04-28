@@ -6079,15 +6079,22 @@ which advertises toggles by label only (no keys)."
           "What to show for saved sessions in the sidebar.
 Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
 
-        (defun decknix--sidebar-render-section-header (title)
+        (defun decknix--sidebar-render-section-header (title &optional section-id)
           "Insert a section header TITLE into the sidebar.
 Composes `bold' with any inner face properties on TITLE so callers
 can propertize sub-regions (e.g. a coloured age badge) without the
-header's bold wiping them."
+header's bold wiping them.
+SECTION-ID, when non-nil, is attached as the `decknix-sidebar-section'
+text property over the visible header span so the unified sidebar
+dispatcher (specs/sidebar-ret.md §3.4) can route RET to the matching
+picker / transient."
           (let ((start (point)))
             (insert " " title "\n")
             ;; (1- (point)) excludes the trailing newline from the face span
-            (add-face-text-property start (1- (point)) 'bold)))
+            (add-face-text-property start (1- (point)) 'bold)
+            (when section-id
+              (put-text-property start (1- (point))
+                                 'decknix-sidebar-section section-id))))
 
         (defvar decknix--sidebar-show-keys t
           "When non-nil, show categorised key listing in the sidebar footer.
@@ -6732,7 +6739,8 @@ the visible count matches the heading."
 
               ;; ── Live Sessions ──
               (decknix--sidebar-render-section-header
-               (format "Live (%d)" (length buffers)))
+               (format "Live (%d)" (length buffers))
+               'live)
               (setq line-num (1+ line-num)) ;; section header line
               (if (null buffers)
                   (progn
@@ -6799,7 +6807,7 @@ the visible count matches the heading."
                                (when age-active
                                  (propertize (format "  [age: %s]" age-label)
                                              'face 'font-lock-constant-face)))))
-                  (decknix--sidebar-render-section-header title))
+                  (decknix--sidebar-render-section-header title 'sessions))
                 (setq line-num (1+ line-num)) ;; section header
                 ;; Group by ABBREVIATED workspace name so differently-stored
                 ;; paths (~/Code/foo vs /Users/x/Code/foo) merge under one heading
@@ -6816,9 +6824,12 @@ the visible count matches the heading."
                       (puthash ws-label (append existing (list entry)) by-ws)))
                   ;; Render each workspace group (order preserved from data, newest first)
                   (dolist (ws-label (nreverse ws-order))
-                    ;; Workspace sub-header
+                    ;; Workspace sub-header — propertized with the workspace
+                    ;; name so the unified dispatcher (specs/sidebar-ret.md
+                    ;; §3.2.4) can offer the workspace transient on RET.
                     (insert (propertize (format "  %s" ws-label)
-                                       'face 'font-lock-type-face)
+                                       'face 'font-lock-type-face
+                                       'decknix-sidebar-workspace ws-label)
                             "\n")
                     (setq line-num (1+ line-num))
                     ;; Sessions under this workspace
@@ -8809,7 +8820,8 @@ Returns updated LINE-NUM."
               (insert "\n")
               (setq line-num (1+ line-num))
               (decknix--sidebar-render-section-header
-               (format "Previous (%d)" (length prev)))
+               (format "Previous (%d)" (length prev))
+               'previous)
               (setq line-num (1+ line-num))
               (dolist (entry prev)
                 (let* ((name (or (alist-get 'name entry) "unknown"))
@@ -11493,7 +11505,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                        (if decknix--hub-show-bots
                            (concat " " (decknix--hub-icon "🤖" 'default))
                          "")
-                       (if decknix--hub-requests-sort-reverse " ⇅" "")))
+                       (if decknix--hub-requests-sort-reverse " ⇅" ""))
+               'requests)
               (setq line-num (1+ line-num))
               (dolist (item items)
                 (let* ((age (decknix--hub-format-age
@@ -11600,7 +11613,8 @@ session are hidden (both from the header count and the listing)."
                                    :initial-value 0)))
             (when (> total 0)
               (decknix--sidebar-render-section-header
-               (format "WIP (%d)" total))
+               (format "WIP (%d)" total)
+               'wip)
               (setq line-num (1+ line-num))
               (dolist (repo-entry repos)
                 (let* ((repo-full (or (alist-get 'repo repo-entry) ""))
@@ -11815,7 +11829,8 @@ deployed artefact predates the merge so it cannot contain this PR."
                  (items (when data (alist-get 'items data))))
             (when items
               (decknix--sidebar-render-section-header
-               (format "Tasks (%d)" (length items)))
+               (format "Tasks (%d)" (length items))
+               'tasks)
               (setq line-num (1+ line-num))
               (dolist (item items)
                 (let* ((key (or (alist-get 'key item) ""))
