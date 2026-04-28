@@ -11043,12 +11043,29 @@ Layout:
                                    (not (string-empty-p deploy-str)))
                               deploy-str
                             ""))))
-            (if grouped
-                (format "     %s%s %s %s%s"
-                        refresh-str branch-str sha7-str age-str signal-zone)
-              (format "   %s%s %s %s %s%s"
-                      refresh-str repo-label branch-str sha7-str age-str
-                      signal-zone))))
+            ;; Build the line then attach text properties for the unified
+            ;; sidebar dispatcher (see specs/sidebar-ret.md §3.4).  head-repo
+            ;; / head-branch mirror repo / branch so the worktree submenu
+            ;; (#129) reads the same keys on every row type.  conv-key is
+            ;; set at the insertion site in render-session-prs.
+            (let ((line (if grouped
+                            (format "     %s%s %s %s%s"
+                                    refresh-str branch-str sha7-str age-str
+                                    signal-zone)
+                          (format "   %s%s %s %s %s%s"
+                                  refresh-str repo-label branch-str sha7-str
+                                  age-str signal-zone))))
+              (propertize line
+                          'decknix-hub-type 'linked-repo
+                          'decknix-hub-url url
+                          'decknix-hub-repo repo-full
+                          'decknix-hub-branch branch
+                          'decknix-hub-sha sha
+                          'decknix-hub-linked-kind 'authored
+                          'decknix-hub-ci-status ci
+                          'decknix-hub-deploy-url nil
+                          'decknix-hub-head-repo repo-full
+                          'decknix-hub-head-branch branch))))
 
         (defun decknix--hub-group-items-by-repo (items)
           "Group ITEMS (PR + repo link records) by owner/repo.
