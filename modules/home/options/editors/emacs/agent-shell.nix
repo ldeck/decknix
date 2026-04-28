@@ -6917,15 +6917,16 @@ the visible count matches the heading."
                           (line-beginning-position)
                           'decknix-sidebar-saved-session)))
               (cond
-               ;; WIP PR: show action menu (merge/close/comment/open)
-               ((and hub-url (eq hub-type 'wip) hub-repo hub-number)
-                (let ((item (list (cons 'url hub-url)
-                                  (cons 'repo hub-repo)
-                                  (cons 'number hub-number)
-                                  (cons 'decknix-type 'wip))))
-                  (decknix--nav-hub-item-actions item)))
-               ;; Other hub item (requests): open in xwidget-webkit or browser
+               ;; Any hub item: open URL in xwidget-webkit or browser
+               ;; (primary action).  The action menu now lives behind RET
+               ;; via `decknix-sidebar-ret' (#123); this advice path runs
+               ;; for M-RET / mouse-click / picker primary-action callers
+               ;; and is intentionally menu-free so the primary action is
+               ;; always a single open.  hub-type/-repo/-number are kept
+               ;; in the binding above so future advice consumers retain
+               ;; the row context without re-fetching properties.
                (hub-url
+                (ignore hub-type hub-repo hub-number)
                 (decknix--open-url hub-url))
                ;; Previous session: restore it and focus
                (prev
@@ -8552,6 +8553,347 @@ With \\[universal-argument] \\[universal-argument], show @-mentioned only."
               (decknix-sidebar-nav-previous-consult)
             (message "No previous sessions")))
 
+        ;; == Unified RET dispatcher (#123) ==
+        ;; RET on any actionable row opens a row-specific action transient
+        ;; (Action Menu).  M-RET / C-u RET runs the row's primary action
+        ;; directly (typically "open URL").  Hub rows are routed via
+        ;; `decknix-hub-type'; non-hub rows (sessions, headers) fall through
+        ;; to the existing `agent-shell-workspace-sidebar-goto' handler.
+        ;; See `specs/sidebar-ret.md' §3.2.1, §3.3.
+
+        (defvar decknix--sidebar-action-context nil
+          "Alist of `decknix-hub-*' text properties for the active row.
+Set by `decknix-sidebar-ret' immediately before invoking a row
+transient; suffixes read it via `decknix--sidebar-action-prop'.")
+
+        (defun decknix--sidebar-row-context ()
+          "Return an alist of `decknix-hub-*' properties at line beginning.
+Returns nil when the row carries no hub properties (e.g. a session,
+section header, or workspace sub-header)."
+          (let* ((pos (line-beginning-position))
+                 (type (get-text-property pos 'decknix-hub-type)))
+            (when type
+              (let (ctx)
+                (dolist (prop '(decknix-hub-type
+                                decknix-hub-url
+                                decknix-hub-repo
+                                decknix-hub-number
+                                decknix-hub-branch
+                                decknix-hub-sha
+                                decknix-hub-linked-kind
+                                decknix-hub-pr-state
+                                decknix-hub-ci-status
+                                decknix-hub-deploy-url
+                                decknix-hub-head-repo
+                                decknix-hub-head-branch
+                                decknix-hub-conv-key
+                                decknix-hub-jira-key
+                                decknix-hub-jira-status))
+                  (let ((v (get-text-property pos prop)))
+                    (when v (push (cons prop v) ctx))))
+                ctx))))
+
+        (defun decknix--sidebar-action-prop (key)
+          "Return KEY from the active row's context alist."
+          (alist-get key decknix--sidebar-action-context))
+
+        (defun decknix--sidebar-action-description ()
+          "One-line label for the active row, used as the transient header."
+          (let* ((repo (decknix--sidebar-action-prop 'decknix-hub-repo))
+                 (num  (decknix--sidebar-action-prop 'decknix-hub-number))
+                 (jk   (decknix--sidebar-action-prop 'decknix-hub-jira-key))
+                 (br   (decknix--sidebar-action-prop 'decknix-hub-branch))
+                 (url  (decknix--sidebar-action-prop 'decknix-hub-url)))
+            (cond
+             (jk (format "Task %s" jk))
+             ((and repo num) (format "%s#%s" repo num))
+             ((and repo br)  (format "%s @ %s" repo br))
+             (url url)
+             (t "(unknown row)"))))
+
+        ;; -- Concrete suffixes (verbs with backing implementations) --
+
+        (transient-define-suffix decknix--sb-act-open ()
+          "Open the row's URL in xwidget/EWW."
+          :description "Open here"
+          (interactive)
+          (let ((url (decknix--sidebar-action-prop 'decknix-hub-url)))
+            (if url (decknix--open-url url) (message "No URL"))))
+
+        (transient-define-suffix decknix--sb-act-browser ()
+          "Open the row's URL in the system browser."
+          :description "Open in browser"
+          (interactive)
+          (let ((url (decknix--sidebar-action-prop 'decknix-hub-url)))
+            (if url (browse-url url) (message "No URL"))))
+
+        (transient-define-suffix decknix--sb-act-copy-url ()
+          "Copy the row's URL to the kill-ring."
+          :description "Copy URL"
+          (interactive)
+          (let ((url (decknix--sidebar-action-prop 'decknix-hub-url)))
+            (if url (progn (kill-new url) (message "Copied: %s" url))
+              (message "No URL"))))
+
+        (transient-define-suffix decknix--sb-act-review ()
+          "Start an agent review session for the row's PR URL."
+          :description "Start review session"
+          (interactive)
+          (let ((url (decknix--sidebar-action-prop 'decknix-hub-url)))
+            (if (and url (fboundp 'decknix--nav-hub-start-review))
+                (decknix--nav-hub-start-review url)
+              (message "No URL"))))
+
+        (transient-define-suffix decknix--sb-act-review-split ()
+          "Start a review session in a split window."
+          :description "Start review (split)"
+          (interactive)
+          (let ((url (decknix--sidebar-action-prop 'decknix-hub-url)))
+            (if (and url (fboundp 'decknix--nav-hub-start-review-split))
+                (decknix--nav-hub-start-review-split url)
+              (message "No URL"))))
+
+        (transient-define-suffix decknix--sb-act-merge ()
+          "Merge the active PR via gh CLI."
+          :description "Merge"
+          (interactive)
+          (let ((repo (decknix--sidebar-action-prop 'decknix-hub-repo))
+                (num  (decknix--sidebar-action-prop 'decknix-hub-number)))
+            (if (and repo num (fboundp 'decknix--hub-wip-merge))
+                (decknix--hub-wip-merge repo num)
+              (message "No PR context"))))
+
+        (transient-define-suffix decknix--sb-act-close ()
+          "Close the active PR via gh CLI."
+          :description "Close"
+          (interactive)
+          (let ((repo (decknix--sidebar-action-prop 'decknix-hub-repo))
+                (num  (decknix--sidebar-action-prop 'decknix-hub-number)))
+            (if (and repo num (fboundp 'decknix--hub-wip-close))
+                (decknix--hub-wip-close repo num)
+              (message "No PR context"))))
+
+        (transient-define-suffix decknix--sb-act-comment ()
+          "Add a comment to the active PR/issue via gh CLI."
+          :description "Comment"
+          (interactive)
+          (let ((repo (decknix--sidebar-action-prop 'decknix-hub-repo))
+                (num  (decknix--sidebar-action-prop 'decknix-hub-number)))
+            (if (and repo num (fboundp 'decknix--hub-wip-comment))
+                (decknix--hub-wip-comment repo num)
+              (message "No PR context"))))
+
+        (transient-define-suffix decknix--sb-act-copy-jira-key ()
+          "Copy the active task's Jira key to the kill-ring."
+          :description "Copy Jira key"
+          (interactive)
+          (let ((k (decknix--sidebar-action-prop 'decknix-hub-jira-key)))
+            (if k (progn (kill-new k) (message "Copied: %s" k))
+              (message "No Jira key"))))
+
+        (transient-define-suffix decknix--sb-act-unlink ()
+          "Unlink this PR / repo from its owning agent session."
+          :description "Unlink from session"
+          (interactive)
+          (let* ((conv-key (decknix--sidebar-action-prop 'decknix-hub-conv-key))
+                 (url      (decknix--sidebar-action-prop 'decknix-hub-url))
+                 (type     (decknix--sidebar-action-prop 'decknix-hub-type))
+                 (branch   (decknix--sidebar-action-prop 'decknix-hub-branch)))
+            (cond
+             ((not conv-key)
+              (message "Row not associated with a session"))
+             ((eq type 'linked-repo)
+              (when (fboundp 'decknix--agent-unlink-repo)
+                (decknix--agent-unlink-repo conv-key url branch)))
+             (t
+              (when (fboundp 'decknix--agent-unlink-pr)
+                (decknix--agent-unlink-pr conv-key url))))))
+
+        ;; -- Stub suffixes (verbs pending follow-up issues) --
+        ;; Placeholders preserve the spec's stable menu shape so the
+        ;; transient layout doesn't shift when each verb lands.
+
+        (defmacro decknix--sb-stub (name desc &optional issue)
+          "Define a placeholder transient suffix NAME with DESC.
+ISSUE, when supplied, is appended as `(#NNN)' to the echo-area
+message so users can find the tracking ticket."
+          `(transient-define-suffix ,name ()
+             :description ,desc
+             (interactive)
+             (message "%s — pending%s"
+                      ,desc
+                      ,(if issue (format " (#%s)" issue) ""))))
+
+        (decknix--sb-stub decknix--sb-act-investigate    "Start investigate session")
+        (decknix--sb-stub decknix--sb-act-review-comment "Review-comment on PR")
+        (decknix--sb-stub decknix--sb-act-jump-ci        "Jump to CI run")
+        (decknix--sb-stub decknix--sb-act-jump-deploy    "Jump to deploy")
+        (decknix--sb-stub decknix--sb-act-transition     "Transition status")
+        (decknix--sb-stub decknix--sb-act-align-jira     "Align Jira with code")
+        (decknix--sb-stub decknix--sb-act-analyze        "Analyze (AI)")
+        (decknix--sb-stub decknix--sb-act-spec           "Define/update spec")
+        (decknix--sb-stub decknix--sb-act-worktree       "Worktree…" "129")
+        (decknix--sb-stub decknix--sb-act-reveal         "Reveal in Sessions picker")
+
+        ;; -- Inapt-if predicates (dim, don't hide, per spec §3.1) --
+
+        (defun decknix--sb-act-deploy-absent-p ()
+          "Non-nil when the active row has no deploy URL (D verb dimmed)."
+          (not (decknix--sidebar-action-prop 'decknix-hub-deploy-url)))
+
+        (defun decknix--sb-act-not-authored-p ()
+          "Non-nil when the active linked PR is not authored by the user."
+          (not (eq (decknix--sidebar-action-prop 'decknix-hub-linked-kind)
+                   'authored)))
+
+        ;; -- Five hub-row transients (spec §3.2.1) --
+
+        (transient-define-prefix decknix-sidebar-request-menu ()
+          "Action menu for a Requests row (PR review awaiting me)."
+          [:description decknix--sidebar-action-description
+           ["Navigate"
+            ("o" decknix--sb-act-open)
+            ("b" decknix--sb-act-browser)
+            ("c" decknix--sb-act-copy-url)]
+           ["Review"
+            ("r" decknix--sb-act-review)
+            ("s" decknix--sb-act-review-split)
+            ("M" decknix--sb-act-comment)
+            ("R" decknix--sb-act-review-comment)]
+           ["Pipeline"
+            ("C" decknix--sb-act-jump-ci)]
+           ["Other"
+            ("w" decknix--sb-act-worktree)
+            ("L" decknix--sb-act-reveal)]]
+          [("q" "Cancel" transient-quit-one)])
+
+        (transient-define-prefix decknix-sidebar-wip-menu ()
+          "Action menu for a WIP row (my open PR)."
+          [:description decknix--sidebar-action-description
+           ["Navigate"
+            ("o" decknix--sb-act-open)
+            ("b" decknix--sb-act-browser)
+            ("c" decknix--sb-act-copy-url)]
+           ["Review"
+            ("r" decknix--sb-act-review)
+            ("s" decknix--sb-act-review-split)
+            ("M" decknix--sb-act-comment)
+            ("R" decknix--sb-act-review-comment)]
+           ["Status"
+            ("m" decknix--sb-act-merge)
+            ("x" decknix--sb-act-close)]
+           ["Pipeline"
+            ("C" decknix--sb-act-jump-ci)
+            ("D" decknix--sb-act-jump-deploy
+             :inapt-if decknix--sb-act-deploy-absent-p)]
+           ["Other"
+            ("w" decknix--sb-act-worktree)
+            ("L" decknix--sb-act-reveal)]]
+          [("q" "Cancel" transient-quit-one)])
+
+        (transient-define-prefix decknix-sidebar-task-menu ()
+          "Action menu for a Tasks row (Jira issue)."
+          [:description decknix--sidebar-action-description
+           ["Navigate"
+            ("o" decknix--sb-act-open)
+            ("b" decknix--sb-act-browser)
+            ("c" decknix--sb-act-copy-url)]
+           ["Session"
+            ("i" decknix--sb-act-investigate)
+            ("M" decknix--sb-act-comment)]
+           ["Jira"
+            ("k" decknix--sb-act-copy-jira-key)
+            ("t" decknix--sb-act-transition)
+            ("A" decknix--sb-act-align-jira)
+            ("y" decknix--sb-act-analyze)
+            ("S" decknix--sb-act-spec)]]
+          [("q" "Cancel" transient-quit-one)])
+
+        (transient-define-prefix decknix-sidebar-linked-pr-menu ()
+          "Action menu for a linked PR row (under a session)."
+          [:description decknix--sidebar-action-description
+           ["Navigate"
+            ("o" decknix--sb-act-open)
+            ("b" decknix--sb-act-browser)
+            ("c" decknix--sb-act-copy-url)]
+           ["Review"
+            ("r" decknix--sb-act-review)
+            ("s" decknix--sb-act-review-split)
+            ("M" decknix--sb-act-comment)
+            ("R" decknix--sb-act-review-comment)]
+           ["Status"
+            ("m" decknix--sb-act-merge
+             :inapt-if decknix--sb-act-not-authored-p)
+            ("x" decknix--sb-act-close
+             :inapt-if decknix--sb-act-not-authored-p)]
+           ["Pipeline"
+            ("C" decknix--sb-act-jump-ci)
+            ("D" decknix--sb-act-jump-deploy
+             :inapt-if decknix--sb-act-deploy-absent-p)]
+           ["Session"
+            ("u" decknix--sb-act-unlink)
+            ("w" decknix--sb-act-worktree)
+            ("L" decknix--sb-act-reveal)]]
+          [("q" "Cancel" transient-quit-one)])
+
+        (transient-define-prefix decknix-sidebar-linked-repo-menu ()
+          "Action menu for a linked repo row (under a session)."
+          [:description decknix--sidebar-action-description
+           ["Navigate"
+            ("o" decknix--sb-act-open)
+            ("b" decknix--sb-act-browser)
+            ("c" decknix--sb-act-copy-url)]
+           ["Session"
+            ("i" decknix--sb-act-investigate)
+            ("u" decknix--sb-act-unlink)]
+           ["Pipeline"
+            ("C" decknix--sb-act-jump-ci)
+            ("D" decknix--sb-act-jump-deploy
+             :inapt-if decknix--sb-act-deploy-absent-p)]
+           ["Other"
+            ("w" decknix--sb-act-worktree)
+            ("L" decknix--sb-act-reveal)]]
+          [("q" "Cancel" transient-quit-one)])
+
+        ;; -- Dispatcher and primary action --
+
+        (defun decknix-sidebar-ret ()
+          "Open the action menu for the row at point.
+Hub rows (Request, WIP, Task, Linked PR, Linked Repo) get a row-
+specific transient.  Other rows fall through to the existing
+primary-action handler so sessions and headers behave as before
+until #125/#126/#127 land.  M-RET / C-u RET runs the primary action
+directly — see `decknix-sidebar-primary-action'."
+          (interactive)
+          (let* ((ctx (decknix--sidebar-row-context))
+                 (type (alist-get 'decknix-hub-type ctx))
+                 (cmd (pcase type
+                        ('review      #'decknix-sidebar-request-menu)
+                        ('wip         #'decknix-sidebar-wip-menu)
+                        ('task        #'decknix-sidebar-task-menu)
+                        ('linked-pr   #'decknix-sidebar-linked-pr-menu)
+                        ('linked-repo #'decknix-sidebar-linked-repo-menu))))
+            (cond
+             ((and ctx cmd)
+              (setq decknix--sidebar-action-context ctx)
+              (decknix--sidebar-call-transient cmd))
+             (t
+              (call-interactively #'agent-shell-workspace-sidebar-goto)))))
+
+        (defun decknix-sidebar-primary-action ()
+          "Run the row's primary action directly (M-RET / C-u RET).
+For hub rows: open the URL in xwidget/EWW.  For other rows: defer to
+`agent-shell-workspace-sidebar-goto' which handles sessions and
+headers."
+          (interactive)
+          (let* ((ctx (decknix--sidebar-row-context))
+                 (url (alist-get 'decknix-hub-url ctx)))
+            (if (and ctx url)
+                (decknix--open-url url)
+              (call-interactively #'agent-shell-workspace-sidebar-goto))))
+
+
+
         ;; -- Bind keys in sidebar mode --
         ;; Override upstream keys: r, w, a now serve section navigation
         (define-key agent-shell-workspace-sidebar-mode-map
@@ -8601,6 +8943,20 @@ With prefix ALL, capture the full history (see `decknix-agent-review')."
 
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "v") #'decknix-sidebar-review-at-point)
+
+        ;; RET = action menu transient for the row at point (#123).
+        ;; M-RET (and C-u RET) = primary action — opens the row's URL in
+        ;; xwidget/EWW for hub rows, or defers to the existing handler for
+        ;; sessions and headers.  Both <return> and RET are bound because
+        ;; tty-style RET and GUI-style <return> are distinct events.
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "RET") #'decknix-sidebar-ret)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "<return>") #'decknix-sidebar-ret)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "M-RET") #'decknix-sidebar-primary-action)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "M-<return>") #'decknix-sidebar-primary-action)
 
         ;; == Sidebar state persistence ==
         ;; Saves toggle states and previous live sessions across restarts.

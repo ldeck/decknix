@@ -274,6 +274,19 @@ The `decknix--context-update-header` function delegates to the unified header
     with a different branch.  Unlink via `C-c A c u` — the picker
     surfaces both PRs and repos with `[repo:main]` / `[authored]`
     prefixes so the type of the item being removed is always clear.
+- **Row action menus** (#123): `RET` on any actionable row opens a
+  row-specific Action Menu transient.  Five hub-row variants today:
+  Request, WIP, Task, Linked PR, Linked Repo — each defined per
+  `specs/sidebar-ret.md` §3.2.1.  `M-RET` (and `C-u RET`) skips the
+  menu and runs the row's primary action directly: for hub rows that
+  is "open URL in xwidget/EWW", for sessions and headers it falls
+  through to the existing handler so behaviour is unchanged until
+  #125 / #126 / #127 land.  The menus follow the spec's stable-shape
+  policy: every verb that *could ever* apply to a row kind keeps a
+  permanent slot and is dimmed via `:inapt-if` when the current row's
+  state disqualifies it (e.g. `m`/`x` on a non-authored linked PR).
+  Verbs awaiting their own follow-up issue render a placeholder that
+  echoes "pending" so the menu shape is stable from day one.
 - Toggles transient (`T`): Opens sectioned menu grouped by sidebar
   section. Suffixes within each section are ordered alphabetically by
   their display label (case-insensitive) to match the sidebar footer,
@@ -388,6 +401,8 @@ workspace sidebar surface which sessions need attention.
 | `C-c C-c` | Route review (review-mode only) |
 | `C-c C-f` | Flag paragraph as follow-up (review-mode only) |
 | `C-c C-l` | List stashed follow-ups (review-mode only) |
+| `RET` | Sidebar: open the row's Action Menu transient (#123) |
+| `M-RET` / `C-u RET` | Sidebar: run the row's primary action (open URL for hub rows) |
 
 ### Planned Features
 
