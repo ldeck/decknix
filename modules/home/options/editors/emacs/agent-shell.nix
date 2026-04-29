@@ -1735,41 +1735,96 @@ Excludes the current buffer. MRU ordering."
         ;; across every session JSON file using ripgrep.
         ;; C-c A g — type a search term, results narrow live.
 
-        (defun decknix--agent-session-rg-search (term)
-          "Search session files for TERM using ripgrep.
-Returns a list of session alists for files containing TERM.
-Uses rg -li for fast case-insensitive file matching, then
-extracts metadata with jq for the matching files.
+        (defun decknix--agent-session-rg-search-fast (term)
+          "Find sessions matching TERM via rg + the in-memory metadata cache.
+Runs `rg -l0' to list files containing TERM (~0.5s for hundreds of
+sessions), extracts the sessionId from each filename
+(`<uuid>.json'), and looks the IDs up in
+`decknix--agent-session-cache'.
 
-Uses `make-process' + `accept-process-output' instead of
-`shell-command-to-string' so Emacs remains responsive to input.
-This lets consult's `while-no-input' interrupt the search if the
-user types more characters, preventing the cursor-freeze / [quit]
-issue."
-          (let* ((jqf (decknix--agent-session-ensure-jq-filter))
-                 (sessions-dir (shell-quote-argument
-                                (expand-file-name "sessions" "~/.augment")))
-                 (cmd (format "%s -li %s %s 2>/dev/null | xargs jq -Mc -f %s 2>/dev/null | jq -Msc 'sort_by(.modified) | reverse'"
-                              (or (executable-find "rg") "rg")
+This is the default path because parsing the matching JSON files
+with jq is the real bottleneck — some sessions weigh 40MB+ and
+the per-keystroke pipeline used to hit ~35s, well past consult's
+`while-no-input' timeout.
+
+Sessions written *since* the last cache refresh (every 2 minutes)
+are silently skipped here.  Use `\\[universal-argument]
+\\[universal-argument]' on `decknix-agent-session-grep' to fall
+back to the slower but exhaustive `*-thorough' variant when
+hunting for a brand-new session."
+          (let* ((rg (or (executable-find "rg") "rg"))
+                 (sessions-dir (expand-file-name "sessions" "~/.augment"))
+                 (cmd (format "%s -l0 %s %s 2>/dev/null"
+                              (shell-quote-argument rg)
                               (shell-quote-argument term)
-                              sessions-dir
-                              (shell-quote-argument jqf)))
+                              (shell-quote-argument sessions-dir)))
                  (output "")
                  (proc (make-process
-                        :name "agent-grep-rg"
+                        :name "agent-grep-rg-fast"
                         :buffer nil
                         :command (list "sh" "-c" cmd)
                         :noquery t
                         :connection-type 'pipe
                         :filter (lambda (_p o)
                                   (setq output (concat output o))))))
-            ;; Yield to Emacs event loop between output chunks.
-            ;; accept-process-output with a small timeout lets
-            ;; while-no-input (used by consult) interrupt us if the
-            ;; user types more characters — no more cursor freeze.
+            ;; Yield so consult's while-no-input can interrupt on
+            ;; subsequent keystrokes — same pattern as the thorough
+            ;; variant below.
             (while (process-live-p proc)
               (accept-process-output proc 0.03))
-            ;; Collect any trailing output
+            (accept-process-output proc 0)
+            ;; rg -l0 is NUL-delimited; split, derive the sessionId from
+            ;; each path's basename, then filter the cached metadata.
+            (let* ((paths (split-string output "\0" t))
+                   (id-set (let ((h (make-hash-table :test 'equal)))
+                             (dolist (p paths)
+                               (puthash (file-name-base p) t h))
+                             h))
+                   (cache (or decknix--agent-session-cache
+                              (progn (decknix--agent-session-list)
+                                     decknix--agent-session-cache)))
+                   (matched (seq-filter
+                             (lambda (s)
+                               (gethash (alist-get 'sessionId s) id-set))
+                             cache)))
+              (sort (copy-sequence matched)
+                    (lambda (a b)
+                      (string> (or (alist-get 'modified a) "")
+                               (or (alist-get 'modified b) "")))))))
+
+        (defun decknix--agent-session-rg-search-thorough (term)
+          "Search session files for TERM using ripgrep + parallel jq.
+Slower but exhaustive complement to
+`decknix--agent-session-rg-search-fast': re-parses every matching
+file with jq instead of relying on the in-memory cache, so it
+finds sessions written since the last cache refresh.
+
+Uses `xargs -0 -P8' to parallelise the per-file jq calls — even
+across hundreds of large session files this completes in a few
+seconds, where the previous serial pipeline could take 30+s.
+
+Uses `make-process' + `accept-process-output' so Emacs stays
+responsive and consult's `while-no-input' can interrupt mid-flight
+when the user types more characters."
+          (let* ((jqf (decknix--agent-session-ensure-jq-filter))
+                 (sessions-dir (shell-quote-argument
+                                (expand-file-name "sessions" "~/.augment")))
+                 (cmd (format "%s -l0 %s %s 2>/dev/null | xargs -0 -P8 -I{} jq -Mc -f %s {} 2>/dev/null | jq -Msc 'sort_by(.modified) | reverse'"
+                              (or (executable-find "rg") "rg")
+                              (shell-quote-argument term)
+                              sessions-dir
+                              (shell-quote-argument jqf)))
+                 (output "")
+                 (proc (make-process
+                        :name "agent-grep-rg-thorough"
+                        :buffer nil
+                        :command (list "sh" "-c" cmd)
+                        :noquery t
+                        :connection-type 'pipe
+                        :filter (lambda (_p o)
+                                  (setq output (concat output o))))))
+            (while (process-live-p proc)
+              (accept-process-output proc 0.03))
             (accept-process-output proc 0)
             (decknix--agent-session-parse output)))
 
@@ -1832,14 +1887,32 @@ Otherwise collapse by conversation."
         (defun decknix-agent-session-grep (arg)
           "Full-text grep across all session content using consult + ripgrep.
 Type a search term and ripgrep searches ALL user messages, agent
-responses, and code blocks in every session file (~1s for 200+ sessions).
-Results narrow live as you type.
+responses, and code blocks in every session file.  Results narrow
+live as you type.
 
-By default shows conversation-collapsed results (one per conversation).
-With \\\\[universal-argument], shows all individual session snapshots."
+The default fast path uses ripgrep to find matching files (~0.5s)
+then maps each filename to the in-memory session metadata cache —
+this avoids re-parsing 40MB+ JSON files on every keystroke, which
+previously starved consult's `while-no-input' and dropped results.
+
+Prefix arguments:
+- no prefix:         conversation-collapsed, fast (cache).
+- \\[universal-argument]:               expanded snapshots, fast (cache).
+- \\[universal-argument] \\[universal-argument]:           conversation-collapsed, thorough
+                     (re-parses every match with parallel jq —
+                     finds sessions written since the last cache
+                     refresh ~2 minutes ago).
+- \\[universal-argument] \\[universal-argument] \\[universal-argument]:       expanded snapshots, thorough."
           (interactive "P")
           (require 'consult)
-          (let* ((expand arg)
+          (let* ((arg-num (prefix-numeric-value arg))
+                 (thorough (>= arg-num 16))
+                 ;; Expand on `C-u' (4) or `C-u C-u C-u' (64); collapse
+                 ;; on no prefix (1) or `C-u C-u' (16).
+                 (expand (or (= arg-num 4) (>= arg-num 64)))
+                 (search-fn (if thorough
+                                'decknix--agent-session-rg-search-thorough
+                              'decknix--agent-session-rg-search-fast))
                  ;; entries-cache: alist mapping candidate-string → (session . session-data)
                  ;; Rebuilt on each rg invocation; used for lookup after selection.
                  (entries-cache nil)
@@ -1853,7 +1926,7 @@ With \\\\[universal-argument], shows all individual session snapshots."
                            nil)
                           (t
                            (condition-case nil
-                               (let* ((matches (decknix--agent-session-rg-search input))
+                               (let* ((matches (funcall ',search-fn input))
                                       (entries (when matches
                                                  (decknix--agent-session-grep-build-entries
                                                   matches ,expand))))
@@ -1862,7 +1935,9 @@ With \\\\[universal-argument], shows all individual session snapshots."
                              (error nil)))))
                       t)
                      :min-input 2)
-                   :prompt "Grep sessions: "
+                   :prompt (if thorough
+                               "Grep sessions (thorough): "
+                             "Grep sessions: ")
                    :sort nil
                    :require-match t))
                  (chosen (cdr (assoc selected entries-cache))))

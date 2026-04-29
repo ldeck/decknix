@@ -376,7 +376,7 @@ workspace sidebar surface which sessions need attention.
 | `C-c A` | Agent commands (global) |
 | `C-c A b` | Switch agent buffer — live buffers only, MRU ordered (#96) |
 | `C-c A s` | Session picker (sectioned: Live / Saved / New); `C-u` for all snapshots (#77) |
-| `C-c A g` | Grep sessions — consult + ripgrep full-text search across all session content; `C-u` for all snapshots |
+| `C-c A g` | Grep sessions — consult + ripgrep full-text search across all session content. Default fast path uses ripgrep + the in-memory session metadata cache (sub-second). `C-u` expands snapshots; `C-u C-u` runs the **thorough** path (parallel jq re-parse, ~5s) which finds sessions written since the last cache refresh; `C-u C-u C-u` combines expanded + thorough |
 | `C-c A n` | New session |
 | `C-c A q` | Quit/close session (switch to next or welcome) |
 | `C-c A c` | Commands — quick actions and custom commands |
