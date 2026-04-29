@@ -11765,7 +11765,7 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
                      ;; Process creation failed — clear pending flag
                      (remhash url decknix--hub-pr-pending-fetches)
                      (message "hub-pr-fetch: process error for %s: %s"
-                              url (error-message-string err))))))))
+                              url (error-message-string err)))))))))
 
         (defvar decknix--hub-pr-refresh-timer nil
           "Timer for coalesced sidebar refresh after PR status fetches.")
@@ -12455,7 +12455,7 @@ status for these branches."
                         (insert json-data "\n"))
                     (error
                      (message "hub: write linked-prs.json: %s"
-                              (error-message-string err))))))))))
+                              (error-message-string err)))))))))
 
 
         (defun decknix--hub-pr-status (url)
