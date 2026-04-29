@@ -11635,6 +11635,348 @@ rollup into the same shape PR records use so downstream renderers
                    (message "hub-repo-fetch: process error for %s@%s: %s"
                             url branch (error-message-string err))))))))
 
+        ;; -- Hub: worktree registry (#128) ---------------------------------
+        ;; Cache-backed answers to "is there a clone of OWNER/REPO?" and
+        ;; "is BRANCH already checked out in a worktree on that clone?".
+        ;; Everything is async (`make-process') so a stale NFS mount can't
+        ;; wedge redisplay.  The on-disk cache lives at
+        ;; `~/.config/decknix/hub/worktrees.el' in the alist form spelt out
+        ;; in `specs/sidebar-ret.md' §3.6.1 so external consumers (the `wt'
+        ;; CLI from `specs/worktree-cli.md', a vim plugin) can read it
+        ;; directly without going through Emacs.
+
+        (defcustom decknix-hub-clones nil
+          "Explicit alist of (\"owner/repo\" . \"/path/to/clone\") overrides.
+Takes precedence over auto-discovered clones (sessions, project.el).
+Personal `decknix-config' may set this to pin a primary checkout when
+multiple worktrees exist."
+          :type '(alist :key-type string :value-type string)
+          :group 'decknix)
+
+        (defcustom decknix-hub-eager-clone-probe nil
+          "When non-nil, probe every known clone once on idle after startup.
+Default `nil' keeps the registry strictly lazy.  Flip to `t' if the
+first sidebar render after restart needs a warm cache."
+          :type 'boolean
+          :group 'decknix)
+
+        (defcustom decknix-hub-worktree-cache-ttl 60
+          "TTL in seconds for cached `git worktree list --porcelain' probes."
+          :type 'integer
+          :group 'decknix)
+
+        (defvar decknix--hub-worktree-cache (make-hash-table :test 'equal)
+          "Worktree registry: \"owner/repo\" -> plist (:primary :worktrees :ts :stale).
+See `specs/sidebar-ret.md' §3.6.1 for the on-disk format.")
+
+        (defvar decknix--hub-worktree-cache-file
+          (expand-file-name "~/.config/decknix/hub/worktrees.el")
+          "Persistence file for `decknix--hub-worktree-cache'.")
+
+        (defvar decknix--hub-worktree-pending (make-hash-table :test 'equal)
+          "Set of repo keys currently being probed.")
+
+        (defvar decknix--hub-worktree-clone-map (make-hash-table :test 'equal)
+          "Memoised: workspace path -> \"owner/repo\" or :unknown.
+Avoids re-running `git config --get remote.origin.url' on every
+sidebar refresh for paths we have already classified.")
+
+        (defun decknix--hub-worktree-canonical-repo (owner-slash-repo)
+          "Lowercase OWNER-SLASH-REPO; safe on nil or non-strings."
+          (when (and owner-slash-repo (stringp owner-slash-repo))
+            (downcase owner-slash-repo)))
+
+        (defun decknix--hub-worktree-repo-from-url (url)
+          "Extract canonical \"owner/repo\" from URL or nil.
+Recognises https://github.com/OWNER/REPO and SSH git@github.com forms."
+          (when (and url (stringp url))
+            (when (string-match
+                   "github\\.com[:/]\\([^/]+\\)/\\([^/]+?\\)\\(?:\\.git\\)?/?$"
+                   url)
+              (decknix--hub-worktree-canonical-repo
+               (concat (match-string 1 url) "/" (match-string 2 url))))))
+
+        (defun decknix--hub-worktree-classify-dir (dir)
+          "Return canonical \"owner/repo\" for DIR or :unknown.
+Memoised in `decknix--hub-worktree-clone-map'."
+          (let* ((canon (file-name-as-directory (expand-file-name dir)))
+                 (cached (gethash canon decknix--hub-worktree-clone-map)))
+            (or cached
+                (let ((repo (or (and (file-directory-p canon)
+                                     (decknix--hub-worktree-repo-from-url
+                                      (decknix--git-remote-url canon)))
+                                :unknown)))
+                  (puthash canon repo decknix--hub-worktree-clone-map)
+                  repo))))
+
+        (defun decknix--hub-worktree-discover-from-sessions ()
+          "Walk agent-sessions.json workspaces; return alist (REPO . PATH).
+First match per repo wins; subsequent matches are dropped so explicit
+overrides from `decknix-hub-clones' can override later in the merge."
+          (let ((seen (make-hash-table :test 'equal))
+                (out nil))
+            (condition-case nil
+                (let* ((store (decknix--agent-tags-read))
+                       (convs (and store
+                                   (decknix--agent-tags-conversations store))))
+                  (when convs
+                    (maphash
+                     (lambda (_k entry)
+                       (let ((ws (and (hash-table-p entry)
+                                      (gethash "workspace" entry))))
+                         (when (and ws (stringp ws) (file-directory-p ws))
+                           (let ((repo (decknix--hub-worktree-classify-dir ws)))
+                             (when (and (stringp repo)
+                                        (not (gethash repo seen)))
+                               (puthash repo t seen)
+                               (push (cons repo ws) out))))))
+                     convs)))
+              (error nil))
+            out))
+
+        (defun decknix--hub-worktree-discover-clones ()
+          "Return alist (REPO . PRIMARY-PATH) by merging discovery sources.
+Priority: explicit `decknix-hub-clones' > cached `:primary' >
+`agent-sessions.json' workspaces > `project.el' known projects."
+          (let ((seen (make-hash-table :test 'equal))
+                (out nil))
+            ;; 1. Explicit defcustom (highest priority).
+            (dolist (entry decknix-hub-clones)
+              (let ((repo (decknix--hub-worktree-canonical-repo (car entry))))
+                (when (and repo (not (gethash repo seen)))
+                  (puthash repo t seen)
+                  (push (cons repo (cdr entry)) out))))
+            ;; 2. Cached entries' :primary (last-known-good across restarts).
+            (maphash (lambda (repo entry)
+                       (let ((p (plist-get entry :primary)))
+                         (when (and p (not (gethash repo seen)))
+                           (puthash repo t seen)
+                           (push (cons repo p) out))))
+                     decknix--hub-worktree-cache)
+            ;; 3. Sessions.
+            (dolist (entry (decknix--hub-worktree-discover-from-sessions))
+              (unless (gethash (car entry) seen)
+                (puthash (car entry) t seen)
+                (push entry out)))
+            ;; 4. project.el known projects (best-effort; no-op without it).
+            (when (fboundp 'project-known-project-roots)
+              (dolist (root (ignore-errors (project-known-project-roots)))
+                (when (and (stringp root) (file-directory-p root))
+                  (let ((repo (decknix--hub-worktree-classify-dir root)))
+                    (when (and (stringp repo) (not (gethash repo seen)))
+                      (puthash repo t seen)
+                      (push (cons repo root) out))))))
+            (nreverse out)))
+
+        (defun decknix--hub-worktree-parse-porcelain (text)
+          "Parse `git worktree list --porcelain' TEXT into ((BRANCH . PATH) ...).
+Detached worktrees are keyed by short HEAD sha.  Bare repos are skipped."
+          (let ((out nil)
+                (cur-path nil) (cur-branch nil) (cur-head nil) (bare nil))
+            (cl-flet ((flush ()
+                        (when (and cur-path (not bare))
+                          (push (cons (or cur-branch
+                                          (and cur-head
+                                               (substring
+                                                cur-head 0
+                                                (min 7 (length cur-head)))))
+                                      cur-path)
+                                out))))
+              (dolist (line (split-string (or text "") "\n"))
+                (cond
+                 ((string-match "^worktree \\(.+\\)$" line)
+                  (flush)
+                  (setq cur-path (match-string 1 line)
+                        cur-branch nil cur-head nil bare nil))
+                 ((string-match "^bare$" line) (setq bare t))
+                 ((string-match "^HEAD \\(.+\\)$" line)
+                  (setq cur-head (match-string 1 line)))
+                 ((string-match "^branch refs/heads/\\(.+\\)$" line)
+                  (setq cur-branch (match-string 1 line)))))
+              (flush))
+            (nreverse out)))
+
+        (defun decknix--hub-worktree--handle-probe-result (proc repo primary)
+          "Sentinel target: parse PROC output, update cache for REPO @ PRIMARY.
+Split out so the sentinel closure stays small (backquote capture under
+dynamic binding is expensive for large bodies — same reasoning as
+`decknix--hub-repo--handle-fetch-result')."
+          (unwind-protect
+              (let* ((exit-code (process-exit-status proc))
+                     (output (when (buffer-live-p (process-buffer proc))
+                               (with-current-buffer (process-buffer proc)
+                                 (buffer-string)))))
+                (cond
+                 ((/= exit-code 0)
+                  (let ((entry (gethash repo decknix--hub-worktree-cache)))
+                    (puthash repo
+                             (plist-put
+                              (or entry
+                                  (list :primary primary
+                                        :worktrees nil :ts 0))
+                              :stale t)
+                             decknix--hub-worktree-cache))
+                  (message "hub-worktree: probe %s exited %d: %s"
+                           repo exit-code
+                           (string-trim (or output ""))))
+                 (t
+                  (let ((wts (decknix--hub-worktree-parse-porcelain output)))
+                    (puthash repo
+                             (list :primary primary
+                                   :worktrees wts
+                                   :ts (float-time)
+                                   :stale nil)
+                             decknix--hub-worktree-cache)))))
+            (remhash repo decknix--hub-worktree-pending)
+            (when (buffer-live-p (process-buffer proc))
+              (kill-buffer (process-buffer proc)))
+            ;; Coalesced sidebar refresh (shares the PR-fetch timer).
+            (when (get-buffer "*agent-shell-sidebar*")
+              (when (timerp decknix--hub-pr-refresh-timer)
+                (cancel-timer decknix--hub-pr-refresh-timer))
+              (setq decknix--hub-pr-refresh-timer
+                    (run-at-time 0.3 nil
+                      (lambda ()
+                        (setq decknix--hub-pr-refresh-timer nil)
+                        (when (get-buffer "*agent-shell-sidebar*")
+                          (ignore-errors
+                            (agent-shell-workspace-sidebar-refresh)))))))))
+
+        (defun decknix-hub-worktree-registry-refresh (&optional repo)
+          "Force re-probe REPO (or every discovered clone if nil).
+Returns immediately; results land in `decknix--hub-worktree-cache'
+asynchronously and trigger a coalesced sidebar refresh on completion."
+          (interactive)
+          (let ((targets
+                 (if repo
+                     (let* ((rk (decknix--hub-worktree-canonical-repo repo))
+                            (entry (gethash rk decknix--hub-worktree-cache))
+                            (p (or (plist-get entry :primary)
+                                   (cdr (assoc rk
+                                               (decknix--hub-worktree-discover-clones))))))
+                       (when p (list (cons rk p))))
+                   (decknix--hub-worktree-discover-clones))))
+            (dolist (entry targets)
+              (let ((rk (car entry)) (primary (cdr entry)))
+                (when (and rk primary
+                           (not (gethash rk decknix--hub-worktree-pending))
+                           (file-directory-p primary))
+                  (puthash rk t decknix--hub-worktree-pending)
+                  (condition-case err
+                      (let ((proc (make-process
+                                   :name (format "hub-wt-%s" rk)
+                                   :buffer (generate-new-buffer
+                                            " *hub-worktree-probe*")
+                                   :connection-type 'pipe
+                                   :command (list "git" "-C" primary
+                                                  "worktree" "list"
+                                                  "--porcelain"))))
+                        (set-process-sentinel
+                         proc
+                         (eval `(lambda (proc _event)
+                                  (when (memq (process-status proc)
+                                              '(exit signal))
+                                    (decknix--hub-worktree--handle-probe-result
+                                     proc ,rk ,primary)))
+                               t)))
+                    (error
+                     (remhash rk decknix--hub-worktree-pending)
+                     (message "hub-worktree: spawn error for %s: %s"
+                              rk (error-message-string err)))))))))
+
+        (defun decknix-hub-worktree-registry-get (repo)
+          "Return the registry plist for REPO or nil.
+Triggers an async refresh when the entry is missing or older than
+`decknix-hub-worktree-cache-ttl'.  Returns the existing entry
+(possibly stale) immediately so callers can render without blocking."
+          (when (stringp repo)
+            (let* ((rk (decknix--hub-worktree-canonical-repo repo))
+                   (entry (gethash rk decknix--hub-worktree-cache))
+                   (ts (or (plist-get entry :ts) 0)))
+              (when (or (null entry)
+                        (> (- (float-time) ts)
+                           decknix-hub-worktree-cache-ttl))
+                (decknix-hub-worktree-registry-refresh rk))
+              entry)))
+
+        (defun decknix-hub-worktree-find (repo branch)
+          "Return the worktree path for REPO @ BRANCH or nil."
+          (when (and repo branch)
+            (let* ((entry (decknix-hub-worktree-registry-get repo))
+                   (worktrees (plist-get entry :worktrees)))
+              (cdr (assoc branch worktrees)))))
+
+        (defun decknix-hub-worktree-list (repo)
+          "Return ((BRANCH . PATH) ...) worktrees for REPO or nil."
+          (plist-get (decknix-hub-worktree-registry-get repo) :worktrees))
+
+        (defun decknix-hub-worktree-clones ()
+          "Return the alist of known (REPO . PRIMARY-PATH) clones."
+          (decknix--hub-worktree-discover-clones))
+
+        (defun decknix-hub-worktree-primary (repo)
+          "Return the primary clone path for REPO or nil."
+          (when (stringp repo)
+            (let ((rk (decknix--hub-worktree-canonical-repo repo)))
+              (or (plist-get (decknix-hub-worktree-registry-get rk) :primary)
+                  (cdr (assoc rk (decknix--hub-worktree-discover-clones)))))))
+
+        ;; -- Persistence (mirrors decknix--hub-pr-cache pattern) -----------
+
+        (defun decknix--hub-worktree-cache-save ()
+          "Persist the worktree cache to disk in the spec §3.6.1 alist form."
+          (when (> (hash-table-count decknix--hub-worktree-cache) 0)
+            (condition-case err
+                (let (entries)
+                  (maphash (lambda (repo entry)
+                             (push (cons repo entry) entries))
+                           decknix--hub-worktree-cache)
+                  (make-directory (file-name-directory
+                                   decknix--hub-worktree-cache-file) t)
+                  (with-temp-file decknix--hub-worktree-cache-file
+                    (insert ";; Auto-generated worktree registry — do not edit\n")
+                    (insert ";; Format: ((\"owner/repo\" :primary PATH"
+                            " :worktrees ((BRANCH . PATH) ...)"
+                            " :ts FLOAT :stale BOOL) ...)\n")
+                    (prin1 entries (current-buffer))
+                    (insert "\n")))
+              (error
+               (message "hub-worktree-cache: save failed: %s"
+                        (error-message-string err))))))
+
+        (defun decknix--hub-worktree-cache-restore ()
+          "Restore the worktree cache from disk."
+          (when (file-exists-p decknix--hub-worktree-cache-file)
+            (condition-case err
+                (let ((entries
+                       (with-temp-buffer
+                         (insert-file-contents
+                          decknix--hub-worktree-cache-file)
+                         (read (current-buffer)))))
+                  (when (listp entries)
+                    (dolist (entry entries)
+                      (when (and (consp entry) (stringp (car entry)))
+                        (puthash (car entry) (cdr entry)
+                                 decknix--hub-worktree-cache)))))
+              (error
+               (message "hub-worktree-cache: restore failed: %s"
+                        (error-message-string err))))))
+
+        (run-with-timer 120 120 #'decknix--hub-worktree-cache-save)
+        (add-hook 'kill-emacs-hook #'decknix--hub-worktree-cache-save)
+        (decknix--hub-worktree-cache-restore)
+
+        ;; -- Optional eager idle pass --------------------------------------
+
+        (defun decknix--hub-worktree-eager-pass ()
+          "Probe every discovered clone once when the user is idle.
+No-op unless `decknix-hub-eager-clone-probe' is non-nil."
+          (when decknix-hub-eager-clone-probe
+            (decknix-hub-worktree-registry-refresh)))
+
+        (when decknix-hub-eager-clone-probe
+          (run-with-idle-timer 5 nil #'decknix--hub-worktree-eager-pass))
+
         (defun decknix--hub-write-linked-prs ()
           "Write linked-prs.json to the hub directory for the daemon.
 Collects linked PRs from all live agent-shell sessions, resolves
