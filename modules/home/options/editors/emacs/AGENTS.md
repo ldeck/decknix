@@ -398,7 +398,8 @@ workspace sidebar surface which sessions need attention.
 | `C-v` / `M-v` | page scroll | bridge to `xwidget-webkit-scroll-up`/`-down` |
 | `M-<` / `M->` | top / bottom of page | bridge to `-scroll-top`/`-scroll-bottom` |
 | `SPC` / `DEL` (or `S-SPC`) | page forward / back | view-mode/EWW/Info convention |
-| `C-s` / `C-r` | in-page search | JS-bridged isearch shim (Slice B will replace with consult-line) |
+| `s` | **find on page** (consult-line over `innerText`) | vertical candidate list + live preview; scrolls + highlights via `window.find` |
+| `C-s` / `C-r` | in-page search (incremental) | JS-bridged isearch shim, kept alongside `s` for users who prefer incremental search |
 | `TAB` / `S-TAB` | next / previous focusable | cycles links, buttons, inputs |
 | `g` | reload | EWW-aligned |
 | `l` / `r` | back / forward | EWW-aligned (history nav) |
@@ -406,6 +407,7 @@ workspace sidebar surface which sessions need attention.
 | `w` | copy URL | EWW-aligned |
 | `+` / `-` | zoom in / out | |
 | `q` | quit window | |
+| `C-c C-s` | find on page (consult-line) | primary-tier alias for `s` |
 | `C-c C-r` | reload | primary tier |
 | `C-c C-b` | back | primary tier |
 | `C-c C-f` | forward | primary tier |
