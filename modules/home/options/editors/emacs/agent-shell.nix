@@ -9302,7 +9302,6 @@ message so users can find the tracking ticket."
         (decknix--sb-stub decknix--sb-act-align-jira     "Align Jira with code")
         (decknix--sb-stub decknix--sb-act-analyze        "Analyze (AI)")
         (decknix--sb-stub decknix--sb-act-spec           "Define/update spec")
-        (decknix--sb-stub decknix--sb-act-worktree       "Worktree…" "129")
         (decknix--sb-stub decknix--sb-act-reveal         "Reveal in Sessions picker")
 
         ;; -- Inapt-if predicates (dim, don't hide, per spec §3.1) --
@@ -9424,6 +9423,368 @@ message so users can find the tracking ticket."
             ("w" decknix--sb-act-worktree)
             ("L" decknix--sb-act-reveal)]]
           [("q" "Cancel" transient-quit-one)])
+
+        ;; -- Worktree submenu (#129; spec §3.6.4) --
+        ;; Surfaces the registry from #128 as a stable-shape transient.
+        ;; All 8 verbs are always rendered; verbs that don't apply for the
+        ;; current `(repo, branch, state)' are dimmed via `:inapt-if'.
+
+        (defun decknix--sb-act-wt-repo ()
+          "Return canonical \"owner/repo\" for the active row, or nil."
+          (let ((r (or (decknix--sidebar-action-prop 'decknix-hub-head-repo)
+                       (decknix--sidebar-action-prop 'decknix-hub-repo))))
+            (when (and r (stringp r))
+              (decknix--hub-worktree-canonical-repo r))))
+
+        (defun decknix--sb-act-wt-branch ()
+          "Return the branch the active row points at, or nil."
+          (or (decknix--sidebar-action-prop 'decknix-hub-head-branch)
+              (decknix--sidebar-action-prop 'decknix-hub-branch)))
+
+        (defun decknix--sb-act-wt-primary ()
+          "Return the primary clone path for the active row's repo, or nil."
+          (let ((repo (decknix--sb-act-wt-repo)))
+            (and repo (decknix-hub-worktree-primary repo))))
+
+        (defun decknix--sb-act-wt-path ()
+          "Return the worktree path for the active (repo, branch), or nil."
+          (let ((repo (decknix--sb-act-wt-repo))
+                (branch (decknix--sb-act-wt-branch)))
+            (and repo branch (decknix-hub-worktree-find repo branch))))
+
+        (defun decknix--sb-act-wt-state ()
+          "Return one of `in-worktree', `primary-head', `branch-ref-only',
+or `no-clone' for the active row.  `branch-ref-only' covers the case
+where the clone exists but the branch isn't checked out anywhere
+locally; the registry only tracks worktrees, so this is a reasonable
+fallback (a more accurate detector would shell out to
+`git rev-parse --verify' but that is deferred to #130)."
+          (let* ((repo (decknix--sb-act-wt-repo))
+                 (branch (decknix--sb-act-wt-branch))
+                 (primary (and repo (decknix-hub-worktree-primary repo)))
+                 (worktrees (and repo (decknix-hub-worktree-list repo)))
+                 (wt (and branch (cdr (assoc branch worktrees)))))
+            (cond
+             ((not primary) 'no-clone)
+             ((and wt (file-equal-p wt primary)) 'primary-head)
+             (wt 'in-worktree)
+             (t 'branch-ref-only))))
+
+        (defun decknix--sb-act-wt-sibling-path (primary branch)
+          "Compute the sibling worktree layout path for PRIMARY @ BRANCH.
+Layout: <primary-parent>/<primary-basename>-worktrees/<sanitised-branch>.
+Slashes in BRANCH are replaced with dashes so nested branch names
+(e.g. feature/foo) don't create extra directory levels."
+          (when (and primary branch)
+            (let* ((primary (directory-file-name (expand-file-name primary)))
+                   (parent (file-name-directory primary))
+                   (base (file-name-nondirectory primary))
+                   (safe-branch (replace-regexp-in-string "/" "-" branch)))
+              (expand-file-name
+               (concat base "-worktrees/" safe-branch)
+               parent))))
+
+        (defun decknix--sb-act-wt-sessions-using (path)
+          "Return list of (CONV-KEY . WORKSPACE) where workspace = PATH.
+Walks `agent-sessions.json' so the interlock survives Emacs restarts
+(live-only would miss saved sessions that haven't been resumed yet)."
+          (let ((target (file-name-as-directory (expand-file-name path)))
+                (out nil))
+            (condition-case nil
+                (let* ((store (decknix--agent-tags-read))
+                       (convs (and store
+                                   (decknix--agent-tags-conversations store))))
+                  (when convs
+                    (maphash
+                     (lambda (k entry)
+                       (let ((ws (and (hash-table-p entry)
+                                      (gethash "workspace" entry))))
+                         (when (and ws (stringp ws)
+                                    (file-equal-p
+                                     (file-name-as-directory
+                                      (expand-file-name ws))
+                                     target))
+                           (push (cons k ws) out))))
+                     convs)))
+              (error nil))
+            out))
+
+        ;; -- Inapt predicates --
+
+        (defun decknix--sb-act-wt-no-worktree-p ()
+          "Non-nil when the active (repo, branch) has no worktree.
+Used for verbs that operate on an existing worktree: o, x, r, c."
+          (null (decknix--sb-act-wt-path)))
+
+        (defun decknix--sb-act-wt-no-clone-p ()
+          "Non-nil when the active row's repo has no local clone.
+Used for verbs that need a clone: n, p, d, s (s only when no clone
+*and* no worktree — but with no clone there's nowhere to create one)."
+          (null (decknix--sb-act-wt-primary)))
+
+        (defun decknix--sb-act-wt-create-disabled-p ()
+          "Non-nil when `n' Create worktree should be dimmed.
+Disabled when there is no clone OR when the branch already has a
+worktree (no point creating it again)."
+          (or (decknix--sb-act-wt-no-clone-p)
+              (decknix--sb-act-wt-path)))
+
+        (defun decknix--sb-act-wt-no-context-p ()
+          "Non-nil when the active row has no (repo, branch) context.
+Used to dim every verb on rows that don't carry head-repo/head-branch
+properties yet (rare — most hub rows do, but e.g. headers wouldn't)."
+          (or (null (decknix--sb-act-wt-repo))
+              (null (decknix--sb-act-wt-branch))))
+
+        ;; -- Async git wrappers --
+
+        (defun decknix--hub-worktree-git-async (primary args repo on-success)
+          "Run `git -C PRIMARY ARGS' asynchronously for REPO.
+On exit-0 invokes ON-SUCCESS (a function of one argument: stdout).
+Always refreshes the registry for REPO when the process exits."
+          (let* ((primary (expand-file-name primary))
+                 (buf (generate-new-buffer " *hub-worktree-git*")))
+            (condition-case err
+                (let ((proc (apply #'make-process
+                                   :name (format "hub-wt-git-%s" repo)
+                                   :buffer buf
+                                   :connection-type 'pipe
+                                   :command (append (list "git" "-C" primary)
+                                                    args)
+                                   nil)))
+                  (set-process-sentinel
+                   proc
+                   (eval `(lambda (proc _event)
+                            (when (memq (process-status proc) '(exit signal))
+                              (let* ((code (process-exit-status proc))
+                                     (out (when (buffer-live-p
+                                                 (process-buffer proc))
+                                            (with-current-buffer
+                                                (process-buffer proc)
+                                              (buffer-string)))))
+                                (unwind-protect
+                                    (cond
+                                     ((zerop code)
+                                      (when ',on-success
+                                        (funcall ,on-success
+                                                 (or out ""))))
+                                     (t
+                                      (message "git %s failed (%d): %s"
+                                               ',(car args) code
+                                               (string-trim
+                                                (or out "")))))
+                                  (when (buffer-live-p
+                                         (process-buffer proc))
+                                    (kill-buffer (process-buffer proc)))
+                                  (decknix-hub-worktree-registry-refresh
+                                   ,repo)))))
+                         t)))
+              (error
+               (when (buffer-live-p buf) (kill-buffer buf))
+               (message "git spawn error: %s" (error-message-string err))))))
+
+        ;; -- Suffixes (the 8 worktree verbs) --
+
+        (transient-define-suffix decknix--sb-act-wt-open ()
+          "Open the worktree directory in dired."
+          :description "Open worktree"
+          :inapt-if #'decknix--sb-act-wt-no-worktree-p
+          (interactive)
+          (let ((path (decknix--sb-act-wt-path)))
+            (if path
+                (dired (expand-file-name path))
+              (message "No worktree for this branch — press n to create one"))))
+
+        (transient-define-suffix decknix--sb-act-wt-new ()
+          "Create a new worktree for the active (repo, branch).
+Layout: <primary>-worktrees/<branch>.  Branch name is taken from the
+active row; minibuffer prompt confirms the branch and target path."
+          :description "Create worktree"
+          :inapt-if #'decknix--sb-act-wt-create-disabled-p
+          (interactive)
+          (let* ((repo (decknix--sb-act-wt-repo))
+                 (branch (decknix--sb-act-wt-branch))
+                 (primary (decknix--sb-act-wt-primary))
+                 (default-path (decknix--sb-act-wt-sibling-path primary branch))
+                 (path (read-file-name
+                        (format "Worktree for %s @ %s: " repo branch)
+                        (file-name-directory default-path)
+                        nil nil
+                        (file-name-nondirectory default-path))))
+            (when (file-exists-p path)
+              (user-error "Path already exists: %s" path))
+            (make-directory (file-name-directory path) t)
+            (decknix--hub-worktree-git-async
+             primary
+             (list "worktree" "add" (expand-file-name path) branch)
+             repo
+             (eval `(lambda (_out)
+                      (message "Worktree created: %s" ,path))
+                   t))))
+
+        (transient-define-suffix decknix--sb-act-wt-session ()
+          "Start an agent session rooted at the worktree.
+If no worktree exists yet, create one first (sibling layout) and
+start the session in the resulting path."
+          :description "Start session in worktree"
+          :inapt-if #'decknix--sb-act-wt-no-clone-p
+          (interactive)
+          (let* ((repo (decknix--sb-act-wt-repo))
+                 (branch (decknix--sb-act-wt-branch))
+                 (primary (decknix--sb-act-wt-primary))
+                 (existing (decknix--sb-act-wt-path)))
+            (cond
+             (existing
+              (decknix--agent-quickaction-start
+               (format "%s-%s"
+                       (replace-regexp-in-string "/" "-" repo)
+                       (replace-regexp-in-string "/" "-" branch))
+               (list (replace-regexp-in-string "/" "-" branch))
+               existing nil))
+             (t
+              (let ((path (decknix--sb-act-wt-sibling-path primary branch)))
+                (when (file-exists-p path)
+                  (user-error "Path already exists: %s" path))
+                (make-directory (file-name-directory path) t)
+                (decknix--hub-worktree-git-async
+                 primary
+                 (list "worktree" "add" (expand-file-name path) branch)
+                 repo
+                 (eval `(lambda (_out)
+                          (decknix--agent-quickaction-start
+                           ,(format "%s-%s"
+                                    (replace-regexp-in-string "/" "-" repo)
+                                    (replace-regexp-in-string "/" "-" branch))
+                           ',(list (replace-regexp-in-string "/" "-" branch))
+                           ,path nil))
+                       t)))))))
+
+        (transient-define-suffix decknix--sb-act-wt-remove ()
+          "Remove the worktree for the active (repo, branch).
+Aborts if any saved session's workspace points at the worktree.
+Prefix arg overrides the dirty/session guard via `git worktree remove --force'."
+          :description "Remove worktree"
+          :inapt-if #'decknix--sb-act-wt-no-worktree-p
+          (interactive)
+          (let* ((repo (decknix--sb-act-wt-repo))
+                 (primary (decknix--sb-act-wt-primary))
+                 (path (decknix--sb-act-wt-path))
+                 (force current-prefix-arg)
+                 (sessions (decknix--sb-act-wt-sessions-using path)))
+            (cond
+             ((and sessions (not force))
+              (message "Aborted: %d session(s) use this workspace; C-u x to force"
+                       (length sessions)))
+             ((not (yes-or-no-p (format "Remove worktree %s? " path))) nil)
+             (t
+              (decknix--hub-worktree-git-async
+               primary
+               (append (list "worktree" "remove")
+                       (when force (list "--force"))
+                       (list (expand-file-name path)))
+               repo
+               (eval `(lambda (_out)
+                        (message "Worktree removed: %s" ,path))
+                     t))))))
+
+        (transient-define-suffix decknix--sb-act-wt-reveal ()
+          "Reveal the worktree directory in macOS Finder."
+          :description "Reveal in Finder"
+          :inapt-if #'decknix--sb-act-wt-no-worktree-p
+          (interactive)
+          (let ((path (decknix--sb-act-wt-path)))
+            (if path
+                (call-process "open" nil 0 nil (expand-file-name path))
+              (message "No worktree for this branch"))))
+
+        (transient-define-suffix decknix--sb-act-wt-prune ()
+          "Prune stale worktree records for the active row's primary clone."
+          :description "Prune stale worktrees"
+          :inapt-if #'decknix--sb-act-wt-no-clone-p
+          (interactive)
+          (let ((repo (decknix--sb-act-wt-repo))
+                (primary (decknix--sb-act-wt-primary)))
+            (decknix--hub-worktree-git-async
+             primary
+             (list "worktree" "prune" "-v")
+             repo
+             (eval `(lambda (out)
+                      (let ((trimmed (string-trim (or out ""))))
+                        (if (string-empty-p trimmed)
+                            (message "Pruned %s: nothing to remove" ,repo)
+                          (message "Pruned %s:\n%s" ,repo trimmed))))
+                   t))))
+
+        (transient-define-suffix decknix--sb-act-wt-status ()
+          "Show git status for the worktree (or the primary clone if none).
+Uses `magit-status' when available; falls back to `vc-dir' otherwise."
+          :description "Status summary"
+          :inapt-if #'decknix--sb-act-wt-no-clone-p
+          (interactive)
+          (let* ((path (or (decknix--sb-act-wt-path)
+                           (decknix--sb-act-wt-primary))))
+            (cond
+             ((not path) (message "No clone for this repo"))
+             ((fboundp 'magit-status) (magit-status (expand-file-name path)))
+             (t (vc-dir (expand-file-name path))))))
+
+        (transient-define-suffix decknix--sb-act-wt-copy ()
+          "Copy the worktree path to the kill-ring."
+          :description "Copy worktree path"
+          :inapt-if #'decknix--sb-act-wt-no-worktree-p
+          (interactive)
+          (let ((path (decknix--sb-act-wt-path)))
+            (if path
+                (let ((expanded (expand-file-name path)))
+                  (kill-new expanded)
+                  (message "Copied: %s" expanded))
+              (message "No worktree for this branch"))))
+
+        ;; -- Header + transient --
+
+        (defun decknix--sb-act-wt-description ()
+          "Header label for the worktree submenu: `repo @ branch — <state>'."
+          (let* ((repo (decknix--sb-act-wt-repo))
+                 (branch (decknix--sb-act-wt-branch))
+                 (state (decknix--sb-act-wt-state))
+                 (state-str
+                  (pcase state
+                    ('in-worktree     "in worktree")
+                    ('primary-head    "primary HEAD")
+                    ('branch-ref-only "branch ref only")
+                    ('no-clone        "no local clone")
+                    (_                "unknown"))))
+            (cond
+             ((and repo branch) (format "%s @ %s — %s" repo branch state-str))
+             (repo (format "%s — %s" repo state-str))
+             (t "Worktree (no repo context)"))))
+
+        (transient-define-prefix decknix-sidebar-worktree-menu ()
+          "Worktree submenu (#129; spec §3.6.4).
+Eight verbs with stable layout; verbs that don't apply for the
+current `(repo, branch, state)' are dimmed via `:inapt-if'."
+          [:description decknix--sb-act-wt-description
+           ["Worktree"
+            ("o" decknix--sb-act-wt-open)
+            ("n" decknix--sb-act-wt-new)
+            ("s" decknix--sb-act-wt-session)
+            ("x" decknix--sb-act-wt-remove)]
+           ["Inspect"
+            ("r" decknix--sb-act-wt-reveal)
+            ("d" decknix--sb-act-wt-status)
+            ("c" decknix--sb-act-wt-copy)
+            ("p" decknix--sb-act-wt-prune)]]
+          [("q" "Cancel" transient-quit-one)])
+
+        (transient-define-suffix decknix--sb-act-worktree ()
+          "Open the worktree submenu for the active row."
+          :description "Worktree…"
+          :inapt-if #'decknix--sb-act-wt-no-context-p
+          (interactive)
+          (decknix--sidebar-call-transient #'decknix-sidebar-worktree-menu))
+
+
+
 
         ;; -- Dispatcher and primary action --
 
