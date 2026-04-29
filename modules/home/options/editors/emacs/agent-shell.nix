@@ -5787,17 +5787,38 @@ either via a single command."
           "When non-nil, open hub URLs in xwidget-webkit instead of external browser.
 Set to nil to always use the system browser.")
 
-        (defun decknix--open-url (url)
-          "Open URL in xwidget-webkit or external browser based on preference."
+        (defvar decknix--webkit-shared-buffer nil
+          "Buffer holding the shared xwidget-webkit session, or nil.
+`decknix--open-url' reuses this buffer so consecutive opens land
+in one WebKit window rather than spawning a buffer per URL.
+Pass NEW-SESSION non-nil (e.g., a prefix arg) to force a fresh
+session.")
+
+        (defun decknix--open-url (url &optional new-session)
+          "Open URL in xwidget-webkit or external browser based on preference.
+With NEW-SESSION non-nil, force a new WebKit buffer rather than
+reusing `decknix--webkit-shared-buffer'."
           (if (and decknix--use-xwidget-webkit
                    (fboundp 'xwidget-webkit-browse-url))
-              (let ((buf-name (format "*WebKit: %s*"
-                                      (or (and (string-match "/pull/\\([0-9]+\\)" url)
-                                               (match-string 0 url))
-                                          (truncate-string-to-width url 40)))))
-                ;; Open in the main area, not the sidebar
-                (xwidget-webkit-browse-url url t)
-                ;; If in agents tab, focus the webkit buffer in the main window
+              (let ((reuse (and (not new-session)
+                                decknix--webkit-shared-buffer
+                                (buffer-live-p decknix--webkit-shared-buffer))))
+                (if reuse
+                    ;; Drive the existing session to the new URL and surface it.
+                    (with-current-buffer decknix--webkit-shared-buffer
+                      (xwidget-webkit-browse-url url)
+                      (display-buffer (current-buffer)))
+                  ;; Spawn a fresh session and remember it for next time.
+                  (xwidget-webkit-browse-url url t)
+                  (setq decknix--webkit-shared-buffer
+                        (or (get-buffer "*xwidget-webkit*")
+                            (seq-find
+                             (lambda (b)
+                               (string-match-p "\\*xwidget-webkit"
+                                               (buffer-name b)))
+                             (buffer-list)))))
+                ;; If in the Agents tab, focus the webkit buffer in the main
+                ;; (non-side) window so the sidebar keeps its row selection.
                 (when (and (fboundp 'agent-shell-workspace--in-agents-tab-p)
                            (agent-shell-workspace--in-agents-tab-p))
                   (let ((target nil))
@@ -5811,42 +5832,148 @@ Set to nil to always use the system browser.")
                       (select-window target)))))
             (browse-url url)))
 
+        ;; -- xwidget-webkit: helper commands --
+        ;; Top-level defuns so they're discoverable via M-x and apropos.
+        ;; Each operates on the current xwidget-webkit session.
+
+        (defun decknix--webkit-copy-url ()
+          "Copy the current xwidget-webkit URL to the kill ring."
+          (interactive)
+          (let ((url (xwidget-webkit-uri (xwidget-webkit-current-session))))
+            (kill-new url)
+            (message "Copied URL: %s" url)))
+
+        (defun decknix--webkit-copy-as-markdown ()
+          "Copy the current page as a markdown link `[title](url)`.
+Useful for pasting into PR review notes or follow-up stashes."
+          (interactive)
+          (let* ((session (xwidget-webkit-current-session))
+                 (url (xwidget-webkit-uri session))
+                 (raw (ignore-errors
+                        (xwidget-webkit-execute-script-rv
+                         session "document.title")))
+                 (title (if (and (stringp raw) (not (string-empty-p raw)))
+                            raw url))
+                 (md (format "[%s](%s)" title url)))
+            (kill-new md)
+            (message "Copied: %s" md)))
+
+        (defun decknix--webkit-open-external ()
+          "Open the current xwidget-webkit URL in the system browser."
+          (interactive)
+          (let ((url (xwidget-webkit-uri (xwidget-webkit-current-session))))
+            (browse-url url)
+            (message "Opened in browser: %s" url)))
+
+        (defun decknix--webkit-switch-to-eww ()
+          "Open the current xwidget-webkit URL in EWW.
+EWW renders the page into a real Emacs buffer so consult-line,
+embark, region kill, occur and other buffer-oriented commands all
+work natively — useful for read-mode browsing."
+          (interactive)
+          (let ((url (xwidget-webkit-uri (xwidget-webkit-current-session))))
+            (eww url)))
+
+        (defun decknix--webkit-focus-input ()
+          "Focus the first visible text input or textarea on the current page."
+          (interactive)
+          (xwidget-webkit-execute-script
+           (xwidget-webkit-current-session)
+           "(function(){var sel='input:not([type=hidden]):not([type=submit]):not([type=button]),textarea';var els=Array.from(document.querySelectorAll(sel)).filter(function(e){return e.offsetParent!==null;});if(els[0]){els[0].focus();els[0].scrollIntoView({block:'center'});}})()"))
+
+        (defun decknix--webkit-next-focusable ()
+          "Move focus to the next link, button, or input on the current page."
+          (interactive)
+          (xwidget-webkit-execute-script
+           (xwidget-webkit-current-session)
+           "(function(){var sel='a[href],button,input:not([type=hidden]),textarea,select';var els=Array.from(document.querySelectorAll(sel)).filter(function(e){return e.offsetParent!==null;});if(els.length===0)return;var i=els.indexOf(document.activeElement);var next=els[(i+1)%els.length];if(next){next.focus();next.scrollIntoView({block:'center'});}})()"))
+
+        (defun decknix--webkit-prev-focusable ()
+          "Move focus to the previous link, button, or input on the current page."
+          (interactive)
+          (xwidget-webkit-execute-script
+           (xwidget-webkit-current-session)
+           "(function(){var sel='a[href],button,input:not([type=hidden]),textarea,select';var els=Array.from(document.querySelectorAll(sel)).filter(function(e){return e.offsetParent!==null;});if(els.length===0)return;var i=els.indexOf(document.activeElement);var prev=els[(i-1+els.length)%els.length];if(prev){prev.focus();prev.scrollIntoView({block:'center'});}})()"))
+
         ;; -- xwidget-webkit: enhanced keybindings --
-        ;; The built-in xwidget-webkit-mode has C-s for isearch, but some
-        ;; packages (e.g., consult) may override it globally.  We also add
-        ;; quick-navigation keys for a more vim-like browsing experience.
+        ;; Two principles:
+        ;;   1. Motion is universal Emacs (C-n / C-p / C-v / M-v / M-< / M->
+        ;;      / SPC / DEL) so users don't relearn keys for the WebKit view.
+        ;;   2. Mode-local commands live on `C-c C-<letter>` (Emacs major-mode
+        ;;      convention), matching agent-shell-mode and review-mode.
+        ;; Single-letter EWW-aligned shortcuts (g/l/r/&/w) are kept as a
+        ;; secondary tier for users with EWW muscle memory.
         (with-eval-after-load 'xwidget
-          ;; Ensure C-s works for in-page search (protect against global overrides)
+          ;; --- Search (in-page) -------------------------------------------------
+          ;; C-s/C-r → JS-bridged isearch shim.  Note: this is NOT real Emacs
+          ;; isearch; consult-line over the page DOM is on Slice B.
           (define-key xwidget-webkit-mode-map (kbd "C-s") #'xwidget-webkit-isearch-mode)
           (define-key xwidget-webkit-mode-map (kbd "C-r") #'xwidget-webkit-isearch-mode)
 
-          ;; Quick navigation
-          (define-key xwidget-webkit-mode-map (kbd "q") #'quit-window)
-          (define-key xwidget-webkit-mode-map (kbd "/") #'xwidget-webkit-isearch-mode)
-          (define-key xwidget-webkit-mode-map (kbd "j") #'xwidget-webkit-scroll-up-line)
-          (define-key xwidget-webkit-mode-map (kbd "k") #'xwidget-webkit-scroll-down-line)
-          (define-key xwidget-webkit-mode-map (kbd "d") #'xwidget-webkit-scroll-up)
-          (define-key xwidget-webkit-mode-map (kbd "u") #'xwidget-webkit-scroll-down)
-          (define-key xwidget-webkit-mode-map (kbd "G") #'xwidget-webkit-scroll-bottom)
-          (define-key xwidget-webkit-mode-map (kbd "0")
+          ;; --- Motion (Emacs-standard) -----------------------------------------
+          (define-key xwidget-webkit-mode-map (kbd "C-n") #'xwidget-webkit-scroll-up-line)
+          (define-key xwidget-webkit-mode-map (kbd "C-p") #'xwidget-webkit-scroll-down-line)
+          (define-key xwidget-webkit-mode-map (kbd "C-v") #'xwidget-webkit-scroll-up)
+          (define-key xwidget-webkit-mode-map (kbd "M-v") #'xwidget-webkit-scroll-down)
+          (define-key xwidget-webkit-mode-map (kbd "M->") #'xwidget-webkit-scroll-bottom)
+          (define-key xwidget-webkit-mode-map (kbd "M-<")
             (lambda () (interactive)
               (xwidget-webkit-scroll-top (xwidget-webkit-current-session))))
-          (define-key xwidget-webkit-mode-map (kbd "y") #'xwidget-webkit-copy-selection-as-kill)
-          (define-key xwidget-webkit-mode-map (kbd "o") #'xwidget-webkit-browse-url)
-          (define-key xwidget-webkit-mode-map (kbd "O")
-            (lambda () (interactive)
-              "Open current URL in system browser."
-              (let ((url (xwidget-webkit-uri (xwidget-webkit-current-session))))
-                (browse-url url)
-                (message "Opened in browser: %s" url))))
-          (define-key xwidget-webkit-mode-map (kbd "Y")
-            (lambda () (interactive)
-              "Copy current URL to kill-ring."
-              (let ((url (xwidget-webkit-uri (xwidget-webkit-current-session))))
-                (kill-new url)
-                (message "Copied: %s" url))))
+          ;; SPC/DEL — view-mode/EWW/Info convention for page forward/back.
+          (define-key xwidget-webkit-mode-map (kbd "SPC") #'xwidget-webkit-scroll-up)
+          (define-key xwidget-webkit-mode-map (kbd "DEL") #'xwidget-webkit-scroll-down)
+          (define-key xwidget-webkit-mode-map (kbd "S-SPC") #'xwidget-webkit-scroll-down)
 
-          ;; Header-line with navigation hints
+          ;; --- EWW-aligned single-letter secondary tier ------------------------
+          (define-key xwidget-webkit-mode-map (kbd "q") #'quit-window)
+          (define-key xwidget-webkit-mode-map (kbd "g") #'xwidget-webkit-reload)
+          (define-key xwidget-webkit-mode-map (kbd "l") #'xwidget-webkit-back)
+          (define-key xwidget-webkit-mode-map (kbd "r") #'xwidget-webkit-forward)
+          (define-key xwidget-webkit-mode-map (kbd "&") #'decknix--webkit-open-external)
+          (define-key xwidget-webkit-mode-map (kbd "w") #'decknix--webkit-copy-url)
+          (define-key xwidget-webkit-mode-map (kbd "+") #'xwidget-webkit-zoom-in)
+          (define-key xwidget-webkit-mode-map (kbd "-") #'xwidget-webkit-zoom-out)
+          (define-key xwidget-webkit-mode-map (kbd "TAB") #'decknix--webkit-next-focusable)
+          (define-key xwidget-webkit-mode-map (kbd "<backtab>") #'decknix--webkit-prev-focusable)
+
+          ;; --- Major-mode commands (C-c C-<letter>, primary tier) --------------
+          (define-key xwidget-webkit-mode-map (kbd "C-c C-r") #'xwidget-webkit-reload)
+          (define-key xwidget-webkit-mode-map (kbd "C-c C-b") #'xwidget-webkit-back)
+          (define-key xwidget-webkit-mode-map (kbd "C-c C-f") #'xwidget-webkit-forward)
+          (define-key xwidget-webkit-mode-map (kbd "C-c C-o") #'decknix--webkit-open-external)
+          (define-key xwidget-webkit-mode-map (kbd "C-c C-u") #'xwidget-webkit-browse-url)
+          (define-key xwidget-webkit-mode-map (kbd "C-c C-y") #'decknix--webkit-copy-url)
+          (define-key xwidget-webkit-mode-map (kbd "C-c C-w") #'decknix--webkit-copy-as-markdown)
+          (define-key xwidget-webkit-mode-map (kbd "C-c C-e") #'decknix--webkit-switch-to-eww)
+          (define-key xwidget-webkit-mode-map (kbd "C-c C-i") #'decknix--webkit-focus-input)
+
+          ;; --- which-key labels for the C-c C- prefix --------------------------
+          (when (fboundp 'which-key-add-keymap-based-replacements)
+            (which-key-add-keymap-based-replacements xwidget-webkit-mode-map
+              "C-c C-r" "reload"
+              "C-c C-b" "back"
+              "C-c C-f" "forward"
+              "C-c C-o" "open-external"
+              "C-c C-u" "open-url…"
+              "C-c C-y" "copy-url"
+              "C-c C-w" "copy-as-markdown"
+              "C-c C-e" "switch-to-eww"
+              "C-c C-i" "focus-input"))
+
+          ;; --- Display rule: keep WebKit buffers in the main area --------------
+          ;; Hub items opened from the sidebar should land in the main window,
+          ;; never inside the side window.  display-buffer-alist matches both
+          ;; the upstream `*xwidget-webkit*' and our legacy `*WebKit:` names.
+          (add-to-list 'display-buffer-alist
+            '("\\`\\*\\(xwidget-webkit\\|WebKit\\)"
+              (display-buffer-reuse-window
+               display-buffer-use-some-window)
+              (inhibit-same-window . nil)
+              (reusable-frames . visible)
+              (some-window . mru)
+              (body-function . select-window)))
+
+          ;; --- Header-line with navigation hints -------------------------------
           (add-hook 'xwidget-webkit-mode-hook
             (lambda ()
               (setq header-line-format
@@ -5864,11 +5991,13 @@ Set to nil to always use the system browser.")
                             url)
                           'face 'font-lock-comment-face)
                          "  "
-                         (propertize "j/k" 'face 'font-lock-keyword-face) " scroll  "
-                         (propertize "/" 'face 'font-lock-keyword-face) " search  "
-                         (propertize "b/f" 'face 'font-lock-keyword-face) " back/fwd  "
-                         (propertize "O" 'face 'font-lock-keyword-face) " browser  "
-                         (propertize "Y" 'face 'font-lock-keyword-face) " copy-url  "
+                         (propertize "C-n/C-p" 'face 'font-lock-keyword-face) " line  "
+                         (propertize "SPC/DEL" 'face 'font-lock-keyword-face) " page  "
+                         (propertize "C-s" 'face 'font-lock-keyword-face) " search  "
+                         (propertize "g" 'face 'font-lock-keyword-face) " reload  "
+                         (propertize "l/r" 'face 'font-lock-keyword-face) " back/fwd  "
+                         (propertize "&" 'face 'font-lock-keyword-face) " browser  "
+                         (propertize "w" 'face 'font-lock-keyword-face) " copy-url  "
                          (propertize "q" 'face 'font-lock-keyword-face) " quit")))))))
 
         ;; Don't auto-create a session when opening the Agents tab for the

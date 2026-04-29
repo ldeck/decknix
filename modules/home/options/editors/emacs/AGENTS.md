@@ -373,6 +373,49 @@ workspace sidebar surface which sessions need attention.
   path. `q` cancels. The agent route strips the `🧭 review meta` header
   but preserves the `📋 instructions` block.
 
+### In-Emacs Browser (`xwidget-webkit`)
+- Hub items (PRs, links from the sidebar) open in `xwidget-webkit` by
+  default via `decknix--open-url`. Subsequent opens **reuse the same
+  WebKit buffer** so the workspace doesn't accumulate one buffer per
+  link; pass a prefix arg (or set `decknix--use-xwidget-webkit` to nil
+  for the system browser) to force a fresh session.
+- WebKit buffers always land in the **main area** of the Agents tab,
+  never inside the sidebar — enforced by `display-buffer-alist` matching
+  `*xwidget-webkit*` and `*WebKit:`.
+- Bindings follow two principles:
+  1. **Motion is universal Emacs** — no need to relearn keys for the
+     WebKit view. The xwidget DOM is opaque to Emacs, so JS-bridged
+     scrolling is wired to the standard motion commands.
+  2. **Mode-local commands live on `C-c C-<letter>`** — the Emacs
+     major-mode convention used by org, magit, comint,
+     `agent-shell-mode`, and `decknix-agent-review-mode`.
+  EWW-aligned single-letter shortcuts are kept as a secondary tier for
+  users with EWW muscle memory.
+
+| Key | Command | Notes |
+|-----|---------|-------|
+| `C-n` / `C-p` | line scroll | JS-bridge to `xwidget-webkit-scroll-up-line`/`-down-line` |
+| `C-v` / `M-v` | page scroll | bridge to `xwidget-webkit-scroll-up`/`-down` |
+| `M-<` / `M->` | top / bottom of page | bridge to `-scroll-top`/`-scroll-bottom` |
+| `SPC` / `DEL` (or `S-SPC`) | page forward / back | view-mode/EWW/Info convention |
+| `C-s` / `C-r` | in-page search | JS-bridged isearch shim (Slice B will replace with consult-line) |
+| `TAB` / `S-TAB` | next / previous focusable | cycles links, buttons, inputs |
+| `g` | reload | EWW-aligned |
+| `l` / `r` | back / forward | EWW-aligned (history nav) |
+| `&` | open in system browser | EWW-aligned |
+| `w` | copy URL | EWW-aligned |
+| `+` / `-` | zoom in / out | |
+| `q` | quit window | |
+| `C-c C-r` | reload | primary tier |
+| `C-c C-b` | back | primary tier |
+| `C-c C-f` | forward | primary tier |
+| `C-c C-o` | open current URL in system browser | |
+| `C-c C-u` | prompt for new URL | |
+| `C-c C-y` | copy URL | |
+| `C-c C-w` | copy as markdown link `[title](url)` | |
+| `C-c C-e` | switch to EWW (real Emacs buffer; consult-line, embark, occur work) | |
+| `C-c C-i` | focus first text input on the page | |
+
 ### Key Prefix Map
 
 | Prefix | Purpose |
