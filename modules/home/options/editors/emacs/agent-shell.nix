@@ -7547,6 +7547,33 @@ comment for why this is cached.")
                                  live saved-count hub-str)
                          'face 'font-lock-keyword-face)))))))
 
+        ;; -- Robust sidebar buffer-at-point lookup ---------------------------
+        ;; Upstream `--buffer-at-point' reads the text property at
+        ;; `line-beginning-position' in `(current-buffer)'.  That assumes the
+        ;; sidebar window is selected when the function runs.  Our action
+        ;; transients (a, T, RET menus) are launched via
+        ;; `decknix--sidebar-call-transient', which deliberately switches to
+        ;; the main window first so transient menus and any windows their
+        ;; suffixes spawn render in the main area instead of trying to split
+        ;; the dedicated sidebar window.  After that switch, every suffix
+        ;; that calls `--buffer-at-point' would look up the property in the
+        ;; main window's buffer (scratch / agent buffer) and find none —
+        ;; surfacing as "No live agent buffer at point" on `a a', `a k',
+        ;; `a r', etc.  Override to always read from the sidebar buffer
+        ;; itself; buffer-local point is preserved per-buffer regardless of
+        ;; which window is currently selected, so the lookup still hits the
+        ;; row the user navigated to before invoking the transient.
+        (advice-add 'agent-shell-workspace-sidebar--buffer-at-point :override
+          (lambda ()
+            "Return the agent buffer for the sidebar row at point.
+Robust to being called from outside the sidebar window."
+            (let ((sidebar-buf
+                   (get-buffer agent-shell-workspace-sidebar-buffer-name)))
+              (when (buffer-live-p sidebar-buf)
+                (with-current-buffer sidebar-buf
+                  (get-text-property (line-beginning-position)
+                                     'agent-shell-workspace-buffer))))))
+
         ;; -- Fix sidebar kill: upstream uses comint-send-eof which calls
         ;; comint-send-input, searching for the prompt regexp.  If the prompt
         ;; isn't at point (process dead, mid-output, duplicate buffer), the
