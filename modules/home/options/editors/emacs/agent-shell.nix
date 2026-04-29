@@ -8736,8 +8736,14 @@ visible (filtered) candidates.  C-g cancels."
         ;; re-focus the sidebar after the transient exits.
 
         (defun decknix--sidebar-restore-after-transient ()
-          "One-shot hook: re-focus the sidebar after a transient exits."
+          "One-shot hook: re-focus the sidebar after a transient exits.
+Also resumes sidebar refreshes that `decknix--sidebar-call-transient'
+suspended for the duration of the transient — without this clear
+the sidebar would freeze permanently after any RET / a / T menu."
           (remove-hook 'transient-exit-hook #'decknix--sidebar-restore-after-transient)
+          ;; Always clear the suspend flag, even if we exit through
+          ;; an unusual code path (C-g, error in a suffix, etc.).
+          (setq decknix--sidebar-refresh-suspended nil)
           (when (and (fboundp 'agent-shell-workspace--in-agents-tab-p)
                      (agent-shell-workspace--in-agents-tab-p))
             ;; Re-show sidebar if it was somehow destroyed
@@ -8746,7 +8752,12 @@ visible (filtered) candidates.  C-g cancels."
             ;; Focus the sidebar
             (when-let ((sw (get-buffer-window
                             agent-shell-workspace-sidebar-buffer-name)))
-              (select-window sw))))
+              (select-window sw)))
+          ;; Run a single refresh so the sidebar catches up on anything
+          ;; that changed while suspended (new live session, mention
+          ;; cleared, hub data updated).
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (ignore-errors (agent-shell-workspace-sidebar-refresh))))
 
         (defun decknix--sidebar-call-transient (cmd)
           "Invoke transient CMD from the main window to preserve the sidebar.
@@ -8754,12 +8765,22 @@ Selects the main window so transient anchors there and any buffer
 changes (e.g., session resume) land in the main area instead of
 trying to split the dedicated sidebar.  The isolation advice above
 ensures the transient buffer is allowed in the Agents tab (so the
-sidebar no longer collapses on tab-switch).  After the transient
-exits, focus returns to the sidebar."
+sidebar no longer collapses on tab-switch).
+
+Sets `decknix--sidebar-refresh-suspended' for the lifetime of the
+transient so 2-second refresh ticks and hub file-notify callbacks
+do not redraw the sidebar (and reset point to top-left) while a
+row's Action Menu is open — `decknix--sidebar-restore-after-transient'
+clears the flag and triggers a single catch-up refresh on exit."
           ;; Select the main window so transient and its actions display there
           (let ((main (window-main-window (selected-frame))))
             (when (and main (window-live-p main))
               (select-window main)))
+          ;; Freeze the sidebar.  call-interactively returns immediately
+          ;; once the transient is set up — the modal interaction lives
+          ;; on the transient state machine, so we cannot use a `let'
+          ;; binding here; the exit hook is responsible for clearing.
+          (setq decknix--sidebar-refresh-suspended t)
           (add-hook 'transient-exit-hook #'decknix--sidebar-restore-after-transient)
           (call-interactively cmd))
 
