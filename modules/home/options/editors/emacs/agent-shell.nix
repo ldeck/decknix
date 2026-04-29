@@ -1160,6 +1160,12 @@ Handles process output that may contain trailing text after the JSON array."
           "Default number of recent exchanges to show when resuming a session.
 Use C-u prefix with the session picker to override.")
 
+        (defvar decknix--agent-grep-last-input nil
+          "Most recent input typed into `decknix-agent-session-grep'.
+Captured by the dynamic collection lambda so the post-selection
+handler can pass the search term through to
+`decknix--agent-session-resume' for jump-to-match.")
+
         (defun decknix--agent-find-new-shell-buffer (before-buffers)
           "Find the agent-shell buffer that was created after BEFORE-BUFFERS snapshot.
 Returns the new buffer, or nil if not found."
@@ -1206,13 +1212,17 @@ buffer for a conversation that is already live produces a confusing
 
         (defun decknix--agent-session-resume (session-id history-count
                                               &optional display-name workspace
-                                              conv-key)
+                                              conv-key search-term)
           "Resume SESSION-ID and pre-populate buffer with HISTORY-COUNT exchanges.
 DISPLAY-NAME, if provided, is used to rename the buffer to *Auggie: NAME*.
 WORKSPACE, if provided, sets --workspace-root and default-directory so the
 agent operates in the original project directory.
 CONV-KEY, if provided, is used to register the new session-id under the
 existing conversation entry in the tag store.
+SEARCH-TERM, if provided, is searched for case-insensitively in the
+loaded buffer after prepopulate; the window point is moved to the
+first match (and recentered).  Used by `decknix-agent-session-grep'
+to land on the matched message instead of the prompt.
 
 When CONV-KEY is non-nil and a live agent-shell buffer already holds
 that conversation, this function switches to that buffer in the
@@ -1231,15 +1241,50 @@ one is current."
                 (let ((target-win (selected-window)))
                   (when (window-live-p target-win)
                     (set-window-buffer target-win existing))
-                  (message "Already live: switched to %s"
-                           (buffer-name existing))
+                  (decknix--agent-session-jump-to-match existing search-term)
+                  (message "Already live: switched to %s%s"
+                           (buffer-name existing)
+                           (if search-term
+                               (format " (search: %s)" search-term)
+                             ""))
                   existing)
               (decknix--agent-session-resume--new
-               session-id history-count display-name workspace conv-key))))
+               session-id history-count display-name workspace conv-key
+               search-term))))
+
+        (defun decknix--agent-session-jump-to-match (buf term)
+          "Search BUF for TERM (case-insensitive); move window point on hit.
+Searches forward from `point-min'.  On a hit, sets the window point
+to the match end and recenters.  On a miss (or when TERM is nil),
+leaves point at `point-max' so the prompt remains visible.
+Returns t when a match was found, nil otherwise."
+          (when (and term (buffer-live-p buf))
+            (with-current-buffer buf
+              (let ((case-fold-search t)
+                    (win (get-buffer-window buf))
+                    (hit (save-excursion
+                           (goto-char (point-min))
+                           (search-forward term nil t))))
+                (cond
+                 ((and hit (window-live-p win))
+                  (set-window-point win hit)
+                  (with-selected-window win
+                    (goto-char hit)
+                    (recenter))
+                  t)
+                 (t
+                  (when (window-live-p win)
+                    (set-window-point win (point-max)))
+                  (when term
+                    (message
+                     "Term %S not in loaded history (only %d exchanges shown)"
+                     term decknix-agent-session-history-count))
+                  nil))))))
 
         (defun decknix--agent-session-resume--new (session-id history-count
                                                    &optional display-name
-                                                   workspace conv-key)
+                                                   workspace conv-key
+                                                   search-term)
           "Internal: start a fresh agent-shell for SESSION-ID.
 See `decknix--agent-session-resume' for argument semantics.  This
 helper carries the original resume logic; the public entry point
@@ -1292,7 +1337,8 @@ dedupes against live buffers before calling here."
                   (buf shell-buf)
                   (bname display-name)
                   (ws workspace)
-                  (ck conv-key))
+                  (ck conv-key)
+                  (term search-term))
               ;; Stamp conv-key synchronously on the new buffer so a
               ;; same-tick resume for the same conversation (e.g. batch
               ;; restore, grep-then-select) can see it and dedupe via
@@ -1330,10 +1376,15 @@ dedupes against live buffers before calling here."
                              (setq-local shell-maker--buffer-name-override
                                          (buffer-name)))
                            (decknix--agent-session-prepopulate ,sid ,n)
-                           ;; Ensure window shows the prompt, not the context
-                           (let ((win (get-buffer-window shell-buf)))
-                             (when (and win (window-live-p win))
-                               (set-window-point win (point-max)))))
+                           ;; If a search term was provided (grep flow),
+                           ;; jump to the first match; otherwise keep the
+                           ;; default behaviour of showing the prompt.
+                           (if ,term
+                               (decknix--agent-session-jump-to-match
+                                shell-buf ,term)
+                             (let ((win (get-buffer-window shell-buf)))
+                               (when (and win (window-live-p win))
+                                 (set-window-point win (point-max))))))
                        (message "Could not find agent-shell buffer for session %s"
                                 (substring ,sid 0 8)))))
                 t))
@@ -1905,6 +1956,7 @@ Prefix arguments:
 - \\[universal-argument] \\[universal-argument] \\[universal-argument]:       expanded snapshots, thorough."
           (interactive "P")
           (require 'consult)
+          (setq decknix--agent-grep-last-input nil)
           (let* ((arg-num (prefix-numeric-value arg))
                  (thorough (>= arg-num 16))
                  ;; Expand on `C-u' (4) or `C-u C-u C-u' (64); collapse
@@ -1921,6 +1973,12 @@ Prefix arguments:
                    (consult--dynamic-collection
                      (eval
                       `(lambda (input)
+                         ;; Capture the typed input so the post-selection
+                         ;; handler can pass it as a search term to the
+                         ;; resume function (two-stage flow: pick session,
+                         ;; then jump to the match inside it).
+                         (setq decknix--agent-grep-last-input
+                               (and input (string-trim input)))
                          (cond
                           ((or (null input) (< (length (string-trim input)) 2))
                            nil)
@@ -1940,7 +1998,11 @@ Prefix arguments:
                              "Grep sessions: ")
                    :sort nil
                    :require-match t))
-                 (chosen (cdr (assoc selected entries-cache))))
+                 (chosen (cdr (assoc selected entries-cache)))
+                 (term (and decknix--agent-grep-last-input
+                            (not (string-empty-p
+                                  decknix--agent-grep-last-input))
+                            decknix--agent-grep-last-input)))
             (when chosen
               (let* ((s (cdr chosen))
                      (first-msg (alist-get 'firstUserMessage s ""))
@@ -1959,7 +2021,7 @@ Prefix arguments:
                  (alist-get 'sessionId s)
                  decknix-agent-session-history-count
                  (decknix--agent-session-display-name s)
-                 workspace conv-key)))))
+                 workspace conv-key term)))))
 
         (defun decknix--agent-detect-workspace ()
           "Detect the best workspace directory for a new session.
