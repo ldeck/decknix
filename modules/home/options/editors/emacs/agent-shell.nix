@@ -5895,6 +5895,94 @@ work natively — useful for read-mode browsing."
            (xwidget-webkit-current-session)
            "(function(){var sel='a[href],button,input:not([type=hidden]),textarea,select';var els=Array.from(document.querySelectorAll(sel)).filter(function(e){return e.offsetParent!==null;});if(els.length===0)return;var i=els.indexOf(document.activeElement);var prev=els[(i-1+els.length)%els.length];if(prev){prev.focus();prev.scrollIntoView({block:'center'});}})()"))
 
+        ;; -- xwidget-webkit: consult-line over page innerText --
+        ;; Bridges Emacs's `consult--read' UI to the WebKit DOM so in-page
+        ;; search feels like consult-line in any other buffer (vertical
+        ;; candidate list, live preview, narrowing) instead of the single-
+        ;; line JS-bridged isearch shim.
+
+        (defvar decknix--webkit-search-history nil
+          "History list for `decknix-webkit-consult-line'.")
+
+        (defun decknix--webkit-page-text ()
+          "Return innerText of the current xwidget-webkit page, or nil if empty."
+          (let* ((session (ignore-errors (xwidget-webkit-current-session)))
+                 (raw (and session
+                           (ignore-errors
+                             (xwidget-webkit-execute-script-rv
+                              session
+                              "document.body && document.body.innerText")))))
+            (and (stringp raw) (not (string-empty-p raw)) raw)))
+
+        (defun decknix--webkit-find-in-page (needle)
+          "Scroll the current xwidget-webkit page to NEEDLE and highlight it.
+Uses `window.find' which natively scrolls the match into view and
+highlights it via the browser's selection."
+          (when (and needle (stringp needle) (not (string-empty-p needle)))
+            (let ((session (ignore-errors (xwidget-webkit-current-session))))
+              (when session
+                (xwidget-webkit-execute-script
+                 session
+                 (format
+                  "(function(){try{window.getSelection().removeAllRanges();window.find(%s,false,false,true,false,false,false);}catch(e){}})()"
+                  (json-encode-string needle)))))))
+
+        (defun decknix-webkit-consult-line ()
+          "Find a line on the current xwidget-webkit page using `consult--read'.
+Pulls the page's `innerText', splits into lines, and offers them
+as a vertical candidate list with live preview \u2014 selecting a line
+scrolls the WebKit view to it via `window.find' and highlights it
+natively in the page.
+
+Each line is annotated with its line number so duplicate lines
+remain distinguishable in the completion UI; live-preview during
+candidate movement uses the line text as the search needle."
+          (interactive)
+          (unless (derived-mode-p 'xwidget-webkit-mode)
+            (user-error "Not in an xwidget-webkit buffer"))
+          (unless (require 'consult nil t)
+            (user-error "consult is not available"))
+          (let* ((text (decknix--webkit-page-text))
+                 (raw-lines (and text (split-string text "\n" t)))
+                 (counter 0)
+                 (candidates
+                  (delq nil
+                        (mapcar
+                         (lambda (raw)
+                           (cl-incf counter)
+                           (let ((trimmed (string-trim raw)))
+                             (when (>= (length trimmed) 2)
+                               ;; Stash the trimmed line in a text property
+                               ;; so the :state callback can fetch it
+                               ;; directly without parsing the prefix.
+                               (propertize
+                                (format "%5d  %s" counter trimmed)
+                                'decknix-webkit-line trimmed))))
+                         raw-lines))))
+            (cond
+             ((null text)
+              (user-error
+               "Page has no text yet \u2014 wait for it to finish loading"))
+             ((null candidates)
+              (user-error "Page has no usable lines to search"))
+             (t
+              (consult--read
+               candidates
+               :prompt "Find on page: "
+               :category 'decknix-webkit-line
+               :require-match nil
+               :sort nil
+               :history 'decknix--webkit-search-history
+               :state
+               (lambda (action cand)
+                 (when (and (eq action 'preview)
+                            (stringp cand)
+                            (not (string-empty-p cand)))
+                   (let ((line (or (get-text-property
+                                    0 'decknix-webkit-line cand)
+                                   cand)))
+                     (decknix--webkit-find-in-page line)))))))))
+
         ;; -- xwidget-webkit: enhanced keybindings --
         ;; Two principles:
         ;;   1. Motion is universal Emacs (C-n / C-p / C-v / M-v / M-< / M->
@@ -5905,10 +5993,14 @@ work natively — useful for read-mode browsing."
         ;; secondary tier for users with EWW muscle memory.
         (with-eval-after-load 'xwidget
           ;; --- Search (in-page) -------------------------------------------------
-          ;; C-s/C-r → JS-bridged isearch shim.  Note: this is NOT real Emacs
-          ;; isearch; consult-line over the page DOM is on Slice B.
+          ;; Two layers:
+          ;;   * `C-c C-s' / `s' → consult-line over the page innerText
+          ;;     (vertical candidate list, live preview, narrowing).
+          ;;   * `C-s' / `C-r'  → JS-bridged isearch shim, kept for users
+          ;;     who prefer incremental search.
           (define-key xwidget-webkit-mode-map (kbd "C-s") #'xwidget-webkit-isearch-mode)
           (define-key xwidget-webkit-mode-map (kbd "C-r") #'xwidget-webkit-isearch-mode)
+          (define-key xwidget-webkit-mode-map (kbd "s")   #'decknix-webkit-consult-line)
 
           ;; --- Motion (Emacs-standard) -----------------------------------------
           (define-key xwidget-webkit-mode-map (kbd "C-n") #'xwidget-webkit-scroll-up-line)
@@ -5946,6 +6038,7 @@ work natively — useful for read-mode browsing."
           (define-key xwidget-webkit-mode-map (kbd "C-c C-w") #'decknix--webkit-copy-as-markdown)
           (define-key xwidget-webkit-mode-map (kbd "C-c C-e") #'decknix--webkit-switch-to-eww)
           (define-key xwidget-webkit-mode-map (kbd "C-c C-i") #'decknix--webkit-focus-input)
+          (define-key xwidget-webkit-mode-map (kbd "C-c C-s") #'decknix-webkit-consult-line)
 
           ;; --- which-key labels for the C-c C- prefix --------------------------
           (when (fboundp 'which-key-add-keymap-based-replacements)
@@ -5954,6 +6047,7 @@ work natively — useful for read-mode browsing."
               "C-c C-b" "back"
               "C-c C-f" "forward"
               "C-c C-o" "open-external"
+              "C-c C-s" "consult-line"
               "C-c C-u" "open-url…"
               "C-c C-y" "copy-url"
               "C-c C-w" "copy-as-markdown"
@@ -5993,7 +6087,7 @@ work natively — useful for read-mode browsing."
                          "  "
                          (propertize "C-n/C-p" 'face 'font-lock-keyword-face) " line  "
                          (propertize "SPC/DEL" 'face 'font-lock-keyword-face) " page  "
-                         (propertize "C-s" 'face 'font-lock-keyword-face) " search  "
+                         (propertize "s" 'face 'font-lock-keyword-face) " find  "
                          (propertize "g" 'face 'font-lock-keyword-face) " reload  "
                          (propertize "l/r" 'face 'font-lock-keyword-face) " back/fwd  "
                          (propertize "&" 'face 'font-lock-keyword-face) " browser  "
