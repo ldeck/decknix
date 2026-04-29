@@ -5911,20 +5911,54 @@ Like treemacs `W' / extra-wide-toggle."
           (interactive)
           (call-interactively #'agent-shell-workspace-sidebar-toggle-quick-switch))
 
+        (defun decknix-sidebar-tile-toggle ()
+          "Toggle tiled layout for live agent buffers.
+Untile if currently tiled; otherwise tile every live agent
+buffer (requires \u22652).  Upstream
+`agent-shell-workspace-tile-toggle' only un-tiles, leaving no way
+to enter tiled mode without manually marking buffers via `a a' —
+this wraps it so the `t' toggle works both directions."
+          (interactive)
+          (let* ((sb (get-buffer "*agent-shell-sidebar*"))
+                 (tiled (and sb
+                             (buffer-local-value
+                              'agent-shell-workspace--tiled sb))))
+            (cond
+             (tiled
+              (call-interactively #'agent-shell-workspace-tile-toggle))
+             (t
+              (let ((bufs (seq-filter #'buffer-live-p (agent-shell-buffers))))
+                (cond
+                 ((< (length bufs) 2)
+                  (message "Need at least 2 live agent buffers to tile (have %d)"
+                           (length bufs)))
+                 ((> (length bufs) 8)
+                  ;; Upstream caps tiling at 8.  Tile the most recent 8.
+                  (agent-shell-workspace--tile (seq-take bufs 8))
+                  (message "Tiled 8 of %d live buffers (upstream cap)"
+                           (length bufs)))
+                 (t
+                  (agent-shell-workspace--tile bufs)
+                  (message "Tiled %d live agent buffers" (length bufs)))))))))
+
         (transient-define-suffix decknix-sidebar-transient--tile-toggle ()
           :key "t"
           :description
           (lambda ()
-            (let* ((sel (and (boundp 'agent-shell-workspace-sidebar--selected-buffer)
-                             agent-shell-workspace-sidebar--selected-buffer))
-                   (tiled (and sel
-                               (boundp 'agent-shell-workspace--tiled-buffers)
-                               (memq sel agent-shell-workspace--tiled-buffers))))
-              (format "Tile toggle   %s"
+            ;; Mirror the footer's `tile [on]/[off]' which reads the
+            ;; sidebar-buffer-local `agent-shell-workspace--tiled' flag —
+            ;; the previous version checked per-buffer membership in
+            ;; `--tiled-buffers' which does not match the global state.
+            (let* ((sb (get-buffer "*agent-shell-sidebar*"))
+                   (tiled (and sb
+                               (buffer-local-value
+                                'agent-shell-workspace--tiled sb))))
+              (format "tile          %s"
                       (propertize (if tiled "[on]" "[off]")
                                   'face (if tiled 'success 'font-lock-comment-face)))))
+          :transient t
           (interactive)
-          (call-interactively #'agent-shell-workspace-tile-toggle))
+          (call-interactively #'decknix-sidebar-tile-toggle))
 
         (transient-define-suffix decknix-sidebar-transient--display-mode ()
           :key "d"
@@ -5992,6 +6026,20 @@ Like treemacs `W' / extra-wide-toggle."
           (interactive)
           (call-interactively #'decknix-sidebar-toggle-sessions-hide-unknown))
 
+        (transient-define-suffix decknix-sidebar-transient--show-saved-sessions ()
+          :key "h"
+          :description
+          (lambda ()
+            (format "saved         %s"
+                    (propertize
+                     (if decknix--hub-show-saved-sessions "[show]" "[hide]")
+                     'face (if decknix--hub-show-saved-sessions
+                               'font-lock-comment-face
+                             'font-lock-constant-face))))
+          :transient t
+          (interactive)
+          (call-interactively #'decknix-sidebar-toggle-saved-sessions))
+
         (transient-define-suffix decknix-sidebar-transient--width ()
           :key "W"
           :description
@@ -6039,8 +6087,11 @@ which advertises toggles by label only (no keys)."
            (decknix-sidebar-transient--deploy-indicator) ;; pipeline
            (decknix-sidebar-transient--wip-my-replies)]  ;; replies
           ["Sessions"
+           ;; Alphabetical by display label (case-insensitive):
+           ;; age, live-backed, saved, unknown-ws.
            (decknix-sidebar-transient--sessions-age)          ;; age
            (decknix-sidebar-transient--sessions-hide-live)    ;; live-backed
+           (decknix-sidebar-transient--show-saved-sessions)   ;; saved
            (decknix-sidebar-transient--sessions-hide-unknown)];; unknown-ws
           ["" ("q" "Done" transient-quit-one)])
 
@@ -6125,6 +6176,13 @@ transient.")
 These render under the \"unknown\" workspace group today.  Toggle
 with `U' in the Toggles transient.")
 
+        (defvar decknix--hub-show-saved-sessions t
+          "When non-nil (default), the saved Sessions block is rendered.
+When nil, the entire Saved Sessions section (heading + per-workspace
+groups) is omitted from the sidebar.  Live, Previous, Requests and
+WIP sections remain unaffected.  Toggle with `h' in the Toggles
+transient.")
+
         (defun decknix--sidebar-sessions-age-label ()
           "Return a short label for the current sessions age filter.
 Reuses the shared `decknix--hub-age-presets' alist so the Sessions
@@ -6172,6 +6230,16 @@ Live section above is then the only place they appear)."
             (agent-shell-workspace-sidebar-refresh))
           (message "Sessions: unknown-workspace rows %s"
                    (if decknix--sidebar-sessions-hide-unknown "hidden" "shown")))
+
+        (defun decknix-sidebar-toggle-saved-sessions ()
+          "Toggle visibility of the saved Sessions section in the sidebar."
+          (interactive)
+          (setq decknix--hub-show-saved-sessions
+                (not decknix--hub-show-saved-sessions))
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (agent-shell-workspace-sidebar-refresh))
+          (message "Saved Sessions: %s"
+                   (if decknix--hub-show-saved-sessions "shown" "hidden")))
 
         (defun decknix-sidebar-cycle-sessions-age-filter ()
           "Cycle the saved-Sessions age filter through presets.
@@ -6496,6 +6564,12 @@ All toggle keys are accessed via the T transient prefix."
                                  'face (if decknix--sidebar-sessions-hide-live
                                            'font-lock-constant-face
                                          'font-lock-comment-face))))
+                  (cons "h" (format "saved %s"
+                                (propertize
+                                 (if decknix--hub-show-saved-sessions "[show]" "[hide]")
+                                 'face (if decknix--hub-show-saved-sessions
+                                           'font-lock-comment-face
+                                         'font-lock-constant-face))))
                   (cons "U" (format "unknown-ws %s"
                                 (propertize
                                  (if decknix--sidebar-sessions-hide-unknown "[hide]" "[show]")
@@ -6719,7 +6793,11 @@ the visible count matches the heading."
                                                       (length
                                                        (agent-shell-workspace--short-name buf)))
                                                     buffers))))
-                   (saved (decknix--sidebar-saved-sessions))
+                   ;; Skip the (potentially expensive) saved-sessions
+                   ;; aggregation entirely when the user has hidden the
+                   ;; section via the `h' toggle.
+                   (saved (when decknix--hub-show-saved-sessions
+                            (decknix--sidebar-saved-sessions)))
                    (line-num 0))
               (erase-buffer)
 
@@ -9080,6 +9158,9 @@ session-id-based uniqueness so they are never accidentally merged."
                          decknix--sidebar-sessions-age-filter)
                    (cons 'sessions-hide-unknown
                          decknix--sidebar-sessions-hide-unknown)
+                   (cons 'show-saved-sessions
+                         (when (boundp 'decknix--hub-show-saved-sessions)
+                           decknix--hub-show-saved-sessions))
                    (cons 'previous-sessions live-info))))
             (make-directory (file-name-directory decknix--sidebar-state-file) t)
             (with-temp-file decknix--sidebar-state-file
@@ -9149,6 +9230,14 @@ session-id-based uniqueness so they are never accidentally merged."
                     (unless (eq sd 'missing)
                       (when (boundp 'decknix--hub-show-deploys)
                         (setq decknix--hub-show-deploys sd))))
+                  ;; Saved-sessions visibility: restore toggle.  Use
+                  ;; the missing sentinel so absence of the key in
+                  ;; older state files leaves the default (`t') intact
+                  ;; rather than silently flipping to nil.
+                  (let ((sv (alist-get 'show-saved-sessions state 'missing)))
+                    (unless (eq sv 'missing)
+                      (when (boundp 'decknix--hub-show-saved-sessions)
+                        (setq decknix--hub-show-saved-sessions sv))))
                   (when-let ((prev (alist-get 'previous-sessions state)))
                     ;; Collapse duplicates on load — existing state files
                     ;; written before dedup landed can carry multiple

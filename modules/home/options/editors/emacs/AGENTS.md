@@ -303,7 +303,9 @@ The `decknix--context-update-header` function delegates to the unified header
   - **Live**: `d` display mode, `H` hidden, `S` quick-switch,
     `N` repo-name cap (short/medium/full),
     `E` PRs (4-way cycle: off/PR/pipeline/both),
-    `y` symbol style (ascii/emoji), `t` tile
+    `y` symbol style (ascii/emoji), `t` tile (true toggle —
+    untiles when active, otherwise tiles every live agent buffer
+    up to upstream's cap of 8; needs ≥2 to engage)
   - **WIP**: `L` hide linked (PRs that are already live as sessions),
     `P` pipeline/deploy indicators, `r` ↩ replies-to-me (parallel to
     the Requests triad, independent state because WIP is about my own
@@ -313,10 +315,11 @@ The `decknix--context-update-header` function delegates to the unified header
     shares presets with Requests `F`), `V` live-backed (default `[dim]`
     — saved rows whose conversation is currently live render shadowed
     as context; flip to `[hide]` to drop them entirely so Live owns
-    them), `U` unknown-ws (hide saved rows whose workspace can't be
-    resolved). Active filters surface in the `Sessions (N)` heading
-    as a `[age: Nd]` badge; filter state persists via
-    `decknix--sidebar-state-file`.
+    them), `h` saved (hide the entire Saved Sessions section — Live
+    / Previous / Requests / WIP remain), `U` unknown-ws (hide saved
+    rows whose workspace can't be resolved). Active filters surface
+    in the `Sessions (N)` heading as a `[age: Nd]` badge; filter
+    state persists via `decknix--sidebar-state-file`.
 - All toggles are advertised in the sidebar footer under a `Toggles`
   heading (press `K` to hide).  Footer items are sorted by the same
   short labels (keys omitted — press `T` for the interactive transient).
