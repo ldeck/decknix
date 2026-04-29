@@ -11734,21 +11734,32 @@ overrides from `decknix-hub-clones' can override later in the merge."
               (error nil))
             out))
 
+        (defun decknix--hub-worktree-normalize-path (path)
+          "Return absolute, ~-expanded PATH or nil.
+`make-process' does not run a shell, so any `~' in a path passed to
+`git -C' would be taken literally and silently fail."
+          (when (and path (stringp path))
+            (expand-file-name path)))
+
         (defun decknix--hub-worktree-discover-clones ()
           "Return alist (REPO . PRIMARY-PATH) by merging discovery sources.
 Priority: explicit `decknix-hub-clones' > cached `:primary' >
-`agent-sessions.json' workspaces > `project.el' known projects."
+`agent-sessions.json' workspaces > `project.el' known projects.
+All paths are normalised via `expand-file-name' so downstream
+`git -C' invocations (no shell) see absolute paths."
           (let ((seen (make-hash-table :test 'equal))
                 (out nil))
             ;; 1. Explicit defcustom (highest priority).
             (dolist (entry decknix-hub-clones)
-              (let ((repo (decknix--hub-worktree-canonical-repo (car entry))))
-                (when (and repo (not (gethash repo seen)))
+              (let ((repo (decknix--hub-worktree-canonical-repo (car entry)))
+                    (path (decknix--hub-worktree-normalize-path (cdr entry))))
+                (when (and repo path (not (gethash repo seen)))
                   (puthash repo t seen)
-                  (push (cons repo (cdr entry)) out))))
+                  (push (cons repo path) out))))
             ;; 2. Cached entries' :primary (last-known-good across restarts).
             (maphash (lambda (repo entry)
-                       (let ((p (plist-get entry :primary)))
+                       (let ((p (decknix--hub-worktree-normalize-path
+                                 (plist-get entry :primary))))
                          (when (and p (not (gethash repo seen)))
                            (puthash repo t seen)
                            (push (cons repo p) out))))
@@ -11757,15 +11768,18 @@ Priority: explicit `decknix-hub-clones' > cached `:primary' >
             (dolist (entry (decknix--hub-worktree-discover-from-sessions))
               (unless (gethash (car entry) seen)
                 (puthash (car entry) t seen)
-                (push entry out)))
+                (push (cons (car entry)
+                            (decknix--hub-worktree-normalize-path (cdr entry)))
+                      out)))
             ;; 4. project.el known projects (best-effort; no-op without it).
             (when (fboundp 'project-known-project-roots)
               (dolist (root (ignore-errors (project-known-project-roots)))
                 (when (and (stringp root) (file-directory-p root))
-                  (let ((repo (decknix--hub-worktree-classify-dir root)))
+                  (let ((repo (decknix--hub-worktree-classify-dir root))
+                        (path (decknix--hub-worktree-normalize-path root)))
                     (when (and (stringp repo) (not (gethash repo seen)))
                       (puthash repo t seen)
-                      (push (cons repo root) out))))))
+                      (push (cons repo path) out))))))
             (nreverse out)))
 
         (defun decknix--hub-worktree-parse-porcelain (text)
@@ -11851,13 +11865,16 @@ asynchronously and trigger a coalesced sidebar refresh on completion."
                  (if repo
                      (let* ((rk (decknix--hub-worktree-canonical-repo repo))
                             (entry (gethash rk decknix--hub-worktree-cache))
-                            (p (or (plist-get entry :primary)
-                                   (cdr (assoc rk
-                                               (decknix--hub-worktree-discover-clones))))))
+                            (p (decknix--hub-worktree-normalize-path
+                                (or (plist-get entry :primary)
+                                    (cdr (assoc rk
+                                                (decknix--hub-worktree-discover-clones)))))))
                        (when p (list (cons rk p))))
                    (decknix--hub-worktree-discover-clones))))
             (dolist (entry targets)
-              (let ((rk (car entry)) (primary (cdr entry)))
+              (let ((rk (car entry))
+                    (primary (decknix--hub-worktree-normalize-path
+                              (cdr entry))))
                 (when (and rk primary
                            (not (gethash rk decknix--hub-worktree-pending))
                            (file-directory-p primary))
