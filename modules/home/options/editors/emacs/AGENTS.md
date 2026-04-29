@@ -303,9 +303,13 @@ The `decknix--context-update-header` function delegates to the unified header
   - **Live**: `d` display mode, `H` hidden, `S` quick-switch,
     `N` repo-name cap (short/medium/full),
     `E` PRs (4-way cycle: off/PR/pipeline/both),
-    `y` symbol style (ascii/emoji), `t` tile (true toggle —
-    untiles when active, otherwise tiles every live agent buffer
-    up to upstream's cap of 8; needs ≥2 to engage)
+    `y` symbol style (ascii/emoji), `t` tile (cycles desired tile
+    count `off → 2 → 3 → 4 → off`; the count is persisted via
+    `decknix--sidebar-state-file` and auto-applied on every sidebar
+    refresh, so setting `t` to `2` before resuming Previous sessions
+    engages tiling the moment the second buffer comes up. Label
+    shows `[off]`, `[N]` when active, or `[N pending]` when waiting
+    for more live buffers; capped at upstream's 8)
   - **WIP**: `L` hide linked (PRs that are already live as sessions),
     `P` pipeline/deploy indicators, `r` ↩ replies-to-me (parallel to
     the Requests triad, independent state because WIP is about my own
