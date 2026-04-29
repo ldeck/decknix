@@ -519,6 +519,7 @@ Press q to dismiss."
             "  C-c s s     Session picker (live + saved)\n"
             "  C-c s n     New session (guided)\n"
             "  C-c s q     Quit session (saves automatically)\n"
+            "  C-c s g     Grep all session content (consult + ripgrep)\n"
             "  C-c s h     View history (C-u to pick any session)\n"
             "  C-c s c     Toggle Context history section (▶/▼)\n"
             "  C-c s y     Copy session ID (C-u for full ID)\n"
@@ -13643,6 +13644,7 @@ Priority order:
                       (define-key map (kbd "s") 'decknix-agent-session-picker)
                       (define-key map (kbd "n") 'decknix-agent-session-new)
                       (define-key map (kbd "q") 'decknix-agent-session-quit)
+                      (define-key map (kbd "g") 'decknix-agent-session-grep)
                       (define-key map (kbd "h") 'decknix-agent-session-history)
                       (define-key map (kbd "c") 'decknix--agent-context-toggle)
                       (define-key map (kbd "y") 'decknix-agent-session-copy-id)
@@ -13658,6 +13660,7 @@ Priority order:
                         "C-c s s" "picker (live+saved)"
                         "C-c s n" "new session"
                         "C-c s q" "quit session"
+                        "C-c s g" "grep all sessions"
                         "C-c s h" "history"
                         "C-c s c" "toggle context history"
                         "C-c s y" "copy session ID"
