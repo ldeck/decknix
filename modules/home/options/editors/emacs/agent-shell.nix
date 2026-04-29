@@ -6048,54 +6048,110 @@ Like treemacs `W' / extra-wide-toggle."
           (interactive)
           (call-interactively #'agent-shell-workspace-sidebar-toggle-quick-switch))
 
-        (defun decknix-sidebar-tile-toggle ()
-          "Toggle tiled layout for live agent buffers.
-Untile if currently tiled; otherwise tile every live agent
-buffer (requires \u22652).  Upstream
-`agent-shell-workspace-tile-toggle' only un-tiles, leaving no way
-to enter tiled mode without manually marking buffers via `a a' —
-this wraps it so the `t' toggle works both directions."
-          (interactive)
-          (let* ((sb (get-buffer "*agent-shell-sidebar*"))
-                 (tiled (and sb
-                             (buffer-local-value
-                              'agent-shell-workspace--tiled sb))))
-            (cond
-             (tiled
-              (call-interactively #'agent-shell-workspace-tile-toggle))
-             (t
-              (let ((bufs (seq-filter #'buffer-live-p (agent-shell-buffers))))
-                (cond
-                 ((< (length bufs) 2)
-                  (message "Need at least 2 live agent buffers to tile (have %d)"
-                           (length bufs)))
-                 ((> (length bufs) 8)
-                  ;; Upstream caps tiling at 8.  Tile the most recent 8.
-                  (agent-shell-workspace--tile (seq-take bufs 8))
-                  (message "Tiled 8 of %d live buffers (upstream cap)"
-                           (length bufs)))
-                 (t
-                  (agent-shell-workspace--tile bufs)
-                  (message "Tiled %d live agent buffers" (length bufs)))))))))
+        (defvar decknix--sidebar-tile-count 0
+          "Desired number of tiled agent-shell buffers in the sidebar.
+0 means tiling is off.  Cycled by `decknix-sidebar-tile-cycle'
+(0 \u2192 2 \u2192 3 \u2192 4 \u2192 0).  Persisted in
+`decknix--sidebar-state-file' so the preference survives Emacs
+restarts.  When >0 and the live buffer count is insufficient, the
+preference is preserved and applied automatically by
+`decknix--sidebar-maybe-apply-tile-pref' once enough buffers
+become available (e.g., after Previous sessions resume).")
 
-        (transient-define-suffix decknix-sidebar-transient--tile-toggle ()
+        (defun decknix--sidebar-tile-current-count ()
+          "Return the number of currently tiled buffers (0 if not tiled).
+Reads the sidebar buffer-local `agent-shell-workspace--tiled-buffers'
+list.  Used to detect mismatches against
+`decknix--sidebar-tile-count' so auto-apply only re-tiles when the
+layout actually needs to change."
+          (let ((sb (get-buffer agent-shell-workspace-sidebar-buffer-name)))
+            (if (and sb
+                     (buffer-local-value 'agent-shell-workspace--tiled sb))
+                (length (buffer-local-value
+                         'agent-shell-workspace--tiled-buffers sb))
+              0)))
+
+        (defun decknix--sidebar-tile-apply (n)
+          "Tile the most-recent N live agent buffers via the upstream API.
+Returns the actual number of buffers tiled (capped at upstream's 8).
+N must be \u22652; callers using N=0 should instead call
+`agent-shell-workspace--untile'."
+          (let* ((bufs (seq-filter #'buffer-live-p (agent-shell-buffers)))
+                 (target (min n (length bufs) 8)))
+            (when (>= target 2)
+              (agent-shell-workspace--tile (seq-take bufs target)))
+            target))
+
+        (defun decknix-sidebar-tile-cycle ()
+          "Cycle the desired tile count: 0 \u2192 2 \u2192 3 \u2192 4 \u2192 0.
+At 0, untile if currently tiled.  At N>0, tile the N most-recent
+live agent buffers; if fewer than N are live, store the preference
+and message that tiling will engage once enough sessions resume.
+The preference is reapplied by
+`decknix--sidebar-maybe-apply-tile-pref' on every sidebar refresh."
+          (interactive)
+          (let* ((current decknix--sidebar-tile-count)
+                 (next (cond ((= current 0) 2)
+                             ((= current 2) 3)
+                             ((= current 3) 4)
+                             (t 0))))
+            (setq decknix--sidebar-tile-count next)
+            (cond
+             ((= next 0)
+              ;; Cycle wrapped back to off — untile if currently tiled.
+              (let ((sb (get-buffer agent-shell-workspace-sidebar-buffer-name)))
+                (when (and sb
+                           (buffer-local-value 'agent-shell-workspace--tiled sb))
+                  (agent-shell-workspace--untile)))
+              (message "Tile: off"))
+             (t
+              (let* ((live (length (seq-filter #'buffer-live-p (agent-shell-buffers))))
+                     (applied (decknix--sidebar-tile-apply next)))
+                (cond
+                 ((>= applied 2)
+                  (message "Tiled %d live agent buffers (target %d)" applied next))
+                 (t
+                  (message "Tile target: %d (need %d more live buffer%s)"
+                           next (- next live)
+                           (if (= (- next live) 1) "" "s")))))))
+            (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+              (agent-shell-workspace-sidebar-refresh))))
+
+        (defun decknix--sidebar-maybe-apply-tile-pref ()
+          "Re-tile when the desired count is set but layout doesn't match.
+Called from the sidebar refresh path so that resuming Previous
+sessions or creating a new session naturally engages the
+preferred tile count once enough buffers exist.  No-op when
+`decknix--sidebar-tile-count' is 0 or the current tiled count
+already equals the preference."
+          (let ((n decknix--sidebar-tile-count))
+            (when (and (integerp n) (>= n 2))
+              (let* ((live-bufs (seq-filter #'buffer-live-p (agent-shell-buffers)))
+                     (target (min n (length live-bufs) 8))
+                     (current (decknix--sidebar-tile-current-count)))
+                (when (and (>= target 2)
+                           (/= current target))
+                  (decknix--sidebar-tile-apply target))))))
+
+        (transient-define-suffix decknix-sidebar-transient--tile-cycle ()
           :key "t"
           :description
           (lambda ()
-            ;; Mirror the footer's `tile [on]/[off]' which reads the
-            ;; sidebar-buffer-local `agent-shell-workspace--tiled' flag —
-            ;; the previous version checked per-buffer membership in
-            ;; `--tiled-buffers' which does not match the global state.
-            (let* ((sb (get-buffer "*agent-shell-sidebar*"))
-                   (tiled (and sb
-                               (buffer-local-value
-                                'agent-shell-workspace--tiled sb))))
+            ;; Mirror the footer's `tile' label.  Reads the buffer-local
+            ;; `agent-shell-workspace--tiled' flag from the upstream
+            ;; sidebar buffer (`*Agent Sidebar*') and shows the desired
+            ;; cycle position so the toggle shape is visible at a glance.
+            (let* ((n decknix--sidebar-tile-count)
+                   (active (> (decknix--sidebar-tile-current-count) 0))
+                   (label (cond ((= n 0) "[off]")
+                                (active (format "[%d]" n))
+                                (t (format "[%d pending]" n)))))
               (format "tile          %s"
-                      (propertize (if tiled "[on]" "[off]")
-                                  'face (if tiled 'success 'font-lock-comment-face)))))
+                      (propertize label
+                                  'face (if active 'success 'font-lock-comment-face)))))
           :transient t
           (interactive)
-          (call-interactively #'decknix-sidebar-tile-toggle))
+          (call-interactively #'decknix-sidebar-tile-cycle))
 
         (transient-define-suffix decknix-sidebar-transient--display-mode ()
           :key "d"
@@ -6216,7 +6272,7 @@ which advertises toggles by label only (no keys)."
            (decknix-sidebar-transient--repo-name-cap)    ;; repo name
            (decknix-sidebar-transient--expand-prs)       ;; session PRs
            (decknix-sidebar-transient--symbol-style)     ;; symbols
-           (decknix-sidebar-transient--tile-toggle)]     ;; Tile toggle
+           (decknix-sidebar-transient--tile-cycle)]      ;; Tile cycle (off/2/3/4)
           ["WIP"
            (decknix-sidebar-transient--wip-bot-pending)  ;; bot review
            (decknix-sidebar-transient--wip-needs-reply)  ;; comments
@@ -6643,12 +6699,13 @@ All toggle keys are accessed via the T transient prefix."
                                            "ascii"))
                                  'face 'font-lock-constant-face)))
                   (cons "t" (format "tile %s"
-                                (let* ((sb (get-buffer "*agent-shell-sidebar*"))
-                                       (tiled (and sb
-                                                   (buffer-local-value
-                                                    'agent-shell-workspace--tiled sb))))
-                                  (propertize (if tiled "[on]" "[off]")
-                                              'face (if tiled 'success 'font-lock-comment-face)))))))
+                                (let* ((n decknix--sidebar-tile-count)
+                                       (active (> (decknix--sidebar-tile-current-count) 0))
+                                       (label (cond ((= n 0) "[off]")
+                                                    (active (format "[%d]" n))
+                                                    (t (format "[%d pending]" n)))))
+                                  (propertize label
+                                              'face (if active 'success 'font-lock-comment-face)))))))
                 (wip
                  (list
                   (cons "L" (format "linked %s"
@@ -9319,6 +9376,9 @@ session-id-based uniqueness so they are never accidentally merged."
                    (cons 'show-saved-sessions
                          (when (boundp 'decknix--hub-show-saved-sessions)
                            decknix--hub-show-saved-sessions))
+                   (cons 'tile-count
+                         (when (boundp 'decknix--sidebar-tile-count)
+                           decknix--sidebar-tile-count))
                    (cons 'previous-sessions live-info))))
             (make-directory (file-name-directory decknix--sidebar-state-file) t)
             (with-temp-file decknix--sidebar-state-file
@@ -9396,6 +9456,14 @@ session-id-based uniqueness so they are never accidentally merged."
                     (unless (eq sv 'missing)
                       (when (boundp 'decknix--hub-show-saved-sessions)
                         (setq decknix--hub-show-saved-sessions sv))))
+                  ;; Tile count preference: restore as integer 0/2/3/4.
+                  ;; Auto-apply runs from the sidebar refresh path so
+                  ;; resuming Previous sessions naturally engages the
+                  ;; preferred layout once enough buffers exist.
+                  (let ((tc (alist-get 'tile-count state)))
+                    (when (and (integerp tc)
+                               (boundp 'decknix--sidebar-tile-count))
+                      (setq decknix--sidebar-tile-count tc)))
                   (when-let ((prev (alist-get 'previous-sessions state)))
                     ;; Collapse duplicates on load — existing state files
                     ;; written before dedup landed can carry multiple
@@ -9732,7 +9800,17 @@ picker's dynamic binding unwinds.")
             (lambda (orig-fn &rest args)
               "Skip refresh when a picker has suspended sidebar updates."
               (unless decknix--sidebar-refresh-suspended
-                (apply orig-fn args)))))
+                (apply orig-fn args))))
+          ;; Auto-apply the tile-count preference whenever the sidebar
+          ;; refreshes.  Idempotent — only re-tiles when the current
+          ;; layout doesn't match the desired count, so resuming a
+          ;; Previous session naturally engages the saved preference
+          ;; without churning windows on every 2 s timer tick.
+          (advice-add 'agent-shell-workspace-sidebar-refresh :after
+            (lambda (&rest _)
+              "Engage `decknix--sidebar-tile-count' once enough buffers exist."
+              (unless decknix--sidebar-refresh-suspended
+                (ignore-errors (decknix--sidebar-maybe-apply-tile-pref))))))
 
         ;; Add Hub group to the sidebar transient
         ;; -- Hub: org filter (multi-select transient) --
