@@ -12299,6 +12299,58 @@ Triggers an async refresh when the entry is missing or older than
               (or (plist-get (decknix-hub-worktree-registry-get rk) :primary)
                   (cdr (assoc rk (decknix--hub-worktree-discover-clones)))))))
 
+        (defun decknix--hub-worktree-live-workspaces ()
+          "Return a hash table of normalised workspace dirs used by live sessions.
+Keys are file-name-as-directory expanded paths; value is t.  Used by
+`decknix--hub-worktree-row-badge' to mark the active session's branch
+with `⎇*' instead of plain `⎇'."
+          (let ((set (make-hash-table :test 'equal)))
+            (when (fboundp 'agent-shell-buffers)
+              (dolist (buf (agent-shell-buffers))
+                (when (buffer-live-p buf)
+                  (let ((dir (with-current-buffer buf
+                               default-directory)))
+                    (when (and dir (stringp dir))
+                      (puthash (file-name-as-directory
+                                (expand-file-name dir))
+                               t set))))))
+            set))
+
+        (defun decknix--hub-worktree-row-badge (repo branch)
+          "Return a 2-char propertized badge for REPO @ BRANCH (spec §3.6.3).
+Glyphs:
+  `⎇*' branch is live in some agent session (worktree path matches a
+       buffer's `default-directory').
+  `⎇ ' branch has its own worktree but no live session.
+  `↓ ' repo has no local clone yet.
+  `  ' otherwise (primary HEAD, branch ref only, missing context).
+The badge always occupies 2 columns so adjacent rows align even when
+the worktree state differs."
+          (let* ((repo (and repo (stringp repo)
+                            (decknix--hub-worktree-canonical-repo repo)))
+                 (primary (and repo (decknix-hub-worktree-primary repo)))
+                 (wt-path (and repo branch
+                               (decknix-hub-worktree-find repo branch))))
+            (cond
+             ((not repo) "  ")
+             ((not primary)
+              (propertize "↓ "
+                          'face '(:foreground "#5c6370" :weight bold)))
+             ((not wt-path) "  ")
+             ((file-equal-p wt-path primary) "  ")
+             (t
+              (let* ((live (decknix--hub-worktree-live-workspaces))
+                     (target (file-name-as-directory
+                              (expand-file-name wt-path)))
+                     (in-use (gethash target live)))
+                (if in-use
+                    (propertize "⎇*"
+                                'face '(:foreground "#98c379" :weight bold))
+                  (propertize "⎇ "
+                              'face '(:foreground "#61afef"))))))))
+
+
+
         ;; -- Persistence (mirrors decknix--hub-pr-cache pattern) -----------
 
         (defun decknix--hub-worktree-cache-save ()
@@ -12706,14 +12758,21 @@ the state word since every downstream signal is moot."
             ;; site since this formatter has no conversation context.
             ;; head-repo defaults to repo-full; fork PRs need daemon support
             ;; (headRepositoryOwner) before this can distinguish them — see #120.
-            (let ((line (if grouped
-                            (format "     %s%s%s %s %s%s"
+            ;; wt-badge prepends the §3.6.3 worktree glyph (2-char slot,
+            ;; consumes part of the leading indent so total width is
+            ;; preserved on no-badge rows).
+            (let* ((wt-badge (decknix--hub-worktree-row-badge
+                              repo-full branch))
+                   (line (if grouped
+                            (format "   %s%s%s%s %s %s%s"
+                                    wt-badge
                                     refresh-str
                                     type-prefix num-str
                                     age-str
                                     state-word
                                     signal-zone)
-                          (format "   %s%s%s%s %s %s%s"
+                          (format " %s%s%s%s%s %s %s%s"
+                                  wt-badge
                                   refresh-str
                                   type-prefix repo-label num-str
                                   age-str
@@ -12805,12 +12864,18 @@ Layout:
             ;; sidebar dispatcher (see specs/sidebar-ret.md §3.4).  head-repo
             ;; / head-branch mirror repo / branch so the worktree submenu
             ;; (#129) reads the same keys on every row type.  conv-key is
-            ;; set at the insertion site in render-session-prs.
-            (let ((line (if grouped
-                            (format "     %s%s %s %s%s"
+            ;; set at the insertion site in render-session-prs.  wt-badge
+            ;; prepends the §3.6.3 worktree glyph (2-char slot, consumes
+            ;; part of the leading indent so total width is preserved).
+            (let* ((wt-badge (decknix--hub-worktree-row-badge
+                              repo-full branch))
+                   (line (if grouped
+                            (format "   %s%s%s %s %s%s"
+                                    wt-badge
                                     refresh-str branch-str sha7-str age-str
                                     signal-zone)
-                          (format "   %s%s %s %s %s%s"
+                          (format " %s%s%s %s %s %s%s"
+                                  wt-badge
                                   refresh-str repo-label branch-str sha7-str
                                   age-str signal-zone))))
               (propertize line
@@ -13327,7 +13392,13 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                                    (if (>= (string-to-number age) 3)
                                        'error 'warning))
                                   (t 'font-lock-comment-face)))
-                       (line (format " %3s %s#%d %s %s"
+                       ;; Worktree badge for the repo (no branch context
+                       ;; on review items so this surfaces only `↓ ' /
+                       ;; `  ' — enough to flag missing local clones).
+                       (wt-badge (decknix--hub-worktree-row-badge
+                                  repo-full nil))
+                       (line (format "%s%3s %s#%d %s %s"
+                                     wt-badge
                                      (propertize age 'face age-face)
                                      (propertize (or repo "") 'face 'font-lock-type-face)
                                      number
@@ -13457,7 +13528,13 @@ session are hidden (both from the header count and the listing)."
                              (title-face (cond (merged-p 'font-lock-comment-face)
                                                (draft 'font-lock-comment-face)
                                                (t nil)))
-                             (line (format " %3s #%-4d %s %s"
+                             ;; Worktree badge — branch is in scope from
+                             ;; the WIP record; surfaces `⎇*' / `⎇ ' /
+                             ;; `↓ ' as defined in spec §3.6.3.
+                             (wt-badge (decknix--hub-worktree-row-badge
+                                        repo-full branch))
+                             (line (format "%s%3s #%-4d %s %s"
+                                          wt-badge
                                           (propertize age 'face 'font-lock-comment-face)
                                           number
                                           ci-str

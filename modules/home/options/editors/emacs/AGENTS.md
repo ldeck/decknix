@@ -287,6 +287,23 @@ The `decknix--context-update-header` function delegates to the unified header
   state disqualifies it (e.g. `m`/`x` on a non-authored linked PR).
   Verbs awaiting their own follow-up issue render a placeholder that
   echoes "pending" so the menu shape is stable from day one.
+- **Worktree integration** (#128 / #129 / #130, spec §3.6): every hub
+  row that resolves a `(repo, branch)` pair carries a 2-column **row
+  badge** showing local worktree state at a glance — `⎇*` (live in a
+  session), `⎇ ` (separate worktree but no live session), `↓ ` (no
+  local clone), or two spaces (primary HEAD / branch ref only).  The
+  Action Menu's `w` key opens the **worktree submenu** with eight
+  stable-shape verbs: `o` open, `n` create, `s` start session in
+  worktree (auto-creates if missing), `x` remove (interlocked against
+  any session whose workspace points at the worktree; `C-u x` forces
+  via `--force`), `r` reveal in Finder, `d` status (Magit / `vc-dir`),
+  `c` copy worktree path, `p` prune.  New worktrees use the sibling
+  layout `<primary>-worktrees/<sanitised-branch>`.  Backed by the
+  `decknix-hub-worktree-registry` cache (`~/.config/decknix/hub/worktrees.el`,
+  60 s TTL, refreshed asynchronously on every mutation) so all UI is
+  non-blocking.  See `specs/sidebar-ret.md` §3.6 for the full contract
+  and `specs/worktree-cli.md` for the cross-editor CLI that consumes
+  the same registry format.
 - Toggles transient (`T`): Opens sectioned menu grouped by sidebar
   section. Suffixes within each section are ordered alphabetically by
   their display label (case-insensitive) to match the sidebar footer,
@@ -464,7 +481,10 @@ workspace sidebar surface which sessions need attention.
 - **Hub: Cross-linking** — Associate sessions with work items (reviews, tasks) (Planned)
 - **Hub: Expandable Recent** — Expand a saved session to see related work items (Planned)
 - **Hub: macOS notifications** — New review requests, CI failures (Planned)
-- **Worktree-aware sessions** — git worktree per agent session (#69) (Planned)
+- **Worktree-aware sessions** — git worktree per agent session (#69):
+  registry / submenu / row badges shipped (#128, #129, #130).  Auto-create
+  a worktree on `C-c A n` based on a chosen branch, and have session creation
+  default `--workspace-root` to the worktree path, still pending.
 - **Session board** — magit-style multi-session dashboard (#70) (Planned)
 - **Session templates** — engineering, review, support workflows (#71) (Planned)
 - **Automation** — push notifications, auto-created sessions (#72) (Planned)

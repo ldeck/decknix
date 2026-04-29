@@ -380,35 +380,42 @@ For a session row's workspace path `$P`:
 #### 3.6.3 Row badges and visual cues
 
 Branch state is communicated **on the row** so the user does not have to open
-the worktree submenu to know where a branch lives.  The badge appears in a
-fixed position immediately before the row's primary identifier (`#N` for PR
-rows, `<branch>` for Linked Repo rows, the session label for session rows),
-costs one column, and falls back to a single space when no badge applies so
-downstream columns line up across rows of the same type.
+the worktree submenu to know where a branch lives.  The badge occupies a
+fixed two-column slot at the start of every hub row (Linked PR, Linked Repo,
+Requests, WIP) so columns downstream line up regardless of state — the slot
+exists even when no badge applies and is then filled with two spaces.
 
-| Badge | Meaning                                                                                       | Face                  |
-|-------|-----------------------------------------------------------------------------------------------|-----------------------|
-| `⎇`   | Branch is checked out in a **separate worktree** of the local clone.                          | `font-lock-keyword-face` |
-| `⎇*`  | Branch is checked out in a worktree **and** that worktree is the current session's workspace. | `font-lock-keyword-face` + bold |
-| `●`   | Branch **is** the primary clone's current HEAD (so `n` Create would clash with primary).      | `shadow`              |
-| ` `   | Branch exists in the local clone as a ref but is not checked out anywhere.                    | —                     |
-| `↓`   | No local clone of the repo on this machine yet (worktree submenu collapses to "create+clone"). | `shadow`              |
+The slot consumes part of the existing leading indent (PR/Repo rows shrink
+from 3/5-space indent to 1/3-space indent + the 2-char badge) so total row
+width is unchanged on no-badge rows; rows that *do* badge protrude exactly
+two columns to the left of where the same row would otherwise start.
+
+| Badge | Meaning                                                                                       | Face                                                |
+|-------|-----------------------------------------------------------------------------------------------|-----------------------------------------------------|
+| `⎇*`  | Branch is checked out in a worktree **and** that worktree is a live session's workspace.      | green (`#98c379`) + bold                           |
+| `⎇ ` | Branch is checked out in a **separate worktree** of the local clone (no live session yet).   | blue (`#61afef`)                                    |
+| `↓ ` | No local clone of the repo on this machine yet (worktree submenu collapses to "create+clone"). | dim (`#5c6370`) + bold                              |
+| `  ` (two spaces) | No badge — branch is the primary clone's HEAD, exists only as a ref, or row has no `(repo, branch)` context. | —                                                   |
 
 Notes:
 
 - The Workspace sub-header (§3.2.4) reuses the same `⎇` glyph so the convention
   is uniform across sections; that earlier reference resolves to this table.
 - Detection is cheap enough to run on every render: the registry already knows
-  `(repo, branch) → worktree-path` and the session's workspace path is a
-  property on the row, so the badge is a hash lookup, not a process invocation.
-  Stale clone-presence answers come from the §3.6.1 60 s TTL and never block.
+  `(repo, branch) → worktree-path` and live workspaces are read from each
+  agent-shell buffer's `default-directory` (a hash-set built once per render),
+  so the badge is a hash lookup, not a process invocation.  Stale clone-presence
+  answers come from the §3.6.1 60 s TTL and never block.
 - Badges never replace the existing draft `#` marker on Linked-PR rows or the
-  state-word colour — they sit *before* `#N` so both signals coexist.
-- The Linked Repo row layout (`<branch> <sha7> <age> CI DTSP`) reserves the
-  badge slot before `<branch>` for the same reason.
-- Tooltip / `help-echo` text on the badge spells out the state (e.g. `⎇ in
-  worktree at /Users/ldeck/tools/decknix-spec-sidebar-ret`) so a hover (or
-  `M-x what-cursor-position`) discloses the path without a transient.
+  state-word colour — they sit *before* the existing leading content so both
+  signals coexist.
+- Requests rows have no `(branch)` context (review items expose the repo only),
+  so the badge resolves to either `↓ ` (no clone) or `  ` (clone present);
+  it surfaces the "would need to clone first" signal without claiming branch
+  state.
+- The asterisk in `⎇*` deliberately costs the second column rather than
+  rendering as a face mark, so muscle-memory parsing of the row's leading
+  glyphs stays unambiguous on non-emoji terminals.
 
 #### 3.6.4 The `w` submenu
 
