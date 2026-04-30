@@ -26,6 +26,42 @@ Customise the prompt character:
 }
 ```
 
+### Inline Timestamp
+
+The prompt line shows a wall-clock timestamp grouped with the
+command-duration so they read as a pair:
+
+```
+~/.config/decknix on ☁️  lachlan@example.com · 2026-04-30T14:32:15 · took 45s
+➜
+```
+
+Configure via `programs.starship.decknix.timestamp.*`:
+
+```nix
+{ ... }: {
+  programs.starship.decknix.timestamp = {
+    enable    = true;                   # default
+    format    = "%Y-%m-%dT%H:%M:%S";    # default (ISO 8601)
+    separator = " · ";                  # default
+    style     = "dimmed";               # default
+  };
+}
+```
+
+`format` accepts any [Chrono strftime](https://docs.rs/chrono/latest/chrono/format/strftime/) string. Common alternatives:
+
+| Format               | Renders as              |
+|----------------------|-------------------------|
+| `%Y-%m-%dT%H:%M:%S`  | `2026-04-30T14:32:15`   |
+| `%T`                 | `14:32:15`              |
+| `%H:%M`              | `14:32`                 |
+| `%a %H:%M`           | `Tue 14:32`             |
+| `%I:%M %p`           | `02:32 PM`              |
+
+Set `enable = false` to drop the timestamp and revert `cmd_duration`
+to upstream defaults.
+
 ## Delta (Diff Viewer)
 
 [Delta](https://github.com/dandavison/delta) is configured as the default git pager, providing syntax-highlighted diffs.
