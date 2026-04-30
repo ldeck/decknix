@@ -57,8 +57,18 @@ in
 
       wipInterval = mkOption {
         type = types.int;
-        default = 120;
-        description = "Seconds between GitHub WIP PR polls.";
+        default = 60;
+        description = ''
+          Seconds between GitHub WIP PR polls.
+
+          Tracks the user's open authored PRs; the Emacs sidebar mirrors
+          this list and uses it as the authoritative source for "this PR
+          is still open".  When a PR drops off the WIP list, the sidebar
+          treats that as a strong signal that GitHub state changed and
+          schedules an `gh pr view` refresh within ~30s, so this poll
+          interval is the dominant component of "Open → Merged" latency
+          for linked PRs.  Defaults to 60s to match `reviewsInterval`.
+        '';
       };
 
       reviewRepos = mkOption {
