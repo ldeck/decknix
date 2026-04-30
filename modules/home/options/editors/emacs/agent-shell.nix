@@ -7928,6 +7928,9 @@ only @-mentioned items."
                                      number
                                      status-str
                                      title)))
+                 ;; Tint the picker label yellow when a live session is
+                 ;; already reviewing this PR (mirrors the sidebar cue).
+                 (decknix--hub-request-tint-active label item)
                  (cons label item)))
              sorted)))
 
@@ -8395,12 +8398,15 @@ Shows result in the echo area and triggers a hub refresh on success."
                                         title))
                                (tagged (cons (cons 'decknix-type 'review) item))
                                (cmd (decknix--nav-make-item-cmd
-                                     tagged #'decknix--nav-hub-item-actions)))
+                                     tagged #'decknix--nav-hub-item-actions))
+                               (label (format "%3s %s#%d %s %s"
+                                              age repo number status-str short)))
+                          ;; Tint the transient suffix label yellow when
+                          ;; a live session is already reviewing this PR.
+                          (decknix--hub-request-tint-active label item)
                           (transient-parse-suffix
                            transient--prefix
-                           (list key
-                                 (format "%3s %s#%d %s %s" age repo number status-str short)
-                                 cmd))))
+                           (list key label cmd))))
                (list (transient-parse-suffix transient--prefix
                        '("q" "Back" transient-quit-one)))))))
 
@@ -8666,6 +8672,9 @@ Interactively: \\[universal-argument] N r limits to N items;
                                                      number
                                                      status-str
                                                      title)))
+                                 ;; Tint the picker label yellow when a
+                                 ;; live session is already reviewing this PR.
+                                 (decknix--hub-request-tint-active label item)
                                  (cons label item)))
                              items))
                            (prompt (format "Request [%d%s%s%s]: "
@@ -11401,6 +11410,31 @@ Checks buffer names for the pattern `pr-<repo>-<number>'."
                                              (buffer-name buf)))
                            (agent-shell-buffers)))))
 
+        (defvar decknix--hub-request-active-face
+          '(:foreground "#d7af5f")
+          "Face spec applied to Request rows / picker labels under
+review by a live agent session.  The same warm gold used by the
+`me' @-mention badge so the colour vocabulary stays consistent
+with other \"this is yours to act on\" signals.  Composed via
+`add-face-text-property' with `append', so per-column faces
+(repo, age, CI, status icons) keep their semantic colours and
+only the neutral text (title, `#NUMBER', separators) takes on
+the tint \u2014 a subtle whole-row cue that does not fight the
+column-by-column rendering.")
+
+        (defun decknix--hub-request-tint-active (str item)
+          "Tint STR yellow when ITEM is a Request with a live review session.
+Mutates STR in place via `add-face-text-property' (`append' merge
+order) and returns it for fluent use at call sites.  No-op when no
+live session exists, so callers can wrap unconditionally."
+          (when (and (stringp str)
+                     (> (length str) 0)
+                     (decknix--hub-request-has-live-session-p item))
+            (add-face-text-property 0 (length str)
+                                    decknix--hub-request-active-face
+                                    'append str))
+          str)
+
         ;; -- Hub: live-linked PR set --
         ;; Build a hash table of "owner/repo#number" keys for every PR
         ;; linked to any live agent-shell session. Used to hide WIP PRs
@@ -13456,6 +13490,9 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                                      (if draft
                                          (propertize short-title 'face 'font-lock-comment-face)
                                        short-title))))
+                  ;; Tint the row yellow when a live session is already
+                  ;; reviewing this PR (composes with per-column faces).
+                  (decknix--hub-request-tint-active line item)
                   (insert (propertize line
                                      'decknix-hub-url url
                                      'decknix-hub-type 'review
