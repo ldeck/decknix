@@ -11517,8 +11517,19 @@ They still appear under their owning live session (when expanded).")
           "Cache for PR status looked up via `gh pr view'.
 Keys are PR URLs; values are (TIMESTAMP . STATUS-ALIST).")
 
-        (defvar decknix--hub-pr-cache-ttl 300
-          "Time-to-live in seconds for cached PR lookups (default 5 min).")
+        (defvar decknix--hub-pr-cache-ttl 180
+          "Time-to-live in seconds for cached PR lookups (default 3 min).
+Used for cache-only renders where a stale entry should still be shown
+to the user but a background refresh is desirable.  Kept conservative
+to bound `gh pr view' invocations across many linked PRs.")
+
+        (defvar decknix--hub-pr-cache-orphan-ttl 30
+          "Refresh interval for PRs that just dropped off the hub.
+When `decknix--hub-pr-status' finds no entry in the hub WIP/Reviews
+data but has a non-terminal cached state, the PR has most likely
+merged or closed since the last hub poll.  This shorter TTL is used
+in that path so the columnar state catches up to GitHub within a
+single hub cycle (~60s) instead of waiting for the global TTL.")
 
         (defvar decknix--hub-pr-cache-file
           (expand-file-name "~/.config/decknix/hub/pr-cache.el")
@@ -12486,17 +12497,19 @@ the cache provides an immediate fallback instead of a bare spinner."
              ;; state is non-terminal, the PR has likely merged/closed
              ;; and fallen off the hub's WIP/Reviews lists — kick off an
              ;; async refresh so the cache picks up the new terminal state.
-             ;; Honour `decknix--hub-pr-cache-ttl': only fetch when the
-             ;; entry is actually stale, otherwise each sidebar render
-             ;; (2s + every hub-file change + every fetch completion)
-             ;; spawns a fresh `gh pr view' per non-terminal PR and the
+             ;; Use the shorter `decknix--hub-pr-cache-orphan-ttl' here
+             ;; so the columnar state catches up within a single hub
+             ;; cycle.  Still TTL-gated so each sidebar render (2s +
+             ;; every hub-file change + every fetch completion) doesn't
+             ;; spawn a fresh `gh pr view' per non-terminal PR — the
              ;; fetch-completion sentinel re-renders the sidebar, which
-             ;; pegs Emacs at 100% CPU with 10+ linked PRs.
+             ;; pegged Emacs at 100% CPU with 10+ linked PRs before
+             ;; this guard.
              (cache-result
               (let ((entry (gethash url decknix--hub-pr-cache)))
                 (when (and entry
                            (>= (- (float-time) (car entry))
-                               decknix--hub-pr-cache-ttl)
+                               decknix--hub-pr-cache-orphan-ttl)
                            (not (member (alist-get 'state cache-result)
                                         '("MERGED" "CLOSED"))))
                   (decknix--hub-pr-fetch-async url)))
