@@ -1308,9 +1308,40 @@ dedupes against live buffers before calling here."
                                conv-key))
                  (model-args (when saved-model
                                (list "--model" saved-model)))
-                 (agent-shell-auggie-acp-command
+                 ;; Augment the auggie ACP command for this resume.  We
+                 ;; MUST capture the augmented command in an explicit
+                 ;; `:client-maker' closure rather than via a dynamic
+                 ;; let-binding of `agent-shell-auggie-acp-command':
+                 ;; the upstream client-maker reads the variable lazily
+                 ;; (when the first ACP client is created), by which
+                 ;; point a dynamic let would have unwound — silently
+                 ;; dropping `--resume <sid>' so auggie spawns a fresh
+                 ;; conversation instead of restoring the saved one.
+                 ;; The buffer's prepopulated history then disagrees
+                 ;; with the running session and the resume looks
+                 ;; "wedged".  See `decknix-agent-session-new' (where
+                 ;; this lesson was first paid for) for the same
+                 ;; pattern.  `eval`+backquote is required because
+                 ;; default.el is dynamic-bound.
+                 (augmented-cmd
                   (append agent-shell-auggie-acp-command
                           ws-args model-args resume-args))
+                 (config
+                  (let ((base (agent-shell-auggie-make-agent-config)))
+                    (setf (alist-get :client-maker base)
+                          (eval `(lambda (buffer)
+                                   (agent-shell--make-acp-client
+                                    :command ,(car augmented-cmd)
+                                    :command-params ',(cdr augmented-cmd)
+                                    :environment-variables
+                                    (cond ((map-elt agent-shell-auggie-authentication :none)
+                                           agent-shell-auggie-environment)
+                                          ((map-elt agent-shell-auggie-authentication :login)
+                                           agent-shell-auggie-environment)
+                                          (t
+                                           (error "Invalid Auggie authentication")))
+                                    :context-buffer buffer)) t))
+                    base))
                  (agent-shell-display-action
                   (eval `(cons (lambda (buffer alist)
                                  (let ((win ,target-win))
@@ -1330,8 +1361,7 @@ dedupes against live buffers before calling here."
                                                     (file-directory-p workspace))
                                                workspace
                                              default-directory)))
-                    (agent-shell-start
-                     :config (agent-shell-auggie-make-agent-config)))))
+                    (agent-shell-start :config config))))
             ;; Use a timer to rename and prepopulate once the process is ready.
             (let ((sid session-id)
                   (n history-count)
