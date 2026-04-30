@@ -12764,14 +12764,14 @@ the state word since every downstream signal is moot."
             (let* ((wt-badge (decknix--hub-worktree-row-badge
                               repo-full branch))
                    (line (if grouped
-                            (format "   %s%s%s%s %s %s%s"
+                            (format "  %s%s%s%s %s %s%s"
                                     wt-badge
                                     refresh-str
                                     type-prefix num-str
                                     age-str
                                     state-word
                                     signal-zone)
-                          (format " %s%s%s%s%s %s %s%s"
+                          (format "%s%s%s%s%s %s %s%s"
                                   wt-badge
                                   refresh-str
                                   type-prefix repo-label num-str
@@ -12870,11 +12870,11 @@ Layout:
             (let* ((wt-badge (decknix--hub-worktree-row-badge
                               repo-full branch))
                    (line (if grouped
-                            (format "   %s%s%s %s %s%s"
+                            (format "  %s%s%s %s %s%s"
                                     wt-badge
                                     refresh-str branch-str sha7-str age-str
                                     signal-zone)
-                          (format " %s%s%s %s %s %s%s"
+                          (format "%s%s%s %s %s %s%s"
                                   wt-badge
                                   refresh-str repo-label branch-str sha7-str
                                   age-str signal-zone))))
@@ -13533,7 +13533,7 @@ session are hidden (both from the header count and the listing)."
                              ;; `↓ ' as defined in spec §3.6.3.
                              (wt-badge (decknix--hub-worktree-row-badge
                                         repo-full branch))
-                             (line (format "%s%3s #%-4d %s %s"
+                             (line (format "%s%3s #%d %s %s"
                                           wt-badge
                                           (propertize age 'face 'font-lock-comment-face)
                                           number
