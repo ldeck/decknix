@@ -180,7 +180,14 @@ The `decknix--context-update-header` function delegates to the unified header
   with a dimmed placeholder so the user can adjust toggles or `C-g` to
   quit — it no longer closes on them.
 - **WIP** section: My open PRs grouped by repository, with CI status and
-  branch names. `RET` opens the PR in the browser.
+  branch names. `RET` opens the PR in the browser.  **Worktree placeholders**
+  (spec §3.6.7): every `(repo, branch)` in the local worktree registry that
+  doesn't have a matching open PR in `github-wip.json` is rendered as a
+  dim `wip` row under the same repo sub-header (`⎇  2h wip  feature/foo`).
+  This surfaces freshly-created worktrees at t=0 instead of waiting for
+  `gh pr create` + GitHub Search indexing (~30s–2min).  Placeholder rows
+  carry no URL, so URL verbs (`o/b/c/r/s/M/R/m/x/C/D`) gracefully no-op;
+  the worktree submenu (`w`) is the verb that matters and works as usual.
 - Data is read from `~/.config/decknix/hub/` JSON files via
   `file-notify-add-watch` on the directory — sidebar refreshes the instant
   any hub file changes.
