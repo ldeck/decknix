@@ -164,7 +164,17 @@ The `decknix--context-update-header` function delegates to the unified header
   inside the picker, `M-s` flips the order ephemerally without touching
   the persisted state.  Shows age (color-coded: 3d+ = red, <3d = yellow),
   repo, PR number, CI status icon (✓/✗/⟳), and title.  `RET` opens the
-  PR in the browser.
+  PR in the browser.  **Active-review tint**: when a live agent-shell
+  session is already reviewing a request (matched on the `pr-<repo>-<n>`
+  buffer-name pattern), the row is tinted gold (`#d7af5f`, the same
+  warm hue as the `me` @-mention badge) so it reads at a glance as
+  "already in flight, do not dispatch a second review session".  The
+  tint composes with per-column faces via `add-face-text-property`
+  (`append`), so repo / age / CI / status icons keep their semantic
+  colours and only the neutral text (title, `#NUMBER`, separators)
+  receives the gold.  The `◉` glyph on the row is preserved as a
+  compact secondary cue.  The same tint is applied in the `r` picker
+  (consult, transient, and consult-multi variants).
 - **Requests picker (`r`)**: a single entry-point for navigating reviews.
   Toggles are all minibuffer-local and never leak into the sidebar's
   global filters (a refresh-suspend flag freezes sidebar re-renders
