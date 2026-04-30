@@ -504,6 +504,58 @@ stale workspace paths don't accumulate:
 This dovetails with the planned #69 "worktree-aware sessions" work — that
 issue can build on this registry rather than introduce its own.
 
+#### 3.6.7 WIP placeholder rows for worktrees without a PR
+
+The WIP section is fed by the hub daemon's `github-wip.json`, which only
+contains PRs the user has already authored on GitHub.  When a fresh
+worktree is created (`C-c A n` or the `w n` submenu), the user expects
+to see it in WIP **immediately** — but `gh pr create` may not have run
+yet, and even after it does, GitHub's Search index lags by 30 seconds
+to a couple of minutes before the row appears.
+
+To close that gap, the WIP section is augmented with **placeholder
+rows** synthesised from the local worktree registry (§3.6.1).  For
+every `(repo, branch)` in the registry that is *not* the primary
+clone path *and* does not have a matching open PR in `decknix--hub-wip`,
+the section emits one placeholder row under the same repo sub-header
+as a real PR would use:
+
+```
+⎇  2h wip  feature/CONN-18
+```
+
+- The first 2 columns are the standard worktree badge (§3.6.3) so a
+  branch in a live session badges `⎇*`.
+- The age column shows the worktree directory's mtime as a relative
+  age, mirroring the format of real WIP rows (`now`, `5m`, `2h`, `3d`).
+- The state-word column reads `wip` in `font-lock-comment-face`,
+  taking the slot a real row would use for `#NNN` + CI signals.  The
+  signal zone is collapsed because none of those signals exist for a
+  branch-without-a-PR.
+- The branch name takes the title slot.  Long names elide with `…`.
+
+Placeholder rows carry text properties `decknix-hub-type 'wip-placeholder`,
+`decknix-hub-repo`, `decknix-hub-branch`, and `decknix-hub-worktree-path`,
+but **no** `decknix-hub-url` (there is no PR yet).  The `RET` dispatch
+routes them through `decknix-sidebar-wip-menu` so the worktree submenu
+(`w`) is reachable; URL-dependent verbs (`o`, `b`, `c`, `r`, `s`, `M`,
+`R`, `m`, `x`, `C`, `D`) gracefully no-op with a "No URL" minibuffer
+message rather than crashing, preserving the §3.1 stable-shape contract.
+
+When a placeholder's PR finally lands in `github-wip.json`, the
+deduplication filter drops the placeholder on the next render and the
+real PR row takes its place — the visual continuity is preserved
+because both rows live under the same repo sub-header and use the
+same column layout.  Repos with **only** placeholder rows (no real
+PRs in WIP yet) appear at the bottom of the WIP section with their
+own sub-header, so a brand-new worktree on a clone the user hasn't
+otherwise touched today still surfaces.
+
+The org-visibility filter (§3.5) applies uniformly to placeholder
+rows, so users who scope WIP to a single org don't see worktrees from
+others.  The `L hide-linked` toggle is a no-op on placeholder rows
+because there is no PR to link.
+
 ## 4. Out of scope for this spec
 
 - Changing the `r` / `w` pickers themselves (already stable).

@@ -9829,11 +9829,18 @@ directly — see `decknix-sidebar-primary-action'."
           (let* ((ctx (decknix--sidebar-row-context))
                  (type (alist-get 'decknix-hub-type ctx))
                  (cmd (pcase type
-                        ('review      #'decknix-sidebar-request-menu)
-                        ('wip         #'decknix-sidebar-wip-menu)
-                        ('task        #'decknix-sidebar-task-menu)
-                        ('linked-pr   #'decknix-sidebar-linked-pr-menu)
-                        ('linked-repo #'decknix-sidebar-linked-repo-menu))))
+                        ('review            #'decknix-sidebar-request-menu)
+                        ('wip               #'decknix-sidebar-wip-menu)
+                        ;; Placeholder rows reuse the WIP menu — only the
+                        ;; worktree submenu (`w') is meaningful since
+                        ;; there is no PR yet, but the URL-dependent
+                        ;; verbs all degrade to a "No URL" message rather
+                        ;; than crashing, so the stable-shape policy
+                        ;; (spec §3.2.1) is preserved.
+                        ('wip-placeholder   #'decknix-sidebar-wip-menu)
+                        ('task              #'decknix-sidebar-task-menu)
+                        ('linked-pr         #'decknix-sidebar-linked-pr-menu)
+                        ('linked-repo       #'decknix-sidebar-linked-repo-menu))))
             (cond
              ((and ctx cmd)
               (setq decknix--sidebar-action-context ctx)
@@ -13462,11 +13469,103 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
       ''
       + optionalString cfg.hub.enable ''
 
+        (defun decknix--hub-wip-placeholder-rows ()
+          "Return alist ((REPO-FULL . ((BRANCH . PATH) ...)) ...) of
+worktrees lacking a matching open PR in `decknix--hub-wip'.
+
+Each `decknix-hub-worktree-clones' entry contributes one row per
+worktree-listed branch whose path is not the primary clone and whose
+branch does not already appear as a PR for the same repo in the WIP
+data.  This lets the WIP section surface a freshly-created worktree
+at t=0, before `gh pr create' has run or before GitHub's Search
+index has caught up to a freshly-pushed PR.
+
+Repo keys are canonicalised (lowercased) so the dedup against WIP
+data is case-insensitive — `gh search prs' may return mixed casing
+for `owner/repo' but the worktree registry stores lowercase."
+          (let* ((data decknix--hub-wip)
+                 (all-repos (when data (alist-get 'repos data)))
+                 (existing (make-hash-table :test 'equal))
+                 (out nil))
+            (dolist (repo-entry all-repos)
+              (let* ((repo (decknix--hub-worktree-canonical-repo
+                            (alist-get 'repo repo-entry)))
+                     (branches (delq nil
+                                     (mapcar (lambda (pr)
+                                               (alist-get 'branch pr))
+                                             (alist-get 'prs repo-entry)))))
+                (when repo
+                  (puthash repo branches existing))))
+            (dolist (clone (decknix-hub-worktree-clones))
+              (let* ((repo (car clone))
+                     (primary (cdr clone))
+                     (worktrees (decknix-hub-worktree-list repo))
+                     (taken (gethash repo existing))
+                     rows)
+                (dolist (wt worktrees)
+                  (let ((branch (car wt))
+                        (path (cdr wt)))
+                    (when (and branch path
+                               (not (member branch taken))
+                               (not (and primary
+                                         (file-exists-p path)
+                                         (file-exists-p primary)
+                                         (file-equal-p path primary))))
+                      (push (cons branch path) rows))))
+                (when rows
+                  (push (cons repo (nreverse rows)) out))))
+            (nreverse out)))
+
+        (defun decknix--hub-render-wip-placeholder (line-num repo-full wt)
+          "Render a single WIP placeholder row for WT under REPO-FULL.
+WT is `(BRANCH . PATH)' from the worktree registry.  Returns updated
+LINE-NUM.
+
+Placeholder rows surface a local worktree that doesn't yet have an
+open PR (or whose PR hasn't been picked up by the hub poller).  The
+column shape mirrors a real WIP row so the worktree badge column,
+age column, and title column stay aligned, but the `#N' + CI signal
+zone collapses to the dim state-word `wip ' since none of those
+signals exist for a branch-without-a-PR.  The row carries enough
+text properties (`repo', `branch', `worktree-path') for the worktree
+submenu to operate on it, but no `decknix-hub-url' so the row's
+primary action is a no-op until a PR materialises."
+          (let* ((branch (car wt))
+                 (path (cdr wt))
+                 (mtime (and path (file-exists-p path)
+                             (file-attribute-modification-time
+                              (file-attributes path))))
+                 (age (if mtime
+                          (decknix--hub-format-age
+                           (format-time-string "%FT%T%z" mtime))
+                        "?"))
+                 (wt-badge (decknix--hub-worktree-row-badge repo-full branch))
+                 (max-title (max 8 (- (window-width) 14)))
+                 (short-branch (if (> (length branch) max-title)
+                                   (concat (substring branch 0 (- max-title 1)) "…")
+                                 branch))
+                 (line (format "%s%3s %-4s %s"
+                               wt-badge
+                               (propertize age 'face 'font-lock-comment-face)
+                               (propertize "wip" 'face 'font-lock-comment-face)
+                               (propertize short-branch
+                                           'face 'font-lock-comment-face))))
+            (insert (propertize line
+                                'decknix-hub-type 'wip-placeholder
+                                'decknix-hub-repo repo-full
+                                'decknix-hub-branch branch
+                                'decknix-hub-worktree-path path)
+                    "\n")
+            (1+ line-num)))
+
         (defun decknix--hub-render-wip (line-num)
           "Render the WIP (my open PRs) section. Returns updated LINE-NUM.
 Respects `decknix--hub-org-visibility'. Shows time since last update.
 Honours `decknix--hub-wip-hide-linked' — PRs linked to a live
-session are hidden (both from the header count and the listing)."
+session are hidden (both from the header count and the listing).
+Surfaces local worktrees lacking a matching open PR as dim
+`wip' placeholder rows so a freshly-created worktree appears at
+t=0 instead of waiting for the PR + GitHub Search indexing."
           (let* ((data decknix--hub-wip)
                  (all-repos (when data (alist-get 'repos data)))
                  ;; Compute live-linked set once; empty when toggle is off.
@@ -13488,15 +13587,43 @@ session are hidden (both from the header count and the listing)."
                                             (alist-get 'repo r) pr))
                                  (alist-get 'prs r))))
                          (or all-repos '())))
-                 (total (cl-reduce #'+ (mapcar
-                                        (lambda (r)
-                                          (cl-count-if
-                                           (lambda (pr)
-                                             (funcall pr-visible-p
-                                                      (alist-get 'repo r) pr))
-                                           (alist-get 'prs r)))
-                                        repos)
-                                   :initial-value 0)))
+                 ;; Worktrees with no matching open PR — surfaced as
+                 ;; placeholder rows so newly-created worktrees show up
+                 ;; in WIP at t=0 instead of waiting for `gh pr create'
+                 ;; + GitHub Search indexing.
+                 (placeholders (decknix--hub-wip-placeholder-rows))
+                 ;; Repos with placeholders that are NOT already in
+                 ;; `repos' (no real PRs visible).  These get a fresh
+                 ;; sub-header below the PR-bearing repos.
+                 (real-repo-keys
+                  (let ((set (make-hash-table :test 'equal)))
+                    (dolist (r repos)
+                      (let ((k (decknix--hub-worktree-canonical-repo
+                                (alist-get 'repo r))))
+                        (when k (puthash k t set))))
+                    set))
+                 (placeholder-only-repos
+                  (seq-filter
+                   (lambda (p)
+                     (and (decknix--hub-item-visible-p (car p))
+                          (not (gethash (car p) real-repo-keys))))
+                   placeholders))
+                 (pr-total (cl-reduce #'+ (mapcar
+                                          (lambda (r)
+                                            (cl-count-if
+                                             (lambda (pr)
+                                               (funcall pr-visible-p
+                                                        (alist-get 'repo r) pr))
+                                             (alist-get 'prs r)))
+                                          repos)
+                                     :initial-value 0))
+                 (placeholder-total
+                  (apply #'+
+                         (mapcar (lambda (p)
+                                   (if (decknix--hub-item-visible-p (car p))
+                                       (length (cdr p)) 0))
+                                 placeholders)))
+                 (total (+ pr-total placeholder-total)))
             (when (> total 0)
               (decknix--sidebar-render-section-header
                (format "WIP (%d)" total)
@@ -13504,11 +13631,15 @@ session are hidden (both from the header count and the listing)."
               (setq line-num (1+ line-num))
               (dolist (repo-entry repos)
                 (let* ((repo-full (or (alist-get 'repo repo-entry) ""))
+                       (repo-key (decknix--hub-worktree-canonical-repo
+                                  repo-full))
                        (repo (car (last (split-string repo-full "/"))))
                        (prs (seq-filter
                              (lambda (pr) (funcall pr-visible-p repo-full pr))
-                             (alist-get 'prs repo-entry))))
-                  (when prs
+                             (alist-get 'prs repo-entry)))
+                       (placeholder-branches
+                        (cdr (assoc repo-key placeholders))))
+                  (when (or prs placeholder-branches)
                     ;; Repo sub-header
                     (insert (propertize (format "  %s" repo)
                                        'face 'font-lock-type-face)
@@ -13592,7 +13723,30 @@ session are hidden (both from the header count and the listing)."
                                            'decknix-hub-number number
                                            'decknix-hub-branch branch)
                                 "\n")
-                        (setq line-num (1+ line-num)))))))
+                        (setq line-num (1+ line-num))))
+                    ;; Worktree placeholder rows for branches with no
+                    ;; matching open PR yet — folded under the same
+                    ;; repo sub-header so a freshly-pushed branch
+                    ;; appears alongside the repo's other PRs while
+                    ;; the GitHub Search index catches up.
+                    (dolist (wt placeholder-branches)
+                      (setq line-num
+                            (decknix--hub-render-wip-placeholder
+                             line-num repo-full wt))))))
+              ;; Repos that have only placeholder worktrees (no open
+              ;; PRs in WIP yet) — render a fresh sub-header so these
+              ;; show up at the bottom of the WIP section.
+              (dolist (entry placeholder-only-repos)
+                (let* ((repo-full (car entry))
+                       (repo (car (last (split-string repo-full "/")))))
+                  (insert (propertize (format "  %s" repo)
+                                      'face 'font-lock-type-face)
+                          "\n")
+                  (setq line-num (1+ line-num))
+                  (dolist (wt (cdr entry))
+                    (setq line-num
+                          (decknix--hub-render-wip-placeholder
+                           line-num repo-full wt)))))
               (insert "\n")
               (setq line-num (1+ line-num))))
           line-num)
