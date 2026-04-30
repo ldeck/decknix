@@ -9357,36 +9357,37 @@ message so users can find the tracking ticket."
         ;; -- Five hub-row transients (spec §3.2.1) --
 
         (transient-define-prefix decknix-sidebar-request-menu ()
-          "Action menu for a Requests row (PR review awaiting me)."
+          "Action menu for a Requests row (PR review awaiting me).
+Per spec §3.7, review verbs (`r s c R') and the worktree submenu
+live under the uppercase category keys `R Review…' / `W Worktree…'
+— a one-tap step costs +1 keypress vs. the pre-§3.7 layout but
+unifies the menu with the sidebar-global `R W S' fast-paths."
           [:description decknix--sidebar-action-description
            ["Navigate"
             ("o" decknix--sb-act-open)
             ("b" decknix--sb-act-browser)
             ("c" decknix--sb-act-copy-url)]
-           ["Review"
-            ("r" decknix--sb-act-review)
-            ("s" decknix--sb-act-review-split)
-            ("M" decknix--sb-act-comment)
-            ("R" decknix--sb-act-review-comment)]
+           ["Submenus"
+            ("R" decknix--sb-act-review-submenu)
+            ("W" decknix--sb-act-worktree)]
            ["Pipeline"
             ("C" decknix--sb-act-jump-ci)]
            ["Other"
-            ("w" decknix--sb-act-worktree)
             ("L" decknix--sb-act-reveal)]]
           [("q" "Cancel" transient-quit-one)])
 
         (transient-define-prefix decknix-sidebar-wip-menu ()
-          "Action menu for a WIP row (my open PR)."
+          "Action menu for a WIP row (my open PR).
+Per spec §3.7, review verbs and the worktree submenu live under
+the uppercase category keys `R Review…' / `W Worktree…'."
           [:description decknix--sidebar-action-description
            ["Navigate"
             ("o" decknix--sb-act-open)
             ("b" decknix--sb-act-browser)
             ("c" decknix--sb-act-copy-url)]
-           ["Review"
-            ("r" decknix--sb-act-review)
-            ("s" decknix--sb-act-review-split)
-            ("M" decknix--sb-act-comment)
-            ("R" decknix--sb-act-review-comment)]
+           ["Submenus"
+            ("R" decknix--sb-act-review-submenu)
+            ("W" decknix--sb-act-worktree)]
            ["Status"
             ("m" decknix--sb-act-merge)
             ("x" decknix--sb-act-close)]
@@ -9395,40 +9396,46 @@ message so users can find the tracking ticket."
             ("D" decknix--sb-act-jump-deploy
              :inapt-if decknix--sb-act-deploy-absent-p)]
            ["Other"
-            ("w" decknix--sb-act-worktree)
             ("L" decknix--sb-act-reveal)]]
           [("q" "Cancel" transient-quit-one)])
 
         (transient-define-prefix decknix-sidebar-task-menu ()
-          "Action menu for a Tasks row (Jira issue)."
+          "Action menu for a Tasks row (Jira issue).
+Per spec §3.7, `i investigate' graduated into `S Session…'.  The
+spec verb moved from uppercase `S' to lowercase `s' to free `S'
+for the Session category key.  `M comment' stays at top level
+because Tasks have no Review submenu to receive it."
           [:description decknix--sidebar-action-description
            ["Navigate"
             ("o" decknix--sb-act-open)
             ("b" decknix--sb-act-browser)
             ("c" decknix--sb-act-copy-url)]
-           ["Session"
-            ("i" decknix--sb-act-investigate)
+           ["Submenus"
+            ("S" decknix--sb-act-session-submenu)]
+           ["Direct"
             ("M" decknix--sb-act-comment)]
            ["Jira"
             ("k" decknix--sb-act-copy-jira-key)
             ("t" decknix--sb-act-transition)
             ("A" decknix--sb-act-align-jira)
             ("y" decknix--sb-act-analyze)
-            ("S" decknix--sb-act-spec)]]
+            ("s" decknix--sb-act-spec)]]
           [("q" "Cancel" transient-quit-one)])
 
         (transient-define-prefix decknix-sidebar-linked-pr-menu ()
-          "Action menu for a linked PR row (under a session)."
+          "Action menu for a linked PR row (under a session).
+Per spec §3.7, review verbs (`r s c R') and unlink (`u') graduated
+into `R Review…' and `S Session…'.  Worktree moved from `w' to
+the canonical uppercase `W'."
           [:description decknix--sidebar-action-description
            ["Navigate"
             ("o" decknix--sb-act-open)
             ("b" decknix--sb-act-browser)
             ("c" decknix--sb-act-copy-url)]
-           ["Review"
-            ("r" decknix--sb-act-review)
-            ("s" decknix--sb-act-review-split)
-            ("M" decknix--sb-act-comment)
-            ("R" decknix--sb-act-review-comment)]
+           ["Submenus"
+            ("R" decknix--sb-act-review-submenu)
+            ("W" decknix--sb-act-worktree)
+            ("S" decknix--sb-act-session-submenu)]
            ["Status"
             ("m" decknix--sb-act-merge
              :inapt-if decknix--sb-act-not-authored-p)
@@ -9438,28 +9445,27 @@ message so users can find the tracking ticket."
             ("C" decknix--sb-act-jump-ci)
             ("D" decknix--sb-act-jump-deploy
              :inapt-if decknix--sb-act-deploy-absent-p)]
-           ["Session"
-            ("u" decknix--sb-act-unlink)
-            ("w" decknix--sb-act-worktree)
+           ["Other"
             ("L" decknix--sb-act-reveal)]]
           [("q" "Cancel" transient-quit-one)])
 
         (transient-define-prefix decknix-sidebar-linked-repo-menu ()
-          "Action menu for a linked repo row (under a session)."
+          "Action menu for a linked repo row (under a session).
+Per spec §3.7, `i investigate' and `u unlink' graduated into
+`S Session…'; worktree moved from `w' to `W'."
           [:description decknix--sidebar-action-description
            ["Navigate"
             ("o" decknix--sb-act-open)
             ("b" decknix--sb-act-browser)
             ("c" decknix--sb-act-copy-url)]
-           ["Session"
-            ("i" decknix--sb-act-investigate)
-            ("u" decknix--sb-act-unlink)]
+           ["Submenus"
+            ("W" decknix--sb-act-worktree)
+            ("S" decknix--sb-act-session-submenu)]
            ["Pipeline"
             ("C" decknix--sb-act-jump-ci)
             ("D" decknix--sb-act-jump-deploy
              :inapt-if decknix--sb-act-deploy-absent-p)]
            ["Other"
-            ("w" decknix--sb-act-worktree)
             ("L" decknix--sb-act-reveal)]]
           [("q" "Cancel" transient-quit-one)])
 
@@ -9822,7 +9828,89 @@ current `(repo, branch, state)' are dimmed via `:inapt-if'."
           (interactive)
           (decknix--sidebar-call-transient #'decknix-sidebar-worktree-menu))
 
+        ;; -- Category submenus (Magit-inspired; spec §3.7) --
+        ;;
+        ;; The Action Menu (RET) advertises uppercase category keys
+        ;; — `R Review… / W Worktree… / S Session…' — that mirror
+        ;; the sidebar-global section keys (`r w l p s').  Pressing
+        ;; the uppercase letter at the sidebar-global level (without
+        ;; opening the Action Menu first) routes straight to the
+        ;; row's matching submenu, giving power users a one-tap path
+        ;; while RET stays the discoverable hub for everyone else.
+        ;;
+        ;; The submenus inherit `decknix--sidebar-action-context'
+        ;; from the dispatching command (RET-via-row-menu or the
+        ;; sidebar-global `R W S' handlers), so suffixes always have
+        ;; a populated context regardless of entry point.
 
+        (defun decknix--sb-act-review-rows-p ()
+          "Non-nil when the active row supports review verbs."
+          (memq (decknix--sidebar-action-prop 'decknix-hub-type)
+                '(review wip wip-placeholder linked-pr)))
+
+        (defun decknix--sb-act-no-review-p ()
+          "Inapt predicate: dim Review submenu entry on rows without review."
+          (not (decknix--sb-act-review-rows-p)))
+
+        (defun decknix--sb-act-session-rows-p ()
+          "Non-nil when the active row supports session verbs.
+Phase 1 covers `unlink' (linked-pr/linked-repo) and `investigate'
+(task/linked-repo).  Phase 2 will add link/move-to-session for
+review/wip rows; until then those rows have no session verbs."
+          (memq (decknix--sidebar-action-prop 'decknix-hub-type)
+                '(task linked-pr linked-repo)))
+
+        (defun decknix--sb-act-no-session-p ()
+          "Inapt predicate: dim Session submenu entry on rows without session verbs."
+          (not (decknix--sb-act-session-rows-p)))
+
+        (defun decknix--sb-act-not-task-p ()
+          "Non-nil when the active row is not a task (for `i' investigate)."
+          (not (eq (decknix--sidebar-action-prop 'decknix-hub-type) 'task)))
+
+        (defun decknix--sb-act-not-linked-p ()
+          "Non-nil when the active row is not linked to a session."
+          (not (decknix--sidebar-action-prop 'decknix-hub-conv-key)))
+
+        (transient-define-prefix decknix-sidebar-review-menu ()
+          "Review submenu (spec §3.7).
+Four verbs with stable layout; the whole menu is meaningful only
+on rows that carry a PR URL (Request, WIP, WIP-placeholder, Linked
+PR).  Sidebar-global `R' and the in-menu `R Review…' entry both
+route here."
+          [:description decknix--sidebar-action-description
+           ["Review"
+            ("r" decknix--sb-act-review)
+            ("s" decknix--sb-act-review-split)
+            ("c" decknix--sb-act-comment)
+            ("R" decknix--sb-act-review-comment)]]
+          [("q" "Cancel" transient-quit-one)])
+
+        (transient-define-suffix decknix--sb-act-review-submenu ()
+          "Open the review submenu for the active row."
+          :description "Review…"
+          :inapt-if #'decknix--sb-act-no-review-p
+          (interactive)
+          (decknix--sidebar-call-transient #'decknix-sidebar-review-menu))
+
+        (transient-define-prefix decknix-sidebar-session-menu ()
+          "Session submenu (spec §3.7).
+Stable-shape skeleton — Phase 1 hosts the verbs that graduated from
+top-level (`u' unlink, `i' investigate).  Phase 2 will add `l'
+link-to-session and `m' move-to-session.  Sidebar-global `S' and the
+in-menu `S Session…' entry both route here."
+          [:description decknix--sidebar-action-description
+           ["Session"
+            ("u" decknix--sb-act-unlink :inapt-if decknix--sb-act-not-linked-p)
+            ("i" decknix--sb-act-investigate :inapt-if decknix--sb-act-not-task-p)]]
+          [("q" "Cancel" transient-quit-one)])
+
+        (transient-define-suffix decknix--sb-act-session-submenu ()
+          "Open the session submenu for the active row."
+          :description "Session…"
+          :inapt-if #'decknix--sb-act-no-session-p
+          (interactive)
+          (decknix--sidebar-call-transient #'decknix-sidebar-session-menu))
 
 
         ;; -- Dispatcher and primary action --
@@ -9934,6 +10022,66 @@ With prefix ALL, capture the full history (see `decknix-agent-review')."
           (kbd "M-RET") #'decknix-sidebar-primary-action)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "M-<return>") #'decknix-sidebar-primary-action)
+
+        ;; == Category submenu fast-paths (spec §3.7) ==
+        ;; `R W S' at sidebar-global level skip the Action Menu hub
+        ;; and open the row's matching submenu directly.  Mirrors the
+        ;; uppercase category keys advertised inside the Action Menu
+        ;; (RET) so muscle memory carries from "open menu, see R" to
+        ;; "press R from anywhere on the row".  Lowercase `r w l p s'
+        ;; keep their existing sidebar-global meaning (section nav,
+        ;; sessions transient) — the uppercase set is purely additive.
+
+        (defun decknix--sidebar-open-category (cmd applies-p label)
+          "Open submenu CMD for the row at point if APPLIES-P, else explain.
+LABEL names the category for the user-facing message."
+          (let* ((ctx (decknix--sidebar-row-context))
+                 (type (alist-get 'decknix-hub-type ctx)))
+            (cond
+             ((null type)
+              (message "No actionable row at point"))
+             ((not (funcall applies-p type))
+              (message "No %s actions on this %s row" label type))
+             (t
+              (setq decknix--sidebar-action-context ctx)
+              (decknix--sidebar-call-transient cmd)))))
+
+        (defun decknix-sidebar-open-review-menu ()
+          "Open the Review submenu for the hub row at point (spec §3.7).
+Bound to `R' at sidebar-global level."
+          (interactive)
+          (decknix--sidebar-open-category
+           #'decknix-sidebar-review-menu
+           (lambda (type)
+             (memq type '(review wip wip-placeholder linked-pr)))
+           "review"))
+
+        (defun decknix-sidebar-open-worktree-menu ()
+          "Open the Worktree submenu for the hub row at point (spec §3.7).
+Bound to `W' at sidebar-global level."
+          (interactive)
+          (decknix--sidebar-open-category
+           #'decknix-sidebar-worktree-menu
+           (lambda (type)
+             (memq type '(review wip wip-placeholder linked-pr linked-repo)))
+           "worktree"))
+
+        (defun decknix-sidebar-open-session-menu ()
+          "Open the Session submenu for the hub row at point (spec §3.7).
+Bound to `S' at sidebar-global level."
+          (interactive)
+          (decknix--sidebar-open-category
+           #'decknix-sidebar-session-menu
+           (lambda (type)
+             (memq type '(task linked-pr linked-repo)))
+           "session"))
+
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "R") #'decknix-sidebar-open-review-menu)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "W") #'decknix-sidebar-open-worktree-menu)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "S") #'decknix-sidebar-open-session-menu)
 
         ;; == Sidebar state persistence ==
         ;; Saves toggle states and previous live sessions across restarts.

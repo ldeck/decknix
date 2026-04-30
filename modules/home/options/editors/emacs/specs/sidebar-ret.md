@@ -114,28 +114,36 @@ knows what they're acting on.
 
 #### 3.2.1 Hub rows (Requests, WIP, Task, Linked PR, Linked Repo)
 
+The Action Menu reorganised in §3.7 (PR 1) graduated review-family
+(`r s c R`) and link-family (`u i`) verbs into category submenus
+behind uppercase keys.  Direct verbs (navigate / status / pipeline)
+remain at top level.
+
 | Verb                              | Key   | Req | WIP | Task | LPR          | LRepo        |
 |-----------------------------------|-------|-----|-----|------|--------------|--------------|
 | Open here (xwidget/EWW)           | `o`   | •   | •   | •    | •            | •            |
 | Open in browser                   | `b`   | •   | •   | •    | •            | •            |
 | Copy URL                          | `c`   | •   | •   | •    | •            | •            |
-| Start review session              | `r`   | •   | •   | —    | •            | —            |
-| Start review (split)              | `s`   | •   | •   | —    | •            | —            |
-| Start investigate session         | `i`   | —   | —   | •    | —            | •            |
+| **Review… submenu**               | `R`   | •   | •   | —    | •            | —            |
+|  ↳ start review                   | `R r` | •   | •   | —    | •            | —            |
+|  ↳ start review (split)           | `R s` | •   | •   | —    | •            | —            |
+|  ↳ comment                        | `R c` | •   | •   | —    | •            | —            |
+|  ↳ review-comment on PR           | `R R` | •   | •   | —    | •            | —            |
+| **Worktree… submenu**             | `W`   | •   | •   | —    | •            | •            |
+| **Session… submenu**              | `S`   | —   | —   | •    | •            | •            |
+|  ↳ unlink from session            | `S u` | —   | —   | —    | •            | •            |
+|  ↳ start investigate session      | `S i` | —   | —   | •    | —            | —            |
+| Comment (Task-direct)             | `M`   | —   | —   | •    | —            | —            |
 | Merge                             | `m`   | —   | •   | —    | ∘ authored   | —            |
 | Close                             | `x`   | —   | •   | —    | ∘ authored   | —            |
-| Comment                           | `M`   | •   | •   | •    | •            | —            |
-| Review-comment on PR              | `R`   | •   | •   | —    | •            | —            |
 | Jump to CI run                    | `C`   | •   | •   | —    | •            | •            |
 | Jump to deploy                    | `D`   | —   | ∘   | —    | ∘            | ∘            |
-| Unlink from session               | `u`   | —   | —   | —    | •            | •            |
+| Reveal in Sessions picker         | `L`   | •   | •   | —    | •            | •            |
 | Copy Jira key                     | `k`   | —   | —   | •    | —            | —            |
 | Transition status                 | `t`   | —   | —   | •    | —            | —            |
 | Align Jira status with code       | `A`   | —   | —   | •    | —            | —            |
 | Analyze (AI)                      | `y`   | —   | —   | •    | —            | —            |
-| Define/update spec                | `S`   | —   | —   | •    | —            | —            |
-| Worktree… (nested transient)      | `w`   | •   | •   | —    | •            | •            |
-| Reveal in Sessions picker         | `L`   | •   | •   | —    | •            | •            |
+| Define/update spec                | `s`   | —   | —   | •    | —            | —            |
 
 Notes:
 - `∘ authored` = only enabled when the current user is the PR author. The
@@ -151,12 +159,16 @@ Notes:
   stable-menu-shape rule.
 - `L` (reveal) = open the Sessions picker pre-filtered to this PR's owning
   session, useful from a linked-PR row under Live/Previous.
-- `R` vs `M` distinguishes "PR review comment" from "generic comment/issue
-  comment" — needed because they're different gh subcommands.
-- `w` opens the **worktree submenu** (§3.6) — unified across every row that
-  carries a branch. Supersedes the earlier linked-repo-only `W` "show local
-  worktree" verb; `W` is now free on hub rows.
-- Tasks deliberately skip `w`: a Jira ticket has no branch of its own. If the
+- `R c` vs `M` distinguishes "PR review comment" from "generic comment/issue
+  comment" — they are different gh subcommands.  On Tasks, `M` stays at top
+  level because Tasks have no Review submenu to receive it.
+- `W` opens the **worktree submenu** (§3.6) — unified across every row that
+  carries a branch.  Promoted from the lowercase `w` (pre-§3.7) to the
+  uppercase category key for consistency with `R` and `S`.
+- `S` opens the **session submenu** (§3.7) — destination for verbs that act
+  on the row's relationship with an agent session (`u` unlink, `i`
+  investigate; PR 2 will add `l` link, `m` move).
+- Tasks deliberately skip `W`: a Jira ticket has no branch of its own. If the
   ticket is linked to a PR the relevant row to act on is the linked PR, not
   the task.
 
@@ -555,6 +567,77 @@ The org-visibility filter (§3.5) applies uniformly to placeholder
 rows, so users who scope WIP to a single org don't see worktrees from
 others.  The `L hide-linked` toggle is a no-op on placeholder rows
 because there is no PR to link.
+
+### 3.7 Category submenus & uppercase shortcuts
+
+The Action Menu accumulated 12–15 verbs per row variant by the time
+worktree/linked-pr/linked-repo support landed.  Every primary letter
+was contested (the `M` "comment" key collided with future `M`-as-move,
+`r` and `s` blocked their own categories, and adding link/move/auto-link
+verbs would have squeezed an already-tight keyspace further).
+
+Two complementary entry points resolve the pressure without breaking
+the discovery affordance:
+
+| Entry | Audience | Behaviour |
+|---|---|---|
+| `RET` on a row | "show me what's available" — discoverable | Opens the row's Action Menu transient.  The menu's columns advertise the uppercase category keys (`R Review… / W Worktree… / S Session…`) so muscle memory accretes from looking at it. |
+| `R` `W` `S` at sidebar-global | "I know the verb-family" — power-user fast path | Skip the Action Menu and open the named submenu directly against the row at point. |
+
+**Lowercase sidebar-global keys are unchanged.** `r w l p s a v h ?`
+still serve section navigation / sessions transient / actions / review /
+help; uppercase `T K P` still serve toggles / hide-keys / restore-all.
+The uppercase trio `R W S` is purely additive.
+
+#### 3.7.1 The doubled-key principle
+
+Inside each submenu, the canonical/primary verb shares the lowercase
+of the category key (Magit's "doubled-key" pattern):
+
+```
+R Review…       contains  r start, s split, c comment, R review-comment
+W Worktree…     contains  o open, n new, s session, x remove, …
+S Session…      contains  u unlink, i investigate, (l link, m move — PR 2)
+```
+
+So `R r` is "Review > start review" and `R R` is "Review >
+review-comment" — the doubled letter mirrors the category and gives
+power users a memorable shortcut for the primary verb.
+
+#### 3.7.2 Per-row applicability
+
+The category submenu opens only on rows where it has at least one
+applicable verb.  When the row type has no matching verbs the
+sidebar-global key shows a friendly message and the in-menu category
+entry is omitted entirely (so the menu shape stays minimal per row
+type rather than dimming an empty submenu).
+
+| Row type        | `R` Review | `W` Worktree | `S` Session |
+|-----------------|------------|--------------|-------------|
+| Request         | ✓          | ✓            | — (PR 2: link/move) |
+| WIP             | ✓          | ✓            | — (PR 2: link/move) |
+| WIP placeholder | ✓ (no-URL verbs no-op) | ✓ | — (PR 2) |
+| Task            | —          | — (no branch) | ✓ (`i`) |
+| Linked PR       | ✓          | ✓            | ✓ (`u`)     |
+| Linked Repo     | —          | ✓            | ✓ (`u i`)   |
+
+PR 2 will add `S l` (link-to-session) and `S m` (move-to-session) to
+Request, WIP, Linked PR, and Linked Repo rows, plus the
+`decknix-hub-worktree-autolink` automation that links new worktrees to
+the session that created them.
+
+#### 3.7.3 Muscle-memory budget
+
+Six verbs gained one keypress each (`r s M R u i` → `R r`, `R s`,
+`R c`, `R R`, `S u`, `S i`).  Three direct keys moved within the same
+menu without changing semantics (`w → W`; Task `S` spec → `s`).  All
+other Action Menu keys (`o b c m x C D L q`) and every sidebar-global
+key are untouched.  The trade:
+
+- **Cost**: +1 keypress for 6 secondary verbs.
+- **Gain**: clean uppercase shortcuts at sidebar-global level, RET as
+  the explicit discoverability door, and the `S` keyspace freed up
+  for link / move / auto-link without a key fight.
 
 ## 4. Out of scope for this spec
 

@@ -304,6 +304,23 @@ The `decknix--context-update-header` function delegates to the unified header
   state disqualifies it (e.g. `m`/`x` on a non-authored linked PR).
   Verbs awaiting their own follow-up issue render a placeholder that
   echoes "pending" so the menu shape is stable from day one.
+- **Category submenus** (spec §3.7): the Action Menu reorganised
+  review-family (`r s c R`) and link-family (`u i`) verbs into two
+  category submenus — `R Review…` and `S Session…` — joining the
+  existing `W Worktree…` (promoted from lowercase `w`).  Six verbs
+  cost +1 keypress each (`R r` / `R s` / `R c` / `R R` / `S u` / `S i`)
+  in exchange for clean uppercase shortcuts at sidebar-global level
+  and a discoverable Action Menu.  Two complementary entry points:
+  - **`RET` on a row** — discoverable hub.  Opens the Action Menu;
+    the columns advertise the uppercase category keys so muscle
+    memory accretes from looking at it.
+  - **`R W S` at sidebar-global** — power-user fast path.  Skip the
+    Action Menu and open the named submenu directly against the
+    row at point.  Lowercase sidebar-global keys (`r w l p s a v h`,
+    plus `T K P`) are unchanged; the uppercase trio is purely
+    additive.  The submenu opens only on rows where it has at least
+    one applicable verb; otherwise the echo area explains why
+    (e.g. "No review actions on this task row").
 - **Worktree integration** (#128 / #129 / #130, spec §3.6): every hub
   row that resolves a `(repo, branch)` pair carries a 2-column **row
   badge** showing local worktree state at a glance — `⎇*` (live in a
@@ -490,6 +507,7 @@ workspace sidebar surface which sessions need attention.
 | `C-c C-l` | List stashed follow-ups (review-mode only) |
 | `RET` | Sidebar: open the row's Action Menu transient (#123) |
 | `M-RET` / `C-u RET` | Sidebar: run the row's primary action (open URL for hub rows) |
+| `R` / `W` / `S` | Sidebar: open Review / Worktree / Session submenu for the row at point (spec §3.7) |
 
 ### Planned Features
 
