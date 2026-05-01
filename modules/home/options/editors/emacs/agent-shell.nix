@@ -807,6 +807,18 @@ Press q to dismiss."
           "Non-nil when this buffer's workspace has been persisted to agent-sessions.json.
 Prevents the auto-persist hook from firing repeatedly.")
 
+        ;; Buffer-local stash for metadata that cannot be persisted at
+        ;; session-creation time because the conversation key is not yet
+        ;; derivable (guided new sessions: first-message is unknown until
+        ;; the user types it).  Flushed by
+        ;; `decknix--agent-flush-pending-metadata' on the first comint
+        ;; input event.
+        (defvar-local decknix--agent-pending-tags nil
+          "Tags awaiting persistence under this buffer's conversation key.")
+
+        (defvar-local decknix--agent-pending-workspace nil
+          "Workspace awaiting persistence under this buffer's conversation key.")
+
         (defun decknix--agent-session-time-ago (iso-time)
           "Format ISO-TIME as a relative time string (e.g. \"2h ago\")."
           (let* ((time (date-to-time iso-time))
@@ -2138,32 +2150,49 @@ Search order:
                           (string= branch "HEAD"))
                 branch))))
 
-        (defun decknix--agent-session-tags-for (session-id tags)
-          "Apply TAGS (list of strings) to SESSION-ID in the tag store.
-Looks up the conversation key for SESSION-ID and stores tags under it.
-Falls back to v1 format (session-id keyed) if conv-key is not yet available."
-          (when (and session-id tags)
-            (let* ((conv-key (decknix--agent-conversation-key-for-session
-                              session-id))
-                   (store (decknix--agent-tags-read)))
-              (if conv-key
-                  ;; v2: store under conversations
-                  (let* ((convs (decknix--agent-tags-conversations store))
-                         (entry (or (gethash conv-key convs)
-                                    (let ((h (make-hash-table :test 'equal)))
-                                      (puthash "sessions" nil h)
-                                      h))))
-                    (puthash "tags" tags entry)
-                    (let ((sids (gethash "sessions" entry)))
-                      (cl-pushnew session-id sids :test #'string=)
-                      (puthash "sessions" sids entry))
-                    (puthash conv-key entry convs)
-                    (decknix--agent-tags-write store))
-                ;; v1 fallback: session-keyed (migration will fix later)
-                (let ((entry (make-hash-table :test 'equal)))
-                  (puthash "tags" tags entry)
-                  (puthash session-id entry store)
-                  (decknix--agent-tags-write store))))))
+        (defun decknix--agent-flush-pending-metadata (input)
+          "Persist pending metadata for the current buffer using INPUT.
+
+Designed for `comint-input-filter-functions': fires on the first
+non-empty user input, derives the conversation key directly from
+the input text (sidestepping the session-list cache), and writes
+any pending tags + workspace under that key in v2 format.
+
+Removes itself from `comint-input-filter-functions' after a
+successful flush so the work runs at most once per buffer.  Empty
+or whitespace-only input leaves the hook in place for the next
+submission."
+          (when (and input (stringp input)
+                     (not (string-empty-p (string-trim input))))
+            (let ((conv-key (decknix--agent-conversation-key input)))
+              (when conv-key
+                ;; Stash conv-key buffer-locally for header-line lookups.
+                (unless decknix--agent-conv-key
+                  (setq-local decknix--agent-conv-key conv-key))
+                ;; Register the session id under the conv-key when known.
+                (when (and (boundp 'decknix--agent-auggie-session-id)
+                           decknix--agent-auggie-session-id)
+                  (decknix--agent-register-session-id
+                   conv-key decknix--agent-auggie-session-id))
+                ;; Persist pending tags + workspace.
+                (when (or decknix--agent-pending-tags
+                          decknix--agent-pending-workspace)
+                  (decknix--agent-store-metadata-by-conv-key
+                   conv-key
+                   decknix--agent-pending-tags
+                   decknix--agent-pending-workspace)
+                  (when decknix--agent-pending-workspace
+                    (setq-local decknix--agent-workspace-persisted t))
+                  (when decknix--agent-pending-tags
+                    (message "Tags applied: [%s]"
+                             (string-join decknix--agent-pending-tags
+                                          ", ")))
+                  (setq-local decknix--agent-pending-tags nil)
+                  (setq-local decknix--agent-pending-workspace nil))
+                ;; One-shot: remove ourselves from the buffer-local hook.
+                (remove-hook 'comint-input-filter-functions
+                             #'decknix--agent-flush-pending-metadata
+                             t)))))
 
         (defun decknix--agent-store-metadata-by-conv-key (conv-key tags workspace)
           "Store TAGS and WORKSPACE directly under CONV-KEY in the tag store.
@@ -2207,13 +2236,41 @@ the same conversation."
 
 
         (defun decknix--agent-auto-persist-workspace ()
-          "Auto-persist workspace for the current buffer on first prompt-ready.
-Subscribes to `prompt-ready' so the workspace is stored as soon as the
-conversation key can be derived (i.e., after the first exchange).  This
-is a safety net — sessions created by any path (upstream `c', guided `n',
-quickaction, resumed, etc.) will have their workspace recorded in
-agent-sessions.json even if the user never renames or tags the session."
+          "Auto-persist workspace for the current buffer.
+
+Safety net for sessions created via any path (upstream `c', guided
+`n', quickaction, resumed, etc.) so they never show as
+\"unknown-ws\".  Two persistence paths converge on
+`decknix--agent-flush-pending-metadata':
+
+1. Comint input-filter hook — fires on the first user input and
+   derives the conversation key directly from the typed text.
+   Handles new sessions where the input ring is empty at
+   prompt-ready.
+
+2. `prompt-ready' subscription — for resumed sessions, the input
+   ring already carries history, so the conv-key can be derived
+   from the oldest entry without waiting for fresh input.
+
+Whichever fires first wins; the other no-ops via the
+`decknix--agent-workspace-persisted' guard."
           (let ((buf (current-buffer)))
+            ;; Stash workspace + install comint hook (covers new sessions).
+            (with-current-buffer buf
+              (let ((ws (or decknix--agent-session-workspace
+                            default-directory)))
+                (when (and ws (stringp ws) (not (string-empty-p ws))
+                           (not decknix--agent-workspace-persisted))
+                  ;; Don't override a workspace already stashed by
+                  ;; the guided post-create path.
+                  (unless decknix--agent-pending-workspace
+                    (setq-local decknix--agent-pending-workspace ws))
+                  (add-hook 'comint-input-filter-functions
+                            #'decknix--agent-flush-pending-metadata
+                            nil t))))
+            ;; Resume-time safety net: if the ring already has history
+            ;; when prompt-ready fires, flush immediately using the
+            ;; oldest ring entry as the first message.
             (agent-shell-subscribe-to
              :shell-buffer buf
              :event 'prompt-ready
@@ -2224,37 +2281,17 @@ agent-sessions.json even if the user never renames or tags the session."
                                        'decknix--agent-workspace-persisted ,buf)))
                         (condition-case nil
                             (with-current-buffer ,buf
-                              ;; Determine the workspace: explicit var > default-directory
-                              (let ((ws (or decknix--agent-session-workspace
-                                           default-directory)))
-                                (when (and ws (stringp ws)
-                                           (not (string-empty-p ws)))
-                                  ;; Derive conv-key from the first user message
-                                  (let* ((ring (and (boundp 'comint-input-ring)
-                                                    comint-input-ring))
-                                         (first-msg
-                                          (when (and ring (ring-p ring)
-                                                     (> (ring-length ring) 0))
-                                            (ring-ref ring (1- (ring-length ring)))))
-                                         (conv-key
-                                          (when (and first-msg
-                                                     (not (string-empty-p first-msg)))
-                                            (decknix--agent-conversation-key first-msg))))
-                                    (when conv-key
-                                      ;; Set conv-key buffer-locally if not yet set
-                                      (unless decknix--agent-conv-key
-                                        (setq-local decknix--agent-conv-key conv-key))
-                                      ;; Only store if this conv-key has no workspace yet
-                                      (let* ((store (decknix--agent-tags-read))
-                                             (convs (decknix--agent-tags-conversations store))
-                                             (entry (gethash conv-key convs)))
-                                        (if (and entry (gethash "workspace" entry))
-                                            ;; Already has workspace — mark as done
-                                            (setq-local decknix--agent-workspace-persisted t)
-                                          ;; No workspace stored — persist it
-                                          (decknix--agent-store-metadata-by-conv-key
-                                           conv-key nil ws)
-                                          (setq-local decknix--agent-workspace-persisted t))))))))
+                              (let* ((ring (and (boundp 'comint-input-ring)
+                                                comint-input-ring))
+                                     (first-msg
+                                      (when (and ring (ring-p ring)
+                                                 (> (ring-length ring) 0))
+                                        (ring-ref ring
+                                                  (1- (ring-length ring))))))
+                                (when (and first-msg
+                                           (not (string-empty-p first-msg)))
+                                  (decknix--agent-flush-pending-metadata
+                                   first-msg))))
                           (error nil))))
                    t))))
         (defun decknix-agent-session-new (&optional quick)
@@ -2351,26 +2388,46 @@ batch launches."
               ;; Persist metadata.
               ;; When first-message is known (quickactions), we can derive the
               ;; conversation key NOW and store tags + workspace immediately.
-              ;; Otherwise, defer to prompt-ready → first-exchange completion.
+              ;; Otherwise, stash them as pending buffer-locals and let the
+              ;; comint input filter flush them once the user submits the
+              ;; first message — the conversation key is derived directly
+              ;; from that text, which sidesteps the prompt-ready race
+              ;; (empty input ring, stale session cache).
               (let ((conv-key (when first-message
                                 (decknix--agent-conversation-key first-message))))
-                (when (and conv-key (or tags workspace))
-                  ;; Immediate storage — we know the conversation key
-                  (decknix--agent-store-metadata-by-conv-key
-                   conv-key tags workspace)
-                  ;; Store conv-key buffer-locally so header-line can
-                  ;; look up tags immediately without waiting for the
-                  ;; session-list cache to refresh.
-                  (with-current-buffer shell-buf
-                    (setq-local decknix--agent-conv-key conv-key))
-                  (when tags
-                    (message "Tags applied: [%s]"
-                             (string-join tags ", "))))
-                ;; ALWAYS subscribe to prompt-ready to set session-id and
-                ;; (when deferred) persist metadata.  The session-id is only
-                ;; available after ACP bootstrapping, which is async — so
-                ;; quickaction sessions (immediate path above) still need
-                ;; this for decknix--agent-auggie-session-id.
+                (if (and conv-key (or tags workspace))
+                    ;; Immediate storage — we know the conversation key
+                    (progn
+                      (decknix--agent-store-metadata-by-conv-key
+                       conv-key tags workspace)
+                      ;; Store conv-key buffer-locally so header-line can
+                      ;; look up tags immediately without waiting for the
+                      ;; session-list cache to refresh.
+                      (with-current-buffer shell-buf
+                        (setq-local decknix--agent-conv-key conv-key)
+                        (when workspace
+                          (setq-local decknix--agent-workspace-persisted t)))
+                      (when tags
+                        (message "Tags applied: [%s]"
+                                 (string-join tags ", "))))
+                  ;; Deferred — stash pending metadata and wire the
+                  ;; one-shot input-filter hook that will flush it once
+                  ;; the user types their first message.
+                  (when (or tags workspace)
+                    (with-current-buffer shell-buf
+                      (setq-local decknix--agent-pending-tags tags)
+                      (setq-local decknix--agent-pending-workspace workspace)
+                      (add-hook 'comint-input-filter-functions
+                                #'decknix--agent-flush-pending-metadata
+                                nil t))))
+                ;; ALWAYS subscribe to prompt-ready to set session-id.
+                ;; The session-id is only available after ACP bootstrapping,
+                ;; which is async.  We also opportunistically register the
+                ;; session-id under a conv-key derived from the comint input
+                ;; ring — useful for resumed sessions where the ring already
+                ;; carries history at prompt-ready time.  For new guided
+                ;; sessions the ring is empty here; the comint input-filter
+                ;; hook installed above handles that case.
                 (agent-shell-subscribe-to
                  :shell-buffer shell-buf
                  :event 'prompt-ready
@@ -2379,7 +2436,6 @@ batch launches."
                           (when (buffer-live-p ,shell-buf)
                             (condition-case nil
                                 (with-current-buffer ,shell-buf
-                                  ;; Get session ID
                                   (let ((sid (or decknix--agent-auggie-session-id
                                                  (when (and (boundp 'shell-maker--config)
                                                             shell-maker--config)
@@ -2388,46 +2444,23 @@ batch launches."
                                     (when (and sid (stringp sid)
                                               (not (string-empty-p sid)))
                                       (setq-local decknix--agent-auggie-session-id sid)
-                                      ;; Derive conv-key from comint input ring
-                                      ;; (the first user message) — reliable even
-                                      ;; when session cache is stale.
                                       (let* ((ring (and (boundp 'comint-input-ring)
                                                        comint-input-ring))
                                              (first-msg (when (and ring
                                                                    (ring-p ring)
                                                                    (> (ring-length ring) 0))
-                                                          ;; Oldest entry = first message
                                                           (ring-ref ring
                                                                     (1- (ring-length ring)))))
                                              (conv-key (when (and first-msg
                                                                   (not (string-empty-p first-msg)))
                                                          (decknix--agent-conversation-key
                                                           first-msg))))
-                                        ;; Set conv-key if not already set (immediate path)
                                         (unless decknix--agent-conv-key
                                           (when conv-key
                                             (setq-local decknix--agent-conv-key conv-key)))
-                                        ;; Register session-id under conv-key
                                         (when conv-key
                                           (decknix--agent-register-session-id
-                                           conv-key sid))
-                                        ;; Store metadata if not already done (deferred path)
-                                        (when (and (not ,conv-key) (or ',tags ,workspace))
-                                          (if conv-key
-                                              (progn
-                                                (decknix--agent-store-metadata-by-conv-key
-                                                 conv-key ',tags ,workspace)
-                                                (when ',tags
-                                                  (message "Tags applied: [%s]"
-                                                           (string-join ',tags ", "))))
-                                            ;; Fallback: try the old cache-based path
-                                            (when ',tags
-                                              (decknix--agent-session-tags-for sid ',tags)
-                                              (message "Tags applied: [%s]"
-                                                       (string-join ',tags ", ")))
-                                            (when ,workspace
-                                              (decknix--agent-session-save-workspace
-                                               sid ,workspace))))))))
+                                           conv-key sid))))))
                               (error nil))))
                        t))))))
 
@@ -2790,16 +2823,25 @@ or walking the store for orphaned v1 entries."
                         (let ((sids (gethash "sessions" conv-entry)))
                           (cl-pushnew sid sids :test #'string=)
                           (puthash "sessions" sids conv-entry))
-                        (puthash conv-key conv-entry convs)))
-                    ;; Remove the old session-keyed entry regardless
-                    (remhash sid store)
-                    (setq migrated (1+ migrated))))
+                        (puthash conv-key conv-entry convs))
+                      ;; Only remove the v1 entry once it has been
+                      ;; successfully merged into v2.  Leaving
+                      ;; unresolved v1 entries in place lets a later
+                      ;; pass complete the migration when session-list
+                      ;; / firstUserMessage data becomes available —
+                      ;; the previous unconditional `remhash' was the
+                      ;; source of tag loss on the guided-session
+                      ;; creation race.
+                      (remhash sid store)
+                      (setq migrated (1+ migrated)))))
                 ;; Write back the cleaned store
                 (puthash "conversations" convs store)
                 (unless (gethash "bookmarks" store)
                   (puthash "bookmarks" (make-hash-table :test 'equal) store))
                 (decknix--agent-tags-write store)
-                (message "Migrated %d v1 tag entries to conversation format" migrated)))
+                (when (> migrated 0)
+                  (message "Migrated %d v1 tag entries to conversation format"
+                           migrated))))
               store)))
 
         (defun decknix--agent-tags-write (store)
