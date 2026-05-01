@@ -1211,11 +1211,17 @@ Uses tags if available, otherwise truncates the first user message."
 Returns nil when CONV-KEY is nil or no live buffer is bound to it.
 Used by `decknix--agent-session-resume' to dedupe: spawning a second
 buffer for a conversation that is already live produces a confusing
-`*Auggie: ...*<2>' pair where one buffer holds stale context."
+`*Auggie: ...*<2>' pair where one buffer holds stale context.
+
+A buffer only qualifies when its underlying auggie process is also
+alive — a process-less buffer corpse (Emacs buffer alive, auggie
+process dead) would otherwise short-circuit resume and leave the
+user staring at a dead shell."
           (when conv-key
             (seq-find
              (lambda (buf)
                (and (buffer-live-p buf)
+                    (process-live-p (get-buffer-process buf))
                     (with-current-buffer buf
                       (and (derived-mode-p 'agent-shell-mode)
                            (bound-and-true-p decknix--agent-conv-key)
