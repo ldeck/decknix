@@ -78,6 +78,41 @@ pub struct JiraTask {
     pub created: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub labels: Option<Vec<String>>,
+    /// Sub-tasks (child issues) — used by the progress data layer to build
+    /// hierarchical task trees.  Always present (possibly empty) so consumers
+    /// can iterate without nil-checks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtasks: Vec<JiraTaskRef>,
+    /// Issue links — "blocks" / "is blocked by" / "relates to" / etc.
+    /// Direction is "inward" (this issue is the *target* of the link, e.g.
+    /// "is blocked by X") or "outward" (this issue is the *source*, e.g.
+    /// "blocks Y").  Empty when the issue has no links.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<JiraLink>,
+}
+
+/// Lightweight reference to another Jira issue.  Used both for sub-tasks and
+/// inside `JiraLink` for the linked issue on the other side.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JiraTaskRef {
+    pub key: String,
+    pub summary: String,
+    pub status: String,
+    pub status_category: String,
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_type: Option<String>,
+}
+
+/// A directed link between two issues.  `direction` is "inward" (this issue
+/// is the target — e.g. "is blocked by X") or "outward" (this issue is the
+/// source — e.g. "blocks Y").  `link_type` is the human-readable Jira link
+/// type name (e.g. "Blocks", "Relates", "Duplicate").
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JiraLink {
+    pub direction: String,
+    pub link_type: String,
+    pub other: JiraTaskRef,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -115,6 +150,15 @@ struct JiraFields {
     created: String,
     #[serde(default)]
     labels: Vec<String>,
+    /// Sub-tasks attached to this issue.  Jira returns these as full issue
+    /// objects when the `subtasks` field is requested, so we reuse `JiraIssue`
+    /// for the deserialization.
+    #[serde(default)]
+    subtasks: Vec<JiraIssue>,
+    /// Inward / outward links to other issues.  Empty when the issue has no
+    /// links or when the field wasn't requested.
+    #[serde(rename = "issuelinks", default)]
+    issue_links: Vec<JiraIssueLink>,
     // Sprint comes from customfield — we'll extract from the API response
 }
 
@@ -157,6 +201,39 @@ struct JiraIssueType {
     name: String,
 }
 
+/// A Jira issue link as returned by the REST API.  Either `inwardIssue` or
+/// `outwardIssue` is set (never both); the missing side is the issue we're
+/// fetching.
+#[derive(Debug, Deserialize)]
+struct JiraIssueLink {
+    #[serde(rename = "type")]
+    link_type: JiraLinkType,
+    #[serde(rename = "inwardIssue")]
+    inward_issue: Option<JiraLinkedIssue>,
+    #[serde(rename = "outwardIssue")]
+    outward_issue: Option<JiraLinkedIssue>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JiraLinkType {
+    name: String,
+}
+
+/// A linked-issue stub returned inside an issue link.  Carries enough info
+/// to render a reference without a follow-up fetch.
+#[derive(Debug, Deserialize)]
+struct JiraLinkedIssue {
+    key: String,
+    fields: Option<JiraLinkedIssueFields>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JiraLinkedIssueFields {
+    summary: Option<String>,
+    status: Option<JiraStatus>,
+    issuetype: Option<JiraIssueType>,
+}
+
 // ---------------------------------------------------------------------------
 // Read API token from file
 // ---------------------------------------------------------------------------
@@ -197,6 +274,68 @@ fn build_jql(config: &JiraConfig) -> String {
     )
 }
 
+/// Convert a sub-task issue (returned inside `fields.subtasks`) into the
+/// lightweight `JiraTaskRef` we serialize to disk.
+fn subtask_to_ref(issue: JiraIssue, base: &str) -> JiraTaskRef {
+    let url = format!("{}/browse/{}", base, issue.key);
+    let f = issue.fields;
+    JiraTaskRef {
+        key: issue.key,
+        summary: f.summary,
+        status: f.status.name,
+        status_category: f.status.status_category
+            .map(|c| c.key)
+            .unwrap_or_else(|| "unknown".into()),
+        url,
+        issue_type: Some(f.issuetype.name),
+    }
+}
+
+/// Convert a single Jira issue link into our `JiraLink`.  Returns `None`
+/// when both inward and outward sides are missing (shouldn't happen in
+/// practice but guards against API quirks).
+fn issuelink_to_link(link: JiraIssueLink, base: &str) -> Option<JiraLink> {
+    let (direction, linked) = if let Some(inward) = link.inward_issue {
+        ("inward", inward)
+    } else if let Some(outward) = link.outward_issue {
+        ("outward", outward)
+    } else {
+        return None;
+    };
+    let url = format!("{}/browse/{}", base, linked.key);
+    let (summary, status_name, status_cat, issue_type) = match linked.fields {
+        Some(lf) => {
+            let (sname, scat) = match lf.status {
+                Some(s) => (
+                    s.name,
+                    s.status_category.map(|c| c.key)
+                        .unwrap_or_else(|| "unknown".into()),
+                ),
+                None => (String::new(), "unknown".into()),
+            };
+            (
+                lf.summary.unwrap_or_default(),
+                sname,
+                scat,
+                lf.issuetype.map(|t| t.name),
+            )
+        }
+        None => (String::new(), String::new(), "unknown".into(), None),
+    };
+    Some(JiraLink {
+        direction: direction.into(),
+        link_type: link.link_type.name,
+        other: JiraTaskRef {
+            key: linked.key,
+            summary,
+            status: status_name,
+            status_category: status_cat,
+            url,
+            issue_type,
+        },
+    })
+}
+
 /// Fetch assigned Jira tasks.
 pub async fn poll_jira_tasks(config: &JiraConfig) -> Result<JiraTasksFile, String> {
     let token = read_api_token(&config.api_token_file)?;
@@ -211,7 +350,7 @@ pub async fn poll_jira_tasks(config: &JiraConfig) -> Result<JiraTasksFile, Strin
         .query(&[
             ("jql", jql.as_str()),
             ("maxResults", &config.max_results.to_string()),
-            ("fields", "summary,status,priority,assignee,parent,issuetype,updated,created,labels"),
+            ("fields", "summary,status,priority,assignee,parent,issuetype,updated,created,labels,subtasks,issuelinks"),
         ])
         .send()
         .await
@@ -229,6 +368,12 @@ pub async fn poll_jira_tasks(config: &JiraConfig) -> Result<JiraTasksFile, Strin
     let base = config.base_url.trim_end_matches('/');
     let items: Vec<JiraTask> = search.issues.into_iter().map(|issue| {
         let f = issue.fields;
+        let subtasks = f.subtasks.into_iter()
+            .map(|sub| subtask_to_ref(sub, base))
+            .collect();
+        let links = f.issue_links.into_iter()
+            .filter_map(|l| issuelink_to_link(l, base))
+            .collect();
         JiraTask {
             key: issue.key.clone(),
             summary: f.summary,
@@ -248,6 +393,8 @@ pub async fn poll_jira_tasks(config: &JiraConfig) -> Result<JiraTasksFile, Strin
             updated: f.updated.parse().unwrap_or_else(|_| Utc::now()),
             created: f.created.parse().unwrap_or_else(|_| Utc::now()),
             labels: if f.labels.is_empty() { None } else { Some(f.labels) },
+            subtasks,
+            links,
         }
     }).collect();
 
