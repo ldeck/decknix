@@ -164,6 +164,20 @@ let
     ];
   };
 
+  decknix-hub-teamcity-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-teamcity";
+    src = ./agent-shell/hub;
+    # Co-resident with decknix-hub-age-presets.el in the hub/ dir,
+    # so trivialBuild byte-compiles both during this package's build.
+    # The dep is symmetric: building age-presets above byte-compiles
+    # this file as a sibling, so its packageRequires is empty too;
+    # the cross-link is only needed if one ever `require's the other.
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-teamcity-test.el"
+    ];
+  };
+
   # == Custom auggie commands ==
   # Deployed to ~/.augment/commands/ via home.file (as symlinks).
   # User-created commands (regular files) coexist in the same directory
@@ -528,6 +542,7 @@ in
         # since they exist to flip what the workspace sidebar renders.
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
+        ++ (optional cfg.hub.enable decknix-hub-teamcity-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el);
 
@@ -6443,7 +6458,8 @@ Like treemacs `W' / extra-wide-toggle."
         ;;
         ;; Defvars and defuns below now live in extracted .el modules
         ;; (see the `let' block at the top: `decknix-progress-el',
-        ;; `decknix-sidebar-toggles-el', `decknix-hub-age-presets-el').
+        ;; `decknix-sidebar-toggles-el', `decknix-hub-age-presets-el',
+        ;; `decknix-hub-teamcity-el').
         ;; This heredoc references them inside transient suffix lambdas
         ;; (just below) and Requests / WIP / sessions render code (much
         ;; further down) at byte-compile time, before the `(require ...)'
@@ -6464,6 +6480,9 @@ Like treemacs `W' / extra-wide-toggle."
         (declare-function decknix--hub-age-filter-label "decknix-hub-age-presets")
         (declare-function decknix--hub-cycle-age-filter "decknix-hub-age-presets")
         (declare-function decknix--hub-age-visible-p "decknix-hub-age-presets")
+        (declare-function decknix--hub-tc-build-for-branch "decknix-hub-teamcity")
+        (declare-function decknix--hub-tc-icon "decknix-hub-teamcity")
+        (declare-function decknix--hub-deploy-indicator "decknix-hub-teamcity")
 
         ;; -- Sidebar transient menu (magit-style ? popup) --
         (require 'transient)
@@ -14006,99 +14025,20 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
               (setq line-num (1+ line-num))))
           line-num)
 
-        ;; -- TeamCity build status helpers --
-        (defun decknix--hub-tc-build-for-branch (branch)
-          "Find the TeamCity build for BRANCH from hub data.
-Returns nil if no match or no TC data."
-          (when (and branch decknix--hub-teamcity-builds)
-            (let ((builds (alist-get 'builds decknix--hub-teamcity-builds)))
-              (seq-find (lambda (b)
-                          (string= (or (alist-get 'branch b) "") branch))
-                        builds))))
-
-        (defun decknix--hub-tc-icon (build)
-          "Return a TeamCity CI icon string for BUILD."
-          (if (not build) ""
-            (let ((state (or (alist-get 'state build) ""))
-                  (status (or (alist-get 'status build) "")))
-              (cond
-               ((string= state "running")
-                (let ((pct (alist-get 'progress_pct build)))
-                  (propertize (if pct (format "⟳%d%%" pct) "⟳")
-                              'face '(:foreground "#e5c07b"))))
-               ((string= state "queued")
-                (propertize "◌" 'face 'font-lock-comment-face))
-               ((string= status "SUCCESS")
-                (propertize "✓" 'face '(:foreground "#98c379")))
-               ((string= status "FAILURE")
-                (propertize "✗" 'face '(:foreground "#e06c75")))
-               ((string= status "ERROR")
-                (propertize "✗" 'face '(:foreground "#e06c75")))
-               (t (propertize "?" 'face 'font-lock-comment-face))))))
-
-        ;; -- Deploy pipeline indicator (DTSP) --
-        (defun decknix--hub-deploy-indicator (repo-full branch &optional merged-at)
-          "Return colored DTSP deploy indicator for REPO-FULL and BRANCH.
-Each letter represents an environment:
-  D=Development T=Testing S=Stable P=Production
-Green=success, Red=failure, Yellow=running, Grey=not deployed.
-
-When MERGED-AT (ISO-8601 UTC timestamp) is non-nil and an environment's
-deploy finished BEFORE the PR merged, render that env as grey — the
-deployed artefact predates the merge so it cannot contain this PR."
-          (if (or (not decknix--hub-show-deploys)
-                  (not decknix--hub-deploys))
-              ""
-            (let* ((repos (alist-get 'repos decknix--hub-deploys))
-                   (repo-entry (seq-find
-                                (lambda (r)
-                                  (string= (or (alist-get 'repo r) "") repo-full))
-                                repos))
-                   (branches (when repo-entry (alist-get 'branches repo-entry)))
-                   (branch-entry (when branches
-                                   (seq-find
-                                    (lambda (b)
-                                      (string= (or (alist-get 'branch b) "") branch))
-                                    branches)))
-                   (envs (when branch-entry (alist-get 'environments branch-entry))))
-              (if (not envs)
-                  ""
-                ;; Build the indicator string
-                (let ((letters nil))
-                  (dolist (env-entry envs)
-                    (let* ((env (or (alist-get 'env env-entry) ""))
-                           (status (or (alist-get 'status env-entry) ""))
-                           (state (or (alist-get 'state env-entry) ""))
-                           (finished (alist-get 'finished env-entry))
-                           ;; Deploy predates merge — this env does not
-                           ;; yet contain the PR's code.  ISO-8601 UTC
-                           ;; timestamps compare correctly as strings.
-                           (stale (and merged-at finished
-                                       (stringp merged-at) (stringp finished)
-                                       (string< finished merged-at)))
-                           (letter (cond
-                                    ((string= env "development") "D")
-                                    ((string= env "testing") "T")
-                                    ((string= env "stable") "S")
-                                    ((string= env "production") "P")
-                                    ((string= env "uk_production") "U")
-                                    (t nil)))
-                           (face (cond
-                                  (stale 'font-lock-comment-face)
-                                  ((string= state "running")
-                                   '(:foreground "#e5c07b" :weight bold))
-                                  ((string= state "queued")
-                                   '(:foreground "#abb2bf"))
-                                  ((string= status "SUCCESS")
-                                   '(:foreground "#98c379" :weight bold))
-                                  ((member status '("FAILURE" "ERROR"))
-                                   '(:foreground "#e06c75" :weight bold))
-                                  (t 'font-lock-comment-face))))
-                      (when letter
-                        (push (propertize letter 'face face) letters))))
-                  (if letters
-                      (concat " " (apply #'concat (nreverse letters)))
-                    ""))))))
+        ;; -- TeamCity build status + deploy pipeline indicator --
+        ;;
+        ;; Source moved out of this heredoc into
+        ;; agent-shell/hub/decknix-hub-teamcity.el, packaged as
+        ;; `decknix-hub-teamcity-el' (see the `let' block at the top
+        ;; of this module).  By this point in the heredoc the hub
+        ;; data defvars (`decknix--hub-teamcity-builds',
+        ;; `decknix--hub-deploys', `decknix--hub-show-deploys') have
+        ;; already been declared above (~line 10595), so the module's
+        ;; forward-decl + load-time `(require ...)' resolves cleanly.
+        ;; The `decknix--hub-toggle-deploy-indicator' command stays
+        ;; here for now — it mutates the UI flag and triggers a
+        ;; sidebar refresh, both of which are heredoc-side concerns.
+        (require 'decknix-hub-teamcity)
 
         (defun decknix--hub-toggle-deploy-indicator ()
           "Toggle visibility of deployment pipeline indicators (DTSP) in WIP."
