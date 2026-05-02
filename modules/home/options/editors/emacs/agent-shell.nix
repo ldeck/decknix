@@ -130,6 +130,15 @@ let
     ];
   };
 
+  decknix-sidebar-toggles-el = mkEmacsTestedPackage {
+    pname = "decknix-sidebar-toggles";
+    src = ./agent-shell/sidebar;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-sidebar-toggles-test.el"
+    ];
+  };
+
   # == Custom auggie commands ==
   # Deployed to ~/.augment/commands/ via home.file (as symlinks).
   # User-created commands (regular files) coexist in the same directory
@@ -490,8 +499,10 @@ in
         ++ (optional cfg.attention.enable agent-shell-attention-el)
         # In-tree decknix packages (gated by the same flags that gated the
         # original inline elisp).  Progress depends on hub data, so it ships
-        # only when hub is enabled.
-        ++ (optional cfg.hub.enable decknix-progress-el);
+        # only when hub is enabled.  Sidebar toggles ride with workspace
+        # since they exist to flip what the workspace sidebar renders.
+        ++ (optional cfg.hub.enable decknix-progress-el)
+        ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el);
 
       extraConfig = ''
         ;;; Agent Shell Configuration (auggie AI integration)
@@ -6716,114 +6727,16 @@ picker / transient."
               (put-text-property start (1- (point))
                                  'decknix-sidebar-section section-id))))
 
-        (defvar decknix--sidebar-show-keys t
-          "When non-nil, show categorised key listing in the sidebar footer.
-Defaults to t for discoverability; toggle with K.")
-
-        (defvar decknix--sidebar-show-hidden nil
-          "When non-nil, include hidden/background sessions in the Sessions list.
-Hidden sessions are marked via `decknix--agent-conversation-set-hidden'.
-Toggle with `H' in the sidebar.")
-
-        (defvar decknix--sidebar-sessions-hide-live nil
-          "When non-nil, hide saved sessions whose conversation is currently live.
-Default nil so live-backed conversations appear dimmed as context
-without competing with the Live section above.  Toggle with `V'
-in the Toggles transient.")
-
-        (defvar decknix--sidebar-sessions-age-filter nil
-          "Age cutoff in seconds for saved Sessions list; nil = no limit.
-Cycles through the same presets as Requests
-(`decknix--hub-age-presets').  Toggle with `a' in the Toggles
-transient.")
-
-        (defvar decknix--sidebar-sessions-hide-unknown nil
-          "When non-nil, hide saved sessions whose workspace can't be resolved.
-These render under the \"unknown\" workspace group today.  Toggle
-with `U' in the Toggles transient.")
-
-        (defvar decknix--hub-show-saved-sessions t
-          "When non-nil (default), the saved Sessions block is rendered.
-When nil, the entire Saved Sessions section (heading + per-workspace
-groups) is omitted from the sidebar.  Live, Previous, Requests and
-WIP sections remain unaffected.  Toggle with `h' in the Toggles
-transient.")
-
-        (defun decknix--sidebar-sessions-age-label ()
-          "Return a short label for the current sessions age filter.
-Reuses the shared `decknix--hub-age-presets' alist so the Sessions
-and Requests age toggles share vocabulary."
-          (or (and (boundp 'decknix--hub-age-presets)
-                   (alist-get decknix--sidebar-sessions-age-filter
-                              decknix--hub-age-presets))
-              "all"))
-
-        (defun decknix-sidebar-toggle-keys ()
-          "Toggle the inline key listing in the sidebar footer."
-          (interactive)
-          (setq decknix--sidebar-show-keys (not decknix--sidebar-show-keys))
-          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-            (agent-shell-workspace-sidebar-refresh)))
-
-        (defun decknix-sidebar-toggle-hidden ()
-          "Toggle visibility of hidden/background sessions in the sidebar."
-          (interactive)
-          (setq decknix--sidebar-show-hidden (not decknix--sidebar-show-hidden))
-          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-            (agent-shell-workspace-sidebar-refresh))
-          (message "Hidden sessions: %s"
-                   (if decknix--sidebar-show-hidden "shown" "hidden")))
-
-        (defun decknix-sidebar-toggle-sessions-hide-live ()
-          "Toggle whether live-backed saved sessions are hidden in the sidebar.
-When off (default), live-backed conversations render dimmed as
-recent context.  When on, they are filtered out entirely (the
-Live section above is then the only place they appear)."
-          (interactive)
-          (setq decknix--sidebar-sessions-hide-live
-                (not decknix--sidebar-sessions-hide-live))
-          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-            (agent-shell-workspace-sidebar-refresh))
-          (message "Sessions: live-backed rows %s"
-                   (if decknix--sidebar-sessions-hide-live "hidden" "dimmed")))
-
-        (defun decknix-sidebar-toggle-sessions-hide-unknown ()
-          "Toggle whether sessions with unresolved workspace are hidden."
-          (interactive)
-          (setq decknix--sidebar-sessions-hide-unknown
-                (not decknix--sidebar-sessions-hide-unknown))
-          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-            (agent-shell-workspace-sidebar-refresh))
-          (message "Sessions: unknown-workspace rows %s"
-                   (if decknix--sidebar-sessions-hide-unknown "hidden" "shown")))
-
-        (defun decknix-sidebar-toggle-saved-sessions ()
-          "Toggle visibility of the saved Sessions section in the sidebar."
-          (interactive)
-          (setq decknix--hub-show-saved-sessions
-                (not decknix--hub-show-saved-sessions))
-          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-            (agent-shell-workspace-sidebar-refresh))
-          (message "Saved Sessions: %s"
-                   (if decknix--hub-show-saved-sessions "shown" "hidden")))
-
-        (defun decknix-sidebar-cycle-sessions-age-filter ()
-          "Cycle the saved-Sessions age filter through presets.
-Reuses `decknix--hub-age-presets' so the Sessions and Requests age
-toggles share vocabulary (all/1d/3d/7d/14d/30d)."
-          (interactive)
-          (let* ((presets (if (boundp 'decknix--hub-age-presets)
-                              decknix--hub-age-presets
-                            '((nil . "all"))))
-                 (keys (mapcar #'car presets))
-                 (pos (cl-position decknix--sidebar-sessions-age-filter
-                                   keys :test #'equal))
-                 (next-pos (mod (1+ (or pos 0)) (length keys))))
-            (setq decknix--sidebar-sessions-age-filter (nth next-pos keys))
-            (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-              (agent-shell-workspace-sidebar-refresh))
-            (message "Sessions age filter: %s"
-                     (decknix--sidebar-sessions-age-label))))
+        ;; == Sidebar visibility/filter toggles ==
+        ;;
+        ;; Source moved out of this heredoc into
+        ;; agent-shell/sidebar/decknix-sidebar-toggles.el, packaged as
+        ;; `decknix-sidebar-toggles-el' (see the `let' block at the top
+        ;; of this module).  The `(require ...)' stays HERE so that
+        ;; downstream call sites further down the workspace block
+        ;; (sidebar render, transient menus, key bindings) see the
+        ;; defvars and toggle commands as soon as they're needed.
+        (require 'decknix-sidebar-toggles)
 
         (defun decknix-sidebar-hide-at-point ()
           "Mark the saved session at point as hidden (background/automated).
