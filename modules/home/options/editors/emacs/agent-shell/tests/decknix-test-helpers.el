@@ -147,19 +147,28 @@ failure / running / nil).  Matches the shape consumed by
 ;; was triggered" without dragging in agent-shell-workspace.
 
 (defvar decknix-test--stub-calls nil
-  "Alist of (SYMBOL . COUNT) recording stubbed-function invocations.
-Bound by `decknix-test-with-stubbed-deps'.")
+  "Alist of (SYMBOL . LIST-OF-ARGLISTS) recording stubbed-function invocations.
+The list is in reverse-call-order (most recent first), so
+`(car (alist-get sym decknix-test--stub-calls))' is the most
+recent call's arglist.  Bound by `decknix-test-with-stubbed-deps'.")
 
 (defun decknix-test-stub-call-count (symbol)
   "Return the number of times stubbed SYMBOL was called inside the macro."
-  (or (alist-get symbol decknix-test--stub-calls) 0))
+  (length (alist-get symbol decknix-test--stub-calls)))
+
+(defun decknix-test-stub-call-args (symbol &optional n)
+  "Return the arglist of the Nth-from-most-recent call to stubbed SYMBOL.
+N defaults to 0 (most recent call).  Returns nil if SYMBOL was
+never called or N is out of range."
+  (nth (or n 0) (alist-get symbol decknix-test--stub-calls)))
 
 (defmacro decknix-test-with-stubbed-deps (stubs &rest body)
   "Run BODY with STUBS bound as no-op functions that record calls.
 STUBS is a list of symbols; each is rebound via `cl-letf' to a
-function that increments `decknix-test--stub-calls' under that key
-and returns nil.  Use `decknix-test-stub-call-count' inside BODY
-to assert the function was triggered.
+function that pushes its arglist onto `decknix-test--stub-calls'
+under that key and returns nil.  Use `decknix-test-stub-call-count'
+to assert the function was triggered, and `decknix-test-stub-call-args'
+to inspect the values it was called with.
 
 Stubs only intercept calls that go through the symbol's function
 cell, so tests targeting code that uses `(when (fboundp 'foo) (foo))'
@@ -169,9 +178,9 @@ work without modification."
      (cl-letf (,@(mapcar
                   (lambda (sym)
                     `((symbol-function ',sym)
-                      (lambda (&rest _args)
-                        (setf (alist-get ',sym decknix-test--stub-calls 0)
-                              (1+ (alist-get ',sym decknix-test--stub-calls 0)))
+                      (lambda (&rest args)
+                        (setf (alist-get ',sym decknix-test--stub-calls)
+                              (cons args (alist-get ',sym decknix-test--stub-calls)))
                         nil)))
                   stubs))
        ,@body)))
