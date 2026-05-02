@@ -199,6 +199,18 @@ let
     ];
   };
 
+  decknix-hub-ci-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-ci";
+    src = ./agent-shell/hub;
+    # Co-resident with the other hub/ modules; trivialBuild byte-compiles
+    # all siblings so packageRequires can stay empty until one explicitly
+    # `require's another.
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-ci-test.el"
+    ];
+  };
+
   # == Custom auggie commands ==
   # Deployed to ~/.augment/commands/ via home.file (as symlinks).
   # User-created commands (regular files) coexist in the same directory
@@ -566,6 +578,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-teamcity-el)
         ++ (optional cfg.hub.enable decknix-hub-org-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-jira-tasks-el)
+        ++ (optional cfg.hub.enable decknix-hub-ci-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el);
 
@@ -6483,7 +6496,7 @@ Like treemacs `W' / extra-wide-toggle."
         ;; (see the `let' block at the top: `decknix-progress-el',
         ;; `decknix-sidebar-toggles-el', `decknix-hub-age-presets-el',
         ;; `decknix-hub-teamcity-el', `decknix-hub-org-filter-el',
-        ;; `decknix-hub-jira-tasks-el').
+        ;; `decknix-hub-jira-tasks-el', `decknix-hub-ci-el').
         ;; This heredoc references them inside transient suffix lambdas
         ;; (just below) and Requests / WIP / sessions render code (much
         ;; further down) at byte-compile time, before the `(require ...)'
@@ -6512,6 +6525,9 @@ Like treemacs `W' / extra-wide-toggle."
         (declare-function decknix--hub-org-visible-p "decknix-hub-org-filter")
         (declare-function decknix--hub-org-filter-summary "decknix-hub-org-filter")
         (declare-function decknix--hub-task-status-icon "decknix-hub-jira-tasks")
+        (declare-function decknix--hub-icon "decknix-hub-ci")
+        (declare-function decknix--hub-ci-icon "decknix-hub-ci")
+        (declare-function decknix--hub-ci-classify "decknix-hub-ci")
 
         ;; -- Sidebar transient menu (magit-style ? popup) --
         (require 'transient)
@@ -13452,86 +13468,26 @@ row, or an empty string when no linked PR is attention-worthy."
                  (t "now")))
             "?"))
 
-        ;; -- Hub: CI classification —
-        ;; Uses individual check details (when available) to distinguish
-        ;; hard build failures from soft lint/analysis failures (e.g. Codacy).
-        ;; Patterns are case-insensitive substrings matched against check names.
-
-        (defvar decknix--hub-ci-soft-patterns
-          '("codacy" "sonarcloud" "sonarqube" "lint" "style" "format"
-            "codecov" "coveralls" "snyk" "dependabot" "renovate")
-          "Check name patterns considered \"soft\" (lint/analysis, not build).
-A CI failure is classified as soft_fail when ALL failing checks
-match one of these patterns (case-insensitive substring match).")
-
-        (defun decknix--hub-ci-check-soft-p (check-name)
-          "Return non-nil if CHECK-NAME matches a soft/lint pattern."
-          (let ((name (downcase (or check-name ""))))
-            (cl-some (lambda (pat) (string-match-p (regexp-quote pat) name))
-                     decknix--hub-ci-soft-patterns)))
-
-        (defun decknix--hub-ci-classify (ci)
-          "Classify a CI status alist into a refined status string.
-Returns \"pass\", \"running\", \"fail\", \"soft_fail\", or \"unknown\".
-\"soft_fail\" means all failing checks are lint/analysis (not build)."
-          (if (not ci)
-              "unknown"
-            (let ((status (or (alist-get 'status ci) "unknown")))
-              (if (not (string= status "fail"))
-                  status
-                ;; It's a fail — check if ALL failures are soft
-                (let ((checks (alist-get 'checks ci)))
-                  (if (not checks)
-                      "fail" ; no detail → assume hard fail
-                    (let* ((failing (seq-filter
-                                    (lambda (c)
-                                      (let ((conc (alist-get 'conclusion c)))
-                                        (member conc '("FAILURE" "ERROR" "TIMED_OUT"
-                                                       "CANCELLED" "ACTION_REQUIRED"))))
-                                    checks))
-                           (all-soft (and failing
-                                         (cl-every
-                                          (lambda (c)
-                                            (decknix--hub-ci-check-soft-p
-                                             (alist-get 'name c)))
-                                          failing))))
-                      (if all-soft "soft_fail" "fail"))))))))
-
-        ;; -- Hub: sidebar icon helper --
-        (defun decknix--hub-icon (str face)
-          "Create a sidebar icon from STR with FACE.
-Only applies a display height property for emoji characters to prevent
-them from stretching line height.  Plain text symbols (✓, ✗, @, ⟳, etc.)
-are left at normal size for readability."
-          (let* ((ch (and (> (length str) 0) (aref str 0)))
-                 (emoji-p (and ch (or
-                                   ;; Miscellaneous Symbols & Pictographs
-                                   (and (>= ch #x1F300) (<= ch #x1F9FF))
-                                   ;; Emoticons, Transport, Supplemental
-                                   (and (>= ch #x2600) (<= ch #x27BF))
-                                   ;; Dingbats
-                                   (and (>= ch #x2700) (<= ch #x27BF))))))
-            (if emoji-p
-                (propertize str 'face face 'display '(height 0.7))
-              (propertize str 'face face))))
-
-        ;; -- Hub: CI + mergeable icon --
-        (defun decknix--hub-ci-icon (ci &optional mergeable)
-          "Return a short icon string for a CI status alist.
-Uses individual check details to distinguish soft from hard failures.
-When MERGEABLE is \"CONFLICTING\", appends a conflict indicator."
-          (let* ((classified (decknix--hub-ci-classify ci))
-                 (ci-icon (pcase classified
-                            ("pass"      (decknix--hub-icon "✓" 'success))
-                            ("soft_fail" (decknix--hub-icon "⚠" 'warning))
-                            ("fail"      (decknix--hub-icon "✗" 'error))
-                            ("running"   (decknix--hub-icon "⟳" 'warning))
-                            (_           (decknix--hub-icon "?" 'font-lock-comment-face))))
-                 (merge-icon (when (equal mergeable "CONFLICTING")
-                               (decknix--hub-icon "⇌" 'error))))
-            (if merge-icon
-                (concat ci-icon merge-icon)
-              ci-icon)))
+        ;; -- Hub: CI classification + sidebar icon helpers --
+        ;;
+        ;; Source moved out of this heredoc into
+        ;; agent-shell/hub/decknix-hub-ci.el, packaged as
+        ;; `decknix-hub-ci-el' (see the `let' block at the top of
+        ;; this module).  Provides:
+        ;;
+        ;;   `decknix--hub-ci-soft-patterns'  (defvar)
+        ;;   `decknix--hub-ci-check-soft-p'   (single-check predicate)
+        ;;   `decknix--hub-ci-classify'       (alist -> refined status)
+        ;;   `decknix--hub-icon'              (emoji-vs-text propertize)
+        ;;   `decknix--hub-ci-icon'           (status -> glyph + face,
+        ;;                                     plus optional CONFLICTING)
+        ;;
+        ;; Heredoc-side icon siblings (`decknix--hub-review-icon',
+        ;; `decknix--hub-wip-review-icon', etc.) call
+        ;; `decknix--hub-icon' once this require has fired; the
+        ;; hygiene block at the top forward-declares the four
+        ;; symbols so byte-compile of those siblings stays clean.
+        (require 'decknix-hub-ci)
 
         (defun decknix--hub-review-icon (item)
           "Return a review state icon for ITEM, or empty string if none.
