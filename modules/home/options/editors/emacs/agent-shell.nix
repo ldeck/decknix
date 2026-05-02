@@ -178,6 +178,27 @@ let
     ];
   };
 
+  decknix-hub-org-filter-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-org-filter";
+    src = ./agent-shell/hub;
+    # Co-resident with the other hub/ modules; trivialBuild byte-compiles
+    # all siblings so packageRequires can stay empty until one explicitly
+    # `require's another.
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-org-filter-test.el"
+    ];
+  };
+
+  decknix-hub-jira-tasks-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-jira-tasks";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-jira-tasks-test.el"
+    ];
+  };
+
   # == Custom auggie commands ==
   # Deployed to ~/.augment/commands/ via home.file (as symlinks).
   # User-created commands (regular files) coexist in the same directory
@@ -543,6 +564,8 @@ in
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
         ++ (optional cfg.hub.enable decknix-hub-teamcity-el)
+        ++ (optional cfg.hub.enable decknix-hub-org-filter-el)
+        ++ (optional cfg.hub.enable decknix-hub-jira-tasks-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el);
 
@@ -6459,7 +6482,8 @@ Like treemacs `W' / extra-wide-toggle."
         ;; Defvars and defuns below now live in extracted .el modules
         ;; (see the `let' block at the top: `decknix-progress-el',
         ;; `decknix-sidebar-toggles-el', `decknix-hub-age-presets-el',
-        ;; `decknix-hub-teamcity-el').
+        ;; `decknix-hub-teamcity-el', `decknix-hub-org-filter-el',
+        ;; `decknix-hub-jira-tasks-el').
         ;; This heredoc references them inside transient suffix lambdas
         ;; (just below) and Requests / WIP / sessions render code (much
         ;; further down) at byte-compile time, before the `(require ...)'
@@ -6483,6 +6507,11 @@ Like treemacs `W' / extra-wide-toggle."
         (declare-function decknix--hub-tc-build-for-branch "decknix-hub-teamcity")
         (declare-function decknix--hub-tc-icon "decknix-hub-teamcity")
         (declare-function decknix--hub-deploy-indicator "decknix-hub-teamcity")
+        (defvar decknix--hub-org-visibility)
+        (declare-function decknix--hub-discover-orgs "decknix-hub-org-filter")
+        (declare-function decknix--hub-org-visible-p "decknix-hub-org-filter")
+        (declare-function decknix--hub-org-filter-summary "decknix-hub-org-filter")
+        (declare-function decknix--hub-task-status-icon "decknix-hub-jira-tasks")
 
         ;; -- Sidebar transient menu (magit-style ? popup) --
         (require 'transient)
@@ -10744,35 +10773,18 @@ picker's dynamic binding unwinds.")
         ;; nil = show all (default). When the table has entries,
         ;; only orgs with t value are shown. O opens a transient
         ;; with per-org toggles, show all / show none.
-
-        (defvar decknix--hub-org-visibility nil
-          "Hash-table tracking org visibility (org-name → boolean).
-nil means show all orgs (no filter active).")
-
-        (defun decknix--hub-discover-orgs ()
-          "Return a sorted list of unique GitHub owners across reviews and WIP."
-          (let ((orgs (make-hash-table :test 'equal)))
-            ;; Reviews
-            (when decknix--hub-reviews
-              (dolist (item (alist-get 'items decknix--hub-reviews))
-                (let* ((repo (or (alist-get 'repo item) ""))
-                       (owner (car (split-string repo "/"))))
-                  (when (and owner (not (string-empty-p owner)))
-                    (puthash owner t orgs)))))
-            ;; WIP
-            (when decknix--hub-wip
-              (dolist (repo-entry (alist-get 'repos decknix--hub-wip))
-                (let* ((repo (or (alist-get 'repo repo-entry) ""))
-                       (owner (car (split-string repo "/"))))
-                  (when (and owner (not (string-empty-p owner)))
-                    (puthash owner t orgs)))))
-            (sort (hash-table-keys orgs) #'string<)))
-
-        (defun decknix--hub-org-visible-p (org)
-          "Return non-nil if ORG should be shown.
-When no filter is active (table is nil), all orgs are visible."
-          (or (null decknix--hub-org-visibility)
-              (gethash org decknix--hub-org-visibility)))
+        ;;
+        ;; The pure helpers (defvar `decknix--hub-org-visibility',
+        ;; `decknix--hub-discover-orgs', `decknix--hub-org-visible-p',
+        ;; and `decknix--hub-org-filter-summary' further down) moved
+        ;; out of this heredoc into agent-shell/hub/decknix-hub-org-filter.el,
+        ;; packaged as `decknix-hub-org-filter-el' (see the `let'
+        ;; block at the top of this module).  The mutating commands
+        ;; (`-toggle-org', `-show-all', `-show-none', the `-make-org-toggle-cmd'
+        ;; factory, the transient prefix / suffix wrappers) stay
+        ;; here — they refresh the sidebar and bind transient slots,
+        ;; which are heredoc-side concerns.
+        (require 'decknix-hub-org-filter)
 
         (defun decknix--hub-toggle-org (org)
           "Toggle visibility of ORG and refresh the sidebar."
@@ -10808,19 +10820,9 @@ When no filter is active (table is nil), all orgs are visible."
             (agent-shell-workspace-sidebar-refresh))
           (message "Hub: hiding all orgs"))
 
-        (defun decknix--hub-org-filter-summary ()
-          "Return a short string describing the current org filter state."
-          (if (null decknix--hub-org-visibility)
-              "all"
-            (let* ((orgs (decknix--hub-discover-orgs))
-                   (total (length orgs))
-                   (visible (cl-count-if
-                             (lambda (o) (gethash o decknix--hub-org-visibility))
-                             orgs)))
-              (cond
-               ((= visible total) "all")
-               ((= visible 0) "none")
-               (t (format "%d/%d" visible total))))))
+        ;; `decknix--hub-org-filter-summary' was extracted alongside
+        ;; the other org-filter pure helpers — see the
+        ;; `(require 'decknix-hub-org-filter)' a few lines up.
 
         ;; -- Hub: per-org toggle command factory --
         (defun decknix--hub-make-org-toggle-cmd (org)
@@ -14050,19 +14052,14 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
                    (if decknix--hub-show-deploys "shown" "hidden")))
 
         ;; -- Jira task status icon --
-        (defun decknix--hub-task-status-icon (status)
-          "Return an icon string for Jira STATUS."
-          (pcase (downcase (or status ""))
-            ("in progress"
-             (propertize "●" 'face '(:foreground "#61afef")))
-            ("code review"
-             (propertize "◐" 'face '(:foreground "#c678dd")))
-            ("blocked"
-             (propertize "✕" 'face '(:foreground "#e06c75")))
-            ("ready"
-             (propertize "○" 'face '(:foreground "#98c379")))
-            (_
-             (propertize "·" 'face 'font-lock-comment-face))))
+        ;;
+        ;; Source moved out of this heredoc into
+        ;; agent-shell/hub/decknix-hub-jira-tasks.el, packaged as
+        ;; `decknix-hub-jira-tasks-el' (see the `let' block at the top
+        ;; of this module).  The renderer immediately below
+        ;; (`decknix--hub-render-tasks') stays here — it inserts text
+        ;; into the sidebar buffer, which is a heredoc-side concern.
+        (require 'decknix-hub-jira-tasks)
 
         (defun decknix--hub-render-tasks (line-num)
           "Render the Tasks (Jira) section. Returns updated LINE-NUM."
