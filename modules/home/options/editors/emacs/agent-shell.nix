@@ -211,6 +211,15 @@ let
     ];
   };
 
+  decknix-hub-mention-bot-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-mention-bot";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-mention-bot-test.el"
+    ];
+  };
+
   # == Custom auggie commands ==
   # Deployed to ~/.augment/commands/ via home.file (as symlinks).
   # User-created commands (regular files) coexist in the same directory
@@ -579,6 +588,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-org-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-jira-tasks-el)
         ++ (optional cfg.hub.enable decknix-hub-ci-el)
+        ++ (optional cfg.hub.enable decknix-hub-mention-bot-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el);
 
@@ -6496,7 +6506,8 @@ Like treemacs `W' / extra-wide-toggle."
         ;; (see the `let' block at the top: `decknix-progress-el',
         ;; `decknix-sidebar-toggles-el', `decknix-hub-age-presets-el',
         ;; `decknix-hub-teamcity-el', `decknix-hub-org-filter-el',
-        ;; `decknix-hub-jira-tasks-el', `decknix-hub-ci-el').
+        ;; `decknix-hub-jira-tasks-el', `decknix-hub-ci-el',
+        ;; `decknix-hub-mention-bot-el').
         ;; This heredoc references them inside transient suffix lambdas
         ;; (just below) and Requests / WIP / sessions render code (much
         ;; further down) at byte-compile time, before the `(require ...)'
@@ -6528,6 +6539,18 @@ Like treemacs `W' / extra-wide-toggle."
         (declare-function decknix--hub-icon "decknix-hub-ci")
         (declare-function decknix--hub-ci-icon "decknix-hub-ci")
         (declare-function decknix--hub-ci-classify "decknix-hub-ci")
+        (defvar decknix--hub-mention-filter)
+        (defvar decknix--hub-mention-filter-cycle)
+        (defvar decknix--hub-show-bots)
+        (defvar decknix--hub-bot-patterns)
+        (declare-function decknix--hub-mention-filter-normalize "decknix-hub-mention-bot")
+        (declare-function decknix--hub-mention-filter-label "decknix-hub-mention-bot")
+        (declare-function decknix--hub-item-author-p "decknix-hub-mention-bot")
+        (declare-function decknix--hub-item-mentioned-p "decknix-hub-mention-bot")
+        (declare-function decknix--hub-item-team-requested-p "decknix-hub-mention-bot")
+        (declare-function decknix--hub-mention-visible-p "decknix-hub-mention-bot")
+        (declare-function decknix--hub-bot-author-p "decknix-hub-mention-bot")
+        (declare-function decknix--hub-bot-visible-p "decknix-hub-mention-bot")
 
         ;; -- Sidebar transient menu (magit-style ? popup) --
         (require 'transient)
@@ -11357,43 +11380,34 @@ lint-only failures and still-running checks."
            ("n" "Show none" decknix--hub-ci-filter-show-none :transient t)
            ("q" "Done" transient-quit-one)])
 
-        ;; -- Hub: direct-mention filter --
-        ;; When enabled, Requests shows only items where the user's attention
-        ;; was specifically requested: either individually added as a reviewer
-        ;; or @-mentioned in a comment/review body.
-
-        (defvar decknix--hub-mention-filter nil
-          "Mention-filter state for the Requests section.
-A symbol with one of these values:
-  nil       — no filtering (all visible).
-  me        — only PRs where I am directly requested or @-mentioned.
-  team      — only PRs where one of my teams is requested
-              (and I am not directly requested / mentioned).
-  me+team   — union of `me' and `team'.
-
-In every non-nil state, PRs I authored are excluded.
-
-For backward compatibility, a legacy boolean `t' is migrated to `me'.")
-
-        (defvar decknix--hub-mention-filter-cycle
-          '(nil me team me+team)
-          "Cycle order for `decknix--hub-cycle-mention-filter'.")
-
-        (defun decknix--hub-mention-filter-normalize (val)
-          "Coerce a persisted VAL into a valid mention-filter state.
-Migrates legacy boolean state: `t' → `me', `nil' stays `nil'."
-          (cond
-           ((memq val decknix--hub-mention-filter-cycle) val)
-           ((eq val t) 'me)
-           (t nil)))
-
-        (defun decknix--hub-mention-filter-label ()
-          "Return a short label for the current mention-filter state."
-          (pcase decknix--hub-mention-filter
-            ('me      "me")
-            ('team    "team")
-            ('me+team "me+team")
-            (_        "off")))
+        ;; -- Hub: direct-mention filter + bot filter (visibility predicates) --
+        ;;
+        ;; Pure source moved out of this heredoc into
+        ;; agent-shell/hub/decknix-hub-mention-bot.el, packaged as
+        ;; `decknix-hub-mention-bot-el' (see the `let' block at the
+        ;; top of this module).  Two co-resident clusters in one file:
+        ;;
+        ;;   mention-filter:
+        ;;     `decknix--hub-mention-filter'         (defvar, state)
+        ;;     `decknix--hub-mention-filter-cycle'   (defvar, cycle order)
+        ;;     `decknix--hub-mention-filter-normalize'  (legacy migration)
+        ;;     `decknix--hub-mention-filter-label'   (state -> label)
+        ;;     `decknix--hub-item-author-p'          (viewer match)
+        ;;     `decknix--hub-item-mentioned-p'       (alist gate)
+        ;;     `decknix--hub-item-team-requested-p'  (alist gate)
+        ;;     `decknix--hub-mention-visible-p'      (combined predicate)
+        ;;
+        ;;   bot:
+        ;;     `decknix--hub-show-bots'              (defvar, override)
+        ;;     `decknix--hub-bot-patterns'           (defvar, regexps)
+        ;;     `decknix--hub-bot-author-p'           (regexp predicate)
+        ;;     `decknix--hub-bot-visible-p'          (item visibility)
+        ;;
+        ;; The two interactive sidebar mutators below stay in the
+        ;; heredoc — they refresh the sidebar buffer (a heredoc-side
+        ;; concern) and the `M-' transient suffixes still target them
+        ;; by symbol.
+        (require 'decknix-hub-mention-bot)
 
         (defun decknix--hub-cycle-mention-filter ()
           "Cycle the mention filter through off → me → team → me+team → off."
@@ -11411,62 +11425,6 @@ Migrates legacy boolean state: `t' → `me', `nil' stays `nil'."
         (defalias 'decknix--hub-toggle-mention-filter
           'decknix--hub-cycle-mention-filter)
 
-        (defun decknix--hub-item-author-p (item)
-          "Return non-nil if ITEM was authored by the current viewer.
-Uses the `viewer' field from the reviews JSON file when available;
-falls back to a no-op (returns nil) when the field is missing so
-the filter remains permissive on older hub versions."
-          (let ((viewer (and (boundp 'decknix--hub-reviews)
-                             decknix--hub-reviews
-                             (alist-get 'viewer decknix--hub-reviews)))
-                (author (alist-get 'author item)))
-            (and viewer author
-                 (string-equal-ignore-case viewer author))))
-
-        (defun decknix--hub-item-mentioned-p (item)
-          "Return non-nil if ITEM has the `mentioned' flag set.
-Used to show the @ indicator and to filter when the mention state
-includes `me'."
-          (eq (alist-get 'mentioned item) t))
-
-        (defun decknix--hub-item-team-requested-p (item)
-          "Return non-nil if ITEM has the `team_requested' flag set.
-True when one of the viewer's teams was requested as a reviewer."
-          (eq (alist-get 'team_requested item) t))
-
-        (defun decknix--hub-mention-visible-p (item)
-          "Return non-nil if ITEM passes the current mention filter.
-Always returns t when filter is `nil'.  When filtering, PRs I
-authored are excluded so I never see them under any mention state."
-          (let ((state decknix--hub-mention-filter))
-            (cond
-             ((null state) t)
-             ((decknix--hub-item-author-p item) nil)
-             (t
-              (let ((me (decknix--hub-item-mentioned-p item))
-                    (team (decknix--hub-item-team-requested-p item)))
-                (pcase state
-                  ('me      me)
-                  ('team    (and team (not me)))
-                  ('me+team (or me team))
-                  (_        t)))))))
-
-        ;; -- Hub: bot filter --
-        (defvar decknix--hub-show-bots nil
-          "When nil (default), hide PRs authored by bots (e.g. dependabot).
-When non-nil, show all PRs including bot-authored ones.")
-
-        (defvar decknix--hub-bot-patterns
-          '("\\[bot\\]$" "^dependabot" "^renovate" "^greenkeeper")
-          "Regexps matched against the PR author to detect bot accounts.")
-
-        (defun decknix--hub-bot-author-p (author)
-          "Return non-nil if AUTHOR matches a known bot pattern."
-          (and author
-               (seq-some (lambda (pat)
-                           (string-match-p pat author))
-                         decknix--hub-bot-patterns)))
-
         (defun decknix--hub-toggle-bot-filter ()
           "Toggle visibility of bot-authored PRs (e.g. dependabot)."
           (interactive)
@@ -11475,13 +11433,6 @@ When non-nil, show all PRs including bot-authored ones.")
             (agent-shell-workspace-sidebar-refresh))
           (message "Bot PRs: %s"
                    (if decknix--hub-show-bots "shown" "hidden")))
-
-        (defun decknix--hub-bot-visible-p (item)
-          "Return non-nil if ITEM passes the bot filter.
-Always returns t when `decknix--hub-show-bots' is non-nil."
-          (or decknix--hub-show-bots
-              (not (decknix--hub-bot-author-p
-                    (alist-get 'author item)))))
 
         ;; -- Hub: attention filters (needs-reply / bot-pending / replies-to-me) --
         ;;

@@ -36,6 +36,7 @@
 (defvar decknix--hub-deploys nil)
 (defvar decknix--hub-show-deploys t)
 (defvar decknix--hub-org-visibility nil)
+(defvar decknix--hub-mention-filter nil)
 (defvar decknix-progress--dir)
 (defvar decknix-progress--index-cache)
 (defvar decknix-progress--todo-cache)
