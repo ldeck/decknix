@@ -30,10 +30,12 @@
 ;; daemon.  The progress dir / cache vars are always set inside the
 ;; tmp-dir macro, so a no-init declaration is sufficient there.
 (defvar decknix--hub-wip nil)
+(defvar decknix--hub-reviews nil)
 (defvar decknix--hub-jira-tasks nil)
 (defvar decknix--hub-teamcity-builds nil)
 (defvar decknix--hub-deploys nil)
 (defvar decknix--hub-show-deploys t)
+(defvar decknix--hub-org-visibility nil)
 (defvar decknix-progress--dir)
 (defvar decknix-progress--index-cache)
 (defvar decknix-progress--todo-cache)
