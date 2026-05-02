@@ -82,11 +82,52 @@ let
   # External symbols defined elsewhere in this file's heredoc are forward-
   # declared inside the .el files via `declare-function' so byte-compile
   # stays warning-clean despite the split.
-  decknix-progress-el = pkgs.emacsPackages.trivialBuild {
+  #
+  # Test policy: every in-tree package wires its ERT characterisation
+  # suite into the build via `mkEmacsTestedPackage'.  Tests live in
+  # `agent-shell/tests/' and are loaded after the package's own .el
+  # files; a red test exits the byte-compile build non-zero, which
+  # fails the system derivation.  No commit without a green build.
+  testsDir = ./agent-shell/tests;
+  mkEmacsTestedPackage = { pname, src, packageRequires ? [ ], testFiles }:
+    (pkgs.emacsPackages.trivialBuild {
+      inherit pname src packageRequires;
+      version = "0.1";
+    }).overrideAttrs (old: {
+      postBuild = (old.postBuild or "") + ''
+        echo "==> Running ERT characterisation tests for ${pname}"
+        # Stage the test sources in a sibling tmp dir (NOT alongside
+        # the package's own .el files) so they don't get picked up by
+        # trivialBuild's `installPhase' and shipped into the daemon's
+        # load-path or native-compiled.  The package dir stays on
+        # `-L .' so the modules-under-test resolve via `require'.
+        decknix_tests_dir=$(mktemp -d)
+        cp ${testsDir}/decknix-test-helpers.el "$decknix_tests_dir/"
+        ${lib.concatMapStringsSep "\n        "
+          (f: ''cp ${testsDir}/${f} "$decknix_tests_dir/"'') testFiles}
+        # Run with the same Emacs the build uses (already on $PATH via
+        # nativeBuildInputs).  -Q skips user init; HOME is sandboxed by
+        # the Nix builder so persistence tests can't escape.
+        emacs -batch -Q \
+          -L . \
+          -L "$decknix_tests_dir" \
+          -l ert \
+          ${lib.concatMapStringsSep " \\\n          "
+            (f: "-l ${lib.removeSuffix ".el" f}") testFiles} \
+          -f ert-run-tests-batch-and-exit
+        rm -rf "$decknix_tests_dir"
+      '';
+    });
+
+  decknix-progress-el = mkEmacsTestedPackage {
     pname = "decknix-progress";
-    version = "0.1";
     src = ./agent-shell/progress;
     packageRequires = [ ];
+    testFiles = [
+      "decknix-progress-test.el"
+      "decknix-progress-ui-test.el"
+      "decknix-progress-sidebar-test.el"
+    ];
   };
 
   # == Custom auggie commands ==
