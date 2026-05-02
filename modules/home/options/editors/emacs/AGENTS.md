@@ -53,6 +53,37 @@ When you need a closure (timers, sentinels, callbacks), use:
 sentinel) are always bound by the lambda itself — the pattern is only needed
 for captured *outer* variables.
 
+### Exception: in-tree Elisp packages under `agent-shell/`
+
+First-party Elisp moved out of the `extraConfig` heredoc lives in standalone
+`.el` files under `modules/home/options/editors/emacs/agent-shell/<feature>/`,
+packaged via `pkgs.emacsPackages.trivialBuild` and pulled into `default.el`
+with a `(require 'decknix-<feature>)` line at the same point in the heredoc
+where the inline source used to live.
+
+These files **opt into lexical binding** (`;;; -*- lexical-binding: t -*-`)
+and so the dynamic-binding workaround above is **not** needed inside them.
+Two rules apply:
+
+1. Symbols defined elsewhere in `default.el` (e.g. `decknix-agent-prefix-map`,
+   `decknix--hub-wip`, `decknix--agent-current-conv-key`) are forward-declared
+   at the top of each file using `declare-function` and `defvar`-without-value.
+   This keeps byte-compile warning-clean while still resolving at runtime.
+2. Top-level **side-effects** that depend on `default.el` runtime state
+   (`define-key` on `decknix-agent-prefix-map`, file-notify-watch starts,
+   etc.) stay **in the heredoc**, immediately after the `(require ...)` call.
+   At Nix build time the byte-compiler triggers `(require ...)` for these
+   files; if they ran side-effects at top level the build would crash because
+   the surrounding heredoc's defvars have only been seen, not evaluated.
+
+Current in-tree packages:
+
+| Path | Feature | Notes |
+|------|---------|-------|
+| `agent-shell/progress/decknix-progress.el` | Progress data layer | Provider-agnostic items, attention rollup |
+| `agent-shell/progress/decknix-progress-ui.el` | `*decknix-progress*` buffer | Magit-style hierarchical view |
+| `agent-shell/progress/decknix-progress-sidebar.el` | Sidebar badge integration | Mtime-cached `index.json` reads |
+
 ## Package Sourcing
 
 ```
