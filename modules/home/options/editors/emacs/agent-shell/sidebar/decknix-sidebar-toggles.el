@@ -19,10 +19,12 @@
 ;;; Code:
 
 (require 'cl-lib)
+;; Shared age-filter presets — Sessions cycle reuses the Requests
+;; preset list so labels (`all/1d/3d/7d/14d/30d') stay aligned.
+(require 'decknix-hub-age-presets)
 
 ;; -- Forward declarations: defined elsewhere in agent-shell config --
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
-(defvar decknix--hub-age-presets)
 
 (defvar decknix--sidebar-show-keys t
   "When non-nil, show categorised key listing in the sidebar footer.

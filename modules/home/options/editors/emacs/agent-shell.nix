@@ -130,10 +130,21 @@ let
     ];
   };
 
+  decknix-hub-age-presets-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-age-presets";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-age-presets-test.el"
+    ];
+  };
+
   decknix-sidebar-toggles-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-toggles";
     src = ./agent-shell/sidebar;
-    packageRequires = [ ];
+    # Sidebar saved-Sessions age toggle reuses the shared preset list
+    # from decknix-hub-age-presets so labels stay aligned with Requests.
+    packageRequires = [ decknix-hub-age-presets-el ];
     testFiles = [
       "decknix-sidebar-toggles-test.el"
     ];
@@ -142,7 +153,12 @@ let
   decknix-sidebar-row-actions-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-row-actions";
     src = ./agent-shell/sidebar;
-    packageRequires = [ ];
+    # Co-resident with decknix-sidebar-toggles.el in the sidebar/ dir,
+    # so trivialBuild byte-compiles both during this package's build.
+    # Toggles `(require 'decknix-hub-age-presets)' at load-time, so
+    # the dep must be on the load-path here too — even though
+    # row-actions itself does not reference the presets.
+    packageRequires = [ decknix-hub-age-presets-el ];
     testFiles = [
       "decknix-sidebar-row-actions-test.el"
     ];
@@ -511,6 +527,7 @@ in
         # only when hub is enabled.  Sidebar toggles ride with workspace
         # since they exist to flip what the workspace sidebar renders.
         ++ (optional cfg.hub.enable decknix-progress-el)
+        ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el);
 
@@ -6424,21 +6441,29 @@ Like treemacs `W' / extra-wide-toggle."
 
         ;; == Forward declarations for byte-compile hygiene ==
         ;;
-        ;; Defvars below now live in extracted .el modules (see the
-        ;; `let' block at the top: `decknix-progress-el',
-        ;; `decknix-sidebar-toggles-el').  This heredoc references
-        ;; them inside transient suffix lambdas (just below) at
-        ;; byte-compile time, before the `(require ...)' calls
-        ;; further down execute, so without these declarations the
-        ;; compiler emits "reference to free variable" warnings on
-        ;; every read site.  A no-init `(defvar X)' is a pure
-        ;; compiler hint — it does NOT bind a value, so module load
-        ;; order remains the source of truth at runtime.
+        ;; Defvars and defuns below now live in extracted .el modules
+        ;; (see the `let' block at the top: `decknix-progress-el',
+        ;; `decknix-sidebar-toggles-el', `decknix-hub-age-presets-el').
+        ;; This heredoc references them inside transient suffix lambdas
+        ;; (just below) and Requests / WIP / sessions render code (much
+        ;; further down) at byte-compile time, before the `(require ...)'
+        ;; calls execute, so without these declarations the compiler
+        ;; emits "reference to free variable" / "function not known"
+        ;; warnings on every read site.  A no-init `(defvar X)' is a
+        ;; pure compiler hint — it does NOT bind a value, so module
+        ;; load order remains the source of truth at runtime.  The
+        ;; `declare-function' lines play the same role for symbols
+        ;; whose function cell lives in an extracted module.
         (defvar decknix--sidebar-show-progress)
         (defvar decknix--sidebar-show-hidden)
         (defvar decknix--sidebar-sessions-hide-live)
         (defvar decknix--sidebar-sessions-hide-unknown)
         (defvar decknix--hub-show-saved-sessions)
+        (defvar decknix--hub-age-filter)
+        (defvar decknix--hub-age-presets)
+        (declare-function decknix--hub-age-filter-label "decknix-hub-age-presets")
+        (declare-function decknix--hub-cycle-age-filter "decknix-hub-age-presets")
+        (declare-function decknix--hub-age-visible-p "decknix-hub-age-presets")
 
         ;; -- Sidebar transient menu (magit-style ? popup) --
         (require 'transient)
@@ -11096,48 +11121,17 @@ When no filter is active (table is nil), all orgs are visible."
         ;; Cycles through preset age thresholds.  Items older than the
         ;; threshold are hidden from both Requests and WIP sections.
         ;; nil = show all (no age filter).
-
-        (defvar decknix--hub-age-filter nil
-          "Current age filter threshold in seconds, or nil for no filter.
-Use `decknix--hub-cycle-age-filter' to cycle through presets.")
-
-        (defvar decknix--hub-age-presets
-          '((nil    . "all")
-            (86400  . "1d")
-            (259200 . "3d")
-            (604800 . "7d")
-            (1209600 . "14d")
-            (2592000 . "30d"))
-          "Alist of (SECONDS . LABEL) presets for the age filter.")
-
-        (defun decknix--hub-age-filter-label ()
-          "Return the label for the current age filter."
-          (or (alist-get decknix--hub-age-filter
-                         decknix--hub-age-presets)
-              "all"))
-
-        (defun decknix--hub-cycle-age-filter ()
-          "Cycle the hub age filter through presets."
-          (interactive)
-          (let* ((keys (mapcar #'car decknix--hub-age-presets))
-                 (pos (cl-position decknix--hub-age-filter keys :test #'equal))
-                 (next-pos (mod (1+ (or pos 0)) (length keys))))
-            (setq decknix--hub-age-filter (nth next-pos keys))
-            (when (get-buffer "*agent-shell-sidebar*")
-              (agent-shell-workspace-sidebar-refresh))
-            (message "Hub age filter: %s" (decknix--hub-age-filter-label))))
-
-        (defun decknix--hub-age-visible-p (iso-time)
-          "Return non-nil if ISO-TIME is within the current age filter.
-Always returns t when filter is nil (show all)."
-          (or (null decknix--hub-age-filter)
-              (and iso-time (stringp iso-time)
-                   (condition-case nil
-                       (let* ((then (encode-time (iso8601-parse iso-time)))
-                              (age-secs (float-time
-                                         (time-subtract (current-time) then))))
-                         (<= age-secs decknix--hub-age-filter))
-                     (error t)))))
+        ;;
+        ;; Source moved out of this heredoc into
+        ;; agent-shell/hub/decknix-hub-age-presets.el, packaged as
+        ;; `decknix-hub-age-presets-el' (see the `let' block at the top
+        ;; of this module).  The `(require ...)' stays HERE so that the
+        ;; downstream `decknix--hub-age-visible-p' call sites further
+        ;; down the workspace block (Requests / WIP / sessions render)
+        ;; and the Toggles transient see the defvars + helpers as soon
+        ;; as they're needed.  Sidebar-toggles also `(require ...)' it
+        ;; so the saved-Sessions age toggle shares the same preset list.
+        (require 'decknix-hub-age-presets)
 
         ;; -- Hub: CI status filter --
         ;; Tracks which CI statuses are visible (pass, fail, running, unknown).
