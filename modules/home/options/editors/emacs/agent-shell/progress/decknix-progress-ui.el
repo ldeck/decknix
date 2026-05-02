@@ -254,7 +254,6 @@ DEFAULT is returned when no explicit state has been set."
   "Insert ITEM at indentation DEPTH; recurse into children unless folded."
   (let* ((id        (or (plist-get item :id) ""))
          (state     (or (plist-get item :state) 'todo))
-         (att       (or (plist-get item :attention) 'none))
          (rolled    (decknix-progress--rollup-attention item))
          (title     (or (plist-get item :title) ""))
          (url       (plist-get item :url))
