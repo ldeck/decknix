@@ -31,6 +31,9 @@
 ;; tmp-dir macro, so a no-init declaration is sufficient there.
 (defvar decknix--hub-wip nil)
 (defvar decknix--hub-jira-tasks nil)
+(defvar decknix--hub-teamcity-builds nil)
+(defvar decknix--hub-deploys nil)
+(defvar decknix--hub-show-deploys t)
 (defvar decknix-progress--dir)
 (defvar decknix-progress--index-cache)
 (defvar decknix-progress--todo-cache)
@@ -120,11 +123,26 @@ keys are `branch', `state' (running/queued/finished), `status'
       (status . ,status)
       (progress_pct . ,pct))))
 
+(defun decknix-test-make-teamcity-env (&rest props)
+  "Build one `environments' alist entry from PROPS (plist).
+Mirrors the shape `decknix--hub-deploy-indicator' iterates over:
+keys are `env' (development/testing/stable/production/uk_production),
+`status' (SUCCESS/FAILURE/ERROR), `state' (finished/running/queued),
+and `finished' (ISO-8601 UTC timestamp string, optional)."
+  (let ((env      (or (plist-get props :env) "stable"))
+        (status   (or (plist-get props :status) "SUCCESS"))
+        (state    (or (plist-get props :state) "finished"))
+        (finished (plist-get props :finished)))
+    `((env . ,env)
+      (status . ,status)
+      (state . ,state)
+      (finished . ,finished))))
+
 (defun decknix-test-make-teamcity-deploys (repo-branches)
   "Build a `decknix--hub-deploys'-shaped alist from REPO-BRANCHES.
-REPO-BRANCHES is a list of (REPO BRANCH . ENVS) where ENVS is a
-list of (ENV-LETTER . STATUS) cons cells (status = success /
-failure / running / nil).  Matches the shape consumed by
+REPO-BRANCHES is a list of (REPO BRANCH ENV-ENTRIES...) where each
+ENV-ENTRY is itself an alist as produced by
+`decknix-test-make-teamcity-env'.  Matches the shape consumed by
 `decknix--hub-deploy-indicator'."
   `((repos . ,(mapcar
                (lambda (rb)
