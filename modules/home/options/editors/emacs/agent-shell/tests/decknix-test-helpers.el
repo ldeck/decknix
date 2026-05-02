@@ -106,6 +106,92 @@ REPO-PRS is a list of (REPO . PR-LIST) cons cells."
       (status_category . ,cat)
       (links . ,links))))
 
+(defun decknix-test-make-teamcity-build (&rest props)
+  "Build a hub TeamCity build alist from PROPS (plist).
+Mirrors the shape `decknix--hub-tc-build-for-branch' consumes:
+keys are `branch', `state' (running/queued/finished), `status'
+\(SUCCESS/FAILURE/ERROR), and optional `progress_pct'."
+  (let ((branch  (or (plist-get props :branch) "main"))
+        (state   (or (plist-get props :state) "finished"))
+        (status  (or (plist-get props :status) "SUCCESS"))
+        (pct     (plist-get props :progress-pct)))
+    `((branch . ,branch)
+      (state . ,state)
+      (status . ,status)
+      (progress_pct . ,pct))))
+
+(defun decknix-test-make-teamcity-deploys (repo-branches)
+  "Build a `decknix--hub-deploys'-shaped alist from REPO-BRANCHES.
+REPO-BRANCHES is a list of (REPO BRANCH . ENVS) where ENVS is a
+list of (ENV-LETTER . STATUS) cons cells (status = success /
+failure / running / nil).  Matches the shape consumed by
+`decknix--hub-deploy-indicator'."
+  `((repos . ,(mapcar
+               (lambda (rb)
+                 (let ((repo (nth 0 rb))
+                       (branch (nth 1 rb))
+                       (envs (nthcdr 2 rb)))
+                   `((repo . ,repo)
+                     (branches . (((branch . ,branch)
+                                   (environments . ,envs)))))))
+               repo-branches))))
+
+;; -- Stubbing for not-yet-extracted dependencies ------------------
+;;
+;; Modules extracted from the heredoc reference symbols defined
+;; elsewhere in `default.el' (e.g. `agent-shell-workspace-sidebar-refresh',
+;; `decknix-agent-prefix-map') that aren't loaded in the test
+;; environment.  At runtime the modules guard those calls with
+;; `(when (fboundp ...))', so this macro feeds a `cl-letf' rebinding
+;; that records each call into a counter so tests can assert "refresh
+;; was triggered" without dragging in agent-shell-workspace.
+
+(defvar decknix-test--stub-calls nil
+  "Alist of (SYMBOL . COUNT) recording stubbed-function invocations.
+Bound by `decknix-test-with-stubbed-deps'.")
+
+(defun decknix-test-stub-call-count (symbol)
+  "Return the number of times stubbed SYMBOL was called inside the macro."
+  (or (alist-get symbol decknix-test--stub-calls) 0))
+
+(defmacro decknix-test-with-stubbed-deps (stubs &rest body)
+  "Run BODY with STUBS bound as no-op functions that record calls.
+STUBS is a list of symbols; each is rebound via `cl-letf' to a
+function that increments `decknix-test--stub-calls' under that key
+and returns nil.  Use `decknix-test-stub-call-count' inside BODY
+to assert the function was triggered.
+
+Stubs only intercept calls that go through the symbol's function
+cell, so tests targeting code that uses `(when (fboundp 'foo) (foo))'
+work without modification."
+  (declare (indent 1))
+  `(let ((decknix-test--stub-calls nil))
+     (cl-letf (,@(mapcar
+                  (lambda (sym)
+                    `((symbol-function ',sym)
+                      (lambda (&rest _args)
+                        (setf (alist-get ',sym decknix-test--stub-calls 0)
+                              (1+ (alist-get ',sym decknix-test--stub-calls 0)))
+                        nil)))
+                  stubs))
+       ,@body)))
+
+;; -- Snapshot helper ------------------------------------------------
+;;
+;; Compares a rendered substring against an expected one, returning
+;; nil on match and a multi-line diff-shaped string on mismatch so
+;; ERT's `should' surfaces both versions in the failure message.
+
+(defun decknix-test-render-snapshot (actual expected)
+  "Return nil when ACTUAL equals EXPECTED, else a diff-shaped message.
+Both arguments are strings.  Use inside ERT with
+  (should (null (decknix-test-render-snapshot actual expected)))
+so a regression prints both the rendered and expected forms."
+  (if (string= actual expected)
+      nil
+    (format "snapshot mismatch:\n--- expected ---\n%s\n--- actual ---\n%s\n--- end ---"
+            expected actual)))
+
 (defun decknix-test-read-json-file (path)
   "Read PATH as JSON and return the parsed hash table."
   (with-temp-buffer
