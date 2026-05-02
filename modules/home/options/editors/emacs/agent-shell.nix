@@ -139,6 +139,15 @@ let
     ];
   };
 
+  decknix-sidebar-row-actions-el = mkEmacsTestedPackage {
+    pname = "decknix-sidebar-row-actions";
+    src = ./agent-shell/sidebar;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-sidebar-row-actions-test.el"
+    ];
+  };
+
   # == Custom auggie commands ==
   # Deployed to ~/.augment/commands/ via home.file (as symlinks).
   # User-created commands (regular files) coexist in the same directory
@@ -502,7 +511,8 @@ in
         # only when hub is enabled.  Sidebar toggles ride with workspace
         # since they exist to flip what the workspace sidebar renders.
         ++ (optional cfg.hub.enable decknix-progress-el)
-        ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el);
+        ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el)
+        ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el);
 
       extraConfig = ''
         ;;; Agent Shell Configuration (auggie AI integration)
@@ -6412,6 +6422,24 @@ Like treemacs `W' / extra-wide-toggle."
                  (setq decknix--sidebar-width-state 'default)
                  (message "Sidebar: default (%d)" default-w))))))
 
+        ;; == Forward declarations for byte-compile hygiene ==
+        ;;
+        ;; Defvars below now live in extracted .el modules (see the
+        ;; `let' block at the top: `decknix-progress-el',
+        ;; `decknix-sidebar-toggles-el').  This heredoc references
+        ;; them inside transient suffix lambdas (just below) at
+        ;; byte-compile time, before the `(require ...)' calls
+        ;; further down execute, so without these declarations the
+        ;; compiler emits "reference to free variable" warnings on
+        ;; every read site.  A no-init `(defvar X)' is a pure
+        ;; compiler hint — it does NOT bind a value, so module load
+        ;; order remains the source of truth at runtime.
+        (defvar decknix--sidebar-show-progress)
+        (defvar decknix--sidebar-show-hidden)
+        (defvar decknix--sidebar-sessions-hide-live)
+        (defvar decknix--sidebar-sessions-hide-unknown)
+        (defvar decknix--hub-show-saved-sessions)
+
         ;; -- Sidebar transient menu (magit-style ? popup) --
         (require 'transient)
 
@@ -6738,34 +6766,16 @@ picker / transient."
         ;; defvars and toggle commands as soon as they're needed.
         (require 'decknix-sidebar-toggles)
 
-        (defun decknix-sidebar-hide-at-point ()
-          "Mark the saved session at point as hidden (background/automated).
-The session will be excluded from the Sessions list unless `H' toggle is on."
-          (interactive)
-          (let ((conv-key (get-text-property
-                           (line-beginning-position)
-                           'decknix-sidebar-saved-conv-key)))
-            (if conv-key
-                (progn
-                  (decknix--agent-conversation-set-hidden conv-key t)
-                  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-                    (agent-shell-workspace-sidebar-refresh))
-                  (message "Session hidden — press H to show hidden sessions"))
-              (message "No saved session at point"))))
-
-        (defun decknix-sidebar-unhide-at-point ()
-          "Un-hide the saved session at point (make visible again)."
-          (interactive)
-          (let ((conv-key (get-text-property
-                           (line-beginning-position)
-                           'decknix-sidebar-saved-conv-key)))
-            (if conv-key
-                (progn
-                  (decknix--agent-conversation-set-hidden conv-key nil)
-                  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-                    (agent-shell-workspace-sidebar-refresh))
-                  (message "Session un-hidden"))
-              (message "No saved session at point"))))
+        ;; == Sidebar row-level actions (`-at-point' commands) ==
+        ;;
+        ;; Source moved out of this heredoc into
+        ;; agent-shell/sidebar/decknix-sidebar-row-actions.el, packaged
+        ;; as `decknix-sidebar-row-actions-el' (see the `let' block at
+        ;; the top of this module).  The `(require ...)' stays HERE
+        ;; alongside the toggles require so downstream key bindings
+        ;; (`a h' / `a u' in the row-action transient) see the commands
+        ;; as soon as they're needed.
+        (require 'decknix-sidebar-row-actions)
 
         (defun decknix--sidebar-render-key-group (label keys)
           "Insert a group LABEL header and KEYS alist as vertical key lines."
