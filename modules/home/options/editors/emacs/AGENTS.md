@@ -84,6 +84,44 @@ Current in-tree packages:
 | `agent-shell/progress/decknix-progress-ui.el` | `*decknix-progress*` buffer | Magit-style hierarchical view |
 | `agent-shell/progress/decknix-progress-sidebar.el` | Sidebar badge integration | Mtime-cached `index.json` reads |
 
+### Tests (`agent-shell/tests/`)
+
+Every in-tree package wires its ERT characterisation suite into the
+build via the `mkEmacsTestedPackage` helper in `agent-shell.nix`.  A
+red test exits the byte-compile build non-zero, which fails the
+system derivation; no commit lands without a green build.
+
+Layout:
+
+```
+agent-shell/tests/
+├── decknix-test-helpers.el       # shared macros + fixture builders
+├── decknix-progress-test.el      # data layer
+├── decknix-progress-ui-test.el   # UI helpers
+└── decknix-progress-sidebar-test.el  # sidebar badge + cache
+```
+
+Conventions:
+
+1. **Characterisation only** — tests pin current behaviour, not
+   intended behaviour.  Use them as a safety net before a refactor;
+   change them only when intentionally changing the contract.
+2. **Lexical-binding tests, dynamic free vars** — `let'-binding a free
+   variable that the byte-compiled module accesses via `varref`
+   (e.g. `decknix--hub-wip`) requires the variable to be globally
+   `special-variable-p`.  Forward declarations in
+   `decknix-test-helpers.el` use `(defvar X nil)` (with initialiser)
+   for hub-data vars so the binding is dynamic; without a value
+   `(defvar X)` is only a compiler hint and the let binds lexically.
+3. **Tmp-isolated persistence** — `decknix-test-with-tmp-progress-dir`
+   shadows `decknix-progress--dir` to a per-test mktemp dir and
+   clears the index cache, so persistence tests can't escape into
+   the user's `~/.config`.
+4. **Test files do not ship** — `mkEmacsTestedPackage' stages tests
+   in a sibling tmp dir for the test run, so they never enter
+   `installPhase' or get native-compiled into the daemon's
+   load-path.
+
 ## Package Sourcing
 
 ```
