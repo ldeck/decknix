@@ -95,7 +95,7 @@
 (declare-function decknix--agent-linked-prs "ext:decknix-agent-shell")
 (declare-function decknix--agent-linked-items "ext:decknix-agent-shell")
 (declare-function decknix--agent-tags-conversations "ext:decknix-agent-shell")
-(declare-function decknix--git-remote-url "ext:decknix-agent-shell")
+(declare-function decknix--git-remote-url "decknix-agent-vcs")
 (declare-function decknix--hub-cycle-age-filter "ext:decknix-agent-shell")
 (declare-function decknix--hub-item-mentioned-p "decknix-hub-mention-bot")
 (declare-function decknix--hub-item-team-requested-p "decknix-hub-mention-bot")

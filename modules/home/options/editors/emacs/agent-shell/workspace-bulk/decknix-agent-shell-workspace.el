@@ -94,7 +94,7 @@
 (declare-function decknix--agent-linked-prs "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-linked-items "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-tags-conversations "ext:decknix-agent-shell-main")
-(declare-function decknix--git-remote-url "ext:decknix-agent-shell-main")
+(declare-function decknix--git-remote-url "decknix-agent-vcs")
 (declare-function decknix-agent-link-pr "ext:decknix-agent-shell-main")
 (declare-function decknix-agent-link-repo "ext:decknix-agent-shell-main")
 (declare-function decknix-agent-unlink-pr "ext:decknix-agent-shell-main")
