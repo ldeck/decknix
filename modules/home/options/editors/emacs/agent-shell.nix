@@ -295,6 +295,15 @@ let
     ];
   };
 
+  decknix-agent-review-format-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-review-format";
+    src = ./agent-shell/review;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-review-format-test.el"
+    ];
+  };
+
   # == Custom auggie commands ==
   # Deployed to ~/.augment/commands/ via home.file (as symlinks).
   # User-created commands (regular files) coexist in the same directory
@@ -664,6 +673,7 @@ in
           decknix-agent-format-el
           decknix-agent-parse-el
           decknix-agent-vcs-el
+          decknix-agent-review-format-el
         ]
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
@@ -714,6 +724,10 @@ in
         (declare-function decknix--agent-conversation-key-raw "decknix-agent-parse")
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
+        (require 'decknix-agent-review-format)
+        (declare-function decknix--agent-review-quote "decknix-agent-review-format")
+        (declare-function decknix--agent-review-format-exchanges "decknix-agent-review-format")
+        (declare-function decknix--agent-review-strip-meta "decknix-agent-review-format")
 
         ;; Use auggie as the default agent (skip agent selection prompt)
         (setq agent-shell-preferred-agent-config 'auggie)
@@ -5395,13 +5409,10 @@ the review back to the source agent-shell session.
             (yas-minor-mode 1))
           (decknix--agent-review-load-collaborators))
 
-        (defun decknix--agent-review-quote (text)
-          "Prefix each line of TEXT with `> ' for a markdown blockquote."
-          (if (or (null text) (string-empty-p text))
-              "> _(empty)_"
-            (mapconcat (lambda (line) (concat "> " line))
-                       (split-string text "\n")
-                       "\n")))
+        ;; `decknix--agent-review-quote' lives in
+        ;; agent-shell/review/decknix-agent-review-format.el alongside
+        ;; format-exchanges and strip-meta — required at the top of
+        ;; this heredoc.
 
         (defun decknix--agent-review-capture-exchange (source-buffer n)
           "Return the last N exchanges from SOURCE-BUFFER's session, oldest first.
@@ -5438,22 +5449,8 @@ Each exchange is (USER-MSG . ASSISTANT-RESP).  Returns nil on failure."
              "> option and update prior assumptions.\n"
              "\n")))
 
-        (defun decknix--agent-review-format-exchanges (exchanges)
-          "Render EXCHANGES as markdown blockquote sections.
-EXCHANGES is a list of (USER-MSG . ASSISTANT-RESP) cons cells."
-          (mapconcat
-           (lambda (ex)
-             (let ((user (car ex))
-                   (resp (cdr ex)))
-               (concat
-                "## prompt\n\n"
-                (decknix--agent-review-quote (or user "")) "\n\n"
-                "## agent response\n\n"
-                (decknix--agent-review-quote (or resp "")) "\n\n"
-                "## annotations\n\n"
-                "<!-- ,c ,a ,r ,o ,m ,f ,A — annotate here -->\n\n")))
-           exchanges
-           "\n---\n\n"))
+        ;; `decknix--agent-review-format-exchanges' lives in
+        ;; agent-shell/review/decknix-agent-review-format.el.
 
         (defun decknix-agent-review (&optional all)
           "Open a review buffer for the current agent-shell session.
@@ -5491,25 +5488,8 @@ the last exchange."
           (expand-file-name "~/.config/decknix/review-jira-drafts")
           "Directory where `j' route writes Jira draft markdown files.")
 
-        (defun decknix--agent-review-strip-meta (content)
-          "Return CONTENT with the leading `🧭 **review meta**' block removed.
-Keeps the `📋 **instructions for the agent**' block intact so the
-agent sees the Option-1 reply contract."
-          (with-temp-buffer
-            (insert content)
-            (goto-char (point-min))
-            (when (re-search-forward "^> 🧭 \\*\\*review meta\\*\\*" nil t)
-              (let ((start (line-beginning-position)))
-                ;; Skip consecutive blockquote lines until the separator `>` line.
-                (while (and (not (eobp))
-                            (looking-at "^> ")
-                            (not (looking-at "^> 📋")))
-                  (forward-line 1))
-                ;; Also drop the single `>\n' spacer between meta and instructions.
-                (when (looking-at "^>\n")
-                  (forward-line 1))
-                (delete-region start (point))))
-            (buffer-string)))
+        ;; `decknix--agent-review-strip-meta' lives in
+        ;; agent-shell/review/decknix-agent-review-format.el.
 
         (defun decknix--agent-review-content-for-route (route)
           "Return the review buffer content appropriate for ROUTE.
