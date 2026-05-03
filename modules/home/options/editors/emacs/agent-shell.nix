@@ -220,6 +220,15 @@ let
     ];
   };
 
+  decknix-hub-worktree-parse-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-worktree-parse";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-worktree-parse-test.el"
+    ];
+  };
+
   # == Custom auggie commands ==
   # Deployed to ~/.augment/commands/ via home.file (as symlinks).
   # User-created commands (regular files) coexist in the same directory
@@ -589,6 +598,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-jira-tasks-el)
         ++ (optional cfg.hub.enable decknix-hub-ci-el)
         ++ (optional cfg.hub.enable decknix-hub-mention-bot-el)
+        ++ (optional cfg.hub.enable decknix-hub-worktree-parse-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el);
 
@@ -6507,7 +6517,7 @@ Like treemacs `W' / extra-wide-toggle."
         ;; `decknix-sidebar-toggles-el', `decknix-hub-age-presets-el',
         ;; `decknix-hub-teamcity-el', `decknix-hub-org-filter-el',
         ;; `decknix-hub-jira-tasks-el', `decknix-hub-ci-el',
-        ;; `decknix-hub-mention-bot-el').
+        ;; `decknix-hub-mention-bot-el', `decknix-hub-worktree-parse-el').
         ;; This heredoc references them inside transient suffix lambdas
         ;; (just below) and Requests / WIP / sessions render code (much
         ;; further down) at byte-compile time, before the `(require ...)'
@@ -6551,6 +6561,10 @@ Like treemacs `W' / extra-wide-toggle."
         (declare-function decknix--hub-mention-visible-p "decknix-hub-mention-bot")
         (declare-function decknix--hub-bot-author-p "decknix-hub-mention-bot")
         (declare-function decknix--hub-bot-visible-p "decknix-hub-mention-bot")
+        (declare-function decknix--hub-worktree-canonical-repo "decknix-hub-worktree-parse")
+        (declare-function decknix--hub-worktree-repo-from-url "decknix-hub-worktree-parse")
+        (declare-function decknix--hub-worktree-normalize-path "decknix-hub-worktree-parse")
+        (declare-function decknix--hub-worktree-parse-porcelain "decknix-hub-worktree-parse")
 
         ;; -- Sidebar transient menu (magit-style ? popup) --
         (require 'transient)
@@ -12330,20 +12344,20 @@ See `specs/sidebar-ret.md' §3.6.1 for the on-disk format.")
 Avoids re-running `git config --get remote.origin.url' on every
 sidebar refresh for paths we have already classified.")
 
-        (defun decknix--hub-worktree-canonical-repo (owner-slash-repo)
-          "Lowercase OWNER-SLASH-REPO; safe on nil or non-strings."
-          (when (and owner-slash-repo (stringp owner-slash-repo))
-            (downcase owner-slash-repo)))
-
-        (defun decknix--hub-worktree-repo-from-url (url)
-          "Extract canonical \"owner/repo\" from URL or nil.
-Recognises https://github.com/OWNER/REPO and SSH git@github.com forms."
-          (when (and url (stringp url))
-            (when (string-match
-                   "github\\.com[:/]\\([^/]+\\)/\\([^/]+?\\)\\(?:\\.git\\)?/?$"
-                   url)
-              (decknix--hub-worktree-canonical-repo
-               (concat (match-string 1 url) "/" (match-string 2 url))))))
+        ;; -- Hub: worktree parser + canonical helpers --
+        ;;
+        ;; Pure source moved out of this heredoc into
+        ;; agent-shell/hub/decknix-hub-worktree-parse.el, packaged as
+        ;; `decknix-hub-worktree-parse-el' (see the `let' block at the
+        ;; top of this module).  Four leaf primitives consumed by the
+        ;; surrounding registry layer (which still lives in this
+        ;; heredoc, pending its own follow-up extraction):
+        ;;
+        ;;   `decknix--hub-worktree-canonical-repo'   (string normalize)
+        ;;   `decknix--hub-worktree-repo-from-url'    (URL -> "owner/repo")
+        ;;   `decknix--hub-worktree-normalize-path'   (~-expansion)
+        ;;   `decknix--hub-worktree-parse-porcelain'  (porcelain parser)
+        (require 'decknix-hub-worktree-parse)
 
         (defun decknix--hub-worktree-classify-dir (dir)
           "Return canonical \"owner/repo\" for DIR or :unknown.
@@ -12382,13 +12396,6 @@ overrides from `decknix-hub-clones' can override later in the merge."
                      convs)))
               (error nil))
             out))
-
-        (defun decknix--hub-worktree-normalize-path (path)
-          "Return absolute, ~-expanded PATH or nil.
-`make-process' does not run a shell, so any `~' in a path passed to
-`git -C' would be taken literally and silently fail."
-          (when (and path (stringp path))
-            (expand-file-name path)))
 
         (defun decknix--hub-worktree-discover-clones ()
           "Return alist (REPO . PRIMARY-PATH) by merging discovery sources.
@@ -12429,34 +12436,6 @@ All paths are normalised via `expand-file-name' so downstream
                     (when (and (stringp repo) (not (gethash repo seen)))
                       (puthash repo t seen)
                       (push (cons repo path) out))))))
-            (nreverse out)))
-
-        (defun decknix--hub-worktree-parse-porcelain (text)
-          "Parse `git worktree list --porcelain' TEXT into ((BRANCH . PATH) ...).
-Detached worktrees are keyed by short HEAD sha.  Bare repos are skipped."
-          (let ((out nil)
-                (cur-path nil) (cur-branch nil) (cur-head nil) (bare nil))
-            (cl-flet ((flush ()
-                        (when (and cur-path (not bare))
-                          (push (cons (or cur-branch
-                                          (and cur-head
-                                               (substring
-                                                cur-head 0
-                                                (min 7 (length cur-head)))))
-                                      cur-path)
-                                out))))
-              (dolist (line (split-string (or text "") "\n"))
-                (cond
-                 ((string-match "^worktree \\(.+\\)$" line)
-                  (flush)
-                  (setq cur-path (match-string 1 line)
-                        cur-branch nil cur-head nil bare nil))
-                 ((string-match "^bare$" line) (setq bare t))
-                 ((string-match "^HEAD \\(.+\\)$" line)
-                  (setq cur-head (match-string 1 line)))
-                 ((string-match "^branch refs/heads/\\(.+\\)$" line)
-                  (setq cur-branch (match-string 1 line)))))
-              (flush))
             (nreverse out)))
 
         (defun decknix--hub-worktree--handle-probe-result (proc repo primary)
