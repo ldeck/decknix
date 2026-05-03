@@ -270,6 +270,22 @@ let
     ];
   };
 
+  # PR B.24: PR status cache + persistence carved out of
+  # `decknix-agent-shell-hub' (hub-bulk).  Owns the URL -> status
+  # hash, its TTL constants, and the on-disk save/restore pair.
+  # Co-resident in `agent-shell/hub/' alongside the other hub
+  # primitives; trivialBuild byte-compiles every sibling here so
+  # packageRequires stays empty (none of the other hub/ modules
+  # `require' this one at load-time).
+  decknix-hub-pr-cache-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-pr-cache";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-pr-cache-test.el"
+    ];
+  };
+
   decknix-hub-pr-lookup-el = mkEmacsTestedPackage {
     pname = "decknix-hub-pr-lookup";
     # Isolated in its own src dir (`hub-lookup/') rather than the
@@ -795,6 +811,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-mention-bot-el)
         ++ (optional cfg.hub.enable decknix-hub-worktree-parse-el)
         ++ (optional cfg.hub.enable decknix-hub-icons-el)
+        ++ (optional cfg.hub.enable decknix-hub-pr-cache-el)
         ++ (optional cfg.hub.enable decknix-hub-pr-lookup-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el)
@@ -1965,6 +1982,14 @@ in
         ;; concern) and the `M-' transient suffixes still target them
         ;; by symbol.
         (require 'decknix-hub-mention-bot)
+
+        ;; PR status cache + persistence (PR B.24) — owns the URL ->
+        ;; status hash, its TTL constants, and save/restore to disk.
+        ;; Required before `decknix-hub-pr-lookup' which reads the
+        ;; cache via forward `defvar' declarations.
+        (require 'decknix-hub-pr-cache)
+        (declare-function decknix--hub-pr-cache-save "decknix-hub-pr-cache")
+        (declare-function decknix--hub-pr-cache-restore "decknix-hub-pr-cache")
 
         ;; Save cache periodically (every 2 min) and on kill
         (run-with-timer 120 120 #'decknix--hub-pr-cache-save)

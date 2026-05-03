@@ -1168,67 +1168,23 @@ They still appear under their owning live session (when expanded).")
            (if decknix--hub-wip-hide-linked "on" "off")))
 
 ;; -- Hub: WIP join — look up live PR status from hub data --
+;;
+;; The PR status cache (`decknix--hub-pr-cache' hash + the TTL
+;; constants + `-cache-save' / `-cache-restore') was carved out
+;; into `agent-shell/hub/decknix-hub-pr-cache.el' as PR B.24.
+;; Forward declarations below keep the rest of this file's
+;; byte-compile clean.  The async fetcher
+;; (`decknix--hub-pr-fetch-async', defined below) and the
+;; data-accessor reader (`decknix--hub-pr-cache-get' in
+;; `decknix-hub-pr-lookup') stay in their existing homes.
 
-(defvar decknix--hub-pr-cache (make-hash-table :test 'equal)
-  "Cache for PR status looked up via `gh pr view'.
-Keys are PR URLs; values are (TIMESTAMP . STATUS-ALIST).")
-
-(defvar decknix--hub-pr-cache-ttl 180
-  "Time-to-live in seconds for cached PR lookups (default 3 min).
-Used for cache-only renders where a stale entry should still be shown
-to the user but a background refresh is desirable.  Kept conservative
-to bound `gh pr view' invocations across many linked PRs.")
-
-(defvar decknix--hub-pr-cache-orphan-ttl 30
-  "Refresh interval for PRs that just dropped off the hub.
-When `decknix--hub-pr-status' finds no entry in the hub WIP/Reviews
-data but has a non-terminal cached state, the PR has most likely
-merged or closed since the last hub poll.  This shorter TTL is used
-in that path so the columnar state catches up to GitHub within a
-single hub cycle (~60s) instead of waiting for the global TTL.")
-
-(defvar decknix--hub-pr-cache-file
-  (expand-file-name "~/.config/decknix/hub/pr-cache.el")
-  "File for persisting PR cache across Emacs restarts.")
-
-(defvar decknix--hub-pr-pending-fetches (make-hash-table :test 'equal)
-  "Set of PR URLs currently being fetched (to avoid duplicate requests).")
-
-(defun decknix--hub-pr-cache-save ()
-  "Persist the PR cache to disk for fast restoration on restart."
-  (when (> (hash-table-count decknix--hub-pr-cache) 0)
-    (condition-case err
-        (let ((entries nil))
-          (maphash (lambda (url val)
-                     (push (cons url val) entries))
-                   decknix--hub-pr-cache)
-          (make-directory (file-name-directory decknix--hub-pr-cache-file) t)
-          (with-temp-file decknix--hub-pr-cache-file
-            (insert ";; Auto-generated PR cache — do not edit\n")
-            (prin1 entries (current-buffer))
-            (insert "\n")))
-      (error
-       (message "hub-pr-cache: save failed: %s"
-                (error-message-string err))))))
-
-(defun decknix--hub-pr-cache-restore ()
-  "Restore the PR cache from disk.
-Entries are loaded with their original timestamps so TTL expiry
-still applies.  For entries older than TTL, they are kept as stale
-data (available via `decknix--hub-pr-cache-get-stale') but an async
-refresh is triggered."
-  (when (file-exists-p decknix--hub-pr-cache-file)
-    (condition-case err
-        (let ((entries (with-temp-buffer
-                         (insert-file-contents decknix--hub-pr-cache-file)
-                         (read (current-buffer)))))
-          (when (listp entries)
-            (dolist (entry entries)
-              (when (consp entry)
-                (puthash (car entry) (cdr entry) decknix--hub-pr-cache)))))
-      (error
-       (message "hub-pr-cache: restore failed: %s"
-                (error-message-string err))))))
+(declare-function decknix--hub-pr-cache-save "decknix-hub-pr-cache")
+(declare-function decknix--hub-pr-cache-restore "decknix-hub-pr-cache")
+(defvar decknix--hub-pr-cache)
+(defvar decknix--hub-pr-cache-ttl)
+(defvar decknix--hub-pr-cache-orphan-ttl)
+(defvar decknix--hub-pr-cache-file)
+(defvar decknix--hub-pr-pending-fetches)
 
 (defun decknix--hub-pr-fetch-async (url)
   "Fetch PR status for URL via `gh pr view' asynchronously.
