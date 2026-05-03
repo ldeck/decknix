@@ -546,7 +546,7 @@ prompt is immediately visible.  Click or TAB the header to expand."
               (goto-char (point-max))))
           ;; Move to start of the prompt line
           (beginning-of-line)
-          (let ((insert-pos (point)))
+          (progn
             ;; Header: ▶ Context (N exchanges) — clickable/TAB-able
             ;; Starts collapsed (▶); user clicks to expand (▼)
             (insert (propertize
@@ -1676,6 +1676,10 @@ Search order:
   2. Saved workspaces that contain a REPO subdirectory on disk
   3. Known workspace roots (`decknix-agent-workspace-roots') containing REPO
   4. nil (caller should prompt the user)"
+  ;; OWNER is part of the stable contract (callers pass it from the
+  ;; PR URL parser) but the current heuristics only need REPO.  A
+  ;; future pass can disambiguate same-named repos across orgs.
+  (ignore owner)
   (or
    ;; 1. Check saved workspaces for a path ending in /REPO/
    (let ((best nil))
@@ -4079,7 +4083,6 @@ Shows commands from ~/.augment/commands/ and project .augment/commands/."
          (selection (completing-read
                      "Command: " (mapcar #'car cmds) nil t nil nil nil
                      `(annotation-function . ,annotator)))
-         (file (cdr (assoc selection cmds)))
          (name (progn (string-match "^/\\([^ ]+\\)" selection)
                       (match-string 1 selection))))
     ;; Insert the slash command at the agent-shell prompt
@@ -4272,7 +4275,6 @@ looks like a PR URL) and workspace (defaulting to current project)."
   "Parse the batch editor buffer into a list of session specs.
 Each spec is an alist with keys: name, workspace, items, grouped."
   (let ((specs nil)
-        (current-group nil)
         (current-items nil)
         (current-ws decknix--batch-default-workspace)
         (current-name nil))

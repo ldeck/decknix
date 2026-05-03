@@ -2507,7 +2507,7 @@ Interactively: \\[universal-argument] N r limits to N items;
           (decknix--nav-live-item-actions buf))))))
 
 (defvar decknix--sidebar-previous-restore-mode nil
-  "Internal flag: nil = single restore, 'all = restore all visible.")
+  "Internal flag: nil = single restore, \\='all = restore all visible.")
 (defvar decknix--sidebar-previous-visible-candidates nil
   "Captured list of visible candidate strings from vertico at M-RET time.")
 
