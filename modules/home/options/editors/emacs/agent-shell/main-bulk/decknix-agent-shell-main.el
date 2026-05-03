@@ -2203,28 +2203,20 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
 (declare-function decknix--agent-tags-conversations
                   "decknix-agent-tags-store" (store))
 
-(defun decknix--agent-conv-touch (conv-key)
-  "Stamp lastAccessed on CONV-KEY so it sorts to the top.
-Called by user-facing operations (tag, rename, resume, create)
-so that any interaction with a conversation bumps its recency,
-not just augment writing to the session file."
-  (when conv-key
-    (let* ((store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (entry (gethash conv-key convs)))
-      (when entry
-        (puthash "lastAccessed"
-                 (format-time-string "%Y-%m-%dT%H:%M:%S.000Z" nil t)
-                 entry)
-        (decknix--agent-tags-write store)))))
-
-(defun decknix--agent-conv-last-accessed (conv-key)
-  "Return the lastAccessed timestamp for CONV-KEY, or nil."
-  (when conv-key
-    (let* ((store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (entry (gethash conv-key convs)))
-      (when entry (gethash "lastAccessed" entry)))))
+;; -- Per-conversation lastAccessed stamp (PR B.42) --
+;; Moved out of this file into
+;; agent-shell/agent/decknix-agent-conv-recency.el, packaged as
+;; `decknix-agent-conv-recency-el'.  Owns the touch (writer)
+;; and last-accessed (reader) pair that mediates the
+;; `lastAccessed' field of `~/.config/decknix/agent-sessions.json'.
+;; The two call sites in this file (the touch invocation in the
+;; conv-tag flow at ~line 895, and the last-accessed lookup in
+;; the conversation-group sort comparator at ~lines 991-992)
+;; reach the symbols through the heredoc's `(require ...)' chain.
+(declare-function decknix--agent-conv-touch
+                  "decknix-agent-conv-recency" (conv-key))
+(declare-function decknix--agent-conv-last-accessed
+                  "decknix-agent-conv-recency" (conv-key))
 
 (defun decknix--agent-tags-for-session (session-id)
   "Return the list of tags for the conversation containing SESSION-ID."
