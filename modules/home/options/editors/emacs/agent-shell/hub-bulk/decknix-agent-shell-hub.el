@@ -931,22 +931,18 @@ unknown conflict."
 (declare-function decknix--hub-repo-name-apply "decknix-hub-repo-name" (repo))
 (declare-function decknix--hub-cycle-repo-name-cap "decknix-hub-repo-name")
 
-;; -- Hub: WIP de-dupe toggle --
-;; When non-nil, WIP omits PRs already linked to a live session so
-;; the user only sees each active PR in one place.
-(defvar decknix--hub-wip-hide-linked t
-  "When non-nil, hide WIP PRs that are linked to a live session.
-They still appear under their owning live session (when expanded).")
-
-(defun decknix--hub-toggle-wip-hide-linked ()
-  "Toggle hiding of live-session-linked PRs from the WIP section."
-  (interactive)
-  (setq decknix--hub-wip-hide-linked
-        (not decknix--hub-wip-hide-linked))
-  (when (get-buffer "*agent-shell-sidebar*")
-    (agent-shell-workspace-sidebar-refresh))
-  (message "WIP hide linked: %s"
-           (if decknix--hub-wip-hide-linked "on" "off")))
+;; -- Hub: WIP de-dupe toggle (PR B.39) --
+;; Moved out of this file into
+;; agent-shell/hub/decknix-hub-wip-link-filter.el, packaged as
+;; `decknix-hub-wip-link-filter-el'.  Owns the cap state defvar
+;; (`decknix--hub-wip-hide-linked', forward-declared near line
+;; 139 for the earlier transient-suffix label use at line 607)
+;; and the interactive flipper (`decknix--hub-toggle-wip-hide-
+;; linked').  The transient suffix that surfaces the toggle in
+;; the sidebar Toggles transient (`L', line ~601 above) stays
+;; in this file per AGENTS.md Rule 2.
+(declare-function decknix--hub-toggle-wip-hide-linked
+                  "decknix-hub-wip-link-filter")
 
 ;; -- Hub: WIP join — look up live PR status from hub data --
 ;;
