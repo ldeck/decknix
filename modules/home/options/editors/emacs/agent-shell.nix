@@ -300,6 +300,25 @@ let
     ];
   };
 
+  # PR B.33: Requests + WIP attention filter cluster carved out of
+  # `decknix-agent-shell-hub' (hub-bulk).  Owns the seven toggle
+  # state defvars (Requests/WIP needs-reply / bot-pending / only-
+  # my-replies plus Requests sort-reverse), the engine
+  # (`sort-requests', the shared `attention-visible-p' predicate
+  # and its Requests/WIP wrappers), the shared `toggle-and-refresh'
+  # helper, and the seven per-bucket toggle commands wired to the
+  # sidebar Toggles transient (`T') and footer.  The transient
+  # suffix / prefix forms in hub-bulk and workspace-bulk stay
+  # there per AGENTS.md Rule 2 (transient UI is heredoc-side).
+  decknix-hub-attention-filter-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-attention-filter";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-attention-filter-test.el"
+    ];
+  };
+
   decknix-hub-mention-bot-el = mkEmacsTestedPackage {
     pname = "decknix-hub-mention-bot";
     src = ./agent-shell/hub;
@@ -930,6 +949,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-jira-tasks-el)
         ++ (optional cfg.hub.enable decknix-hub-ci-el)
         ++ (optional cfg.hub.enable decknix-hub-ci-filter-el)
+        ++ (optional cfg.hub.enable decknix-hub-attention-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-mention-bot-el)
         ++ (optional cfg.hub.enable decknix-hub-worktree-parse-el)
         ++ (optional cfg.hub.enable decknix-hub-icons-el)
@@ -2292,6 +2312,44 @@ in
         (declare-function decknix--hub-ci-filter-show-none "decknix-hub-ci-filter")
         (declare-function decknix--hub-ci-filter-status-desc
                           "decknix-hub-ci-filter" (status icon label))
+
+        ;; Attention filter cluster (PR B.33) -- owns the seven
+        ;; toggle state defvars (Requests/WIP needs-reply / bot-
+        ;; pending / only-my-replies plus the Requests sort-reverse
+        ;; flag), the engine (`sort-requests', the shared
+        ;; `attention-visible-p' predicate, and the Requests/WIP
+        ;; flavoured wrappers), the shared `toggle-and-refresh'
+        ;; helper, and the seven per-bucket toggle commands wired
+        ;; to the sidebar Toggles transient (`T') in workspace-
+        ;; bulk and the transient suffixes still living in
+        ;; hub-bulk.  No external deps -- the sidebar refresh
+        ;; side-effect is `fboundp'-gated inside
+        ;; `toggle-and-refresh'.
+        (require 'decknix-hub-attention-filter)
+        (declare-function decknix--hub-sort-requests "decknix-hub-attention-filter" (items))
+        (declare-function decknix--hub-attention-visible-p
+                          "decknix-hub-attention-filter"
+                          (item hide-reply hide-bot only-my))
+        (declare-function decknix--hub-requests-attention-visible-p
+                          "decknix-hub-attention-filter" (item))
+        (declare-function decknix--hub-wip-attention-visible-p
+                          "decknix-hub-attention-filter" (pr))
+        (declare-function decknix--hub-toggle-and-refresh
+                          "decknix-hub-attention-filter" (sym message-fmt))
+        (declare-function decknix--hub-toggle-requests-hide-needs-reply
+                          "decknix-hub-attention-filter")
+        (declare-function decknix--hub-toggle-requests-hide-bot-pending
+                          "decknix-hub-attention-filter")
+        (declare-function decknix--hub-toggle-requests-only-my-replies
+                          "decknix-hub-attention-filter")
+        (declare-function decknix--hub-toggle-requests-sort-reverse
+                          "decknix-hub-attention-filter")
+        (declare-function decknix--hub-toggle-wip-hide-needs-reply
+                          "decknix-hub-attention-filter")
+        (declare-function decknix--hub-toggle-wip-hide-bot-pending
+                          "decknix-hub-attention-filter")
+        (declare-function decknix--hub-toggle-wip-only-my-replies
+                          "decknix-hub-attention-filter")
 
 
 
