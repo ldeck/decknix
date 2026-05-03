@@ -215,6 +215,24 @@ let
     ];
   };
 
+  # PR B.32: xwidget-webkit page-text + window.find JS-bridge
+  # primitives carved out of `decknix-agent-shell-workspace'
+  # (workspace-bulk).  Co-resident in a new `agent-shell/webkit/'
+  # dir so future webkit helpers (history JSON parsing, link
+  # extraction, copy-as-markdown) have a topical home rather than
+  # accumulating in workspace-bulk.  Owns the search history
+  # defvar shared with the consult-line interactive command (still
+  # in workspace-bulk per Rule 2 -- consult UI + WebKit keymap
+  # binding are heredoc-side concerns).
+  decknix-webkit-page-el = mkEmacsTestedPackage {
+    pname = "decknix-webkit-page";
+    src = ./agent-shell/webkit;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-webkit-page-test.el"
+    ];
+  };
+
   decknix-hub-teamcity-el = mkEmacsTestedPackage {
     pname = "decknix-hub-teamcity";
     src = ./agent-shell/hub;
@@ -923,6 +941,7 @@ in
         ++ (optional cfg.workspace.enable decknix-sidebar-format-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-previous-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-tile-el)
+        ++ (optional cfg.workspace.enable decknix-webkit-page-el)
         ++ (optional cfg.context.enable decknix-agent-shell-context-el)
         ++ (optional cfg.hub.enable decknix-agent-shell-hub-el)
         ++ [ decknix-agent-shell-main-el ]
@@ -1264,6 +1283,16 @@ in
         ;; == Workspace: dedicated tab-bar tab with sidebar ==
         (require 'agent-shell-workspace)
         (define-key decknix-agent-prefix-map (kbd "w") 'agent-shell-workspace-toggle)
+
+        ;; xwidget-webkit JS-bridge primitives (PR B.32) -- the
+        ;; `page-text' and `find-in-page' helpers feed both the
+        ;; `decknix-webkit-consult-line' command in workspace-bulk
+        ;; and any future webkit-side find-in-page entry points.
+        ;; Loaded before the keymap setup below so the consult-line
+        ;; binding resolves cleanly at file-notify-watch start.
+        (require 'decknix-webkit-page)
+        (declare-function decknix--webkit-page-text    "decknix-webkit-page")
+        (declare-function decknix--webkit-find-in-page "decknix-webkit-page" (needle))
 
         ;; -- xwidget-webkit: enhanced keybindings --
         ;; Two principles:
