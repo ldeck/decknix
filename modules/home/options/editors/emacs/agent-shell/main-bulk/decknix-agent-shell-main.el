@@ -118,7 +118,7 @@
 (declare-function corfu-complete "ext:corfu")
 (declare-function markdown-mode "ext:markdown-mode")
 (declare-function decknix--sidebar-restore-previous-session "ext:decknix-agent-shell-workspace")
-(declare-function decknix--sidebar-previous-dedupe "ext:decknix-agent-shell-workspace")
+(declare-function decknix--sidebar-previous-dedupe "decknix-sidebar-previous")
 (declare-function decknix--session-conv-id "ext:decknix-agent-shell")
 
 ;; Forward defvars for heredoc-resident state and external configs.
