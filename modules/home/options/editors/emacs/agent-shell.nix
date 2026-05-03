@@ -1357,6 +1357,8 @@ in
                           "decknix-agent-tags-read" (session-id))
         (declare-function decknix--agent-tags-for-conv-key
                           "decknix-agent-tags-read" (conv-key))
+        (declare-function decknix--agent-tags-all
+                          "decknix-agent-tags-read")
 
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")

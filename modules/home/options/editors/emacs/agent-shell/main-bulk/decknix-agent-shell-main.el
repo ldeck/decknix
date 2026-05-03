@@ -2338,17 +2338,14 @@ auggie."
 (declare-function decknix--git-remote-url "decknix-agent-vcs")
 (declare-function decknix--detect-default-branch "decknix-agent-vcs")
 
-(defun decknix--agent-tags-all ()
-  "Return a sorted list of all unique tags across all conversations."
-  (let* ((store (decknix--agent-tags-read))
-         (convs (decknix--agent-tags-conversations store))
-         (all-tags nil))
-    (maphash (lambda (_key entry)
-               (when (hash-table-p entry)
-                 (dolist (tag (gethash "tags" entry))
-                   (cl-pushnew tag all-tags :test #'string=))))
-             convs)
-    (sort all-tags #'string<)))
+;; -- Tags aggregation (PR B.44) --
+;; `decknix--agent-tags-all' moved into the existing
+;; `decknix-agent-tags-read' module alongside the two read
+;; accessors carved in B.43.  The four call sites in this file
+;; (~lines 1820 / 2390 / 2480 / 2532 / 2561) reach the symbol
+;; through the heredoc's `(require ...)' chain.
+(declare-function decknix--agent-tags-all
+                  "decknix-agent-tags-read")
 
 (defun decknix--agent-current-session-id ()
   "Get the auggie session ID for the current buffer, or nil."

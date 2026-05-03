@@ -116,5 +116,43 @@ Defensive guard for legacy / corrupt entries."
     (should (equal '("frontend")
                    (decknix--agent-tags-for-session "sid-1")))))
 
+;; -- tags-all (aggregation) --------------------------------------
+
+(ert-deftest decknix-agent-tags-read--all-empty-store ()
+  "Aggregate returns nil when no conversations exist."
+  (decknix-test-tags-read-with-store
+    (should (null (decknix--agent-tags-all)))))
+
+(ert-deftest decknix-agent-tags-read--all-no-tags ()
+  "Aggregate returns nil when conversations exist but none carry tags."
+  (decknix-test-tags-read-with-store
+    (decknix-test-tags-read--seed "ck-1" "workspace" "/p")
+    (decknix-test-tags-read--seed "ck-2" "workspace" "/q")
+    (should (null (decknix--agent-tags-all)))))
+
+(ert-deftest decknix-agent-tags-read--all-deduplicates ()
+  "Aggregate dedupes tags shared across conversations."
+  (decknix-test-tags-read-with-store
+    (decknix-test-tags-read--seed "ck-1" "tags" '("review" "backend"))
+    (decknix-test-tags-read--seed "ck-2" "tags" '("backend" "infra"))
+    (should (equal '("backend" "infra" "review")
+                   (decknix--agent-tags-all)))))
+
+(ert-deftest decknix-agent-tags-read--all-sorts-string-lt ()
+  "Aggregate returns tags sorted by `string<'."
+  (decknix-test-tags-read-with-store
+    (decknix-test-tags-read--seed "ck-1" "tags" '("zeta" "alpha" "mu"))
+    (should (equal '("alpha" "mu" "zeta")
+                   (decknix--agent-tags-all)))))
+
+(ert-deftest decknix-agent-tags-read--all-skips-non-hash-entries ()
+  "Aggregate is defensive against legacy / corrupt non-hash entries."
+  (decknix-test-tags-read-with-store
+    (decknix-test-tags-read--seed "ck-1" "tags" '("real"))
+    (puthash "ck-2" '(:not-a-hash)
+             (decknix--agent-tags-conversations
+              (decknix--agent-tags-read)))
+    (should (equal '("real") (decknix--agent-tags-all)))))
+
 (provide 'decknix-agent-tags-read-test)
 ;;; decknix-agent-tags-read-test.el ends here
