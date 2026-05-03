@@ -7,34 +7,38 @@
 
 ;;; Commentary:
 ;;
-;; One pure data-accessor extracted from the agent-shell heredoc:
+;; Two pure data-accessors extracted from the agent-shell heredoc:
 ;;
 ;;   `decknix--hub-pr-status-from-hub'  (URL -> normalised alist | nil)
+;;   `decknix--hub-pr-cache-get'        (URL -> cached alist + (stale . t)
+;;                                        marker on TTL miss | nil)
 ;;
-;; Walks two heredoc-resident defvars (`decknix--hub-wip',
-;; `decknix--hub-reviews') and returns a flat status alist with
-;; consistent shape across both source files (WIP PRs that I
-;; authored vs. PRs that have requested my review).
+;; The first walks `decknix--hub-wip' / `decknix--hub-reviews' (live
+;; hub data); the second walks `decknix--hub-pr-cache' (the offline
+;; mirror used when the daemon hasn't yet fetched a per-PR view).
+;; Both are side-effect free by design — TTL-triggered refresh is
+;; the responsibility of the heredoc-resident `decknix--hub-pr-status'
+;; orchestrator, not of these accessors.
 ;;
-;; The function is pure given its inputs — it reads the two globals
-;; via dynamic resolution, never writes them, and never performs I/O.
-;; Tests bind those two globals via `let' to drive every code path.
-;;
-;; Returned alist always carries:
+;; status-from-hub returned alist always carries:
 ;;   kind (wip | review), state (always uppercase), draft (eq-t),
 ;;   ci-status, checks, updated_at, needs_reply, bot_pending,
 ;;   replies_to_me, title, mergeable.
-;;
 ;; WIP variant additionally carries: merged_at, branch, review_decision.
 ;; Review variant additionally carries: my_review.
+;;
+;; cache-get returns the cached alist verbatim when fresh, or the
+;; same alist with `(stale . t)' appended when older than TTL.
 
 ;;; Code:
 
 (require 'decknix-agent-url-parse)
 
-;; Forward declarations for the two heredoc-resident hub data globals.
+;; Forward declarations for the heredoc-resident hub data globals.
 (defvar decknix--hub-wip)
 (defvar decknix--hub-reviews)
+(defvar decknix--hub-pr-cache)
+(defvar decknix--hub-pr-cache-ttl)
 
 (defun decknix--hub-pr-status-from-hub (url)
   "Look up PR status from hub WIP and Reviews data only.
@@ -101,6 +105,26 @@ Returns an alist or nil if not found."
                         (cons 'title (alist-get 'title item))
                         (cons 'mergeable (alist-get 'mergeable item)))))))
           nil)))))
+
+(defun decknix--hub-pr-cache-get (url)
+  "Return cached status for URL if still valid, else nil.
+When the entry is stale (older than TTL) returns the cached data with
+a `(stale . t)' marker appended so callers can show the old data with
+a refresh indicator instead of a bare loading spinner.
+
+This function is side-effect free by design.  Staleness-triggered
+background refresh is the responsibility of `decknix--hub-pr-status'
+(which TTL-gates its self-heal branch) so that callers invoking
+`decknix--hub-pr-cache-get' from hot paths — e.g. sort predicates in
+`decknix--hub-render-session-prs' — do not schedule O(N log N) async
+fetches per render (see commit message for #hub-loop)."
+  (let ((entry (gethash url decknix--hub-pr-cache)))
+    (when entry
+      (let ((ts (car entry))
+            (status (cdr entry)))
+        (if (< (- (float-time) ts) decknix--hub-pr-cache-ttl)
+            status
+          (append status '((stale . t))))))))
 
 (provide 'decknix-hub-pr-lookup)
 ;;; decknix-hub-pr-lookup.el ends here
