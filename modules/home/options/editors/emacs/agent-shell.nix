@@ -238,6 +238,15 @@ let
     ];
   };
 
+  decknix-agent-format-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-format";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-format-test.el"
+    ];
+  };
+
   # == Custom auggie commands ==
   # Deployed to ~/.augment/commands/ via home.file (as symlinks).
   # User-created commands (regular files) coexist in the same directory
@@ -602,7 +611,7 @@ in
         # since they exist to flip what the workspace sidebar renders.
         # URL parsing is foundational (linked PRs, quick actions, repo
         # linking, hub) so it ships whenever agent-shell is enabled at all.
-        ++ [ decknix-agent-url-parse-el ]
+        ++ [ decknix-agent-url-parse-el decknix-agent-format-el ]
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
         ++ (optional cfg.hub.enable decknix-hub-teamcity-el)
@@ -639,6 +648,9 @@ in
         (declare-function decknix--agent-repo-parse-url "decknix-agent-url-parse")
         (declare-function decknix--agent-pr-url-accessor "decknix-agent-url-parse")
         (declare-function decknix--hub-repo-cache-key "decknix-agent-url-parse")
+        (require 'decknix-agent-format)
+        (declare-function decknix--agent-session-time-ago "decknix-agent-format")
+        (declare-function decknix--agent-session-time-compact "decknix-agent-format")
 
         ;; Use auggie as the default agent (skip agent selection prompt)
         (setq agent-shell-preferred-agent-config 'auggie)
@@ -1016,32 +1028,10 @@ Prevents the auto-persist hook from firing repeatedly.")
         (defvar-local decknix--agent-pending-workspace nil
           "Workspace awaiting persistence under this buffer's conversation key.")
 
-        (defun decknix--agent-session-time-ago (iso-time)
-          "Format ISO-TIME as a relative time string (e.g. \"2h ago\")."
-          (let* ((time (date-to-time iso-time))
-                 (delta (float-time (time-subtract (current-time) time)))
-                 (minutes (/ delta 60))
-                 (hours (/ delta 3600))
-                 (days (/ delta 86400)))
-            (cond ((< minutes 1) "just now")
-                  ((< minutes 60) (format "%dm ago" (truncate minutes)))
-                  ((< hours 24) (format "%dh ago" (truncate hours)))
-                  ((< days 30) (format "%dd ago" (truncate days)))
-                  (t (format-time-string "%Y-%m-%d" time)))))
-
-        (defun decknix--agent-session-time-compact (iso-time)
-          "Format ISO-TIME as a compact relative time (e.g. \"2h\", \"5d\").
-Used in the sidebar where horizontal space is at a premium."
-          (let* ((time (date-to-time iso-time))
-                 (delta (float-time (time-subtract (current-time) time)))
-                 (minutes (/ delta 60))
-                 (hours (/ delta 3600))
-                 (days (/ delta 86400)))
-            (cond ((< minutes 1) "now")
-                  ((< minutes 60) (format "%dm" (truncate minutes)))
-                  ((< hours 24) (format "%dh" (truncate hours)))
-                  ((< days 30) (format "%dd" (truncate days)))
-                  (t (format-time-string "%m/%d" time)))))
+        ;; Time formatters (`decknix--agent-session-time-ago' and
+        ;; `decknix--agent-session-time-compact') live in
+        ;; agent-shell/agent/decknix-agent-format.el — required at the
+        ;; top of this heredoc.
 
         ;; == Session history pre-population ==
         ;; When resuming a session via --resume, the buffer is empty.
