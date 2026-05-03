@@ -490,6 +490,26 @@ let
     ];
   };
 
+  # PR B.34: conversation-key derivation + mergedInto resolution
+  # carved out of `decknix-agent-shell-main' (main-bulk).  Owns the
+  # canonical four-function cluster that bridges the raw SHA-256
+  # hash from `decknix-agent-parse', the `mergedInto' redirect
+  # walker that consults `decknix-agent-tags-store', and the two
+  # session-aware lookups that read `decknix-agent-session-cache'.
+  # Pure resolution layer -- the heredoc and the bulk modules call
+  # these from ~30 sites every time a first-message is hashed to a
+  # conv-key, so loading order in the heredoc places this module
+  # immediately after `decknix-agent-tags-store' and
+  # `decknix-agent-session-cache'.
+  decknix-agent-conv-resolve-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-conv-resolve";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-conv-resolve-test.el"
+    ];
+  };
+
   decknix-agent-review-format-el = mkEmacsTestedPackage {
     pname = "decknix-agent-review-format";
     src = ./agent-shell/review;
@@ -939,6 +959,7 @@ in
           decknix-agent-session-cache-el
           decknix-agent-tags-store-el
           decknix-agent-link-store-el
+          decknix-agent-conv-resolve-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
         ]
@@ -1057,6 +1078,24 @@ in
                           (conv-key url branch &optional added))
         (declare-function decknix--agent-unlink-repo  "decknix-agent-link-store"
                           (conv-key url branch))
+
+        ;; Conversation-key resolution layer (PR B.34).  Bridges the
+        ;; raw SHA-256 hash from `decknix-agent-parse' with the
+        ;; persisted `mergedInto' redirects in
+        ;; `decknix-agent-tags-store', and provides two session-aware
+        ;; lookups built on `decknix-agent-session-cache'.  Loaded
+        ;; here -- after all three of its dependencies -- so the
+        ;; ~30 conversation-key call sites in the rest of this
+        ;; heredoc and the bulk modules resolve cleanly.
+        (require 'decknix-agent-conv-resolve)
+        (declare-function decknix--agent-conversation-key
+                          "decknix-agent-conv-resolve" (first-message))
+        (declare-function decknix--agent-conv-resolve-key
+                          "decknix-agent-conv-resolve" (conv-key))
+        (declare-function decknix--agent-conversation-key-for-session
+                          "decknix-agent-conv-resolve" (session-id))
+        (declare-function decknix--agent-latest-session-id-for-conv-key
+                          "decknix-agent-conv-resolve" (conv-key))
 
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
