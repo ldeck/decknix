@@ -229,6 +229,19 @@ let
     ];
   };
 
+  decknix-hub-icons-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-icons";
+    src = ./agent-shell/hub;
+    # Cross-package require: pulls in `decknix--hub-icon' from the
+    # co-resident decknix-hub-ci.el (also in this src dir, so the
+    # daemon resolves it via load-path without a packageRequires
+    # declaration).
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-icons-test.el"
+    ];
+  };
+
   decknix-agent-url-parse-el = mkEmacsTestedPackage {
     pname = "decknix-agent-url-parse";
     src = ./agent-shell/agent;
@@ -629,6 +642,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-ci-el)
         ++ (optional cfg.hub.enable decknix-hub-mention-bot-el)
         ++ (optional cfg.hub.enable decknix-hub-worktree-parse-el)
+        ++ (optional cfg.hub.enable decknix-hub-icons-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el);
 
@@ -6498,7 +6512,7 @@ Like treemacs `W' / extra-wide-toggle."
         ;; `decknix-hub-teamcity-el', `decknix-hub-org-filter-el',
         ;; `decknix-hub-jira-tasks-el', `decknix-hub-ci-el',
         ;; `decknix-hub-mention-bot-el', `decknix-hub-worktree-parse-el',
-        ;; `decknix-agent-url-parse-el').
+        ;; `decknix-agent-url-parse-el', `decknix-hub-icons-el').
         ;; This heredoc references them inside transient suffix lambdas
         ;; (just below) and Requests / WIP / sessions render code (much
         ;; further down) at byte-compile time, before the `(require ...)'
@@ -6546,6 +6560,11 @@ Like treemacs `W' / extra-wide-toggle."
         (declare-function decknix--hub-worktree-repo-from-url "decknix-hub-worktree-parse")
         (declare-function decknix--hub-worktree-normalize-path "decknix-hub-worktree-parse")
         (declare-function decknix--hub-worktree-parse-porcelain "decknix-hub-worktree-parse")
+        (declare-function decknix--hub-format-age "decknix-hub-icons")
+        (declare-function decknix--hub-review-icon "decknix-hub-icons")
+        (declare-function decknix--hub-wip-review-icon "decknix-hub-icons")
+        (declare-function decknix--hub-activity-icons "decknix-hub-icons")
+        (declare-function decknix--hub-wip-reply-icon "decknix-hub-icons")
 
         ;; -- Sidebar transient menu (magit-style ? popup) --
         (require 'transient)
@@ -13360,29 +13379,24 @@ row, or an empty string when no linked PR is attention-worthy."
                   (concat " " (string-join (nreverse parts) " "))
                 ""))))
 
-        ;; -- Hub: age formatting --
-        (defun decknix--hub-format-age (iso-time)
-          "Format an ISO timestamp as a compact age string (e.g. 3d, 5h, 12m)."
-          (if (and iso-time (stringp iso-time))
-              (let* ((then (condition-case nil
-                               (encode-time (iso8601-parse iso-time))
-                             (error nil)))
-                     (secs (when then
-                             (float-time (time-subtract (current-time) then)))))
-                (cond
-                 ((null secs) "?")
-                 ((>= secs 86400) (format "%dd" (truncate (/ secs 86400))))
-                 ((>= secs 3600) (format "%dh" (truncate (/ secs 3600))))
-                 ((>= secs 60) (format "%dm" (truncate (/ secs 60))))
-                 (t "now")))
-            "?"))
-
+        ;; -- Hub: age formatter + sidebar icon helpers --
+        ;;
+        ;; Source moved out of this heredoc into
+        ;; agent-shell/hub/decknix-hub-icons.el, packaged as
+        ;; `decknix-hub-icons-el' (see the `let' block at the top of
+        ;; this module).  Provides:
+        ;;
+        ;;   `decknix--hub-format-age'         (ISO -> "Nd"/"Nh"/etc.)
+        ;;   `decknix--hub-review-icon'        (review state glyph)
+        ;;   `decknix--hub-wip-review-icon'    (review-decision glyph)
+        ;;   `decknix--hub-activity-icons'     (🤖/💬/↩ stack)
+        ;;   `decknix--hub-wip-reply-icon'     (legacy alias)
+        ;;
         ;; -- Hub: CI classification + sidebar icon helpers --
         ;;
         ;; Source moved out of this heredoc into
         ;; agent-shell/hub/decknix-hub-ci.el, packaged as
-        ;; `decknix-hub-ci-el' (see the `let' block at the top of
-        ;; this module).  Provides:
+        ;; `decknix-hub-ci-el'.  Provides:
         ;;
         ;;   `decknix--hub-ci-soft-patterns'  (defvar)
         ;;   `decknix--hub-ci-check-soft-p'   (single-check predicate)
@@ -13391,66 +13405,10 @@ row, or an empty string when no linked PR is attention-worthy."
         ;;   `decknix--hub-ci-icon'           (status -> glyph + face,
         ;;                                     plus optional CONFLICTING)
         ;;
-        ;; Heredoc-side icon siblings (`decknix--hub-review-icon',
-        ;; `decknix--hub-wip-review-icon', etc.) call
-        ;; `decknix--hub-icon' once this require has fired; the
-        ;; hygiene block at the top forward-declares the four
-        ;; symbols so byte-compile of those siblings stays clean.
+        ;; decknix-hub-icons.el internally `(require 'decknix-hub-ci)`
+        ;; for `decknix--hub-icon' so the require below covers both.
         (require 'decknix-hub-ci)
-
-        (defun decknix--hub-review-icon (item)
-          "Return a review state icon for ITEM, or empty string if none.
-Shows whether the current user has already responded to this PR.
-  ✎ = commented (cyan), ✓ = approved (green), ✗ = changes requested (red)."
-          (let ((state (alist-get 'my_review item)))
-            (pcase state
-              ("APPROVED"          (decknix--hub-icon "✓" 'success))
-              ("CHANGES_REQUESTED" (decknix--hub-icon "✗" 'error))
-              ("COMMENTED"         (decknix--hub-icon "✎" '(:foreground "#5fafaf")))
-              ("DISMISSED"         (decknix--hub-icon "−" 'font-lock-comment-face))
-              ("PENDING"           (decknix--hub-icon "…" 'warning))
-              (_ ""))))
-
-        (defun decknix--hub-wip-review-icon (pr)
-          "Return a review decision icon for a WIP PR, or empty string.
-Shows the overall review status of the user's own PR:
-  ✓ = approved (green), ✗ = changes requested (red),
-  ◐ = review required (yellow), (none) = no review policy."
-          (let ((decision (alist-get 'review_decision pr)))
-            (pcase decision
-              ("APPROVED"          (decknix--hub-icon "✓" 'success))
-              ("CHANGES_REQUESTED" (decknix--hub-icon "✗" 'error))
-              ("REVIEW_REQUIRED"   (decknix--hub-icon "◐" 'warning))
-              (_ ""))))
-
-        (defun decknix--hub-activity-icons (pr)
-          "Return concatenated attention icons for PR.
-
-Shows, in order:
-- 🤖 (bot-pending) when the latest comment/review is from a bot —
-  supersedes 💬 so the two aren't shown together for the same event.
-- 💬 (needs-reply) when the latest non-bot activity is from someone
-  else and no bot posted after them.
-- ↩ (replies-to-me) when a human posted after one of my own comments
-  or reviews; co-exists with 🤖/💬 because it is a distinct signal
-  about a thread I participated in."
-          (let ((needs-reply   (eq (alist-get 'needs_reply pr) t))
-                (bot-pending   (eq (alist-get 'bot_pending pr) t))
-                (replies-to-me (eq (alist-get 'replies_to_me pr) t)))
-            (concat
-             (cond
-              (bot-pending
-               (decknix--hub-icon "🤖" '(:foreground "#af5f87")))
-              (needs-reply
-               (decknix--hub-icon "💬" '(:foreground "#d7af5f")))
-              (t ""))
-             (if replies-to-me
-                 (decknix--hub-icon "↩" '(:foreground "#87d7af" :weight bold))
-               ""))))
-
-        (defun decknix--hub-wip-reply-icon (pr)
-          "Back-compat shim: return `decknix--hub-activity-icons' for PR."
-          (decknix--hub-activity-icons pr))
+        (require 'decknix-hub-icons)
 
         ;; -- Hub: status hint when daemon not running --
         (defun decknix--hub-has-data-p ()
