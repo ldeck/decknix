@@ -90,7 +90,7 @@
 (declare-function decknix--sidebar-state-save "ext:decknix-agent-shell")
 (declare-function decknix--sidebar-state-load "ext:decknix-agent-shell")
 (declare-function decknix--sidebar-refresh "ext:decknix-agent-shell")
-(declare-function decknix--sidebar-render-section-header "ext:decknix-agent-shell")
+(declare-function decknix--sidebar-render-section-header "decknix-sidebar-format")
 (declare-function decknix--agent-current-conv-key "ext:decknix-agent-shell")
 (declare-function decknix--agent-linked-prs "ext:decknix-agent-shell")
 (declare-function decknix--agent-linked-items "ext:decknix-agent-shell")

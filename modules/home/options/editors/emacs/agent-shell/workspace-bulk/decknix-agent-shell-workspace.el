@@ -791,85 +791,20 @@ which advertises toggles by label only (no keys)."
   "What to show for saved sessions in the sidebar.
 Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
 
-(defun decknix--sidebar-render-section-header (title &optional section-id)
-  "Insert a section header TITLE into the sidebar.
-Composes `bold' with any inner face properties on TITLE so callers
-can propertize sub-regions (e.g. a coloured age badge) without the
-header's bold wiping them.
-SECTION-ID, when non-nil, is attached as the `decknix-sidebar-section'
-text property over the visible header span so the unified sidebar
-dispatcher (specs/sidebar-ret.md §3.4) can route RET to the matching
-picker / transient."
-  (let ((start (point)))
-    (insert " " title "\n")
-    ;; (1- (point)) excludes the trailing newline from the face span
-    (add-face-text-property start (1- (point)) 'bold)
-    (when section-id
-      (put-text-property start (1- (point))
-                         'decknix-sidebar-section section-id))))
-
-(defun decknix--sidebar-render-key-group (label keys)
-  "Insert a group LABEL header and KEYS alist as vertical key lines."
-  (insert (propertize (format " %s" label) 'face 'bold) "\n")
-  (dolist (kv keys)
-    (insert (propertize (format " %3s " (car kv))
-                        'face 'font-lock-keyword-face)
-            (propertize (cdr kv)
-                        'face 'font-lock-comment-face)
-            "\n")))
-
-(defun decknix--sidebar-render-key-group-inline (label keys)
-  "Insert group LABEL then KEYS alist as a compact horizontal line.
-Format: LABEL  k·desc  k·desc  k·desc"
-  (insert (propertize (format " %s " label) 'face 'bold))
-  (let ((first t))
-    (dolist (kv keys)
-      (unless first (insert " "))
-      (setq first nil)
-      (insert (propertize (car kv) 'face 'font-lock-keyword-face)
-              (propertize "·" 'face 'font-lock-comment-face)
-              (propertize (cdr kv) 'face 'font-lock-comment-face))))
-  (insert "\n"))
-
-(defun decknix--sidebar-render-key-groups-side-by-side (left-label left-keys
-                                                         right-label right-keys
-                                                         col-width)
-  "Render LEFT and RIGHT key groups in two columns.
-Each column is COL-WIDTH chars wide.  LEFT group is padded on the right
-so RIGHT group starts at column COL-WIDTH."
-  ;; Build lists of formatted lines for each group
-  ;; N.B. must use let* — max-rows depends on left-lines and right-lines
-  (let* ((left-lines
-          (cons (propertize (format " %s" left-label) 'face 'bold)
-                (mapcar (lambda (kv)
-                          (concat
-                           (propertize (format " %3s " (car kv))
-                                       'face 'font-lock-keyword-face)
-                           (propertize (cdr kv)
-                                       'face 'font-lock-comment-face)))
-                        left-keys)))
-         (right-lines
-          (cons (propertize (format " %s" right-label) 'face 'bold)
-                (mapcar (lambda (kv)
-                          (concat
-                           (propertize (format " %3s " (car kv))
-                                       'face 'font-lock-keyword-face)
-                           (propertize (cdr kv)
-                                       'face 'font-lock-comment-face)))
-                        right-keys)))
-         (max-rows (max (length left-lines) (length right-lines))))
-    ;; Pad shorter list
-    (while (< (length left-lines) max-rows)
-      (setq left-lines (append left-lines (list ""))))
-    (while (< (length right-lines) max-rows)
-      (setq right-lines (append right-lines (list ""))))
-    ;; Render side by side
-    (cl-mapc
-     (lambda (l r)
-       (let* ((l-visible (length (substring-no-properties l)))
-              (pad (max 1 (- col-width l-visible))))
-         (insert l (make-string pad ?\s) r "\n")))
-     left-lines right-lines)))
+;; Sidebar render primitives carved out into
+;; agent-shell/sidebar/decknix-sidebar-format.el (PR B.26).
+;; Forward declarations keep the rest of this file's byte-compile
+;; clean.  All four are pure formatters that `insert' into the
+;; current buffer; the heredoc and hub-bulk continue to call them
+;; via these declares.
+(declare-function decknix--sidebar-render-section-header
+                  "decknix-sidebar-format")
+(declare-function decknix--sidebar-render-key-group
+                  "decknix-sidebar-format")
+(declare-function decknix--sidebar-render-key-group-inline
+                  "decknix-sidebar-format")
+(declare-function decknix--sidebar-render-key-groups-side-by-side
+                  "decknix-sidebar-format")
 
 (defun decknix--sidebar-footer-nav-keys ()
   "Build the Navigate key alist for the footer."

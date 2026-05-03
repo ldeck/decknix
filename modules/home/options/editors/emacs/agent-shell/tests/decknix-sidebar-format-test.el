@@ -82,5 +82,113 @@ a session."
   (let ((decknix--sidebar-sessions-age-filter (* 60 60)))
     (should (decknix--sidebar-session-age-visible-p "not-an-iso-date"))))
 
+;; -- render-section-header -----------------------------------------
+;;
+;; These tests render into a `with-temp-buffer' and check both the
+;; raw text (no properties) and a representative face span.
+
+(ert-deftest decknix-sidebar-render-section-header--basic-text ()
+  "Header inserts ` TITLE\\n' verbatim."
+  (with-temp-buffer
+    (decknix--sidebar-render-section-header "Live")
+    (should (equal (buffer-substring-no-properties (point-min)
+                                                   (point-max))
+                   " Live\n"))))
+
+(ert-deftest decknix-sidebar-render-section-header--bold-applied ()
+  "The visible header span (excluding trailing newline) carries
+the `bold' face via `add-face-text-property'."
+  (with-temp-buffer
+    (decknix--sidebar-render-section-header "Live")
+    ;; Position 1 is the leading space; position 4 is the `e' of Live.
+    (let ((face (get-text-property 1 'face)))
+      ;; `add-face-text-property' may layer faces; check membership
+      ;; rather than equality so future composition stays compatible.
+      (should (or (eq face 'bold)
+                  (and (listp face) (memq 'bold face)))))))
+
+(ert-deftest decknix-sidebar-render-section-header--section-id-property ()
+  "SECTION-ID, when supplied, is set as `decknix-sidebar-section'
+text property over the visible span (not the trailing newline)."
+  (with-temp-buffer
+    (decknix--sidebar-render-section-header "Sessions" 'sessions)
+    (should (eq (get-text-property 2 'decknix-sidebar-section)
+                'sessions))
+    ;; Trailing newline must not carry the property
+    (should (null (get-text-property (1- (point-max))
+                                     'decknix-sidebar-section)))))
+
+(ert-deftest decknix-sidebar-render-section-header--section-id-omitted ()
+  "Omitting SECTION-ID leaves the property unset (nil everywhere)."
+  (with-temp-buffer
+    (decknix--sidebar-render-section-header "Live")
+    (should (null (get-text-property 2 'decknix-sidebar-section)))))
+
+;; -- render-key-group ----------------------------------------------
+
+(ert-deftest decknix-sidebar-render-key-group--vertical-format ()
+  "Vertical group: header line then one ` KEY DESC\\n' per pair."
+  (with-temp-buffer
+    (decknix--sidebar-render-key-group
+     "Navigate" '(("r" . "request") ("w" . "wip")))
+    (should (equal (buffer-substring-no-properties (point-min)
+                                                   (point-max))
+                   " Navigate\n   r request\n   w wip\n"))))
+
+(ert-deftest decknix-sidebar-render-key-group--empty-keys ()
+  "Empty KEYS still inserts the header line and nothing else."
+  (with-temp-buffer
+    (decknix--sidebar-render-key-group "Empty" '())
+    (should (equal (buffer-substring-no-properties (point-min)
+                                                   (point-max))
+                   " Empty\n"))))
+
+;; -- render-key-group-inline ---------------------------------------
+
+(ert-deftest decknix-sidebar-render-key-group-inline--single-line ()
+  "Inline group: ` LABEL  k·desc k·desc\\n' on one line."
+  (with-temp-buffer
+    (decknix--sidebar-render-key-group-inline
+     "Quick" '(("c" . "new") ("k" . "kill")))
+    (should (equal (buffer-substring-no-properties (point-min)
+                                                   (point-max))
+                   " Quick c·new k·kill\n"))))
+
+;; -- render-key-groups-side-by-side --------------------------------
+
+(ert-deftest decknix-sidebar-render-key-groups-side-by-side--padding ()
+  "Side-by-side: header row + per-pair row, right column padded
+to start at COL-WIDTH so headers line up."
+  (with-temp-buffer
+    (decknix--sidebar-render-key-groups-side-by-side
+     "L" '(("a" . "x"))
+     "R" '(("b" . "y"))
+     10)
+    (let* ((raw (buffer-substring-no-properties (point-min)
+                                                (point-max)))
+           (lines (split-string raw "\n" t)))
+      (should (= (length lines) 2))
+      ;; Header row: " L" + 8 spaces + " R" => " L         R"
+      (should (equal (nth 0 lines) " L         R"))
+      ;; Body row: "   a x" (6 visible) + 4 spaces + "   b y"
+      (should (equal (nth 1 lines) "   a x       b y")))))
+
+(ert-deftest decknix-sidebar-render-key-groups-side-by-side--padding-uneven ()
+  "Shorter group is padded with empty rows so both columns end at
+the same height."
+  (with-temp-buffer
+    (decknix--sidebar-render-key-groups-side-by-side
+     "L" '(("a" . "x") ("b" . "y") ("c" . "z"))
+     "R" '(("p" . "1"))
+     10)
+    (let* ((raw (buffer-substring-no-properties (point-min)
+                                                (point-max)))
+           (lines (split-string raw "\n" t)))
+      ;; 1 header row + 3 left-keys = 4 total rows
+      (should (= (length lines) 4))
+      ;; Last row: only the left col has content; right col is empty
+      ;; so the right side after padding is the empty string.
+      (should (string-prefix-p "   c z" (nth 3 lines))))))
+
 (provide 'decknix-sidebar-format-test)
 ;;; decknix-sidebar-format-test.el ends here

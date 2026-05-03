@@ -1391,9 +1391,17 @@ in
         ;;   decknix--sidebar-session-age-visible-p
         ;; The age-visible predicate references the heredoc-resident
         ;; `decknix--sidebar-sessions-age-filter' via dynamic resolution.
+        ;; PR B.26 also folded the four sidebar render primitives
+        ;; (section header + three key-group renderers) into this
+        ;; package — they are pure `insert' formatters used by both
+        ;; the heredoc and `hub-bulk' to compose the sidebar buffer.
         (require 'decknix-sidebar-format)
         (declare-function decknix--sidebar-abbreviate-workspace "decknix-sidebar-format")
         (declare-function decknix--sidebar-session-age-visible-p "decknix-sidebar-format")
+        (declare-function decknix--sidebar-render-section-header "decknix-sidebar-format")
+        (declare-function decknix--sidebar-render-key-group "decknix-sidebar-format")
+        (declare-function decknix--sidebar-render-key-group-inline "decknix-sidebar-format")
+        (declare-function decknix--sidebar-render-key-groups-side-by-side "decknix-sidebar-format")
 
         ;; Previous-Sessions list + dedupe (PR B.23) — carries the
         ;; in-memory list mutated by sidebar-state restore and the
