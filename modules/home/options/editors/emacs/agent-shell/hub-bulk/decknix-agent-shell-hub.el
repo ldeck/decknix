@@ -1306,58 +1306,27 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
 ;; Linked repos (type=\"repo\") don't flow through the hub daemon;
 ;; we fetch their HEAD commit + combined CI state directly via
 ;; `gh api graphql' and cache the result per (repo, branch).
-
-(defvar decknix--hub-repo-cache (make-hash-table :test 'equal)
-  "Cache for repo+branch HEAD status.
-Keys are \"OWNER/REPO#BRANCH\"; values are (TIMESTAMP . STATUS-ALIST).")
-
-(defvar decknix--hub-repo-cache-ttl 300
-  "Time-to-live in seconds for cached repo+branch lookups.")
-
-(defvar decknix--hub-repo-cache-file
-  (expand-file-name "~/.config/decknix/hub/repo-cache.el")
-  "File for persisting repo cache across Emacs restarts.")
-
-(defvar decknix--hub-repo-pending-fetches (make-hash-table :test 'equal)
-  "Set of repo+branch keys currently being fetched.")
-
+;;
+;; The cache state (`decknix--hub-repo-cache' hash + TTL constant
+;; + `-cache-save' / `-cache-restore') was carved out into
+;; `agent-shell/hub/decknix-hub-repo-cache.el' as PR B.27, mirroring
+;; the PR-cache extraction (B.24).  Forward declarations below keep
+;; the rest of this file's byte-compile clean.  The async fetcher
+;; (`decknix--hub-repo-fetch-async', defined below) and the
+;; cache-reader / status orchestrator (`decknix--hub-repo-cache-get'
+;; and `decknix--hub-repo-status', defined immediately after) stay
+;; here because they call the fetcher.
+;;
 ;; `decknix--hub-repo-cache-key' lives in
 ;; agent-shell/agent/decknix-agent-url-parse.el — required at
 ;; the top of this heredoc.
 
-(defun decknix--hub-repo-cache-save ()
-  "Persist the repo cache to disk."
-  (when (> (hash-table-count decknix--hub-repo-cache) 0)
-    (condition-case err
-        (let (entries)
-          (maphash (lambda (k v) (push (cons k v) entries))
-                   decknix--hub-repo-cache)
-          (make-directory (file-name-directory
-                           decknix--hub-repo-cache-file) t)
-          (with-temp-file decknix--hub-repo-cache-file
-            (insert ";; Auto-generated repo cache — do not edit\n")
-            (prin1 entries (current-buffer))
-            (insert "\n")))
-      (error
-       (message "hub-repo-cache: save failed: %s"
-                (error-message-string err))))))
-
-(defun decknix--hub-repo-cache-restore ()
-  "Restore the repo cache from disk."
-  (when (file-exists-p decknix--hub-repo-cache-file)
-    (condition-case err
-        (let ((entries (with-temp-buffer
-                         (insert-file-contents
-                          decknix--hub-repo-cache-file)
-                         (read (current-buffer)))))
-          (when (listp entries)
-            (dolist (entry entries)
-              (when (consp entry)
-                (puthash (car entry) (cdr entry)
-                         decknix--hub-repo-cache)))))
-      (error
-       (message "hub-repo-cache: restore failed: %s"
-                (error-message-string err))))))
+(declare-function decknix--hub-repo-cache-save "decknix-hub-repo-cache")
+(declare-function decknix--hub-repo-cache-restore "decknix-hub-repo-cache")
+(defvar decknix--hub-repo-cache)
+(defvar decknix--hub-repo-cache-ttl)
+(defvar decknix--hub-repo-cache-file)
+(defvar decknix--hub-repo-pending-fetches)
 
 (defun decknix--hub-repo-cache-get (url branch)
   "Return cached HEAD status for URL+BRANCH if valid, else nil.
