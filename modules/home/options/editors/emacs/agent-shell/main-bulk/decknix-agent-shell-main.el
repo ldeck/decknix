@@ -2151,70 +2151,29 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
 ;; session-cache modules so callers in this file resolve at load time.
 (defvar decknix--agent-tags-file)
 
-;; `decknix--agent-conversation-key-raw' lives in
-;; agent-shell/agent/decknix-agent-parse.el — required at the
-;; top of this heredoc.
-
-(defun decknix--agent-conversation-key (first-message)
-  "Derive the canonical conversation key from FIRST-MESSAGE.
-Computes SHA-256 hash truncated to 16 chars, then follows any
-mergedInto redirect in agent-sessions.json so that merged
-conversations resolve to the target conversation key."
-  (let ((raw (decknix--agent-conversation-key-raw first-message)))
-    (if raw (decknix--agent-conv-resolve-key raw) raw)))
-
-(defun decknix--agent-conv-resolve-key (conv-key)
-  "Resolve CONV-KEY by following mergedInto redirects.
-Returns the canonical conversation key.  Follows at most 5 hops
-to avoid infinite loops from misconfiguration."
-  (let ((store (decknix--agent-tags-read))
-        (key conv-key)
-        (hops 0))
-    (when store
-      (let ((convs (decknix--agent-tags-conversations store)))
-        (while (and key (< hops 5))
-          (let ((entry (gethash key convs)))
-            (if (and (hash-table-p entry)
-                     (gethash "mergedInto" entry))
-                (progn
-                  (setq key (gethash "mergedInto" entry))
-                  (setq hops (1+ hops)))
-              (setq hops 5))))))  ;; break
-    (or key conv-key)))
-
-(defun decknix--agent-conversation-key-for-session (session-id)
-  "Look up the conversation key for SESSION-ID from cached session data."
-  (let* ((sessions (decknix--agent-session-list))
-         (match (seq-find (lambda (s)
-                            (string= (alist-get 'sessionId s) session-id))
-                          sessions)))
-    (when match
-      (decknix--agent-conversation-key
-       (alist-get 'firstUserMessage match "")))))
-
-(defun decknix--agent-latest-session-id-for-conv-key (conv-key)
-  "Return the session-id of the most recently modified snapshot for CONV-KEY.
-Returns nil when CONV-KEY is nil or no session matches.  Auggie writes
-a fresh session file whenever a conversation is interrupted/composed,
-so a single conv-key typically owns many session-ids; this picks the
-latest so resume flows pull in the full recent context, not an older
-snapshot."
-  (when conv-key
-    (let* ((sessions (decknix--agent-session-list))
-           (matches
-            (seq-filter
-             (lambda (s)
-               (let ((fm (alist-get 'firstUserMessage s "")))
-                 (and (not (string-empty-p fm))
-                      (string= (decknix--agent-conversation-key fm)
-                               conv-key))))
-             sessions))
-           (sorted (sort (copy-sequence matches)
-                         (lambda (a b)
-                           (string> (or (alist-get 'modified a) "")
-                                    (or (alist-get 'modified b) ""))))))
-      (when sorted
-        (alist-get 'sessionId (car sorted))))))
+;; Conversation-key derivation + mergedInto resolution (PR B.34) —
+;; moved out of this heredoc into
+;; agent-shell/agent/decknix-agent-conv-resolve.el, packaged as
+;; `decknix-agent-conv-resolve-el'.  Owns the canonical
+;; `decknix--agent-conversation-key' (raw hash → mergedInto
+;; resolution), the redirect-walker `decknix--agent-conv-resolve-key',
+;; and the two session-aware lookups
+;; (`decknix--agent-conversation-key-for-session' /
+;; `decknix--agent-latest-session-id-for-conv-key').
+;;
+;; The module is required from the heredoc immediately after the
+;; tags-store + session-cache modules so callers in this file
+;; (~30 sites that hash a first-message to a conv-key) resolve
+;; cleanly at load time.  Forward-declared here so that the rest
+;; of this file byte-compiles clean.
+(declare-function decknix--agent-conversation-key
+                  "decknix-agent-conv-resolve" (first-message))
+(declare-function decknix--agent-conv-resolve-key
+                  "decknix-agent-conv-resolve" (conv-key))
+(declare-function decknix--agent-conversation-key-for-session
+                  "decknix-agent-conv-resolve" (session-id))
+(declare-function decknix--agent-latest-session-id-for-conv-key
+                  "decknix-agent-conv-resolve" (conv-key))
 
 ;; Tag store storage layer (PR B.28) — moved out of this heredoc into
 ;; agent-shell/agent/decknix-agent-tags-store.el, packaged as
