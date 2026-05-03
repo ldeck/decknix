@@ -382,71 +382,18 @@ candidate movement uses the line text as the search needle."
                            cand)))
              (decknix--webkit-find-in-page line)))))))))
 
-;; -- Sidebar width cycling (inspired by treemacs) --
-;; W cycles: default (24) → fit-to-content → wide (48) → default.
-(defvar decknix--sidebar-width-state 'default
-  "Current sidebar width state: default, fit, or wide.")
-
-(defun decknix--sidebar-apply-width ()
-  "Apply the saved width state to the sidebar window.
-Called after the sidebar opens to restore the width from the
-previous session."
-  (let ((win (get-buffer-window
-              agent-shell-workspace-sidebar-buffer-name))
-        (default-w agent-shell-workspace-sidebar-width))
-    (when (and win (window-live-p win)
-               (not (eq decknix--sidebar-width-state 'default)))
-      (pcase decknix--sidebar-width-state
-        ('fit
-         ;; Fit to content: measure longest line
-         (let ((max-len 0))
-           (with-current-buffer (window-buffer win)
-             (save-excursion
-               (goto-char (point-min))
-               (while (not (eobp))
-                 (setq max-len
-                       (max max-len (- (line-end-position)
-                                       (line-beginning-position))))
-                 (forward-line 1))))
-           (let ((fit-w (max default-w (+ max-len 2))))
-             (window-resize win (- fit-w (window-width win)) t))))
-        ('wide
-         (let ((wide-w (* 2 default-w)))
-           (window-resize win (- wide-w (window-width win)) t)))))))
-
-(defun decknix-sidebar-cycle-width ()
-  "Cycle sidebar width: default → fit-to-content → wide → default.
-Like treemacs `W' / extra-wide-toggle."
-  (interactive)
-  (let* ((win (get-buffer-window
-               agent-shell-workspace-sidebar-buffer-name))
-         (default-w agent-shell-workspace-sidebar-width)
-         (wide-w (* 2 default-w)))
-    (when (and win (window-live-p win))
-      (pcase decknix--sidebar-width-state
-        ('default
-         ;; Fit to content: measure longest line
-         (let ((max-len 0))
-           (with-current-buffer (window-buffer win)
-             (save-excursion
-               (goto-char (point-min))
-               (while (not (eobp))
-                 (setq max-len
-                       (max max-len (- (line-end-position)
-                                       (line-beginning-position))))
-                 (forward-line 1))))
-           (let ((fit-w (max default-w (+ max-len 2))))
-             (window-resize win (- fit-w (window-width win)) t)))
-         (setq decknix--sidebar-width-state 'fit)
-         (message "Sidebar: fit-to-content"))
-        ('fit
-         (window-resize win (- wide-w (window-width win)) t)
-         (setq decknix--sidebar-width-state 'wide)
-         (message "Sidebar: wide (%d)" wide-w))
-        ('wide
-         (window-resize win (- default-w (window-width win)) t)
-         (setq decknix--sidebar-width-state 'default)
-         (message "Sidebar: default (%d)" default-w))))))
+;; Sidebar width cycling (PR B.35) — moved out of this file into
+;; agent-shell/sidebar/decknix-sidebar-width.el, packaged as
+;; `decknix-sidebar-width-el'.  Owns the cycle state defvar
+;; (`decknix--sidebar-width-state') and the two commands that
+;; mutate it (`decknix--sidebar-apply-width' applied as advice on
+;; the sidebar opener; `decknix-sidebar-cycle-width' bound to `W'
+;; in the toggles transient).  Forward declarations here so the
+;; transient suffix labels and the persistence read/write sites
+;; (~5 references in this file) byte-compile clean.
+(defvar decknix--sidebar-width-state)
+(declare-function decknix--sidebar-apply-width "decknix-sidebar-width")
+(declare-function decknix-sidebar-cycle-width "decknix-sidebar-width")
 
 ;; == Forward declarations for byte-compile hygiene ==
 ;;

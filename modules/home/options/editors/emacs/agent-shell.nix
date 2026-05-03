@@ -215,6 +215,33 @@ let
     ];
   };
 
+  # PR B.35: sidebar width cycling carved out of
+  # `decknix-agent-shell-workspace' (workspace-bulk).  Owns the
+  # cycle state defvar (`decknix--sidebar-width-state'), the
+  # restore-on-open helper (`decknix--sidebar-apply-width', wired
+  # into the heredoc as advice on the sidebar opener), and the
+  # interactive cycler (`decknix-sidebar-cycle-width', bound to
+  # `W' in the toggles transient).  No external deps -- the two
+  # upstream package vars `agent-shell-workspace-sidebar-buffer-
+  # name' and `agent-shell-workspace-sidebar-width' are
+  # forward-declared and resolved at runtime via the heredoc's
+  # load order.  The persisted `width-state' value still travels
+  # through `decknix--sidebar-state-file' (read/write in
+  # workspace-bulk).
+  decknix-sidebar-width-el = mkEmacsTestedPackage {
+    pname = "decknix-sidebar-width";
+    src = ./agent-shell/sidebar;
+    # Sibling `decknix-sidebar-toggles.el' in the same `src' dir
+    # transitively requires `decknix-hub-age-presets', so the
+    # trivialBuild byte-compile pass needs that package on the
+    # load-path even though `decknix-sidebar-width' itself has
+    # no deps.  Mirrors `decknix-sidebar-tile-el' above.
+    packageRequires = [ decknix-hub-age-presets-el ];
+    testFiles = [
+      "decknix-sidebar-width-test.el"
+    ];
+  };
+
   # PR B.32: xwidget-webkit page-text + window.find JS-bridge
   # primitives carved out of `decknix-agent-shell-workspace'
   # (workspace-bulk).  Co-resident in a new `agent-shell/webkit/'
@@ -982,6 +1009,7 @@ in
         ++ (optional cfg.workspace.enable decknix-sidebar-format-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-previous-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-tile-el)
+        ++ (optional cfg.workspace.enable decknix-sidebar-width-el)
         ++ (optional cfg.workspace.enable decknix-webkit-page-el)
         ++ (optional cfg.context.enable decknix-agent-shell-context-el)
         ++ (optional cfg.hub.enable decknix-agent-shell-hub-el)
@@ -1552,6 +1580,18 @@ in
                   (format "%s %s" short
                           (mapconcat (lambda (tag) (concat "#" tag)) tags " "))
                 short))))
+
+        ;; Sidebar width cycling state + commands (PR B.35) -- owns
+        ;; the cycle state defvar (`decknix--sidebar-width-state'),
+        ;; the restore-on-open helper (`decknix--sidebar-apply-width',
+        ;; wired below as advice on the sidebar opener), and the
+        ;; interactive cycler (`decknix-sidebar-cycle-width', bound
+        ;; in workspace-bulk's toggles transient).  Loaded here so
+        ;; the immediately-following advice-add resolves cleanly.
+        (require 'decknix-sidebar-width)
+        (defvar decknix--sidebar-width-state)
+        (declare-function decknix--sidebar-apply-width "decknix-sidebar-width")
+        (declare-function decknix-sidebar-cycle-width "decknix-sidebar-width")
 
         ;; Apply saved width after the sidebar opens
         (advice-add 'agent-shell-workspace-sidebar-open :after
