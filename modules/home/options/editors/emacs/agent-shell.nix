@@ -262,6 +262,26 @@ let
     ];
   };
 
+  # PR B.30: CI status filter state + helpers carved out of
+  # `decknix-agent-shell-hub' (hub-bulk).  Owns the visible-status
+  # list, the canonical render-order alist, the predicates
+  # (`status-of', `visible-p'), the propertised footer summary,
+  # the per-bucket toggle commands wired to the transient suffixes
+  # in hub-bulk, the `show-all' / `show-none' bulk verbs, and the
+  # transient row-description builder.  Depends on
+  # `decknix-hub-ci' for the classification primitive
+  # (`decknix--hub-ci-classify') used by `status-of'; the transient
+  # suffix / prefix forms stay in hub-bulk because they wire into
+  # the broader sidebar transient cluster there.
+  decknix-hub-ci-filter-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-ci-filter";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-ci-filter-test.el"
+    ];
+  };
+
   decknix-hub-mention-bot-el = mkEmacsTestedPackage {
     pname = "decknix-hub-mention-bot";
     src = ./agent-shell/hub;
@@ -870,6 +890,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-org-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-jira-tasks-el)
         ++ (optional cfg.hub.enable decknix-hub-ci-el)
+        ++ (optional cfg.hub.enable decknix-hub-ci-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-mention-bot-el)
         ++ (optional cfg.hub.enable decknix-hub-worktree-parse-el)
         ++ (optional cfg.hub.enable decknix-hub-icons-el)
@@ -2176,6 +2197,28 @@ in
         ;; for `decknix--hub-icon' so the require below covers both.
         (require 'decknix-hub-ci)
         (require 'decknix-hub-icons)
+
+        ;; CI status filter (PR B.30) -- owns the visible-status
+        ;; list, the render-order alist, the visibility predicate
+        ;; consumed by sidebar Requests/WIP, the propertised footer
+        ;; summary, and the per-bucket toggle commands wired to the
+        ;; transient suffixes in hub-bulk.  Depends on
+        ;; `decknix-hub-ci' for `decknix--hub-ci-classify'.
+        (require 'decknix-hub-ci-filter)
+        (declare-function decknix--hub-ci-status-of "decknix-hub-ci-filter" (item))
+        (declare-function decknix--hub-ci-visible-p "decknix-hub-ci-filter" (item))
+        (declare-function decknix--hub-ci-filter-summary "decknix-hub-ci-filter")
+        (declare-function decknix--hub-ci-toggle-status "decknix-hub-ci-filter" (status))
+        (declare-function decknix--hub-ci-filter-refresh "decknix-hub-ci-filter")
+        (declare-function decknix--hub-ci-filter-toggle-pass "decknix-hub-ci-filter")
+        (declare-function decknix--hub-ci-filter-toggle-soft "decknix-hub-ci-filter")
+        (declare-function decknix--hub-ci-filter-toggle-running "decknix-hub-ci-filter")
+        (declare-function decknix--hub-ci-filter-toggle-unknown "decknix-hub-ci-filter")
+        (declare-function decknix--hub-ci-filter-toggle-fail "decknix-hub-ci-filter")
+        (declare-function decknix--hub-ci-filter-show-all "decknix-hub-ci-filter")
+        (declare-function decknix--hub-ci-filter-show-none "decknix-hub-ci-filter")
+        (declare-function decknix--hub-ci-filter-status-desc
+                          "decknix-hub-ci-filter" (status icon label))
 
 
 
