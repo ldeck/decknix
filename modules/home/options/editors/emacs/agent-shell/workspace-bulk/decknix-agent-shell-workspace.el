@@ -314,32 +314,17 @@ work natively — useful for read-mode browsing."
 ;; search feels like consult-line in any other buffer (vertical
 ;; candidate list, live preview, narrowing) instead of the single-
 ;; line JS-bridged isearch shim.
-
-(defvar decknix--webkit-search-history nil
-  "History list for `decknix-webkit-consult-line'.")
-
-(defun decknix--webkit-page-text ()
-  "Return innerText of the current xwidget-webkit page, or nil if empty."
-  (let* ((session (ignore-errors (xwidget-webkit-current-session)))
-         (raw (and session
-                   (ignore-errors
-                     (xwidget-webkit-execute-script-rv
-                      session
-                      "document.body && document.body.innerText")))))
-    (and (stringp raw) (not (string-empty-p raw)) raw)))
-
-(defun decknix--webkit-find-in-page (needle)
-  "Scroll the current xwidget-webkit page to NEEDLE and highlight it.
-Uses `window.find' which natively scrolls the match into view and
-highlights it via the browser's selection."
-  (when (and needle (stringp needle) (not (string-empty-p needle)))
-    (let ((session (ignore-errors (xwidget-webkit-current-session))))
-      (when session
-        (xwidget-webkit-execute-script
-         session
-         (format
-          "(function(){try{window.getSelection().removeAllRanges();window.find(%s,false,false,true,false,false,false);}catch(e){}})()"
-          (json-encode-string needle)))))))
+;;
+;; The two JS-bridge primitives (`decknix--webkit-page-text',
+;; `decknix--webkit-find-in-page') and the shared search history
+;; defvar (`decknix--webkit-search-history') live in
+;; `agent-shell/webkit/decknix-webkit-page.el', packaged as
+;; `decknix-webkit-page-el'.  The interactive `consult-line'
+;; command stays here because it wires the consult UI and is
+;; keymap-bound to the WebKit major-mode in the heredoc.
+(declare-function decknix--webkit-page-text    "decknix-webkit-page")
+(declare-function decknix--webkit-find-in-page "decknix-webkit-page" (needle))
+(defvar decknix--webkit-search-history)
 
 (defun decknix-webkit-consult-line ()
   "Find a line on the current xwidget-webkit page using `consult--read'.
