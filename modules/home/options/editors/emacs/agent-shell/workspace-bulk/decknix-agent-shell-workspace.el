@@ -1304,14 +1304,18 @@ the target.  Sessions and tags are moved to the target."
   (mapcar #'char-to-string (number-sequence ?a ?z))
   "Single-letter keys a–z for item selection in section transients.")
 
-;; Helper: build a transient command for a specific item
-(defun decknix--nav-make-item-cmd (item-data action-fn)
-  "Create a named command that calls ACTION-FN with ITEM-DATA."
-  (let ((sym (make-symbol "decknix--nav-item")))
-    (fset sym (eval `(lambda ()
-                       (interactive)
-                       (funcall ',action-fn ',item-data)) t))
-    sym))
+;; Sidebar nav transient item-command factory (PR B.38) --
+;; moved out of this file into
+;; agent-shell/sidebar/decknix-sidebar-nav-cmd.el, packaged as
+;; `decknix-sidebar-nav-cmd-el'.  Owns the single defun
+;; `decknix--nav-make-item-cmd' called from the four section
+;; transients in this file (`decknix-sidebar-nav-requests-
+;; consult' / `-wip-consult' / `-live-consult' / `-previous-
+;; consult') to mint a transient suffix per visible row.
+;; Forward declaration here so those call sites byte-compile
+;; clean.
+(declare-function decknix--nav-make-item-cmd
+                  "decknix-sidebar-nav-cmd" (item-data action-fn))
 
 ;; -- Item action menus --
 ;; Uses read-char-choice after a short delay to avoid conflicts

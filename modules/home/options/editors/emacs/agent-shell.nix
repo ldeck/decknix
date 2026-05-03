@@ -242,6 +242,29 @@ let
     ];
   };
 
+  # PR B.38: sidebar nav transient item-command factory carved
+  # out of `decknix-agent-shell-workspace' (workspace-bulk).  A
+  # one-defun module -- `decknix--nav-make-item-cmd' -- minted as
+  # its own package because it is the cleanest pure cell in the
+  # workspace transient suffix machinery and serves as the seed
+  # for a future `agent-shell/sidebar/nav-*' family of carved
+  # transient helpers.  No external deps -- it only uses
+  # `make-symbol' / `fset' / `eval'.  The four call-sites in
+  # workspace-bulk (the section transients for Requests / WIP /
+  # Live / Previous) reach the symbol through the heredoc's
+  # `(require ...)' chain.  The same `decknix-hub-age-presets'
+  # workaround as the other sidebar/ packages applies: sibling
+  # `decknix-sidebar-toggles.el' transitively pulls it in during
+  # the trivialBuild byte-compile pass.
+  decknix-sidebar-nav-cmd-el = mkEmacsTestedPackage {
+    pname = "decknix-sidebar-nav-cmd";
+    src = ./agent-shell/sidebar;
+    packageRequires = [ decknix-hub-age-presets-el ];
+    testFiles = [
+      "decknix-sidebar-nav-cmd-test.el"
+    ];
+  };
+
   # PR B.32: xwidget-webkit page-text + window.find JS-bridge
   # primitives carved out of `decknix-agent-shell-workspace'
   # (workspace-bulk).  Co-resident in a new `agent-shell/webkit/'
@@ -1054,6 +1077,7 @@ in
         ++ (optional cfg.workspace.enable decknix-sidebar-previous-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-tile-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-width-el)
+        ++ (optional cfg.workspace.enable decknix-sidebar-nav-cmd-el)
         ++ (optional cfg.workspace.enable decknix-webkit-page-el)
         ++ (optional cfg.context.enable decknix-agent-shell-context-el)
         ++ (optional cfg.hub.enable decknix-agent-shell-hub-el)
@@ -1654,6 +1678,16 @@ in
         (defvar decknix--sidebar-width-state)
         (declare-function decknix--sidebar-apply-width "decknix-sidebar-width")
         (declare-function decknix-sidebar-cycle-width "decknix-sidebar-width")
+
+        ;; Sidebar nav transient item-command factory (PR B.38) --
+        ;; one-defun module providing `decknix--nav-make-item-cmd'
+        ;; for the Requests / WIP / Live / Previous section
+        ;; transients in workspace-bulk.  No state, no side-effects;
+        ;; the four call-sites in workspace-bulk reach the symbol
+        ;; through this require.
+        (require 'decknix-sidebar-nav-cmd)
+        (declare-function decknix--nav-make-item-cmd
+                          "decknix-sidebar-nav-cmd" (item-data action-fn))
 
         ;; Apply saved width after the sidebar opens
         (advice-add 'agent-shell-workspace-sidebar-open :after
