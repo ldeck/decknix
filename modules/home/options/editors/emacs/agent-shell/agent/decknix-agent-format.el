@@ -1,4 +1,4 @@
-;;; decknix-agent-format.el --- Agent session time formatters -*- lexical-binding: t -*-
+;;; decknix-agent-format.el --- Agent display formatters -*- lexical-binding: t -*-
 
 ;; Author: decknix
 ;; Maintainer: decknix
@@ -7,8 +7,10 @@
 
 ;;; Commentary:
 ;;
-;; Pure time-formatting primitives extracted from the agent-shell
-;; heredoc.  Both functions take an ISO-8601 timestamp string and
+;; Pure display-formatting primitives extracted from the agent-shell
+;; heredoc.
+;;
+;; Time formatters — both take an ISO-8601 timestamp string and
 ;; return a human-readable relative-time string with the same
 ;; bucket boundaries (1m / 1h / 1d / 30d):
 ;;
@@ -20,6 +22,14 @@
 ;;
 ;; Both functions read `(current-time)' for the delta computation;
 ;; tests stub it via `cl-letf' for deterministic boundary checks.
+;;
+;; String formatters:
+;;
+;;   `decknix--prompt-truncate-for-display' (prompt + max-len ->
+;;                                           single-line truncated
+;;                                           string with newlines
+;;                                           collapsed to ↵; appends
+;;                                           an ellipsis on overflow)
 
 ;;; Code:
 
@@ -49,6 +59,14 @@ Used in the sidebar where horizontal space is at a premium."
           ((< hours 24) (format "%dh" (truncate hours)))
           ((< days 30) (format "%dd" (truncate days)))
           (t (format-time-string "%m/%d" time)))))
+
+(defun decknix--prompt-truncate-for-display (prompt max-len)
+  "Truncate PROMPT to MAX-LEN chars, collapsing newlines to ↵."
+  (let* ((collapsed (replace-regexp-in-string "[\n\r]+" " ↵ " prompt))
+         (trimmed (string-trim collapsed)))
+    (if (<= (length trimmed) max-len)
+        trimmed
+      (concat (substring trimmed 0 (- max-len 1)) "…"))))
 
 (provide 'decknix-agent-format)
 ;;; decknix-agent-format.el ends here
