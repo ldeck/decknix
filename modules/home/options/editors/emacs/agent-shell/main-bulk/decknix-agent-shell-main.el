@@ -2144,9 +2144,12 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
 ;; {"conversations": {"conv-hash": {"tags": [...], "sessions": [...]}},
 ;;  "bookmarks": {"session-id": {"label": "...", "created": "..."}}}
 
-(defvar decknix--agent-tags-file
-  (expand-file-name "~/.config/decknix/agent-sessions.json")
-  "Path to the JSON file storing conversation tag metadata.")
+;; `decknix--agent-tags-file' (path to ~/.config/decknix/agent-sessions.json)
+;; moved out of this heredoc into agent-shell/agent/decknix-agent-tags-store.el
+;; alongside the cache state and the read/write/conversations triple.
+;; Required by the heredoc immediately after the conversation-key /
+;; session-cache modules so callers in this file resolve at load time.
+(defvar decknix--agent-tags-file)
 
 ;; `decknix--agent-conversation-key-raw' lives in
 ;; agent-shell/agent/decknix-agent-parse.el — required at the
@@ -2213,146 +2216,33 @@ snapshot."
       (when sorted
         (alist-get 'sessionId (car sorted))))))
 
-;; In-memory cache for the tag store to avoid repeated json-read-file.
-;; Each call to decknix--agent-tags-read was doing disk I/O (called 29+
-;; times from various functions).  Now we cache the parsed hash-table and
-;; only re-read when the file's mtime changes.
-(defvar decknix--agent-tags-cache nil
-  "In-memory cache of the tag store hash-table.")
-(defvar decknix--agent-tags-cache-mtime nil
-  "File modification time when cache was last populated.")
-(defvar decknix--agent-tags-cache-checked-at 0.0
-  "`float-time' when we last validated the tag-store cache on disk.
-Used to throttle `file-exists-p' / `file-attributes' syscalls and the
-v1→v2 migration walk on hot paths (sidebar refresh, group-by-conv).")
-(defconst decknix--agent-tags-cache-ttl 1.0
-  "Seconds to trust `decknix--agent-tags-cache' without re-checking disk.
-The sidebar refresh timer calls `decknix--agent-tags-read' O(N) times per
-cycle via `decknix--agent-session-group-by-conversation'; statting the
-tag file plus walking the store for v1 migrations N times per refresh
-would saturate a core (see #hub-loop).  The mtime check still fires
-after the TTL elapses, so external edits converge within one second.")
-
-(defun decknix--agent-tags-read ()
-  "Read the tag store, returning an in-memory cached hash-table.
-Re-reads from disk only if the file has been modified externally.
-Auto-migrates v1 (session-keyed) format to v2 (conversation-keyed).
-
-When called repeatedly inside `decknix--agent-tags-cache-ttl' seconds
-the cached hash-table is returned directly without stat-ing the file
-or walking the store for orphaned v1 entries."
-  ;; Fast path: recent cache hit — skip stat + migration walk.
-  (if (and decknix--agent-tags-cache
-           (< (- (float-time) decknix--agent-tags-cache-checked-at)
-              decknix--agent-tags-cache-ttl))
-      decknix--agent-tags-cache
-    (setq decknix--agent-tags-cache-checked-at (float-time))
-    ;; Check if cache is valid (file hasn't changed)
-    (let ((current-mtime (and (file-exists-p decknix--agent-tags-file)
-                              (file-attribute-modification-time
-                               (file-attributes decknix--agent-tags-file)))))
-      (when (or (null decknix--agent-tags-cache)
-                (not (equal current-mtime decknix--agent-tags-cache-mtime)))
-        ;; Cache miss — read from disk
-        (setq decknix--agent-tags-cache
-              (if (file-exists-p decknix--agent-tags-file)
-                  (condition-case err
-                      (let* ((json-object-type 'hash-table)
-                             (json-array-type 'list)
-                             (json-key-type 'string))
-                        (json-read-file decknix--agent-tags-file))
-                    (error
-                     (message "Warning: could not read tag store: %s"
-                              (error-message-string err))
-                     (make-hash-table :test 'equal)))
-                (make-hash-table :test 'equal)))
-        (setq decknix--agent-tags-cache-mtime current-mtime)))
-    (let ((store decknix--agent-tags-cache))
-      ;; Auto-migrate v1 format: session-keyed entries → conversation-keyed.
-      ;; Handles both initial migration (no "conversations" key) and
-      ;; incremental migration (orphaned v1 entries coexisting with v2).
-      (let ((convs (or (gethash "conversations" store)
-                       (make-hash-table :test 'equal)))
-            (sessions (decknix--agent-session-list))
-            (old-entries nil)
-            (migrated 0))
-      ;; Collect orphaned session-keyed entries (UUID keys with tags)
-      (maphash (lambda (key val)
-                 (when (and (hash-table-p val)
-                            (gethash "tags" val)
-                            (not (member key '("conversations" "bookmarks"))))
-                   (push (cons key val) old-entries)))
-               store)
-      (when old-entries
-        ;; Resolve each old session → conversation and merge tags
-        (dolist (entry old-entries)
-          (let* ((sid (car entry))
-                 (data (cdr entry))
-                 (match (seq-find
-                         (eval `(lambda (s)
-                                  (string= (alist-get 'sessionId s) ,sid))
-                               t)
-                         sessions))
-                 (conv-key (when match
-                             (decknix--agent-conversation-key
-                              (alist-get 'firstUserMessage match ""))))
-                 (tags (gethash "tags" data)))
-            (when (and conv-key tags)
-              (let ((conv-entry (or (gethash conv-key convs)
-                                    (let ((h (make-hash-table :test 'equal)))
-                                      (puthash "tags" nil h)
-                                      (puthash "sessions" nil h)
-                                      h))))
-                ;; Merge tags
-                (let ((existing (gethash "tags" conv-entry)))
-                  (dolist (tag tags)
-                    (cl-pushnew tag existing :test #'string=))
-                  (puthash "tags" existing conv-entry))
-                ;; Track session
-                (let ((sids (gethash "sessions" conv-entry)))
-                  (cl-pushnew sid sids :test #'string=)
-                  (puthash "sessions" sids conv-entry))
-                (puthash conv-key conv-entry convs))
-              ;; Only remove the v1 entry once it has been
-              ;; successfully merged into v2.  Leaving
-              ;; unresolved v1 entries in place lets a later
-              ;; pass complete the migration when session-list
-              ;; / firstUserMessage data becomes available —
-              ;; the previous unconditional `remhash' was the
-              ;; source of tag loss on the guided-session
-              ;; creation race.
-              (remhash sid store)
-              (setq migrated (1+ migrated)))))
-        ;; Write back the cleaned store
-        (puthash "conversations" convs store)
-        (unless (gethash "bookmarks" store)
-          (puthash "bookmarks" (make-hash-table :test 'equal) store))
-        (decknix--agent-tags-write store)
-        (when (> migrated 0)
-          (message "Migrated %d v1 tag entries to conversation format"
-                   migrated))))
-      store)))
-
-(defun decknix--agent-tags-write (store)
-  "Write STORE (hash-table) to the tag file and update in-memory cache."
-  (let ((dir (file-name-directory decknix--agent-tags-file)))
-    (unless (file-directory-p dir)
-      (make-directory dir t))
-    (with-temp-file decknix--agent-tags-file
-      (let ((json-encoding-pretty-print t))
-        (insert (json-encode store))))
-    ;; Update cache so subsequent reads don't hit disk
-    (setq decknix--agent-tags-cache store
-          decknix--agent-tags-cache-mtime
-          (file-attribute-modification-time
-           (file-attributes decknix--agent-tags-file)))))
-
-(defun decknix--agent-tags-conversations (store)
-  "Get the conversations hash-table from STORE."
-  (or (gethash "conversations" store)
-      (let ((convs (make-hash-table :test 'equal)))
-        (puthash "conversations" convs store)
-        convs)))
+;; Tag store storage layer (PR B.28) — moved out of this heredoc into
+;; agent-shell/agent/decknix-agent-tags-store.el, packaged as
+;; `decknix-agent-tags-store-el'.  Owns the file path, the in-memory
+;; cache (hash + mtime + checked-at + TTL), the v1->v2 auto-migration
+;; in `decknix--agent-tags-read', and the persistence pair
+;; (`decknix--agent-tags-write' + `decknix--agent-tags-conversations').
+;;
+;; The migration walk inside `decknix--agent-tags-read' calls back
+;; into `decknix--agent-session-list' (now in
+;; `decknix-agent-session-cache') and `decknix--agent-conversation-key'
+;; (still in this heredoc, since it threads mergedInto-redirect
+;; resolution through this very store and so cannot live in the
+;; lower-level package).  Both are forward-declared in the module.
+;;
+;; Forward declarations here so the rest of this file (which
+;; references the cache hash + the read/write pair from many call
+;; sites) byte-compiles clean.
+(defvar decknix--agent-tags-cache)
+(defvar decknix--agent-tags-cache-mtime)
+(defvar decknix--agent-tags-cache-checked-at)
+(defvar decknix--agent-tags-cache-ttl)
+(declare-function decknix--agent-tags-read
+                  "decknix-agent-tags-store" ())
+(declare-function decknix--agent-tags-write
+                  "decknix-agent-tags-store" (store))
+(declare-function decknix--agent-tags-conversations
+                  "decknix-agent-tags-store" (store))
 
 (defun decknix--agent-conv-touch (conv-key)
   "Stamp lastAccessed on CONV-KEY so it sorts to the top.
