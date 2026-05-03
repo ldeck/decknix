@@ -2244,49 +2244,24 @@ not just augment writing to the session file."
       (when (hash-table-p entry)
         (gethash "tags" entry)))))
 
-(defun decknix--agent-workspace-for-conv-key (conv-key)
-  "Return the workspace directory for conversation CONV-KEY, or nil."
-  (let* ((store (decknix--agent-tags-read))
-         (convs (decknix--agent-tags-conversations store)))
-    (let ((entry (gethash conv-key convs)))
-      (when (hash-table-p entry)
-        (gethash "workspace" entry)))))
-
-(defun decknix--agent-session-save-workspace (session-id workspace)
-  "Persist WORKSPACE for the conversation containing SESSION-ID.
-Looks up the conversation key from cached session data, then stores
-the workspace in the conversation entry alongside tags."
-  (when (and session-id workspace)
-    (let ((conv-key (decknix--agent-conversation-key-for-session
-                     session-id)))
-      (when conv-key
-        (let* ((store (decknix--agent-tags-read))
-               (convs (decknix--agent-tags-conversations store))
-               (entry (or (gethash conv-key convs)
-                          (let ((h (make-hash-table :test 'equal)))
-                            (puthash "tags" nil h)
-                            (puthash "sessions" nil h)
-                            h))))
-          (puthash "workspace" workspace entry)
-          (puthash conv-key entry convs)
-          (decknix--agent-tags-write store))))))
-
-(defun decknix--agent-session-save-workspace-for-conv-key
-    (conv-key workspace)
-  "Persist WORKSPACE for CONV-KEY directly (no session-id lookup).
-Used by the session picker when the user selects a workspace for a
-conversation that had no workspace stored."
-  (when (and conv-key workspace)
-    (let* ((store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (entry (or (gethash conv-key convs)
-                      (let ((h (make-hash-table :test 'equal)))
-                        (puthash "tags" nil h)
-                        (puthash "sessions" nil h)
-                        h))))
-      (puthash "workspace" workspace entry)
-      (puthash conv-key entry convs)
-      (decknix--agent-tags-write store))))
+;; -- Per-conversation workspace persistence (PR B.40) --
+;; Moved out of this file into
+;; agent-shell/agent/decknix-agent-session-workspace.el,
+;; packaged as `decknix-agent-session-workspace-el'.  Owns the
+;; reader (`decknix--agent-workspace-for-conv-key') and the two
+;; writers (`-session-save-workspace' resolving via session-id;
+;; `-session-save-workspace-for-conv-key' direct).  The eight
+;; call sites in this file (resume / picker / quick-action paths
+;; at lines ~1016 / 1123 / 1141 / 1172 / 1550 / 1557 / 2023 /
+;; 4663) reach the symbols through the heredoc's `(require ...)'
+;; chain.  The two call sites in workspace-bulk (lines 1071 /
+;; 3545) similarly come through the heredoc.
+(declare-function decknix--agent-workspace-for-conv-key
+                  "decknix-agent-session-workspace" (conv-key))
+(declare-function decknix--agent-session-save-workspace
+                  "decknix-agent-session-workspace" (session-id workspace))
+(declare-function decknix--agent-session-save-workspace-for-conv-key
+                  "decknix-agent-session-workspace" (conv-key workspace))
 
 ;; -- Per-session model persistence --
 ;;
