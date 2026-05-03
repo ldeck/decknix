@@ -647,6 +647,26 @@ let
     ];
   };
 
+  # PR B.42: per-conversation lastAccessed stamp carved out
+  # of `decknix-agent-shell-main' (main-bulk).  Sister of B.37 /
+  # B.40 in the `agent-shell/agent/' persistence cluster.  Owns
+  # the touch / last-accessed pair that mediates the
+  # `~/.config/decknix/agent-sessions.json' "lastAccessed"
+  # field, used by user-facing operations (tag, rename, resume,
+  # create) to bump a conversation's recency for the
+  # conversation-grouped picker's sort.  Loaded at the same point
+  # in the heredoc as the other agent/ persistence helpers so
+  # the two call sites in main-bulk (~lines 895 / 991-992)
+  # resolve cleanly.
+  decknix-agent-conv-recency-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-conv-recency";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-conv-recency-test.el"
+    ];
+  };
+
   # PR B.40: per-conversation workspace persistence carved out
   # of `decknix-agent-shell-main' (main-bulk).  Sits beside
   # `decknix-agent-session-model' in `agent-shell/agent/' as a
@@ -1121,6 +1141,7 @@ in
           decknix-agent-conv-resolve-el
           decknix-agent-session-model-el
           decknix-agent-session-workspace-el
+          decknix-agent-conv-recency-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
         ]
@@ -1294,6 +1315,18 @@ in
                           "decknix-agent-session-workspace" (session-id workspace))
         (declare-function decknix--agent-session-save-workspace-for-conv-key
                           "decknix-agent-session-workspace" (conv-key workspace))
+
+        ;; Per-conversation lastAccessed stamp (PR B.42) -- the
+        ;; touch / last-accessed pair that mediates the same
+        ;; agent-sessions.json store as the rest of this cluster.
+        ;; Used by tag / rename / resume / create flows to bump
+        ;; conversation recency, and by the conversation-grouped
+        ;; picker's sort comparator.
+        (require 'decknix-agent-conv-recency)
+        (declare-function decknix--agent-conv-touch
+                          "decknix-agent-conv-recency" (conv-key))
+        (declare-function decknix--agent-conv-last-accessed
+                          "decknix-agent-conv-recency" (conv-key))
 
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
