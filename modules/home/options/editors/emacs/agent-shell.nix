@@ -389,6 +389,28 @@ let
     ];
   };
 
+  # PR B.39: WIP "hide linked" toggle carved out of
+  # `decknix-agent-shell-hub' (hub-bulk).  When non-nil (the
+  # default), PRs that already have a live agent-shell session
+  # are hidden from the WIP section so the row doesn't duplicate
+  # noise the live row is already showing.  Owns the toggle
+  # state defvar (`decknix--hub-wip-hide-linked', default `t')
+  # and the interactive flipper (`decknix--hub-toggle-wip-hide-
+  # linked').  No external deps -- the sidebar refresh callback
+  # is gated by a `get-buffer' check so calling the toggle
+  # before the sidebar exists is a no-op.  The transient suffix
+  # surfacing the toggle in the WIP section of the sidebar
+  # Toggles transient (`L') stays in hub-bulk per AGENTS.md
+  # Rule 2.
+  decknix-hub-wip-link-filter-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-wip-link-filter";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-wip-link-filter-test.el"
+    ];
+  };
+
   decknix-hub-mention-bot-el = mkEmacsTestedPackage {
     pname = "decknix-hub-mention-bot";
     src = ./agent-shell/hub;
@@ -1065,6 +1087,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-ci-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-attention-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-repo-name-el)
+        ++ (optional cfg.hub.enable decknix-hub-wip-link-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-mention-bot-el)
         ++ (optional cfg.hub.enable decknix-hub-worktree-parse-el)
         ++ (optional cfg.hub.enable decknix-hub-icons-el)
@@ -2543,6 +2566,21 @@ in
                           "decknix-hub-repo-name" (repo))
         (declare-function decknix--hub-cycle-repo-name-cap
                           "decknix-hub-repo-name")
+
+        ;; WIP "hide linked" toggle (PR B.39) -- when non-nil
+        ;; (the default), PRs that are already live as agent-
+        ;; shell sessions are dropped from the WIP section so
+        ;; the row doesn't duplicate noise the live row already
+        ;; carries.  Owns the toggle state defvar and the
+        ;; interactive flipper bound to the `L' suffix in the
+        ;; WIP section of the sidebar Toggles transient (the
+        ;; transient suffix itself stays in hub-bulk per Rule
+        ;; 2).  No external deps -- the sidebar refresh callback
+        ;; is gated by a `get-buffer' check.
+        (require 'decknix-hub-wip-link-filter)
+        (defvar decknix--hub-wip-hide-linked)
+        (declare-function decknix--hub-toggle-wip-hide-linked
+                          "decknix-hub-wip-link-filter")
 
 
 
