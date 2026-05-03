@@ -298,6 +298,19 @@ let
     ];
   };
 
+  # PR B.22: session list cache + jq fetcher carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Co-resident in
+  # `agent-shell/agent/' with `decknix-agent-parse' which it
+  # depends on at load time.
+  decknix-agent-session-cache-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-session-cache";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-session-cache-test.el"
+    ];
+  };
+
   decknix-agent-vcs-el = mkEmacsTestedPackage {
     pname = "decknix-agent-vcs";
     src = ./agent-shell/agent;
@@ -753,6 +766,7 @@ in
           decknix-agent-url-parse-el
           decknix-agent-format-el
           decknix-agent-parse-el
+          decknix-agent-session-cache-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
         ]
@@ -823,6 +837,14 @@ in
         (declare-function decknix--agent-session-parse "decknix-agent-parse")
         (declare-function decknix--prompt-search-parse "decknix-agent-parse")
         (declare-function decknix--agent-conversation-key-raw "decknix-agent-parse")
+        ;; Session list cache (PR B.22) — depends on `decknix-agent-parse'
+        ;; for the parser, so loaded immediately after it.
+        (require 'decknix-agent-session-cache)
+        (declare-function decknix--agent-session-list "decknix-agent-session-cache")
+        (declare-function decknix--agent-session-refresh-sync "decknix-agent-session-cache")
+        (declare-function decknix--agent-session-refresh-async "decknix-agent-session-cache")
+        (declare-function decknix--agent-session-jq-cmd "decknix-agent-session-cache")
+        (declare-function decknix--agent-session-ensure-jq-filter "decknix-agent-session-cache")
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
         (require 'decknix-agent-review-format)
