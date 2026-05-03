@@ -164,6 +164,18 @@ let
     ];
   };
 
+  decknix-sidebar-format-el = mkEmacsTestedPackage {
+    pname = "decknix-sidebar-format";
+    src = ./agent-shell/sidebar;
+    # Co-resident with decknix-sidebar-toggles.el — trivialBuild
+    # byte-compiles every sibling, so age-presets must be on the
+    # load-path even though format itself doesn't reference it.
+    packageRequires = [ decknix-hub-age-presets-el ];
+    testFiles = [
+      "decknix-sidebar-format-test.el"
+    ];
+  };
+
   decknix-hub-teamcity-el = mkEmacsTestedPackage {
     pname = "decknix-hub-teamcity";
     src = ./agent-shell/hub;
@@ -686,7 +698,8 @@ in
         ++ (optional cfg.hub.enable decknix-hub-icons-el)
         ++ (optional cfg.hub.enable decknix-hub-pr-lookup-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el)
-        ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el);
+        ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el)
+        ++ (optional cfg.workspace.enable decknix-sidebar-format-el);
 
       extraConfig = ''
         ;;; Agent Shell Configuration (auggie AI integration)
@@ -6905,6 +6918,15 @@ picker / transient."
         ;; as soon as they're needed.
         (require 'decknix-sidebar-row-actions)
 
+        ;; Pure display helpers extracted from the heredoc:
+        ;;   decknix--sidebar-abbreviate-workspace
+        ;;   decknix--sidebar-session-age-visible-p
+        ;; The age-visible predicate references the heredoc-resident
+        ;; `decknix--sidebar-sessions-age-filter' via dynamic resolution.
+        (require 'decknix-sidebar-format)
+        (declare-function decknix--sidebar-abbreviate-workspace "decknix-sidebar-format")
+        (declare-function decknix--sidebar-session-age-visible-p "decknix-sidebar-format")
+
         (defun decknix--sidebar-render-key-group (label keys)
           "Insert a group LABEL header and KEYS alist as vertical key lines."
           (insert (propertize (format " %s" label) 'face 'bold) "\n")
@@ -7327,28 +7349,10 @@ items inline (horizontal).  Press K to toggle, ? for full transient."
                     (propertize " show keys" 'face 'font-lock-comment-face)
                     "\n")))
 
-        (defun decknix--sidebar-abbreviate-workspace (path)
-          "Abbreviate PATH for sidebar display."
-          (if (null path) "?"
-            (let ((abbr (abbreviate-file-name path)))
-              ;; Extract last path component for compact display
-              (if (string-match "/\\([^/]+\\)/?$" abbr)
-                  (match-string 1 abbr)
-                abbr))))
-
-        (defun decknix--sidebar-session-age-visible-p (modified)
-          "Return non-nil if MODIFIED passes the sessions age filter.
-Always t when the filter is nil (show all).  MODIFIED may be nil
-\(e.g. malformed session files); such entries are kept when the
-filter is off and dropped when a cutoff is active."
-          (cond
-           ((null decknix--sidebar-sessions-age-filter) t)
-           ((null modified) nil)
-           (t (condition-case nil
-                  (let* ((then (encode-time (iso8601-parse modified)))
-                         (age (float-time (time-subtract (current-time) then))))
-                    (<= age decknix--sidebar-sessions-age-filter))
-                (error t)))))
+        ;; `decknix--sidebar-abbreviate-workspace' and
+        ;; `decknix--sidebar-session-age-visible-p' live in
+        ;; agent-shell/sidebar/decknix-sidebar-format.el — required
+        ;; alongside the other sidebar packages above.
 
         (defun decknix--sidebar-saved-sessions ()
           "Return recent saved conversations as list of tuples.
