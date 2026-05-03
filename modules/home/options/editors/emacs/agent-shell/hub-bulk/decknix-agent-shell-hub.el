@@ -3085,10 +3085,11 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
         (let* ((key (or (alist-get 'key item) ""))
                (summary (or (alist-get 'summary item) ""))
                (status (or (alist-get 'status item) ""))
-               (priority (alist-get 'priority item))
                (url (alist-get 'url item))
-               (issue-type (alist-get 'issue_type item))
-               (parent-key (alist-get 'parent_key item))
+               ;; FIXME(arch-debt): priority / issue_type / parent_key
+               ;; are present in the JSON payload but not yet
+               ;; surfaced in the row; future PR can re-bind and
+               ;; render them as a leading badge column.
                (icon (decknix--hub-task-status-icon status))
                ;; Truncate summary to fit sidebar
                (max-sum (max 8 (- (window-width) 16)))

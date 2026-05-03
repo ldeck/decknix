@@ -604,9 +604,12 @@ Without prefix, toggle inline context in the header-line.
          (props (cdr (assoc id decknix--context-items)))
          (num (plist-get props :number)))
     (if (and num (fboundp 'forge-visit-topic))
-        (let ((repo (or (plist-get props :repo) decknix--context-repo)))
+        (progn
+          ;; FIXME(arch-debt): repo is read from props but the
+          ;; current branch only browses the URL; a follow-up can
+          ;; restore proper `forge-visit-topic' dispatch keyed on
+          ;; (repo . num).
           (message "Opening %s in forge..." id)
-          ;; Use forge-visit-topic if we can find it
           (if-let ((url (plist-get props :url)))
               (browse-url url)
             (message "No URL for %s" id)))
