@@ -918,35 +918,18 @@ unknown conflict."
     (agent-shell-workspace-sidebar-refresh))
   (message "PR symbols: %s" decknix--hub-symbol-style))
 
-;; -- Hub: repo-name cap in ungrouped PR lines --
-(defvar decknix--hub-repo-name-cap 'short
-  "Cap for the repo segment of an ungrouped PR line.
-`short' = 12 chars, `medium' = 20 chars, `none' = uncapped.
-Irrelevant when PRs are grouped under a repo sub-header.")
-
-(defun decknix--hub-repo-name-apply (repo)
-  "Truncate REPO per `decknix--hub-repo-name-cap'."
-  (let* ((limit (pcase decknix--hub-repo-name-cap
-                  ('short  12)
-                  ('medium 20)
-                  ('none   nil)
-                  (_       12))))
-    (if (and limit (> (length repo) limit))
-        (substring repo 0 limit)
-      repo)))
-
-(defun decknix--hub-cycle-repo-name-cap ()
-  "Cycle the repo-name cap: short → medium → none → short."
-  (interactive)
-  (setq decknix--hub-repo-name-cap
-        (pcase decknix--hub-repo-name-cap
-          ('short  'medium)
-          ('medium 'none)
-          ('none   'short)
-          (_       'short)))
-  (when (get-buffer "*agent-shell-sidebar*")
-    (agent-shell-workspace-sidebar-refresh))
-  (message "Repo name cap: %s" decknix--hub-repo-name-cap))
+;; Hub repo-name cap (PR B.36) — moved out of this file into
+;; agent-shell/hub/decknix-hub-repo-name.el, packaged as
+;; `decknix-hub-repo-name-el'.  Owns the cap state defvar
+;; (`decknix--hub-repo-name-cap', forward-declared near line 142
+;; for the earlier transient-suffix label use), the pure
+;; truncator (`decknix--hub-repo-name-apply', called from the
+;; columnar PR row renderers below), and the interactive cycler
+;; (`decknix--hub-cycle-repo-name-cap', bound via the `N' suffix
+;; in the sidebar Toggles transient).  The transient suffix
+;; itself stays in this file per AGENTS.md Rule 2.
+(declare-function decknix--hub-repo-name-apply "decknix-hub-repo-name" (repo))
+(declare-function decknix--hub-cycle-repo-name-cap "decknix-hub-repo-name")
 
 ;; -- Hub: WIP de-dupe toggle --
 ;; When non-nil, WIP omits PRs already linked to a live session so

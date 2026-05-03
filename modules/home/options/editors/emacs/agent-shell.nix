@@ -346,6 +346,26 @@ let
     ];
   };
 
+  # PR B.36: repo-name cap cluster carved out of
+  # `decknix-agent-shell-hub' (hub-bulk).  Decides how aggressively
+  # the repo segment of an ungrouped PR line is truncated when
+  # rendered in the sidebar.  Owns the cap state defvar
+  # (`decknix--hub-repo-name-cap'), the pure truncator
+  # (`decknix--hub-repo-name-apply'), and the interactive cycler
+  # (`decknix--hub-cycle-repo-name-cap').  No external deps -- the
+  # sidebar refresh callback is gated by a `get-buffer' check.
+  # The transient suffix surfacing the cycler in the sidebar
+  # Toggles transient (`N') stays in hub-bulk per AGENTS.md
+  # Rule 2.
+  decknix-hub-repo-name-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-repo-name";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-repo-name-test.el"
+    ];
+  };
+
   decknix-hub-mention-bot-el = mkEmacsTestedPackage {
     pname = "decknix-hub-mention-bot";
     src = ./agent-shell/hub;
@@ -998,6 +1018,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-ci-el)
         ++ (optional cfg.hub.enable decknix-hub-ci-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-attention-filter-el)
+        ++ (optional cfg.hub.enable decknix-hub-repo-name-el)
         ++ (optional cfg.hub.enable decknix-hub-mention-bot-el)
         ++ (optional cfg.hub.enable decknix-hub-worktree-parse-el)
         ++ (optional cfg.hub.enable decknix-hub-icons-el)
@@ -2429,6 +2450,24 @@ in
                           "decknix-hub-attention-filter")
         (declare-function decknix--hub-toggle-wip-only-my-replies
                           "decknix-hub-attention-filter")
+
+        ;; Repo-name cap cluster (PR B.36) -- decides how
+        ;; aggressively the repo segment of an ungrouped PR line is
+        ;; truncated.  Owns the cap state defvar
+        ;; (`decknix--hub-repo-name-cap'), the pure truncator
+        ;; (`decknix--hub-repo-name-apply') called from the
+        ;; columnar PR row renderers in hub-bulk and the footer
+        ;; toggle label in workspace-bulk, and the interactive
+        ;; cycler (`decknix--hub-cycle-repo-name-cap') wired to
+        ;; the `N' suffix in the sidebar Toggles transient.  No
+        ;; external deps -- the sidebar refresh callback is
+        ;; gated by a `get-buffer' check.
+        (require 'decknix-hub-repo-name)
+        (defvar decknix--hub-repo-name-cap)
+        (declare-function decknix--hub-repo-name-apply
+                          "decknix-hub-repo-name" (repo))
+        (declare-function decknix--hub-cycle-repo-name-cap
+                          "decknix-hub-repo-name")
 
 
 
