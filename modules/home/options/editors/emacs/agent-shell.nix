@@ -361,6 +361,26 @@ let
     ];
   };
 
+  # PR B.28: tag-store JSON persistence + cache carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Owns the file path
+  # defvar, the four cache state vars (hash + mtime + checked-at +
+  # TTL), the `read'/`write'/`conversations' triple, and the
+  # v1->v2 auto-migration walk inside `read'.  Co-resident with
+  # the other agent/ modules; the migration walk forward-declares
+  # `decknix--agent-session-list' (sibling
+  # `decknix-agent-session-cache' package, required first by the
+  # heredoc) and `decknix--agent-conversation-key' (still in
+  # main-bulk because it threads mergedInto-redirect resolution
+  # back through this very store).  Both resolve at call time.
+  decknix-agent-tags-store-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-tags-store";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-tags-store-test.el"
+    ];
+  };
+
   decknix-agent-vcs-el = mkEmacsTestedPackage {
     pname = "decknix-agent-vcs";
     src = ./agent-shell/agent;
@@ -817,6 +837,7 @@ in
           decknix-agent-format-el
           decknix-agent-parse-el
           decknix-agent-session-cache-el
+          decknix-agent-tags-store-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
         ]
@@ -898,6 +919,17 @@ in
         (declare-function decknix--agent-session-refresh-async "decknix-agent-session-cache")
         (declare-function decknix--agent-session-jq-cmd "decknix-agent-session-cache")
         (declare-function decknix--agent-session-ensure-jq-filter "decknix-agent-session-cache")
+        ;; Tag-store storage layer (PR B.28) — owns
+        ;; ~/.config/decknix/agent-sessions.json: the file-path
+        ;; defvar, the in-memory cache (hash + mtime + checked-at +
+        ;; TTL), v1->v2 auto-migration in `read', and the
+        ;; persistence pair.  Loaded after the session-cache module
+        ;; because the migration walk inside `read' resolves
+        ;; `decknix--agent-session-list' from there at call time.
+        (require 'decknix-agent-tags-store)
+        (declare-function decknix--agent-tags-read "decknix-agent-tags-store")
+        (declare-function decknix--agent-tags-write "decknix-agent-tags-store" (store))
+        (declare-function decknix--agent-tags-conversations "decknix-agent-tags-store" (store))
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
         (declare-function decknix--git-remote-url "decknix-agent-vcs")
