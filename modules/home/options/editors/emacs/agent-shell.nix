@@ -624,6 +624,28 @@ let
     ];
   };
 
+  # PR B.40: per-conversation workspace persistence carved out
+  # of `decknix-agent-shell-main' (main-bulk).  Sits beside
+  # `decknix-agent-session-model' in `agent-shell/agent/' as a
+  # parallel persistence module owning the three storage
+  # primitives that mediate the
+  # `~/.config/decknix/agent-sessions.json' "workspace" field --
+  # one reader, one direct writer (CONV-KEY known) and one
+  # session-id-resolved writer that hops through
+  # `decknix--agent-conversation-key-for-session'.  Loaded at
+  # the same point in the heredoc as the other agent/
+  # persistence helpers so the resume-time reads at main-bulk
+  # (lines 1016 / 1123 / 1141 / 1550 / 2023 / 4663) and the
+  # workspace-bulk picker (lines 1071 / 3545) resolve cleanly.
+  decknix-agent-session-workspace-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-session-workspace";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-session-workspace-test.el"
+    ];
+  };
+
   decknix-agent-review-format-el = mkEmacsTestedPackage {
     pname = "decknix-agent-review-format";
     src = ./agent-shell/review;
@@ -1075,6 +1097,7 @@ in
           decknix-agent-link-store-el
           decknix-agent-conv-resolve-el
           decknix-agent-session-model-el
+          decknix-agent-session-workspace-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
         ]
@@ -1233,6 +1256,20 @@ in
                           "decknix-agent-session-model" (conv-key))
         (declare-function decknix--agent-session-save-model-for-conv-key
                           "decknix-agent-session-model" (conv-key model-id))
+
+        ;; Per-conversation workspace persistence (PR B.40) --
+        ;; reader + two writers that share the same agent-
+        ;; sessions.json store as tags / linked PRs / per-session
+        ;; model overrides.  Loaded immediately after
+        ;; `decknix-agent-session-model' to keep the agent/
+        ;; persistence cluster contiguous in load order.
+        (require 'decknix-agent-session-workspace)
+        (declare-function decknix--agent-workspace-for-conv-key
+                          "decknix-agent-session-workspace" (conv-key))
+        (declare-function decknix--agent-session-save-workspace
+                          "decknix-agent-session-workspace" (session-id workspace))
+        (declare-function decknix--agent-session-save-workspace-for-conv-key
+                          "decknix-agent-session-workspace" (conv-key workspace))
 
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
