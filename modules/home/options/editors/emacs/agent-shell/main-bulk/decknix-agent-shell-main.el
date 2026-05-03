@@ -2218,23 +2218,19 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
 (declare-function decknix--agent-conv-last-accessed
                   "decknix-agent-conv-recency" (conv-key))
 
-(defun decknix--agent-tags-for-session (session-id)
-  "Return the list of tags for the conversation containing SESSION-ID."
-  (let* ((conv-key (decknix--agent-conversation-key-for-session session-id))
-         (store (decknix--agent-tags-read))
-         (convs (decknix--agent-tags-conversations store)))
-    (when conv-key
-      (let ((entry (gethash conv-key convs)))
-        (when (hash-table-p entry)
-          (gethash "tags" entry))))))
-
-(defun decknix--agent-tags-for-conv-key (conv-key)
-  "Return the list of tags for conversation CONV-KEY."
-  (let* ((store (decknix--agent-tags-read))
-         (convs (decknix--agent-tags-conversations store)))
-    (let ((entry (gethash conv-key convs)))
-      (when (hash-table-p entry)
-        (gethash "tags" entry)))))
+;; -- Tags read accessors (PR B.43) --
+;; Moved out of this file into
+;; agent-shell/agent/decknix-agent-tags-read.el, packaged as
+;; `decknix-agent-tags-read-el'.  Owns the two pure readers
+;; (`decknix--agent-tags-for-session' /
+;; `decknix--agent-tags-for-conv-key') consumed by many call
+;; sites here, in workspace-bulk, in the progress modules, and
+;; in the heredoc.  The interactive tag *writers* stay in this
+;; file per AGENTS.md Rule 2.
+(declare-function decknix--agent-tags-for-session
+                  "decknix-agent-tags-read" (session-id))
+(declare-function decknix--agent-tags-for-conv-key
+                  "decknix-agent-tags-read" (conv-key))
 
 ;; -- Per-conversation workspace persistence (PR B.40) --
 ;; Moved out of this file into
