@@ -7,10 +7,14 @@
 
 ;;; Commentary:
 ;;
-;; ERT tests pinning current behaviour of the time-formatting helpers
-;; extracted from the agent-shell heredoc.  Each bucket boundary
-;; (1m / 1h / 1d / 30d) is exercised on both sides via `cl-letf'
-;; mocking of `current-time' so the suite is deterministic.
+;; ERT tests pinning current behaviour of the display formatters
+;; extracted from the agent-shell heredoc:
+;;
+;; - Time formatters: each bucket boundary (1m / 1h / 1d / 30d) is
+;;   exercised on both sides via `cl-letf' mocking of `current-time'
+;;   so the suite is deterministic.
+;; - String formatters: prompt-truncate exercises overflow,
+;;   newline collapse, trim, and exact-boundary behaviour.
 
 ;;; Code:
 
@@ -144,6 +148,44 @@
    (let ((result (decknix--agent-session-time-compact
                   (decknix-test--iso-offset (* 60 24 60 60)))))
      (should (string-match-p "^[0-9]\\{2\\}/[0-9]\\{2\\}$" result)))))
+
+;; -- prompt-truncate-for-display -----------------------------------
+
+(ert-deftest decknix-prompt-truncate-for-display--short-passes-through ()
+  "Strings shorter than MAX-LEN return as-is (after trim)."
+  (should (equal (decknix--prompt-truncate-for-display "hello" 100)
+                 "hello")))
+
+(ert-deftest decknix-prompt-truncate-for-display--exact-length ()
+  "String exactly at MAX-LEN returns verbatim (boundary is `<=' not `<')."
+  (should (equal (decknix--prompt-truncate-for-display "abcde" 5)
+                 "abcde")))
+
+(ert-deftest decknix-prompt-truncate-for-display--overflow-truncates ()
+  "Strings longer than MAX-LEN are truncated; ellipsis takes the
+last char slot, so the visible content is MAX-LEN-1 characters."
+  (let ((result (decknix--prompt-truncate-for-display
+                 "abcdefghij" 5)))
+    (should (equal result "abcd…"))
+    (should (eq (length result) 5))))
+
+(ert-deftest decknix-prompt-truncate-for-display--collapses-newlines ()
+  "Newlines (LF and CR) collapse into the ↵ glyph with surrounding spaces."
+  (should (equal (decknix--prompt-truncate-for-display
+                  "line one\nline two" 100)
+                 "line one ↵ line two")))
+
+(ert-deftest decknix-prompt-truncate-for-display--multiple-newlines-collapse ()
+  "Consecutive newlines collapse into a single ↵ (regexp uses [\\n\\r]+)."
+  (should (equal (decknix--prompt-truncate-for-display
+                  "a\n\n\n\nb" 100)
+                 "a ↵ b")))
+
+(ert-deftest decknix-prompt-truncate-for-display--trims-leading-trailing ()
+  "Leading and trailing whitespace (after newline collapse) is trimmed."
+  (should (equal (decknix--prompt-truncate-for-display
+                  "  hello world  " 100)
+                 "hello world")))
 
 (provide 'decknix-agent-format-test)
 ;;; decknix-agent-format-test.el ends here

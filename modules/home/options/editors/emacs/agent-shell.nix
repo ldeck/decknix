@@ -707,6 +707,7 @@ in
         (require 'decknix-agent-format)
         (declare-function decknix--agent-session-time-ago "decknix-agent-format")
         (declare-function decknix--agent-session-time-compact "decknix-agent-format")
+        (declare-function decknix--prompt-truncate-for-display "decknix-agent-format")
         (require 'decknix-agent-parse)
         (declare-function decknix--agent-session-parse "decknix-agent-parse")
         (declare-function decknix--prompt-search-parse "decknix-agent-parse")
@@ -4235,13 +4236,10 @@ Outputs one JSON array per line (one per session file)."
         ;; Pre-fetch prompt search cache on daemon start
         (run-at-time 5 nil #'decknix--prompt-search-refresh-async)
 
-        (defun decknix--prompt-truncate-for-display (prompt max-len)
-          "Truncate PROMPT to MAX-LEN chars, collapsing newlines to ↵."
-          (let* ((collapsed (replace-regexp-in-string "[\n\r]+" " ↵ " prompt))
-                 (trimmed (string-trim collapsed)))
-            (if (<= (length trimmed) max-len)
-                trimmed
-              (concat (substring trimmed 0 (- max-len 1)) "…"))))
+        ;; `decknix--prompt-truncate-for-display' lives in
+        ;; agent-shell/agent/decknix-agent-format.el alongside the
+        ;; relative-time formatters — required at the top of this
+        ;; heredoc.
 
         (defun decknix-agent-compose-search-history ()
           "Search prompt history using consult with fuzzy matching.
