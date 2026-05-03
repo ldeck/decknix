@@ -265,6 +265,29 @@ let
     ];
   };
 
+  # PR B.41: sidebar footer Navigate / Quick key alists carved
+  # out of `decknix-agent-shell-workspace' (workspace-bulk).  Two
+  # pure builders (`decknix--sidebar-footer-nav-keys' /
+  # `-quick-keys') feeding the footer renderer at the single call
+  # site in workspace-bulk (~line 1006).  The third footer
+  # section (`-toggle-keys') stays in workspace-bulk -- it pulls
+  # in ~15 hub-bulk free vars and faces, so carving it
+  # cleanly needs a follow-up slice that also moves the toggle
+  # state vars.  This module forward-declares
+  # `decknix--sidebar-previous-sessions' (defined in
+  # workspace-bulk) so the byte-compile stays warning-clean.
+  # Same `decknix-hub-age-presets' workaround as the sibling
+  # sidebar/ packages -- trivialBuild byte-compiles every .el in
+  # the dir so the transitive requires must resolve.
+  decknix-sidebar-footer-keys-el = mkEmacsTestedPackage {
+    pname = "decknix-sidebar-footer-keys";
+    src = ./agent-shell/sidebar;
+    packageRequires = [ decknix-hub-age-presets-el ];
+    testFiles = [
+      "decknix-sidebar-footer-keys-test.el"
+    ];
+  };
+
   # PR B.32: xwidget-webkit page-text + window.find JS-bridge
   # primitives carved out of `decknix-agent-shell-workspace'
   # (workspace-bulk).  Co-resident in a new `agent-shell/webkit/'
@@ -1124,6 +1147,7 @@ in
         ++ (optional cfg.workspace.enable decknix-sidebar-tile-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-width-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-nav-cmd-el)
+        ++ (optional cfg.workspace.enable decknix-sidebar-footer-keys-el)
         ++ (optional cfg.workspace.enable decknix-webkit-page-el)
         ++ (optional cfg.context.enable decknix-agent-shell-context-el)
         ++ (optional cfg.hub.enable decknix-agent-shell-hub-el)
@@ -1748,6 +1772,17 @@ in
         (require 'decknix-sidebar-nav-cmd)
         (declare-function decknix--nav-make-item-cmd
                           "decknix-sidebar-nav-cmd" (item-data action-fn))
+
+        ;; Sidebar footer Navigate / Quick key alists (PR B.41) --
+        ;; pure builders consumed by the footer renderer in
+        ;; workspace-bulk.  The third footer section (Toggles) is
+        ;; still in workspace-bulk because it pulls in many hub-
+        ;; bulk free vars and faces.
+        (require 'decknix-sidebar-footer-keys)
+        (declare-function decknix--sidebar-footer-nav-keys
+                          "decknix-sidebar-footer-keys")
+        (declare-function decknix--sidebar-footer-quick-keys
+                          "decknix-sidebar-footer-keys")
 
         ;; Apply saved width after the sidebar opens
         (advice-add 'agent-shell-workspace-sidebar-open :after

@@ -675,27 +675,19 @@ Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
 (declare-function decknix--sidebar-render-key-groups-side-by-side
                   "decknix-sidebar-format")
 
-(defun decknix--sidebar-footer-nav-keys ()
-  "Build the Navigate key alist for the footer."
-  (append
-   '(("r"   . "requests")
-     ("w"   . "wip")
-     ("l"   . "live"))
-   (when decknix--sidebar-previous-sessions
-     '(("p"   . "restore…")
-       ("P"   . "restore all")))
-   '(("s"   . "sessions…"))))
-
-(defun decknix--sidebar-footer-quick-keys ()
-  "Build the Quick key alist for the footer.
-Sorted alphabetically by label; review launching is merged into
-the `r' (requests) picker via its `M-r' toggle."
-  '(("a"   . "actions…")
-    ("c"   . "new")
-    ("RET" . "open")
-    ("q"   . "quit")
-    ("g"   . "refresh")
-    ("T"   . "toggles")))
+;; -- Sidebar footer Navigate / Quick key alists (PR B.41) --
+;; Moved out of this file into
+;; agent-shell/sidebar/decknix-sidebar-footer-keys.el, packaged
+;; as `decknix-sidebar-footer-keys-el'.  Owns the two pure data
+;; builders consumed by the footer renderer at the single call
+;; site below (~line 1006).  The third section
+;; (`decknix--sidebar-footer-toggle-keys') stays here because it
+;; pulls in ~15 hub-bulk free vars and faces -- a follow-up slice
+;; would also need to move the toggle state vars.
+(declare-function decknix--sidebar-footer-nav-keys
+                  "decknix-sidebar-footer-keys")
+(declare-function decknix--sidebar-footer-quick-keys
+                  "decknix-sidebar-footer-keys")
 
 (defun decknix--sidebar-footer-toggle-keys ()
   "Build the Toggles sections for the footer.
