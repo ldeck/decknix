@@ -53,6 +53,37 @@
   (should (null (decknix--agent-pr-parse-url
                  "not a url"))))
 
+;; -- parse-pr-url (alist variant) ----------------------------------
+
+(ert-deftest decknix-agent-parse-pr-url--basic ()
+  "Basic GitHub PR URL returns alist of all-string fields."
+  (let ((result (decknix--agent-parse-pr-url
+                 "https://github.com/owner/repo/pull/123")))
+    (should (equal (alist-get 'owner result) "owner"))
+    (should (equal (alist-get 'repo result) "repo"))
+    ;; Number is a string in this variant (vs int in pr-parse-url).
+    (should (equal (alist-get 'number result) "123"))))
+
+(ert-deftest decknix-agent-parse-pr-url--with-trailing-path ()
+  "Trailing path components like /files don't break parsing."
+  (let ((result (decknix--agent-parse-pr-url
+                 "https://github.com/owner/repo/pull/42/files")))
+    (should (equal (alist-get 'number result) "42"))))
+
+(ert-deftest decknix-agent-parse-pr-url--repo-with-hyphens ()
+  "Hyphenated owner/repo names parse correctly."
+  (let ((result (decknix--agent-parse-pr-url
+                 "https://github.com/my-org/some-repo/pull/9")))
+    (should (equal (alist-get 'owner result) "my-org"))
+    (should (equal (alist-get 'repo result) "some-repo"))))
+
+(ert-deftest decknix-agent-parse-pr-url--no-match ()
+  "Non-PR URLs return nil."
+  (should (null (decknix--agent-parse-pr-url
+                 "https://github.com/owner/repo/issues/1")))
+  (should (null (decknix--agent-parse-pr-url
+                 "https://github.com/owner/repo"))))
+
 ;; -- repo-parse-url ------------------------------------------------
 
 (ert-deftest decknix-agent-repo-parse-url--nil ()
