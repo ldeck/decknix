@@ -881,6 +881,8 @@ in
         (declare-function decknix--agent-session-ensure-jq-filter "decknix-agent-session-cache")
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
+        (declare-function decknix--git-remote-url "decknix-agent-vcs")
+        (declare-function decknix--detect-default-branch "decknix-agent-vcs")
         (require 'decknix-agent-review-format)
         (declare-function decknix--agent-review-quote "decknix-agent-review-format")
         (declare-function decknix--agent-review-format-exchanges "decknix-agent-review-format")

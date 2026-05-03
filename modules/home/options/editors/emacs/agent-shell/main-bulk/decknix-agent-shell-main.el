@@ -2660,64 +2660,14 @@ No-op if URL+BRANCH is already linked as a repo."
 
 ;; -- VCS detection helpers (used by repo-linking commands) --
 ;;
-;; `decknix--vcs-kind' lives in
-;; agent-shell/agent/decknix-agent-vcs.el — required at the
-;; top of this heredoc.
+;; `decknix--vcs-kind', `decknix--git-remote-url' and
+;; `decknix--detect-default-branch' all live in
+;; agent-shell/agent/decknix-agent-vcs.el (PR B.25 carved the
+;; latter two out alongside the original `decknix--vcs-kind').
+;; Required at the top of this heredoc.
 
-(defun decknix--git-remote-url (dir)
-  "Return the github.com/OWNER/REPO URL for DIR's origin remote, or nil.
-Converts SSH form (git@github.com:OWNER/REPO.git) to HTTPS and strips
-any trailing .git suffix.  Returns nil unless the remote is on github.com."
-  (let* ((default-directory (file-name-as-directory
-                              (expand-file-name dir)))
-         (raw (condition-case nil
-                  (string-trim
-                   (shell-command-to-string
-                    "git config --get remote.origin.url"))
-                (error ""))))
-    (when (and raw (not (string-empty-p raw)))
-      (let ((url raw))
-        (when (string-match "^git@github\\.com:\\(.+\\)$" url)
-          (setq url (concat "https://github.com/"
-                            (match-string 1 url))))
-        (when (string-suffix-p ".git" url)
-          (setq url (substring url 0 -4)))
-        (when (string-match-p "github\\.com/" url) url)))))
-
-(defun decknix--detect-default-branch (dir)
-  "Return the default branch name for the repo at DIR, as a string.
-Uses `gh repo view' first (authoritative for GitHub), falls back to
-origin HEAD and `init.defaultBranch' for git, `pijul channel' for
-pijul, and returns \"main\" as last-resort fallback for jj and
-unknown VCSes."
-  (let* ((default-directory (file-name-as-directory
-                              (expand-file-name dir)))
-         (vcs (decknix--vcs-kind dir))
-         (try (lambda (cmd re group)
-                (let ((out (condition-case nil
-                               (string-trim
-                                (shell-command-to-string
-                                 (concat cmd " 2>/dev/null")))
-                             (error ""))))
-                  (when (and out (not (string-empty-p out)))
-                    (if re
-                        (when (string-match re out)
-                          (match-string group out))
-                      out))))))
-    (or (pcase vcs
-          ('git
-           (or (funcall try
-                "gh repo view --json defaultBranchRef -q .defaultBranchRef.name"
-                nil nil)
-               (funcall try
-                "git symbolic-ref --short refs/remotes/origin/HEAD"
-                "^origin/\\(.+\\)$" 1)
-               (funcall try
-                "git config init.defaultBranch" nil nil)))
-          ('pijul
-           (funcall try "pijul channel" "^\\* \\(\\S-+\\)" 1))
-          (_ nil))
-        "main")))
+(declare-function decknix--git-remote-url "decknix-agent-vcs")
+(declare-function decknix--detect-default-branch "decknix-agent-vcs")
 
 (defun decknix--agent-tags-all ()
   "Return a sorted list of all unique tags across all conversations."
