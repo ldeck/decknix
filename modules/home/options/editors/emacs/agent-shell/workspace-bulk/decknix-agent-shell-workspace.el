@@ -111,8 +111,8 @@
 (declare-function decknix--agent-unsorted-table "ext:decknix-agent-shell-main")
 ;; More bulk hub module symbols.
 (declare-function decknix--hub-item-visible-p "ext:decknix-agent-shell-hub")
-(declare-function decknix--hub-ci-visible-p "ext:decknix-agent-shell-hub")
-(declare-function decknix--hub-ci-filter-summary "ext:decknix-agent-shell-hub")
+(declare-function decknix--hub-ci-visible-p "decknix-hub-ci-filter")
+(declare-function decknix--hub-ci-filter-summary "decknix-hub-ci-filter")
 (declare-function decknix--hub-sort-requests "ext:decknix-agent-shell-hub")
 (declare-function decknix--hub-requests-attention-visible-p "ext:decknix-agent-shell-hub")
 (declare-function decknix--hub-wip-attention-visible-p "ext:decknix-agent-shell-hub")
