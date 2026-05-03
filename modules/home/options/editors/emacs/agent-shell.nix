@@ -247,6 +247,15 @@ let
     ];
   };
 
+  decknix-agent-parse-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-parse";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-parse-test.el"
+    ];
+  };
+
   # == Custom auggie commands ==
   # Deployed to ~/.augment/commands/ via home.file (as symlinks).
   # User-created commands (regular files) coexist in the same directory
@@ -611,7 +620,7 @@ in
         # since they exist to flip what the workspace sidebar renders.
         # URL parsing is foundational (linked PRs, quick actions, repo
         # linking, hub) so it ships whenever agent-shell is enabled at all.
-        ++ [ decknix-agent-url-parse-el decknix-agent-format-el ]
+        ++ [ decknix-agent-url-parse-el decknix-agent-format-el decknix-agent-parse-el ]
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
         ++ (optional cfg.hub.enable decknix-hub-teamcity-el)
@@ -651,6 +660,10 @@ in
         (require 'decknix-agent-format)
         (declare-function decknix--agent-session-time-ago "decknix-agent-format")
         (declare-function decknix--agent-session-time-compact "decknix-agent-format")
+        (require 'decknix-agent-parse)
+        (declare-function decknix--agent-session-parse "decknix-agent-parse")
+        (declare-function decknix--prompt-search-parse "decknix-agent-parse")
+        (declare-function decknix--agent-conversation-key-raw "decknix-agent-parse")
 
         ;; Use auggie as the default agent (skip agent selection prompt)
         (setq agent-shell-preferred-agent-config 'auggie)
@@ -1285,22 +1298,9 @@ then sorts by modified time (newest first)."
              " {} 2>/dev/null"
              " | jq -Msc 'sort_by(.modified) | reverse'")))
 
-        (defun decknix--agent-session-parse (raw)
-          "Parse RAW json string into session alists.
-Handles process output that may contain trailing text after the JSON array."
-          (condition-case nil
-              (let* ((json-array-type 'list)
-                     (json-object-type 'alist)
-                     (json-key-type 'symbol)
-                     (trimmed (string-trim raw))
-                     ;; Process buffers append 'Process ... finished' — find last ']'
-                     (end (when (string-prefix-p "[" trimmed)
-                            (1+ (or (cl-position ?\] trimmed :from-end t) -1))))
-                     (json-str (when (and end (> end 1))
-                                 (substring trimmed 0 end))))
-                (when json-str
-                  (json-read-from-string json-str)))
-            (error nil)))
+        ;; `decknix--agent-session-parse' lives in
+        ;; agent-shell/agent/decknix-agent-parse.el — required at the
+        ;; top of this heredoc.
 
         (defun decknix--agent-session-refresh-sync ()
           "Synchronous session list fetch (used on first call only)."
@@ -2849,12 +2849,9 @@ Opens in xwidget-webkit (q to quit) or eww as fallback."
           (expand-file-name "~/.config/decknix/agent-sessions.json")
           "Path to the JSON file storing conversation tag metadata.")
 
-        (defun decknix--agent-conversation-key-raw (first-message)
-          "Derive the raw conversation key from FIRST-MESSAGE.
-Uses SHA-256 hash truncated to 16 chars.  Does NOT resolve merges —
-use `decknix--agent-conversation-key' for the canonical key."
-          (when (and first-message (not (string-empty-p first-message)))
-            (substring (secure-hash 'sha256 first-message) 0 16)))
+        ;; `decknix--agent-conversation-key-raw' lives in
+        ;; agent-shell/agent/decknix-agent-parse.el — required at the
+        ;; top of this heredoc.
 
         (defun decknix--agent-conversation-key (first-message)
           "Derive the canonical conversation key from FIRST-MESSAGE.
@@ -4121,23 +4118,9 @@ Outputs one JSON array per line (one per session file)."
              " sh -c 'jq -c -f \"$1\" \"$2\" 2>/dev/null || true' _ "
              (shell-quote-argument jqf) " {}")))
 
-        (defun decknix--prompt-search-parse (raw)
-          "Parse RAW jq output into a flat deduplicated prompt list."
-          (let ((seen (make-hash-table :test 'equal))
-                (result nil))
-            (dolist (line (split-string (string-trim raw) "\n" t))
-              (condition-case nil
-                  (let* ((json-array-type 'list)
-                         (json-key-type 'symbol)
-                         (msgs (json-read-from-string line)))
-                    (dolist (msg msgs)
-                      (when (and (stringp msg)
-                                 (not (string-empty-p (string-trim msg)))
-                                 (not (gethash msg seen)))
-                        (puthash msg t seen)
-                        (push msg result))))
-                (error nil)))
-            (nreverse result)))
+        ;; `decknix--prompt-search-parse' lives in
+        ;; agent-shell/agent/decknix-agent-parse.el — required at the
+        ;; top of this heredoc.
 
         (defun decknix--prompt-search-refresh-sync ()
           "Synchronously build the prompt search cache."
