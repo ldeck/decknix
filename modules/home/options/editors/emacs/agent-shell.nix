@@ -242,6 +242,23 @@ let
     ];
   };
 
+  decknix-hub-pr-lookup-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-pr-lookup";
+    # Isolated in its own src dir (`hub-lookup/') rather than the
+    # shared `hub/' tree because it cross-`require's the agent/
+    # `decknix-agent-url-parse' package.  Trivial-build byte-compiles
+    # every .el in src, so dropping pr-lookup into hub/ would force
+    # *every* hub package to declare agent-url-parse in their
+    # packageRequires (since the shared src dir means every hub build
+    # would try to compile pr-lookup as a sibling).  Keeping it apart
+    # confines the dep declaration to this entry alone.
+    src = ./agent-shell/hub-lookup;
+    packageRequires = [ decknix-agent-url-parse-el ];
+    testFiles = [
+      "decknix-hub-pr-lookup-test.el"
+    ];
+  };
+
   decknix-agent-url-parse-el = mkEmacsTestedPackage {
     pname = "decknix-agent-url-parse";
     src = ./agent-shell/agent;
@@ -643,6 +660,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-mention-bot-el)
         ++ (optional cfg.hub.enable decknix-hub-worktree-parse-el)
         ++ (optional cfg.hub.enable decknix-hub-icons-el)
+        ++ (optional cfg.hub.enable decknix-hub-pr-lookup-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el);
 
@@ -6512,7 +6530,8 @@ Like treemacs `W' / extra-wide-toggle."
         ;; `decknix-hub-teamcity-el', `decknix-hub-org-filter-el',
         ;; `decknix-hub-jira-tasks-el', `decknix-hub-ci-el',
         ;; `decknix-hub-mention-bot-el', `decknix-hub-worktree-parse-el',
-        ;; `decknix-agent-url-parse-el', `decknix-hub-icons-el').
+        ;; `decknix-agent-url-parse-el', `decknix-hub-icons-el',
+        ;; `decknix-hub-pr-lookup-el').
         ;; This heredoc references them inside transient suffix lambdas
         ;; (just below) and Requests / WIP / sessions render code (much
         ;; further down) at byte-compile time, before the `(require ...)'
@@ -6565,6 +6584,7 @@ Like treemacs `W' / extra-wide-toggle."
         (declare-function decknix--hub-wip-review-icon "decknix-hub-icons")
         (declare-function decknix--hub-activity-icons "decknix-hub-icons")
         (declare-function decknix--hub-wip-reply-icon "decknix-hub-icons")
+        (declare-function decknix--hub-pr-status-from-hub "decknix-hub-pr-lookup")
 
         ;; -- Sidebar transient menu (magit-style ? popup) --
         (require 'transient)
@@ -11871,71 +11891,14 @@ refresh is triggered."
         ;; Restore on startup
         (decknix--hub-pr-cache-restore)
 
-        (defun decknix--hub-pr-status-from-hub (url)
-          "Look up PR status from hub WIP and Reviews data only.
-Returns an alist or nil if not found."
-          (let ((parsed (decknix--agent-pr-parse-url url)))
-            (when parsed
-              (let ((full-repo (format "%s/%s" (nth 0 parsed) (nth 1 parsed)))
-                    (number (nth 2 parsed)))
-                (catch 'found
-                  ;; Search WIP repos
-                  (dolist (repo-group (when decknix--hub-wip
-                                        (alist-get 'repos decknix--hub-wip)))
-                    (when (equal (alist-get 'repo repo-group) full-repo)
-                      (dolist (pr (alist-get 'prs repo-group))
-                        (when (equal (alist-get 'number pr) number)
-                          (let* ((ci (alist-get 'ci pr))
-                                 (hub-checks (alist-get 'checks ci)))
-                            (throw 'found
-                                   (list
-                                    ;; Origin file — lets callers distinguish
-                                    ;; PRs I authored (wip) from PRs I review (review).
-                                    (cons 'kind 'wip)
-                                    ;; Upcase state — hub JSON uses lowercase
-                                    ;; ("open") but display code expects "OPEN"
-                                    (cons 'state (upcase (or (alist-get 'state pr) "OPEN")))
-                                    ;; `draft' is orthogonal to `state' — GitHub
-                                    ;; models draft PRs as state=OPEN with a
-                                    ;; separate isDraft flag.  We preserve that
-                                    ;; so downstream state checks (deploys, CI
-                                    ;; gating) keep working, while renderers can
-                                    ;; surface the draft distinction.
-                                    (cons 'draft (eq (alist-get 'draft pr) t))
-                                    (cons 'ci-status (alist-get 'status ci))
-                                    (cons 'checks hub-checks)
-                                    (cons 'merged_at (alist-get 'merged_at pr))
-                                    (cons 'updated_at (alist-get 'updated pr))
-                                    (cons 'review_decision
-                                          (alist-get 'review_decision pr))
-                                    (cons 'needs_reply (alist-get 'needs_reply pr))
-                                    (cons 'bot_pending (alist-get 'bot_pending pr))
-                                    (cons 'replies_to_me (alist-get 'replies_to_me pr))
-                                    (cons 'title (alist-get 'title pr))
-                                    (cons 'branch (alist-get 'branch pr))
-                                    (cons 'mergeable (alist-get 'mergeable pr)))))))))
-                  ;; Also search review requests (for subject PRs)
-                  (dolist (item (when decknix--hub-reviews
-                                  (alist-get 'items decknix--hub-reviews)))
-                    (when (and (equal (alist-get 'repo item) full-repo)
-                               (equal (alist-get 'number item) number))
-                      (let* ((ci (alist-get 'ci item))
-                             (hub-checks (alist-get 'checks ci)))
-                        (throw 'found
-                               (list
-                                (cons 'kind 'review)
-                                (cons 'state "OPEN")
-                                (cons 'draft (eq (alist-get 'draft item) t))
-                                (cons 'ci-status (alist-get 'status ci))
-                                (cons 'checks hub-checks)
-                                (cons 'updated_at (alist-get 'created item))
-                                (cons 'my_review (alist-get 'my_review item))
-                                (cons 'needs_reply (alist-get 'needs_reply item))
-                                (cons 'bot_pending (alist-get 'bot_pending item))
-                                (cons 'replies_to_me (alist-get 'replies_to_me item))
-                                (cons 'title (alist-get 'title item))
-                                (cons 'mergeable (alist-get 'mergeable item)))))))
-                  nil)))))
+        ;; -- Hub: PR status lookup from cached WIP + Reviews data --
+        ;;
+        ;; Source moved out of this heredoc into
+        ;; agent-shell/hub/decknix-hub-pr-lookup.el, packaged as
+        ;; `decknix-hub-pr-lookup-el'.  Walks the heredoc-resident
+        ;; `decknix--hub-wip' and `decknix--hub-reviews' globals via
+        ;; dynamic resolution (the module's defvars are forward-only).
+        (require 'decknix-hub-pr-lookup)
 
         (defun decknix--hub-pr-cache-get (url)
           "Return cached status for URL if still valid, else nil.
