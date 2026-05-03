@@ -180,6 +180,7 @@
 (defvar decknix--hub-reviews)
 (defvar decknix-hub-eager-clone-probe)
 (defvar decknix--sidebar-previous-sessions)
+(declare-function decknix--sidebar-previous-dedupe "decknix-sidebar-previous")
 (defvar decknix--sidebar-show-keys)
 (defvar agent-shell-workspace-sidebar-buffer-name)
 (declare-function decknix--agent-session-resume "ext:decknix-agent-shell-main")
@@ -3713,29 +3714,11 @@ Bound to `S' at sidebar-global level."
   (expand-file-name "~/.config/decknix/sidebar-state.el")
   "Path to the file storing sidebar toggle states and previous sessions.")
 
-(defvar decknix--sidebar-previous-sessions nil
-  "List of sessions that were live when Emacs last exited.
-Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
-
-(defun decknix--sidebar-previous-dedupe (entries)
-  "Return ENTRIES with at most one entry per conv-key.
-auggie writes a fresh session file on every interrupt/compose, so a
-single conversation can own several session-ids on disk.  When the
-Previous list (persisted or in-memory) carries two entries sharing a
-conv-key, they both resolve to the same latest snapshot at restore
-time and render as visually identical rows — this helper collapses
-them down to the first occurrence, keeping render/picker/restore
-flows in sync.  Entries without a conv-key fall back to
-session-id-based uniqueness so they are never accidentally merged."
-  (let ((seen (make-hash-table :test 'equal))
-        (out nil))
-    (dolist (e entries)
-      (let* ((ck (alist-get 'conv-key e))
-             (key (or ck (cons 'sid (alist-get 'session-id e)))))
-        (unless (gethash key seen)
-          (puthash key t seen)
-          (push e out))))
-    (nreverse out)))
+;; `decknix--sidebar-previous-sessions' (the in-memory list) and
+;; `decknix--sidebar-previous-dedupe' (the pure dedupe) carved out
+;; into `agent-shell/sidebar/decknix-sidebar-previous.el' as PR B.23.
+;; Forward declarations live at the top of this module so the
+;; remaining call sites here byte-compile clean.
 
 (defun decknix--sidebar-state-save ()
   "Save sidebar toggle states and current live sessions to disk."

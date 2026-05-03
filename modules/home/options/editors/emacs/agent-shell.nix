@@ -164,6 +164,22 @@ let
     ];
   };
 
+  # PR B.23: Previous-Sessions list + dedupe carved out of the
+  # `cfg.workspace.enable' heredoc.  Pure list -> list helper plus
+  # the in-memory list it operates on.  Co-resident in
+  # `agent-shell/sidebar/' alongside the other sidebar primitives —
+  # trivialBuild byte-compiles every sibling, so age-presets must
+  # be on the load-path even though previous itself doesn't
+  # reference it (sidebar-toggles requires it at load-time).
+  decknix-sidebar-previous-el = mkEmacsTestedPackage {
+    pname = "decknix-sidebar-previous";
+    src = ./agent-shell/sidebar;
+    packageRequires = [ decknix-hub-age-presets-el ];
+    testFiles = [
+      "decknix-sidebar-previous-test.el"
+    ];
+  };
+
   decknix-sidebar-format-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-format";
     src = ./agent-shell/sidebar;
@@ -783,6 +799,7 @@ in
         ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-format-el)
+        ++ (optional cfg.workspace.enable decknix-sidebar-previous-el)
         ++ (optional cfg.context.enable decknix-agent-shell-context-el)
         ++ (optional cfg.hub.enable decknix-agent-shell-hub-el)
         ++ [ decknix-agent-shell-main-el ]
@@ -1358,6 +1375,13 @@ in
         (require 'decknix-sidebar-format)
         (declare-function decknix--sidebar-abbreviate-workspace "decknix-sidebar-format")
         (declare-function decknix--sidebar-session-age-visible-p "decknix-sidebar-format")
+
+        ;; Previous-Sessions list + dedupe (PR B.23) — carries the
+        ;; in-memory list mutated by sidebar-state restore and the
+        ;; pure dedupe used everywhere a Previous-Sessions list is
+        ;; rendered or restored.
+        (require 'decknix-sidebar-previous)
+        (declare-function decknix--sidebar-previous-dedupe "decknix-sidebar-previous")
 
         (advice-add 'agent-shell-workspace-sidebar--render :override
           (lambda ()
