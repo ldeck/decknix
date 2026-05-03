@@ -2382,167 +2382,31 @@ auggie."
          t)))
 
 ;; -- PR / repo linking: store/retrieve linked items per conversation --
-;; All link records live under the same "linked_prs" key for
-;; backward compatibility.  Two record shapes are supported:
-;;   PR link   : {"url": ".../pull/N", "type": "authored"|"subject",
-;;                "added": "auto"|"manual", "linked_at": "ISO"}
-;;   Repo link : {"url": "...github.com/OWNER/REPO", "type": "repo",
-;;                "branch": "main", "added": ..., "linked_at": "ISO"}
-
-;; URL parsers (`decknix--agent-pr-parse-url',
-;; `decknix--agent-repo-parse-url', `decknix--agent-pr-url-accessor')
-;; live in agent-shell/agent/decknix-agent-url-parse.el — required
-;; near the top of this heredoc so they resolve at every call site.
-
-(defun decknix--agent-linked-items (conv-key)
-  "Return all linked items (PRs and repos) for CONV-KEY, insertion order."
-  (when conv-key
-    (let* ((store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (entry (gethash conv-key convs)))
-      (when (hash-table-p entry)
-        (gethash "linked_prs" entry)))))
-
-(defun decknix--agent-linked-prs (conv-key)
-  "Return linked PR records for CONV-KEY (excludes repo-type links).
-PR records have type \"authored\" or \"subject\"; repo records are
-surfaced via `decknix--agent-linked-repos' or `decknix--agent-linked-items'."
-  (seq-remove
-   (lambda (rec)
-     (equal (decknix--agent-pr-url-accessor rec "type") "repo"))
-   (decknix--agent-linked-items conv-key)))
-
-(defun decknix--agent-linked-repos (conv-key)
-  "Return linked repo records for CONV-KEY (type \"repo\" only)."
-  (seq-filter
-   (lambda (rec)
-     (equal (decknix--agent-pr-url-accessor rec "type") "repo"))
-   (decknix--agent-linked-items conv-key)))
-
-(defun decknix--agent-link-pr (conv-key url &optional pr-type added)
-  "Link PR at URL to conversation CONV-KEY.
-PR-TYPE is \"authored\" or \"subject\" (default: \"authored\").
-ADDED is \"auto\" or \"manual\" (default: \"manual\").
-No-op if URL is already linked."
-  (when (and conv-key url (decknix--agent-pr-parse-url url))
-    (let* ((store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (entry (or (gethash conv-key convs)
-                      (let ((h (make-hash-table :test 'equal)))
-                        (puthash "tags" nil h)
-                        (puthash "sessions" nil h)
-                        h)))
-           (existing (gethash "linked_prs" entry))
-           (already (seq-find
-                     (lambda (pr)
-                       (equal (if (hash-table-p pr)
-                                  (gethash "url" pr)
-                                (alist-get 'url pr))
-                              url))
-                     existing)))
-      (unless already
-        (let ((pr-entry (make-hash-table :test 'equal)))
-          (puthash "url" url pr-entry)
-          (puthash "type" (or pr-type "authored") pr-entry)
-          (puthash "added" (or added "manual") pr-entry)
-          (puthash "linked_at"
-                   (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)
-                   pr-entry)
-          (puthash "linked_prs" (append existing (list pr-entry)) entry)
-          (puthash conv-key entry convs)
-          (decknix--agent-tags-write store)
-          ;; Update linked-prs.json for the hub daemon
-          (when (fboundp 'decknix--hub-write-linked-prs)
-            (decknix--hub-write-linked-prs))
-          ;; Force a fresh PR-state fetch.  The hub's WIP adapter only
-          ;; tracks open PRs, so a PR that merged/closed between the
-          ;; last hub poll and this link call would otherwise stay
-          ;; stuck at its cached state for up to the cache TTL.
-          (when (fboundp 'decknix--hub-pr-fetch-async)
-            (when (boundp 'decknix--hub-pr-cache)
-              (remhash url decknix--hub-pr-cache))
-            (decknix--hub-pr-fetch-async url))
-          t)))))
-
-(defun decknix--agent-unlink-pr (conv-key url)
-  "Remove PR at URL from conversation CONV-KEY.
-Leaves repo-type links for the same URL untouched."
-  (when (and conv-key url)
-    (let* ((store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (entry (gethash conv-key convs)))
-      (when (hash-table-p entry)
-        (let ((existing (gethash "linked_prs" entry)))
-          (puthash "linked_prs"
-                   (seq-remove
-                    (lambda (rec)
-                      (and (equal (decknix--agent-pr-url-accessor rec "url") url)
-                           (not (equal (decknix--agent-pr-url-accessor rec "type")
-                                       "repo"))))
-                    existing)
-                   entry)
-          (decknix--agent-tags-write store)
-          ;; Update linked-prs.json for the hub daemon
-          (when (fboundp 'decknix--hub-write-linked-prs)
-            (decknix--hub-write-linked-prs)))))))
-
-(defun decknix--agent-link-repo (conv-key url branch &optional added)
-  "Link repo at URL with BRANCH to conversation CONV-KEY.
-URL is a `https://github.com/OWNER/REPO' URL (pull-request URLs are
-rejected — use `decknix--agent-link-pr' for those).
-ADDED is \"auto\" or \"manual\" (default: \"manual\").
-No-op if URL+BRANCH is already linked as a repo."
-  (when (and conv-key url branch
-             (decknix--agent-repo-parse-url url))
-    (let* ((store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (entry (or (gethash conv-key convs)
-                      (let ((h (make-hash-table :test 'equal)))
-                        (puthash "tags" nil h)
-                        (puthash "sessions" nil h)
-                        h)))
-           (existing (gethash "linked_prs" entry))
-           (already (seq-find
-                     (lambda (rec)
-                       (and (equal (decknix--agent-pr-url-accessor rec "url") url)
-                            (equal (decknix--agent-pr-url-accessor rec "type") "repo")
-                            (equal (decknix--agent-pr-url-accessor rec "branch") branch)))
-                     existing)))
-      (unless already
-        (let ((rec (make-hash-table :test 'equal)))
-          (puthash "url" url rec)
-          (puthash "type" "repo" rec)
-          (puthash "branch" branch rec)
-          (puthash "added" (or added "manual") rec)
-          (puthash "linked_at"
-                   (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)
-                   rec)
-          (puthash "linked_prs" (append existing (list rec)) entry)
-          (puthash conv-key entry convs)
-          (decknix--agent-tags-write store)
-          ;; Force a fresh repo status fetch so the new row lights up
-          ;; without waiting for the next sidebar refresh cycle.
-          (when (fboundp 'decknix--hub-repo-fetch-async)
-            (decknix--hub-repo-fetch-async url branch))
-          t)))))
-
-(defun decknix--agent-unlink-repo (conv-key url branch)
-  "Remove repo link for URL+BRANCH from conversation CONV-KEY."
-  (when (and conv-key url branch)
-    (let* ((store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (entry (gethash conv-key convs)))
-      (when (hash-table-p entry)
-        (let ((existing (gethash "linked_prs" entry)))
-          (puthash "linked_prs"
-                   (seq-remove
-                    (lambda (rec)
-                      (and (equal (decknix--agent-pr-url-accessor rec "url") url)
-                           (equal (decknix--agent-pr-url-accessor rec "type") "repo")
-                           (equal (decknix--agent-pr-url-accessor rec "branch") branch)))
-                    existing)
-                   entry)
-          (decknix--agent-tags-write store))))))
+;;
+;; Source moved out of this heredoc into
+;; agent-shell/agent/decknix-agent-link-store.el, packaged as
+;; `decknix-agent-link-store-el'.  Provides the seven entry points
+;; that mutate the per-conversation `linked_prs' record set:
+;;
+;;   `decknix--agent-linked-items' / `-prs' / `-repos'
+;;   `decknix--agent-link-pr'   / `-unlink-pr'
+;;   `decknix--agent-link-repo' / `-unlink-repo'
+;;
+;; The module loads the storage layer (`decknix-agent-tags-store')
+;; and the URL parsers (`decknix-agent-url-parse') itself, so the
+;; heredoc only needs the existing top-level (require) lines.  Hub-
+;; side post-mutation callbacks (write-linked-prs / pr-fetch-async /
+;; repo-fetch-async) are gated through `fboundp' inside the module.
+(declare-function decknix--agent-linked-items "decknix-agent-link-store" (conv-key))
+(declare-function decknix--agent-linked-prs   "decknix-agent-link-store" (conv-key))
+(declare-function decknix--agent-linked-repos "decknix-agent-link-store" (conv-key))
+(declare-function decknix--agent-link-pr      "decknix-agent-link-store"
+                  (conv-key url &optional pr-type added))
+(declare-function decknix--agent-unlink-pr    "decknix-agent-link-store" (conv-key url))
+(declare-function decknix--agent-link-repo    "decknix-agent-link-store"
+                  (conv-key url branch &optional added))
+(declare-function decknix--agent-unlink-repo  "decknix-agent-link-store"
+                  (conv-key url branch))
 
 ;; `decknix--agent-pr-url-accessor' lives in
 ;; agent-shell/agent/decknix-agent-url-parse.el — required at
