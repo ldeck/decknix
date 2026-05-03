@@ -22,10 +22,10 @@
 ;;
 ;;   `decknix--hub-repo-cache-key'      (URL + branch -> cache key)
 ;;
-;; The two PR parsers (`pr-parse-url' and `parse-pr-url') return
-;; different shapes (positional list of (string string int) vs
-;; alist of all-strings) and have different historical call sites;
-;; both are kept verbatim under the no-refactor rule.
+;; The two PR parsers return different shapes (positional list of
+;; (string string int) vs alist of all-strings) for historical
+;; reasons; the alist variant delegates to the positional one so
+;; the GitHub PR URL regex lives in exactly one place.
 ;;
 ;; All five helpers are leaf primitives — they take strings/lists/
 ;; hash-tables and return strings/lists/alists.  No I/O, no global
@@ -45,13 +45,14 @@
 (defun decknix--agent-parse-pr-url (url)
   "Parse a GitHub PR URL into an alist with owner, repo, number.
 Returns nil if URL is not a valid GitHub PR URL.
-Handles: https://github.com/OWNER/REPO/pull/NUMBER[/...]"
-  (when (string-match
-         "github\\.com/\\([^/]+\\)/\\([^/]+\\)/pull/\\([0-9]+\\)"
-         url)
-    (list (cons 'owner (match-string 1 url))
-          (cons 'repo (match-string 2 url))
-          (cons 'number (match-string 3 url)))))
+Handles: https://github.com/OWNER/REPO/pull/NUMBER[/...]
+Number is returned as a string for parity with the historical
+all-strings shape; callers that want an integer use
+`decknix--agent-pr-parse-url' directly."
+  (when-let* ((parsed (decknix--agent-pr-parse-url url)))
+    (list (cons 'owner  (nth 0 parsed))
+          (cons 'repo   (nth 1 parsed))
+          (cons 'number (number-to-string (nth 2 parsed))))))
 
 (defun decknix--agent-repo-parse-url (url)
   "Parse github.com/OWNER/REPO from URL and return (OWNER REPO).

@@ -84,6 +84,10 @@
   (should (null (decknix--agent-parse-pr-url
                  "https://github.com/owner/repo"))))
 
+(ert-deftest decknix-agent-parse-pr-url--nil ()
+  "Nil URL safely returns nil (delegated through `pr-parse-url')."
+  (should (null (decknix--agent-parse-pr-url nil))))
+
 ;; -- repo-parse-url ------------------------------------------------
 
 (ert-deftest decknix-agent-repo-parse-url--nil ()
