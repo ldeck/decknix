@@ -6593,6 +6593,7 @@ Like treemacs `W' / extra-wide-toggle."
         (declare-function decknix--hub-activity-icons "decknix-hub-icons")
         (declare-function decknix--hub-wip-reply-icon "decknix-hub-icons")
         (declare-function decknix--hub-pr-status-from-hub "decknix-hub-pr-lookup")
+        (declare-function decknix--hub-pr-cache-get "decknix-hub-pr-lookup")
 
         ;; -- Sidebar transient menu (magit-style ? popup) --
         (require 'transient)
@@ -11901,32 +11902,18 @@ refresh is triggered."
 
         ;; -- Hub: PR status lookup from cached WIP + Reviews data --
         ;;
-        ;; Source moved out of this heredoc into
-        ;; agent-shell/hub/decknix-hub-pr-lookup.el, packaged as
-        ;; `decknix-hub-pr-lookup-el'.  Walks the heredoc-resident
-        ;; `decknix--hub-wip' and `decknix--hub-reviews' globals via
-        ;; dynamic resolution (the module's defvars are forward-only).
+        ;; Sources moved out of this heredoc into
+        ;; agent-shell/hub-lookup/decknix-hub-pr-lookup.el, packaged
+        ;; as `decknix-hub-pr-lookup-el':
+        ;;
+        ;;   decknix--hub-pr-status-from-hub  — walks `decknix--hub-wip'
+        ;;     and `decknix--hub-reviews' (heredoc-resident globals,
+        ;;     dynamically resolved by the module's forward defvars).
+        ;;   decknix--hub-pr-cache-get        — TTL-gated read of the
+        ;;     `decknix--hub-pr-cache' hash table; appends
+        ;;     `(stale . t)' on TTL miss instead of returning nil so
+        ;;     callers can show old data with a refresh indicator.
         (require 'decknix-hub-pr-lookup)
-
-        (defun decknix--hub-pr-cache-get (url)
-          "Return cached status for URL if still valid, else nil.
-When the entry is stale (older than TTL) returns the cached data with
-a `(stale . t)' marker appended so callers can show the old data with
-a refresh indicator instead of a bare loading spinner.
-
-This function is side-effect free by design.  Staleness-triggered
-background refresh is the responsibility of `decknix--hub-pr-status'
-(which TTL-gates its self-heal branch) so that callers invoking
-`decknix--hub-pr-cache-get' from hot paths — e.g. sort predicates in
-`decknix--hub-render-session-prs' — do not schedule O(N log N) async
-fetches per render (see commit message for #hub-loop)."
-          (let ((entry (gethash url decknix--hub-pr-cache)))
-            (when entry
-              (let ((ts (car entry))
-                    (status (cdr entry)))
-                (if (< (- (float-time) ts) decknix--hub-pr-cache-ttl)
-                    status
-                  (append status '((stale . t))))))))
 
         (defun decknix--hub-pr-fetch-async (url)
           "Fetch PR status for URL via `gh pr view' asynchronously.
