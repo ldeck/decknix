@@ -13,7 +13,7 @@
 ;; conversations) and the persistence pairs `decknix-agent-
 ;; session-{model,workspace}' / `decknix-agent-conv-recency'.
 ;;
-;; Two entry points:
+;; Three entry points:
 ;;
 ;;   `decknix--agent-tags-for-session'
 ;;       Resolves SESSION-ID -> CONV-KEY via
@@ -24,14 +24,23 @@
 ;;       Direct accessor when CONV-KEY is already in hand.
 ;;       Returns the tags list (or nil).
 ;;
-;; Both are pure with respect to the store -- they read but do
-;; not mutate.  The many interactive verbs that *write* tags
+;;   `decknix--agent-tags-all'
+;;       Aggregation across all conversations -- returns a
+;;       sorted list of unique tag strings.  Used by the
+;;       interactive verbs that prompt with completing-read over
+;;       the existing tag vocabulary (rename / remove / filter
+;;       global pickers).
+;;
+;; All three are pure with respect to the store -- they read but
+;; do not mutate.  The interactive verbs that *write* tags
 ;; (`decknix--agent-tag-add' / `-tag-remove' / `-tags-clear' /
 ;; `-tags-rename', etc.) stay in main-bulk per AGENTS.md Rule 2
 ;; -- they refresh the sidebar buffer and may call into other
 ;; UI machinery.
 
 ;;; Code:
+
+(require 'cl-lib)
 
 ;; Forward declarations for the tags-store accessors and the
 ;; session->conv-key resolver this module depends on.  All three
@@ -63,6 +72,18 @@
     (let ((entry (gethash conv-key convs)))
       (when (hash-table-p entry)
         (gethash "tags" entry)))))
+
+(defun decknix--agent-tags-all ()
+  "Return a sorted list of all unique tags across all conversations."
+  (let* ((store (decknix--agent-tags-read))
+         (convs (decknix--agent-tags-conversations store))
+         (all-tags nil))
+    (maphash (lambda (_key entry)
+               (when (hash-table-p entry)
+                 (dolist (tag (gethash "tags" entry))
+                   (cl-pushnew tag all-tags :test #'string=))))
+             convs)
+    (sort all-tags #'string<)))
 
 (provide 'decknix-agent-tags-read)
 ;;; decknix-agent-tags-read.el ends here
