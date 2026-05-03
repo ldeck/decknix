@@ -192,6 +192,29 @@ let
     ];
   };
 
+  # PR B.29: sidebar tile-cycle helpers carved out of
+  # `decknix-agent-shell-workspace' (workspace-bulk).  Owns the
+  # desired-count defvar, the current-count reader, the one-shot
+  # apply helper, the interactive `decknix-sidebar-tile-cycle'
+  # command, and `decknix--sidebar-maybe-apply-tile-pref' (the
+  # sidebar-refresh hook that re-engages tiling once enough live
+  # buffers exist).  All four upstream symbols
+  # (`agent-shell-buffers', `agent-shell-workspace--tile' /
+  # `--untile', `agent-shell-workspace-sidebar-buffer-name', and
+  # the buffer-local `--tiled' / `--tiled-buffers' flags) are
+  # forward-declared so the module byte-compiles standalone.
+  # Co-resident with the other sidebar/ modules; needs the same
+  # `decknix-hub-age-presets-el' on packageRequires for the
+  # trivialBuild sibling pass.
+  decknix-sidebar-tile-el = mkEmacsTestedPackage {
+    pname = "decknix-sidebar-tile";
+    src = ./agent-shell/sidebar;
+    packageRequires = [ decknix-hub-age-presets-el ];
+    testFiles = [
+      "decknix-sidebar-tile-test.el"
+    ];
+  };
+
   decknix-hub-teamcity-el = mkEmacsTestedPackage {
     pname = "decknix-hub-teamcity";
     src = ./agent-shell/hub;
@@ -857,6 +880,7 @@ in
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-format-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-previous-el)
+        ++ (optional cfg.workspace.enable decknix-sidebar-tile-el)
         ++ (optional cfg.context.enable decknix-agent-shell-context-el)
         ++ (optional cfg.hub.enable decknix-agent-shell-hub-el)
         ++ [ decknix-agent-shell-main-el ]
@@ -1460,6 +1484,19 @@ in
         ;; rendered or restored.
         (require 'decknix-sidebar-previous)
         (declare-function decknix--sidebar-previous-dedupe "decknix-sidebar-previous")
+
+        ;; Sidebar tile-cycle helpers (PR B.29) -- moved out of
+        ;; the workspace heredoc.  Owns the desired-count defvar,
+        ;; the current-count reader, the one-shot apply, the
+        ;; interactive cycle command, and the sidebar-refresh
+        ;; auto-engage hook.  Persistence (read/write tile-count
+        ;; into `decknix--sidebar-state-file') stays in workspace-
+        ;; bulk's broader sidebar-state save/restore cluster.
+        (require 'decknix-sidebar-tile)
+        (declare-function decknix--sidebar-tile-current-count "decknix-sidebar-tile")
+        (declare-function decknix--sidebar-tile-apply "decknix-sidebar-tile" (n))
+        (declare-function decknix-sidebar-tile-cycle "decknix-sidebar-tile")
+        (declare-function decknix--sidebar-maybe-apply-tile-pref "decknix-sidebar-tile")
 
         (advice-add 'agent-shell-workspace-sidebar--render :override
           (lambda ()
