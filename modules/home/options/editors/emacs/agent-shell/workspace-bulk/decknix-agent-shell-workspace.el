@@ -107,7 +107,7 @@
 (declare-function decknix--agent-workspace-for-conv-key "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-session-display-name "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-session-group-by-conversation "ext:decknix-agent-shell-main")
-(declare-function decknix--agent-session-list "ext:decknix-agent-shell-main")
+(declare-function decknix--agent-session-list "decknix-agent-session-cache")
 (declare-function decknix--agent-unsorted-table "ext:decknix-agent-shell-main")
 ;; More bulk hub module symbols.
 (declare-function decknix--hub-item-visible-p "ext:decknix-agent-shell-hub")
