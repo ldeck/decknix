@@ -33,6 +33,7 @@
 (defvar decknix--hub-reviews nil)
 (defvar decknix--hub-pr-cache nil)
 (defvar decknix--hub-pr-cache-ttl nil)
+(defvar decknix--sidebar-sessions-age-filter nil)
 (defvar decknix--hub-jira-tasks nil)
 (defvar decknix--hub-teamcity-builds nil)
 (defvar decknix--hub-deploys nil)
