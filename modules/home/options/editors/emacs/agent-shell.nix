@@ -229,6 +229,15 @@ let
     ];
   };
 
+  decknix-agent-url-parse-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-url-parse";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-url-parse-test.el"
+    ];
+  };
+
   # == Custom auggie commands ==
   # Deployed to ~/.augment/commands/ via home.file (as symlinks).
   # User-created commands (regular files) coexist in the same directory
@@ -591,6 +600,9 @@ in
         # original inline elisp).  Progress depends on hub data, so it ships
         # only when hub is enabled.  Sidebar toggles ride with workspace
         # since they exist to flip what the workspace sidebar renders.
+        # URL parsing is foundational (linked PRs, quick actions, repo
+        # linking, hub) so it ships whenever agent-shell is enabled at all.
+        ++ [ decknix-agent-url-parse-el ]
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
         ++ (optional cfg.hub.enable decknix-hub-teamcity-el)
@@ -612,6 +624,21 @@ in
         ;; == Core: agent-shell with auggie defaults ==
         (require 'agent-shell)
         (require 'agent-shell-auggie)
+
+        ;; == Foundational URL parsers (extracted module) ==
+        ;;
+        ;; URL-parsing primitives moved out of this heredoc into
+        ;; agent-shell/agent/decknix-agent-url-parse.el, packaged as
+        ;; `decknix-agent-url-parse-el'.  Loaded early because every
+        ;; later subsystem (linked PRs, hub, quick-actions, repo
+        ;; linking) calls into them.  Forward declarations keep byte-
+        ;; compile clean for the many call sites between here and the
+        ;; main hygiene block at line ~6531 below.
+        (require 'decknix-agent-url-parse)
+        (declare-function decknix--agent-pr-parse-url "decknix-agent-url-parse")
+        (declare-function decknix--agent-repo-parse-url "decknix-agent-url-parse")
+        (declare-function decknix--agent-pr-url-accessor "decknix-agent-url-parse")
+        (declare-function decknix--hub-repo-cache-key "decknix-agent-url-parse")
 
         ;; Use auggie as the default agent (skip agent selection prompt)
         (setq agent-shell-preferred-agent-config 'auggie)
@@ -3186,30 +3213,10 @@ auggie."
         ;;   Repo link : {"url": "...github.com/OWNER/REPO", "type": "repo",
         ;;                "branch": "main", "added": ..., "linked_at": "ISO"}
 
-        (defun decknix--agent-pr-parse-url (url)
-          "Parse a GitHub PR URL into (owner repo number) or nil."
-          (when (and url (string-match
-                         "github\\.com/\\([^/]+\\)/\\([^/]+\\)/pull/\\([0-9]+\\)"
-                         url))
-            (list (match-string 1 url)
-                  (match-string 2 url)
-                  (string-to-number (match-string 3 url)))))
-
-        (defun decknix--agent-repo-parse-url (url)
-          "Parse github.com/OWNER/REPO from URL and return (OWNER REPO).
-Rejects pull-request URLs (those route through `decknix--agent-pr-parse-url').
-Strips any trailing slash, query, fragment, or .git suffix."
-          (when (and url
-                     (stringp url)
-                     (not (string-match-p "/pull/[0-9]+" url))
-                     (string-match
-                      "github\\.com/\\([^/]+\\)/\\([^/?#]+\\)"
-                      url))
-            (let ((owner (match-string 1 url))
-                  (repo (match-string 2 url)))
-              (when (string-suffix-p ".git" repo)
-                (setq repo (substring repo 0 -4)))
-              (list owner repo))))
+        ;; URL parsers (`decknix--agent-pr-parse-url',
+        ;; `decknix--agent-repo-parse-url', `decknix--agent-pr-url-accessor')
+        ;; live in agent-shell/agent/decknix-agent-url-parse.el — required
+        ;; near the top of this heredoc so they resolve at every call site.
 
         (defun decknix--agent-linked-items (conv-key)
           "Return all linked items (PRs and repos) for CONV-KEY, insertion order."
@@ -3361,9 +3368,9 @@ No-op if URL+BRANCH is already linked as a repo."
                            entry)
                   (decknix--agent-tags-write store))))))
 
-        (defun decknix--agent-pr-url-accessor (pr field)
-          "Get FIELD from PR link (supports both hash-table and alist)."
-          (if (hash-table-p pr) (gethash field pr) (alist-get (intern field) pr)))
+        ;; `decknix--agent-pr-url-accessor' lives in
+        ;; agent-shell/agent/decknix-agent-url-parse.el — required at
+        ;; the top of this heredoc.
 
         ;; -- VCS detection helpers (used by repo-linking commands) --
 
@@ -6517,7 +6524,8 @@ Like treemacs `W' / extra-wide-toggle."
         ;; `decknix-sidebar-toggles-el', `decknix-hub-age-presets-el',
         ;; `decknix-hub-teamcity-el', `decknix-hub-org-filter-el',
         ;; `decknix-hub-jira-tasks-el', `decknix-hub-ci-el',
-        ;; `decknix-hub-mention-bot-el', `decknix-hub-worktree-parse-el').
+        ;; `decknix-hub-mention-bot-el', `decknix-hub-worktree-parse-el',
+        ;; `decknix-agent-url-parse-el').
         ;; This heredoc references them inside transient suffix lambdas
         ;; (just below) and Requests / WIP / sessions render code (much
         ;; further down) at byte-compile time, before the `(require ...)'
@@ -12092,11 +12100,9 @@ Keys are \"OWNER/REPO#BRANCH\"; values are (TIMESTAMP . STATUS-ALIST).")
         (defvar decknix--hub-repo-pending-fetches (make-hash-table :test 'equal)
           "Set of repo+branch keys currently being fetched.")
 
-        (defun decknix--hub-repo-cache-key (url branch)
-          "Return the canonical cache key for URL + BRANCH, or nil."
-          (let ((parsed (decknix--agent-repo-parse-url url)))
-            (when (and parsed branch)
-              (format "%s/%s#%s" (nth 0 parsed) (nth 1 parsed) branch))))
+        ;; `decknix--hub-repo-cache-key' lives in
+        ;; agent-shell/agent/decknix-agent-url-parse.el — required at
+        ;; the top of this heredoc.
 
         (defun decknix--hub-repo-cache-save ()
           "Persist the repo cache to disk."
