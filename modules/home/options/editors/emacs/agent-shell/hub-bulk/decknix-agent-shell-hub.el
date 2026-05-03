@@ -80,6 +80,25 @@
 (declare-function decknix--hub-bot-visible-p "decknix-hub-mention-bot")
 (declare-function decknix--hub-mention-filter-label "decknix-hub-mention-bot")
 (declare-function decknix--hub-mention-filter-normalize "decknix-hub-mention-bot")
+;; Attention-filter cluster (PR B.33) -- engine + toggle commands
+;; live in `decknix-hub-attention-filter'.  Declared up here because
+;; the transient suffixes earlier in this file (line ~480 onward)
+;; reference the toggle commands by `#'symbol' before the moved
+;; declarations at the original site near line ~726.
+(declare-function decknix--hub-toggle-requests-hide-needs-reply
+                  "decknix-hub-attention-filter")
+(declare-function decknix--hub-toggle-requests-hide-bot-pending
+                  "decknix-hub-attention-filter")
+(declare-function decknix--hub-toggle-requests-only-my-replies
+                  "decknix-hub-attention-filter")
+(declare-function decknix--hub-toggle-requests-sort-reverse
+                  "decknix-hub-attention-filter")
+(declare-function decknix--hub-toggle-wip-hide-needs-reply
+                  "decknix-hub-attention-filter")
+(declare-function decknix--hub-toggle-wip-hide-bot-pending
+                  "decknix-hub-attention-filter")
+(declare-function decknix--hub-toggle-wip-only-my-replies
+                  "decknix-hub-attention-filter")
 (declare-function decknix--hub-pr-status-from-hub "decknix-hub-pr-lookup")
 (declare-function decknix--hub-pr-cache-get "decknix-hub-pr-lookup")
 (declare-function decknix--hub-worktree-canonical-repo "decknix-hub-worktree-parse")
@@ -725,169 +744,38 @@ lint-only failures and still-running checks."
 
 ;; -- Hub: attention filters (needs-reply / bot-pending / replies-to-me) --
 ;;
-;; These three orthogonal signals come from the hub daemon.  Each
-;; section (Requests, WIP) owns its own toggle state so a PR can be
-;; filtered out of one list while remaining visible in the other —
-;; e.g. hiding bot-pending PRs from Requests (not review-ready) but
-;; keeping them visible in WIP (so I can see my own PRs needing a
-;; push).
+;; Source moved out of this file into
+;; agent-shell/hub/decknix-hub-attention-filter.el, packaged as
+;; `decknix-hub-attention-filter-el'.  Owns the seven defvars
+;; (Requests + WIP toggle state plus the Requests sort-reverse
+;; flag), the engine (sort-requests, attention-visible-p shared
+;; predicate, requests-/wip- flavoured wrappers), the shared
+;; `toggle-and-refresh' helper, and the seven per-bucket toggle
+;; commands wired to the sidebar Toggles transient (`T') and
+;; footer.  The transient suffix / prefix forms that surface
+;; these commands stay in workspace-bulk's broader transient
+;; cluster.
 
-(defvar decknix--hub-requests-hide-needs-reply nil
-  "When non-nil, hide Requests PRs carrying the 💬 icon.
-Suppresses PRs where the latest non-bot activity is from someone
-other than me — i.e. the ball is in another reviewer's or the
-author's court and nothing is waiting on me.  Toggle with `c'.")
-
-(defvar decknix--hub-requests-hide-bot-pending t
-  "When non-nil (default), hide Requests PRs carrying the 🤖 icon.
-A bot posted the latest comment/review, typically a lint/CI/coverage
-signal the author must address with another commit.  Approving before
-that lands risks stale-review dismissal, so the PR isn't review-ready.
-Toggle with `b'.")
-
-(defvar decknix--hub-requests-only-my-replies nil
-  "When non-nil, only show Requests PRs carrying the ↩ icon.
-Filters IN PRs where a human posted a reply after one of my own
-comments or reviews.  Toggle with `M'.")
-
-(defvar decknix--hub-requests-sort-reverse nil
-  "When nil (default), Requests are sorted oldest-first.
-When non-nil, the order is reversed (newest-first).  The same
-ordering applies to both the sidebar Requests section and the
-`R' review picker so the two stay in sync.  Toggle with `s' in the
-sidebar toggles transient or with M-s live inside the picker
-(picker toggles are let-scoped and do not persist).")
-
-(defun decknix--hub-sort-requests (items)
-  "Return ITEMS sorted by `created' ascending (oldest first).
-When `decknix--hub-requests-sort-reverse' is non-nil, sort descending
-(newest first) instead.  Items without a `created' field sort last
-regardless of direction.  Uses a stable sort on a fresh copy so the
-caller's list is never mutated."
-  (let ((reverse (and (boundp 'decknix--hub-requests-sort-reverse)
-                      decknix--hub-requests-sort-reverse)))
-    (sort (copy-sequence (or items '()))
-          (lambda (a b)
-            (let ((ca (alist-get 'created a))
-                  (cb (alist-get 'created b)))
-              (cond
-               ;; Items without a created timestamp drift to the end.
-               ((and (null ca) (null cb)) nil)
-               ((null ca) nil)
-               ((null cb) t)
-               (reverse (string> ca cb))
-               (t       (string< ca cb))))))))
-
-(defvar decknix--hub-wip-hide-needs-reply nil
-  "When non-nil, hide WIP PRs carrying the 💬 icon.
-Suppresses PRs where reviewers posted the latest activity — useful
-when I want to focus on PRs still awaiting first review.  Toggle
-with `n'.")
-
-(defvar decknix--hub-wip-hide-bot-pending nil
-  "When non-nil, hide WIP PRs carrying the 🤖 icon.
-Suppresses my own PRs where a bot posted the latest activity.
-Defaults to off because as the author I usually want to see these
-so I can push a fix.  Toggle with `u'.")
-
-(defvar decknix--hub-wip-only-my-replies nil
-  "When non-nil, only show WIP PRs carrying the ↩ icon.
-Filters IN my PRs where a reviewer replied to one of my comments.
-Toggle with `r'.")
-
-(defun decknix--hub-attention-visible-p (item hide-reply hide-bot only-my)
-  "Return non-nil if ITEM passes the three attention filters.
-HIDE-REPLY, HIDE-BOT, and ONLY-MY are the three toggle states for
-the owning section."
-  (let ((needs-reply   (eq (alist-get 'needs_reply item) t))
-        (bot-pending   (eq (alist-get 'bot_pending item) t))
-        (replies-to-me (eq (alist-get 'replies_to_me item) t)))
-    (and
-     ;; Hide needs-reply suppresses only the non-bot case
-     ;; (bot-pending is handled by its own toggle so we don't
-     ;; double-suppress when both are true).
-     (or (not hide-reply)
-         (not (and needs-reply (not bot-pending))))
-     (or (not hide-bot)
-         (not bot-pending))
-     (or (not only-my)
-         replies-to-me))))
-
-(defun decknix--hub-requests-attention-visible-p (item)
-  "Return non-nil if ITEM passes the Requests attention filters."
-  (decknix--hub-attention-visible-p
-   item
-   decknix--hub-requests-hide-needs-reply
-   decknix--hub-requests-hide-bot-pending
-   decknix--hub-requests-only-my-replies))
-
-(defun decknix--hub-wip-attention-visible-p (pr)
-  "Return non-nil if PR passes the WIP attention filters."
-  (decknix--hub-attention-visible-p
-   pr
-   decknix--hub-wip-hide-needs-reply
-   decknix--hub-wip-hide-bot-pending
-   decknix--hub-wip-only-my-replies))
-
-(defun decknix--hub-toggle-and-refresh (sym message-fmt)
-  "Flip SYM and refresh the sidebar, messaging MESSAGE-FMT with the new value."
-  (set sym (not (symbol-value sym)))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
-  (message message-fmt
-           (if (symbol-value sym) "on" "off")))
-
-(defun decknix--hub-toggle-requests-hide-needs-reply ()
-  "Toggle hiding Requests PRs with 💬 (non-bot trailing activity)."
-  (interactive)
-  (decknix--hub-toggle-and-refresh
-   'decknix--hub-requests-hide-needs-reply
-   "Requests 💬 filter: %s"))
-
-(defun decknix--hub-toggle-requests-hide-bot-pending ()
-  "Toggle hiding Requests PRs with 🤖 (latest activity from a bot)."
-  (interactive)
-  (decknix--hub-toggle-and-refresh
-   'decknix--hub-requests-hide-bot-pending
-   "Requests 🤖 filter: %s"))
-
-(defun decknix--hub-toggle-requests-only-my-replies ()
-  "Toggle showing only Requests PRs with ↩ (human reply in my thread)."
-  (interactive)
-  (decknix--hub-toggle-and-refresh
-   'decknix--hub-requests-only-my-replies
-   "Requests ↩ only-my-replies: %s"))
-
-(defun decknix--hub-toggle-requests-sort-reverse ()
-  "Toggle Requests sort direction (oldest↔newest) in the sidebar.
-The review picker honours the same flag so pressing `R' from the
-sidebar shows items in the same order.  Use M-s inside the picker
-for an ephemeral flip that does not persist."
-  (interactive)
-  (decknix--hub-toggle-and-refresh
-   'decknix--hub-requests-sort-reverse
-   "Requests sort: %s"))
-
-(defun decknix--hub-toggle-wip-hide-needs-reply ()
-  "Toggle hiding WIP PRs with 💬."
-  (interactive)
-  (decknix--hub-toggle-and-refresh
-   'decknix--hub-wip-hide-needs-reply
-   "WIP 💬 filter: %s"))
-
-(defun decknix--hub-toggle-wip-hide-bot-pending ()
-  "Toggle hiding WIP PRs with 🤖."
-  (interactive)
-  (decknix--hub-toggle-and-refresh
-   'decknix--hub-wip-hide-bot-pending
-   "WIP 🤖 filter: %s"))
-
-(defun decknix--hub-toggle-wip-only-my-replies ()
-  "Toggle showing only WIP PRs with ↩."
-  (interactive)
-  (decknix--hub-toggle-and-refresh
-   'decknix--hub-wip-only-my-replies
-   "WIP ↩ only-my-replies: %s"))
+;; Forward declarations so the surrounding hub-bulk code (which
+;; reads the defvars and calls the engine functions when rendering
+;; rows) byte-compiles clean against the moved symbols.
+(defvar decknix--hub-requests-hide-needs-reply)
+(defvar decknix--hub-requests-hide-bot-pending)
+(defvar decknix--hub-requests-only-my-replies)
+(defvar decknix--hub-requests-sort-reverse)
+(defvar decknix--hub-wip-hide-needs-reply)
+(defvar decknix--hub-wip-hide-bot-pending)
+(defvar decknix--hub-wip-only-my-replies)
+(declare-function decknix--hub-sort-requests "decknix-hub-attention-filter" (items))
+(declare-function decknix--hub-attention-visible-p
+                  "decknix-hub-attention-filter"
+                  (item hide-reply hide-bot only-my))
+(declare-function decknix--hub-requests-attention-visible-p
+                  "decknix-hub-attention-filter" (item))
+(declare-function decknix--hub-wip-attention-visible-p
+                  "decknix-hub-attention-filter" (pr))
+(declare-function decknix--hub-toggle-and-refresh
+                  "decknix-hub-attention-filter" (sym message-fmt))
 
 ;; -- Hub: active review detection --
 ;; Cross-references request items against live agent-shell buffers
