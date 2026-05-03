@@ -433,6 +433,26 @@ let
     ];
   };
 
+  # PR B.31: per-conversation link store carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Owns the seven
+  # mutators over the `linked_prs' record set inside the
+  # conversation entry of `agent-sessions.json' (PR + repo
+  # records share the same key for backward compat).  Loads
+  # `decknix-agent-tags-store' for the JSON I/O and
+  # `decknix-agent-url-parse' for URL validation.  Hub-side
+  # post-mutation callbacks (`decknix--hub-write-linked-prs',
+  # `decknix--hub-pr-fetch-async', `decknix--hub-repo-fetch-async')
+  # are gated through `fboundp' so this module loads cleanly even
+  # when the hub feature is disabled.
+  decknix-agent-link-store-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-link-store";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-link-store-test.el"
+    ];
+  };
+
   decknix-agent-review-format-el = mkEmacsTestedPackage {
     pname = "decknix-agent-review-format";
     src = ./agent-shell/review;
@@ -881,6 +901,7 @@ in
           decknix-agent-parse-el
           decknix-agent-session-cache-el
           decknix-agent-tags-store-el
+          decknix-agent-link-store-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
         ]
@@ -975,6 +996,29 @@ in
         (declare-function decknix--agent-tags-read "decknix-agent-tags-store")
         (declare-function decknix--agent-tags-write "decknix-agent-tags-store" (store))
         (declare-function decknix--agent-tags-conversations "decknix-agent-tags-store" (store))
+
+        ;; Per-conversation link records (PR B.31).  Owns the seven
+        ;; mutators over the `linked_prs' record set: linked-items /
+        ;; linked-prs / linked-repos accessors plus link-pr / unlink-pr
+        ;; / link-repo / unlink-repo writers.  Depends on the tags-
+        ;; store I/O above and `decknix-agent-url-parse' (loaded
+        ;; earlier via the URL-parse require near the top of this
+        ;; heredoc).  Hub callbacks fired after a successful link
+        ;; (write-linked-prs to refresh the daemon's view, fetch-
+        ;; async to short-circuit the cache TTL) are `fboundp'-gated
+        ;; inside the module.
+        (require 'decknix-agent-link-store)
+        (declare-function decknix--agent-linked-items "decknix-agent-link-store" (conv-key))
+        (declare-function decknix--agent-linked-prs   "decknix-agent-link-store" (conv-key))
+        (declare-function decknix--agent-linked-repos "decknix-agent-link-store" (conv-key))
+        (declare-function decknix--agent-link-pr      "decknix-agent-link-store"
+                          (conv-key url &optional pr-type added))
+        (declare-function decknix--agent-unlink-pr    "decknix-agent-link-store" (conv-key url))
+        (declare-function decknix--agent-link-repo    "decknix-agent-link-store"
+                          (conv-key url branch &optional added))
+        (declare-function decknix--agent-unlink-repo  "decknix-agent-link-store"
+                          (conv-key url branch))
+
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
         (declare-function decknix--git-remote-url "decknix-agent-vcs")
