@@ -286,6 +286,15 @@ let
     ];
   };
 
+  decknix-agent-vcs-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-vcs";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-vcs-test.el"
+    ];
+  };
+
   # == Custom auggie commands ==
   # Deployed to ~/.augment/commands/ via home.file (as symlinks).
   # User-created commands (regular files) coexist in the same directory
@@ -650,7 +659,12 @@ in
         # since they exist to flip what the workspace sidebar renders.
         # URL parsing is foundational (linked PRs, quick actions, repo
         # linking, hub) so it ships whenever agent-shell is enabled at all.
-        ++ [ decknix-agent-url-parse-el decknix-agent-format-el decknix-agent-parse-el ]
+        ++ [
+          decknix-agent-url-parse-el
+          decknix-agent-format-el
+          decknix-agent-parse-el
+          decknix-agent-vcs-el
+        ]
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
         ++ (optional cfg.hub.enable decknix-hub-teamcity-el)
@@ -696,6 +710,8 @@ in
         (declare-function decknix--agent-session-parse "decknix-agent-parse")
         (declare-function decknix--prompt-search-parse "decknix-agent-parse")
         (declare-function decknix--agent-conversation-key-raw "decknix-agent-parse")
+        (require 'decknix-agent-vcs)
+        (declare-function decknix--vcs-kind "decknix-agent-vcs")
 
         ;; Use auggie as the default agent (skip agent selection prompt)
         (setq agent-shell-preferred-agent-config 'auggie)
@@ -3392,18 +3408,10 @@ No-op if URL+BRANCH is already linked as a repo."
         ;; the top of this heredoc.
 
         ;; -- VCS detection helpers (used by repo-linking commands) --
-
-        (defun decknix--vcs-kind (dir)
-          "Return a symbol describing the VCS managing DIR, or nil.
-One of: `git', `pijul', `jj', or nil when no recognised VCS is present.
-Handles git worktrees (where .git is a file pointing into the main repo)."
-          (let ((dir (file-name-as-directory (expand-file-name dir))))
-            (cond
-             ((or (file-directory-p (expand-file-name ".git" dir))
-                  (file-exists-p (expand-file-name ".git" dir))) 'git)
-             ((file-directory-p (expand-file-name ".pijul" dir)) 'pijul)
-             ((file-directory-p (expand-file-name ".jj" dir)) 'jj)
-             (t nil))))
+        ;;
+        ;; `decknix--vcs-kind' lives in
+        ;; agent-shell/agent/decknix-agent-vcs.el — required at the
+        ;; top of this heredoc.
 
         (defun decknix--git-remote-url (dir)
           "Return the github.com/OWNER/REPO URL for DIR's origin remote, or nil.
