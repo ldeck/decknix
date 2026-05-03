@@ -647,6 +647,25 @@ let
     ];
   };
 
+  # PR B.43: tags read accessors carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Co-resident in
+  # `agent-shell/agent/' beside the existing
+  # `decknix-agent-tags-store' (which owns load / save /
+  # conversations) and the per-conversation persistence pairs.
+  # Owns the two pure read accessors that resolve a session-id
+  # or a conv-key to the conversation's tag list.  The many
+  # call sites in main-bulk / workspace-bulk / progress / nix
+  # heredoc reach the symbols through the heredoc's
+  # `(require ...)' chain.
+  decknix-agent-tags-read-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-tags-read";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-tags-read-test.el"
+    ];
+  };
+
   # PR B.42: per-conversation lastAccessed stamp carved out
   # of `decknix-agent-shell-main' (main-bulk).  Sister of B.37 /
   # B.40 in the `agent-shell/agent/' persistence cluster.  Owns
@@ -1142,6 +1161,7 @@ in
           decknix-agent-session-model-el
           decknix-agent-session-workspace-el
           decknix-agent-conv-recency-el
+          decknix-agent-tags-read-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
         ]
@@ -1327,6 +1347,16 @@ in
                           "decknix-agent-conv-recency" (conv-key))
         (declare-function decknix--agent-conv-last-accessed
                           "decknix-agent-conv-recency" (conv-key))
+
+        ;; Tags read accessors (PR B.43) -- pure readers that
+        ;; resolve session-id or conv-key to the conversation's
+        ;; tag list.  Tag *writers* (interactive verbs) stay in
+        ;; main-bulk per AGENTS.md Rule 2.
+        (require 'decknix-agent-tags-read)
+        (declare-function decknix--agent-tags-for-session
+                          "decknix-agent-tags-read" (session-id))
+        (declare-function decknix--agent-tags-for-conv-key
+                          "decknix-agent-tags-read" (conv-key))
 
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
