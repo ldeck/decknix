@@ -2289,35 +2289,28 @@ conversation that had no workspace stored."
       (decknix--agent-tags-write store))))
 
 ;; -- Per-session model persistence --
+;;
 ;; The global default model lives in ~/.augment/settings.json
 ;; (declared via decknix.cli.auggie.settings.model).  Any
 ;; per-session override the user makes with C-c C-v is stored
 ;; here so that resume-time we can pass --model <id> and get
 ;; back the same agent the user was working with.
-
-(defun decknix--agent-session-model-for-conv-key (conv-key)
-  "Return saved auggie model-id for CONV-KEY, or nil."
-  (when conv-key
-    (let* ((store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (entry (gethash conv-key convs)))
-      (when (hash-table-p entry)
-        (gethash "model" entry)))))
-
-(defun decknix--agent-session-save-model-for-conv-key
-    (conv-key model-id)
-  "Persist auggie MODEL-ID for CONV-KEY in agent-sessions.json."
-  (when (and conv-key model-id)
-    (let* ((store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (entry (or (gethash conv-key convs)
-                      (let ((h (make-hash-table :test 'equal)))
-                        (puthash "tags" nil h)
-                        (puthash "sessions" nil h)
-                        h))))
-      (puthash "model" model-id entry)
-      (puthash conv-key entry convs)
-      (decknix--agent-tags-write store))))
+;;
+;; The two storage primitives (`decknix--agent-session-model-
+;; for-conv-key' and `-save-model-for-conv-key') were carved
+;; out into agent-shell/agent/decknix-agent-session-model.el
+;; (PR B.37), packaged as `decknix-agent-session-model-el'.
+;; The interactive `decknix-agent-set-session-model' command
+;; below stays here per AGENTS.md Rule 2 -- it wraps the
+;; upstream `agent-shell-set-session-model' UI verb whose
+;; on-success callback simply calls into the module's `save'
+;; primitive.  Forward declarations here so the call sites in
+;; this file (line ~815 in the resume path and the `set-session-
+;; model' wrapper below) byte-compile clean.
+(declare-function decknix--agent-session-model-for-conv-key
+                  "decknix-agent-session-model" (conv-key))
+(declare-function decknix--agent-session-save-model-for-conv-key
+                  "decknix-agent-session-model" (conv-key model-id))
 
 (defun decknix-agent-set-session-model ()
   "Change the model for the current agent-shell session and persist it.

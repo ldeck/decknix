@@ -557,6 +557,28 @@ let
     ];
   };
 
+  # PR B.37: per-conversation auggie model overrides carved out
+  # of `decknix-agent-shell-main' (main-bulk).  Sits beside
+  # `decknix-agent-tags-store' / `-link-store' / `-conv-resolve'
+  # in `agent-shell/agent/' as a small persistence module
+  # owning the two storage primitives that mediate the
+  # `~/.config/decknix/agent-sessions.json' "model" field.  The
+  # interactive command that wraps the upstream
+  # `agent-shell-set-session-model' (`decknix-agent-set-session-
+  # model') stays in main-bulk per AGENTS.md Rule 2 -- it is a
+  # UI verb whose on-success callback simply calls into this
+  # module's `save' primitive.  Loaded at the same point in the
+  # heredoc as the other agent/ persistence helpers so the
+  # resume-time read at main-bulk:815 resolves the symbol.
+  decknix-agent-session-model-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-session-model";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-session-model-test.el"
+    ];
+  };
+
   decknix-agent-review-format-el = mkEmacsTestedPackage {
     pname = "decknix-agent-review-format";
     src = ./agent-shell/review;
@@ -1007,6 +1029,7 @@ in
           decknix-agent-tags-store-el
           decknix-agent-link-store-el
           decknix-agent-conv-resolve-el
+          decknix-agent-session-model-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
         ]
@@ -1145,6 +1168,24 @@ in
                           "decknix-agent-conv-resolve" (session-id))
         (declare-function decknix--agent-latest-session-id-for-conv-key
                           "decknix-agent-conv-resolve" (conv-key))
+
+        ;; Per-conversation auggie model overrides (PR B.37) --
+        ;; persistence layer for the model-id the user picks
+        ;; mid-session via C-c C-v.  Owns the read accessor
+        ;; (`decknix--agent-session-model-for-conv-key', called by
+        ;; the resume path in main-bulk) and the write primitive
+        ;; (`decknix--agent-session-save-model-for-conv-key',
+        ;; called from the on-success callback of
+        ;; `decknix-agent-set-session-model' which itself stays in
+        ;; main-bulk per AGENTS.md Rule 2).  Loaded immediately
+        ;; after `decknix-agent-conv-resolve' so the agent/
+        ;; persistence cluster forms a contiguous block in load
+        ;; order.
+        (require 'decknix-agent-session-model)
+        (declare-function decknix--agent-session-model-for-conv-key
+                          "decknix-agent-session-model" (conv-key))
+        (declare-function decknix--agent-session-save-model-for-conv-key
+                          "decknix-agent-session-model" (conv-key model-id))
 
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
