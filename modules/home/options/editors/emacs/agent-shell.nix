@@ -286,6 +286,24 @@ let
     ];
   };
 
+  # PR B.27: Repo HEAD status cache + persistence carved out of
+  # hub-bulk, direct parallel to `decknix-hub-pr-cache' above.
+  # Owns the "OWNER/REPO#BRANCH" -> status hash, its TTL constant,
+  # and the on-disk save/restore pair.  The cache reader
+  # (`decknix--hub-repo-cache-get') and orchestrator
+  # (`decknix--hub-repo-status') stay in hub-bulk because they
+  # call the async fetcher; this slice is the persistence layer
+  # only.  Co-resident with the other hub/ modules; packageRequires
+  # empty for the same reason as the PR-cache slice.
+  decknix-hub-repo-cache-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-repo-cache";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-repo-cache-test.el"
+    ];
+  };
+
   decknix-hub-pr-lookup-el = mkEmacsTestedPackage {
     pname = "decknix-hub-pr-lookup";
     # Isolated in its own src dir (`hub-lookup/') rather than the
@@ -812,6 +830,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-worktree-parse-el)
         ++ (optional cfg.hub.enable decknix-hub-icons-el)
         ++ (optional cfg.hub.enable decknix-hub-pr-cache-el)
+        ++ (optional cfg.hub.enable decknix-hub-repo-cache-el)
         ++ (optional cfg.hub.enable decknix-hub-pr-lookup-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-toggles-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el)
@@ -2021,6 +2040,16 @@ in
         ;;     `(stale . t)' on TTL miss instead of returning nil so
         ;;     callers can show old data with a refresh indicator.
         (require 'decknix-hub-pr-lookup)
+
+        ;; Repo HEAD status cache + persistence (PR B.27) — owns the
+        ;; "OWNER/REPO#BRANCH" -> status hash, its TTL constant, and
+        ;; save/restore to disk.  Direct parallel to
+        ;; `decknix-hub-pr-cache' above; the cache reader and status
+        ;; orchestrator stay in hub-bulk because they call the async
+        ;; fetcher.
+        (require 'decknix-hub-repo-cache)
+        (declare-function decknix--hub-repo-cache-save "decknix-hub-repo-cache")
+        (declare-function decknix--hub-repo-cache-restore "decknix-hub-repo-cache")
 
         (run-with-timer 120 120 #'decknix--hub-repo-cache-save)
         (add-hook 'kill-emacs-hook #'decknix--hub-repo-cache-save)
