@@ -8,10 +8,12 @@
 ;;; Commentary:
 ;;
 ;; Pure URL-parsing primitives extracted from the agent-shell heredoc.
-;; Three coherent helpers form a minimal toolkit consumed by the
-;; conversation-link / hub-repo / WIP / quick-action machinery:
+;; A minimal toolkit consumed by the conversation-link / hub-repo /
+;; WIP / quick-action machinery:
 ;;
 ;;   `decknix--agent-pr-parse-url'      (PR URL  -> (owner repo n)  | nil)
+;;   `decknix--agent-parse-pr-url'      (PR URL  -> ((owner . S) (repo . S)
+;;                                                   (number . S))   | nil)
 ;;   `decknix--agent-repo-parse-url'    (repo URL -> (owner repo)    | nil)
 ;;   `decknix--agent-pr-url-accessor'   (alist | hash-table -> field)
 ;;
@@ -20,9 +22,14 @@
 ;;
 ;;   `decknix--hub-repo-cache-key'      (URL + branch -> cache key)
 ;;
-;; All four are leaf primitives — they take strings/lists/hash-tables
-;; and return strings/lists.  No I/O, no global state, no side
-;; effects.
+;; The two PR parsers (`pr-parse-url' and `parse-pr-url') return
+;; different shapes (positional list of (string string int) vs
+;; alist of all-strings) and have different historical call sites;
+;; both are kept verbatim under the no-refactor rule.
+;;
+;; All five helpers are leaf primitives — they take strings/lists/
+;; hash-tables and return strings/lists/alists.  No I/O, no global
+;; state, no side effects.
 
 ;;; Code:
 
@@ -34,6 +41,17 @@
     (list (match-string 1 url)
           (match-string 2 url)
           (string-to-number (match-string 3 url)))))
+
+(defun decknix--agent-parse-pr-url (url)
+  "Parse a GitHub PR URL into an alist with owner, repo, number.
+Returns nil if URL is not a valid GitHub PR URL.
+Handles: https://github.com/OWNER/REPO/pull/NUMBER[/...]"
+  (when (string-match
+         "github\\.com/\\([^/]+\\)/\\([^/]+\\)/pull/\\([0-9]+\\)"
+         url)
+    (list (cons 'owner (match-string 1 url))
+          (cons 'repo (match-string 2 url))
+          (cons 'number (match-string 3 url)))))
 
 (defun decknix--agent-repo-parse-url (url)
   "Parse github.com/OWNER/REPO from URL and return (OWNER REPO).

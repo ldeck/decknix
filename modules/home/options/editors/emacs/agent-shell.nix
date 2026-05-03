@@ -700,6 +700,7 @@ in
         ;; main hygiene block at line ~6531 below.
         (require 'decknix-agent-url-parse)
         (declare-function decknix--agent-pr-parse-url "decknix-agent-url-parse")
+        (declare-function decknix--agent-parse-pr-url "decknix-agent-url-parse")
         (declare-function decknix--agent-repo-parse-url "decknix-agent-url-parse")
         (declare-function decknix--agent-pr-url-accessor "decknix-agent-url-parse")
         (declare-function decknix--hub-repo-cache-key "decknix-agent-url-parse")
@@ -4889,17 +4890,11 @@ Use this when the agent is mid-response and you want to interject."
         ;; tags, workspace, and auto-send a command.
         ;; Metadata enrichment (author, Jira key, etc.) is deferred to the
         ;; review command itself, keeping initiation instant.
-
-        (defun decknix--agent-parse-pr-url (url)
-          "Parse a GitHub PR URL into an alist with owner, repo, number.
-Returns nil if URL is not a valid GitHub PR URL.
-Handles: https://github.com/OWNER/REPO/pull/NUMBER[/...]"
-          (when (string-match
-                 "github\\.com/\\([^/]+\\)/\\([^/]+\\)/pull/\\([0-9]+\\)"
-                 url)
-            (list (cons 'owner (match-string 1 url))
-                  (cons 'repo (match-string 2 url))
-                  (cons 'number (match-string 3 url)))))
+        ;;
+        ;; `decknix--agent-parse-pr-url' lives in
+        ;; agent-shell/agent/decknix-agent-url-parse.el alongside its
+        ;; sibling `decknix--agent-pr-parse-url' (positional-list
+        ;; variant) — required at the top of this heredoc.
 
         (defun decknix--agent-clipboard-url ()
           "Return a GitHub PR URL from the kill ring or system clipboard, or nil."
