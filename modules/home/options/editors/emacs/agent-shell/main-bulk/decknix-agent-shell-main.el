@@ -1562,93 +1562,22 @@ Prefix arguments:
          (decknix--agent-session-display-name s)
          workspace conv-key term)))))
 
-(defun decknix--agent-detect-workspace ()
-  "Detect the best workspace directory for a new session.
-Uses project root if available, otherwise `default-directory'."
-  (or (when (fboundp 'project-root)
-        (when-let ((proj (project-current)))
-          (project-root proj)))
-      default-directory))
-
-(defvar decknix-agent-workspace-roots nil
-  "List of parent directories that contain git repositories.
-Used by `decknix--agent-pr-detect-workspace' to find the local
-checkout of a repo from a PR URL.  E.g., if this contains
-\"~/Code/myorg\" and the PR is for \"myrepo\", the function
-checks whether ~/Code/myorg/myrepo/ exists.
-Set this in your decknix-config's extraConfig or default.el.")
-
-(defun decknix--agent-pr-detect-workspace (owner repo)
-  "Find the best workspace for a PR from OWNER/REPO.
-Search order:
-  1. Saved workspaces whose path ends in REPO (exact match)
-  2. Saved workspaces that contain a REPO subdirectory on disk
-  3. Known workspace roots (`decknix-agent-workspace-roots') containing REPO
-  4. nil (caller should prompt the user)"
-  ;; OWNER is part of the stable contract (callers pass it from the
-  ;; PR URL parser) but the current heuristics only need REPO.  A
-  ;; future pass can disambiguate same-named repos across orgs.
-  (ignore owner)
-  (or
-   ;; 1. Check saved workspaces for a path ending in /REPO/
-   (let ((best nil))
-     (condition-case nil
-         (let* ((store (decknix--agent-tags-read))
-                (convs (decknix--agent-tags-conversations store)))
-           (maphash
-            (lambda (_key entry)
-              (when (hash-table-p entry)
-                (let ((ws (gethash "workspace" entry)))
-                  (when (and ws (stringp ws))
-                    ;; Match repo name as the last path component
-                    (let ((dir-name (file-name-nondirectory
-                                     (directory-file-name ws))))
-                      (when (string-equal-ignore-case dir-name repo)
-                        (when (file-directory-p ws)
-                          (setq best ws))))))))
-            convs))
-       (error nil))
-     best)
-   ;; 2. Check saved workspaces for a REPO subdirectory on disk.
-   ;; Handles repos not checked out as their own workspace but under
-   ;; a parent org directory (e.g., ~/Code/nurturecloud/ contains
-   ;; nct-intelligence-beholder/).  Returns the PARENT workspace,
-   ;; not the repo subdir — matching the convention where tags
-   ;; identify the specific repo within the org workspace.
-   (let ((best nil))
-     (condition-case nil
-         (let* ((store (decknix--agent-tags-read))
-                (convs (decknix--agent-tags-conversations store))
-                (seen (make-hash-table :test 'equal)))
-           (maphash
-            (lambda (_key entry)
-              (when (hash-table-p entry)
-                (let ((ws (gethash "workspace" entry)))
-                  (when (and ws (stringp ws))
-                    (let ((expanded (expand-file-name ws)))
-                      (unless (gethash expanded seen)
-                        (puthash expanded t seen)
-                        (let ((candidate (expand-file-name repo expanded)))
-                          (when (file-directory-p candidate)
-                            (setq best (file-name-as-directory expanded))))))))))
-            convs))
-       (error nil))
-     best)
-   ;; 3. Check known workspace roots for REPO subdir
-   (cl-loop for root in decknix-agent-workspace-roots
-            for candidate = (expand-file-name repo root)
-            when (file-directory-p candidate)
-            return (file-name-as-directory candidate))))
-
-(defun decknix--agent-detect-branch (dir)
-  "Detect the current git branch in DIR, or nil."
-  (let ((default-directory dir))
-    (let ((branch (string-trim
-                   (shell-command-to-string
-                    "git rev-parse --abbrev-ref HEAD 2>/dev/null"))))
-      (unless (or (string-empty-p branch)
-                  (string= branch "HEAD"))
-        branch))))
+;; -- Workspace + branch detection (PR B.45) --
+;; Moved out of this file into
+;; agent-shell/agent/decknix-agent-workspace-detect.el, packaged
+;; as `decknix-agent-workspace-detect-el'.  Owns the three pure
+;; detectors plus the `decknix-agent-workspace-roots' defvar
+;; that seeds the third lookup tier.  Two cross-bulk call sites
+;; in workspace-bulk (~lines 1330 / 1579, both inside `fboundp'
+;; guards in the PR review quick-action picker) reach
+;; `decknix--agent-pr-detect-workspace' through the heredoc.
+(declare-function decknix--agent-detect-workspace
+                  "decknix-agent-workspace-detect")
+(declare-function decknix--agent-pr-detect-workspace
+                  "decknix-agent-workspace-detect" (owner repo))
+(declare-function decknix--agent-detect-branch
+                  "decknix-agent-workspace-detect" (dir))
+(defvar decknix-agent-workspace-roots)
 
 (defun decknix--agent-flush-pending-metadata (input)
   "Persist pending metadata for the current buffer using INPUT.
