@@ -647,6 +647,25 @@ let
     ];
   };
 
+  # PR B.48: current/require session-id + conv-key accessors
+  # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
+  # resident with the rest of the agent/ persistence + detection
+  # cluster.  Owns the read-only `-current-session-id' plus the
+  # two error-raising require helpers used as the first form in
+  # almost every interactive command that operates on the current
+  # session.  The buffer-local `decknix--agent-auggie-session-id'
+  # defvar stays in main-bulk -- it is initialised inside the
+  # agent-shell startup hook (a side-effect that belongs in the
+  # heredoc by Rule 2).
+  decknix-agent-session-id-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-session-id";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-session-id-test.el"
+    ];
+  };
+
   # PR B.46: custom auggie command discovery carved out of
   # `decknix-agent-shell-main' (main-bulk).  Co-resident with the
   # rest of the agent/ persistence + detection cluster.  Owns the
@@ -1220,6 +1239,7 @@ in
           decknix-agent-tags-read-el
           decknix-agent-workspace-detect-el
           decknix-agent-command-discover-el
+          decknix-agent-session-id-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -1444,6 +1464,18 @@ in
         (declare-function decknix--agent-command-description
                           "decknix-agent-command-discover" (file))
         (defvar decknix--agent-command-dirs)
+
+        ;; Session-id + conv-key accessors (PR B.48) -- the
+        ;; current-session-id read plus the two require helpers
+        ;; that gate every interactive command operating on the
+        ;; current session.
+        (require 'decknix-agent-session-id)
+        (declare-function decknix--agent-current-session-id
+                          "decknix-agent-session-id")
+        (declare-function decknix--agent-require-session-id
+                          "decknix-agent-session-id")
+        (declare-function decknix--agent-require-conv-key
+                          "decknix-agent-session-id")
 
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
