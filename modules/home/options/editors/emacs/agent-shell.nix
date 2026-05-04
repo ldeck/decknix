@@ -647,6 +647,21 @@ let
     ];
   };
 
+  # PR B.49: clipboard URL DWIM helper carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Co-resident with the
+  # rest of the agent/ cluster.  Owns the tiny kill-ring +
+  # pbpaste reader used as the `read-string' default in the
+  # PR-quick-action and review prompts.  Pure I/O helper -- no
+  # global state.
+  decknix-agent-clipboard-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-clipboard";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-clipboard-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1240,6 +1255,7 @@ in
           decknix-agent-workspace-detect-el
           decknix-agent-command-discover-el
           decknix-agent-session-id-el
+          decknix-agent-clipboard-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -1476,6 +1492,13 @@ in
                           "decknix-agent-session-id")
         (declare-function decknix--agent-require-conv-key
                           "decknix-agent-session-id")
+
+        ;; Clipboard URL DWIM (PR B.49) -- kill-ring + pbpaste
+        ;; reader used as the `read-string' default in the
+        ;; PR-quick-action and review prompts.
+        (require 'decknix-agent-clipboard)
+        (declare-function decknix--agent-clipboard-url
+                          "decknix-agent-clipboard")
 
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
