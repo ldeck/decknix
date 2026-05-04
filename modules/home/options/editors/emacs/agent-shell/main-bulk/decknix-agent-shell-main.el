@@ -2276,24 +2276,21 @@ auggie."
 (declare-function decknix--agent-tags-all
                   "decknix-agent-tags-read")
 
-(defun decknix--agent-current-session-id ()
-  "Get the auggie session ID for the current buffer, or nil."
-  (when (derived-mode-p 'agent-shell-mode)
-    decknix--agent-auggie-session-id))
-
-(defun decknix--agent-require-session-id ()
-  "Get the current session ID or error."
-  (or (decknix--agent-current-session-id)
-      (user-error "No auggie session ID for this buffer (is it a resumed session?)")))
-
-(defun decknix--agent-require-conv-key ()
-  "Get the conversation key for the current session, or error."
-  (let* ((session-id (decknix--agent-require-session-id))
-         (conv-key (decknix--agent-conversation-key-for-session session-id)))
-    (unless conv-key
-      (user-error "Cannot determine conversation for session %s"
-                  (substring session-id 0 8)))
-    conv-key))
+;; -- Session-id + conv-key accessors (PR B.48) --
+;; Moved into agent-shell/agent/decknix-agent-session-id.el.
+;; The buffer-local `decknix--agent-auggie-session-id' defvar
+;; itself stays in this file (initialised by the agent-shell
+;; startup hook -- a side-effect that belongs in the heredoc by
+;; Rule 2).  Many call sites in this file (~lines 2301 / 2314 /
+;; 2315 / 2384 / 2545 / 2554 / 2555 / ...) and one in the
+;; workspace heredoc (~line 1608) reach the moved symbols
+;; through the heredoc's `(require ...)' chain.
+(declare-function decknix--agent-current-session-id
+                  "decknix-agent-session-id")
+(declare-function decknix--agent-require-session-id
+                  "decknix-agent-session-id")
+(declare-function decknix--agent-require-conv-key
+                  "decknix-agent-session-id")
 
 (defun decknix-agent-tag-show ()
   "Show the tags for the current conversation."
