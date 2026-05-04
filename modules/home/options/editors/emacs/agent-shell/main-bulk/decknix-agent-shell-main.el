@@ -3553,14 +3553,11 @@ Prompts for a name and opens a template in ~/.augment/commands/."
 ;; sibling `decknix--agent-pr-parse-url' (positional-list
 ;; variant) — required at the top of this heredoc.
 
-(defun decknix--agent-clipboard-url ()
-  "Return a GitHub PR URL from the kill ring or system clipboard, or nil."
-  (let ((text (or (ignore-errors (current-kill 0 t))
-                  (ignore-errors
-                    (string-trim
-                     (shell-command-to-string "pbpaste"))))))
-    (when (and text (string-match-p "github\\.com/.*/pull/" text))
-      (string-trim text))))
+;; -- Clipboard URL DWIM (PR B.49) --
+;; Moved into agent-shell/agent/decknix-agent-clipboard.el.
+;; Sole call site (~line 3649) reaches the symbol through the
+;; heredoc's `(require ...)' chain.
+(declare-function decknix--agent-clipboard-url "decknix-agent-clipboard")
 
 (defun decknix--agent-quickaction-start (name tags workspace command)
   "Start a quick-action session with NAME, TAGS, WORKSPACE, and auto-send COMMAND.
