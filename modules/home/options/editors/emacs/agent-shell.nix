@@ -756,6 +756,23 @@ let
     ];
   };
 
+  # PR B.47: review @mention author + collaborators store carved
+  # out of `decknix-agent-shell-main' (main-bulk).  Co-resident
+  # with `decknix-agent-review-format' under `agent-shell/review'.
+  # Owns the three user-tunable defvars (`-author', `-collaborators',
+  # `-collaborators-file') plus the three accessors that back the
+  # `decknix-agent-review-mode' @mention picker, the heredoc
+  # yasnippet bodies (`,c' / `,a' / `,r' / `,o' / `,m' / `,f'),
+  # and the `decknix-agent-review-add-collaborator' command.
+  decknix-agent-review-collaborators-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-review-collaborators";
+    src = ./agent-shell/review;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-review-collaborators-test.el"
+    ];
+  };
+
   # PR B-Bulk.1: bulk extraction of the context-panel sub-heredoc.
   # Verbatim move of 35 declarations (576 lines of forms + commentary)
   # from the four `+ optionalString cfg.context.enable ''..''` sub-heredocs
@@ -1205,6 +1222,7 @@ in
           decknix-agent-command-discover-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
+          decknix-agent-review-collaborators-el
         ]
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
@@ -1435,6 +1453,21 @@ in
         (declare-function decknix--agent-review-quote "decknix-agent-review-format")
         (declare-function decknix--agent-review-format-exchanges "decknix-agent-review-format")
         (declare-function decknix--agent-review-strip-meta "decknix-agent-review-format")
+
+        ;; Review @mention author + collaborators store (PR B.47)
+        ;; -- persistence + identity for the inline review buffer.
+        ;; Owns the three user-tunable defvars consumed by the
+        ;; heredoc yasnippet bodies and `-add-collaborator'.
+        (require 'decknix-agent-review-collaborators)
+        (declare-function decknix--agent-review-author
+                          "decknix-agent-review-collaborators")
+        (declare-function decknix--agent-review-load-collaborators
+                          "decknix-agent-review-collaborators")
+        (declare-function decknix--agent-review-save-collaborators
+                          "decknix-agent-review-collaborators")
+        (defvar decknix-agent-review-author)
+        (defvar decknix-agent-review-collaborators)
+        (defvar decknix-agent-review-collaborators-file)
 
         ;; Use auggie as the default agent (skip agent selection prompt)
         (setq agent-shell-preferred-agent-config 'auggie)

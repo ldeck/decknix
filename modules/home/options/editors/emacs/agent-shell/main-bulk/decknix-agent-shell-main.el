@@ -3989,18 +3989,18 @@ Comments start with #."
 ;; E3 adds the follow-up stash.
 ;; E4 adds the submit/route transient.
 
-(defvar decknix-agent-review-author nil
-  "Name used to author annotations in the review buffer.
-When nil, defaults to `user-login-name'.")
-
-(defvar decknix-agent-review-collaborators '()
-  "Collaborators available in the review buffer's @mention picker.
-Populated on demand; persisted to
-`decknix-agent-review-collaborators-file'.")
-
-(defvar decknix-agent-review-collaborators-file
-  (expand-file-name "~/.config/decknix/review-collaborators.el")
-  "File used to persist known collaborators across Emacs sessions.")
+;; -- Review @mention author + collaborators store (PR B.47) --
+;; The three user-tunable defvars (`-author', `-collaborators',
+;; `-collaborators-file') and three accessor functions
+;; (`-author', `-load-collaborators', `-save-collaborators')
+;; live in agent-shell/review/decknix-agent-review-collaborators.el
+;; alongside `decknix-agent-review-format'.  Multiple call sites in
+;; this file (~lines 4083 / 4103 / 4348 / 4359 / 4439 / 4447 / 4448
+;; / 4465 / 4471) reach the symbols through the heredoc's
+;; `(require ...)' chain.
+(defvar decknix-agent-review-author)
+(defvar decknix-agent-review-collaborators)
+(defvar decknix-agent-review-collaborators-file)
 
 (defvar-local decknix--agent-review-source-buffer nil
   "Agent-shell buffer that this review buffer was created from.")
@@ -4021,28 +4021,15 @@ Populated on demand; persisted to
     map)
   "Keymap for `decknix-agent-review-mode'.")
 
-(defun decknix--agent-review-author ()
-  "Return the annotation author name."
-  (or decknix-agent-review-author user-login-name "me"))
-
-(defun decknix--agent-review-load-collaborators ()
-  "Read persisted collaborators into `decknix-agent-review-collaborators'."
-  (let ((f decknix-agent-review-collaborators-file))
-    (when (file-exists-p f)
-      (condition-case nil
-          (let ((data (with-temp-buffer
-                        (insert-file-contents f)
-                        (read (current-buffer)))))
-            (when (listp data)
-              (setq decknix-agent-review-collaborators data)))
-        (error nil)))))
-
-(defun decknix--agent-review-save-collaborators ()
-  "Persist `decknix-agent-review-collaborators' to disk."
-  (let ((f decknix-agent-review-collaborators-file))
-    (make-directory (file-name-directory f) t)
-    (with-temp-file f
-      (prin1 decknix-agent-review-collaborators (current-buffer)))))
+;; -- Review collaborator accessors (PR B.47) --
+;; Moved into agent-shell/review/decknix-agent-review-collaborators.el
+;; alongside the three defvars above.
+(declare-function decknix--agent-review-author
+                  "decknix-agent-review-collaborators")
+(declare-function decknix--agent-review-load-collaborators
+                  "decknix-agent-review-collaborators")
+(declare-function decknix--agent-review-save-collaborators
+                  "decknix-agent-review-collaborators")
 
 (define-derived-mode decknix-agent-review-mode markdown-mode "AgentReview"
   "Major mode for annotating agent-shell exchanges.
