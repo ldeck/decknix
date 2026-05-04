@@ -647,6 +647,27 @@ let
     ];
   };
 
+  # PR B.45: workspace + branch detection helpers carved out
+  # of `decknix-agent-shell-main' (main-bulk).  Co-resident with
+  # the rest of the agent/ persistence + detection cluster.
+  # Owns the three pure detectors that the session-creation /
+  # PR-quick-action flows use to suggest a workspace directory
+  # and the current git branch, plus the user-tunable
+  # `decknix-agent-workspace-roots' defvar that seeds the third
+  # tier of the PR lookup heuristic.  The two cross-bulk call
+  # sites in workspace-bulk (~lines 1330 / 1579, both inside
+  # `fboundp' guards in the PR review quick-action picker)
+  # reach `decknix--agent-pr-detect-workspace' through the
+  # heredoc's `(require ...)' chain.
+  decknix-agent-workspace-detect-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-workspace-detect";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-workspace-detect-test.el"
+    ];
+  };
+
   # PR B.43: tags read accessors carved out of
   # `decknix-agent-shell-main' (main-bulk).  Co-resident in
   # `agent-shell/agent/' beside the existing
@@ -1162,6 +1183,7 @@ in
           decknix-agent-session-workspace-el
           decknix-agent-conv-recency-el
           decknix-agent-tags-read-el
+          decknix-agent-workspace-detect-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
         ]
@@ -1359,6 +1381,20 @@ in
                           "decknix-agent-tags-read" (conv-key))
         (declare-function decknix--agent-tags-all
                           "decknix-agent-tags-read")
+
+        ;; Workspace + branch detection (PR B.45) -- pure helpers
+        ;; consumed by session-creation / PR-quick-action flows.
+        ;; Owns the user-tunable `decknix-agent-workspace-roots'
+        ;; defvar that seeds the third tier of the PR lookup
+        ;; heuristic.
+        (require 'decknix-agent-workspace-detect)
+        (declare-function decknix--agent-detect-workspace
+                          "decknix-agent-workspace-detect")
+        (declare-function decknix--agent-pr-detect-workspace
+                          "decknix-agent-workspace-detect" (owner repo))
+        (declare-function decknix--agent-detect-branch
+                          "decknix-agent-workspace-detect" (dir))
+        (defvar decknix-agent-workspace-roots)
 
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
