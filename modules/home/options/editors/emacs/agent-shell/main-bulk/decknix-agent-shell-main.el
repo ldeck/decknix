@@ -3489,42 +3489,16 @@ Use this when the agent is mid-response and you want to interject."
 
 ;; == Custom commands: discovery, picker, authoring ==
 
-(defvar decknix--agent-command-dirs
-  (list (expand-file-name "~/.augment/commands"))
-  "Directories to scan for auggie custom commands.
-Project-level .augment/commands/ is added dynamically.")
-
-(defun decknix--agent-command-files ()
-  "Return an alist of (name . path) for all available commands.
-Scans global and project-level command directories."
-  (let ((dirs (copy-sequence decknix--agent-command-dirs))
-        (result nil))
-    ;; Add project-level .augment/commands/ if it exists
-    (when-let* ((proj (project-current))
-                (root (project-root proj))
-                (proj-dir (expand-file-name ".augment/commands" root)))
-      (when (file-directory-p proj-dir)
-        (push proj-dir dirs)))
-    (dolist (dir dirs)
-      (when (file-directory-p dir)
-        (dolist (file (directory-files dir t "\\.md\\'" t))
-          (let* ((name (file-name-sans-extension
-                        (file-name-nondirectory file)))
-                 (scope (if (string-prefix-p
-                             (expand-file-name "~/.augment") dir)
-                            "global" "project")))
-            (push (cons (format "/%s  (%s)" name scope) file) result)))))
-    (nreverse result)))
-
-(defun decknix--agent-command-description (file)
-  "Extract the description from a command FILE's YAML frontmatter."
-  (with-temp-buffer
-    (insert-file-contents file nil 0 500)
-    (goto-char (point-min))
-    (if (and (looking-at "---")
-             (re-search-forward "^description:\\s-*\\(.+\\)" nil t))
-        (match-string 1)
-      "")))
+;; -- Custom command discovery (PR B.46) --
+;; `decknix--agent-command-{dirs,files,description}' moved into
+;; agent-shell/agent/decknix-agent-command-discover.el.  Two call
+;; sites in this file (~lines 362 / 3533 / 3568) reach the
+;; symbols through the heredoc's `(require ...)' chain.
+(declare-function decknix--agent-command-files
+                  "decknix-agent-command-discover")
+(declare-function decknix--agent-command-description
+                  "decknix-agent-command-discover" (file))
+(defvar decknix--agent-command-dirs)
 
 (defun decknix-agent-command-run ()
   "Pick a custom command and insert it as a slash command in the prompt.

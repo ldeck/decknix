@@ -647,6 +647,24 @@ let
     ];
   };
 
+  # PR B.46: custom auggie command discovery carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Co-resident with the
+  # rest of the agent/ persistence + detection cluster.  Owns the
+  # user-tunable `decknix--agent-command-dirs' defvar plus the two
+  # pure scanners that back the `decknix-agent-command-{run,new,
+  # edit}' commands and the inline command-files lookup in the
+  # session-grep annotation path (~main-bulk:362).  Fully pure --
+  # only filesystem reads via `directory-files' and `with-temp-
+  # buffer' over the YAML frontmatter.
+  decknix-agent-command-discover-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-command-discover";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-command-discover-test.el"
+    ];
+  };
+
   # PR B.45: workspace + branch detection helpers carved out
   # of `decknix-agent-shell-main' (main-bulk).  Co-resident with
   # the rest of the agent/ persistence + detection cluster.
@@ -1184,6 +1202,7 @@ in
           decknix-agent-conv-recency-el
           decknix-agent-tags-read-el
           decknix-agent-workspace-detect-el
+          decknix-agent-command-discover-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
         ]
@@ -1395,6 +1414,18 @@ in
         (declare-function decknix--agent-detect-branch
                           "decknix-agent-workspace-detect" (dir))
         (defvar decknix-agent-workspace-roots)
+
+        ;; Custom auggie command discovery (PR B.46) -- pure
+        ;; filesystem scanners + a user-tunable dirs defvar.
+        ;; Consumed by the `decknix-agent-command-{run,new,edit}'
+        ;; commands and the inline annotation lookup in the
+        ;; session-grep code path.
+        (require 'decknix-agent-command-discover)
+        (declare-function decknix--agent-command-files
+                          "decknix-agent-command-discover")
+        (declare-function decknix--agent-command-description
+                          "decknix-agent-command-discover" (file))
+        (defvar decknix--agent-command-dirs)
 
         (require 'decknix-agent-vcs)
         (declare-function decknix--vcs-kind "decknix-agent-vcs")
