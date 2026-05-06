@@ -1971,23 +1971,30 @@ Returns one of:
                               prompt hints
                               (if ready-only-var "M-r✓ " "")))
          (retry nil)
+         ;; Plain lambdas under `lexical-binding: t' are real
+         ;; closures over `retry', `mention-only-var',
+         ;; `ready-only-var' and the *-fn vars below.  Do NOT wrap
+         ;; them in `(eval `(lambda ...) t)' — that evaluates the
+         ;; form under an empty lexical environment, so `setq retry'
+         ;; would mutate a stray global instead of the outer let's
+         ;; binding and the `condition-case' handler at the bottom
+         ;; of this function would always observe nil → the picker
+         ;; treats every toggle as a cancel and closes.
          (mention-fn
-          (eval `(lambda ()
-                   (interactive)
-                   (set ',mention-only-var
-                        (not (symbol-value ',mention-only-var)))
-                   (setq retry t)
-                   (abort-recursive-edit))
-                t))
+          (lambda ()
+            (interactive)
+            (set mention-only-var
+                 (not (symbol-value mention-only-var)))
+            (setq retry t)
+            (abort-recursive-edit)))
          (ready-fn
           (when ready-only-var
-            (eval `(lambda ()
-                     (interactive)
-                     (set ',ready-only-var
-                          (not (symbol-value ',ready-only-var)))
-                     (setq retry t)
-                     (abort-recursive-edit))
-                  t)))
+            (lambda ()
+              (interactive)
+              (set ready-only-var
+                   (not (symbol-value ready-only-var)))
+              (setq retry t)
+              (abort-recursive-edit))))
          (bot-fn
           (lambda ()
             (interactive)
@@ -2011,25 +2018,24 @@ Returns one of:
          ;; to minibuffer history navigation instead of cycling
          ;; candidates.
          (setup-fn
-          (eval `(lambda ()
-                   (local-set-key (kbd "M-m") ,mention-fn)
-                   ,(when ready-fn
-                      `(local-set-key (kbd "M-r") ,ready-fn))
-                   (local-set-key (kbd "M-b") ,bot-fn)
-                   (local-set-key (kbd "M-s") ,sort-fn)
-                   (when (fboundp 'embark-select)
-                     (local-set-key (kbd "C-SPC") 'embark-select))
-                   ;; Capture embark selections at exit time;
-                   ;; `embark-selected-candidates' is buffer-local
-                   ;; to the minibuffer so we must read it before
-                   ;; completing-read returns.
-                   (add-hook 'minibuffer-exit-hook
-                     (lambda ()
-                       (when (fboundp 'embark-selected-candidates)
-                         (setq decknix--hub-picker-captured-selections
-                               (embark-selected-candidates))))
-                     nil t))
-                t)))
+          (lambda ()
+            (local-set-key (kbd "M-m") mention-fn)
+            (when ready-fn
+              (local-set-key (kbd "M-r") ready-fn))
+            (local-set-key (kbd "M-b") bot-fn)
+            (local-set-key (kbd "M-s") sort-fn)
+            (when (fboundp 'embark-select)
+              (local-set-key (kbd "C-SPC") 'embark-select))
+            ;; Capture embark selections at exit time;
+            ;; `embark-selected-candidates' is buffer-local
+            ;; to the minibuffer so we must read it before
+            ;; completing-read returns.
+            (add-hook 'minibuffer-exit-hook
+              (lambda ()
+                (when (fboundp 'embark-selected-candidates)
+                  (setq decknix--hub-picker-captured-selections
+                        (embark-selected-candidates))))
+              nil t))))
     (condition-case nil
         ;; Wrap the candidate labels in an unsorted completion
         ;; table so Vertico/orderless do not re-sort them — the
