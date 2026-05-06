@@ -167,6 +167,15 @@
 (defvar decknix--hub-requests-hide-bot-pending)
 (defvar decknix--hub-requests-only-my-replies)
 (defvar decknix--hub-requests-sort-reverse)
+;; Picker-scoped toggle state for `decknix-sidebar-nav-requests-consult'.
+;; These variables are only ever `let'-bound by the picker entry point
+;; and read back inside `decknix--hub-completing-read-with-mention-toggle'
+;; via `symbol-value' / `set'.  They MUST be `defvar'd with an initialiser
+;; here so the `let' establishes a dynamic binding under
+;; `lexical-binding: t' — without it the symbol's value cell stays empty
+;; and the helper raises "Symbol's value as variable is void".
+(defvar decknix--req-mention-only nil)
+(defvar decknix--req-ready-only nil)
 (defvar decknix--hub-wip-hide-needs-reply)
 (defvar decknix--hub-wip-hide-bot-pending)
 (defvar decknix--hub-wip-only-my-replies)
