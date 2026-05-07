@@ -1506,31 +1506,39 @@ Prefix arguments:
                       'decknix--agent-session-rg-search-fast))
          ;; entries-cache: alist mapping candidate-string → (session . session-data)
          ;; Rebuilt on each rg invocation; used for lookup after selection.
+         ;; Plain lambda below under `lexical-binding: t' is a real
+         ;; closure over `entries-cache', `search-fn' and `expand'.
+         ;; Do NOT wrap in `(eval `(lambda ...) t)' — that evaluates
+         ;; the form under an empty lexical environment, so
+         ;; `(setq entries-cache ...)' would mutate a stray global
+         ;; instead of this binding.  After `consult--read' returns,
+         ;; `entries-cache' would still be nil and the
+         ;; `(cdr (assoc selected entries-cache))' lookup below would
+         ;; silently yield nil → RET on a candidate would do nothing.
+         ;; Same regression class as commit 7e67928 (picker toggles).
          (entries-cache nil)
          (selected
           (consult--read
            (consult--dynamic-collection
-             (eval
-              `(lambda (input)
-                 ;; Capture the typed input so the post-selection
-                 ;; handler can pass it as a search term to the
-                 ;; resume function (two-stage flow: pick session,
-                 ;; then jump to the match inside it).
-                 (setq decknix--agent-grep-last-input
-                       (and input (string-trim input)))
-                 (cond
-                  ((or (null input) (< (length (string-trim input)) 2))
-                   nil)
-                  (t
-                   (condition-case nil
-                       (let* ((matches (funcall ',search-fn input))
-                              (entries (when matches
-                                         (decknix--agent-session-grep-build-entries
-                                          matches ,expand))))
-                         (setq entries-cache entries)
-                         (mapcar #'car entries))
-                     (error nil)))))
-              t)
+             (lambda (input)
+               ;; Capture the typed input so the post-selection
+               ;; handler can pass it as a search term to the
+               ;; resume function (two-stage flow: pick session,
+               ;; then jump to the match inside it).
+               (setq decknix--agent-grep-last-input
+                     (and input (string-trim input)))
+               (cond
+                ((or (null input) (< (length (string-trim input)) 2))
+                 nil)
+                (t
+                 (condition-case nil
+                     (let* ((matches (funcall search-fn input))
+                            (entries (when matches
+                                       (decknix--agent-session-grep-build-entries
+                                        matches expand))))
+                       (setq entries-cache entries)
+                       (mapcar #'car entries))
+                   (error nil)))))
              :min-input 2)
            :prompt (if thorough
                        "Grep sessions (thorough): "
