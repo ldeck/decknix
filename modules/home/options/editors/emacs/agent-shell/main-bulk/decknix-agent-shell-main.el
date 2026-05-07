@@ -448,72 +448,20 @@ Prevents the auto-persist hook from firing repeatedly.")
 ;; When resuming a session via --resume, the buffer is empty.
 ;; This reads the local session JSON and inserts recent exchanges
 ;; so the user has context of what happened before.
+;;
+;; PR B.52: the path builder (`decknix--agent-session-file') and
+;; the pure turn-grouping extractor
+;; (`decknix--agent-session-extract-history') were carved into
+;; `decknix-agent-session-history' (`agent-shell/agent/').  The
+;; buffer-side `prepopulate' / `restore-input-ring' below stay in
+;; main-bulk because they side-effect the agent buffer (per
+;; AGENTS.md Rule 2).  Forward-declare so the byte-compile pass
+;; resolves the carved symbols.
 
-(defun decknix--agent-session-file (session-id)
-  "Return the path to the local session JSON for SESSION-ID."
-  (expand-file-name (concat session-id ".json")
-                    (expand-file-name "sessions" "~/.augment")))
-
-(defun decknix--agent-session-extract-history (session-id n)
-  "Extract the last N user-visible exchanges from SESSION-ID's local JSON.
-Returns a list of (USER-MSG . ASSISTANT-RESP) cons cells, oldest first.
-
-The auggie session JSON's `chatHistory' splits each user→assistant turn
-across many entries: one entry carries the user text in `request_message'
-(with `response_text' typically empty), and the assistant's reply is
-spread across the *following* entries as response chunks (their
-`request_message' is empty -— those entries are tool results / streaming
-fragments attributed to the same turn).  A new turn starts when
-`request_message' becomes non-empty again.
-
-Single forward pass: accumulate `response_text' chunks under the current
-user message; close the turn when the next user message arrives or the
-history ends; finally take the last N turns.  This pairs each user
-message with its real assistant response (the most recent interaction
-included) instead of the same entry's almost-always-empty
-`response_text', which the previous backward-walk picked up."
-  (let ((file (decknix--agent-session-file session-id)))
-    (when (file-exists-p file)
-      (condition-case err
-          (let* ((json-array-type 'list)
-                 (json-object-type 'alist)
-                 (json-key-type 'symbol)
-                 (data (json-read-file file))
-                 (history (alist-get 'chatHistory data))
-                 (turns nil)
-                 (cur-user nil)
-                 (cur-resp nil))
-            (dolist (entry history)
-              (let* ((ex (alist-get 'exchange entry))
-                     (req (alist-get 'request_message ex ""))
-                     (resp (alist-get 'response_text ex "")))
-                (when (and (stringp req)
-                           (not (string-empty-p (string-trim req))))
-                  ;; Close out the previous turn (if any).
-                  (when cur-user
-                    (push (cons cur-user
-                                (mapconcat #'identity
-                                           (nreverse cur-resp) "\n"))
-                          turns))
-                  (setq cur-user req
-                        cur-resp nil))
-                (when (and cur-user
-                           (stringp resp)
-                           (not (string-empty-p resp)))
-                  (push resp cur-resp))))
-            ;; Close out the final turn so the most recent interaction
-            ;; is always included.
-            (when cur-user
-              (push (cons cur-user
-                          (mapconcat #'identity (nreverse cur-resp) "\n"))
-                    turns))
-            (let* ((all (nreverse turns))
-                   (len (length all)))
-              (if (> len n) (nthcdr (- len n) all) all)))
-        (error
-         (message "Failed to read session history: %s"
-                  (error-message-string err))
-         nil)))))
+(declare-function decknix--agent-session-file
+                  "decknix-agent-session-history" (session-id))
+(declare-function decknix--agent-session-extract-history
+                  "decknix-agent-session-history" (session-id n))
 
 (defun decknix--agent-context-toggle ()
   "Toggle the visibility of the Context history section.

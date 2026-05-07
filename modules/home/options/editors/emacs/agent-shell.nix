@@ -581,6 +581,24 @@ let
     ];
   };
 
+  # PR B.52: local session JSON path builder + pure history
+  # extractor carved out of `decknix-agent-shell-main' (main-bulk).
+  # Co-resident with the rest of the agent/ persistence cluster.
+  # Owns the path helper (`decknix--agent-session-file') and the
+  # turn-grouping reader (`decknix--agent-session-extract-history')
+  # that drives `decknix--agent-session-prepopulate' (still in
+  # main-bulk -- side-effecting buffer write per AGENTS.md Rule 2)
+  # and the timeline / jump-to-match helpers.  Both functions are
+  # pure: only filesystem reads + cons cells, no global state.
+  decknix-agent-session-history-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-session-history";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-session-history-test.el"
+    ];
+  };
+
   # PR B.28: tag-store JSON persistence + cache carved out of
   # `decknix-agent-shell-main' (main-bulk).  Owns the file path
   # defvar, the four cache state vars (hash + mtime + checked-at +
@@ -1270,6 +1288,7 @@ in
           decknix-agent-format-el
           decknix-agent-parse-el
           decknix-agent-session-cache-el
+          decknix-agent-session-history-el
           decknix-agent-tags-store-el
           decknix-agent-link-store-el
           decknix-agent-conv-resolve-el
@@ -1373,6 +1392,17 @@ in
         (declare-function decknix--agent-session-refresh-async "decknix-agent-session-cache")
         (declare-function decknix--agent-session-jq-cmd "decknix-agent-session-cache")
         (declare-function decknix--agent-session-ensure-jq-filter "decknix-agent-session-cache")
+        ;; Local session JSON path + history extractor (PR B.52).
+        ;; Pure helpers carved from main-bulk: the path builder feeds
+        ;; the resume / grep / restore-input-ring flows, and the
+        ;; turn-grouping reader feeds `decknix--agent-session-
+        ;; prepopulate' (still in main-bulk because the buffer write
+        ;; is a side-effect per AGENTS.md Rule 2).
+        (require 'decknix-agent-session-history)
+        (declare-function decknix--agent-session-file
+                          "decknix-agent-session-history" (session-id))
+        (declare-function decknix--agent-session-extract-history
+                          "decknix-agent-session-history" (session-id n))
         ;; Tag-store storage layer (PR B.28) — owns
         ;; ~/.config/decknix/agent-sessions.json: the file-path
         ;; defvar, the in-memory cache (hash + mtime + checked-at +
