@@ -131,6 +131,7 @@
 (defvar decknix--agent-context-toggled)
 (defvar yas-snippet-dirs)
 (defvar comint-input-ring)
+(defvar comint-input-ring-size)
 (defvar comint-scroll-to-bottom-on-input)
 (defvar comint-scroll-to-bottom-on-output)
 (defvar comint-scroll-show-maximum-output)
@@ -629,6 +630,40 @@ prompt is immediately visible.  Click or TAB the header to expand."
       ;; immediately ready for input, not stuck at the context header
       (goto-char (point-max)))))
 
+(defun decknix--agent-session-restore-input-ring (session-id)
+  "Populate `comint-input-ring' with prompts from SESSION-ID's local JSON.
+On a freshly-resumed session the ring is created empty by
+`comint-mode' and only grows from inputs the user submits in *this*
+Emacs run, so M-p / M-n in the compose buffer (and standard comint
+history navigation in the agent buffer itself) cycle through nothing
+even though the session has hundreds of past prompts.  Same blocker
+hits the global cross-session walk (M-P / M-N) when it starts at
+the current session.
+
+Reads the user prompts via `decknix--prompt-extract-from-file' (jq
+path, newest first), grows the ring to fit when there are more
+prompts than the default `comint-input-ring-size', then ring-inserts
+in oldest-first order so the newest sits at index 0 -- matching how
+`comint-read-input-ring' loads from a history file.
+
+No-ops when the ring already has entries (the user has typed in this
+buffer) so we never clobber fresh history with stale on-disk data."
+  (when (and (bound-and-true-p comint-input-ring)
+             (ring-p comint-input-ring)
+             (ring-empty-p comint-input-ring))
+    (let* ((file (decknix--agent-session-file session-id))
+           (prompts (and (file-exists-p file)
+                         (decknix--prompt-extract-from-file file))))
+      (when prompts
+        (let ((needed (max (or comint-input-ring-size 32)
+                           (length prompts))))
+          (setq-local comint-input-ring-size needed)
+          (setq-local comint-input-ring (make-ring needed)))
+        (dolist (p (nreverse prompts))
+          (when (and (stringp p)
+                     (not (string-empty-p (string-trim p))))
+            (ring-insert comint-input-ring p)))))))
+
 (defun decknix--agent-unsorted-table (candidates)
   "Wrap CANDIDATES in a completion table that preserves list order.
 Prevents vertico/orderless from re-sorting alphabetically.
@@ -951,6 +986,12 @@ dedupes against live buffers before calling here."
                      (setq-local shell-maker--buffer-name-override
                                  (buffer-name)))
                    (decknix--agent-session-prepopulate ,sid ,n)
+                   ;; Seed `comint-input-ring' from the on-disk
+                   ;; session so M-p / M-n in compose (and the
+                   ;; agent buffer's own comint history nav) cycle
+                   ;; through this conversation's previous prompts
+                   ;; instead of finding an empty ring.
+                   (decknix--agent-session-restore-input-ring ,sid)
                    ;; If a search term was provided (grep flow),
                    ;; jump to the first match; otherwise keep the
                    ;; default behaviour of showing the prompt.
