@@ -127,6 +127,8 @@
 (declare-function decknix--hub-ci-icon "decknix-hub-ci")
 (declare-function decknix--hub-ci-classify "decknix-hub-ci")
 (declare-function decknix--hub-request-ready-p "decknix-hub-ready-filter")
+(declare-function decknix--hub-review-ready-requests "decknix-hub-ready-filter")
+(declare-function decknix--hub-review-entries "decknix-hub-ready-filter")
 (declare-function decknix--hub-mention-visible-p "decknix-hub-mention-bot")
 (declare-function decknix--hub-mention-filter-label "decknix-hub-mention-bot")
 (declare-function decknix--hub-mention-filter-normalize "decknix-hub-mention-bot")
@@ -1351,83 +1353,13 @@ preventing extra splits when called from the sidebar."
         (decknix--agent-quickaction-start name tags workspace command)
         (message "Starting review: %s/%s#%s" owner repo number)))))
 
-(defun decknix--hub-review-ready-requests ()
-  "Return the list of review requests that are ready for review.
-Applies org, age, and CI visibility filters, then the ready predicate."
-  (let* ((data decknix--hub-reviews)
-         (all-items (when data (alist-get 'items data))))
-    (seq-filter
-     (lambda (item)
-       (and (decknix--hub-item-visible-p (alist-get 'repo item))
-            (decknix--hub-age-visible-p (alist-get 'created item))
-            (decknix--hub-ci-visible-p item)
-            (decknix--hub-bot-visible-p item)
-            (decknix--hub-requests-attention-visible-p item)
-            (decknix--hub-request-ready-p item)))
-     (or all-items '()))))
-
-(defun decknix--hub-review-entries (&optional mention-only)
-  "Build labelled (LABEL . ITEM) entries from ready review requests.
-Ordering follows `decknix--hub-requests-sort-reverse' via
-`decknix--hub-sort-requests' so the picker matches the sidebar
-Requests section exactly.  When MENTION-ONLY is non-nil, include
-only @-mentioned items."
-  (let* ((ready (decknix--hub-review-ready-requests))
-         (filtered (if mention-only
-                       (seq-filter
-                        (lambda (item)
-                          (eq (alist-get 'mentioned item) t))
-                        ready)
-                     ready))
-         (sorted (decknix--hub-sort-requests filtered)))
-    (mapcar
-     (lambda (item)
-       (let* ((age (decknix--hub-format-age
-                    (alist-get 'created item)))
-              (repo-full (or (alist-get 'repo item) ""))
-              (repo (car (last (split-string repo-full "/"))))
-              (number (alist-get 'number item))
-              (title (or (alist-get 'title item) ""))
-              (ci-str (decknix--hub-ci-icon
-                       (alist-get 'ci item)
-                       (alist-get 'mergeable item)))
-              (rev-str (decknix--hub-review-icon item))
-              (status-str (if (string-empty-p rev-str)
-                              ci-str
-                            (concat ci-str rev-str)))
-              ;; @-mention indicator
-              (mention-str (if (eq (alist-get 'mentioned item) t)
-                               (propertize "@"
-                                 'face '(:foreground "#d7af5f" :weight bold))
-                             ""))
-              (status-str (if (string-empty-p mention-str)
-                              status-str
-                            (concat status-str mention-str)))
-              ;; Active session indicator
-              (active-str (if (decknix--hub-request-has-live-session-p item)
-                              (propertize "◉"
-                                'face '(:foreground "#87d7ff"))
-                            ""))
-              (status-str (if (string-empty-p active-str)
-                              status-str
-                            (concat status-str active-str)))
-              ;; Age colouring matching sidebar
-              (age-face (cond
-                         ((string-match-p "d$" age)
-                          (if (>= (string-to-number age) 3)
-                              'error 'warning))
-                         (t 'font-lock-comment-face)))
-              (label (format " %3s %s#%d %s %s"
-                             (propertize age 'face age-face)
-                             (propertize (or repo "") 'face 'font-lock-type-face)
-                             number
-                             status-str
-                             title)))
-         ;; Tint the picker label yellow when a live session is
-         ;; already reviewing this PR (mirrors the sidebar cue).
-         (decknix--hub-request-tint-active label item)
-         (cons label item)))
-     sorted)))
+;; PR B.51: `decknix--hub-review-ready-requests' and
+;; `decknix--hub-review-entries' carved into
+;; `decknix-hub-ready-filter' (agent-shell/hub/) alongside
+;; `decknix--hub-request-ready-p' (B.50).  The reader returns the
+;; ready subset of `decknix--hub-reviews'; the entry builder turns
+;; that subset into the `(LABEL . ITEM)' cons cells the `r' picker
+;; consumes.  Both forward-declared at the top of this file.
 
 (defun decknix--hub-launch-review-items (items split-p)
   "Launch review sessions for ITEMS.
