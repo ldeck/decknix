@@ -456,8 +456,21 @@ Prevents the auto-persist hook from firing repeatedly.")
 (defun decknix--agent-session-extract-history (session-id n)
   "Extract the last N user-visible exchanges from SESSION-ID's local JSON.
 Returns a list of (USER-MSG . ASSISTANT-RESP) cons cells, oldest first.
-Uses the top-level request_message and response_text fields of each
-exchange, which are the user-facing summary strings."
+
+The auggie session JSON's `chatHistory' splits each user→assistant turn
+across many entries: one entry carries the user text in `request_message'
+(with `response_text' typically empty), and the assistant's reply is
+spread across the *following* entries as response chunks (their
+`request_message' is empty -— those entries are tool results / streaming
+fragments attributed to the same turn).  A new turn starts when
+`request_message' becomes non-empty again.
+
+Single forward pass: accumulate `response_text' chunks under the current
+user message; close the turn when the next user message arrives or the
+history ends; finally take the last N turns.  This pairs each user
+message with its real assistant response (the most recent interaction
+included) instead of the same entry's almost-always-empty
+`response_text', which the previous backward-walk picked up."
   (let ((file (decknix--agent-session-file session-id)))
     (when (file-exists-p file)
       (condition-case err
@@ -466,22 +479,36 @@ exchange, which are the user-facing summary strings."
                  (json-key-type 'symbol)
                  (data (json-read-file file))
                  (history (alist-get 'chatHistory data))
-                 (exchanges nil)
-                 (count 0))
-            ;; Walk backwards through chatHistory to find user exchanges
-            (let ((i (1- (length history))))
-              (while (and (>= i 0) (< count n))
-                (let* ((entry (nth i history))
-                       (ex (alist-get 'exchange entry))
-                       (user-msg (alist-get 'request_message ex ""))
-                       (resp-text (alist-get 'response_text ex "")))
-                  ;; Only count exchanges with a non-empty user message
-                  (when (and (stringp user-msg)
-                             (not (string-empty-p (string-trim user-msg))))
-                    (push (cons user-msg resp-text) exchanges)
-                    (setq count (1+ count))))
-                (setq i (1- i))))
-            exchanges)
+                 (turns nil)
+                 (cur-user nil)
+                 (cur-resp nil))
+            (dolist (entry history)
+              (let* ((ex (alist-get 'exchange entry))
+                     (req (alist-get 'request_message ex ""))
+                     (resp (alist-get 'response_text ex "")))
+                (when (and (stringp req)
+                           (not (string-empty-p (string-trim req))))
+                  ;; Close out the previous turn (if any).
+                  (when cur-user
+                    (push (cons cur-user
+                                (mapconcat #'identity
+                                           (nreverse cur-resp) "\n"))
+                          turns))
+                  (setq cur-user req
+                        cur-resp nil))
+                (when (and cur-user
+                           (stringp resp)
+                           (not (string-empty-p resp)))
+                  (push resp cur-resp))))
+            ;; Close out the final turn so the most recent interaction
+            ;; is always included.
+            (when cur-user
+              (push (cons cur-user
+                          (mapconcat #'identity (nreverse cur-resp) "\n"))
+                    turns))
+            (let* ((all (nreverse turns))
+                   (len (length all)))
+              (if (> len n) (nthcdr (- len n) all) all)))
         (error
          (message "Failed to read session history: %s"
                   (error-message-string err))
@@ -519,8 +546,17 @@ reports that fact instead of silently no-opping."
 (defvar decknix--agent-context-header-map
   (let ((map (make-sparse-keymap)))
     (define-key map [mouse-1] #'decknix--agent-context-toggle)
+    ;; GUI Emacs sends `<tab>' / `<return>' when the keys are
+    ;; pressed; the agent-shell-mode-hook (default.el) binds
+    ;; `<tab>' globally to `decknix--agent-tab-dwim', so the
+    ;; text-property keymap MUST bind the bracketed forms first
+    ;; or the local map's `<tab>' binding is found before the
+    ;; fallback translation to `TAB' even gets a chance.  Bind
+    ;; both forms so the toggle fires in tty AND GUI frames.
     (define-key map (kbd "TAB") #'decknix--agent-context-toggle)
+    (define-key map (kbd "<tab>") #'decknix--agent-context-toggle)
     (define-key map (kbd "RET") #'decknix--agent-context-toggle)
+    (define-key map (kbd "<return>") #'decknix--agent-context-toggle)
     map)
   "Keymap for the Context section header toggle.")
 
