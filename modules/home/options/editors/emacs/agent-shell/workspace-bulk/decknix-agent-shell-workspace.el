@@ -126,6 +126,7 @@
 (declare-function decknix--hub-icon "decknix-hub-ci")
 (declare-function decknix--hub-ci-icon "decknix-hub-ci")
 (declare-function decknix--hub-ci-classify "decknix-hub-ci")
+(declare-function decknix--hub-request-ready-p "decknix-hub-ready-filter")
 (declare-function decknix--hub-mention-visible-p "decknix-hub-mention-bot")
 (declare-function decknix--hub-mention-filter-label "decknix-hub-mention-bot")
 (declare-function decknix--hub-mention-filter-normalize "decknix-hub-mention-bot")
@@ -1349,19 +1350,6 @@ preventing extra splits when called from the sidebar."
           (select-window main))
         (decknix--agent-quickaction-start name tags workspace command)
         (message "Starting review: %s/%s#%s" owner repo number)))))
-
-(defun decknix--hub-request-ready-p (item)
-  "Return non-nil if review request ITEM is ready for review.
-Ready means: CI passing (or soft-fail), not conflicting, not draft,
-and not already reviewed by me (APPROVED or CHANGES_REQUESTED)."
-  (let ((ci-status (decknix--hub-ci-classify (alist-get 'ci item)))
-        (mergeable (alist-get 'mergeable item))
-        (draft (alist-get 'draft item))
-        (my-review (alist-get 'my_review item)))
-    (and (member ci-status '("pass" "soft_fail"))
-         (not (equal mergeable "CONFLICTING"))
-         (not (eq draft t))
-         (not (member my-review '("APPROVED" "CHANGES_REQUESTED"))))))
 
 (defun decknix--hub-review-ready-requests ()
   "Return the list of review requests that are ready for review.
