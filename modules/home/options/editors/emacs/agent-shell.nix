@@ -392,6 +392,24 @@ let
     ];
   };
 
+  # PR B.50: "ready for review" predicate carved out of
+  # `decknix-agent-shell-workspace' (workspace-bulk).  Co-resident
+  # with the rest of the hub/ filter cluster.  Owns
+  # `decknix--hub-request-ready-p' -- the four-clause pure predicate
+  # that backs both the sidebar Requests "ready" filter and the `r'
+  # picker's `M-r' ready-only toggle.  Depends on
+  # `decknix--hub-ci-classify' from `decknix-hub-ci' for the CI
+  # status step; the remaining three clauses are alist lookups
+  # (mergeable / draft / my_review).  No side effects, no UI.
+  decknix-hub-ready-filter-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-ready-filter";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-ready-filter-test.el"
+    ];
+  };
+
   # PR B.36: repo-name cap cluster carved out of
   # `decknix-agent-shell-hub' (hub-bulk).  Decides how aggressively
   # the repo segment of an ungrouped PR line is truncated when
@@ -1268,6 +1286,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-ci-el)
         ++ (optional cfg.hub.enable decknix-hub-ci-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-attention-filter-el)
+        ++ (optional cfg.hub.enable decknix-hub-ready-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-repo-name-el)
         ++ (optional cfg.hub.enable decknix-hub-wip-link-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-mention-bot-el)
@@ -2840,6 +2859,21 @@ in
                           "decknix-hub-attention-filter")
         (declare-function decknix--hub-toggle-wip-only-my-replies
                           "decknix-hub-attention-filter")
+
+        ;; "Ready for review" predicate (PR B.50) -- carved out of
+        ;; `decknix-agent-shell-workspace' (workspace-bulk).  Owns
+        ;; the four-clause pure predicate
+        ;; (`decknix--hub-request-ready-p') that backs both the
+        ;; sidebar Requests "ready" filter
+        ;; (`decknix--hub-review-ready-requests') and the `r'
+        ;; picker's `M-r' ready-only toggle.  Depends on
+        ;; `decknix--hub-ci-classify' from `decknix-hub-ci'
+        ;; (already required above) for the CI status step; the
+        ;; remaining three clauses are alist lookups
+        ;; (mergeable / draft / my_review).  No side effects, no UI.
+        (require 'decknix-hub-ready-filter)
+        (declare-function decknix--hub-request-ready-p
+                          "decknix-hub-ready-filter" (item))
 
         ;; Repo-name cap cluster (PR B.36) -- decides how
         ;; aggressively the repo segment of an ungrouped PR line is
