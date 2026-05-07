@@ -392,15 +392,22 @@ let
     ];
   };
 
-  # PR B.50: "ready for review" predicate carved out of
+  # PRs B.50 + B.51: "ready for review" reader carved out of
   # `decknix-agent-shell-workspace' (workspace-bulk).  Co-resident
-  # with the rest of the hub/ filter cluster.  Owns
-  # `decknix--hub-request-ready-p' -- the four-clause pure predicate
-  # that backs both the sidebar Requests "ready" filter and the `r'
-  # picker's `M-r' ready-only toggle.  Depends on
-  # `decknix--hub-ci-classify' from `decknix-hub-ci' for the CI
-  # status step; the remaining three clauses are alist lookups
-  # (mergeable / draft / my_review).  No side effects, no UI.
+  # with the rest of the hub/ filter cluster.  Owns three symbols:
+  # `decknix--hub-request-ready-p' (B.50, the four-clause pure
+  # predicate over a single review-request alist),
+  # `decknix--hub-review-ready-requests' (B.51, the reader over
+  # `decknix--hub-reviews' that composes the predicate with the six
+  # carved visibility filters), and `decknix--hub-review-entries'
+  # (B.51, the entry builder that turns the ready subset into the
+  # `(LABEL . ITEM)' cons cells the `r' picker consumes).  Depends
+  # on `decknix--hub-ci-classify' from `decknix-hub-ci' for the CI
+  # status step; the visibility predicates are reached via
+  # `declare-function' to avoid pulling the carved filter packages
+  # into the package's compile graph (they're already required by
+  # the heredoc next to this one).  No side effects, no UI.
+
   decknix-hub-ready-filter-el = mkEmacsTestedPackage {
     pname = "decknix-hub-ready-filter";
     src = ./agent-shell/hub;
@@ -2860,20 +2867,31 @@ in
         (declare-function decknix--hub-toggle-wip-only-my-replies
                           "decknix-hub-attention-filter")
 
-        ;; "Ready for review" predicate (PR B.50) -- carved out of
-        ;; `decknix-agent-shell-workspace' (workspace-bulk).  Owns
-        ;; the four-clause pure predicate
-        ;; (`decknix--hub-request-ready-p') that backs both the
-        ;; sidebar Requests "ready" filter
-        ;; (`decknix--hub-review-ready-requests') and the `r'
-        ;; picker's `M-r' ready-only toggle.  Depends on
-        ;; `decknix--hub-ci-classify' from `decknix-hub-ci'
-        ;; (already required above) for the CI status step; the
-        ;; remaining three clauses are alist lookups
-        ;; (mergeable / draft / my_review).  No side effects, no UI.
+        ;; "Ready for review" reader (PRs B.50 + B.51) -- carved
+        ;; out of `decknix-agent-shell-workspace' (workspace-bulk).
+        ;; Owns the four-clause pure predicate
+        ;; (`decknix--hub-request-ready-p') plus the two readers
+        ;; that compose it with the visibility / sort / icon
+        ;; helpers: `decknix--hub-review-ready-requests' returns
+        ;; the ready subset of `decknix--hub-reviews'; and
+        ;; `decknix--hub-review-entries' turns that subset into
+        ;; the `(LABEL . ITEM)' cons cells the `r' picker
+        ;; consumes.  Depends on `decknix--hub-ci-classify' from
+        ;; `decknix-hub-ci', the visibility predicates already
+        ;; carved into `decknix-hub-{age-presets,ci-filter,
+        ;; mention-bot,attention-filter}', the icons in
+        ;; `decknix-hub-{icons,ci}', and two helpers still in
+        ;; hub-bulk (`request-has-live-session-p',
+        ;; `request-tint-active') reached via `declare-function'.
+        ;; No side effects, no UI.
         (require 'decknix-hub-ready-filter)
         (declare-function decknix--hub-request-ready-p
                           "decknix-hub-ready-filter" (item))
+        (declare-function decknix--hub-review-ready-requests
+                          "decknix-hub-ready-filter")
+        (declare-function decknix--hub-review-entries
+                          "decknix-hub-ready-filter"
+                          (&optional mention-only))
 
         ;; Repo-name cap cluster (PR B.36) -- decides how
         ;; aggressively the repo segment of an ungrouped PR line is
