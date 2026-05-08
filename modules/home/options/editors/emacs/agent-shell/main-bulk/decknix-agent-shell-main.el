@@ -493,6 +493,14 @@ Prevents the auto-persist hook from firing repeatedly.")
 (declare-function decknix--agent-session-grep-build-entries
                   "decknix-agent-grep-format" (sessions expand))
 
+;; Pure formatter for conversation-collapsed picker rows lives in
+;; `decknix-agent-conv-format' (PR B.58, `agent-shell/agent/').
+;; The session picker dispatches to it from the saved-sessions
+;; section; forward-declare so the byte-compile pass resolves the
+;; carved symbol.
+(declare-function decknix--agent-conversation-preview
+                  "decknix-agent-conv-format" (conv-group))
+
 (defun decknix--agent-context-toggle ()
   "Toggle the visibility of the Context history section.
 Switches between ▶ (collapsed) and ▼ (expanded).  When no Context
@@ -985,42 +993,9 @@ commit reviews) that should not appear in user-facing session lists."
 ;; agent-shell/agent/decknix-agent-session-group.el (PR B.56) --
 ;; required at the top of this heredoc.
 
-(defun decknix--agent-conversation-preview (conv-group)
-  "Format a one-line preview for a conversation CONV-GROUP.
-CONV-GROUP is (CONV-KEY LATEST-SESSION ALL-SESSIONS).
-Shows: id  age  exchanges  preview [tags] (N sessions) @workspace"
-  (let* ((conv-key (car conv-group))
-         (latest (cadr conv-group))
-         (all (caddr conv-group))
-         (session-count (length all))
-         (id (alist-get 'sessionId latest))
-         (modified (alist-get 'modified latest))
-         (exchanges (alist-get 'exchangeCount latest 0))
-         (first-msg (alist-get 'firstUserMessage latest ""))
-         (preview (car (split-string first-msg "\n" t)))
-         (tags (decknix--agent-tags-for-conv-key conv-key))
-         (tag-str (if tags (format " [%s]" (string-join tags ", ")) ""))
-         (count-str (if (> session-count 1)
-                        (format " (%d sessions)" session-count)
-                      ""))
-         (workspace (when conv-key
-                      (decknix--agent-workspace-for-conv-key conv-key)))
-         (ws-str (if workspace
-                     (let ((abbr (abbreviate-file-name workspace)))
-                       (format " @%s"
-                               (if (string-match "/\\([^/]+\\)/?$" abbr)
-                                   (match-string 1 abbr)
-                                 abbr)))
-                   ""))
-         (truncated (truncate-string-to-width (or preview "") 50 nil nil "...")))
-    (format "%-8s  %-8s  %4dx  %s%s%s%s"
-            (substring id 0 (min 8 (length id)))
-            (if modified (decknix--agent-session-time-ago modified) "?")
-            exchanges
-            truncated
-            tag-str
-            count-str
-            ws-str)))
+;; `decknix--agent-conversation-preview' lives in
+;; agent-shell/agent/decknix-agent-conv-format.el (PR B.58) --
+;; required at the top of this heredoc.
 
 ;; ── Session picker (consult--multi) ──────────────────────────
 ;; Modelled after C-x b (consult-buffer): sectioned groups with
