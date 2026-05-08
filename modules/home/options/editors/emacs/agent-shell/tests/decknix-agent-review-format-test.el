@@ -117,5 +117,74 @@ is kept by `delete-region' of the line-beginning..end-of-line range)."
     ;; rather than deleted whole.
     (should (string-prefix-p "\nbody" result))))
 
+;; -- review-render-preamble (PR B.59) ------------------------------
+
+(ert-deftest decknix-agent-review-render-preamble--shape ()
+  "Preamble carries `🧭 review meta' header, all four meta lines, the
+`📋 instructions' block, and a trailing blank line."
+  (let ((p (decknix--agent-review-render-preamble
+            "*Auggie: foo*"
+            "/Users/me/work/proj"
+            '("alice" "bob"))))
+    (should (string-match-p "^> 🧭 \\*\\*review meta\\*\\*\n" p))
+    (should (string-match-p "^> session: \\*Auggie: foo\\*\n" p))
+    (should (string-match-p "^> workspace: " p))
+    (should (string-match-p "^> collaborators: alice, bob\n" p))
+    (should (string-match-p "^> route: agent" p))
+    (should (string-match-p "📋 \\*\\*instructions for the agent\\*\\*"
+                            p))
+    ;; Option-1 contract phrase appears verbatim.
+    (should (string-match-p "Respond inline using" p))
+    ;; Trailing blank line so the next markdown section starts cleanly.
+    (should (string-suffix-p "\n\n" p))))
+
+(ert-deftest decknix-agent-review-render-preamble--abbreviates-workspace ()
+  "Workspace path is passed through `abbreviate-file-name'."
+  (let* ((home (or (getenv "HOME") "/root"))
+         (ws (concat home "/work/proj"))
+         (p (decknix--agent-review-render-preamble "s" ws '("a"))))
+    (should (string-match-p "^> workspace: ~/work/proj\n" p))))
+
+(ert-deftest decknix-agent-review-render-preamble--nil-workspace ()
+  "nil workspace renders the empty path (not `nil') after abbreviation."
+  (let ((p (decknix--agent-review-render-preamble "s" nil '("a"))))
+    (should (string-match-p "^> workspace: \n" p))
+    (should-not (string-match-p "nil" p))))
+
+(ert-deftest decknix-agent-review-render-preamble--empty-workspace ()
+  "Empty-string workspace renders the empty path (no abbreviate crash)."
+  (let ((p (decknix--agent-review-render-preamble "s" "" '("a"))))
+    (should (string-match-p "^> workspace: \n" p))))
+
+(ert-deftest decknix-agent-review-render-preamble--collaborators-comma-joined ()
+  "Collaborator list renders comma-separated; caller is responsible
+for placing the author first (the formatter does no reordering)."
+  (let ((p (decknix--agent-review-render-preamble
+            "s" "/x" '("zoe" "anna" "mike"))))
+    (should (string-match-p "^> collaborators: zoe, anna, mike\n" p))))
+
+(ert-deftest decknix-agent-review-render-preamble--single-collaborator ()
+  "Single collaborator renders without a trailing separator."
+  (let ((p (decknix--agent-review-render-preamble
+            "s" "/x" '("solo"))))
+    (should (string-match-p "^> collaborators: solo\n" p))
+    (should-not (string-match-p "solo," p))))
+
+(ert-deftest decknix-agent-review-render-preamble--strip-meta-roundtrip ()
+  "`strip-meta' deletes the `🧭 review meta' marker line of the
+preamble, leaving the meta-detail lines and the `📋 instructions'
+block in place (current strip-meta behaviour, see existing test
+`strip-meta--strips-marker-line-only')."
+  (let* ((p (decknix--agent-review-render-preamble
+             "*Auggie: foo*" "/x" '("a")))
+         (stripped (decknix--agent-review-strip-meta p)))
+    (should-not (string-match-p "🧭 \\*\\*review meta\\*\\*" stripped))
+    ;; Meta details survive (current behaviour).
+    (should (string-match-p "session: \\*Auggie: foo\\*" stripped))
+    (should (string-match-p "collaborators: a" stripped))
+    ;; Instructions block survives intact.
+    (should (string-match-p "📋 \\*\\*instructions" stripped))
+    (should (string-match-p "Respond inline using" stripped))))
+
 (provide 'decknix-agent-review-format-test)
 ;;; decknix-agent-review-format-test.el ends here
