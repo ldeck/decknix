@@ -645,6 +645,23 @@ let
     ];
   };
 
+  # PR B.55: pure jq command builder for the cross-session prompt
+  # search.  Sibling of `decknix--agent-session-jq-cmd' (in
+  # `decknix-agent-session-cache'): both shell out to `find | xargs
+  # -P8' over `~/.augment/sessions/*.json', differing only in the jq
+  # filter (this one extracts user-prompt arrays for the consult
+  # picker; cache extracts session metadata).  Reuses the cached
+  # filter path owned by `decknix-agent-prompt-extract' (B.53) and
+  # the sessions-dir defvar owned by `decknix-agent-session-cache'.
+  decknix-agent-prompt-search-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-prompt-search";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-prompt-search-test.el"
+    ];
+  };
+
   # PR B.28: tag-store JSON persistence + cache carved out of
   # `decknix-agent-shell-main' (main-bulk).  Owns the file path
   # defvar, the four cache state vars (hash + mtime + checked-at +
@@ -1336,6 +1353,7 @@ in
           decknix-agent-session-cache-el
           decknix-agent-session-history-el
           decknix-agent-prompt-extract-el
+          decknix-agent-prompt-search-el
           decknix-agent-session-format-el
           decknix-agent-tags-store-el
           decknix-agent-link-store-el
@@ -1462,6 +1480,16 @@ in
                           "decknix-agent-prompt-extract")
         (declare-function decknix--prompt-extract-from-file
                           "decknix-agent-prompt-extract" (file))
+        ;; Cross-session prompt-search jq command builder (PR B.55).
+        ;; Sibling of `decknix--agent-session-jq-cmd' in the
+        ;; session-cache module; same find/xargs/jq pipeline shape,
+        ;; different filter (user prompts instead of session
+        ;; metadata).  Reuses the cached filter path from
+        ;; `decknix-agent-prompt-extract' above and the
+        ;; sessions-dir defvar from `decknix-agent-session-cache'.
+        (require 'decknix-agent-prompt-search)
+        (declare-function decknix--prompt-search-jq-cmd
+                          "decknix-agent-prompt-search")
         ;; Tag-store storage layer (PR B.28) — owns
         ;; ~/.config/decknix/agent-sessions.json: the file-path
         ;; defvar, the in-memory cache (hash + mtime + checked-at +
