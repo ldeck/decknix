@@ -90,7 +90,8 @@ let
   # fails the system derivation.  No commit without a green build.
   testsDir = ./agent-shell/tests;
   mkEmacsTestedPackage = { pname, src, packageRequires ? [ ]
-                         , testFiles, testInputs ? [ ] }:
+                         , testFiles, testInputs ? [ ]
+                         , extraSiteFiles ? [ ] }:
     (pkgs.emacsPackages.trivialBuild {
       inherit pname src packageRequires;
       version = "0.1";
@@ -98,6 +99,34 @@ let
       # Tests sometimes shell out (jq, rg, ...) -- expose those
       # binaries on PATH only for the test phase via nativeBuildInputs.
       nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ testInputs;
+      # Override `installPhase' to ship only the package's own files
+      # (default: `${pname}.el' + `${pname}.elc'; multi-file packages
+      # add to that via `extraSiteFiles').  Many packages share a
+      # `src' directory (e.g. `agent-shell/agent/' has 23 packages
+      # all pointing at the same 23 source files); without this
+      # override, trivialBuild's default `install *.el *.elc $LISPDIR'
+      # ships every sibling, and `postInstall' then native-compiles
+      # all of them -- so the aggregated `emacs-packages-deps' output
+      # ends up with 23x23 = 529 .eln files for what should be 23,
+      # fattening `native-comp-eln-load-path' scans at every
+      # `(require ...)' and slowing daemon startup.
+      # buildPhase still byte-compiles every .el (so cross-file
+      # `(require 'decknix-...)' resolution at compile time is
+      # unaffected) and `postBuild' (the ERT test phase) runs before
+      # this installPhase, so it still sees every sibling on `-L .'.
+      # Cross-package runtime requires must be declared via
+      # `packageRequires' so `package-activate-all' on the post-
+      # install native-comp pass can resolve them.
+      installPhase = ''
+        runHook preInstall
+        LISPDIR=$out/share/emacs/site-lisp
+        install -d $LISPDIR
+        install ${pname}.el ${pname}.elc $LISPDIR
+        ${lib.concatMapStringsSep "\n        "
+          (f: ''install ${f} ${lib.removeSuffix ".el" f}.elc $LISPDIR'')
+          extraSiteFiles}
+        runHook postInstall
+      '';
       postBuild = (old.postBuild or "") + ''
         echo "==> Running ERT characterisation tests for ${pname}"
         # Stage the test sources in a sibling tmp dir (NOT alongside
@@ -123,10 +152,19 @@ let
       '';
     });
 
+  # Multi-file package: ships three .el files under one Nix
+  # derivation (data layer + UI + sidebar integration).  The UI
+  # and sidebar modules `(require 'decknix-progress)' at top
+  # level; declare them as additional install targets so the
+  # narrowed installPhase keeps shipping all three.
   decknix-progress-el = mkEmacsTestedPackage {
     pname = "decknix-progress";
     src = ./agent-shell/progress;
     packageRequires = [ ];
+    extraSiteFiles = [
+      "decknix-progress-ui.el"
+      "decknix-progress-sidebar.el"
+    ];
     testFiles = [
       "decknix-progress-test.el"
       "decknix-progress-ui-test.el"
@@ -371,7 +409,8 @@ let
   decknix-hub-ci-filter-el = mkEmacsTestedPackage {
     pname = "decknix-hub-ci-filter";
     src = ./agent-shell/hub;
-    packageRequires = [ ];
+    # Top-level `(require 'decknix-hub-ci)' for the CI status reader.
+    packageRequires = [ decknix-hub-ci-el ];
     testFiles = [
       "decknix-hub-ci-filter-test.el"
     ];
@@ -415,7 +454,8 @@ let
   decknix-hub-ready-filter-el = mkEmacsTestedPackage {
     pname = "decknix-hub-ready-filter";
     src = ./agent-shell/hub;
-    packageRequires = [ ];
+    # Top-level `(require 'decknix-hub-ci)' for CI rollup helpers.
+    packageRequires = [ decknix-hub-ci-el ];
     testFiles = [
       "decknix-hub-ready-filter-test.el"
     ];
@@ -484,11 +524,11 @@ let
   decknix-hub-icons-el = mkEmacsTestedPackage {
     pname = "decknix-hub-icons";
     src = ./agent-shell/hub;
-    # Cross-package require: pulls in `decknix--hub-icon' from the
-    # co-resident decknix-hub-ci.el (also in this src dir, so the
-    # daemon resolves it via load-path without a packageRequires
-    # declaration).
-    packageRequires = [ ];
+    # Top-level `(require 'decknix-hub-ci)' pulls in `decknix--hub-
+    # icon'.  Required at the package level so native-comp's
+    # `package-activate-all' on the post-install pass can resolve
+    # the load (same need as the other hub-ci consumers above).
+    packageRequires = [ decknix-hub-ci-el ];
     testFiles = [
       "decknix-hub-icons-test.el"
     ];
@@ -787,7 +827,9 @@ let
   decknix-agent-link-store-el = mkEmacsTestedPackage {
     pname = "decknix-agent-link-store";
     src = ./agent-shell/agent;
-    packageRequires = [ ];
+    # Top-level requires: tags-store (shared persistence) + url-parse
+    # (PR/repo URL parsing).
+    packageRequires = [ decknix-agent-tags-store-el decknix-agent-url-parse-el ];
     testFiles = [
       "decknix-agent-link-store-test.el"
     ];
@@ -807,7 +849,13 @@ let
   decknix-agent-conv-resolve-el = mkEmacsTestedPackage {
     pname = "decknix-agent-conv-resolve";
     src = ./agent-shell/agent;
-    packageRequires = [ ];
+    # Top-level requires: parse (json/exchange parsing), tags-store
+    # (conv-key persistence), session-cache (jq-cmd builder).
+    packageRequires = [
+      decknix-agent-parse-el
+      decknix-agent-tags-store-el
+      decknix-agent-session-cache-el
+    ];
     testFiles = [
       "decknix-agent-conv-resolve-test.el"
     ];
@@ -829,7 +877,9 @@ let
   decknix-agent-session-model-el = mkEmacsTestedPackage {
     pname = "decknix-agent-session-model";
     src = ./agent-shell/agent;
-    packageRequires = [ ];
+    # Top-level `(require 'decknix-agent-tags-store)' for shared
+    # JSON persistence of per-conversation overrides.
+    packageRequires = [ decknix-agent-tags-store-el ];
     testFiles = [
       "decknix-agent-session-model-test.el"
     ];
@@ -963,7 +1013,12 @@ let
   decknix-agent-session-workspace-el = mkEmacsTestedPackage {
     pname = "decknix-agent-session-workspace";
     src = ./agent-shell/agent;
-    packageRequires = [ ];
+    # Top-level requires: tags-store (shared JSON persistence) +
+    # conv-resolve (conv-key derivation for live buffers).
+    packageRequires = [
+      decknix-agent-tags-store-el
+      decknix-agent-conv-resolve-el
+    ];
     testFiles = [
       "decknix-agent-session-workspace-test.el"
     ];
