@@ -662,6 +662,29 @@ let
     ];
   };
 
+  # PR B.56: conversation aggregation + live-buffer label carved out
+  # of `decknix-agent-shell-main' (main-bulk).  Two display-prep
+  # helpers that sit between the cached session list and the
+  # consult picker / sidebar header:
+  #   * `decknix--agent-session-group-by-conversation' -- pure
+  #     aggregation of the flat session list into conversation
+  #     triples, sorted by max(modified, lastAccessed).
+  #   * `decknix--agent-session-live-label' -- short label for a
+  #     live agent-shell buffer (read-only over the buffer; no
+  #     mutation).
+  # Forward-declares four sibling lookups (conversation-key,
+  # conversation-hidden-p, conv-last-accessed, tags-for-session);
+  # tests stub all four via `cl-letf' so the suite never reaches
+  # the real tag-store JSON or conv-recency cache.
+  decknix-agent-session-group-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-session-group";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-session-group-test.el"
+    ];
+  };
+
   # PR B.28: tag-store JSON persistence + cache carved out of
   # `decknix-agent-shell-main' (main-bulk).  Owns the file path
   # defvar, the four cache state vars (hash + mtime + checked-at +
@@ -1355,6 +1378,7 @@ in
           decknix-agent-prompt-extract-el
           decknix-agent-prompt-search-el
           decknix-agent-session-format-el
+          decknix-agent-session-group-el
           decknix-agent-tags-store-el
           decknix-agent-link-store-el
           decknix-agent-conv-resolve-el
@@ -1608,6 +1632,24 @@ in
                           "decknix-agent-session-format" (session))
         (declare-function decknix--agent-session-display-name
                           "decknix-agent-session-format" (session))
+
+        ;; Conversation aggregation + live-buffer label (PR B.56) --
+        ;; carved from main-bulk.  `group-by-conversation' buckets
+        ;; the flat session list into conversation triples and
+        ;; sorts by max(modified, lastAccessed); `live-label'
+        ;; renders the short label for a live agent-shell buffer in
+        ;; the picker / sidebar.  Loaded after conv-resolve /
+        ;; conv-recency / tags-read because it composes one symbol
+        ;; from each at call time; `decknix--agent-conversation-
+        ;; hidden-p' is still in main-bulk (tag-store mutation
+        ;; complement) so it resolves at runtime via the heredoc's
+        ;; surrounding scope.
+        (require 'decknix-agent-session-group)
+        (declare-function decknix--agent-session-group-by-conversation
+                          "decknix-agent-session-group"
+                          (sessions &optional include-hidden))
+        (declare-function decknix--agent-session-live-label
+                          "decknix-agent-session-group" (buf))
 
         ;; Workspace + branch detection (PR B.45) -- pure helpers
         ;; consumed by session-creation / PR-quick-action flows.

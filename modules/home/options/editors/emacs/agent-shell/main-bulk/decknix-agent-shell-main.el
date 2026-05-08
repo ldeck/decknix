@@ -472,6 +472,17 @@ Prevents the auto-persist hook from firing repeatedly.")
 (declare-function decknix--agent-session-display-name
                   "decknix-agent-session-format" (session))
 
+;; Conversation aggregation + live-buffer label live in
+;; `decknix-agent-session-group' (PR B.56, `agent-shell/agent/').
+;; The picker / sidebar / collapsed-conversation header dispatch
+;; to them; forward-declare so the byte-compile pass resolves the
+;; carved symbols.
+(declare-function decknix--agent-session-group-by-conversation
+                  "decknix-agent-session-group"
+                  (sessions &optional include-hidden))
+(declare-function decknix--agent-session-live-label
+                  "decknix-agent-session-group" (buf))
+
 (defun decknix--agent-context-toggle ()
   "Toggle the visibility of the Context history section.
 Switches between ▶ (collapsed) and ▼ (expanded).  When no Context
@@ -960,47 +971,9 @@ commit reviews) that should not appear in user-facing session lists."
     (puthash "hidden" (if hidden t :json-false) entry)
     (decknix--agent-tags-write store)))
 
-(defun decknix--agent-session-group-by-conversation
-    (sessions &optional include-hidden)
-  "Group SESSIONS by conversation (shared firstUserMessage).
-Returns a list of (CONV-KEY LATEST-SESSION ALL-SESSIONS) triples,
-sorted by most recently interacted first.
-
-Hidden conversations (marked with hidden=true in agent-sessions.json)
-are excluded unless INCLUDE-HIDDEN is non-nil.  Hidden sessions are
-typically background/automated sessions like git hook commit reviews.
-
-Inter-group sort uses max(session.modified, conversation.lastAccessed)
-so that tag/rename/resume operations bump a conversation to the top,
-not just augment writing to the session file."
-  (let ((groups (make-hash-table :test 'equal)))
-    (dolist (s sessions)
-      (let* ((first-msg (alist-get 'firstUserMessage s ""))
-             (conv-key (decknix--agent-conversation-key first-msg)))
-        (when (and conv-key
-                   (or include-hidden
-                       (not (decknix--agent-conversation-hidden-p conv-key))))
-          (let ((existing (gethash conv-key groups)))
-            (puthash conv-key (cons s existing) groups)))))
-    ;; Build result: (conv-key latest-session all-sessions)
-    (let (result)
-      (maphash (lambda (key sessions-list)
-                 (let ((sorted (sort (copy-sequence sessions-list)
-                                    (lambda (a b)
-                                      (string> (or (alist-get 'modified a) "")
-                                               (or (alist-get 'modified b) ""))))))
-                   (push (list key (car sorted) sorted) result)))
-               groups)
-      ;; Sort by max(session.modified, lastAccessed) — any interaction
-      ;; with a conversation (tagging, renaming, resuming) counts.
-      (sort result (lambda (a b)
-                     (let* ((mod-a (or (alist-get 'modified (cadr a)) ""))
-                            (mod-b (or (alist-get 'modified (cadr b)) ""))
-                            (acc-a (or (decknix--agent-conv-last-accessed (car a)) ""))
-                            (acc-b (or (decknix--agent-conv-last-accessed (car b)) ""))
-                            (eff-a (if (string> acc-a mod-a) acc-a mod-a))
-                            (eff-b (if (string> acc-b mod-b) acc-b mod-b)))
-                       (string> eff-a eff-b)))))))
+;; `decknix--agent-session-group-by-conversation' lives in
+;; agent-shell/agent/decknix-agent-session-group.el (PR B.56) --
+;; required at the top of this heredoc.
 
 (defun decknix--agent-conversation-preview (conv-group)
   "Format a one-line preview for a conversation CONV-GROUP.
@@ -1043,27 +1016,9 @@ Shows: id  age  exchanges  preview [tags] (N sessions) @workspace"
 ;; Modelled after C-x b (consult-buffer): sectioned groups with
 ;; horizontal dividers — Live Sessions → Saved Sessions → New.
 
-(defun decknix--agent-session-live-label (buf)
-  "Build a display label for live agent-shell buffer BUF."
-  (let* ((ws (buffer-local-value
-              'decknix--agent-session-workspace buf))
-         (ws-short (when ws
-                     (file-name-nondirectory
-                      (directory-file-name ws))))
-         (tags (when (buffer-live-p buf)
-                 (with-current-buffer buf
-                   (when (and (boundp 'decknix--agent-auggie-session-id)
-                              decknix--agent-auggie-session-id)
-                     (decknix--agent-tags-for-session
-                      decknix--agent-auggie-session-id)))))
-         (tag-str (when tags
-                    (mapconcat (lambda (tg) (format "#%s" tg))
-                               tags " ")))
-         (detail (string-join (delq nil (list ws-short tag-str)) "  ")))
-    (format "%s%s"
-            (buffer-name buf)
-            (if (string-empty-p detail) ""
-              (format "  — %s" detail)))))
+;; `decknix--agent-session-live-label' lives in
+;; agent-shell/agent/decknix-agent-session-group.el (PR B.56) --
+;; required at the top of this heredoc.
 
 ;; We store a hash-table mapping candidate strings → payloads so that
 ;; each source's :action can look up the data for the selected string.
