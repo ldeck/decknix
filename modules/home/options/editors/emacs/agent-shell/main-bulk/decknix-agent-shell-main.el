@@ -463,6 +463,15 @@ Prevents the auto-persist hook from firing repeatedly.")
 (declare-function decknix--agent-session-extract-history
                   "decknix-agent-session-history" (session-id n))
 
+;; Pure session formatters live in `decknix-agent-session-format'
+;; (PR B.54, `agent-shell/agent/').  Picker rows + buffer rename
+;; sites in this file dispatch to them; forward-declare so the
+;; byte-compile pass resolves the carved symbols.
+(declare-function decknix--agent-session-preview
+                  "decknix-agent-session-format" (session))
+(declare-function decknix--agent-session-display-name
+                  "decknix-agent-session-format" (session))
+
 (defun decknix--agent-context-toggle ()
   "Toggle the visibility of the Context history section.
 Switches between ▶ (collapsed) and ▼ (expanded).  When no Context
@@ -661,22 +670,9 @@ the ID needed for --resume).  Falls back to the ACP session ID from
                agent-shell--state
                (map-nested-elt agent-shell--state '(:session :id)))))))
 
-(defun decknix--agent-session-preview (session)
-  "Format a one-line preview for a saved SESSION, including tags."
-  (let* ((id (alist-get 'sessionId session))
-         (modified (alist-get 'modified session))
-         (exchanges (alist-get 'exchangeCount session 0))
-         (first-msg (alist-get 'firstUserMessage session ""))
-         (preview (car (split-string first-msg "\n" t)))
-         (tags (decknix--agent-tags-for-session id))
-         (tag-str (if tags (format " [%s]" (string-join tags ", ")) ""))
-         (truncated (truncate-string-to-width (or preview "") 50 nil nil "...")))
-    (format "%-8s  %-8s  %3dx  %s%s"
-            (substring id 0 (min 8 (length id)))
-            (if modified (decknix--agent-session-time-ago modified) "?")
-            exchanges
-            truncated
-            tag-str)))
+;; `decknix--agent-session-preview' lives in
+;; agent-shell/agent/decknix-agent-session-format.el (PR B.54) --
+;; required at the top of this heredoc.
 
 (defvar decknix-agent-session-history-count 2
   "Default number of recent exchanges to show when resuming a session.
@@ -698,22 +694,9 @@ Returns the new buffer, or nil if not found."
                      (derived-mode-p 'agent-shell-mode))))
             (buffer-list)))
 
-(defun decknix--agent-session-display-name (session)
-  "Derive a short buffer display name from SESSION data.
-Uses tags if available, otherwise truncates the first user message."
-  (let* ((sid (alist-get 'sessionId session ""))
-         (first-msg (alist-get 'firstUserMessage session ""))
-         (conv-key (decknix--agent-conversation-key first-msg))
-         (tags (when conv-key (decknix--agent-tags-for-conv-key conv-key)))
-         (preview (car (split-string first-msg "\n" t))))
-    (cond
-     ;; If there are tags, use them as the name
-     (tags (string-join tags "/"))
-     ;; Otherwise use a truncated preview of the first message
-     ((and preview (not (string-empty-p preview)))
-      (truncate-string-to-width preview 40 nil nil "..."))
-     ;; Fallback to session ID prefix
-     (t (substring sid 0 (min 8 (length sid)))))))
+;; `decknix--agent-session-display-name' lives in
+;; agent-shell/agent/decknix-agent-session-format.el (PR B.54) --
+;; required at the top of this heredoc.
 
 (defun decknix--agent-find-live-buffer-for-conv-key (conv-key)
   "Return the first live agent-shell buffer whose conv-key matches CONV-KEY.

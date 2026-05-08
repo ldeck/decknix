@@ -628,6 +628,23 @@ let
     testInputs = [ pkgs.jq ];
   };
 
+  # PR B.54: pure session formatters carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Both functions take the
+  # alist produced by `decknix--agent-session-parse' and return
+  # user-visible strings -- no buffer writes, no global mutation.
+  # Forward-declares the four sibling helpers it composes
+  # (tags-for-session, tags-for-conv-key, conversation-key,
+  # session-time-ago); tests stub all four via `cl-letf' so the suite
+  # never touches the tag-store JSON or the wall clock.
+  decknix-agent-session-format-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-session-format";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-session-format-test.el"
+    ];
+  };
+
   # PR B.28: tag-store JSON persistence + cache carved out of
   # `decknix-agent-shell-main' (main-bulk).  Owns the file path
   # defvar, the four cache state vars (hash + mtime + checked-at +
@@ -1319,6 +1336,7 @@ in
           decknix-agent-session-cache-el
           decknix-agent-session-history-el
           decknix-agent-prompt-extract-el
+          decknix-agent-session-format-el
           decknix-agent-tags-store-el
           decknix-agent-link-store-el
           decknix-agent-conv-resolve-el
@@ -1551,6 +1569,17 @@ in
                           "decknix-agent-tags-read" (conv-key))
         (declare-function decknix--agent-tags-all
                           "decknix-agent-tags-read")
+
+        ;; Pure session formatters (PR B.54) -- carved from main-bulk.
+        ;; `preview' renders one row of the saved-sessions picker;
+        ;; `display-name' derives the `*Auggie: <name>*' buffer name
+        ;; on resume.  Loaded after tags-read / conv-resolve /
+        ;; format because it composes all three at call time.
+        (require 'decknix-agent-session-format)
+        (declare-function decknix--agent-session-preview
+                          "decknix-agent-session-format" (session))
+        (declare-function decknix--agent-session-display-name
+                          "decknix-agent-session-format" (session))
 
         ;; Workspace + branch detection (PR B.45) -- pure helpers
         ;; consumed by session-creation / PR-quick-action flows.
