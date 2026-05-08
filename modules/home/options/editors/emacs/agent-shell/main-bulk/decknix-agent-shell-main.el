@@ -483,6 +483,16 @@ Prevents the auto-persist hook from firing repeatedly.")
 (declare-function decknix--agent-session-live-label
                   "decknix-agent-session-group" (buf))
 
+;; Pure formatters for the session-grep picker live in
+;; `decknix-agent-grep-format' (PR B.57, `agent-shell/agent/').
+;; The grep command in this file dispatches to them via the
+;; consult :items lambda; forward-declare so the byte-compile
+;; pass resolves the carved symbols.
+(declare-function decknix--agent-session-grep-candidate
+                  "decknix-agent-grep-format" (session))
+(declare-function decknix--agent-session-grep-build-entries
+                  "decknix-agent-grep-format" (sessions expand))
+
 (defun decknix--agent-context-toggle ()
   "Toggle the visibility of the Context history section.
 Switches between ▶ (collapsed) and ▼ (expanded).  When no Context
@@ -1381,61 +1391,10 @@ when the user types more characters."
     (accept-process-output proc 0)
     (decknix--agent-session-parse output)))
 
-(defun decknix--agent-session-grep-candidate (session)
-  "Build a candidate string for SESSION in grep results."
-  (let* ((id (alist-get 'sessionId session))
-         (modified (alist-get 'modified session))
-         (exchanges (alist-get 'exchangeCount session 0))
-         (first-msg (alist-get 'firstUserMessage session ""))
-         (preview (car (split-string first-msg "\n" t)))
-         (tags (decknix--agent-tags-for-session id))
-         (tag-str (if tags (format " [%s]" (string-join tags ", ")) ""))
-         (time-ago (if modified
-                       (decknix--agent-session-time-ago modified)
-                     "?"))
-         (msg-preview (truncate-string-to-width
-                       (or preview "") 80 nil nil "...")))
-    (format "%-8s  %-8s  %4dx%s  %s"
-            (substring id 0 (min 8 (length id)))
-            time-ago exchanges tag-str msg-preview)))
-
-(defun decknix--agent-session-grep-build-entries (sessions expand)
-  "Build candidate entries from SESSIONS for grep results.
-If EXPAND is non-nil, show all individual sessions.
-Otherwise collapse by conversation."
-  (if expand
-      (mapcar (lambda (session)
-                (cons (decknix--agent-session-grep-candidate session)
-                      (cons 'session session)))
-              sessions)
-    (let ((conv-groups
-           (decknix--agent-session-group-by-conversation sessions)))
-      (mapcar (lambda (group)
-                (let* ((conv-key (car group))
-                       (latest (cadr group))
-                       (all (caddr group))
-                       (session-count (length all))
-                       (id (alist-get 'sessionId latest))
-                       (modified (alist-get 'modified latest))
-                       (exchanges (alist-get 'exchangeCount latest 0))
-                       (first-msg (alist-get 'firstUserMessage latest ""))
-                       (preview (car (split-string first-msg "\n" t)))
-                       (tags (decknix--agent-tags-for-conv-key conv-key))
-                       (tag-str (if tags (format " [%s]" (string-join tags ", ")) ""))
-                       (count-str (if (> session-count 1)
-                                      (format " (%d sessions)" session-count)
-                                    ""))
-                       (time-ago (if modified
-                                     (decknix--agent-session-time-ago modified)
-                                   "?"))
-                       (msg-preview (truncate-string-to-width
-                                     (or preview "") 80 nil nil "...")))
-                  (cons (format "%-8s  %-8s  %4dx%s%s  %s"
-                                (substring id 0 (min 8 (length id)))
-                                time-ago exchanges tag-str count-str
-                                msg-preview)
-                        (cons 'session latest))))
-              conv-groups))))
+;; `decknix--agent-session-grep-candidate' and
+;; `decknix--agent-session-grep-build-entries' live in
+;; agent-shell/agent/decknix-agent-grep-format.el (PR B.57) --
+;; required at the top of this heredoc.
 
 (defun decknix-agent-session-grep (arg)
   "Full-text grep across all session content using consult + ripgrep.

@@ -685,6 +685,29 @@ let
     ];
   };
 
+  # PR B.57: pure formatters for the session-grep picker carved out
+  # of `decknix-agent-shell-main' (main-bulk).
+  #   * `decknix--agent-session-grep-candidate' -- one row of the
+  #     expanded grep results (sibling of `session-format'/`preview',
+  #     wider preview cap so grep matches further into the message
+  #     stay visible).
+  #   * `decknix--agent-session-grep-build-entries' -- consult
+  #     candidate list builder; EXPAND fans out one row per session,
+  #     nil collapses by conversation via `group-by-conversation'
+  #     (B.56) with a trailing `(N sessions)' count.
+  # Forward-declares four sibling lookups (tags-for-session,
+  # tags-for-conv-key, session-time-ago, group-by-conversation);
+  # tests stub all four via `cl-letf' so the suite never reaches
+  # the real tag-store JSON or wall clock.
+  decknix-agent-grep-format-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-grep-format";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-grep-format-test.el"
+    ];
+  };
+
   # PR B.28: tag-store JSON persistence + cache carved out of
   # `decknix-agent-shell-main' (main-bulk).  Owns the file path
   # defvar, the four cache state vars (hash + mtime + checked-at +
@@ -1379,6 +1402,7 @@ in
           decknix-agent-prompt-search-el
           decknix-agent-session-format-el
           decknix-agent-session-group-el
+          decknix-agent-grep-format-el
           decknix-agent-tags-store-el
           decknix-agent-link-store-el
           decknix-agent-conv-resolve-el
@@ -1650,6 +1674,18 @@ in
                           (sessions &optional include-hidden))
         (declare-function decknix--agent-session-live-label
                           "decknix-agent-session-group" (buf))
+
+        ;; Pure formatters for the session-grep picker (PR B.57) --
+        ;; carved from main-bulk.  `grep-candidate' renders one row
+        ;; of the expanded results; `grep-build-entries' is the
+        ;; consult candidate list builder that switches between
+        ;; expanded and conversation-collapsed via
+        ;; `group-by-conversation' (loaded immediately above).
+        (require 'decknix-agent-grep-format)
+        (declare-function decknix--agent-session-grep-candidate
+                          "decknix-agent-grep-format" (session))
+        (declare-function decknix--agent-session-grep-build-entries
+                          "decknix-agent-grep-format" (sessions expand))
 
         ;; Workspace + branch detection (PR B.45) -- pure helpers
         ;; consumed by session-creation / PR-quick-action flows.
