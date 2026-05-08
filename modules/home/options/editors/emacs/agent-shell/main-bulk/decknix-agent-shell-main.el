@@ -2678,6 +2678,13 @@ Restored when cycling past the newest history entry.")
 (declare-function decknix--prompt-extract-from-file
                   "decknix-agent-prompt-extract" (file))
 
+;; Cross-session prompt-search jq command builder lives in
+;; `decknix-agent-prompt-search' (PR B.55, `agent-shell/agent/').
+;; Two refresh helpers in this file shell-out via this command;
+;; forward-declare so the byte-compile pass resolves the symbol.
+(declare-function decknix--prompt-search-jq-cmd
+                  "decknix-agent-prompt-search")
+
 (defvar-local decknix--compose-history-local-only t
   "When non-nil, M-p/M-n only cycle the current session's prompts.
 Set to nil by M-P/M-N to enable cross-session history navigation.")
@@ -2853,17 +2860,10 @@ Starts with the current session, then streams from saved sessions on-demand."
 (defvar decknix--prompt-search-refresh-proc nil
   "Process handle for async prompt search cache refresh.")
 
-(defun decknix--prompt-search-jq-cmd ()
-  "Shell command to extract all user prompts from all sessions.
-Outputs one JSON array per line (one per session file)."
-  (let ((jqf (decknix--prompt-extract-ensure-jq-filter)))
-    (concat
-     "find " (shell-quote-argument decknix--agent-sessions-dir)
-     " -maxdepth 1 -name '*.json' -print0 2>/dev/null"
-     " | xargs -0 -P8 -I{}"
-     " sh -c 'jq -c -f \"$1\" \"$2\" 2>/dev/null || true' _ "
-     (shell-quote-argument jqf) " {}")))
-
+;; `decknix--prompt-search-jq-cmd' lives in
+;; agent-shell/agent/decknix-agent-prompt-search.el (PR B.55) --
+;; required at the top of this heredoc.
+;;
 ;; `decknix--prompt-search-parse' lives in
 ;; agent-shell/agent/decknix-agent-parse.el — required at the
 ;; top of this heredoc.
