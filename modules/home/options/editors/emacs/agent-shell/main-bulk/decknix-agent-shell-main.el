@@ -3933,33 +3933,15 @@ Each exchange is (USER-MSG . ASSISTANT-RESP).  Returns nil on failure."
     (when-let ((sid (decknix--agent-buffer-session-id)))
       (decknix--agent-session-extract-history sid n))))
 
-(defun decknix--agent-review-render-preamble (source-buffer)
-  "Build the preamble string for a review of SOURCE-BUFFER."
-  (let* ((session-name (buffer-name source-buffer))
-         (workspace (with-current-buffer source-buffer
-                      (or decknix--agent-session-workspace
-                          default-directory)))
-         (author (decknix--agent-review-author))
-         (collabs (cons author
-                        (seq-remove
-                         (lambda (c) (string= c author))
-                         decknix-agent-review-collaborators))))
-    (concat
-     "> 🧭 **review meta**\n"
-     (format "> session: %s\n" session-name)
-     (format "> workspace: %s\n"
-             (abbreviate-file-name (or workspace "")))
-     (format "> collaborators: %s\n"
-             (mapconcat #'identity collabs ", "))
-     "> route: agent  (C-c C-c submits to source session)\n"
-     ">\n"
-     "> 📋 **instructions for the agent** (Option 1):\n"
-     "> Respond inline using `> 💬 **agent:** …` immediately after\n"
-     "> each of my annotations. Keep order. Don't collapse multiple\n"
-     "> annotations into one reply. For ❌ rejections, propose a\n"
-     "> concrete change. For 🔀 option picks, acknowledge the chosen\n"
-     "> option and update prior assumptions.\n"
-     "\n")))
+;; `decknix--agent-review-render-preamble' lives in
+;; agent-shell/review/decknix-agent-review-format.el (PR B.59) --
+;; required at the top of this heredoc.  Its signature takes plain
+;; data (SESSION-NAME WORKSPACE COLLABORATORS) so the carved
+;; version stays pure; the call site below extracts the buffer-
+;; local workspace + author/collaborators list before invoking it.
+(declare-function decknix--agent-review-render-preamble
+                  "decknix-agent-review-format"
+                  (session-name workspace collaborators))
 
 ;; `decknix--agent-review-format-exchanges' lives in
 ;; agent-shell/review/decknix-agent-review-format.el.
@@ -3985,9 +3967,23 @@ the last exchange."
       (setq decknix--agent-review-source-buffer src)
       (setq decknix--agent-review-session-id sid)
       (setq decknix--agent-review-workspace ws)
-      (let ((inhibit-read-only t))
+      (let* ((inhibit-read-only t)
+             ;; Extract preamble inputs at the call site so the
+             ;; carved formatter (PR B.59) stays pure: buffer name,
+             ;; workspace via `or `decknix--agent-session-workspace'
+             ;; default-directory'', and author-first collaborators.
+             (session-name (buffer-name src))
+             (preamble-ws (with-current-buffer src
+                            (or decknix--agent-session-workspace
+                                default-directory)))
+             (author (decknix--agent-review-author))
+             (collabs (cons author
+                            (seq-remove
+                             (lambda (c) (string= c author))
+                             decknix-agent-review-collaborators))))
         (erase-buffer)
-        (insert (decknix--agent-review-render-preamble src))
+        (insert (decknix--agent-review-render-preamble
+                 session-name preamble-ws collabs))
         (insert (decknix--agent-review-format-exchanges exchanges))
         (goto-char (point-min))
         (when (re-search-forward "^## annotations" nil t)

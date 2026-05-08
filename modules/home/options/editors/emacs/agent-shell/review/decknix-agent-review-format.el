@@ -8,7 +8,7 @@
 ;;; Commentary:
 ;;
 ;; Pure string-formatting primitives extracted from the agent-shell
-;; heredoc's review-mode subsystem.  Three helpers operate on string
+;; heredoc's review-mode subsystem.  Four helpers operate on string
 ;; inputs and return strings; none read or write buffers, files, or
 ;; globals.
 ;;
@@ -27,10 +27,20 @@
 ;;                                              including the `📋
 ;;                                              **instructions**'
 ;;                                              block)
+;;   `decknix--agent-review-render-preamble'   (session-name workspace
+;;                                              collaborators -> the
+;;                                              `🧭 review meta' +
+;;                                              `📋 instructions'
+;;                                              header that opens
+;;                                              every review buffer;
+;;                                              consumed by `strip-
+;;                                              meta' on the agent
+;;                                              route)
 ;;
 ;; `format-exchanges' calls `quote' so both belong in the same
 ;; module.  `strip-meta' is independent but co-located because all
-;; three are part of the same render/route pipeline.
+;; four are part of the same render/route pipeline -- preamble in,
+;; strip-meta out.
 
 ;;; Code:
 
@@ -78,6 +88,36 @@ agent sees the Option-1 reply contract."
           (forward-line 1))
         (delete-region start (point))))
     (buffer-string)))
+
+(defun decknix--agent-review-render-preamble (session-name workspace collaborators)
+  "Return the review-buffer preamble for SESSION-NAME, WORKSPACE, COLLABORATORS.
+SESSION-NAME is a display string (typically the source agent-shell
+buffer name).  WORKSPACE is a path that gets passed through
+`abbreviate-file-name'; nil/empty renders as the empty path.
+COLLABORATORS is a list of names rendered comma-separated; the
+caller is responsible for placing the review author first.
+
+The output is the `🧭 **review meta**' blockquote followed by the
+`📋 **instructions for the agent**' Option-1 contract.  Pure --
+no buffer reads, no defvar lookups; the carved counterpart of
+`decknix--agent-review-strip-meta', which deletes exactly this
+header on the agent route."
+  (concat
+   "> 🧭 **review meta**\n"
+   (format "> session: %s\n" session-name)
+   (format "> workspace: %s\n"
+           (abbreviate-file-name (or workspace "")))
+   (format "> collaborators: %s\n"
+           (mapconcat #'identity collaborators ", "))
+   "> route: agent  (C-c C-c submits to source session)\n"
+   ">\n"
+   "> 📋 **instructions for the agent** (Option 1):\n"
+   "> Respond inline using `> 💬 **agent:** …` immediately after\n"
+   "> each of my annotations. Keep order. Don't collapse multiple\n"
+   "> annotations into one reply. For ❌ rejections, propose a\n"
+   "> concrete change. For 🔀 option picks, acknowledge the chosen\n"
+   "> option and update prior assumptions.\n"
+   "\n"))
 
 (provide 'decknix-agent-review-format)
 ;;; decknix-agent-review-format.el ends here

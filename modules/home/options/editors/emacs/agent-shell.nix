@@ -1769,6 +1769,13 @@ in
         (declare-function decknix--agent-review-quote "decknix-agent-review-format")
         (declare-function decknix--agent-review-format-exchanges "decknix-agent-review-format")
         (declare-function decknix--agent-review-strip-meta "decknix-agent-review-format")
+        ;; Pure preamble renderer (PR B.59) -- carved from main-bulk
+        ;; with a refactored data-only signature so the call site
+        ;; below extracts buffer-local workspace + collaborators
+        ;; before invoking it.
+        (declare-function decknix--agent-review-render-preamble
+                          "decknix-agent-review-format"
+                          (session-name workspace collaborators))
 
         ;; Review @mention author + collaborators store (PR B.47)
         ;; -- persistence + identity for the inline review buffer.
