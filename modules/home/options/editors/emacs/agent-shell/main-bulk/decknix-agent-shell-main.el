@@ -501,6 +501,14 @@ Prevents the auto-persist hook from firing repeatedly.")
 (declare-function decknix--agent-conversation-preview
                   "decknix-agent-conv-format" (conv-group))
 
+;; Pure dispatch helper for the compose-submit busy-prompt lives
+;; in `decknix-agent-compose-busy' (`agent-shell/compose/').  Maps
+;; (busy-p, user-choice) to one of `submit', `interrupt-submit',
+;; `queue', or `cancel'; the submit handler `pcase'-es over the
+;; result instead of using `cl-return-from'.
+(declare-function decknix--compose-busy-action
+                  "decknix-agent-compose-busy" (busy-p))
+
 (defun decknix--agent-context-toggle ()
   "Toggle the visibility of the Context history section.
 Switches between ▶ (collapsed) and ▼ (expanded).  When no Context
@@ -3129,7 +3137,7 @@ Called by a repeating timer on the agent-shell buffer."
                             (decknix--compose-queue-poll))))
                      t)))))))
 
-(cl-defun decknix-agent-compose-submit ()
+(defun decknix-agent-compose-submit ()
   "Submit the compose buffer content to the agent-shell.
 If the agent is busy, offers three options:
   - Interrupt and submit immediately
@@ -3137,46 +3145,46 @@ If the agent is busy, offers three options:
   - Cancel
 Use C-c k k to pre-emptively interrupt, then C-c C-c to submit cleanly.
 
-Defined with `cl-defun' so the `?q' branch's `cl-return-from'
-finds an implicit `cl-block' named after this function."
+The busy-prompt dispatch lives in `decknix--compose-busy-action'
+(carved package, `agent-shell/compose/'); this handler `pcase'-es
+over the returned action symbol rather than `cl-return-from'-ing
+out of nested branches, which both removes the
+`No catch for tag: --cl-block-...' bug class and pins the
+dispatch table under ERT."
   (interactive)
-  (let ((input (string-trim (buffer-string)))
-        (target decknix--compose-target-buffer))
-    (if (string-empty-p input)
-        (user-error "Empty prompt — nothing to submit")
-      ;; Check if the agent is busy
-      (when (and (buffer-live-p target)
-                 (with-current-buffer target
-                   (bound-and-true-p shell-maker--busy)))
-        (let ((choice (read-char-choice
-                       "Agent is busy: [i]nterrupt & submit  [q]ueue for later  [c]ancel "
-                       '(?i ?q ?c))))
-          (pcase choice
-            (?c (user-error "Submit cancelled — agent is still processing"))
-            (?q
-             ;; Queue the prompt and close/clear compose
-             (decknix--compose-enqueue-prompt target input)
-             (decknix--compose-finish)
-             (message "Prompt queued — will submit when agent is ready")
-             (cl-return-from decknix-agent-compose-submit))
-            (?i
-             ;; Interrupt and continue to submit below
+  (let* ((input (string-trim (buffer-string)))
+         (target decknix--compose-target-buffer))
+    (cond
+     ((string-empty-p input)
+      (user-error "Empty prompt — nothing to submit"))
+     (t
+      (let* ((busy-p (and (buffer-live-p target)
+                          (with-current-buffer target
+                            (bound-and-true-p shell-maker--busy))))
+             (action (decknix--compose-busy-action busy-p)))
+        (pcase action
+          ('cancel
+           (user-error "Submit cancelled — agent is still processing"))
+          ('queue
+           (decknix--compose-enqueue-prompt target input)
+           (decknix--compose-finish)
+           (message "Prompt queued — will submit when agent is ready"))
+          ((or 'submit 'interrupt-submit)
+           (when (eq action 'interrupt-submit)
              (with-current-buffer target
                (when (fboundp 'agent-shell-interrupt)
                  (let ((agent-shell-confirm-interrupt nil))
                    (agent-shell-interrupt))))
-             (sit-for 0.3)))))
-      ;; Verify the agent process is alive before submitting
-      (unless (and (buffer-live-p target)
-                   (get-buffer-process target)
-                   (process-live-p (get-buffer-process target)))
-        (user-error "Agent process not running — wait for it to start or restart with C-c A a"))
-      ;; Clear or close the compose buffer
-      (decknix--compose-finish)
-      ;; Submit to the agent-shell buffer
-      (with-current-buffer target
-        (goto-char (point-max))
-        (shell-maker-submit :input input)))))
+             (sit-for 0.3))
+           ;; Verify the agent process is alive before submitting.
+           (unless (and (buffer-live-p target)
+                        (get-buffer-process target)
+                        (process-live-p (get-buffer-process target)))
+             (user-error "Agent process not running — wait for it to start or restart with C-c A a"))
+           (decknix--compose-finish)
+           (with-current-buffer target
+             (goto-char (point-max))
+             (shell-maker-submit :input input)))))))))
 
 (defun decknix-agent-compose-interrupt-agent ()
   "Pre-emptively interrupt the agent without submitting.
