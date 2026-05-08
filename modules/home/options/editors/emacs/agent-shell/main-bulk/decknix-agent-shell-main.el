@@ -3129,13 +3129,16 @@ Called by a repeating timer on the agent-shell buffer."
                             (decknix--compose-queue-poll))))
                      t)))))))
 
-(defun decknix-agent-compose-submit ()
+(cl-defun decknix-agent-compose-submit ()
   "Submit the compose buffer content to the agent-shell.
 If the agent is busy, offers three options:
   - Interrupt and submit immediately
   - Queue the prompt (auto-submitted when agent becomes idle)
   - Cancel
-Use C-c k k to pre-emptively interrupt, then C-c C-c to submit cleanly."
+Use C-c k k to pre-emptively interrupt, then C-c C-c to submit cleanly.
+
+Defined with `cl-defun' so the `?q' branch's `cl-return-from'
+finds an implicit `cl-block' named after this function."
   (interactive)
   (let ((input (string-trim (buffer-string)))
         (target decknix--compose-target-buffer))
