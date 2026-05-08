@@ -89,11 +89,15 @@ let
   # files; a red test exits the byte-compile build non-zero, which
   # fails the system derivation.  No commit without a green build.
   testsDir = ./agent-shell/tests;
-  mkEmacsTestedPackage = { pname, src, packageRequires ? [ ], testFiles }:
+  mkEmacsTestedPackage = { pname, src, packageRequires ? [ ]
+                         , testFiles, testInputs ? [ ] }:
     (pkgs.emacsPackages.trivialBuild {
       inherit pname src packageRequires;
       version = "0.1";
     }).overrideAttrs (old: {
+      # Tests sometimes shell out (jq, rg, ...) -- expose those
+      # binaries on PATH only for the test phase via nativeBuildInputs.
+      nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ testInputs;
       postBuild = (old.postBuild or "") + ''
         echo "==> Running ERT characterisation tests for ${pname}"
         # Stage the test sources in a sibling tmp dir (NOT alongside
@@ -597,6 +601,31 @@ let
     testFiles = [
       "decknix-agent-session-history-test.el"
     ];
+  };
+
+  # PR B.53: per-file prompt extractor + jq filter cache carved out
+  # of `decknix-agent-shell-main' (main-bulk).  Co-resident with the
+  # other agent/ jq helpers.  Two consumers in main-bulk drive this:
+  # `decknix--agent-session-restore-input-ring' seeds the resumed
+  # session's `comint-input-ring', and
+  # `decknix--compose-history-load-next-batch' streams older
+  # sessions' prompts on demand for M-P / M-N.  Plus the
+  # workspace-side `decknix--prompt-search-jq-cmd' reuses the cached
+  # filter file via `decknix--prompt-extract-ensure-jq-filter' for
+  # its parallel xargs prompt-search build.  Both functions are
+  # pure relative to the cached filter-path defvar: shell out to jq,
+  # parse the result, return a list (nil on any failure).
+  decknix-agent-prompt-extract-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-prompt-extract";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-prompt-extract-test.el"
+    ];
+    # Tests shell out to jq to exercise the real filter against
+    # session-shaped fixtures; without this the build sandbox has
+    # no jq on PATH and the cases skip themselves.
+    testInputs = [ pkgs.jq ];
   };
 
   # PR B.28: tag-store JSON persistence + cache carved out of
@@ -1289,6 +1318,7 @@ in
           decknix-agent-parse-el
           decknix-agent-session-cache-el
           decknix-agent-session-history-el
+          decknix-agent-prompt-extract-el
           decknix-agent-tags-store-el
           decknix-agent-link-store-el
           decknix-agent-conv-resolve-el
@@ -1403,6 +1433,17 @@ in
                           "decknix-agent-session-history" (session-id))
         (declare-function decknix--agent-session-extract-history
                           "decknix-agent-session-history" (session-id n))
+        ;; Per-file prompt extractor + cached jq filter (PR B.53).
+        ;; Pure shell-out: feeds `decknix--agent-session-restore-
+        ;; input-ring' (M-p/M-n on resume), `decknix--compose-
+        ;; history-load-next-batch' (cross-session M-P/M-N), and the
+        ;; workspace-side `decknix--prompt-search-jq-cmd' which
+        ;; reuses the cached filter file.
+        (require 'decknix-agent-prompt-extract)
+        (declare-function decknix--prompt-extract-ensure-jq-filter
+                          "decknix-agent-prompt-extract")
+        (declare-function decknix--prompt-extract-from-file
+                          "decknix-agent-prompt-extract" (file))
         ;; Tag-store storage layer (PR B.28) — owns
         ;; ~/.config/decknix/agent-sessions.json: the file-path
         ;; defvar, the in-memory cache (hash + mtime + checked-at +

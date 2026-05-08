@@ -2679,42 +2679,21 @@ Restored when cycling past the newest history entry.")
   "Non-nil when all session files have been processed.")
 
 ;; == On-demand per-file prompt extraction ==
+;;
+;; PR B.53: the cached jq filter
+;; (`decknix--prompt-extract-ensure-jq-filter') and the per-file
+;; reader (`decknix--prompt-extract-from-file') were carved into
+;; `decknix-agent-prompt-extract' (`agent-shell/agent/').  Both are
+;; pure shell-out helpers with a single defvar of cached state
+;; (the tmp .jq path); the buffer-side consumers that mutate
+;; `comint-input-ring' / the compose history queue stay in
+;; main-bulk per AGENTS.md Rule 2.  Forward-declare so the
+;; byte-compile pass resolves the carved symbols.
 
-(defvar decknix--prompt-extract-jq-filter-file nil
-  "Path to temp file containing the jq filter for single-file extraction.")
-
-(defun decknix--prompt-extract-ensure-jq-filter ()
-  "Create the jq filter file for per-file prompt extraction."
-  (unless (and decknix--prompt-extract-jq-filter-file
-              (file-exists-p decknix--prompt-extract-jq-filter-file))
-    (setq decknix--prompt-extract-jq-filter-file
-          (make-temp-file "auggie-extract-" nil ".jq"))
-    (with-temp-file decknix--prompt-extract-jq-filter-file
-      (insert "[.chatHistory[].exchange.request_message"
-              " // \"\" | select(length > 0)] | reverse\n")))
-  decknix--prompt-extract-jq-filter-file)
-
-(defun decknix--prompt-extract-from-file (file)
-  "Extract user prompts from a single session FILE using jq.
-Returns a list of non-empty strings, newest first."
-  (condition-case nil
-      (let* ((jqf (decknix--prompt-extract-ensure-jq-filter))
-             (raw (shell-command-to-string
-                   (concat "jq -c -f "
-                           (shell-quote-argument jqf) " "
-                           (shell-quote-argument file)
-                           " 2>/dev/null")))
-             (trimmed (string-trim raw)))
-        (when (and (not (string-empty-p trimmed))
-                   (string-prefix-p "[" trimmed))
-          (let* ((json-array-type 'list)
-                 (json-key-type 'symbol)
-                 (msgs (json-read-from-string trimmed)))
-            (seq-filter (lambda (m)
-                          (and (stringp m)
-                               (not (string-empty-p (string-trim m)))))
-                        msgs))))
-    (error nil)))
+(declare-function decknix--prompt-extract-ensure-jq-filter
+                  "decknix-agent-prompt-extract")
+(declare-function decknix--prompt-extract-from-file
+                  "decknix-agent-prompt-extract" (file))
 
 (defvar-local decknix--compose-history-local-only t
   "When non-nil, M-p/M-n only cycle the current session's prompts.
