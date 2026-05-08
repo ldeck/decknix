@@ -708,6 +708,24 @@ let
     ];
   };
 
+  # PR B.58: pure conversation-row formatter carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Sibling of
+  # `session-format' (B.54) and `grep-format' (B.57): same column
+  # shape with two extra suffixes -- ` (N sessions)' for collapsed
+  # multi-snapshot rows and ` @<workspace>' for the project root
+  # shortname.  Forward-declares three sibling lookups
+  # (tags-for-conv-key, workspace-for-conv-key, session-time-ago);
+  # tests stub all three via `cl-letf' so the suite never reaches
+  # the real tag-store JSON, the workspace-cache file, or wall clock.
+  decknix-agent-conv-format-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-conv-format";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-conv-format-test.el"
+    ];
+  };
+
   # PR B.28: tag-store JSON persistence + cache carved out of
   # `decknix-agent-shell-main' (main-bulk).  Owns the file path
   # defvar, the four cache state vars (hash + mtime + checked-at +
@@ -1403,6 +1421,7 @@ in
           decknix-agent-session-format-el
           decknix-agent-session-group-el
           decknix-agent-grep-format-el
+          decknix-agent-conv-format-el
           decknix-agent-tags-store-el
           decknix-agent-link-store-el
           decknix-agent-conv-resolve-el
@@ -1686,6 +1705,16 @@ in
                           "decknix-agent-grep-format" (session))
         (declare-function decknix--agent-session-grep-build-entries
                           "decknix-agent-grep-format" (sessions expand))
+
+        ;; Pure formatter for conversation-collapsed picker rows
+        ;; (PR B.58) -- carved from main-bulk.  Sibling of
+        ;; `session-preview' (B.54) / `grep-candidate' (B.57) that
+        ;; consumes a (CONV-KEY LATEST-SESSION ALL-SESSIONS) triple
+        ;; from `group-by-conversation' (loaded above) and decorates
+        ;; the row with `(N sessions)' + ` @workspace' suffixes.
+        (require 'decknix-agent-conv-format)
+        (declare-function decknix--agent-conversation-preview
+                          "decknix-agent-conv-format" (conv-group))
 
         ;; Workspace + branch detection (PR B.45) -- pure helpers
         ;; consumed by session-creation / PR-quick-action flows.
