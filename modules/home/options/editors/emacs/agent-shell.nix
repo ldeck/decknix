@@ -726,6 +726,24 @@ let
     ];
   };
 
+  # Pure dispatch helper for the compose-submit busy-prompt.
+  # Maps (busy-p, user-choice) to one of `submit',
+  # `interrupt-submit', `queue', or `cancel'.  Carved out of
+  # main-bulk so the dispatch table is independently testable --
+  # a previous version `cl-return-from'-ed out of the busy-prompt
+  # `pcase' from inside a plain `defun' (no implicit `cl-block'),
+  # throwing `No catch for tag' when the user picked `?q'.  The
+  # carved enum lets the caller `pcase' over a flat result with
+  # no early-exit mechanics, removing that bug class entirely.
+  decknix-agent-compose-busy-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-compose-busy";
+    src = ./agent-shell/compose;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-compose-busy-test.el"
+    ];
+  };
+
   # PR B.28: tag-store JSON persistence + cache carved out of
   # `decknix-agent-shell-main' (main-bulk).  Owns the file path
   # defvar, the four cache state vars (hash + mtime + checked-at +
@@ -1422,6 +1440,7 @@ in
           decknix-agent-session-group-el
           decknix-agent-grep-format-el
           decknix-agent-conv-format-el
+          decknix-agent-compose-busy-el
           decknix-agent-tags-store-el
           decknix-agent-link-store-el
           decknix-agent-conv-resolve-el
@@ -1715,6 +1734,14 @@ in
         (require 'decknix-agent-conv-format)
         (declare-function decknix--agent-conversation-preview
                           "decknix-agent-conv-format" (conv-group))
+
+        ;; Pure dispatch helper for the compose-submit busy-prompt.
+        ;; Returns one of `submit', `interrupt-submit', `queue', or
+        ;; `cancel' so the caller `pcase'-es over a flat enum
+        ;; instead of `cl-return-from'-ing out of a nested branch.
+        (require 'decknix-agent-compose-busy)
+        (declare-function decknix--compose-busy-action
+                          "decknix-agent-compose-busy" (busy-p))
 
         ;; Workspace + branch detection (PR B.45) -- pure helpers
         ;; consumed by session-creation / PR-quick-action flows.
