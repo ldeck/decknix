@@ -1204,6 +1204,20 @@ let
     ];
   };
 
+  # PR B.79: ComposeQueue policy resolver carved from
+  # `decknix--compose-queue-poll'.  Pure decision: given
+  # (queued-prompt, buffer-live?, busy?, process-live?) returns
+  # one of (:action cancel-timer | submit :input STR | wait).
+  # Bulk pcase's on the action and applies the side-effect.
+  decknix-agent-compose-queue-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-compose-queue";
+    src = ./agent-shell/compose-queue;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-compose-queue-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1878,6 +1892,7 @@ in
           decknix-agent-resume-command-el
           decknix-agent-jump-target-el
           decknix-agent-input-ring-el
+          decknix-agent-compose-queue-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -2335,6 +2350,15 @@ in
                           (current-size prompt-count))
         (declare-function decknix--input-ring-insertion-order
                           "decknix-agent-input-ring" (prompts))
+
+        ;; Compose-queue policy (PR B.79) -- pure action resolver
+        ;; for the auto-submit timer.  Bulk owns timer/submit
+        ;; side-effects per Rule 2.
+        (require 'decknix-agent-compose-queue)
+        (declare-function decknix--compose-queue-action
+                          "decknix-agent-compose-queue"
+                          (queued-prompt buffer-live-p
+                                         busy-p process-live-p))
 
         ;; Tag-store mutators (PR B.70) -- the three writers that
         ;; persist conversation tags + workspace + session-id
