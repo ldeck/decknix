@@ -355,164 +355,24 @@ reports that fact instead of silently no-opping."
 ;; per-buffer so multiple sessions can sit at different positions
 ;; in their respective timelines.
 
-(defvar-local decknix--agent-history-cache nil
-  "Cached full turn list for this buffer's session.
-Populated on the first `decknix--agent-session-prepopulate' run
-and re-used by `decknix-agent-history-older' / `-newer' so paging
-the timeline window does not re-read the on-disk session JSON.
-nil means the cache has not been populated yet (e.g. fresh buffer
-before the resume timer has fired).")
+;; PR B.68: the two buffer-local caches and the three paging
+;; primitives (`-context-find-existing', `-context-render-window',
+;; `-session-prepopulate') were carved into
+;; `decknix-agent-context-history'.  The interactive paging
+;; commands (`decknix-agent-history-older' / `-newer' below) and
+;; the section-header keymap (`decknix--agent-context-header-map'
+;; above) stay here per AGENTS.md Rule 2.  Forward-declare the
+;; carved symbols so the byte-compiler resolves them.
+(defvar decknix--agent-history-cache)
+(defvar decknix--agent-history-cursor)
+(declare-function decknix--agent-context-find-existing
+                  "decknix-agent-context-history")
+(declare-function decknix--agent-context-render-window
+                  "decknix-agent-context-history" (cursor))
+(declare-function decknix--agent-session-prepopulate
+                  "decknix-agent-context-history"
+                  (session-id n))
 
-(defvar-local decknix--agent-history-cursor nil
-  "Index (0-based, oldest = 0) of the topmost turn currently rendered.
-Set by `decknix--agent-session-prepopulate' to land the user at
-the bottom of the timeline (most recent N turns) and updated by
-`decknix-agent-history-older' / `-newer' as the user pages.  nil
-means no Context section has been rendered in this buffer.")
-
-(defun decknix--agent-context-find-existing ()
-  "Return a plist describing the existing Context section, or nil.
-The plist carries `:header-start' (line BOL of the `▶'/`▼' header),
-`:body-start' (first char of the `decknix-context-body' region) and
-`:body-end' (one past the last char of that region) so callers can
-read the body's `invisible' flag without re-deriving offsets."
-  (save-excursion
-    (let ((body-start (next-single-property-change
-                       (point-min) 'decknix-context-body)))
-      (when body-start
-        (let ((body-end (next-single-property-change
-                         body-start 'decknix-context-body))
-              (header-start (save-excursion
-                              (goto-char (max (point-min) (1- body-start)))
-                              (line-beginning-position))))
-          (when body-end
-            (list :header-start header-start
-                  :body-start body-start
-                  :body-end body-end)))))))
-
-(defun decknix--agent-context-render-window (cursor)
-  "Re-render the Context section anchored at turn CURSOR (0-based).
-Reads from the buffer-local `decknix--agent-history-cache' (must
-be populated; see `decknix--agent-session-prepopulate') and slices
-out `decknix-agent-session-history-count' turns starting at the
-window-clamped CURSOR.
-
-Removes any existing Context section first so the buffer is left
-with exactly one.  Updates `decknix--agent-history-cursor' to the
-clamped value so subsequent paging starts from the visible window
-even when the caller passed an out-of-range cursor.  Preserves
-the prior collapsed/expanded state of the section across
-re-renders so paging does not auto-expand a collapsed section."
-  (let* ((all decknix--agent-history-cache)
-         (count decknix-agent-session-history-count)
-         (total (length all))
-         (clamped (decknix--agent-session-window-clamp cursor count total))
-         (window (decknix--agent-session-take-window all clamped count))
-         (window-len (length window))
-         (display-from (1+ clamped))
-         (display-to (+ clamped window-len))
-         (existing (decknix--agent-context-find-existing))
-         (was-collapsed
-          (when existing
-            ;; Pre-existing section's invisible flag dictates the
-            ;; collapse/expand state we restore after re-render.
-            ;; New sections (no existing) start collapsed by
-            ;; convention — the prompt stays immediately visible.
-            (get-text-property (plist-get existing :body-start)
-                               'invisible))))
-    (when window
-      (let ((inhibit-read-only t))
-        (save-excursion
-          ;; Drop any existing section so we can replace it.
-          (when existing
-            (delete-region (plist-get existing :header-start)
-                           (plist-get existing :body-end)))
-          ;; Position at start of the prompt line.
-          (goto-char (point-max))
-          (let ((prompt-pos
-                 (when (bound-and-true-p comint-prompt-regexp)
-                   (re-search-backward comint-prompt-regexp nil t))))
-            (if prompt-pos
-                (goto-char prompt-pos)
-              (goto-char (point-max))))
-          (beginning-of-line)
-          (let* ((arrow (if (or (null existing) was-collapsed) "▶" "▼"))
-                 (label (format "Context (%d–%d / %d)"
-                                display-from display-to total)))
-            (insert (propertize
-                     (format "%s %s\n"
-                             arrow
-                             (propertize label
-                                         'font-lock-face
-                                         'font-lock-doc-markup-face))
-                     'read-only t
-                     'rear-nonsticky t
-                     'keymap decknix--agent-context-header-map))
-            (let ((body-start (point)))
-              (dolist (ex window)
-                (let ((user (car ex))
-                      (resp (cdr ex)))
-                  (insert (propertize
-                           (format "\n❯ %s\n"
-                                   (truncate-string-to-width
-                                    user 500 nil nil "..."))
-                           'font-lock-face 'font-lock-keyword-face
-                           'read-only t
-                           'rear-nonsticky t))
-                  (when (and resp (not (string-empty-p resp)))
-                    (insert (propertize
-                             (format "\n%s\n"
-                                     (truncate-string-to-width
-                                      resp 2000 nil nil
-                                      "\n[...truncated]"))
-                             'font-lock-face 'font-lock-doc-face
-                             'read-only t
-                             'rear-nonsticky t)))))
-              (insert (propertize "\n" 'read-only t 'rear-nonsticky t))
-              (put-text-property body-start (point)
-                                 'decknix-context-body t)
-              ;; Restore collapsed/expanded state: new sections
-              ;; start collapsed; re-renders preserve the prior
-              ;; visibility so paging doesn't yank the user's
-              ;; collapse choice out from under them.
-              (put-text-property body-start (point)
-                                 'invisible
-                                 (if existing was-collapsed t))))))
-      (setq decknix--agent-history-cursor clamped)
-      (cons clamped window-len))))
-
-(defun decknix--agent-session-prepopulate (session-id n)
-  "Insert a collapsible Context section with the last N exchanges.
-Inserts just before the prompt, matching the ▶/▼ toggle style of
-agent-shell's built-in sections (Notices, Agent capabilities, etc.).
-User messages shown in `font-lock-keyword-face', assistant responses
-in `font-lock-doc-face'.  Section is collapsed by default so the
-prompt is immediately visible.  Click or TAB the header to expand;
-press `[' / `]' (or `C-c s [' / `C-c s ]') to page older / newer
-turns through the same window.
-
-Caches the full parsed turn list in `decknix--agent-history-cache'
-and seeds `decknix--agent-history-cursor' so subsequent paging
-operates on the cache without re-reading the on-disk JSON."
-  (let* ((all (decknix--agent-session-extract-all-turns session-id))
-         (total (length all))
-         (count n)
-         ;; Land at the bottom of the timeline (most recent N turns).
-         (cursor (decknix--agent-session-window-clamp
-                  (- total count) count total)))
-    (when all
-      (setq decknix--agent-history-cache all)
-      ;; Make N buffer-local so subsequent `[' / `]' paging steps
-      ;; by the same window size the user picked at resume time
-      ;; (e.g. `C-u 5 C-c A s' overrides the default 2).  The
-      ;; render helper reads the current value to compute the
-      ;; window slice, so a global setq here would leak into
-      ;; other buffers.
-      (setq-local decknix-agent-session-history-count count)
-      (decknix--agent-context-render-window cursor)
-      ;; Move point to the prompt so the buffer is immediately
-      ;; ready for input, not stuck at the Context header.
-      (goto-char (point-max)))))
 
 (defun decknix-agent-history-older (&optional n)
   "Page the Context timeline window backwards by N turns.
@@ -629,18 +489,11 @@ since default.el is evaluated under dynamic binding."
 (defvar decknix--agent-sessions-dir)
 (defvar decknix--agent-session-jq-filter-file)
 
-(defun decknix--agent-buffer-session-id (&optional buf)
-  "Return the auggie CLI session ID for BUF (default: current buffer).
-Reads the buffer-local `decknix--agent-auggie-session-id' first (this is
-the ID needed for --resume).  Falls back to the ACP session ID from
-`agent-shell--state' if the auggie ID is not yet set."
-  (with-current-buffer (or buf (current-buffer))
-    (or (and (boundp 'decknix--agent-auggie-session-id)
-             decknix--agent-auggie-session-id)
-        (ignore-errors
-          (and (boundp 'agent-shell--state)
-               agent-shell--state
-               (map-nested-elt agent-shell--state '(:session :id)))))))
+;; PR B.66: `decknix--agent-buffer-session-id',
+;; `-find-new-shell-buffer', `-find-live-buffer-for-conv-key' and
+;; `-current-conv-key' carved into `decknix-agent-buffer-lookup'.
+;; All four are read-only helpers; the heredoc requires the package
+;; and forward-declares the symbols so this file compiles clean.
 
 ;; `decknix--agent-session-preview' lives in
 ;; agent-shell/agent/decknix-agent-session-format.el (PR B.54) --
@@ -656,42 +509,9 @@ Captured by the dynamic collection lambda so the post-selection
 handler can pass the search term through to
 `decknix--agent-session-resume' for jump-to-match.")
 
-(defun decknix--agent-find-new-shell-buffer (before-buffers)
-  "Find the agent-shell buffer that was created after BEFORE-BUFFERS snapshot.
-Returns the new buffer, or nil if not found."
-  (seq-find (lambda (buf)
-              (and (buffer-live-p buf)
-                   (not (memq buf before-buffers))
-                   (with-current-buffer buf
-                     (derived-mode-p 'agent-shell-mode))))
-            (buffer-list)))
-
 ;; `decknix--agent-session-display-name' lives in
 ;; agent-shell/agent/decknix-agent-session-format.el (PR B.54) --
 ;; required at the top of this heredoc.
-
-(defun decknix--agent-find-live-buffer-for-conv-key (conv-key)
-  "Return the first live agent-shell buffer whose conv-key matches CONV-KEY.
-Returns nil when CONV-KEY is nil or no live buffer is bound to it.
-Used by `decknix--agent-session-resume' to dedupe: spawning a second
-buffer for a conversation that is already live produces a confusing
-`*Auggie: ...*<2>' pair where one buffer holds stale context.
-
-A buffer only qualifies when its underlying auggie process is also
-alive — a process-less buffer corpse (Emacs buffer alive, auggie
-process dead) would otherwise short-circuit resume and leave the
-user staring at a dead shell."
-  (when conv-key
-    (seq-find
-     (lambda (buf)
-       (and (buffer-live-p buf)
-            (process-live-p (get-buffer-process buf))
-            (with-current-buffer buf
-              (and (derived-mode-p 'agent-shell-mode)
-                   (bound-and-true-p decknix--agent-conv-key)
-                   (equal decknix--agent-conv-key conv-key)))))
-     (when (fboundp 'agent-shell-buffers)
-       (agent-shell-buffers)))))
 
 (defun decknix--agent-session-resume (session-id history-count
                                       &optional display-name workspace
@@ -973,27 +793,9 @@ dedupes against live buffers before calling here."
       ;; Return the buffer so callers can use it directly
       shell-buf)))
 
-(defun decknix--agent-conversation-hidden-p (conv-key)
-  "Return non-nil if CONV-KEY is marked as hidden in agent-sessions.json.
-Hidden conversations are background/automated sessions (e.g., git hook
-commit reviews) that should not appear in user-facing session lists."
-  (condition-case nil
-      (let* ((store (decknix--agent-tags-read))
-             (convs (decknix--agent-tags-conversations store))
-             (entry (gethash conv-key convs)))
-        (and entry (eq (gethash "hidden" entry) t)))
-    (error nil)))
-
-(defun decknix--agent-conversation-set-hidden (conv-key hidden)
-  "Set the hidden flag for CONV-KEY to HIDDEN (t or nil)."
-  (let* ((store (decknix--agent-tags-read))
-         (convs (decknix--agent-tags-conversations store))
-         (entry (gethash conv-key convs)))
-    (unless entry
-      (setq entry (make-hash-table :test 'equal))
-      (puthash conv-key entry convs))
-    (puthash "hidden" (if hidden t :json-false) entry)
-    (decknix--agent-tags-write store)))
+;; PR B.67: `decknix--agent-conversation-hidden-p' and
+;; `-set-hidden' carved into `decknix-agent-conv-hidden'.  The
+;; heredoc requires the package and forward-declares both symbols.
 
 ;; `decknix--agent-session-group-by-conversation' lives in
 ;; agent-shell/agent/decknix-agent-session-group.el (PR B.56) --
@@ -4192,20 +3994,9 @@ Selecting `new…' prompts for a fresh name and adds it to the list."
 ;; the pre-existing `decknix--agent-clipboard-url'.  Forward
 ;; declarations live with the other clipboard declares above.
 
-(defun decknix--agent-current-conv-key ()
-  "Get the conversation key for the current agent-shell buffer."
-  (when (derived-mode-p 'agent-shell-mode)
-    (when-let ((sid decknix--agent-auggie-session-id))
-      (let* ((store (decknix--agent-tags-read))
-             (convs (decknix--agent-tags-conversations store)))
-        (catch 'found
-          (maphash
-           (lambda (key entry)
-             (when (hash-table-p entry)
-               (when (member sid (gethash "sessions" entry))
-                 (throw 'found key))))
-           convs)
-          nil)))))
+;; `decknix--agent-current-conv-key' carved into
+;; `decknix-agent-buffer-lookup' (PR B.66) alongside the other
+;; buffer / conv-key lookups.
 
 (defun decknix-agent-link-pr ()
   "Link a GitHub PR to the current session's conversation.

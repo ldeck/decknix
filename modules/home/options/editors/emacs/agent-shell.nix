@@ -945,6 +945,72 @@ let
     ];
   };
 
+  # PR B.66: four small read-only buffer / conv-key lookups
+  # carved out of `decknix-agent-shell-main' (main-bulk).  Owns:
+  #   `-buffer-session-id'                auggie-id with ACP fallback
+  #   `-find-new-shell-buffer'            snapshot diff
+  #   `-find-live-buffer-for-conv-key'    dedupe lookup
+  #   `-current-conv-key'                 reverse-resolve sid -> key
+  # All four are pure with respect to their inputs (the tag store
+  # accessor is stubbed in the test suite via cl-letf), so they
+  # carve cleanly without dragging any side-effecting machinery
+  # along.  Depends on `decknix-agent-tags-store' for the read
+  # path; the rest are upstream agent-shell symbols
+  # forward-declared at the top of the carved file.
+  decknix-agent-buffer-lookup-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-buffer-lookup";
+    src = ./agent-shell/buffer-lookup;
+    packageRequires = [
+      decknix-agent-tags-store-el
+    ];
+    testFiles = [
+      "decknix-agent-buffer-lookup-test.el"
+    ];
+  };
+
+  # PR B.67: predicate + setter for the per-conversation `hidden'
+  # flag in `agent-sessions.json' carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Hidden conversations
+  # are background / automated sessions (e.g. git-hook commit
+  # reviews) that should not surface in user-facing pickers.
+  # The interactive sidebar toggle that wraps the setter stays in
+  # main-bulk per AGENTS.md Rule 2 -- it side-effects the sidebar
+  # refresh.  Depends on `decknix-agent-tags-store' for the
+  # read/write/conversations primitives.
+  decknix-agent-conv-hidden-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-conv-hidden";
+    src = ./agent-shell/conv-hidden;
+    packageRequires = [
+      decknix-agent-tags-store-el
+    ];
+    testFiles = [
+      "decknix-agent-conv-hidden-test.el"
+    ];
+  };
+
+  # PR B.68: Context-history paging primitives carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Owns:
+  #   `-context-find-existing'    pure: locate the existing section
+  #   `-context-render-window'    re-render at a new cursor
+  #   `-session-prepopulate'      initial seed: extract + cache + render
+  # plus the two buffer-local caches (`-history-cache',
+  # `-history-cursor').  The interactive paging commands
+  # (`decknix-agent-history-older' / `-newer') and the keymap on
+  # the section header stay in main-bulk per AGENTS.md Rule 2 --
+  # they bind keys / mouse buttons and read user prefix args.
+  # Depends on `decknix-agent-session-history' for the
+  # extract-all-turns / window-clamp / take-window primitives.
+  decknix-agent-context-history-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-context-history";
+    src = ./agent-shell/context-history;
+    packageRequires = [
+      decknix-agent-session-history-el
+    ];
+    testFiles = [
+      "decknix-agent-context-history-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1606,6 +1672,9 @@ in
           decknix-agent-clipboard-el
           decknix-agent-help-el
           decknix-agent-header-el
+          decknix-agent-buffer-lookup-el
+          decknix-agent-conv-hidden-el
+          decknix-agent-context-history-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -1927,6 +1996,51 @@ in
                           "decknix-agent-header")
         (defvar decknix--header-timer)
         (defvar decknix--header-prev-status)
+
+        ;; Buffer / conv-key lookups (PR B.66) -- four small
+        ;; read-only helpers carved from main-bulk.  Used by the
+        ;; quick-action launchers (find new buffer), the resume
+        ;; dedupe path, the link verbs, the header builder, and
+        ;; many sidebar handlers.  Loaded here so the heredoc and
+        ;; every later carved package can `(require ...)' without
+        ;; re-stating the dependency chain.
+        (require 'decknix-agent-buffer-lookup)
+        (declare-function decknix--agent-buffer-session-id
+                          "decknix-agent-buffer-lookup" (&optional buf))
+        (declare-function decknix--agent-find-new-shell-buffer
+                          "decknix-agent-buffer-lookup" (before-buffers))
+        (declare-function decknix--agent-find-live-buffer-for-conv-key
+                          "decknix-agent-buffer-lookup" (conv-key))
+        (declare-function decknix--agent-current-conv-key
+                          "decknix-agent-buffer-lookup")
+
+        ;; Hidden-conversation flag (PR B.67) -- predicate + setter
+        ;; for the per-conversation `hidden' boolean in
+        ;; agent-sessions.json.  The interactive sidebar toggle that
+        ;; wraps the setter stays in main-bulk per Rule 2.
+        (require 'decknix-agent-conv-hidden)
+        (declare-function decknix--agent-conversation-hidden-p
+                          "decknix-agent-conv-hidden" (conv-key))
+        (declare-function decknix--agent-conversation-set-hidden
+                          "decknix-agent-conv-hidden" (conv-key hidden))
+
+        ;; Context-history paging primitives (PR B.68) -- pure
+        ;; `find-existing', the buffer-mutating `render-window'
+        ;; and the initial `session-prepopulate' seed, plus the
+        ;; two buffer-local caches (`-history-cache',
+        ;; `-history-cursor').  The interactive paging commands
+        ;; (`decknix-agent-history-older' / `-newer') and the
+        ;; section-header keymap stay in main-bulk per Rule 2.
+        (require 'decknix-agent-context-history)
+        (declare-function decknix--agent-context-find-existing
+                          "decknix-agent-context-history")
+        (declare-function decknix--agent-context-render-window
+                          "decknix-agent-context-history" (cursor))
+        (declare-function decknix--agent-session-prepopulate
+                          "decknix-agent-context-history"
+                          (session-id n))
+        (defvar decknix--agent-history-cache)
+        (defvar decknix--agent-history-cursor)
 
         ;; Workspace + branch detection (PR B.45) -- pure helpers
         ;; consumed by session-creation / PR-quick-action flows.
