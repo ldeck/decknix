@@ -919,6 +919,32 @@ let
     ];
   };
 
+  # PR B.65: header-line builder + 2-second refresh timer carved
+  # out of `decknix-agent-shell-main' (main-bulk).  Owns:
+  #   - status detection (rich via agent-shell-workspace, fall-
+  #     back to shell-maker--busy and process state)
+  #   - status -> icon and status -> face tables
+  #   - tag lookup (conv-key fast path + session-id fallback)
+  #   - upstream agent-shell header embed
+  #   - composed `decknix--header-build' that joins icon + tags
+  #     + context + upstream with `  │  ' separator
+  #   - 2 buffer-local defvars (`-header-timer', `-header-prev-status')
+  #   - `-update' / `-start-timer' / `-stop-timer' plumbing
+  # Lexical-binding lets the start-timer use a plain lambda
+  # closure instead of the `(eval `(lambda ...) t)' workaround
+  # the dynamic-binding heredoc required.  The agent-shell
+  # startup hook that calls `-update' / `-start-timer' and adds
+  # `-stop-timer' to `kill-buffer-hook' stays in the heredoc per
+  # AGENTS.md Rule 2.
+  decknix-agent-header-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-header";
+    src = ./agent-shell/header;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-header-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1579,6 +1605,7 @@ in
           decknix-agent-session-id-el
           decknix-agent-clipboard-el
           decknix-agent-help-el
+          decknix-agent-header-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -1884,6 +1911,22 @@ in
         (declare-function decknix-agent-help-keys "decknix-agent-help")
         (declare-function decknix-agent-help-tutorial "decknix-agent-help")
         (declare-function decknix-agent-help-functions "decknix-agent-help")
+
+        ;; Header-line builder + 2-second refresh timer (PR B.65)
+        ;; -- carved from main-bulk.  Owns the icon / face tables,
+        ;; the status detection, the header build composition, and
+        ;; the buffer-local timer plumbing called from the agent-
+        ;; shell startup hook below (which lives in the heredoc per
+        ;; AGENTS.md Rule 2: top-level side-effects belong in main).
+        (require 'decknix-agent-header)
+        (declare-function decknix--header-update "decknix-agent-header")
+        (declare-function decknix--header-build "decknix-agent-header")
+        (declare-function decknix--header-start-timer
+                          "decknix-agent-header")
+        (declare-function decknix--header-stop-timer
+                          "decknix-agent-header")
+        (defvar decknix--header-timer)
+        (defvar decknix--header-prev-status)
 
         ;; Workspace + branch detection (PR B.45) -- pure helpers
         ;; consumed by session-creation / PR-quick-action flows.
