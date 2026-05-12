@@ -1138,6 +1138,22 @@ let
     ];
   };
 
+  # PR B.75: prompt-history navigation for the compose buffer.
+  # Owns the seven `defvar-local' state vars (history-index,
+  # saved-input, items, seen, file-queue, exhausted, local-only)
+  # plus the `init' / `load-next-batch' / `navigate-{previous,next}'
+  # / `reset' helpers.  The interactive M-p/M-n/M-P/M-N entry
+  # points in main-bulk flip the local-only flag and dispatch to
+  # the navigate-{previous,next} backends per AGENTS.md Rule 2.
+  decknix-agent-compose-history-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-compose-history";
+    src = ./agent-shell/compose-history;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-compose-history-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1808,6 +1824,7 @@ in
           decknix-agent-prompt-search-cache-el
           decknix-agent-review-capture-el
           decknix-agent-compose-header-el
+          decknix-agent-compose-history-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -2208,6 +2225,29 @@ in
         (require 'decknix-agent-compose-header)
         (declare-function decknix--compose-build-header-line
                           "decknix-agent-compose-header" (sticky))
+
+        ;; Compose prompt-history navigation (PR B.75) -- owns the
+        ;; seven `defvar-local' state vars + init/load-next-batch/
+        ;; navigate-{previous,next}/reset helpers.  The interactive
+        ;; M-p/M-n/M-P/M-N entry points stay in main-bulk per Rule 2.
+        (require 'decknix-agent-compose-history)
+        (declare-function decknix--compose-history-init
+                          "decknix-agent-compose-history")
+        (declare-function decknix--compose-history-load-next-batch
+                          "decknix-agent-compose-history")
+        (declare-function decknix--compose-history-navigate-previous
+                          "decknix-agent-compose-history")
+        (declare-function decknix--compose-history-navigate-next
+                          "decknix-agent-compose-history")
+        (declare-function decknix--compose-history-reset
+                          "decknix-agent-compose-history")
+        (defvar decknix--compose-history-index)
+        (defvar decknix--compose-saved-input)
+        (defvar decknix--compose-history-items)
+        (defvar decknix--compose-history-seen)
+        (defvar decknix--compose-history-file-queue)
+        (defvar decknix--compose-history-exhausted)
+        (defvar decknix--compose-history-local-only)
 
         ;; Tag-store mutators (PR B.70) -- the three writers that
         ;; persist conversation tags + workspace + session-id
