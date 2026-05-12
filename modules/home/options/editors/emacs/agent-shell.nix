@@ -1154,6 +1154,22 @@ let
     ];
   };
 
+  # PR B.76: ResumeCommand value-object for the SessionResume
+  # bounded context.  Pure builder that composes the auggie ACP
+  # command line for a session resume from BASE-CMD + WORKSPACE +
+  # MODEL + SESSION-ID.  No I/O, no buffer state -- the bulk caller
+  # `decknix--agent-session-resume--new' owns workspace validation,
+  # model resolution, the `:client-maker' closure dance, and the
+  # post-create timer per AGENTS.md Rule 2.
+  decknix-agent-resume-command-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-resume-command";
+    src = ./agent-shell/resume-command;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-resume-command-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1825,6 +1841,7 @@ in
           decknix-agent-review-capture-el
           decknix-agent-compose-header-el
           decknix-agent-compose-history-el
+          decknix-agent-resume-command-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -2248,6 +2265,18 @@ in
         (defvar decknix--compose-history-file-queue)
         (defvar decknix--compose-history-exhausted)
         (defvar decknix--compose-history-local-only)
+
+        ;; ResumeCommand value-object (PR B.76) -- pure builder that
+        ;; composes the auggie ACP command line for a session resume
+        ;; from BASE-CMD + WORKSPACE + MODEL + SESSION-ID.  The bulk
+        ;; `decknix--agent-session-resume--new' validates the
+        ;; workspace, resolves the per-conversation model override,
+        ;; and wires the result into the `:client-maker' closure per
+        ;; Rule 2.
+        (require 'decknix-agent-resume-command)
+        (declare-function decknix--resume-command-build
+                          "decknix-agent-resume-command"
+                          (base-cmd workspace model session-id))
 
         ;; Tag-store mutators (PR B.70) -- the three writers that
         ;; persist conversation tags + workspace + session-id
