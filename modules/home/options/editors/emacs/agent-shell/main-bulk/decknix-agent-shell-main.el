@@ -2532,26 +2532,34 @@ Buffer-local on agent-shell buffers.")
 
 (defun decknix--compose-queue-poll ()
   "Check if the agent is idle and submit the queued prompt.
-Called by a repeating timer on the agent-shell buffer."
-  (let ((buf (current-buffer)))
-    (if (not (buffer-live-p buf))
-        ;; Buffer killed — cancel timer
-        (when decknix--compose-queue-timer
-          (cancel-timer decknix--compose-queue-timer)
-          (setq decknix--compose-queue-timer nil))
-      (when (and decknix--compose-queued-prompt
-                 (not (bound-and-true-p shell-maker--busy))
-                 (get-buffer-process buf)
-                 (process-live-p (get-buffer-process buf)))
-        ;; Agent is idle — submit the queued prompt
-        (let ((input decknix--compose-queued-prompt))
-          (setq decknix--compose-queued-prompt nil)
-          (when decknix--compose-queue-timer
-            (cancel-timer decknix--compose-queue-timer)
-            (setq decknix--compose-queue-timer nil))
-          (goto-char (point-max))
-          (shell-maker-submit :input input)
-          (message "Queued prompt submitted"))))))
+Called by a repeating timer on the agent-shell buffer.
+
+PR B.79: the cancel/submit/wait decision is pinned by
+`decknix-agent-compose-queue' (carved, +7 ERT).  This function
+is the comint/timer-side adapter that performs the actual
+side-effect indicated by the resolver's `:action'."
+  (let* ((buf (current-buffer))
+         (proc (and (buffer-live-p buf) (get-buffer-process buf)))
+         (action (decknix--compose-queue-action
+                  decknix--compose-queued-prompt
+                  (buffer-live-p buf)
+                  (bound-and-true-p shell-maker--busy)
+                  (and proc (process-live-p proc)))))
+    (pcase (plist-get action :action)
+      ('cancel-timer
+       (when decknix--compose-queue-timer
+         (cancel-timer decknix--compose-queue-timer)
+         (setq decknix--compose-queue-timer nil)))
+      ('submit
+       (let ((input (plist-get action :input)))
+         (setq decknix--compose-queued-prompt nil)
+         (when decknix--compose-queue-timer
+           (cancel-timer decknix--compose-queue-timer)
+           (setq decknix--compose-queue-timer nil))
+         (goto-char (point-max))
+         (shell-maker-submit :input input)
+         (message "Queued prompt submitted")))
+      ('wait nil))))
 
 (defun decknix--compose-enqueue-prompt (target input)
   "Queue INPUT for submission on TARGET buffer when the agent is idle."
