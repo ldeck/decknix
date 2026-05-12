@@ -1050,6 +1050,21 @@ let
     ];
   };
 
+  # PR B.60: follow-up id generator + describe formatter carved out
+  # of `decknix-agent-shell-main' (main-bulk).  Co-resident with
+  # `decknix-agent-review-format' under `agent-shell/review'.  The
+  # I/O counterparts (`-followups-read', `-followups-write',
+  # `-followup-set-status', `-followup-delete') stay in main-bulk
+  # alongside the user-tunable file path defvar.
+  decknix-agent-review-followup-format-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-review-followup-format";
+    src = ./agent-shell/review;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-review-followup-format-test.el"
+    ];
+  };
+
   # PR B-Bulk.1: bulk extraction of the context-panel sub-heredoc.
   # Verbatim move of 35 declarations (576 lines of forms + commentary)
   # from the four `+ optionalString cfg.context.enable ''..''` sub-heredocs
@@ -1510,6 +1525,7 @@ in
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
+          decknix-agent-review-followup-format-el
         ]
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
@@ -1873,6 +1889,18 @@ in
         (defvar decknix-agent-review-author)
         (defvar decknix-agent-review-collaborators)
         (defvar decknix-agent-review-collaborators-file)
+
+        ;; Follow-up id generator + describe formatter (PR B.60) --
+        ;; carved from main-bulk.  Co-resident with `-review-format'
+        ;; / `-review-collaborators' under `agent-shell/review'.  The
+        ;; I/O counterparts (`-followups-read', `-followups-write',
+        ;; `-followup-set-status', `-followup-delete') stay in
+        ;; main-bulk alongside the user-tunable file path defvar.
+        (require 'decknix-agent-review-followup-format)
+        (declare-function decknix--agent-review-followup-id
+                          "decknix-agent-review-followup-format")
+        (declare-function decknix--agent-review-followup-describe
+                          "decknix-agent-review-followup-format" (entry))
 
         ;; Use auggie as the default agent (skip agent selection prompt)
         (setq agent-shell-preferred-agent-config 'auggie)
