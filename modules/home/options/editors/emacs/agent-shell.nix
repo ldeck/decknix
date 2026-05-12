@@ -1170,6 +1170,24 @@ let
     ];
   };
 
+  # PR B.77: JumpTarget strategy resolver for the SessionSearch
+  # bounded context (#136 cross-window jump-to-match).  Two pure
+  # helpers: `anchor-for-window-bottom' encapsulates the domain
+  # rule for "land matched turn at window bottom"; `resolve'
+  # returns a Strategy plist (`in-buffer' / `render-window' /
+  # `not-found') from already-computed buffer + cache search
+  # results.  Bulk `decknix--agent-session-jump-to-match' owns
+  # the actual searches, window mutation, and section
+  # force-expand per Rule 2.
+  decknix-agent-jump-target-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-jump-target";
+    src = ./agent-shell/jump-target;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-jump-target-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1842,6 +1860,7 @@ in
           decknix-agent-compose-header-el
           decknix-agent-compose-history-el
           decknix-agent-resume-command-el
+          decknix-agent-jump-target-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -2277,6 +2296,18 @@ in
         (declare-function decknix--resume-command-build
                           "decknix-agent-resume-command"
                           (base-cmd workspace model session-id))
+
+        ;; JumpTarget strategy resolver (PR B.77) -- two pure helpers
+        ;; for the cross-window jump-to-match (#136).  Bulk
+        ;; `decknix--agent-session-jump-to-match' performs the buffer
+        ;; + cache searches and window mutation; this module owns
+        ;; the decision tree + the anchor formula per Rule 2.
+        (require 'decknix-agent-jump-target)
+        (declare-function decknix--jump-target-anchor-for-window-bottom
+                          "decknix-agent-jump-target" (idx count))
+        (declare-function decknix--jump-target-resolve
+                          "decknix-agent-jump-target"
+                          (buffer-hit cache-idx count))
 
         ;; Tag-store mutators (PR B.70) -- the three writers that
         ;; persist conversation tags + workspace + session-id

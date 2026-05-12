@@ -587,65 +587,61 @@ was found (in either pass), nil otherwise."
                  (with-selected-window win
                    (goto-char hit)
                    (recenter)))
-               t))
-          (let ((hit (find-in-buffer)))
-            (cond
-             (hit (land-on hit))
-             ;; Cross-window jump-to-match (#136): the search term
-             ;; matched in the on-disk session JSON but lies
-             ;; outside the currently-rendered window.  Re-render
-             ;; the Context section anchored on the matching turn,
-             ;; ensure it is expanded, then re-run the buffer
-             ;; search.
-             ((and decknix--agent-history-cache
-                   (let* ((idx (decknix--agent-session-find-turn-containing
-                                decknix--agent-history-cache
-                                (regexp-quote term)))
-                          (count decknix-agent-session-history-count))
-                     (when idx
-                       ;; Land the matching turn at the BOTTOM of
-                       ;; the window (idx is the last turn shown).
-                       (decknix--agent-context-render-window
-                        (max 0 (- (1+ idx) count)))
-                       ;; Force-expand so the text is visible.
-                       (let ((existing
-                              (decknix--agent-context-find-existing)))
-                         (when existing
-                           (let ((inhibit-read-only t))
-                             (put-text-property
+               t)
+             (force-expand-section ()
+               (let ((existing (decknix--agent-context-find-existing)))
+                 (when existing
+                   (let ((inhibit-read-only t))
+                     (put-text-property
+                      (plist-get existing :body-start)
+                      (plist-get existing :body-end)
+                      'invisible nil)
+                     (save-excursion
+                       (goto-char (plist-get existing :header-start))
+                       (when (re-search-forward
+                              "[▼▶]"
                               (plist-get existing :body-start)
-                              (plist-get existing :body-end)
-                              'invisible nil)
-                             (save-excursion
-                               (goto-char
-                                (plist-get existing :header-start))
-                               (when (re-search-forward
-                                      "[▼▶]"
-                                      (plist-get existing :body-start)
-                                      t)
-                                 (replace-match "▼"))))))
-                       t)))
-              (let ((rehit (find-in-buffer)))
-                (if rehit
-                    (land-on rehit)
-                  ;; Edge case: the term matched a turn but the
-                  ;; buffer search still misses (e.g. truncation
-                  ;; ate the matched region).  Fall through to
-                  ;; the not-found branch below.
-                  (when (window-live-p win)
-                    (set-window-point win (point-max)))
-                  (message
-                   "Term %S found in turn but truncated out of view"
-                   term)
-                  nil)))
-             (t
-              (when (window-live-p win)
-                (set-window-point win (point-max)))
-              (when term
-                (message
-                 "Term %S not in loaded history (only %d exchanges shown)"
-                 term decknix-agent-session-history-count))
-              nil))))))))
+                              t)
+                         (replace-match "▼")))))))
+             (give-up (msg)
+               (when (window-live-p win)
+                 (set-window-point win (point-max)))
+               (message msg)
+               nil))
+          ;; Decision separated from side-effects via the carved
+          ;; `decknix-agent-jump-target' resolver (PR B.77, #136).
+          ;; We compute the two search results up-front and let the
+          ;; pure resolver pick the strategy; the dispatch below
+          ;; performs the actual rendering / window mutation.
+          (let* ((buffer-hit (find-in-buffer))
+                 (cache-idx (when (and (null buffer-hit)
+                                       decknix--agent-history-cache)
+                              (decknix--agent-session-find-turn-containing
+                               decknix--agent-history-cache
+                               (regexp-quote term))))
+                 (target (decknix--jump-target-resolve
+                          buffer-hit cache-idx
+                          decknix-agent-session-history-count)))
+            (pcase (plist-get target :strategy)
+              ('in-buffer
+               (land-on (plist-get target :hit)))
+              ('render-window
+               (decknix--agent-context-render-window
+                (plist-get target :anchor))
+               (force-expand-section)
+               (let ((rehit (find-in-buffer)))
+                 (if rehit
+                     (land-on rehit)
+                   ;; Edge case: turn matched but the buffer search
+                   ;; still misses (e.g. truncation ate the region).
+                   (give-up
+                    (format "Term %S found in turn but truncated out of view"
+                            term)))))
+              ('not-found
+               (give-up
+                (format "Term %S not in loaded history (only %d exchanges shown)"
+                        term
+                        decknix-agent-session-history-count))))))))))
 
 (defun decknix--agent-session-resume--new (session-id history-count
                                            &optional display-name
