@@ -3692,11 +3692,13 @@ Prompts for a name and opens a template in ~/.augment/commands/."
 ;; sibling `decknix--agent-pr-parse-url' (positional-list
 ;; variant) — required at the top of this heredoc.
 
-;; -- Clipboard URL DWIM (PR B.49) --
+;; -- Clipboard URL DWIM (PR B.49 + B.63) --
 ;; Moved into agent-shell/agent/decknix-agent-clipboard.el.
-;; Sole call site (~line 3649) reaches the symbol through the
-;; heredoc's `(require ...)' chain.
+;; All call sites reach the symbols through the heredoc's
+;; `(require 'decknix-agent-clipboard)' chain.
 (declare-function decknix--agent-clipboard-url "decknix-agent-clipboard")
+(declare-function decknix--clipboard-github-pr-url "decknix-agent-clipboard")
+(declare-function decknix--clipboard-github-repo-url "decknix-agent-clipboard")
 
 (defun decknix--agent-quickaction-start (name tags workspace command)
   "Start a quick-action session with NAME, TAGS, WORKSPACE, and auto-send COMMAND.
@@ -4430,25 +4432,11 @@ Selecting `new…' prompts for a fresh name and adds it to the list."
 
 ;; -- PR / repo linking interactive commands --
 
-(defun decknix--clipboard-github-pr-url ()
-  "Return clipboard content if it looks like a GitHub PR URL, else nil."
-  (let ((clip (ignore-errors
-                (current-kill 0 t))))
-    (when (and clip (string-match-p
-                     "https://github\\.com/[^/]+/[^/]+/pull/[0-9]+"
-                     clip))
-      (string-trim clip))))
-
-(defun decknix--clipboard-github-repo-url ()
-  "Return clipboard content if it looks like a GitHub repo URL.
-Rejects pull-request URLs — those belong to `decknix--clipboard-github-pr-url'."
-  (let ((clip (ignore-errors (current-kill 0 t))))
-    (when (and clip
-               (stringp clip)
-               (string-match-p "https://github\\.com/[^/]+/[^/?#]+"
-                               clip)
-               (not (string-match-p "/pull/[0-9]+" clip)))
-      (string-trim clip))))
+;; PR B.63: `decknix--clipboard-github-pr-url' and
+;; `decknix--clipboard-github-repo-url' carved into
+;; `agent-shell/agent/decknix-agent-clipboard.el' alongside
+;; the pre-existing `decknix--agent-clipboard-url'.  Forward
+;; declarations live with the other clipboard declares above.
 
 (defun decknix--agent-current-conv-key ()
   "Get the conversation key for the current agent-shell buffer."

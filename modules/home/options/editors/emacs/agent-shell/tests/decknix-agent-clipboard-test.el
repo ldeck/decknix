@@ -81,5 +81,71 @@ isn't a PR URL the function returns nil without consulting pbpaste."
                (lambda (_) (error "pbpaste not found"))))
       (should (null (decknix--agent-clipboard-url))))))
 
+;; -- decknix--clipboard-github-pr-url ----------------------------
+
+(ert-deftest decknix-clipboard-github-pr-url--matches-canonical-pr-url ()
+  "Returns the kill ring head when it is a fully-qualified PR URL."
+  (decknix-test-clip-with-empty-kill-ring
+    (kill-new "https://github.com/foo/bar/pull/42")
+    (should (equal "https://github.com/foo/bar/pull/42"
+                   (decknix--clipboard-github-pr-url)))))
+
+(ert-deftest decknix-clipboard-github-pr-url--trims-whitespace ()
+  "Trims surrounding whitespace from the kill ring entry."
+  (decknix-test-clip-with-empty-kill-ring
+    (kill-new "  https://github.com/foo/bar/pull/1  \n")
+    (should (equal "https://github.com/foo/bar/pull/1"
+                   (decknix--clipboard-github-pr-url)))))
+
+(ert-deftest decknix-clipboard-github-pr-url--rejects-bare-repo ()
+  "Returns nil for repo URLs without a `/pull/N' segment."
+  (decknix-test-clip-with-empty-kill-ring
+    (kill-new "https://github.com/foo/bar")
+    (should (null (decknix--clipboard-github-pr-url)))))
+
+(ert-deftest decknix-clipboard-github-pr-url--rejects-non-github ()
+  "Returns nil for non-GitHub URLs."
+  (decknix-test-clip-with-empty-kill-ring
+    (kill-new "https://example.com/foo/bar/pull/1")
+    (should (null (decknix--clipboard-github-pr-url)))))
+
+(ert-deftest decknix-clipboard-github-pr-url--nil-on-empty-kill-ring ()
+  "Returns nil when the kill ring is empty (no `pbpaste' fallback)."
+  (decknix-test-clip-with-empty-kill-ring
+    (should (null (decknix--clipboard-github-pr-url)))))
+
+;; -- decknix--clipboard-github-repo-url --------------------------
+
+(ert-deftest decknix-clipboard-github-repo-url--matches-bare-repo ()
+  "Returns the kill ring head when it is a GitHub repo URL."
+  (decknix-test-clip-with-empty-kill-ring
+    (kill-new "https://github.com/foo/bar")
+    (should (equal "https://github.com/foo/bar"
+                   (decknix--clipboard-github-repo-url)))))
+
+(ert-deftest decknix-clipboard-github-repo-url--rejects-pr-url ()
+  "Returns nil for PR URLs -- those belong to the PR helper."
+  (decknix-test-clip-with-empty-kill-ring
+    (kill-new "https://github.com/foo/bar/pull/42")
+    (should (null (decknix--clipboard-github-repo-url)))))
+
+(ert-deftest decknix-clipboard-github-repo-url--trims-whitespace ()
+  "Trims surrounding whitespace from the kill ring entry."
+  (decknix-test-clip-with-empty-kill-ring
+    (kill-new "  https://github.com/foo/bar  \n")
+    (should (equal "https://github.com/foo/bar"
+                   (decknix--clipboard-github-repo-url)))))
+
+(ert-deftest decknix-clipboard-github-repo-url--rejects-non-github ()
+  "Returns nil for non-GitHub URLs."
+  (decknix-test-clip-with-empty-kill-ring
+    (kill-new "https://example.com/foo/bar")
+    (should (null (decknix--clipboard-github-repo-url)))))
+
+(ert-deftest decknix-clipboard-github-repo-url--nil-on-empty-kill-ring ()
+  "Returns nil when the kill ring is empty."
+  (decknix-test-clip-with-empty-kill-ring
+    (should (null (decknix--clipboard-github-repo-url)))))
+
 (provide 'decknix-agent-clipboard-test)
 ;;; decknix-agent-clipboard-test.el ends here
