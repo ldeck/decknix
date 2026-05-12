@@ -1234,6 +1234,23 @@ let
     ];
   };
 
+  # PR B.81: Workspace-persist policy carved from
+  # `decknix--agent-auto-persist-workspace'.  Two pure helpers:
+  # `persist-decision' resolves install-vs-no-op for the comint
+  # input-filter hook; `ring-first-message' fetches the oldest
+  # ring entry via a caller-supplied lookup fn (no `comint' /
+  # `ring' dependency in the carved module).  Bulk owns the
+  # `add-hook', `setq-local', and `agent-shell-subscribe-to'
+  # side-effects per Rule 2.
+  decknix-agent-workspace-persist-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-workspace-persist";
+    src = ./agent-shell/workspace-persist;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-workspace-persist-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1910,6 +1927,7 @@ in
           decknix-agent-input-ring-el
           decknix-agent-compose-queue-el
           decknix-agent-quickaction-window-el
+          decknix-agent-workspace-persist-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -2388,6 +2406,18 @@ in
         (declare-function decknix--quickaction-target-window
                           "decknix-agent-quickaction-window"
                           (cur-is-sidebar cur main-win))
+
+        ;; Workspace-persist policy (PR B.81) -- pure decision +
+        ;; ring-first-message accessor for the auto-persist safety
+        ;; net.  Bulk owns hook installation, ring access, and
+        ;; the prompt-ready subscription per Rule 2.
+        (require 'decknix-agent-workspace-persist)
+        (declare-function decknix--workspace-persist-decision
+                          "decknix-agent-workspace-persist"
+                          (ws persisted-p pending-set-p))
+        (declare-function decknix--workspace-ring-first-message
+                          "decknix-agent-workspace-persist"
+                          (ring-length ring-ref-fn))
 
         ;; Tag-store mutators (PR B.70) -- the three writers that
         ;; persist conversation tags + workspace + session-id

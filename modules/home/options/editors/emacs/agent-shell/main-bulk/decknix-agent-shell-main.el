@@ -1326,17 +1326,23 @@ Safety net for sessions created via any path (upstream `c', guided
 
 Whichever fires first wins; the other no-ops via the
 `decknix--agent-workspace-persisted' guard."
+  ;; PR B.81: persist-decision + ring-first-message are pinned by
+  ;; `decknix-agent-workspace-persist' (carved, +14 ERT).  This
+  ;; function is the comint/event-side adapter that performs hook
+  ;; installation, ring access, and the prompt-ready subscription.
   (let ((buf (current-buffer)))
     ;; Stash workspace + install comint hook (covers new sessions).
     (with-current-buffer buf
-      (let ((ws (or decknix--agent-session-workspace
-                    default-directory)))
-        (when (and ws (stringp ws) (not (string-empty-p ws))
-                   (not decknix--agent-workspace-persisted))
-          ;; Don't override a workspace already stashed by
-          ;; the guided post-create path.
-          (unless decknix--agent-pending-workspace
-            (setq-local decknix--agent-pending-workspace ws))
+      (let* ((ws (or decknix--agent-session-workspace
+                     default-directory))
+             (decision (decknix--workspace-persist-decision
+                        ws
+                        decknix--agent-workspace-persisted
+                        decknix--agent-pending-workspace)))
+        (when (eq (plist-get decision :action) 'install)
+          (let ((stash (plist-get decision :stash)))
+            (when stash
+              (setq-local decknix--agent-pending-workspace stash)))
           (add-hook 'comint-input-filter-functions
                     #'decknix--agent-flush-pending-metadata
                     nil t))))
@@ -1356,12 +1362,11 @@ Whichever fires first wins; the other no-ops via the
                       (let* ((ring (and (boundp 'comint-input-ring)
                                         comint-input-ring))
                              (first-msg
-                              (when (and ring (ring-p ring)
-                                         (> (ring-length ring) 0))
-                                (ring-ref ring
-                                          (1- (ring-length ring))))))
-                        (when (and first-msg
-                                   (not (string-empty-p first-msg)))
+                              (and ring (ring-p ring)
+                                   (decknix--workspace-ring-first-message
+                                    (ring-length ring)
+                                    (lambda (idx) (ring-ref ring idx))))))
+                        (when first-msg
                           (decknix--agent-flush-pending-metadata
                            first-msg))))
                   (error nil))))
