@@ -91,6 +91,8 @@
 (declare-function decknix--agent-review-quote "decknix-agent-review-format")
 (declare-function decknix--agent-review-format-exchanges "decknix-agent-review-format")
 (declare-function decknix--agent-review-strip-meta "decknix-agent-review-format")
+(declare-function decknix--agent-review-followup-id "decknix-agent-review-followup-format")
+(declare-function decknix--agent-review-followup-describe "decknix-agent-review-followup-format" (entry))
 (declare-function which-key-add-key-based-replacements "ext:which-key")
 (declare-function which-key-add-keymap-based-replacements "ext:which-key")
 (declare-function consult--multi "ext:consult")
@@ -4153,11 +4155,10 @@ title, body, route (\"local\"|\"github\"|\"jira\"), status
       (insert (json-encode items))
       (insert "\n"))))
 
-(defun decknix--agent-review-followup-id ()
-  "Generate a short, time-ordered id for a follow-up."
-  (format "fu-%s-%04x"
-          (format-time-string "%Y%m%d%H%M%S")
-          (random 65536)))
+;; `decknix--agent-review-followup-id' lives in
+;; agent-shell/review/decknix-agent-review-followup-format.el (PR B.60) --
+;; required at the top of this heredoc alongside the rest of the
+;; review/ cluster.
 
 (defun decknix-agent-review-flag-followup (title)
   "Flag the current paragraph as a follow-up.
@@ -4207,19 +4208,8 @@ prompted for — defaults to the first non-blank line near point."
                       (string-trim title))))
     (message "Recorded follow-up %s — %s" id title)))
 
-(defun decknix--agent-review-followup-describe (entry)
-  "Return a single-line label for follow-up ENTRY."
-  (format "%s  %-7s  %s  %s"
-          (or (alist-get 'id entry) "?")
-          (propertize (or (alist-get 'status entry) "open")
-                      'face (if (string= (alist-get 'status entry) "done")
-                                'font-lock-comment-face
-                              'font-lock-warning-face))
-          (format-time-string "%Y-%m-%d"
-                              (ignore-errors
-                                (date-to-time
-                                 (alist-get 'ts entry ""))))
-          (or (alist-get 'title entry) "(untitled)")))
+;; `decknix--agent-review-followup-describe' lives in
+;; agent-shell/review/decknix-agent-review-followup-format.el (PR B.60).
 
 (defun decknix-agent-review-list-followups ()
   "List stashed follow-ups via `completing-read'.
