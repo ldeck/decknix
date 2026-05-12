@@ -663,16 +663,17 @@ dedupes against live buffers before calling here."
   ;; We pin the display to whichever window the caller intended
   ;; (typically the selected window, or main window from sidebar).
   (let* ((target-win (selected-window))
-         (resume-args (list "--resume" session-id))
-         (ws-args (when (and workspace (file-directory-p workspace))
-                    (list "--workspace-root" workspace)))
          ;; Per-conversation model override (set mid-session
          ;; via C-c C-v).  When absent, omit --model so auggie
          ;; falls back to the global default in settings.json.
          (saved-model (decknix--agent-session-model-for-conv-key
                        conv-key))
-         (model-args (when saved-model
-                       (list "--model" saved-model)))
+         ;; Validate workspace once here (filesystem I/O); the
+         ;; pure `decknix--resume-command-build' below treats a
+         ;; non-empty string as "use it".
+         (validated-ws (when (and workspace
+                                  (file-directory-p workspace))
+                         workspace))
          ;; Augment the auggie ACP command for this resume.  We
          ;; MUST capture the augmented command in an explicit
          ;; `:client-maker' closure rather than via a dynamic
@@ -687,10 +688,13 @@ dedupes against live buffers before calling here."
          ;; "wedged".  See `decknix-agent-session-new' (where
          ;; this lesson was first paid for) for the same
          ;; pattern.  `eval`+backquote is required because
-         ;; default.el is dynamic-bound.
+         ;; default.el is dynamic-bound.  Composition itself is
+         ;; carved into `decknix-agent-resume-command' (PR B.76)
+         ;; so the argument-order contract is unit-tested.
          (augmented-cmd
-          (append agent-shell-auggie-acp-command
-                  ws-args model-args resume-args))
+          (decknix--resume-command-build
+           agent-shell-auggie-acp-command
+           validated-ws saved-model session-id))
          (config
           (let ((base (agent-shell-auggie-make-agent-config)))
             (setf (alist-get :client-maker base)
@@ -722,10 +726,7 @@ dedupes against live buffers before calling here."
          ;; avoids the race in `find-new-shell-buffer' when multiple
          ;; sessions are restored in quick succession.
          (shell-buf
-          (let ((default-directory (if (and workspace
-                                            (file-directory-p workspace))
-                                       workspace
-                                     default-directory)))
+          (let ((default-directory (or validated-ws default-directory)))
             (agent-shell-start :config config))))
     ;; Use a timer to rename and prepopulate once the process is ready.
     (let ((sid session-id)
