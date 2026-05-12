@@ -2896,18 +2896,25 @@ fully established.  Returns immediately.
 When invoked from a dedicated or side window (e.g., the sidebar), the
 new session is displayed in the frame's main window instead of
 replacing the caller, preserving the sidebar."
+  ;; PR B.80: window-classification + target-selection are pinned
+  ;; by `decknix-agent-quickaction-window' (carved, +10 ERT).
+  ;; Bulk evaluates the frame/window I/O signals and hands them
+  ;; to the pure resolvers; returned target drives the
+  ;; `display-buffer-alist' override below.
   (let* ((workspace (expand-file-name workspace))
          (cur (selected-window))
          (sidebar-buf (or (bound-and-true-p
                            agent-shell-workspace-sidebar-buffer-name)
                           "*agent-shell-sidebar*"))
-         (cur-is-sidebar (or (window-parameter cur 'window-side)
-                             (window-dedicated-p cur)
-                             (string= (buffer-name (window-buffer cur))
-                                      sidebar-buf)))
-         (target-win (if cur-is-sidebar
-                         (or (window-main-window (selected-frame)) cur)
-                       cur))
+         (cur-is-sidebar
+          (decknix--quickaction-window-is-sidebar-p
+           (window-parameter cur 'window-side)
+           (window-dedicated-p cur)
+           (buffer-name (window-buffer cur))
+           sidebar-buf))
+         (target-win
+          (decknix--quickaction-target-window
+           cur-is-sidebar cur (window-main-window (selected-frame))))
          (before-buffers (buffer-list))
          (augmented-cmd
           (append agent-shell-auggie-acp-command
