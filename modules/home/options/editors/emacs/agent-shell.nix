@@ -1075,6 +1075,69 @@ let
     ];
   };
 
+  # PR B.72: Prompt-search cache layer carved out of main-bulk.
+  # Owns the cache + TTL + async-refresh proc defvars and the
+  # three cache helpers consumed by the consult-based search:
+  #   `decknix--prompt-search-refresh-sync'
+  #   `decknix--prompt-search-refresh-async'
+  #   `decknix--prompt-search-get'   (current ring + cache, deduped)
+  # The interactive `decknix-agent-compose-search-history' entry
+  # point stays in main-bulk per AGENTS.md Rule 2 -- it consults
+  # via `consult--read' and mutates the compose buffer.  Buffer-
+  # local `decknix--compose-target-buffer' is owned by main-bulk
+  # and forward-declared in the carved module.
+  decknix-agent-prompt-search-cache-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-prompt-search-cache";
+    src = ./agent-shell/prompt-search-cache;
+    packageRequires = [
+      decknix-agent-prompt-search-el
+      decknix-agent-parse-el
+    ];
+    testFiles = [
+      "decknix-agent-prompt-search-cache-test.el"
+    ];
+  };
+
+  # PR B.73: Review-buffer exchange capture carved out of main-
+  # bulk.  Owns the tiny pure delegator that resolves a session
+  # id from SOURCE-BUFFER and forwards (sid, n) to the carved
+  # history extractor:
+  #   `decknix--agent-review-capture-exchange'
+  # The interactive `decknix-agent-review' / `-cancel' /
+  # `-flag-followup' / `-list-followups' / `-add-collaborator'
+  # entry points stay in main-bulk per AGENTS.md Rule 2 -- they
+  # own minor-mode setup, kill-buffer ops and the read-only
+  # preamble insertion.
+  decknix-agent-review-capture-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-review-capture";
+    src = ./agent-shell/review-capture;
+    packageRequires = [
+      decknix-agent-buffer-lookup-el
+      decknix-agent-session-history-el
+    ];
+    testFiles = [
+      "decknix-agent-review-capture-test.el"
+    ];
+  };
+
+  # PR B.74: Compose-buffer header-line builder carved out of
+  # main-bulk.  Pure builder that returns a propertized list of
+  # segments given the buffer-local STICKY boolean -- the
+  # interactive `decknix--compose-update-header-line' wrapper
+  # that calls `setq-local' on the result stays in main-bulk
+  # per AGENTS.md Rule 2.  Intentionally separate from the
+  # unified `decknix--header-build' (PR B.65) used by agent-
+  # shell buffers -- this header advertises compose-mode-local
+  # keys (M-p / M-n / M-r) instead of busy-state / tags / ws.
+  decknix-agent-compose-header-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-compose-header";
+    src = ./agent-shell/compose-header;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-compose-header-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1742,6 +1805,9 @@ in
           decknix-agent-compose-internals-el
           decknix-agent-tags-mutate-el
           decknix-agent-batch-parse-el
+          decknix-agent-prompt-search-cache-el
+          decknix-agent-review-capture-el
+          decknix-agent-compose-header-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -2133,6 +2199,16 @@ in
         (declare-function decknix--compose-setup-completion
                           "decknix-agent-compose-internals")
 
+        ;; Compose header-line builder (PR B.74) -- pure builder
+        ;; that returns a propertized list of segments given the
+        ;; STICKY boolean.  The interactive
+        ;; `decknix--compose-update-header-line' wrapper that
+        ;; calls `setq-local' on the result stays in main-bulk
+        ;; per Rule 2.
+        (require 'decknix-agent-compose-header)
+        (declare-function decknix--compose-build-header-line
+                          "decknix-agent-compose-header" (sticky))
+
         ;; Tag-store mutators (PR B.70) -- the three writers that
         ;; persist conversation tags + workspace + session-id
         ;; chains under the v2 store.  The flush hook is wired to
@@ -2157,6 +2233,24 @@ in
         (require 'decknix-agent-batch-parse)
         (declare-function decknix--batch-parse-buffer
                           "decknix-agent-batch-parse")
+
+        ;; Prompt-search cache (PR B.72) -- TTL + sync/async
+        ;; refresh + ring-merge for the consult-based prompt
+        ;; history search.  Owns the cache, cache-time, ttl and
+        ;; refresh-proc defvars; the interactive
+        ;; `decknix-agent-compose-search-history' stays in main-
+        ;; bulk per Rule 2.
+        (require 'decknix-agent-prompt-search-cache)
+        (declare-function decknix--prompt-search-refresh-sync
+                          "decknix-agent-prompt-search-cache")
+        (declare-function decknix--prompt-search-refresh-async
+                          "decknix-agent-prompt-search-cache")
+        (declare-function decknix--prompt-search-get
+                          "decknix-agent-prompt-search-cache")
+        (defvar decknix--prompt-search-cache)
+        (defvar decknix--prompt-search-cache-time)
+        (defvar decknix--prompt-search-cache-ttl)
+        (defvar decknix--prompt-search-refresh-proc)
 
         ;; Workspace + branch detection (PR B.45) -- pure helpers
         ;; consumed by session-creation / PR-quick-action flows.
@@ -2242,6 +2336,17 @@ in
                           "decknix-agent-review-followup-format")
         (declare-function decknix--agent-review-followup-describe
                           "decknix-agent-review-followup-format" (entry))
+
+        ;; Review-buffer exchange capture (PR B.73) -- carved
+        ;; from main-bulk.  Pure delegator that resolves a session
+        ;; id from SOURCE-BUFFER and forwards (sid, n) to the
+        ;; carved history extractor.  The interactive
+        ;; `decknix-agent-review' entry point stays in main-bulk
+        ;; per Rule 2.
+        (require 'decknix-agent-review-capture)
+        (declare-function decknix--agent-review-capture-exchange
+                          "decknix-agent-review-capture"
+                          (source-buffer n))
 
         ;; Follow-up stash JSON persistence (PR B.61) -- carved
         ;; from main-bulk.  Owns the user-tunable
