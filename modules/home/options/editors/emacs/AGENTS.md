@@ -29,6 +29,44 @@ Nix build time.
 - `ProcessType = "Background"` in the plist
 - GUI frames via `emacsclient -c`; `ec` wrapper auto-starts daemon
 
+### Hot-reload (`deckmacs-reload`, `C-c D r`)
+
+`decknix switch` invokes `(deckmacs-reload)` via `emacsclient` from
+`postActivation`.  The reload performs three steps in order so that
+edits to **carved first-party packages** (everything matching
+`decknix-*` under `agent-shell/<feature>/`) propagate without a
+`launchctl kickstart`:
+
+1. **Swap store paths.**  The aggregator lives at one
+   `/nix/store/<HASH>-emacs-packages-deps` root that changes on every
+   switch.  `deckmacs--swap-store-paths` rewrites that prefix in
+   `load-path` and `native-comp-eln-load-path`, preserving the
+   surrounding upstream Emacs lisp dirs (their order matters for
+   built-in module precedence).
+2. **Force-unload `decknix-*` features.**  `(unload-feature ... t)`
+   on every loaded `decknix-*` so the next step's `(require ...)`
+   calls actually run instead of no-opping.  FORCE=t bypasses the
+   dependent-features check; ordering is irrelevant because every
+   `require` re-resolves below.
+3. **Load the new `default.el`.**  The heredoc's
+   `(require 'decknix-foo)` calls now find new bytecode at the new
+   store root.  Top-level side-effects (`define-key`, `add-hook`,
+   `advice-add`) re-run.
+
+A manual `launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server`
+is still needed when (and only when):
+- The Emacs **major version** changes (different `emacs-30.2` store path).
+- `EMACSLOADPATH` gains entries outside `emacs-packages-deps` that
+  the daemon's environment doesn't know about.
+- A buffer-local `decknix-*` function is mid-execution at reload
+  time (extremely rare; the reload runs in idle).
+
+Note: `add-hook` lambdas in the heredoc that lack a symbol form
+will accumulate duplicates across reloads — this pre-dated the
+unload step and is a known minor footgun.  Symbol-named hooks
+(`(add-hook 'foo #'bar)`) are unloaded with the feature and
+re-added cleanly.
+
 ## Critical: Dynamic Binding in `default.el`
 
 **`default.el` is evaluated under dynamic binding** (no `;;; -*- lexical-binding: t -*-`).
