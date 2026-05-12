@@ -351,10 +351,16 @@ The `decknix--context-update-header` function delegates to the unified header
     will refine this with a per-bot signature list
     (`copilot-pull-request-reviewer[bot]`, `augment-code[bot]`,
     `dependabot[bot]`, `github-actions[bot]`).
-  - `c` = human comments column. Yellow when a human posted last and
-    no reply has gone back (`needs_reply`); green-ish when a human
-    replied in a thread I participated in (`replies_to_me`); dim
-    otherwise.
+  - `c` = human comments column. **Tier 1 attention heuristic**
+    (per-thread `isResolved` + last-author): when the PR has inline
+    review threads, yellow if any thread is unresolved AND the last
+    commenter is not me; bright green (`#98c379`) if every thread is
+    resolved (or the only unresolved ones have me as the last
+    commenter). When the PR has NO inline threads, falls back to
+    the legacy ladder: yellow on `needs_reply`, soft green
+    (`#87d7af`) on `replies_to_me`, dim otherwise. Thread stats
+    come from a `gh api graphql reviewThreads` call run in parallel
+    with the standard `gh pr view` fetch in the hub.
   - `✓` = approval column. Green `✓` = APPROVED, red `✗` =
     CHANGES_REQUESTED, yellow `?` = review required / commented /
     pending, dim `?` otherwise. Sourced from `review_decision` for

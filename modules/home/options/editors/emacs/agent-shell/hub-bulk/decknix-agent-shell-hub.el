@@ -1791,17 +1791,40 @@ derived from per-bot review signatures."
 
 (defun decknix--hub-cmt-column (status)
   "Return the comments column glyph (`c') coloured by STATUS signals.
-Yellow when a human posted last and no reply has been sent;
-green-ish when a human replied to one of my threads; dim otherwise."
+
+Tier 1 attention heuristic (per-thread isResolved + last-author):
+- Yellow `c' (#e5c07b) when at least one inline review thread is
+  unresolved AND the last commenter on it is not me.
+- Bright green `c' (#98c379) when there are inline threads on the
+  PR and none are actionable to me (all resolved, or I posted last
+  in any unresolved one).
+- For PRs with NO inline review threads, fall back to the legacy
+  ladder: yellow on `needs_reply' (with `bot_pending' carved out
+  for the `b' column), softer green on `replies_to_me', dim
+  otherwise."
   (let* ((state (or (alist-get 'state status) ""))
          (needs-reply (eq (alist-get 'needs_reply status) t))
          (replies-to-me (eq (alist-get 'replies_to_me status) t))
          (bot-pending (eq (alist-get 'bot_pending status) t))
+         (total-threads (alist-get 'total_threads status))
+         (unresolved-threads (alist-get 'unresolved_threads status))
+         (have-thread-data (and (numberp total-threads)
+                                (> total-threads 0)))
          (face (cond ((string= state "MERGED")
                       'font-lock-comment-face)
-                     ;; needs-reply dominates when it's a human
-                     ;; asking something (bot-pending already
-                     ;; covers the bot-is-last case).
+                     ;; Tier 1: inline review threads exist — judge
+                     ;; per-thread instead of via whole-PR last-author.
+                     (have-thread-data
+                      (cond ((and (numberp unresolved-threads)
+                                  (> unresolved-threads 0))
+                             '(:foreground "#e5c07b" :weight bold))
+                            ;; All threads resolved or my-court — bright
+                            ;; green so it stands out from `replies_to_me'.
+                            (t
+                             '(:foreground "#98c379" :weight bold))))
+                     ;; Fallback ladder for PRs without inline threads:
+                     ;; needs-reply dominates when it's a human asking
+                     ;; (bot-pending already covers the bot-is-last case).
                      ((and needs-reply (not bot-pending))
                       '(:foreground "#e5c07b" :weight bold))
                      (replies-to-me

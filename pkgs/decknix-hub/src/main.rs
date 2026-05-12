@@ -112,6 +112,10 @@ struct ReviewRequest {
     bot_pending: Option<bool>, // true when the latest comment/review is from a bot
     #[serde(skip_serializing_if = "Option::is_none")]
     replies_to_me: Option<bool>, // true when a non-bot human posted after one of my comments/reviews
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_threads: Option<u32>, // total inline review threads on the PR
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unresolved_threads: Option<u32>, // unresolved threads where last comment author != me
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -167,6 +171,10 @@ struct WipPr {
     bot_pending: Option<bool>, // true when the latest comment/review is from a bot
     #[serde(skip_serializing_if = "Option::is_none")]
     replies_to_me: Option<bool>, // true when a non-bot human posted after one of my comments/reviews
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_threads: Option<u32>, // total inline review threads on the PR
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unresolved_threads: Option<u32>, // unresolved threads where last comment author != me
     #[serde(skip_serializing_if = "Option::is_none")]
     merged_at: Option<DateTime<Utc>>, // when the PR was merged (None for open PRs)
 }
@@ -456,6 +464,92 @@ struct GhReview {
     state: Option<String>,
 }
 
+/// Per-PR inline review thread stats used by the Tier 1 attention
+/// heuristic.  GraphQL `reviewThreads` carries the `isResolved` flag
+/// that `gh pr view --json` does not surface, so we run a small
+/// dedicated query alongside the main fetch.  A thread is considered
+/// "actionable to me" when it is unresolved AND the last commenter is
+/// not me — if I posted last, the ball is in their court even though
+/// the thread is open.
+struct ReviewThreadStats {
+    total: u32,
+    unresolved_to_me: u32,
+}
+
+/// Fetch review-thread stats via `gh api graphql`.  Returns `None` on
+/// any error so the caller falls back to the activity-based heuristic.
+async fn fetch_review_threads(
+    repo: &str,
+    number: u64,
+    my_login: Option<&str>,
+) -> Option<ReviewThreadStats> {
+    let (owner, name) = repo.split_once('/')?;
+    let number_s = number.to_string();
+    // Single-line query — Rust's `\` line continuation strips ALL
+    // following whitespace, which would glue adjacent GraphQL fields
+    // together (e.g. `isResolvedcomments`) and produce a parse error.
+    let query_arg = "query=query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { isResolved comments(last: 1) { nodes { author { login } } } } } } } }";
+    let output = gh_json(&[
+        "api", "graphql",
+        "-F", &format!("owner={owner}"),
+        "-F", &format!("repo={name}"),
+        "-F", &format!("number={number_s}"),
+        "-f", query_arg,
+    ]).await.ok()?;
+
+    #[derive(Deserialize)]
+    struct Resp { data: Option<RespData> }
+    #[derive(Deserialize)]
+    struct RespData { repository: Option<RespRepo> }
+    #[derive(Deserialize)]
+    struct RespRepo { #[serde(rename = "pullRequest")] pull_request: Option<RespPr> }
+    #[derive(Deserialize)]
+    struct RespPr { #[serde(rename = "reviewThreads")] review_threads: Option<RespThreads> }
+    #[derive(Deserialize)]
+    struct RespThreads { nodes: Option<Vec<RespThread>> }
+    #[derive(Deserialize)]
+    struct RespThread {
+        #[serde(rename = "isResolved")]
+        is_resolved: Option<bool>,
+        comments: Option<RespComments>,
+    }
+    #[derive(Deserialize)]
+    struct RespComments { nodes: Option<Vec<RespCommentNode>> }
+    #[derive(Deserialize)]
+    struct RespCommentNode { author: Option<RespAuthor> }
+    #[derive(Deserialize)]
+    struct RespAuthor { login: Option<String> }
+
+    let parsed: Resp = serde_json::from_str(&output).ok()?;
+    let nodes = parsed.data?
+        .repository?
+        .pull_request?
+        .review_threads?
+        .nodes
+        .unwrap_or_default();
+
+    let total = nodes.len() as u32;
+    let me = my_login.map(|s| s.to_ascii_lowercase());
+    let unresolved_to_me = nodes.iter().filter(|t| {
+        let unresolved = !t.is_resolved.unwrap_or(false);
+        if !unresolved { return false; }
+        let last_login = t.comments.as_ref()
+            .and_then(|c| c.nodes.as_ref())
+            .and_then(|ns| ns.last())
+            .and_then(|n| n.author.as_ref())
+            .and_then(|a| a.login.as_deref())
+            .map(|s| s.to_ascii_lowercase());
+        match (last_login, me.as_deref()) {
+            (Some(ll), Some(m)) => ll != m,
+            // Unknown author or unknown me-login — count as actionable
+            // so we err on the side of surfacing it.
+            _ => true,
+        }
+    }).count() as u32;
+
+    Some(ReviewThreadStats { total, unresolved_to_me })
+}
+
 /// Result of fetching review-request PR details.
 struct ReviewPrDetails {
     ci: Option<CiStatus>,
@@ -466,6 +560,8 @@ struct ReviewPrDetails {
     needs_reply: Option<bool>,
     bot_pending: Option<bool>,
     replies_to_me: Option<bool>,
+    total_threads: Option<u32>,
+    unresolved_threads: Option<u32>,
 }
 
 impl Default for ReviewPrDetails {
@@ -473,7 +569,7 @@ impl Default for ReviewPrDetails {
         Self {
             ci: None, mergeable: None, my_review: None, mentioned: None,
             team_requested: None, needs_reply: None, bot_pending: None,
-            replies_to_me: None,
+            replies_to_me: None, total_threads: None, unresolved_threads: None,
         }
     }
 }
@@ -484,14 +580,27 @@ async fn fetch_pr_ci(
     number: u64,
     my_login: Option<&str>,
 ) -> ReviewPrDetails {
-    let output = match gh_json(&[
+    // Run the `gh pr view` and review-thread GraphQL fetches in parallel
+    // so the per-PR latency is dominated by the slower of the two.  The
+    // owned `number_s` and `args` outlive the future so the borrowed
+    // `&[&str]` slice in `gh_json` stays valid through the await.
+    let number_s = number.to_string();
+    let args: [&str; 7] = [
         "pr", "view",
-        &number.to_string(),
+        &number_s,
         "--repo", repo,
         "--json", "statusCheckRollup,mergeable,mergeStateStatus,latestReviews,comments,reviews,reviewRequests",
-    ]).await {
+    ];
+    let pr_view_fut = gh_json(&args);
+    let threads_fut = fetch_review_threads(repo, number, my_login);
+    let (output, threads) = tokio::join!(pr_view_fut, threads_fut);
+    let output = match output {
         Ok(o) => o,
-        Err(_) => return ReviewPrDetails::default(),
+        Err(_) => return ReviewPrDetails {
+            total_threads: threads.as_ref().map(|t| t.total),
+            unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            ..ReviewPrDetails::default()
+        },
     };
 
     #[derive(Deserialize)]
@@ -617,9 +726,15 @@ async fn fetch_pr_ci(
                 needs_reply: Some(needs_reply),
                 bot_pending: Some(bot_pending),
                 replies_to_me: Some(replies_to_me),
+                total_threads: threads.as_ref().map(|t| t.total),
+                unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
             }
         }
-        Err(_) => ReviewPrDetails::default(),
+        Err(_) => ReviewPrDetails {
+            total_threads: threads.as_ref().map(|t| t.total),
+            unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            ..ReviewPrDetails::default()
+        },
     }
 }
 
@@ -684,6 +799,8 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             needs_reply: details.needs_reply,
             bot_pending: details.bot_pending,
             replies_to_me: details.replies_to_me,
+            total_threads: details.total_threads,
+            unresolved_threads: details.unresolved_threads,
         });
     }
 
@@ -710,6 +827,8 @@ struct PrDetails {
     needs_reply: Option<bool>,
     bot_pending: Option<bool>,
     replies_to_me: Option<bool>,
+    total_threads: Option<u32>,
+    unresolved_threads: Option<u32>,
     merged_at: Option<String>,
 }
 
@@ -718,6 +837,7 @@ impl Default for PrDetails {
         Self {
             branch: None, ci: None, mergeable: None, review_decision: None,
             needs_reply: None, bot_pending: None, replies_to_me: None,
+            total_threads: None, unresolved_threads: None,
             merged_at: None,
         }
     }
@@ -742,14 +862,25 @@ struct GhReviewEntry {
 
 /// Fetch branch, CI, mergeable, review decision, and reply status for a PR.
 async fn fetch_pr_details(repo: &str, number: u64, my_login: Option<&str>) -> PrDetails {
-    let output = match gh_json(&[
+    // Run the `gh pr view` and review-thread GraphQL fetches in parallel.
+    // Bind owned temps so the borrowed `&[&str]` slice outlives the await.
+    let number_s = number.to_string();
+    let args: [&str; 7] = [
         "pr", "view",
-        &number.to_string(),
+        &number_s,
         "--repo", repo,
         "--json", "headRefName,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision,comments,reviews,mergedAt",
-    ]).await {
+    ];
+    let pr_view_fut = gh_json(&args);
+    let threads_fut = fetch_review_threads(repo, number, my_login);
+    let (output, threads) = tokio::join!(pr_view_fut, threads_fut);
+    let output = match output {
         Ok(o) => o,
-        Err(_) => return PrDetails::default(),
+        Err(_) => return PrDetails {
+            total_threads: threads.as_ref().map(|t| t.total),
+            unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            ..PrDetails::default()
+        },
     };
 
     #[derive(Deserialize)]
@@ -813,10 +944,16 @@ async fn fetch_pr_details(repo: &str, number: u64, my_login: Option<&str>) -> Pr
                 needs_reply,
                 bot_pending,
                 replies_to_me,
+                total_threads: threads.as_ref().map(|t| t.total),
+                unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
                 merged_at: d.merged_at,
             }
         }
-        Err(_) => PrDetails::default(),
+        Err(_) => PrDetails {
+            total_threads: threads.as_ref().map(|t| t.total),
+            unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            ..PrDetails::default()
+        },
     }
 }
 
@@ -926,6 +1063,8 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
             needs_reply: details.needs_reply,
             bot_pending: details.bot_pending,
             replies_to_me: details.replies_to_me,
+            total_threads: details.total_threads,
+            unresolved_threads: details.unresolved_threads,
             merged_at: merged_ts,
         });
     }
