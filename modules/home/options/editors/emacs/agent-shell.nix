@@ -1266,6 +1266,21 @@ let
     ];
   };
 
+  # PR B.83: Session post-create policy carved from
+  # `decknix--agent-session-new-post-create'.  Two pure helpers:
+  # `flush-mode' resolves immediate-vs-deferred metadata strategy
+  # given (conv-key, tags, workspace); `buffer-name' formats the
+  # canonical "*Auggie: NAME*" name.  Bulk owns rename / setq-local
+  # / `agent-shell-subscribe-to' side-effects per Rule 2.
+  decknix-agent-post-create-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-post-create";
+    src = ./agent-shell/post-create;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-post-create-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1944,6 +1959,7 @@ in
           decknix-agent-quickaction-window-el
           decknix-agent-workspace-persist-el
           decknix-agent-batch-build-el
+          decknix-agent-post-create-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -2449,6 +2465,15 @@ in
                           (spec items default-ws parser-fn detector-fn))
         (declare-function decknix--batch-summary-rows
                           "decknix-agent-batch-build" (results))
+
+        ;; Post-create policy (PR B.83) -- pure flush-mode resolver
+        ;; + buffer-name formatter for `decknix--agent-session-new-post-create'.
+        (require 'decknix-agent-post-create)
+        (declare-function decknix--post-create-flush-mode
+                          "decknix-agent-post-create"
+                          (conv-key tags workspace))
+        (declare-function decknix--post-create-buffer-name
+                          "decknix-agent-post-create" (name))
 
         ;; Tag-store mutators (PR B.70) -- the three writers that
         ;; persist conversation tags + workspace + session-id

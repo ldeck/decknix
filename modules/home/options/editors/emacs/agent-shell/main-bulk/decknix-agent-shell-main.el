@@ -1453,50 +1453,54 @@ once the first exchange completes.  All state is per-buffer — safe for
 batch launches."
   (let ((shell-buf (decknix--agent-find-new-shell-buffer before-buffers)))
     (when shell-buf
-      ;; Rename immediately — the buffer exists now
+      ;; Rename immediately — the buffer exists now.  Buffer-name
+      ;; format is pinned by `decknix--post-create-buffer-name'
+      ;; (PR B.83).
       (with-current-buffer shell-buf
         (rename-buffer
          (generate-new-buffer-name
-          (format "*Auggie: %s*" name)))
+          (decknix--post-create-buffer-name name)))
         (setq-local shell-maker--buffer-name-override
                     (buffer-name))
         (when workspace
           (setq-local decknix--agent-session-workspace workspace)))
-      ;; Persist metadata.
-      ;; When first-message is known (quickactions), we can derive the
-      ;; conversation key NOW and store tags + workspace immediately.
-      ;; Otherwise, stash them as pending buffer-locals and let the
-      ;; comint input filter flush them once the user submits the
-      ;; first message — the conversation key is derived directly
-      ;; from that text, which sidesteps the prompt-ready race
-      ;; (empty input ring, stale session cache).
-      (let ((conv-key (when first-message
-                        (decknix--agent-conversation-key first-message))))
-        (if (and conv-key (or tags workspace))
-            ;; Immediate storage — we know the conversation key
-            (progn
-              (decknix--agent-store-metadata-by-conv-key
-               conv-key tags workspace)
-              ;; Store conv-key buffer-locally so header-line can
-              ;; look up tags immediately without waiting for the
-              ;; session-list cache to refresh.
-              (with-current-buffer shell-buf
-                (setq-local decknix--agent-conv-key conv-key)
-                (when workspace
-                  (setq-local decknix--agent-workspace-persisted t)))
-              (when tags
-                (message "Tags applied: [%s]"
-                         (string-join tags ", "))))
-          ;; Deferred — stash pending metadata and wire the
-          ;; one-shot input-filter hook that will flush it once
-          ;; the user types their first message.
-          (when (or tags workspace)
-            (with-current-buffer shell-buf
-              (setq-local decknix--agent-pending-tags tags)
-              (setq-local decknix--agent-pending-workspace workspace)
-              (add-hook 'comint-input-filter-functions
-                        #'decknix--agent-flush-pending-metadata
-                        nil t))))
+      ;; Persist metadata.  The immediate-vs-deferred dispatch is
+      ;; pinned by `decknix--post-create-flush-mode' (PR B.83):
+      ;;   immediate              -> conv-key handoff + setq-local
+      ;;   deferred-with-metadata -> stash + comint input-filter hook
+      ;;   deferred-no-metadata   -> only the prompt-ready subscription
+      ;; Whichever branch runs, we ALWAYS subscribe to prompt-ready
+      ;; below to capture the session-id once ACP bootstrap finishes.
+      (let* ((conv-key (when first-message
+                         (decknix--agent-conversation-key first-message)))
+             (mode (decknix--post-create-flush-mode
+                    conv-key tags workspace)))
+        (pcase mode
+          ('immediate
+           (when (or tags workspace)
+             (decknix--agent-store-metadata-by-conv-key
+              conv-key tags workspace))
+           ;; Store conv-key buffer-locally so header-line can
+           ;; look up tags immediately without waiting for the
+           ;; session-list cache to refresh.
+           (with-current-buffer shell-buf
+             (setq-local decknix--agent-conv-key conv-key)
+             (when workspace
+               (setq-local decknix--agent-workspace-persisted t)))
+           (when tags
+             (message "Tags applied: [%s]"
+                      (string-join tags ", "))))
+          ('deferred-with-metadata
+           ;; Stash pending metadata and wire the one-shot
+           ;; input-filter hook that will flush it once the user
+           ;; submits their first message.
+           (with-current-buffer shell-buf
+             (setq-local decknix--agent-pending-tags tags)
+             (setq-local decknix--agent-pending-workspace workspace)
+             (add-hook 'comint-input-filter-functions
+                       #'decknix--agent-flush-pending-metadata
+                       nil t)))
+          ('deferred-no-metadata nil))
         ;; ALWAYS subscribe to prompt-ready to set session-id.
         ;; The session-id is only available after ACP bootstrapping,
         ;; which is async.  We also opportunistically register the
