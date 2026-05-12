@@ -1011,6 +1011,70 @@ let
     ];
   };
 
+  # PR B.69: Compose-buffer internal helpers carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Owns the four
+  # completion-at-point pieces (`-command-completion-at-point',
+  # `-file-completion-at-point', `-trigger-completion',
+  # `-setup-completion'), the buffer resolver
+  # (`decknix--compose-find-target') and the display-buffer spec
+  # (`-display-action').  All non-interactive: the user-facing
+  # `decknix-agent-compose' / `-submit' entry points, the minor
+  # mode `decknix-agent-compose-mode', its keymap and the buffer-
+  # local `decknix--compose-target-buffer' defvar stay in main-
+  # bulk per AGENTS.md Rule 2.
+  decknix-agent-compose-internals-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-compose-internals";
+    src = ./agent-shell/compose-internals;
+    packageRequires = [];
+    testFiles = [
+      "decknix-agent-compose-internals-test.el"
+    ];
+  };
+
+  # PR B.70: Tag-store mutators carved out of main-bulk.  Owns
+  # the three writers that persist conversation tags + workspace
+  # + session-id chains under the v2 store:
+  #   `decknix--agent-store-metadata-by-conv-key'
+  #   `decknix--agent-register-session-id'
+  #   `decknix--agent-flush-pending-metadata'
+  # The last one is a `comint-input-filter-functions' hook target;
+  # the `add-hook' that installs it (in
+  # `decknix--agent-auto-persist-workspace') stays in main-bulk
+  # per AGENTS.md Rule 2.  Buffer-local state read here is owned
+  # by main-bulk and forward-declared in the carved module.
+  decknix-agent-tags-mutate-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-tags-mutate";
+    src = ./agent-shell/tags-mutate;
+    packageRequires = [
+      decknix-agent-tags-store-el
+      decknix-agent-conv-resolve-el
+    ];
+    testFiles = [
+      "decknix-agent-tags-mutate-test.el"
+    ];
+  };
+
+  # PR B.71: Batch-editor parser carved out of main-bulk.  Owns
+  # `decknix--batch-parse-buffer' -- a pure scan-current-buffer ->
+  # alist-spec-list translator that the launcher consumes.  The
+  # interactive launcher (`decknix--batch-launch'), the summary
+  # buffer rendering and the `decknix-agent-batch-process' entry
+  # point stay in main-bulk per AGENTS.md Rule 2.  The user-
+  # tunable `decknix--batch-default-workspace' defvar also stays
+  # in main-bulk (set interactively, used by other batch code);
+  # the parser reads it via dynamic-variable lookup.
+  decknix-agent-batch-parse-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-batch-parse";
+    src = ./agent-shell/batch-parse;
+    packageRequires = [
+      decknix-agent-url-parse-el
+      decknix-agent-workspace-detect-el
+    ];
+    testFiles = [
+      "decknix-agent-batch-parse-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1675,6 +1739,9 @@ in
           decknix-agent-buffer-lookup-el
           decknix-agent-conv-hidden-el
           decknix-agent-context-history-el
+          decknix-agent-compose-internals-el
+          decknix-agent-tags-mutate-el
+          decknix-agent-batch-parse-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -2041,6 +2108,55 @@ in
                           (session-id n))
         (defvar decknix--agent-history-cache)
         (defvar decknix--agent-history-cursor)
+
+        ;; Compose-buffer internal helpers (PR B.69) -- target
+        ;; resolver, display-buffer spec, and the four completion-
+        ;; at-point pieces (`-command-completion-at-point',
+        ;; `-file-completion-at-point', `-trigger-completion',
+        ;; `-setup-completion').  Non-interactive: the user-facing
+        ;; entry points and the minor-mode/keymap stay in main-bulk
+        ;; per Rule 2.  The buffer-local
+        ;; `decknix--compose-target-buffer' defvar stays in main-
+        ;; bulk for now because other compose code that has not
+        ;; yet been carved still owns it.
+        (require 'decknix-agent-compose-internals)
+        (declare-function decknix--compose-find-target
+                          "decknix-agent-compose-internals")
+        (declare-function decknix--compose-display-action
+                          "decknix-agent-compose-internals")
+        (declare-function decknix--compose-command-completion-at-point
+                          "decknix-agent-compose-internals")
+        (declare-function decknix--compose-file-completion-at-point
+                          "decknix-agent-compose-internals")
+        (declare-function decknix--compose-trigger-completion
+                          "decknix-agent-compose-internals")
+        (declare-function decknix--compose-setup-completion
+                          "decknix-agent-compose-internals")
+
+        ;; Tag-store mutators (PR B.70) -- the three writers that
+        ;; persist conversation tags + workspace + session-id
+        ;; chains under the v2 store.  The flush hook is wired to
+        ;; `comint-input-filter-functions' from
+        ;; `decknix--agent-auto-persist-workspace' (in main-bulk)
+        ;; per Rule 2.
+        (require 'decknix-agent-tags-mutate)
+        (declare-function decknix--agent-store-metadata-by-conv-key
+                          "decknix-agent-tags-mutate"
+                          (conv-key tags workspace))
+        (declare-function decknix--agent-register-session-id
+                          "decknix-agent-tags-mutate"
+                          (conv-key session-id))
+        (declare-function decknix--agent-flush-pending-metadata
+                          "decknix-agent-tags-mutate" (input))
+
+        ;; Batch-editor parser (PR B.71) -- pure scan-current-buffer
+        ;; -> alist-spec-list translator.  The interactive launcher
+        ;; (`decknix--batch-launch'), summary buffer renderer and
+        ;; `decknix-agent-batch-process' entry point stay in main-
+        ;; bulk per Rule 2.
+        (require 'decknix-agent-batch-parse)
+        (declare-function decknix--batch-parse-buffer
+                          "decknix-agent-batch-parse")
 
         ;; Workspace + branch detection (PR B.45) -- pure helpers
         ;; consumed by session-creation / PR-quick-action flows.

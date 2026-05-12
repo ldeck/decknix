@@ -1292,90 +1292,21 @@ Prefix arguments:
                   "decknix-agent-workspace-detect" (dir))
 (defvar decknix-agent-workspace-roots)
 
-(defun decknix--agent-flush-pending-metadata (input)
-  "Persist pending metadata for the current buffer using INPUT.
-
-Designed for `comint-input-filter-functions': fires on the first
-non-empty user input, derives the conversation key directly from
-the input text (sidestepping the session-list cache), and writes
-any pending tags + workspace under that key in v2 format.
-
-Removes itself from `comint-input-filter-functions' after a
-successful flush so the work runs at most once per buffer.  Empty
-or whitespace-only input leaves the hook in place for the next
-submission."
-  (when (and input (stringp input)
-             (not (string-empty-p (string-trim input))))
-    (let ((conv-key (decknix--agent-conversation-key input)))
-      (when conv-key
-        ;; Stash conv-key buffer-locally for header-line lookups.
-        (unless decknix--agent-conv-key
-          (setq-local decknix--agent-conv-key conv-key))
-        ;; Register the session id under the conv-key when known.
-        (when (and (boundp 'decknix--agent-auggie-session-id)
-                   decknix--agent-auggie-session-id)
-          (decknix--agent-register-session-id
-           conv-key decknix--agent-auggie-session-id))
-        ;; Persist pending tags + workspace.
-        (when (or decknix--agent-pending-tags
-                  decknix--agent-pending-workspace)
-          (decknix--agent-store-metadata-by-conv-key
-           conv-key
-           decknix--agent-pending-tags
-           decknix--agent-pending-workspace)
-          (when decknix--agent-pending-workspace
-            (setq-local decknix--agent-workspace-persisted t))
-          (when decknix--agent-pending-tags
-            (message "Tags applied: [%s]"
-                     (string-join decknix--agent-pending-tags
-                                  ", ")))
-          (setq-local decknix--agent-pending-tags nil)
-          (setq-local decknix--agent-pending-workspace nil))
-        ;; One-shot: remove ourselves from the buffer-local hook.
-        (remove-hook 'comint-input-filter-functions
-                     #'decknix--agent-flush-pending-metadata
-                     t)))))
-
-(defun decknix--agent-store-metadata-by-conv-key (conv-key tags workspace)
-  "Store TAGS and WORKSPACE directly under CONV-KEY in the tag store.
-Use this when the conversation key is known at creation time (e.g., quickactions
-where the first message is the command itself)."
-  (when conv-key
-    (let* ((store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (entry (or (gethash conv-key convs)
-                      (let ((h (make-hash-table :test 'equal)))
-                        (puthash "sessions" nil h)
-                        h))))
-      (when tags
-        (let ((existing (gethash "tags" entry)))
-          (dolist (tag tags)
-            (cl-pushnew tag existing :test #'string=))
-          (puthash "tags" existing entry)))
-      (when workspace
-        (puthash "workspace" workspace entry))
-      ;; Bump recency
-      (puthash "lastAccessed"
-               (format-time-string "%Y-%m-%dT%H:%M:%S.000Z" nil t) entry)
-      (puthash conv-key entry convs)
-      (decknix--agent-tags-write store))))
-
-(defun decknix--agent-register-session-id (conv-key session-id)
-  "Ensure SESSION-ID is in the sessions list for CONV-KEY.
-This keeps all session snapshots (original + resumed) linked to
-the same conversation."
-  (when (and conv-key session-id)
-    (let* ((store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (entry (gethash conv-key convs)))
-      (when entry
-        (let ((sids (gethash "sessions" entry)))
-          (unless (and sids (member session-id sids))
-            (puthash "sessions"
-                     (cons session-id (or sids '()))
-                     entry)
-            (decknix--agent-tags-write store)))))))
-
+;; PR B.70: `decknix--agent-flush-pending-metadata',
+;; `-store-metadata-by-conv-key' and `-register-session-id' were
+;; carved into `decknix-agent-tags-mutate'.  The `add-hook' that
+;; installs the flush against `comint-input-filter-functions' lives
+;; in `decknix--agent-auto-persist-workspace' below per AGENTS.md
+;; Rule 2; the function bodies themselves are pure tag-store
+;; mutators.  Forward-declare so the byte-compiler resolves them.
+(declare-function decknix--agent-flush-pending-metadata
+                  "decknix-agent-tags-mutate" (input))
+(declare-function decknix--agent-store-metadata-by-conv-key
+                  "decknix-agent-tags-mutate"
+                  (conv-key tags workspace))
+(declare-function decknix--agent-register-session-id
+                  "decknix-agent-tags-mutate"
+                  (conv-key session-id))
 
 (defun decknix--agent-auto-persist-workspace ()
   "Auto-persist workspace for the current buffer.
@@ -2796,79 +2727,6 @@ C-c k k interrupt agent, C-c k C-c interrupt & submit."
   :lighter (:eval (if decknix--compose-sticky " Compose[sticky]" " Compose"))
   :keymap decknix-agent-compose-mode-map)
 
-;; -- Compose buffer: slash command + file completion --
-;; Delegates to agent-shell's completion machinery via the
-;; compose buffer's target agent-shell buffer.
-
-(defun decknix--compose-command-completion-at-point ()
-  "Complete slash commands in the compose buffer.
-Looks up available commands from the target agent-shell buffer."
-  (when-let* ((target (and (boundp 'decknix--compose-target-buffer)
-                           decknix--compose-target-buffer))
-              ((buffer-live-p target))
-              (bounds (save-excursion
-                        (let* ((end (progn (skip-chars-forward "[:alnum:]_-") (point)))
-                               (start (progn (skip-chars-backward "[:alnum:]_-") (point))))
-                          (when (eq (char-before start) ?/)
-                            (list start end)))))
-              (commands (with-current-buffer target
-                          (when (boundp 'agent-shell--state)
-                            (map-elt agent-shell--state :available-commands))))
-              (descriptions (mapcar (lambda (c)
-                                      (cons (map-elt c 'name)
-                                            (map-elt c 'description)))
-                                    commands)))
-    (list (nth 0 bounds) (nth 1 bounds)
-          (mapcar #'car descriptions)
-          :exclusive t
-          :annotation-function
-          (lambda (name)
-            (when-let* ((desc (map-elt descriptions name)))
-              (concat "  " desc)))
-          :company-kind (lambda (_) 'function)
-          :exit-function (lambda (_string _status) (insert " ")))))
-
-(defun decknix--compose-file-completion-at-point ()
-  "Complete project files after @ in the compose buffer.
-Uses the target agent-shell buffer's project context."
-  (when-let* ((target (and (boundp 'decknix--compose-target-buffer)
-                           decknix--compose-target-buffer))
-              ((buffer-live-p target))
-              (bounds (save-excursion
-                        (let* ((end (progn (skip-chars-forward "[:alnum:]/_.-") (point)))
-                               (start (progn (skip-chars-backward "[:alnum:]/_.-") (point))))
-                          (when (eq (char-before start) ?@)
-                            (list start end)))))
-              (files (with-current-buffer target
-                       (when (fboundp 'agent-shell--project-files)
-                         (agent-shell--project-files)))))
-    (list (nth 0 bounds) (nth 1 bounds)
-          files
-          :exclusive 'no
-          :company-kind (lambda (f) (if (string-suffix-p "/" f) 'folder 'file))
-          :exit-function (lambda (_string _status) (insert " ")))))
-
-(defun decknix--compose-trigger-completion ()
-  "Trigger completion in compose buffer when / or @ is typed.
-Only triggers at line start or after whitespace."
-  (when (and (memq (char-before) '(?/ ?@))
-             (or (= (point) (1+ (line-beginning-position)))
-                 (memq (char-before (1- (point))) '(?\s ?\t ?\n))))
-    (cond
-     ((and (eq (char-before) ?/)
-           (decknix--compose-command-completion-at-point))
-      (completion-at-point))
-     ((eq (char-before) ?@)
-      (completion-at-point)))))
-
-(defun decknix--compose-setup-completion ()
-  "Set up slash command and file completion in the compose buffer."
-  (add-hook 'completion-at-point-functions
-            #'decknix--compose-file-completion-at-point nil t)
-  (add-hook 'completion-at-point-functions
-            #'decknix--compose-command-completion-at-point nil t)
-  (add-hook 'post-self-insert-hook
-            #'decknix--compose-trigger-completion nil t))
 
 (defun decknix--compose-finish ()
   "Finish a compose action: clear if sticky, close if transient.
@@ -3087,31 +2945,26 @@ after pressing C-c."
                (propertize "M-r" 'font-lock-face 'font-lock-keyword-face)
                (propertize " search" 'font-lock-face 'font-lock-comment-face))))
 
-(defun decknix--compose-find-target ()
-  "Find the agent-shell buffer to target for compose."
-  (cond
-   ;; Already in an agent-shell buffer
-   ((derived-mode-p 'agent-shell-mode)
-    (current-buffer))
-   ;; In a compose buffer — return its target
-   (decknix--compose-target-buffer
-    decknix--compose-target-buffer)
-   ;; Find the most recent agent-shell buffer
-   ((and (fboundp 'agent-shell-buffers)
-         (agent-shell-buffers))
-    (car (agent-shell-buffers)))
-   (t (user-error
-       "No agent-shell buffer found. Start one with C-c A a"))))
-
-(defun decknix--compose-display-action ()
-  "Return a display-buffer action for the compose window.
-Uses a bottom side-window so it never steals the workspace sidebar
-or other side-windows."
-  '((display-buffer-in-side-window)
-    (side . bottom)
-    (slot . 0)
-    (window-height . 10)
-    (preserve-size . (nil . t))))
+;; PR B.69: `decknix--compose-find-target',
+;; `-display-action' and the four completion-at-point helpers
+;; (`-command-completion-at-point', `-file-completion-at-point',
+;; `-trigger-completion', `-setup-completion') were carved into
+;; `decknix-agent-compose-internals'.  The interactive
+;; `decknix-agent-compose' / `-submit' entry points, the minor
+;; mode and its keymap stay here per AGENTS.md Rule 2.  Forward-
+;; declare the carved symbols so the byte-compiler resolves them.
+(declare-function decknix--compose-find-target
+                  "decknix-agent-compose-internals")
+(declare-function decknix--compose-display-action
+                  "decknix-agent-compose-internals")
+(declare-function decknix--compose-command-completion-at-point
+                  "decknix-agent-compose-internals")
+(declare-function decknix--compose-file-completion-at-point
+                  "decknix-agent-compose-internals")
+(declare-function decknix--compose-trigger-completion
+                  "decknix-agent-compose-internals")
+(declare-function decknix--compose-setup-completion
+                  "decknix-agent-compose-internals")
 
 (defun decknix--compose-get-or-create (target)
   "Get the existing compose buffer for TARGET, or create a new one.
@@ -3390,80 +3243,14 @@ looks like a PR URL) and workspace (defaulting to current project)."
 (defvar decknix--batch-default-workspace nil
   "Default workspace for the current batch editor.")
 
-(defun decknix--batch-parse-buffer ()
-  "Parse the batch editor buffer into a list of session specs.
-Each spec is an alist with keys: name, workspace, items, grouped."
-  (let ((specs nil)
-        (current-items nil)
-        (current-ws decknix--batch-default-workspace)
-        (current-name nil))
-    (save-excursion
-      (goto-char (point-min))
-      (while (not (eobp))
-        (let ((line (string-trim
-                     (buffer-substring-no-properties
-                      (line-beginning-position)
-                      (line-end-position)))))
-          (cond
-           ;; Divider: --- <name> [: <workspace>]
-           ((string-match "^---\\s-+\\(.+\\)" line)
-            ;; Flush previous group if any
-            (when (and current-name current-items)
-              (push (list (cons 'name current-name)
-                          (cons 'workspace current-ws)
-                          (cons 'items (nreverse current-items))
-                          (cons 'grouped t))
-                    specs))
-            ;; Parse new group header
-            (let ((header (match-string 1 line)))
-              (if (string-match "^\\(.+?\\)\\s-*:\\s-*\\(\\S-+.*\\)" header)
-                  (progn
-                    (setq current-name (string-trim (match-string 1 header)))
-                    (setq current-ws (expand-file-name
-                                      (string-trim (match-string 2 header)))))
-                (setq current-name (string-trim header))
-                (setq current-ws decknix--batch-default-workspace)))
-            (setq current-items nil))
-           ;; Empty line or comment — skip
-           ((or (string-empty-p line)
-                (string-prefix-p "#" line))
-            nil)
-           ;; Content line
-           (t
-            (if current-name
-                ;; Inside a group
-                (push line current-items)
-              ;; Ungrouped — each line is its own session
-              (let* ((parsed (decknix--agent-parse-pr-url line))
-                     (auto-name (if parsed
-                                    (format "pr-%s-%s"
-                                            (alist-get 'repo parsed)
-                                            (alist-get 'number parsed))
-                                  (format "review-%s"
-                                          (substring
-                                           (secure-hash 'sha256 line)
-                                           0 8))))
-                     ;; Auto-detect workspace from PR URL
-                     (ws (if parsed
-                             (or (decknix--agent-pr-detect-workspace
-                                  (alist-get 'owner parsed)
-                                  (alist-get 'repo parsed))
-                                 decknix--batch-default-workspace)
-                           decknix--batch-default-workspace)))
-                (push (list (cons 'name auto-name)
-                            (cons 'workspace ws)
-                            (cons 'items (list line))
-                            (cons 'grouped nil))
-                      specs))))))
-        (forward-line 1)))
-    ;; Flush final group
-    (when (and current-name current-items)
-      (push (list (cons 'name current-name)
-                  (cons 'workspace current-ws)
-                  (cons 'items (nreverse current-items))
-                  (cons 'grouped t))
-            specs))
-    (nreverse specs)))
+;; PR B.71: `decknix--batch-parse-buffer' was carved into
+;; `decknix-agent-batch-parse'.  The launcher (`-launch'),
+;; summary renderer (`-show-summary') and the
+;; `decknix-agent-batch-process' interactive entry point stay
+;; here per AGENTS.md Rule 2.  Forward-declare the parser so the
+;; byte-compiler resolves it.
+(declare-function decknix--batch-parse-buffer
+                  "decknix-agent-batch-parse")
 
 (defvar decknix--batch-launch-results nil
   "List of (NAME STATUS BUFFER) for the most recent batch launch.")
