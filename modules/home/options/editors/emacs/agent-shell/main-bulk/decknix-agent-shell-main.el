@@ -93,6 +93,11 @@
 (declare-function decknix--agent-review-strip-meta "decknix-agent-review-format")
 (declare-function decknix--agent-review-followup-id "decknix-agent-review-followup-format")
 (declare-function decknix--agent-review-followup-describe "decknix-agent-review-followup-format" (entry))
+(declare-function decknix--agent-review-followups-read "decknix-agent-review-followup-io" ())
+(declare-function decknix--agent-review-followups-write "decknix-agent-review-followup-io" (items))
+(declare-function decknix--agent-review-followup-set-status "decknix-agent-review-followup-io" (entry status))
+(declare-function decknix--agent-review-followup-delete "decknix-agent-review-followup-io" (entry))
+(defvar decknix-agent-review-followups-file)
 (declare-function which-key-add-key-based-replacements "ext:which-key")
 (declare-function which-key-add-keymap-based-replacements "ext:which-key")
 (declare-function consult--multi "ext:consult")
@@ -4355,41 +4360,17 @@ Prompts for:
     (kill-buffer (current-buffer))))
 
 ;; -- Follow-up stash (local JSON; future: GitHub / Jira routes) --
-
-(defvar decknix-agent-review-followups-file
-  (expand-file-name "~/.config/decknix/review-followups.json")
-  "JSON file storing follow-ups flagged during review sessions.
-A list of objects with keys: id, ts, session, workspace, author,
-title, body, route (\"local\"|\"github\"|\"jira\"), status
-(\"open\"|\"done\").")
-
-(defun decknix--agent-review-followups-read ()
-  "Return the current follow-ups list (may be empty)."
-  (let ((f decknix-agent-review-followups-file))
-    (if (file-exists-p f)
-        (condition-case err
-            (let ((json-array-type 'list)
-                  (json-object-type 'alist)
-                  (json-key-type 'symbol))
-              (json-read-file f))
-          (error
-           (message "review-followups: failed to read %s — %s"
-                    f (error-message-string err))
-           nil))
-      nil)))
-
-(defun decknix--agent-review-followups-write (items)
-  "Persist ITEMS to `decknix-agent-review-followups-file'."
-  (let ((f decknix-agent-review-followups-file))
-    (make-directory (file-name-directory f) t)
-    (with-temp-file f
-      (insert (json-encode items))
-      (insert "\n"))))
-
-;; `decknix--agent-review-followup-id' lives in
-;; agent-shell/review/decknix-agent-review-followup-format.el (PR B.60) --
-;; required at the top of this heredoc alongside the rest of the
-;; review/ cluster.
+;;
+;; The four storage helpers (`decknix-agent-review-followups-file',
+;; `-followups-read', `-followups-write', `-followup-set-status',
+;; `-followup-delete') live in
+;; agent-shell/review/decknix-agent-review-followup-io.el (PR B.61).
+;; The two pure formatters (`-followup-id', `-followup-describe')
+;; live in agent-shell/review/decknix-agent-review-followup-format.el
+;; (PR B.60).  Both packages are required at the top of this heredoc
+;; alongside the rest of the review/ cluster.  The interactive
+;; commands that compose them (`-flag-followup', `-list-followups')
+;; remain here next to the rest of `decknix-agent-review-mode'.
 
 (defun decknix-agent-review-flag-followup (title)
   "Flag the current paragraph as a follow-up.
@@ -4469,32 +4450,9 @@ Selecting an entry offers a sub-action: mark-done / re-open / delete
               (message "Copied: %s" id)))
         (?q (message "Cancelled"))))))
 
-(defun decknix--agent-review-followup-set-status (entry status)
-  "Update ENTRY's status to STATUS and persist."
-  (let* ((id (alist-get 'id entry))
-         (items (decknix--agent-review-followups-read))
-         (updated
-          (mapcar
-           (lambda (e)
-             (if (string= (alist-get 'id e) id)
-                 (cons (cons 'status status)
-                       (assq-delete-all 'status (copy-sequence e)))
-               e))
-           items)))
-    (decknix--agent-review-followups-write updated)
-    (message "Follow-up %s → %s" id status)))
-
-(defun decknix--agent-review-followup-delete (entry)
-  "Remove ENTRY from the stash (after confirm)."
-  (when (yes-or-no-p (format "Delete follow-up %s? "
-                             (alist-get 'id entry)))
-    (let* ((id (alist-get 'id entry))
-           (items (decknix--agent-review-followups-read))
-           (filtered (seq-remove
-                      (lambda (e) (string= (alist-get 'id e) id))
-                      items)))
-      (decknix--agent-review-followups-write filtered)
-      (message "Deleted follow-up %s" id))))
+;; `decknix--agent-review-followup-set-status' and
+;; `decknix--agent-review-followup-delete' live in
+;; agent-shell/review/decknix-agent-review-followup-io.el (PR B.61).
 
 (defun decknix-agent-review-add-collaborator ()
   "Add a collaborator to the local mention list."

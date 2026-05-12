@@ -1054,14 +1054,31 @@ let
   # of `decknix-agent-shell-main' (main-bulk).  Co-resident with
   # `decknix-agent-review-format' under `agent-shell/review'.  The
   # I/O counterparts (`-followups-read', `-followups-write',
-  # `-followup-set-status', `-followup-delete') stay in main-bulk
-  # alongside the user-tunable file path defvar.
+  # `-followup-set-status', `-followup-delete') live in the sibling
+  # `decknix-agent-review-followup-io' package (PR B.61).
   decknix-agent-review-followup-format-el = mkEmacsTestedPackage {
     pname = "decknix-agent-review-followup-format";
     src = ./agent-shell/review;
     packageRequires = [ ];
     testFiles = [
       "decknix-agent-review-followup-format-test.el"
+    ];
+  };
+
+  # PR B.61: follow-up stash JSON persistence carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Owns the user-tunable
+  # `decknix-agent-review-followups-file' defvar and the
+  # read/write/set-status/delete quartet that compose around it.
+  # The interactive review-mode commands (`-flag-followup',
+  # `-list-followups') stay in main-bulk and call into this module
+  # via `(require 'decknix-agent-review-followup-io)' from the
+  # heredoc.
+  decknix-agent-review-followup-io-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-review-followup-io";
+    src = ./agent-shell/review;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-review-followup-io-test.el"
     ];
   };
 
@@ -1526,6 +1543,7 @@ in
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
           decknix-agent-review-followup-format-el
+          decknix-agent-review-followup-io-el
         ]
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
@@ -1892,15 +1910,30 @@ in
 
         ;; Follow-up id generator + describe formatter (PR B.60) --
         ;; carved from main-bulk.  Co-resident with `-review-format'
-        ;; / `-review-collaborators' under `agent-shell/review'.  The
-        ;; I/O counterparts (`-followups-read', `-followups-write',
-        ;; `-followup-set-status', `-followup-delete') stay in
-        ;; main-bulk alongside the user-tunable file path defvar.
+        ;; / `-review-collaborators' under `agent-shell/review'.
         (require 'decknix-agent-review-followup-format)
         (declare-function decknix--agent-review-followup-id
                           "decknix-agent-review-followup-format")
         (declare-function decknix--agent-review-followup-describe
                           "decknix-agent-review-followup-format" (entry))
+
+        ;; Follow-up stash JSON persistence (PR B.61) -- carved
+        ;; from main-bulk.  Owns the user-tunable
+        ;; `decknix-agent-review-followups-file' defvar and the
+        ;; read / write / set-status / delete quartet.  The
+        ;; interactive review-mode commands (`-flag-followup',
+        ;; `-list-followups') stay in main-bulk and call into
+        ;; this module by symbol.
+        (require 'decknix-agent-review-followup-io)
+        (declare-function decknix--agent-review-followups-read
+                          "decknix-agent-review-followup-io")
+        (declare-function decknix--agent-review-followups-write
+                          "decknix-agent-review-followup-io" (items))
+        (declare-function decknix--agent-review-followup-set-status
+                          "decknix-agent-review-followup-io" (entry status))
+        (declare-function decknix--agent-review-followup-delete
+                          "decknix-agent-review-followup-io" (entry))
+        (defvar decknix-agent-review-followups-file)
 
         ;; Use auggie as the default agent (skip agent selection prompt)
         (setq agent-shell-preferred-agent-config 'auggie)
