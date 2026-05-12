@@ -1188,6 +1188,22 @@ let
     ];
   };
 
+  # PR B.78: Input-ring sizing & insertion-ordering rules carved
+  # from `decknix--agent-session-restore-input-ring'.  Two pure
+  # helpers: `required-size' computes the ring-grow target,
+  # `insertion-order' transforms newest-first prompt lists into
+  # oldest-first insertion-ready lists with blanks / non-strings
+  # filtered out.  `comint-input-ring' / `make-ring' / `ring-insert'
+  # mutation stays in main-bulk per Rule 2.
+  decknix-agent-input-ring-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-input-ring";
+    src = ./agent-shell/input-ring;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-input-ring-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1861,6 +1877,7 @@ in
           decknix-agent-compose-history-el
           decknix-agent-resume-command-el
           decknix-agent-jump-target-el
+          decknix-agent-input-ring-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -2308,6 +2325,16 @@ in
         (declare-function decknix--jump-target-resolve
                           "decknix-agent-jump-target"
                           (buffer-hit cache-idx count))
+
+        ;; Input-ring sizing & ordering (PR B.78) -- two pure rules
+        ;; carved from `decknix--agent-session-restore-input-ring'.
+        ;; Bulk owns the comint-side mutation per Rule 2.
+        (require 'decknix-agent-input-ring)
+        (declare-function decknix--input-ring-required-size
+                          "decknix-agent-input-ring"
+                          (current-size prompt-count))
+        (declare-function decknix--input-ring-insertion-order
+                          "decknix-agent-input-ring" (prompts))
 
         ;; Tag-store mutators (PR B.70) -- the three writers that
         ;; persist conversation tags + workspace + session-id

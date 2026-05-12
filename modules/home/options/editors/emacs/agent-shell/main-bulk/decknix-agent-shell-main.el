@@ -444,14 +444,16 @@ buffer) so we never clobber fresh history with stale on-disk data."
            (prompts (and (file-exists-p file)
                          (decknix--prompt-extract-from-file file))))
       (when prompts
-        (let ((needed (max (or comint-input-ring-size 32)
-                           (length prompts))))
+        ;; PR B.78: ring-sizing and insertion-ordering rules are
+        ;; pinned by `decknix-agent-input-ring' (carved, +11 ERT).
+        ;; This function is the comint-side adapter that performs
+        ;; the actual `make-ring' / `ring-insert' mutation.
+        (let ((needed (decknix--input-ring-required-size
+                       comint-input-ring-size (length prompts))))
           (setq-local comint-input-ring-size needed)
           (setq-local comint-input-ring (make-ring needed)))
-        (dolist (p (nreverse prompts))
-          (when (and (stringp p)
-                     (not (string-empty-p (string-trim p))))
-            (ring-insert comint-input-ring p)))))))
+        (dolist (p (decknix--input-ring-insertion-order prompts))
+          (ring-insert comint-input-ring p))))))
 
 (defun decknix--agent-unsorted-table (candidates)
   "Wrap CANDIDATES in a completion table that preserves list order.
