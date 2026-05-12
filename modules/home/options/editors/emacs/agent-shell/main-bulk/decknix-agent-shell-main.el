@@ -98,6 +98,12 @@
 (declare-function decknix--agent-review-followup-set-status "decknix-agent-review-followup-io" (entry status))
 (declare-function decknix--agent-review-followup-delete "decknix-agent-review-followup-io" (entry))
 (defvar decknix-agent-review-followups-file)
+(declare-function decknix--agent-review-content-for-route "decknix-agent-review-submit" (route))
+(declare-function decknix--agent-review-submit-to-agent "decknix-agent-review-submit" (content))
+(declare-function decknix--agent-review-submit-pr "decknix-agent-review-submit" (content))
+(declare-function decknix--agent-review-submit-jira "decknix-agent-review-submit" (content))
+(declare-function decknix--agent-review-submit-file "decknix-agent-review-submit" (content))
+(defvar decknix-agent-review-jira-drafts-dir)
 (declare-function which-key-add-key-based-replacements "ext:which-key")
 (declare-function which-key-add-keymap-based-replacements "ext:which-key")
 (declare-function consult--multi "ext:consult")
@@ -4240,88 +4246,14 @@ the last exchange."
     (pop-to-buffer buf)))
 
 ;; -- Submit / route --
-
-(defvar decknix-agent-review-jira-drafts-dir
-  (expand-file-name "~/.config/decknix/review-jira-drafts")
-  "Directory where `j' route writes Jira draft markdown files.")
-
-;; `decknix--agent-review-strip-meta' lives in
-;; agent-shell/review/decknix-agent-review-format.el.
-
-(defun decknix--agent-review-content-for-route (route)
-  "Return the review buffer content appropriate for ROUTE.
-ROUTE is one of `agent', `pr', `jira', `file'."
-  (let ((raw (buffer-string)))
-    (pcase route
-      ('agent
-       ;; Agent already has the raw exchange in its history — strip
-       ;; the review-meta header but keep the instructions block
-       ;; (it tells the agent how to respond).
-       (decknix--agent-review-strip-meta raw))
-      (_
-       ;; Other routes want the full buffer (meta + instructions +
-       ;; annotations) for human consumption.
-       raw))))
-
-(defun decknix--agent-review-submit-to-agent (content)
-  "Send CONTENT to the source agent-shell as a new prompt.
-Handles the busy-prompt dance the same way the compose editor does."
-  (let ((target decknix--agent-review-source-buffer)
-        (action 'submit))
-    (unless (buffer-live-p target)
-      (user-error "Source agent-shell buffer is gone"))
-    (unless (and (get-buffer-process target)
-                 (process-live-p (get-buffer-process target)))
-      (user-error "Agent process not running — restart with C-c A a"))
-    (when (with-current-buffer target
-            (bound-and-true-p shell-maker--busy))
-      (let ((choice (read-char-choice
-                     "Agent busy: [i]nterrupt & submit  [q]ueue  [c]ancel "
-                     '(?i ?q ?c))))
-        (pcase choice
-          (?c (user-error "Submit cancelled"))
-          (?q (setq action 'queue))
-          (?i
-           (with-current-buffer target
-             (when (fboundp 'agent-shell-interrupt)
-               (let ((agent-shell-confirm-interrupt nil))
-                 (agent-shell-interrupt))))
-           (sit-for 0.3)))))
-    (pcase action
-      ('queue
-       (when (fboundp 'decknix--compose-enqueue-prompt)
-         (decknix--compose-enqueue-prompt target content))
-       (message "Queued review for agent"))
-      ('submit
-       (with-current-buffer target
-         (goto-char (point-max))
-         (shell-maker-submit :input content))
-       (pop-to-buffer target)
-       (message "Review sent to %s" (buffer-name target))))))
-
-(defun decknix--agent-review-submit-pr (content)
-  "Copy CONTENT to the kill-ring for pasting into a PR comment."
-  (kill-new content)
-  (message "Review copied to kill-ring (%d chars)" (length content)))
-
-(defun decknix--agent-review-submit-jira (content)
-  "Save CONTENT as a Jira draft markdown file."
-  (make-directory decknix-agent-review-jira-drafts-dir t)
-  (let* ((id (format-time-string "%Y%m%d-%H%M%S"))
-         (file (expand-file-name
-                (format "review-%s.md" id)
-                decknix-agent-review-jira-drafts-dir)))
-    (with-temp-file file
-      (insert content))
-    (message "Jira draft written: %s" (abbreviate-file-name file))))
-
-(defun decknix--agent-review-submit-file (content)
-  "Save CONTENT to a user-chosen file."
-  (let ((file (read-file-name "Save review to: ")))
-    (when (and file (not (string-empty-p file)))
-      (with-temp-file file
-        (insert content))
-      (message "Review saved: %s" (abbreviate-file-name file)))))
+;;
+;; The defvar `decknix-agent-review-jira-drafts-dir' and the five
+;; route helpers (`-content-for-route', `-submit-to-agent',
+;; `-submit-pr', `-submit-jira', `-submit-file') live in
+;; agent-shell/review/decknix-agent-review-submit.el (PR B.62) --
+;; required at the top of this heredoc.  The interactive entry
+;; point below stays here next to its `C-c C-c' binding in
+;; review-mode.
 
 (cl-defun decknix-agent-review-submit ()
   "Route the review buffer to the configured destination.
