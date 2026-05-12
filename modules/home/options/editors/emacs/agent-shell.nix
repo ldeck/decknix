@@ -2562,6 +2562,144 @@ in
         ;; Pre-fetch prompt search cache on daemon start
         (run-at-time 5 nil #'decknix--prompt-search-refresh-async)
 
+        ;; == Layer 1: record ACP process deaths for forensic diagnosis ==
+        ;; Upstream `acp--start-client' installs a sentinel that immediately
+        ;; deletes the stderr pipe-process and kills its buffer when the
+        ;; underlying CLI exits.  That destroys the post-mortem info we need
+        ;; (exit code, signal, last stderr) — especially for the sleep/wake
+        ;; deaths where auggie's HTTPS socket gets torn down and the Node
+        ;; process exits cleanly without surfacing the cause anywhere.
+        ;;
+        ;; We attach a :before advice to the sentinel that records the death
+        ;; into an in-memory ring and an append-only log, then defers to the
+        ;; upstream cleanup unchanged.  Inspect captures with
+        ;; `M-x decknix-agent-show-deaths'.
+        (defvar decknix--agent-death-log-file
+          (expand-file-name "agent-deaths.log"
+                            (or (getenv "XDG_CONFIG_HOME")
+                                (expand-file-name "~/.config")))
+          "Append-only log of agent process deaths (printed s-expressions).")
+
+        (defvar decknix--agent-death-records nil
+          "In-memory ring of recent agent process deaths (newest first).")
+
+        (defconst decknix--agent-death-records-max 50
+          "Maximum number of in-memory death records to retain.")
+
+        (defconst decknix--agent-death-stderr-tail 4096
+          "Maximum bytes of stderr to capture per death record.")
+
+        (defun decknix--agent-stderr-buffer-for (proc)
+          "Return the `acp-client-stderr' buffer paired with PROC, or nil.
+The upstream naming convention is `acp-client(CMD)-N' for the main
+process and `acp-client-stderr(CMD)-N' for its stderr pipe."
+          (let ((name (process-name proc)))
+            (when (and name (string-prefix-p "acp-client(" name))
+              (get-buffer
+               (concat "acp-client-stderr"
+                       (substring name (length "acp-client")))))))
+
+        (defun decknix--agent-append-death-log (record)
+          "Append RECORD as a printed s-expression to the death log."
+          (let ((dir (file-name-directory decknix--agent-death-log-file)))
+            (unless (file-directory-p dir)
+              (make-directory dir t)))
+          (let ((coding-system-for-write 'utf-8)
+                (print-escape-newlines t)
+                (print-length nil)
+                (print-level nil))
+            (write-region
+             (concat (prin1-to-string record) "\n")
+             nil decknix--agent-death-log-file 'append 'silent)))
+
+        (defun decknix--agent-record-death (proc event)
+          "Record diagnostic info about PROC dying with EVENT.
+Runs as :before advice on the upstream sentinel so the stderr
+buffer is still alive when we read its tail."
+          (condition-case err
+              (let* ((stderr-buf (decknix--agent-stderr-buffer-for proc))
+                     (stderr-tail
+                      (and (buffer-live-p stderr-buf)
+                           (with-current-buffer stderr-buf
+                             (let ((max-pt (point-max)))
+                               (buffer-substring-no-properties
+                                (max (point-min)
+                                     (- max-pt decknix--agent-death-stderr-tail))
+                                max-pt)))))
+                     (record
+                      (list :timestamp (format-time-string "%FT%T%z")
+                            :process-name (process-name proc)
+                            :command (process-command proc)
+                            :status (symbol-name (process-status proc))
+                            :exit-code (process-exit-status proc)
+                            :event (string-trim (or event ""))
+                            :stderr-tail (or stderr-tail ""))))
+                (push record decknix--agent-death-records)
+                (when (> (length decknix--agent-death-records)
+                         decknix--agent-death-records-max)
+                  (setq decknix--agent-death-records
+                        (seq-take decknix--agent-death-records
+                                  decknix--agent-death-records-max)))
+                (decknix--agent-append-death-log record))
+            (error
+             (message "decknix--agent-record-death failed: %S" err))))
+
+        (defun decknix--agent-install-death-recorder (&rest args)
+          "After `acp--start-client', wrap the process sentinel to record deaths.
+We replace the sentinel with a thin wrapper that records first then
+delegates to the original.  `eval ... t' is used so the original
+sentinel value is embedded as a quoted constant in the wrapper —
+needed because `default.el' is dynamically bound and a plain lambda
+cannot close over the surrounding `let' binding."
+          (let* ((client (plist-get args :client))
+                 (proc (and client (map-elt client :process))))
+            (when (processp proc)
+              (let ((orig (process-sentinel proc)))
+                (set-process-sentinel
+                 proc
+                 (eval `(lambda (p ev)
+                          (decknix--agent-record-death p ev)
+                          (when ',orig (funcall ',orig p ev)))
+                       t))))))
+
+        (with-eval-after-load 'acp
+          (advice-add 'acp--start-client :after
+                      #'decknix--agent-install-death-recorder))
+
+        (defun decknix--agent-insert-death-record (rec)
+          "Insert REC into the current buffer."
+          (insert (format "── %s ──\n" (plist-get rec :timestamp)))
+          (insert (format "  process : %s\n" (plist-get rec :process-name)))
+          (insert (format "  status  : %s   exit-code: %s\n"
+                          (plist-get rec :status)
+                          (plist-get rec :exit-code)))
+          (insert (format "  event   : %s\n" (plist-get rec :event)))
+          (when-let ((cmd (plist-get rec :command)))
+            (insert (format "  command : %s\n"
+                            (mapconcat #'identity cmd " "))))
+          (let ((tail (plist-get rec :stderr-tail)))
+            (when (and tail (not (string-empty-p tail)))
+              (insert "  stderr-tail:\n")
+              (insert (replace-regexp-in-string
+                       "^" "    " (string-trim-right tail)))
+              (insert "\n")))
+          (insert "\n"))
+
+        (defun decknix-agent-show-deaths ()
+          "Show recent ACP process death records in a buffer."
+          (interactive)
+          (with-current-buffer (get-buffer-create "*decknix-agent-deaths*")
+            (let ((inhibit-read-only t))
+              (erase-buffer)
+              (special-mode)
+              (if (null decknix--agent-death-records)
+                  (insert (format "No agent deaths recorded this Emacs session.\n\nLog file: %s\n"
+                                  decknix--agent-death-log-file))
+                (dolist (rec decknix--agent-death-records)
+                  (decknix--agent-insert-death-record rec))))
+            (goto-char (point-min)))
+          (pop-to-buffer "*decknix-agent-deaths*"))
+
         ;; which-key labels for compose mode keybindings
         (with-eval-after-load 'which-key
           (which-key-add-keymap-based-replacements decknix-agent-compose-mode-map
