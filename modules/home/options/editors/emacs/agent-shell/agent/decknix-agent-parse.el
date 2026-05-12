@@ -18,7 +18,12 @@
 ;;                                           deduplicated prompt list)
 ;;   `decknix--agent-conversation-key-raw'  (first-message string ->
 ;;                                           SHA-256 truncated to 16
-;;                                           hex chars)
+;;                                           hex chars; input is itself
+;;                                           truncated to the first
+;;                                           `decknix--agent-conv-key-canonical-length'
+;;                                           characters first to match
+;;                                           the jq `[:200]' slice
+;;                                           applied on the read side)
 ;;
 ;; All three are leaf primitives — no I/O, no global state, no side
 ;; effects (except the seen-set local to `prompt-search-parse').
@@ -65,12 +70,32 @@ Handles process output that may contain trailing text after the JSON array."
         (error nil)))
     (nreverse result)))
 
+(defconst decknix--agent-conv-key-canonical-length 200
+  "Character cap applied to FIRST-MESSAGE before hashing.
+Mirrors the jq filter `[:200]' slice in
+`decknix--agent-session-ensure-jq-filter' so that the write side
+(comint input filter, quickaction launchers) and the read side
+(picker, sidebar, header lookups) hash the same canonical form.
+
+Without this cap, messages longer than 200 codepoints produced
+write-side keys that the read side could never resolve, leaving
+their tags / workspace / linked-PR metadata orphaned in
+`agent-sessions.json'.")
+
 (defun decknix--agent-conversation-key-raw (first-message)
   "Derive the raw conversation key from FIRST-MESSAGE.
-Uses SHA-256 hash truncated to 16 chars.  Does NOT resolve merges —
-use `decknix--agent-conversation-key' for the canonical key."
+Truncates FIRST-MESSAGE to the first
+`decknix--agent-conv-key-canonical-length' characters and returns
+SHA-256 of that prefix, itself truncated to 16 hex chars.  Does NOT
+resolve merges — use `decknix--agent-conversation-key' for the
+canonical key."
   (when (and first-message (not (string-empty-p first-message)))
-    (substring (secure-hash 'sha256 first-message) 0 16)))
+    (let* ((len (length first-message))
+           (canonical (if (> len decknix--agent-conv-key-canonical-length)
+                          (substring first-message 0
+                                     decknix--agent-conv-key-canonical-length)
+                        first-message)))
+      (substring (secure-hash 'sha256 canonical) 0 16))))
 
 (provide 'decknix-agent-parse)
 ;;; decknix-agent-parse.el ends here

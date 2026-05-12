@@ -198,5 +198,157 @@ into the current one."
           (should (member "session-id-A"
                           (gethash "sessions" entry))))))))
 
+;; -- canonical conv-key migration ---------------------------------
+;;
+;; Pre-canonical writes hashed the unbounded comint input rather than
+;; the jq-truncated firstUserMessage prefix.  Long-message entries
+;; landed under a key the read side could never resolve.  The
+;; migration walks v2 conversations, re-derives the canonical key
+;; from each entry's first session, and moves orphans (merging into
+;; any pre-existing canonical entry).
+
+(defmacro decknix-agent-tags-store-test--with-canonical-stubs
+    (sessions key-fn &rest body)
+  "Run BODY with `decknix--agent-session-list' / `-conversation-key' stubbed.
+SESSIONS is the list returned by the session-list stub; KEY-FN is the
+function that maps a firstUserMessage string to a conv-key for the
+conversation-key stub."
+  (declare (indent 2))
+  `(cl-letf (((symbol-function 'decknix--agent-session-list)
+              (lambda () ,sessions))
+             ((symbol-function 'decknix--agent-conversation-key)
+              ,key-fn))
+     ,@body))
+
+(defun decknix-agent-tags-store-test--seed-store (entries)
+  "Write a v2 STORE built from ENTRIES into the shadowed tag file.
+ENTRIES is an alist of (KEY . PLIST) where PLIST may contain
+`:tags', `:sessions', `:workspace'."
+  (let ((store (make-hash-table :test 'equal))
+        (convs (make-hash-table :test 'equal)))
+    (dolist (cell entries)
+      (let ((key (car cell))
+            (plist (cdr cell))
+            (entry (make-hash-table :test 'equal)))
+        (when-let ((tags (plist-get plist :tags)))
+          (puthash "tags" tags entry))
+        (when-let ((sids (plist-get plist :sessions)))
+          (puthash "sessions" sids entry))
+        (when-let ((ws (plist-get plist :workspace)))
+          (puthash "workspace" ws entry))
+        (puthash key entry convs)))
+    (puthash "conversations" convs store)
+    (decknix--agent-tags-write store)
+    (setq decknix--agent-tags-cache nil
+          decknix--agent-tags-cache-mtime nil
+          decknix--agent-tags-cache-checked-at 0.0)))
+
+(ert-deftest decknix-agent-tags-store--canonical-rekey-simple-move ()
+  "Orphan entry is moved to its canonical conv-key when the slot is free."
+  (decknix-agent-tags-store-test--with-isolated-store
+    (decknix-agent-tags-store-test--seed-store
+     '(("orphan-key" :tags ("review" "urgent")
+                     :sessions ("sid-A")
+                     :workspace "/tmp/ws")))
+    (decknix-agent-tags-store-test--with-canonical-stubs
+        '(((sessionId . "sid-A") (firstUserMessage . "first msg")))
+        (lambda (msg)
+          (and (equal msg "first msg") "canonical-key"))
+      (let* ((store (decknix--agent-tags-read))
+             (convs (decknix--agent-tags-conversations store)))
+        (should-not (gethash "orphan-key" convs))
+        (let ((entry (gethash "canonical-key" convs)))
+          (should (hash-table-p entry))
+          (should (equal '("review" "urgent") (gethash "tags" entry)))
+          (should (equal "/tmp/ws" (gethash "workspace" entry)))
+          (should (member "sid-A" (gethash "sessions" entry))))
+        (should (= decknix--agent-tags-canonical-key-version
+                   (gethash "_canonicalKeyVersion" store)))))))
+
+(ert-deftest decknix-agent-tags-store--canonical-rekey-merges-into-target ()
+  "Orphan tags / sessions / workspace fold into a pre-existing canonical entry."
+  (decknix-agent-tags-store-test--with-isolated-store
+    (decknix-agent-tags-store-test--seed-store
+     '(("orphan-key"     :tags ("legacy") :sessions ("sid-old")
+                         :workspace "/tmp/old-ws")
+       ("canonical-key"  :tags ("kept")   :sessions ("sid-new"))))
+    (decknix-agent-tags-store-test--with-canonical-stubs
+        '(((sessionId . "sid-old") (firstUserMessage . "old msg"))
+          ((sessionId . "sid-new") (firstUserMessage . "new msg")))
+        (lambda (msg)
+          (cond ((equal msg "old msg") "canonical-key")
+                ((equal msg "new msg") "canonical-key")
+                (t nil)))
+      (let* ((store (decknix--agent-tags-read))
+             (convs (decknix--agent-tags-conversations store))
+             (target (gethash "canonical-key" convs)))
+        (should-not (gethash "orphan-key" convs))
+        (should (hash-table-p target))
+        (should (equal (sort (copy-sequence (gethash "tags" target))
+                             #'string<)
+                       '("kept" "legacy")))
+        (should (member "sid-old" (gethash "sessions" target)))
+        (should (member "sid-new" (gethash "sessions" target)))
+        ;; Workspace from the orphan promoted because the target slot
+        ;; lacked one.
+        (should (equal "/tmp/old-ws" (gethash "workspace" target)))))))
+
+(ert-deftest decknix-agent-tags-store--canonical-rekey-skips-matching ()
+  "Entries whose key already matches the canonical hash are untouched."
+  (decknix-agent-tags-store-test--with-isolated-store
+    (decknix-agent-tags-store-test--seed-store
+     '(("good-key" :tags ("ok") :sessions ("sid-A"))))
+    (decknix-agent-tags-store-test--with-canonical-stubs
+        '(((sessionId . "sid-A") (firstUserMessage . "msg-A")))
+        (lambda (msg) (and (equal msg "msg-A") "good-key"))
+      (let* ((store (decknix--agent-tags-read))
+             (convs (decknix--agent-tags-conversations store))
+             (entry (gethash "good-key" convs)))
+        (should (hash-table-p entry))
+        (should (equal '("ok") (gethash "tags" entry)))))))
+
+(ert-deftest decknix-agent-tags-store--canonical-rekey-no-sessions-defers ()
+  "Without a populated session list the migration is a no-op (no flag stamped)."
+  (decknix-agent-tags-store-test--with-isolated-store
+    (decknix-agent-tags-store-test--seed-store
+     '(("orphan-key" :tags ("t") :sessions ("sid-A"))))
+    (decknix-agent-tags-store-test--with-canonical-stubs
+        nil
+        (lambda (_msg) "canonical-key")
+      (let* ((store (decknix--agent-tags-read))
+             (convs (decknix--agent-tags-conversations store)))
+        ;; Entry stays under the old key -- nothing to resolve against.
+        (should (hash-table-p (gethash "orphan-key" convs)))
+        ;; And the version flag is NOT stamped, so a later read with
+        ;; sessions populated will still attempt the migration.
+        (should-not (gethash "_canonicalKeyVersion" store))))))
+
+(ert-deftest decknix-agent-tags-store--canonical-rekey-idempotent ()
+  "Once stamped, the migration short-circuits on subsequent reads."
+  (decknix-agent-tags-store-test--with-isolated-store
+    (decknix-agent-tags-store-test--seed-store
+     '(("canonical-key" :tags ("t") :sessions ("sid-A"))))
+    ;; First pass: stamps the version flag.
+    (decknix-agent-tags-store-test--with-canonical-stubs
+        '(((sessionId . "sid-A") (firstUserMessage . "msg-A")))
+        (lambda (msg) (and (equal msg "msg-A") "canonical-key"))
+      (decknix--agent-tags-read))
+    ;; Bust the cache so the second read takes the disk path again.
+    (setq decknix--agent-tags-cache nil
+          decknix--agent-tags-cache-mtime nil
+          decknix--agent-tags-cache-checked-at 0.0)
+    ;; Second pass: even with a stub that would re-key everything, the
+    ;; flag should short-circuit the migration entirely.
+    (let ((calls 0))
+      (decknix-agent-tags-store-test--with-canonical-stubs
+          '(((sessionId . "sid-A") (firstUserMessage . "msg-A")))
+          (lambda (msg)
+            (setq calls (1+ calls))
+            (and (equal msg "msg-A") "canonical-key"))
+        (decknix--agent-tags-read)
+        ;; Zero invocations of the conv-key fn means the migration walk
+        ;; was skipped on the second read.
+        (should (= 0 calls))))))
+
 (provide 'decknix-agent-tags-store-test)
 ;;; decknix-agent-tags-store-test.el ends here
