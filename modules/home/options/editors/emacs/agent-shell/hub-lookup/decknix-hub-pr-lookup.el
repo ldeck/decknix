@@ -23,7 +23,7 @@
 ;; status-from-hub returned alist always carries:
 ;;   kind (wip | review), state (always uppercase), draft (eq-t),
 ;;   ci-status, checks, updated_at, needs_reply, bot_pending,
-;;   replies_to_me, title, mergeable.
+;;   replies_to_me, total_threads, unresolved_threads, title, mergeable.
 ;; WIP variant additionally carries: merged_at, branch, review_decision.
 ;; Review variant additionally carries: my_review.
 ;;
@@ -80,6 +80,9 @@ Returns an alist or nil if not found."
                             (cons 'needs_reply (alist-get 'needs_reply pr))
                             (cons 'bot_pending (alist-get 'bot_pending pr))
                             (cons 'replies_to_me (alist-get 'replies_to_me pr))
+                            (cons 'total_threads (alist-get 'total_threads pr))
+                            (cons 'unresolved_threads
+                                  (alist-get 'unresolved_threads pr))
                             (cons 'title (alist-get 'title pr))
                             (cons 'branch (alist-get 'branch pr))
                             (cons 'mergeable (alist-get 'mergeable pr)))))))))
@@ -102,6 +105,9 @@ Returns an alist or nil if not found."
                         (cons 'needs_reply (alist-get 'needs_reply item))
                         (cons 'bot_pending (alist-get 'bot_pending item))
                         (cons 'replies_to_me (alist-get 'replies_to_me item))
+                        (cons 'total_threads (alist-get 'total_threads item))
+                        (cons 'unresolved_threads
+                              (alist-get 'unresolved_threads item))
                         (cons 'title (alist-get 'title item))
                         (cons 'mergeable (alist-get 'mergeable item)))))))
           nil)))))

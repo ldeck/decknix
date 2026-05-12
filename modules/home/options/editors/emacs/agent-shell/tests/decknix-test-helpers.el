@@ -78,6 +78,8 @@ Pass :ci-status to override the inner ci alist."
          (needs-reply (plist-get props :needs-reply))
          (bot-pending (plist-get props :bot-pending))
          (replies-to-me (plist-get props :replies-to-me))
+         (total-threads (plist-get props :total-threads))
+         (unresolved-threads (plist-get props :unresolved-threads))
          (ci-status (or (plist-get props :ci-status) "pass"))
          (url (or (plist-get props :url)
                   (format "https://github.com/o/r/pull/%s" number))))
@@ -92,6 +94,8 @@ Pass :ci-status to override the inner ci alist."
       (needs_reply . ,needs-reply)
       (bot_pending . ,bot-pending)
       (replies_to_me . ,replies-to-me)
+      (total_threads . ,total-threads)
+      (unresolved_threads . ,unresolved-threads)
       (ci . ((status . ,ci-status))))))
 
 (defun decknix-test-make-hub-wip (repo-prs)
