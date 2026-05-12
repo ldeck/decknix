@@ -2475,95 +2475,23 @@ Starts with the current session, then streams from saved sessions on-demand."
   (decknix--compose-history-navigate-next))
 
 ;; == Consult-based prompt search (M-r) ==
-
-(defvar decknix--prompt-search-cache nil
-  "Cached list of all user prompts for consult search (strings).")
-
-(defvar decknix--prompt-search-cache-time 0
-  "Time when prompt search cache was last updated.")
-
-(defvar decknix--prompt-search-cache-ttl 300
-  "Seconds before prompt search cache is stale (5 min).")
-
-(defvar decknix--prompt-search-refresh-proc nil
-  "Process handle for async prompt search cache refresh.")
-
-;; `decknix--prompt-search-jq-cmd' lives in
-;; agent-shell/agent/decknix-agent-prompt-search.el (PR B.55) --
-;; required at the top of this heredoc.
 ;;
-;; `decknix--prompt-search-parse' lives in
-;; agent-shell/agent/decknix-agent-parse.el — required at the
-;; top of this heredoc.
-
-(defun decknix--prompt-search-refresh-sync ()
-  "Synchronously build the prompt search cache."
-  (message "Loading all prompt history for search…")
-  (let ((result (decknix--prompt-search-parse
-                 (shell-command-to-string
-                  (decknix--prompt-search-jq-cmd)))))
-    (setq decknix--prompt-search-cache result
-          decknix--prompt-search-cache-time (float-time))
-    result))
-
-(defun decknix--prompt-search-refresh-async ()
-  "Asynchronously refresh the prompt search cache."
-  (when (or (null decknix--prompt-search-refresh-proc)
-            (not (process-live-p decknix--prompt-search-refresh-proc)))
-    (let ((buf (generate-new-buffer " *auggie-prompt-search*")))
-      (setq decknix--prompt-search-refresh-proc
-            (start-process-shell-command
-             "auggie-prompt-search" buf
-             (decknix--prompt-search-jq-cmd)))
-      (set-process-sentinel
-       decknix--prompt-search-refresh-proc
-       (eval
-        `(lambda (proc _event)
-           (when (eq (process-status proc) 'exit)
-             (let ((pbuf (process-buffer proc)))
-               (when (buffer-live-p pbuf)
-                 (let ((result (decknix--prompt-search-parse
-                                (with-current-buffer pbuf
-                                  (buffer-string)))))
-                   (when result
-                     (setq decknix--prompt-search-cache result
-                           decknix--prompt-search-cache-time
-                           (float-time))))
-                 (kill-buffer pbuf)))))
-        t)))))
-
-(defun decknix--prompt-search-get ()
-  "Return all prompts for search, fetching if needed."
-  (when (and (null decknix--prompt-search-cache)
-             (= decknix--prompt-search-cache-time 0))
-    (decknix--prompt-search-refresh-sync))
-  (when (> (- (float-time) decknix--prompt-search-cache-time)
-           decknix--prompt-search-cache-ttl)
-    (decknix--prompt-search-refresh-async))
-  ;; Also prepend current comint-input-ring entries
-  (let ((seen (make-hash-table :test 'equal))
-        (ring-items nil)
-        (target (or decknix--compose-target-buffer
-                    (when (derived-mode-p 'agent-shell-mode)
-                      (current-buffer)))))
-    (when (and target (buffer-live-p target))
-      (with-current-buffer target
-        (when (and (bound-and-true-p comint-input-ring)
-                   (not (ring-empty-p comint-input-ring)))
-          (dotimes (i (ring-length comint-input-ring))
-            (let ((item (ring-ref comint-input-ring i)))
-              (when (and (stringp item)
-                         (not (string-empty-p (string-trim item)))
-                         (not (gethash item seen)))
-                (puthash item t seen)
-                (push item ring-items)))))))
-    ;; Combine: current ring + saved (deduped)
-    (let ((result (nreverse ring-items)))
-      (dolist (msg decknix--prompt-search-cache)
-        (unless (gethash msg seen)
-          (puthash msg t seen)
-          (push msg result)))
-      (nreverse result))))
+;; PR B.72: cache layer (defvars + `-refresh-sync' / `-refresh-async'
+;; / `-get') was carved into `decknix-agent-prompt-search-cache'.
+;; The interactive `decknix-agent-compose-search-history' stays
+;; here per AGENTS.md Rule 2 -- it consults via `consult--read'
+;; and mutates the compose buffer.  Forward-declare the carved
+;; symbols so the byte-compiler resolves them.
+(declare-function decknix--prompt-search-refresh-sync
+                  "decknix-agent-prompt-search-cache")
+(declare-function decknix--prompt-search-refresh-async
+                  "decknix-agent-prompt-search-cache")
+(declare-function decknix--prompt-search-get
+                  "decknix-agent-prompt-search-cache")
+(defvar decknix--prompt-search-cache)
+(defvar decknix--prompt-search-cache-time)
+(defvar decknix--prompt-search-cache-ttl)
+(defvar decknix--prompt-search-refresh-proc)
 
 ;; `decknix--prompt-truncate-for-display' lives in
 ;; agent-shell/agent/decknix-agent-format.el alongside the
@@ -2923,27 +2851,23 @@ Transient: editor closes after submit/cancel."
   (force-mode-line-update)
   (message "Compose: %s" (if decknix--compose-sticky "sticky (stays open)" "transient (closes on action)")))
 
+;; PR B.74: the propertized-segment builder
+;; (`decknix--compose-build-header-line') was carved into
+;; `decknix-agent-compose-header'.  This thin wrapper stays in
+;; main-bulk per AGENTS.md Rule 2 -- it owns the `setq-local'
+;; side-effect against `header-line-format' and reads the
+;; buffer-local `decknix--compose-sticky' flag.
+(declare-function decknix--compose-build-header-line
+                  "decknix-agent-compose-header" (sticky))
+
 (defun decknix--compose-update-header-line ()
   "Update the header-line to reflect current sticky state.
 Compact header — shows C-c as the action prefix and hints that
 which-key will reveal bindings.  Full sequences shown via which-key
 after pressing C-c."
   (setq-local header-line-format
-              (list
-               (propertize
-                (if decknix--compose-sticky " ● Compose [sticky]" " ○ Compose")
-                'font-lock-face (if decknix--compose-sticky
-                                    'font-lock-constant-face
-                                  'font-lock-comment-face))
-               (propertize "  " 'font-lock-face 'font-lock-comment-face)
-               (propertize "C-c" 'font-lock-face 'font-lock-keyword-face)
-               (propertize " actions  " 'font-lock-face 'font-lock-comment-face)
-               (propertize "M-p" 'font-lock-face 'font-lock-keyword-face)
-               (propertize "/" 'font-lock-face 'font-lock-comment-face)
-               (propertize "M-n" 'font-lock-face 'font-lock-keyword-face)
-               (propertize " cycle  " 'font-lock-face 'font-lock-comment-face)
-               (propertize "M-r" 'font-lock-face 'font-lock-keyword-face)
-               (propertize " search" 'font-lock-face 'font-lock-comment-face))))
+              (decknix--compose-build-header-line
+               decknix--compose-sticky)))
 
 ;; PR B.69: `decknix--compose-find-target',
 ;; `-display-action' and the four completion-at-point helpers
@@ -3526,12 +3450,14 @@ the review back to the source agent-shell session.
 ;; format-exchanges and strip-meta — required at the top of
 ;; this heredoc.
 
-(defun decknix--agent-review-capture-exchange (source-buffer n)
-  "Return the last N exchanges from SOURCE-BUFFER's session, oldest first.
-Each exchange is (USER-MSG . ASSISTANT-RESP).  Returns nil on failure."
-  (with-current-buffer source-buffer
-    (when-let ((sid (decknix--agent-buffer-session-id)))
-      (decknix--agent-session-extract-history sid n))))
+;; PR B.73: `decknix--agent-review-capture-exchange' was carved
+;; into `decknix-agent-review-capture'.  The interactive
+;; `decknix-agent-review' entry point (and its review-mode
+;; setup) stays here per AGENTS.md Rule 2.  Forward-declare so
+;; the byte-compiler resolves the call site below.
+(declare-function decknix--agent-review-capture-exchange
+                  "decknix-agent-review-capture"
+                  (source-buffer n))
 
 ;; `decknix--agent-review-render-preamble' lives in
 ;; agent-shell/review/decknix-agent-review-format.el (PR B.59) --
