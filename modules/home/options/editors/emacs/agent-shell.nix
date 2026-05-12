@@ -1218,6 +1218,22 @@ let
     ];
   };
 
+  # PR B.80: QuickAction window-resolver carved from
+  # `decknix--agent-quickaction-start'.  Two pure helpers:
+  # `is-sidebar-p' classifies a window from already-evaluated
+  # signals; `target-window' picks the window the new session
+  # buffer should land in (sidebar -> main, plain -> cur).  Bulk
+  # owns `selected-window' / `window-main-window' lookups and the
+  # `agent-shell-start' invocation per Rule 2.
+  decknix-agent-quickaction-window-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-quickaction-window";
+    src = ./agent-shell/quickaction-window;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-quickaction-window-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1893,6 +1909,7 @@ in
           decknix-agent-jump-target-el
           decknix-agent-input-ring-el
           decknix-agent-compose-queue-el
+          decknix-agent-quickaction-window-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -2359,6 +2376,18 @@ in
                           "decknix-agent-compose-queue"
                           (queued-prompt buffer-live-p
                                          busy-p process-live-p))
+
+        ;; QuickAction window resolver (PR B.80) -- decides where
+        ;; the new session buffer should land based on whether the
+        ;; caller is the sidebar.  Bulk owns frame/window I/O.
+        (require 'decknix-agent-quickaction-window)
+        (declare-function decknix--quickaction-window-is-sidebar-p
+                          "decknix-agent-quickaction-window"
+                          (side-param dedicated-p
+                                      buffer-name sidebar-name))
+        (declare-function decknix--quickaction-target-window
+                          "decknix-agent-quickaction-window"
+                          (cur-is-sidebar cur main-win))
 
         ;; Tag-store mutators (PR B.70) -- the three writers that
         ;; persist conversation tags + workspace + session-id
