@@ -1099,10 +1099,7 @@ back to the slower but exhaustive `*-thorough' variant when
 hunting for a brand-new session."
   (let* ((rg (or (executable-find "rg") "rg"))
          (sessions-dir (expand-file-name "sessions" "~/.augment"))
-         (cmd (format "%s -l0 %s %s 2>/dev/null"
-                      (shell-quote-argument rg)
-                      (shell-quote-argument term)
-                      (shell-quote-argument sessions-dir)))
+         (cmd (decknix--rg-fast-command rg term sessions-dir))
          (output "")
          (proc (make-process
                 :name "agent-grep-rg-fast"
@@ -1121,10 +1118,7 @@ hunting for a brand-new session."
     ;; rg -l0 is NUL-delimited; split, derive the sessionId from
     ;; each path's basename, then filter the cached metadata.
     (let* ((paths (split-string output "\0" t))
-           (id-set (let ((h (make-hash-table :test 'equal)))
-                     (dolist (p paths)
-                       (puthash (file-name-base p) t h))
-                     h))
+           (id-set (decknix--rg-paths-to-id-set paths))
            (cache (or decknix--agent-session-cache
                       (progn (decknix--agent-session-list)
                              decknix--agent-session-cache)))
@@ -1154,11 +1148,9 @@ when the user types more characters."
   (let* ((jqf (decknix--agent-session-ensure-jq-filter))
          (sessions-dir (shell-quote-argument
                         (expand-file-name "sessions" "~/.augment")))
-         (cmd (format "%s -l0 %s %s 2>/dev/null | xargs -0 -P8 -I{} jq -Mc -f %s {} 2>/dev/null | jq -Msc 'sort_by(.modified) | reverse'"
-                      (or (executable-find "rg") "rg")
-                      (shell-quote-argument term)
-                      sessions-dir
-                      (shell-quote-argument jqf)))
+         (cmd (decknix--rg-thorough-command
+               (or (executable-find "rg") "rg")
+               term sessions-dir jqf))
          (output "")
          (proc (make-process
                 :name "agent-grep-rg-thorough"
