@@ -18,10 +18,19 @@
 ;;                                     "lastAccessed": "..."}}
 ;;    "bookmarks":     {"<session-id>": {"label": "...", "created": "..."}}}
 ;;
+;; A bookkeeping `_canonicalKeyVersion' integer at the root tracks
+;; the canonical conv-key migration (see
+;; `decknix--agent-tags-canonical-key-version').
+;;
 ;; This module owns the storage layer:
 ;;
 ;;   `decknix--agent-tags-read'           — cached read with v1 -> v2
-;;                                            auto-migration
+;;                                            auto-migration plus a
+;;                                            second-pass canonical
+;;                                            conv-key re-keying for
+;;                                            v2 entries written before
+;;                                            the jq-truncated hash
+;;                                            convention was honoured
 ;;   `decknix--agent-tags-write'          — write hash to disk +
 ;;                                            update cache
 ;;   `decknix--agent-tags-conversations'  — extract / lazily seed
@@ -75,6 +84,14 @@ tag file plus walking the store for v1 migrations N times per refresh
 would saturate a core (see #hub-loop).  The mtime check still fires
 after the TTL elapses, so external edits converge within one second.")
 
+(defconst decknix--agent-tags-canonical-key-version 1
+  "Schema version for the canonical conv-key migration.
+Bump in lockstep with `decknix--agent-conv-key-canonical-length' or any
+future change to the conv-key derivation that would invalidate previously
+written entries.  When `decknix--agent-tags-read' sees a stored
+`_canonicalKeyVersion' lower than this constant it runs
+`decknix--agent-tags--canonicalize-keys' once and bumps the flag.")
+
 (defun decknix--agent-tags-read ()
   "Read the tag store, returning an in-memory cached hash-table.
 Re-reads from disk only if the file has been modified externally.
@@ -118,11 +135,15 @@ or walking the store for orphaned v1 entries."
             (sessions (decknix--agent-session-list))
             (old-entries nil)
             (migrated 0))
-      ;; Collect orphaned session-keyed entries (UUID keys with tags)
+      ;; Collect orphaned session-keyed entries (UUID keys with tags).
+      ;; Skip the well-known root keys plus the `_canonicalKeyVersion'
+      ;; bookkeeping flag added by the canonical conv-key migration.
       (maphash (lambda (key val)
                  (when (and (hash-table-p val)
                             (gethash "tags" val)
-                            (not (member key '("conversations" "bookmarks"))))
+                            (not (member key '("conversations"
+                                               "bookmarks"
+                                               "_canonicalKeyVersion"))))
                    (push (cons key val) old-entries)))
                store)
       (when old-entries
@@ -173,7 +194,103 @@ or walking the store for orphaned v1 entries."
         (when (> migrated 0)
           (message "Migrated %d v1 tag entries to conversation format"
                    migrated))))
+      ;; Second-pass migration: re-key v2 entries that were written
+      ;; under the pre-canonical hash (full comint input, not the
+      ;; jq-truncated firstUserMessage prefix the read side uses).
+      ;; Idempotent via `_canonicalKeyVersion'.  Requires a populated
+      ;; session list to look up firstUserMessage values; runs as a
+      ;; no-op when sessions are unavailable so the migration completes
+      ;; on a later read once the cache warms up.
+      (decknix--agent-tags--maybe-canonicalize-keys store)
       store)))
+
+(defun decknix--agent-tags--maybe-canonicalize-keys (store)
+  "Run the canonical conv-key migration on STORE if needed.
+Gated by the `_canonicalKeyVersion' flag so the walk only happens
+once per upgrade.  Skipped entirely when `decknix--agent-session-list'
+is empty, so the migration defers gracefully until the session
+cache populates."
+  (let ((current (gethash "_canonicalKeyVersion" store)))
+    (when (or (not (numberp current))
+              (< current decknix--agent-tags-canonical-key-version))
+      (let* ((sessions (decknix--agent-session-list))
+             (rekeyed (and sessions
+                           (decknix--agent-tags--canonicalize-keys
+                            store sessions))))
+        (when (and rekeyed (> rekeyed 0))
+          (message "Re-keyed %d conversation entries to canonical hash"
+                   rekeyed))
+        ;; Only stamp the version flag once we had session data to
+        ;; work with -- otherwise a cold-start read would mark the
+        ;; migration done before any orphan could be resolved.
+        (when sessions
+          (puthash "_canonicalKeyVersion"
+                   decknix--agent-tags-canonical-key-version
+                   store)
+          (decknix--agent-tags-write store))))))
+
+(defun decknix--agent-tags--canonicalize-keys (store sessions)
+  "Re-key conversation entries in STORE under the canonical hash.
+SESSIONS is the cached session-list (alists with `sessionId' +
+`firstUserMessage').  For each entry whose first session-id resolves
+to a firstUserMessage that hashes to a different conv-key than the
+entry is currently stored under, the entry is moved to the canonical
+key.  Tags / sessions / workspace are merged into any pre-existing
+canonical entry so no metadata is lost.
+
+Mutates STORE in place; returns the number of entries re-keyed."
+  (let* ((convs (gethash "conversations" store))
+         (sid->fum (make-hash-table :test 'equal))
+         (rekeyed 0)
+         (to-move nil))
+    (when (hash-table-p convs)
+      ;; Build session-id -> firstUserMessage lookup once so the
+      ;; per-entry resolve is O(1) instead of O(N) over the full
+      ;; session list.
+      (dolist (s sessions)
+        (let ((sid (alist-get 'sessionId s))
+              (fum (alist-get 'firstUserMessage s)))
+          (when (and sid fum)
+            (puthash sid fum sid->fum))))
+      ;; First pass: collect entries whose key disagrees with the
+      ;; canonical hash of their first session's firstUserMessage.
+      ;; Defer the mutation so we don't disturb the maphash walk.
+      (maphash
+       (lambda (key entry)
+         (when (hash-table-p entry)
+           (let* ((sids (gethash "sessions" entry))
+                  (sid (car sids))
+                  (fum (and sid (gethash sid sid->fum)))
+                  (canonical (and fum (decknix--agent-conversation-key fum))))
+             (when (and canonical (not (string= canonical key)))
+               (push (list key canonical entry) to-move)))))
+       convs)
+      ;; Second pass: apply moves, merging into any pre-existing
+      ;; canonical-key entry instead of clobbering it.
+      (dolist (mv to-move)
+        (let* ((old-key (nth 0 mv))
+               (new-key (nth 1 mv))
+               (entry (nth 2 mv))
+               (target (gethash new-key convs)))
+          (cond
+           ((null target)
+            (puthash new-key entry convs)
+            (remhash old-key convs))
+           (t
+            (let ((merged-tags (gethash "tags" target)))
+              (dolist (tag (gethash "tags" entry))
+                (cl-pushnew tag merged-tags :test #'string=))
+              (puthash "tags" merged-tags target))
+            (let ((merged-sids (gethash "sessions" target)))
+              (dolist (sid (gethash "sessions" entry))
+                (cl-pushnew sid merged-sids :test #'string=))
+              (puthash "sessions" merged-sids target))
+            (unless (gethash "workspace" target)
+              (when-let ((ws (gethash "workspace" entry)))
+                (puthash "workspace" ws target)))
+            (remhash old-key convs)))
+          (setq rekeyed (1+ rekeyed)))))
+    rekeyed))
 
 (defun decknix--agent-tags-write (store)
   "Write STORE (hash-table) to the tag file and update in-memory cache."

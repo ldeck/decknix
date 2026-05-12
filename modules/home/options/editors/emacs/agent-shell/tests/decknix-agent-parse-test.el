@@ -139,5 +139,49 @@ algorithm changes."
   (should (equal (decknix--agent-conversation-key-raw "hello")
                  "2cf24dba5fb0a30e")))
 
+;; -- canonical-length truncation -----------------------------------
+;;
+;; The jq filter that builds the read-side `firstUserMessage' field
+;; slices `request_message[:200]'.  Without matching truncation on the
+;; write side, messages longer than the canonical length produced
+;; orphaned conversation entries whose tags / workspace / linked-PR
+;; metadata could never be resolved by the picker, sidebar or header.
+
+(ert-deftest decknix-agent-conv-key--canonical-length-defconst ()
+  "The canonical truncation length matches the jq `[:200]' slice."
+  (should (= 200 decknix--agent-conv-key-canonical-length)))
+
+(ert-deftest decknix-agent-conversation-key-raw--truncates-long-input ()
+  "Inputs longer than 200 chars hash the same as their 200-char prefix."
+  (let* ((prefix (make-string 200 ?a))
+         (long (concat prefix (make-string 50 ?b))))
+    (should (= 250 (length long)))
+    (should (equal (decknix--agent-conversation-key-raw long)
+                   (decknix--agent-conversation-key-raw prefix)))))
+
+(ert-deftest decknix-agent-conversation-key-raw--exact-200-no-truncation ()
+  "Inputs of exactly 200 chars are hashed unmodified."
+  (let* ((s (make-string 200 ?x))
+         (s+1 (concat s "y")))
+    (should-not (equal (decknix--agent-conversation-key-raw s)
+                       (decknix--agent-conversation-key-raw "x")))
+    ;; The 201st char does not change the hash because it is sliced off.
+    (should (equal (decknix--agent-conversation-key-raw s)
+                   (decknix--agent-conversation-key-raw s+1)))))
+
+(ert-deftest decknix-agent-conversation-key-raw--short-unaffected ()
+  "Inputs shorter than the canonical length are unaffected by the cap.
+Pinned against the well-known SHA-256(\"hello\") prefix."
+  (should (equal (decknix--agent-conversation-key-raw "hello")
+                 "2cf24dba5fb0a30e")))
+
+(ert-deftest decknix-agent-conversation-key-raw--long-pinned-vector ()
+  "Pin the canonical hash for a known long input.
+Computed independently: SHA-256 of 200 lowercase `a' chars."
+  ;; `python3 -c "import hashlib; print(hashlib.sha256(b'a'*200).hexdigest()[:16])"'
+  ;; -> "c2a908d98f5df987"
+  (should (equal (decknix--agent-conversation-key-raw (make-string 200 ?a))
+                 "c2a908d98f5df987")))
+
 (provide 'decknix-agent-parse-test)
 ;;; decknix-agent-parse-test.el ends here
