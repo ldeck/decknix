@@ -890,13 +890,32 @@ let
   # rest of the agent/ cluster.  Owns the tiny kill-ring +
   # pbpaste reader used as the `read-string' default in the
   # PR-quick-action and review prompts.  Pure I/O helper -- no
-  # global state.
+  # global state.  PR B.63 added the two stricter
+  # `decknix--clipboard-github-pr-url' / `-repo-url' siblings used
+  # by the link/unlink interactive flows.
   decknix-agent-clipboard-el = mkEmacsTestedPackage {
     pname = "decknix-agent-clipboard";
     src = ./agent-shell/agent;
     packageRequires = [ ];
     testFiles = [
       "decknix-agent-clipboard-test.el"
+    ];
+  };
+
+  # PR B.64: help renderers carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Owns the welcome
+  # banner builder (`decknix--agent-welcome-message', wired into
+  # `agent-shell--config' by `setcdr' in the heredoc) and the
+  # three `C-c ? <k|t|f>' help-buffer commands.  All four are
+  # pure presentation -- ~270 lines of `propertize'-built
+  # reference text -- so factoring them out shrinks main-bulk
+  # without affecting any side-effecting state.
+  decknix-agent-help-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-help";
+    src = ./agent-shell/help;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-help-test.el"
     ];
   };
 
@@ -1559,6 +1578,7 @@ in
           decknix-agent-command-discover-el
           decknix-agent-session-id-el
           decknix-agent-clipboard-el
+          decknix-agent-help-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -1852,6 +1872,18 @@ in
         (require 'decknix-agent-compose-busy)
         (declare-function decknix--compose-busy-action
                           "decknix-agent-compose-busy" (busy-p))
+
+        ;; Help renderers (PR B.64) -- pure presentation layer for
+        ;; the welcome banner + the three `C-c ? <k|t|f>' help
+        ;; buffers.  Loaded before the welcome-message advice and
+        ;; the help-prefix-map keybindings below; both reference
+        ;; symbols owned by this module.
+        (require 'decknix-agent-help)
+        (declare-function decknix--agent-welcome-message
+                          "decknix-agent-help" (config))
+        (declare-function decknix-agent-help-keys "decknix-agent-help")
+        (declare-function decknix-agent-help-tutorial "decknix-agent-help")
+        (declare-function decknix-agent-help-functions "decknix-agent-help")
 
         ;; Workspace + branch detection (PR B.45) -- pure helpers
         ;; consumed by session-creation / PR-quick-action flows.
