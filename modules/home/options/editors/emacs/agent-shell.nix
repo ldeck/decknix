@@ -3491,6 +3491,14 @@ in
                       (define-key map (kbd "g") 'decknix-agent-session-grep)
                       (define-key map (kbd "h") 'decknix-agent-session-history)
                       (define-key map (kbd "c") 'decknix--agent-context-toggle)
+                      ;; Timeline navigation (#136) — page the
+                      ;; restored Context window without reloading
+                      ;; the session JSON.  Buffer-local twins of
+                      ;; `[' / `]' on the Context header keymap so
+                      ;; the user does not need to land point on
+                      ;; the header to advance the timeline.
+                      (define-key map (kbd "[") 'decknix-agent-history-older)
+                      (define-key map (kbd "]") 'decknix-agent-history-newer)
                       (define-key map (kbd "y") 'decknix-agent-session-copy-id)
                       (define-key map (kbd "d") 'decknix-agent-session-toggle-id-display)
                       (define-key map (kbd "l") 'decknix-agent-link-pr)
@@ -3507,6 +3515,8 @@ in
                         "C-c s g" "grep all sessions"
                         "C-c s h" "history"
                         "C-c s c" "toggle context history"
+                        "C-c s [" "context: older turns"
+                        "C-c s ]" "context: newer turns"
                         "C-c s y" "copy session ID"
                         "C-c s d" "toggle ID display"
                         "C-c s l" "link PR"

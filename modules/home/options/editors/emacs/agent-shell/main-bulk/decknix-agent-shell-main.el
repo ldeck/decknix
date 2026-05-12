@@ -195,6 +195,8 @@ Press q to dismiss."
     "  C-c s g     Grep all session content (consult + ripgrep)\n"
     "  C-c s h     View history (C-u to pick any session)\n"
     "  C-c s c     Toggle Context history section (▶/▼)\n"
+    "  C-c s [     Page Context window to older turns\n"
+    "  C-c s ]     Page Context window to newer turns\n"
     "  C-c s y     Copy session ID (C-u for full ID)\n"
     "  C-c s d     Toggle short/full ID in header\n"
     "\n"
@@ -464,6 +466,17 @@ Prevents the auto-persist hook from firing repeatedly.")
                   "decknix-agent-session-history" (session-id))
 (declare-function decknix--agent-session-extract-history
                   "decknix-agent-session-history" (session-id n))
+;; Timeline navigation helpers (#136) — pure list/index math used
+;; by the buffer-local cursor commands `decknix-agent-history-older'
+;; / `-newer' and the cross-window jump-to-match below.
+(declare-function decknix--agent-session-extract-all-turns
+                  "decknix-agent-session-history" (session-id))
+(declare-function decknix--agent-session-window-clamp
+                  "decknix-agent-session-history" (cursor count total))
+(declare-function decknix--agent-session-take-window
+                  "decknix-agent-session-history" (turns cursor count))
+(declare-function decknix--agent-session-find-turn-containing
+                  "decknix-agent-session-history" (turns regexp))
 
 ;; Pure session formatters live in `decknix-agent-session-format'
 ;; (PR B.54, `agent-shell/agent/').  Picker rows + buffer rename
@@ -554,50 +567,126 @@ reports that fact instead of silently no-opping."
     (define-key map (kbd "<tab>") #'decknix--agent-context-toggle)
     (define-key map (kbd "RET") #'decknix--agent-context-toggle)
     (define-key map (kbd "<return>") #'decknix--agent-context-toggle)
+    ;; Timeline navigation (#136) — page the rendered window of
+    ;; restored exchanges by `decknix-agent-session-history-count'
+    ;; in either direction without reloading the JSON.  The full
+    ;; turn list is cached buffer-locally on the first prepopulate.
+    (define-key map (kbd "[") #'decknix-agent-history-older)
+    (define-key map (kbd "]") #'decknix-agent-history-newer)
     map)
   "Keymap for the Context section header toggle.")
 
-(defun decknix--agent-session-prepopulate (session-id n)
-  "Insert a collapsible Context section with the last N exchanges.
-Inserts just before the prompt, matching the ▶/▼ toggle style of
-agent-shell's built-in sections (Notices, Agent capabilities, etc.).
-User messages shown in `font-lock-keyword-face', assistant responses
-in `font-lock-doc-face'.  Section is collapsed by default so the
-prompt is immediately visible.  Click or TAB the header to expand."
-  (let ((exchanges (decknix--agent-session-extract-history session-id n)))
-    (when exchanges
+;; -- Timeline navigation (#136) ----------------------------------
+;;
+;; The Context section restored on `--resume' shows a fixed window
+;; of the last `decknix-agent-session-history-count' turns.  These
+;; buffer-local vars + the `[' / `]' commands (bound on the Context
+;; header keymap above and on `C-c s [' / `C-c s ]' in agent-shell
+;; buffers) page that window through the full on-disk turn list
+;; without re-parsing the JSON on every press.
+;;
+;; The cache holds the parsed all-turns list; the cursor is the
+;; 0-based index of the topmost turn currently rendered.  Both are
+;; per-buffer so multiple sessions can sit at different positions
+;; in their respective timelines.
+
+(defvar-local decknix--agent-history-cache nil
+  "Cached full turn list for this buffer's session.
+Populated on the first `decknix--agent-session-prepopulate' run
+and re-used by `decknix-agent-history-older' / `-newer' so paging
+the timeline window does not re-read the on-disk session JSON.
+nil means the cache has not been populated yet (e.g. fresh buffer
+before the resume timer has fired).")
+
+(defvar-local decknix--agent-history-cursor nil
+  "Index (0-based, oldest = 0) of the topmost turn currently rendered.
+Set by `decknix--agent-session-prepopulate' to land the user at
+the bottom of the timeline (most recent N turns) and updated by
+`decknix-agent-history-older' / `-newer' as the user pages.  nil
+means no Context section has been rendered in this buffer.")
+
+(defun decknix--agent-context-find-existing ()
+  "Return a plist describing the existing Context section, or nil.
+The plist carries `:header-start' (line BOL of the `▶'/`▼' header),
+`:body-start' (first char of the `decknix-context-body' region) and
+`:body-end' (one past the last char of that region) so callers can
+read the body's `invisible' flag without re-deriving offsets."
+  (save-excursion
+    (let ((body-start (next-single-property-change
+                       (point-min) 'decknix-context-body)))
+      (when body-start
+        (let ((body-end (next-single-property-change
+                         body-start 'decknix-context-body))
+              (header-start (save-excursion
+                              (goto-char (max (point-min) (1- body-start)))
+                              (line-beginning-position))))
+          (when body-end
+            (list :header-start header-start
+                  :body-start body-start
+                  :body-end body-end)))))))
+
+(defun decknix--agent-context-render-window (cursor)
+  "Re-render the Context section anchored at turn CURSOR (0-based).
+Reads from the buffer-local `decknix--agent-history-cache' (must
+be populated; see `decknix--agent-session-prepopulate') and slices
+out `decknix-agent-session-history-count' turns starting at the
+window-clamped CURSOR.
+
+Removes any existing Context section first so the buffer is left
+with exactly one.  Updates `decknix--agent-history-cursor' to the
+clamped value so subsequent paging starts from the visible window
+even when the caller passed an out-of-range cursor.  Preserves
+the prior collapsed/expanded state of the section across
+re-renders so paging does not auto-expand a collapsed section."
+  (let* ((all decknix--agent-history-cache)
+         (count decknix-agent-session-history-count)
+         (total (length all))
+         (clamped (decknix--agent-session-window-clamp cursor count total))
+         (window (decknix--agent-session-take-window all clamped count))
+         (window-len (length window))
+         (display-from (1+ clamped))
+         (display-to (+ clamped window-len))
+         (existing (decknix--agent-context-find-existing))
+         (was-collapsed
+          (when existing
+            ;; Pre-existing section's invisible flag dictates the
+            ;; collapse/expand state we restore after re-render.
+            ;; New sections (no existing) start collapsed by
+            ;; convention — the prompt stays immediately visible.
+            (get-text-property (plist-get existing :body-start)
+                               'invisible))))
+    (when window
       (let ((inhibit-read-only t))
         (save-excursion
-          ;; Find the prompt — search backwards from end
+          ;; Drop any existing section so we can replace it.
+          (when existing
+            (delete-region (plist-get existing :header-start)
+                           (plist-get existing :body-end)))
+          ;; Position at start of the prompt line.
           (goto-char (point-max))
           (let ((prompt-pos
                  (when (bound-and-true-p comint-prompt-regexp)
                    (re-search-backward comint-prompt-regexp nil t))))
             (if prompt-pos
                 (goto-char prompt-pos)
-              ;; Fallback: insert before point-max
               (goto-char (point-max))))
-          ;; Move to start of the prompt line
           (beginning-of-line)
-          (progn
-            ;; Header: ▶ Context (N exchanges) — clickable/TAB-able
-            ;; Starts collapsed (▶); user clicks to expand (▼)
+          (let* ((arrow (if (or (null existing) was-collapsed) "▶" "▼"))
+                 (label (format "Context (%d–%d / %d)"
+                                display-from display-to total)))
             (insert (propertize
-                     (format "▶ %s\n"
-                             (propertize
-                              (format "Context (%d exchange%s)"
-                                      (length exchanges)
-                                      (if (= (length exchanges) 1) "" "s"))
-                              'font-lock-face 'font-lock-doc-markup-face))
+                     (format "%s %s\n"
+                             arrow
+                             (propertize label
+                                         'font-lock-face
+                                         'font-lock-doc-markup-face))
                      'read-only t
                      'rear-nonsticky t
                      'keymap decknix--agent-context-header-map))
-            ;; Body: exchanges with invisible toggling
             (let ((body-start (point)))
-              (dolist (ex exchanges)
+              (dolist (ex window)
                 (let ((user (car ex))
                       (resp (cdr ex)))
-                  ;; User message
                   (insert (propertize
                            (format "\n❯ %s\n"
                                    (truncate-string-to-width
@@ -605,7 +694,6 @@ prompt is immediately visible.  Click or TAB the header to expand."
                            'font-lock-face 'font-lock-keyword-face
                            'read-only t
                            'rear-nonsticky t))
-                  ;; Assistant response
                   (when (and resp (not (string-empty-p resp)))
                     (insert (propertize
                              (format "\n%s\n"
@@ -616,15 +704,95 @@ prompt is immediately visible.  Click or TAB the header to expand."
                              'read-only t
                              'rear-nonsticky t)))))
               (insert (propertize "\n" 'read-only t 'rear-nonsticky t))
-              ;; Tag the body region for toggling
               (put-text-property body-start (point)
                                  'decknix-context-body t)
-              ;; Start collapsed — hide the body
+              ;; Restore collapsed/expanded state: new sections
+              ;; start collapsed; re-renders preserve the prior
+              ;; visibility so paging doesn't yank the user's
+              ;; collapse choice out from under them.
               (put-text-property body-start (point)
-                                 'invisible t)))))
-      ;; Move cursor to the prompt (end of buffer) so it's
-      ;; immediately ready for input, not stuck at the context header
+                                 'invisible
+                                 (if existing was-collapsed t))))))
+      (setq decknix--agent-history-cursor clamped)
+      (cons clamped window-len))))
+
+(defun decknix--agent-session-prepopulate (session-id n)
+  "Insert a collapsible Context section with the last N exchanges.
+Inserts just before the prompt, matching the ▶/▼ toggle style of
+agent-shell's built-in sections (Notices, Agent capabilities, etc.).
+User messages shown in `font-lock-keyword-face', assistant responses
+in `font-lock-doc-face'.  Section is collapsed by default so the
+prompt is immediately visible.  Click or TAB the header to expand;
+press `[' / `]' (or `C-c s [' / `C-c s ]') to page older / newer
+turns through the same window.
+
+Caches the full parsed turn list in `decknix--agent-history-cache'
+and seeds `decknix--agent-history-cursor' so subsequent paging
+operates on the cache without re-reading the on-disk JSON."
+  (let* ((all (decknix--agent-session-extract-all-turns session-id))
+         (total (length all))
+         (count n)
+         ;; Land at the bottom of the timeline (most recent N turns).
+         (cursor (decknix--agent-session-window-clamp
+                  (- total count) count total)))
+    (when all
+      (setq decknix--agent-history-cache all)
+      ;; Make N buffer-local so subsequent `[' / `]' paging steps
+      ;; by the same window size the user picked at resume time
+      ;; (e.g. `C-u 5 C-c A s' overrides the default 2).  The
+      ;; render helper reads the current value to compute the
+      ;; window slice, so a global setq here would leak into
+      ;; other buffers.
+      (setq-local decknix-agent-session-history-count count)
+      (decknix--agent-context-render-window cursor)
+      ;; Move point to the prompt so the buffer is immediately
+      ;; ready for input, not stuck at the Context header.
       (goto-char (point-max)))))
+
+(defun decknix-agent-history-older (&optional n)
+  "Page the Context timeline window backwards by N turns.
+N defaults to `decknix-agent-session-history-count' so a single
+press shifts the window by exactly one screenful.  No-op when
+already at the oldest turn (cursor = 0); reports that fact when
+called interactively."
+  (interactive "P")
+  (let ((step (if n (prefix-numeric-value n)
+                decknix-agent-session-history-count)))
+    (cond
+     ((null decknix--agent-history-cache)
+      (when (called-interactively-p 'interactive)
+        (message "No restored Context history in this buffer.")))
+     ((or (null decknix--agent-history-cursor)
+          (zerop decknix--agent-history-cursor))
+      (when (called-interactively-p 'interactive)
+        (message "Already at the oldest turn.")))
+     (t
+      (decknix--agent-context-render-window
+       (- decknix--agent-history-cursor step))))))
+
+(defun decknix-agent-history-newer (&optional n)
+  "Page the Context timeline window forwards by N turns.
+N defaults to `decknix-agent-session-history-count' so a single
+press shifts the window by exactly one screenful.  No-op when
+already at the newest turn; reports that fact when called
+interactively."
+  (interactive "P")
+  (let* ((step (if n (prefix-numeric-value n)
+                 decknix-agent-session-history-count))
+         (count decknix-agent-session-history-count)
+         (total (length decknix--agent-history-cache))
+         (max-cursor (max 0 (- total count))))
+    (cond
+     ((null decknix--agent-history-cache)
+      (when (called-interactively-p 'interactive)
+        (message "No restored Context history in this buffer.")))
+     ((or (null decknix--agent-history-cursor)
+          (>= decknix--agent-history-cursor max-cursor))
+      (when (called-interactively-p 'interactive)
+        (message "Already at the newest turn.")))
+     (t
+      (decknix--agent-context-render-window
+       (+ decknix--agent-history-cursor step))))))
 
 (defun decknix--agent-session-restore-input-ring (session-id)
   "Populate `comint-input-ring' with prompts from SESSION-ID's local JSON.
@@ -805,31 +973,94 @@ one is current."
 (defun decknix--agent-session-jump-to-match (buf term)
   "Search BUF for TERM (case-insensitive); move window point on hit.
 Searches forward from `point-min'.  On a hit, sets the window point
-to the match end and recenters.  On a miss (or when TERM is nil),
-leaves point at `point-max' so the prompt remains visible.
-Returns t when a match was found, nil otherwise."
+to the match end and recenters.
+
+When TERM is not present in the rendered buffer text, falls back
+to searching the buffer-local `decknix--agent-history-cache' (the
+full parsed turn list).  If a turn matches, seeds
+`decknix--agent-history-cursor' so that turn lands at the bottom
+of the rendered window, re-renders via
+`decknix--agent-context-render-window', expands the section so
+the matched text is visible, then re-runs the buffer search to
+position point on the match.
+
+Falls back to point-max with an explanatory message when neither
+the buffer nor the cache yields a match.  Returns t when a match
+was found (in either pass), nil otherwise."
   (when (and term (buffer-live-p buf))
     (with-current-buffer buf
       (let ((case-fold-search t)
-            (win (get-buffer-window buf))
-            (hit (save-excursion
-                   (goto-char (point-min))
-                   (search-forward term nil t))))
-        (cond
-         ((and hit (window-live-p win))
-          (set-window-point win hit)
-          (with-selected-window win
-            (goto-char hit)
-            (recenter))
-          t)
-         (t
-          (when (window-live-p win)
-            (set-window-point win (point-max)))
-          (when term
-            (message
-             "Term %S not in loaded history (only %d exchanges shown)"
-             term decknix-agent-session-history-count))
-          nil))))))
+            (win (get-buffer-window buf)))
+        (cl-labels
+            ((find-in-buffer ()
+               (save-excursion
+                 (goto-char (point-min))
+                 (search-forward term nil t)))
+             (land-on (hit)
+               (when (and hit (window-live-p win))
+                 (set-window-point win hit)
+                 (with-selected-window win
+                   (goto-char hit)
+                   (recenter)))
+               t))
+          (let ((hit (find-in-buffer)))
+            (cond
+             (hit (land-on hit))
+             ;; Cross-window jump-to-match (#136): the search term
+             ;; matched in the on-disk session JSON but lies
+             ;; outside the currently-rendered window.  Re-render
+             ;; the Context section anchored on the matching turn,
+             ;; ensure it is expanded, then re-run the buffer
+             ;; search.
+             ((and decknix--agent-history-cache
+                   (let* ((idx (decknix--agent-session-find-turn-containing
+                                decknix--agent-history-cache
+                                (regexp-quote term)))
+                          (count decknix-agent-session-history-count))
+                     (when idx
+                       ;; Land the matching turn at the BOTTOM of
+                       ;; the window (idx is the last turn shown).
+                       (decknix--agent-context-render-window
+                        (max 0 (- (1+ idx) count)))
+                       ;; Force-expand so the text is visible.
+                       (let ((existing
+                              (decknix--agent-context-find-existing)))
+                         (when existing
+                           (let ((inhibit-read-only t))
+                             (put-text-property
+                              (plist-get existing :body-start)
+                              (plist-get existing :body-end)
+                              'invisible nil)
+                             (save-excursion
+                               (goto-char
+                                (plist-get existing :header-start))
+                               (when (re-search-forward
+                                      "[▼▶]"
+                                      (plist-get existing :body-start)
+                                      t)
+                                 (replace-match "▼"))))))
+                       t)))
+              (let ((rehit (find-in-buffer)))
+                (if rehit
+                    (land-on rehit)
+                  ;; Edge case: the term matched a turn but the
+                  ;; buffer search still misses (e.g. truncation
+                  ;; ate the matched region).  Fall through to
+                  ;; the not-found branch below.
+                  (when (window-live-p win)
+                    (set-window-point win (point-max)))
+                  (message
+                   "Term %S found in turn but truncated out of view"
+                   term)
+                  nil)))
+             (t
+              (when (window-live-p win)
+                (set-window-point win (point-max)))
+              (when term
+                (message
+                 "Term %S not in loaded history (only %d exchanges shown)"
+                 term decknix-agent-session-history-count))
+              nil))))))))
 
 (defun decknix--agent-session-resume--new (session-id history-count
                                            &optional display-name
