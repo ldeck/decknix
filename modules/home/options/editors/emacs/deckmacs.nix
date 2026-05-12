@@ -61,12 +61,72 @@ in
         (when (and file (string-match "\\(/nix/store/[^/]+\\)" file))
           (match-string 1 file)))
 
+      ;; == Hot-reload internals ==
+
+      (defun deckmacs--swap-store-paths (new-store-root)
+        "Rewrite emacs-packages-deps store hashes in load paths to NEW-STORE-ROOT.
+      The aggregator lives at a single store path that changes on every
+      switch.  Walking `load-path' and `native-comp-eln-load-path' and
+      replacing the old prefix preserves the upstream Emacs lisp dirs
+      interleaved between aggregator entries (their order matters for
+      built-in / upstream module precedence).  Returns the count of
+      entries rewritten across both lists."
+        (let* ((sample (seq-find (lambda (p)
+                                   (string-match-p "emacs-packages-deps" p))
+                                 load-path))
+               (old-root (when sample
+                           (when (string-match "\\(/nix/store/[^/]+\\)" sample)
+                             (match-string 1 sample))))
+               (rewritten 0))
+          (when (and old-root (not (equal old-root new-store-root)))
+            (setq load-path
+                  (mapcar (lambda (p)
+                            (if (string-prefix-p old-root p)
+                                (progn (setq rewritten (1+ rewritten))
+                                       (concat new-store-root
+                                               (substring p (length old-root))))
+                              p))
+                          load-path))
+            (when (boundp 'native-comp-eln-load-path)
+              (setq native-comp-eln-load-path
+                    (mapcar (lambda (p)
+                              (if (string-prefix-p old-root p)
+                                  (progn (setq rewritten (1+ rewritten))
+                                         (concat new-store-root
+                                                 (substring p (length old-root))))
+                                p))
+                            native-comp-eln-load-path))))
+          rewritten))
+
+      (defun deckmacs--unload-decknix-features ()
+        "Force-unload every loaded decknix-* feature.
+      `unload-feature' with FORCE=t bypasses the dependent-features check
+      so we can unload in any order; the subsequent `load-file' on the
+      new default.el re-runs every `(require 'decknix-...)' call which
+      now resolves to the new store paths swapped in by
+      `deckmacs--swap-store-paths'.  Returns the list of features
+      unloaded."
+        (let ((unloaded nil))
+          (dolist (feat (copy-sequence features))
+            (when (and (symbolp feat)
+                       (string-prefix-p "decknix-" (symbol-name feat)))
+              (when (ignore-errors (unload-feature feat t) t)
+                (push feat unloaded))))
+          (nreverse unloaded)))
+
       ;; == Reload ==
 
       (defun deckmacs-reload ()
         "Reload the current Nix profile's default.el without restarting the daemon.
       Compares store paths to detect changes. With \\[universal-argument], force
-      reload even if the store path hasn't changed."
+      reload even if the store path hasn't changed.
+
+      Hot-reload covers carved first-party packages by rewriting the
+      `emacs-packages-deps' store prefix in `load-path' /
+      `native-comp-eln-load-path' to the new store root, then
+      force-unloading every loaded `decknix-*' feature so the new
+      default.el's `(require ...)' calls actually pull the new bytecode
+      (a bare `require' is a no-op when the feature is already loaded)."
         (interactive)
         (let* ((new-el (deckmacs--resolve-current-default-el))
                (new-store (deckmacs--store-path-for new-el))
@@ -79,18 +139,22 @@ in
             (message "Deckmacs: Already up to date (%s)"
                      (deckmacs--short-store-path new-store)))
            (t
-            (let ((old-store deckmacs--loaded-store-path))
+            (let* ((old-store deckmacs--loaded-store-path)
+                   (rewritten (deckmacs--swap-store-paths new-store))
+                   (unloaded (deckmacs--unload-decknix-features)))
               (load-file new-el)
               (setq deckmacs--loaded-store-path new-store)
               (setq deckmacs--reload-count (1+ deckmacs--reload-count))
               (push (list timestamp new-store
                          (if old-store "reload" "initial"))
                     deckmacs--reload-history)
-              (message "Deckmacs: Reloaded default.el%s (%s)"
+              (message "Deckmacs: Reloaded default.el%s (%s); rewrote %d load-path entries, unloaded %d decknix-* features"
                        (if old-store
                            (format " (store path changed)")
                          " (initial load tracked)")
-                       (deckmacs--short-store-path new-store)))))))
+                       (deckmacs--short-store-path new-store)
+                       rewritten
+                       (length unloaded)))))))
 
       ;; == Status ==
 
