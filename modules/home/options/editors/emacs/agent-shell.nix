@@ -1281,6 +1281,22 @@ let
     ];
   };
 
+  # PR B.84: Pure rg/jq shell-command builders carved from
+  # `decknix--agent-session-rg-search-fast' /
+  # `decknix--agent-session-rg-search-thorough'.  The bulk callers
+  # retain ownership of `make-process' + `accept-process-output'
+  # per Rule 2; this module pins the exact pipeline shape and
+  # quoting so future refactors can't silently break the rg/jq
+  # invocation.
+  decknix-agent-rg-search-command-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-rg-search-command";
+    src = ./agent-shell/rg-search-command;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-rg-search-command-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1960,6 +1976,7 @@ in
           decknix-agent-workspace-persist-el
           decknix-agent-batch-build-el
           decknix-agent-post-create-el
+          decknix-agent-rg-search-command-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -2474,6 +2491,20 @@ in
                           (conv-key tags workspace))
         (declare-function decknix--post-create-buffer-name
                           "decknix-agent-post-create" (name))
+
+        ;; rg search command builders (PR B.84) -- pure shell-command
+        ;; builders for the fast / thorough session-grep pipelines,
+        ;; plus a NUL-delimited paths -> hash-table helper.  Bulk
+        ;; owns make-process + accept-process-output per Rule 2.
+        (require 'decknix-agent-rg-search-command)
+        (declare-function decknix--rg-fast-command
+                          "decknix-agent-rg-search-command"
+                          (rg term sessions-dir))
+        (declare-function decknix--rg-thorough-command
+                          "decknix-agent-rg-search-command"
+                          (rg term sessions-dir jq-filter))
+        (declare-function decknix--rg-paths-to-id-set
+                          "decknix-agent-rg-search-command" (paths))
 
         ;; Tag-store mutators (PR B.70) -- the three writers that
         ;; persist conversation tags + workspace + session-id
