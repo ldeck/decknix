@@ -1251,6 +1251,21 @@ let
     ];
   };
 
+  # PR B.82: Batch builders carved from `decknix--batch-launch'
+  # and `decknix--batch-show-summary'.  Four pure transforms:
+  # spec -> command, items -> tags, spec -> workspace, results
+  # -> summary-rows.  Bulk owns the live `quickaction-start'
+  # invocation, the `condition-case' result accumulation, and
+  # the `*Batch Launch*' buffer rendering per Rule 2.
+  decknix-agent-batch-build-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-batch-build";
+    src = ./agent-shell/batch-build;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-batch-build-test.el"
+    ];
+  };
+
   # PR B.48: current/require session-id + conv-key accessors
   # carved out of `decknix-agent-shell-main' (main-bulk).  Co-
   # resident with the rest of the agent/ persistence + detection
@@ -1928,6 +1943,7 @@ in
           decknix-agent-compose-queue-el
           decknix-agent-quickaction-window-el
           decknix-agent-workspace-persist-el
+          decknix-agent-batch-build-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
           decknix-agent-review-collaborators-el
@@ -2418,6 +2434,21 @@ in
         (declare-function decknix--workspace-ring-first-message
                           "decknix-agent-workspace-persist"
                           (ring-length ring-ref-fn))
+
+        ;; Batch builders (PR B.82) -- pure transforms from a
+        ;; batch-spec to command/tags/workspace, and from launched
+        ;; results to summary rows.  Bulk owns quickaction-start
+        ;; invocation and *Batch Launch* buffer rendering.
+        (require 'decknix-agent-batch-build)
+        (declare-function decknix--batch-build-command
+                          "decknix-agent-batch-build" (grouped items))
+        (declare-function decknix--batch-build-tags
+                          "decknix-agent-batch-build" (items parser-fn))
+        (declare-function decknix--batch-resolve-workspace
+                          "decknix-agent-batch-build"
+                          (spec items default-ws parser-fn detector-fn))
+        (declare-function decknix--batch-summary-rows
+                          "decknix-agent-batch-build" (results))
 
         ;; Tag-store mutators (PR B.70) -- the three writers that
         ;; persist conversation tags + workspace + session-id
