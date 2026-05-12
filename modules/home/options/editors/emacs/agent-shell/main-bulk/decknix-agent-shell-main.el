@@ -3050,48 +3050,25 @@ looks like a PR URL) and workspace (defaulting to current project)."
   "Launch sessions for each spec in SPECS.
 Each spec is an alist with name, workspace, items, grouped.
 Grouped specs send all items as a single message.
-Ungrouped specs send each item via /review-service-pr."
+Ungrouped specs send each item via /review-service-pr.
+
+PR B.82: command/tags/workspace transforms are pinned by
+`decknix-agent-batch-build' (carved, +12 ERT).  This function
+is the orchestration adapter: it walks SPECS, calls the pure
+builders, invokes the live `decknix--agent-quickaction-start',
+and accumulates results."
   (setq decknix--batch-launch-results nil)
   (dolist (spec specs)
     (let* ((name (alist-get 'name spec))
            (items (alist-get 'items spec))
            (grouped (alist-get 'grouped spec))
-           ;; Build the command to send
-           (command (if grouped
-                        ;; Grouped: send all items as one message
-                        (mapconcat
-                         (lambda (item)
-                           (format "/review-service-pr %s" item))
-                         items "\n")
-                      ;; Ungrouped: single item
-                      (format "/review-service-pr %s" (car items))))
-           ;; Tags: review + repo names + PR numbers from parsed URLs
-           (tags (let ((tag-list (list "review")))
-                   (dolist (item items)
-                     (let ((parsed (decknix--agent-parse-pr-url item)))
-                       (when parsed
-                         (cl-pushnew (alist-get 'repo parsed)
-                                     tag-list :test #'string=)
-                         (cl-pushnew (format "#%s" (alist-get 'number parsed))
-                                     tag-list :test #'string=))))
-                   tag-list))
-           ;; Workspace: for grouped items without explicit workspace,
-           ;; auto-detect from the first parseable PR URL
-           (workspace
-            (let ((ws (alist-get 'workspace spec)))
-              (if (and grouped
-                       (string= ws decknix--batch-default-workspace))
-                  ;; Try auto-detecting from the first PR URL
-                  (or (cl-some
-                       (lambda (item)
-                         (let ((parsed (decknix--agent-parse-pr-url item)))
-                           (when parsed
-                             (decknix--agent-pr-detect-workspace
-                              (alist-get 'owner parsed)
-                              (alist-get 'repo parsed)))))
-                       items)
-                      ws)
-                ws))))
+           (command (decknix--batch-build-command grouped items))
+           (tags (decknix--batch-build-tags
+                  items #'decknix--agent-parse-pr-url))
+           (workspace (decknix--batch-resolve-workspace
+                       spec items decknix--batch-default-workspace
+                       #'decknix--agent-parse-pr-url
+                       #'decknix--agent-pr-detect-workspace)))
       (condition-case err
           (progn
             (decknix--agent-quickaction-start name tags workspace command)
@@ -3105,8 +3082,14 @@ Ungrouped specs send each item via /review-service-pr."
   (decknix--batch-show-summary))
 
 (defun decknix--batch-show-summary ()
-  "Display a summary buffer of the batch launch results."
-  (let ((buf (get-buffer-create "*Batch Launch*")))
+  "Display a summary buffer of the batch launch results.
+
+PR B.82: per-row icon + status mapping is pinned by
+`decknix--batch-summary-rows' (carved).  This function applies
+faces and inserts the rows."
+  (let ((buf (get-buffer-create "*Batch Launch*"))
+        (rows (decknix--batch-summary-rows
+               decknix--batch-launch-results)))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
@@ -3115,12 +3098,13 @@ Ungrouped specs send each item via /review-service-pr."
         (insert (propertize (make-string 40 ?═)
                             'font-lock-face 'font-lock-comment-face)
                 "\n\n")
-        (dolist (result decknix--batch-launch-results)
-          (let ((name (nth 0 result))
-                (status (nth 1 result))
-                (err (nth 2 result)))
+        (dolist (row rows)
+          (let ((icon (plist-get row :icon))
+                (name (plist-get row :name))
+                (status (plist-get row :status))
+                (err (plist-get row :err)))
             (insert (propertize
-                     (if (string= status "launched") "✓ " "✗ ")
+                     icon
                      'font-lock-face
                      (if (string= status "launched")
                          'success 'error))
@@ -3130,7 +3114,7 @@ Ungrouped specs send each item via /review-service-pr."
                     "\n")))
         (insert "\n"
                 (propertize (format "%d sessions launched"
-                                   (length decknix--batch-launch-results))
+                                   (length rows))
                             'font-lock-face 'font-lock-comment-face)
                 "\n\n"
                 (propertize "Press q to close.\n"
