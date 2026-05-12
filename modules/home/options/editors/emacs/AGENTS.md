@@ -611,6 +611,7 @@ workspace sidebar surface which sessions need attention.
 | `C-c b` | Switch agent buffer — live buffers only (#96) |
 | `C-c s g` | Grep all session content (in-buffer shortcut for `C-c A g`) |
 | `C-c s c` | Toggle inline Context history section (▶/▼) — in-buffer only |
+| `C-c s [` / `C-c s ]` | Page restored Context window to older / newer turns (#136). Also bound on the Context header itself as `[` / `]`. Header line shows `Context (a–b / N)` so the cursor position is discoverable. Cross-window jump-to-match: `C-c s g` selecting a hit outside the loaded window now seeds the cursor so the matched turn lands at the bottom and `point` lands on the match |
 | `C-c i` | Context panel (in agent-shell buffers) |
 | `C-c w` | Toggle Agents workspace (in-buffer shortcut) |
 | `C-c j` | Jump to pending session (in-buffer shortcut) |

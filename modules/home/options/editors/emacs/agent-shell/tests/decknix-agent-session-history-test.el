@@ -129,5 +129,131 @@ joined by newline in dolist order."
       (should (equal "first" (caar turns)))
       (should (equal "reply" (cdar turns))))))
 
+;; -- extract-all-turns --------------------------------------------
+
+(ert-deftest decknix-agent-session-history/all-turns-no-truncation ()
+  "extract-all-turns returns every turn even past N=2 default."
+  (decknix-agent-session-history-test--with-fixture
+      "{\"chatHistory\":[
+         {\"exchange\":{\"request_message\":\"q1\",\"response_text\":\"r1\"}},
+         {\"exchange\":{\"request_message\":\"q2\",\"response_text\":\"r2\"}},
+         {\"exchange\":{\"request_message\":\"q3\",\"response_text\":\"r3\"}},
+         {\"exchange\":{\"request_message\":\"q4\",\"response_text\":\"r4\"}}
+       ]}"
+    (let ((turns (decknix--agent-session-extract-all-turns sid)))
+      (should (= 4 (length turns)))
+      (should (equal '(("q1" . "r1") ("q2" . "r2")
+                       ("q3" . "r3") ("q4" . "r4"))
+                     turns)))))
+
+(ert-deftest decknix-agent-session-history/all-turns-missing-file ()
+  "Missing session file returns nil from extract-all-turns."
+  (cl-letf (((symbol-function 'decknix--agent-session-file)
+             (lambda (_id) "/tmp/decknix-does-not-exist.json")))
+    (should (null (decknix--agent-session-extract-all-turns "ghost")))))
+
+;; -- window-clamp -------------------------------------------------
+
+(ert-deftest decknix-agent-session-history/clamp-empty-total ()
+  "TOTAL=0 always yields cursor=0 regardless of inputs."
+  (should (= 0 (decknix--agent-session-window-clamp 5 2 0)))
+  (should (= 0 (decknix--agent-session-window-clamp -3 2 0)))
+  (should (= 0 (decknix--agent-session-window-clamp 0 0 0))))
+
+(ert-deftest decknix-agent-session-history/clamp-non-positive-count ()
+  "Non-positive COUNT short-circuits to cursor=0."
+  (should (= 0 (decknix--agent-session-window-clamp 7 0 10)))
+  (should (= 0 (decknix--agent-session-window-clamp 7 -1 10))))
+
+(ert-deftest decknix-agent-session-history/clamp-fits-everything ()
+  "When COUNT >= TOTAL the only valid cursor is 0."
+  (should (= 0 (decknix--agent-session-window-clamp 5 10 4)))
+  (should (= 0 (decknix--agent-session-window-clamp 0 10 10))))
+
+(ert-deftest decknix-agent-session-history/clamp-bottom-of-range ()
+  "Negative cursor clamps up to 0."
+  (should (= 0 (decknix--agent-session-window-clamp -100 3 10))))
+
+(ert-deftest decknix-agent-session-history/clamp-top-of-range ()
+  "Cursor past max clamps down to TOTAL-COUNT."
+  (should (= 7 (decknix--agent-session-window-clamp 999 3 10)))
+  (should (= 7 (decknix--agent-session-window-clamp 7 3 10))))
+
+(ert-deftest decknix-agent-session-history/clamp-mid-range-passthrough ()
+  "Cursor inside [0, TOTAL-COUNT] passes through unchanged."
+  (should (= 4 (decknix--agent-session-window-clamp 4 3 10))))
+
+;; -- take-window --------------------------------------------------
+
+(ert-deftest decknix-agent-session-history/take-window-mid-slice ()
+  "Mid-list cursor returns COUNT consecutive turns."
+  (let ((turns '(("q1" . "r1") ("q2" . "r2") ("q3" . "r3")
+                 ("q4" . "r4") ("q5" . "r5"))))
+    (should (equal '(("q2" . "r2") ("q3" . "r3"))
+                   (decknix--agent-session-take-window turns 1 2)))))
+
+(ert-deftest decknix-agent-session-history/take-window-out-of-range-clamps ()
+  "Out-of-range cursor clamps and returns the tail."
+  (let ((turns '(("q1" . "r1") ("q2" . "r2") ("q3" . "r3"))))
+    (should (equal '(("q2" . "r2") ("q3" . "r3"))
+                   (decknix--agent-session-take-window turns 99 2)))))
+
+(ert-deftest decknix-agent-session-history/take-window-empty-or-zero ()
+  "Empty TURNS or non-positive COUNT yields nil."
+  (should (null (decknix--agent-session-take-window nil 0 5)))
+  (should (null (decknix--agent-session-take-window '(("q" . "r")) 0 0))))
+
+(ert-deftest decknix-agent-session-history/take-window-count-exceeds-list ()
+  "COUNT larger than list returns whole list."
+  (let ((turns '(("q1" . "r1") ("q2" . "r2"))))
+    (should (equal turns
+                   (decknix--agent-session-take-window turns 0 99)))))
+
+;; -- find-turn-containing -----------------------------------------
+
+(ert-deftest decknix-agent-session-history/find-turn-user-side ()
+  "Match in the user message returns that turn's index."
+  (let ((turns '(("ask about zebras" . "...")
+                 ("ask about MOUSE" . "...")
+                 ("ask about ducks" . "..."))))
+    (should (= 1 (decknix--agent-session-find-turn-containing
+                  turns "mouse")))))
+
+(ert-deftest decknix-agent-session-history/find-turn-response-side ()
+  "Match in the assistant response returns that turn's index."
+  (let ((turns '(("a" . "alpha")
+                 ("b" . "BRAVO needle here")
+                 ("c" . "charlie"))))
+    (should (= 1 (decknix--agent-session-find-turn-containing
+                  turns "needle")))))
+
+(ert-deftest decknix-agent-session-history/find-turn-case-insensitive ()
+  "Search is case-insensitive."
+  (let ((turns '(("Foo" . "Bar"))))
+    (should (= 0 (decknix--agent-session-find-turn-containing
+                  turns "FOO")))
+    (should (= 0 (decknix--agent-session-find-turn-containing
+                  turns "BAR")))))
+
+(ert-deftest decknix-agent-session-history/find-turn-no-match-returns-nil ()
+  "No match returns nil; nil/empty regexp returns nil."
+  (let ((turns '(("a" . "b"))))
+    (should (null (decknix--agent-session-find-turn-containing
+                   turns "xyz")))
+    (should (null (decknix--agent-session-find-turn-containing
+                   turns nil)))
+    (should (null (decknix--agent-session-find-turn-containing
+                   turns "")))
+    (should (null (decknix--agent-session-find-turn-containing
+                   nil "a")))))
+
+(ert-deftest decknix-agent-session-history/find-turn-first-match-wins ()
+  "Returns index of the first matching turn (oldest-first)."
+  (let ((turns '(("first match" . "x")
+                 ("second match" . "y")
+                 ("third match" . "z"))))
+    (should (= 0 (decknix--agent-session-find-turn-containing
+                  turns "match")))))
+
 (provide 'decknix-agent-session-history-test)
 ;;; decknix-agent-session-history-test.el ends here
