@@ -1082,6 +1082,26 @@ let
     ];
   };
 
+  # PR B.62: review submit/route helpers carved out of
+  # `decknix-agent-shell-main' (main-bulk).  Owns the
+  # `decknix-agent-review-jira-drafts-dir' defvar and the five
+  # route helpers (`-content-for-route' pure transform plus the
+  # four `-submit-{to-agent,pr,jira,file}' destinations).  The
+  # interactive entry point `decknix-agent-review-submit' (bound
+  # to `C-c C-c' in review-mode) stays in main-bulk and dispatches
+  # into this module by symbol.  Depends on
+  # `decknix-agent-review-format' for `-strip-meta'.
+  decknix-agent-review-submit-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-review-submit";
+    src = ./agent-shell/review;
+    packageRequires = [
+      decknix-agent-review-format-el
+    ];
+    testFiles = [
+      "decknix-agent-review-submit-test.el"
+    ];
+  };
+
   # PR B-Bulk.1: bulk extraction of the context-panel sub-heredoc.
   # Verbatim move of 35 declarations (576 lines of forms + commentary)
   # from the four `+ optionalString cfg.context.enable ''..''` sub-heredocs
@@ -1544,6 +1564,7 @@ in
           decknix-agent-review-collaborators-el
           decknix-agent-review-followup-format-el
           decknix-agent-review-followup-io-el
+          decknix-agent-review-submit-el
         ]
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
@@ -1934,6 +1955,26 @@ in
         (declare-function decknix--agent-review-followup-delete
                           "decknix-agent-review-followup-io" (entry))
         (defvar decknix-agent-review-followups-file)
+
+        ;; Review submit/route helpers (PR B.62) -- carved from
+        ;; main-bulk.  Owns the `-jira-drafts-dir' defvar and the
+        ;; five route helpers (content-for-route + four submit
+        ;; destinations).  The interactive entry point
+        ;; `decknix-agent-review-submit' (bound to `C-c C-c' in
+        ;; review-mode) stays in main-bulk and dispatches into
+        ;; this module by symbol.
+        (require 'decknix-agent-review-submit)
+        (declare-function decknix--agent-review-content-for-route
+                          "decknix-agent-review-submit" (route))
+        (declare-function decknix--agent-review-submit-to-agent
+                          "decknix-agent-review-submit" (content))
+        (declare-function decknix--agent-review-submit-pr
+                          "decknix-agent-review-submit" (content))
+        (declare-function decknix--agent-review-submit-jira
+                          "decknix-agent-review-submit" (content))
+        (declare-function decknix--agent-review-submit-file
+                          "decknix-agent-review-submit" (content))
+        (defvar decknix-agent-review-jira-drafts-dir)
 
         ;; Use auggie as the default agent (skip agent selection prompt)
         (setq agent-shell-preferred-agent-config 'auggie)
