@@ -364,147 +364,22 @@ Prompts for a name and opens a template in ~/.augment/commands/."
          (file (cdr (assoc selection cmds))))
     (find-file file)))
 
-;; == Quick actions: PR review, batch processing ==
-;; DWIM workflows that create a session with pre-configured name,
-;; tags, workspace, and auto-send a command.
-;; Metadata enrichment (author, Jira key, etc.) is deferred to the
-;; review command itself, keeping initiation instant.
-;;
-;; `decknix--agent-parse-pr-url' lives in
-;; agent-shell/agent/decknix-agent-url-parse.el alongside its
-;; sibling `decknix--agent-pr-parse-url' (positional-list
-;; variant) — required at the top of this heredoc.
-
-;; -- Clipboard URL DWIM (PR B.49 + B.63) --
-;; Moved into agent-shell/agent/decknix-agent-clipboard.el.
-;; All call sites reach the symbols through the heredoc's
-;; `(require 'decknix-agent-clipboard)' chain.
-(declare-function decknix--agent-clipboard-url "decknix-agent-clipboard")
-(declare-function decknix--clipboard-github-pr-url "decknix-agent-clipboard")
-(declare-function decknix--clipboard-github-repo-url "decknix-agent-clipboard")
-
-(defun decknix--agent-quickaction-start (name tags workspace command)
-  "Start a quick-action session with NAME, TAGS, WORKSPACE, and auto-send COMMAND.
-Creates a new agent session, applies metadata, then subscribes to the
-`prompt-ready' event to send COMMAND as soon as the ACP session is
-fully established.  Returns immediately.
-When invoked from a dedicated or side window (e.g., the sidebar), the
-new session is displayed in the frame's main window instead of
-replacing the caller, preserving the sidebar."
-  ;; PR B.80: window-classification + target-selection are pinned
-  ;; by `decknix-agent-quickaction-window' (carved, +10 ERT).
-  ;; Bulk evaluates the frame/window I/O signals and hands them
-  ;; to the pure resolvers; returned target drives the
-  ;; `display-buffer-alist' override below.
-  (let* ((workspace (expand-file-name workspace))
-         (cur (selected-window))
-         (sidebar-buf (or (bound-and-true-p
-                           agent-shell-workspace-sidebar-buffer-name)
-                          "*agent-shell-sidebar*"))
-         (cur-is-sidebar
-          (decknix--quickaction-window-is-sidebar-p
-           (window-parameter cur 'window-side)
-           (window-dedicated-p cur)
-           (buffer-name (window-buffer cur))
-           sidebar-buf))
-         (target-win
-          (decknix--quickaction-target-window
-           cur-is-sidebar cur (window-main-window (selected-frame))))
-         (before-buffers (buffer-list))
-         (augmented-cmd
-          (append agent-shell-auggie-acp-command
-                  (list "--workspace-root" workspace)))
-         (config
-          (let ((base (agent-shell-auggie-make-agent-config)))
-            (setf (alist-get :client-maker base)
-                  (eval `(lambda (buffer)
-                           (agent-shell--make-acp-client
-                            :command ,(car augmented-cmd)
-                            :command-params ',(cdr augmented-cmd)
-                            :environment-variables
-                            (cond ((map-elt agent-shell-auggie-authentication :none)
-                                   agent-shell-auggie-environment)
-                                  ((map-elt agent-shell-auggie-authentication :login)
-                                   agent-shell-auggie-environment)
-                                  (t
-                                   (error "Invalid Auggie authentication")))
-                            :context-buffer buffer)) t))
-            base)))
-    ;; Override display-action to target the selected window,
-    ;; preventing splits when called from sidebar or after
-    ;; minibuffer exit.
-    (let ((default-directory workspace)
-          (agent-shell-display-action
-           (eval `(cons (lambda (buffer alist)
-                          (let ((win ,target-win))
-                            (if (window-live-p win)
-                                (window--display-buffer
-                                 buffer win 'reuse alist)
-                              (display-buffer-same-window buffer alist))))
-                        nil)
-                 t)))
-      (agent-shell-start :config config))
-    (setq decknix--agent-session-cache-time 0)
-    (decknix--agent-session-new-post-create
-     before-buffers name tags workspace command)
-    ;; Find the newly created shell buffer and subscribe to prompt-ready.
-    ;; agent-shell-start creates the buffer synchronously (mode-hook fires
-    ;; before it returns), so find-new-shell-buffer works immediately.
-    (let ((shell-buf (decknix--agent-find-new-shell-buffer before-buffers)))
-      (when shell-buf
-        (agent-shell-subscribe-to
-         :shell-buffer shell-buf
-         :event 'prompt-ready
-         :on-event
-         (eval `(lambda (_event)
-                  (when (buffer-live-p ,shell-buf)
-                    (with-current-buffer ,shell-buf
-                      (goto-char (point-max))
-                      (shell-maker-submit :input ,command))
-                    (message "Sent: %s"
-                             (truncate-string-to-width ,command 60))))
-               t))))))
-
-(defun decknix-agent-review-pr (url)
-  "Start a PR review session for URL.
-Parses the GitHub PR URL, creates a new session with auto-generated
-name and tags, then sends /review-service-pr.  Metadata enrichment
-\(author, Jira key, title\) is handled by the review command itself.
-
-Interactively, prompts for URL (defaulting to clipboard if it
-looks like a PR URL) and workspace (defaulting to current project)."
-  (interactive
-   (let* ((default-url (decknix--agent-clipboard-url))
-          (url (read-string
-                (if default-url
-                    (format "PR URL [%s]: " default-url)
-                  "PR URL: ")
-                nil nil default-url)))
-     (list url)))
-  ;; Parse and validate
-  (let ((parsed (decknix--agent-parse-pr-url url)))
-    (unless parsed
-      (user-error "Not a valid GitHub PR URL: %s" url))
-    (let* ((owner (alist-get 'owner parsed))
-           (repo (alist-get 'repo parsed))
-           (number (alist-get 'number parsed))
-           ;; Auto-generate session name: pr-<repo>-<number>
-           (name (format "pr-%s-%s" repo number))
-           ;; Tags: review + repo + PR number for distinguishability
-           (tags (list "review" repo (format "#%s" number)))
-           ;; Workspace: smart detection from PR URL
-           ;; Priority: saved workspace → workspace-roots → project root → cwd
-           (default-ws (decknix--agent-pr-detect-workspace owner repo))
-           (workspace (read-directory-name
-                       (format "Workspace for %s/%s#%s: "
-                               owner repo number)
-                       default-ws nil t))
-           ;; Confirm name
-           (name (read-string (format "Session name [%s]: " name)
-                              nil nil name))
-           (command (format "/review-service-pr %s" url)))
-      (decknix--agent-quickaction-start name tags workspace command)
-      (message "Starting review: %s/%s#%s" owner repo number))))
+;; == Quickaction primitive + PR review + PR/repo linking ==
+;; Split into `decknix-agent-shell-main-link' (PR Split.S.6).
+;; Owns:
+;;   - `decknix--agent-quickaction-start' (reusable spawn-a-new-
+;;     session-with-a-primed-first-message primitive)
+;;   - `decknix-agent-review-pr' (the canonical quick action)
+;;   - `decknix-agent-link-pr' / `-link-repo' / `-unlink-pr'
+;;     (interactive linking commands that mutate the carved
+;;     `decknix-agent-link-store' for the current conv-key)
+;; The split file forward-declares the carved url-parse / clipboard
+;; / link-store / vcs / quickaction-window / buffer-lookup helpers
+;; and the sibling `decknix--agent-session-new-post-create'.  Side-
+;; effecting `(define-key)' bindings (`C-c A c r' / `c l' / `c L'
+;; / `c u') into the heredoc's prefix maps still happen in the
+;; heredoc itself per AGENTS.md Rule 2.
+(require 'decknix-agent-shell-main-link)
 
 ;; == Batch processing: launch multiple sessions from a compose editor ==
 ;; Split into `decknix-agent-shell-main-batch' (PR Split.S.2).
@@ -532,124 +407,6 @@ looks like a PR URL) and workspace (defaulting to current project)."
 ;; the heredoc-resident defvars (`-author', `-collaborators',
 ;; `-followups-file', `-jira-drafts-dir').
 (require 'decknix-agent-shell-main-review)
-
-
-;; -- PR / repo linking interactive commands --
-
-;; PR B.63: `decknix--clipboard-github-pr-url' and
-;; `decknix--clipboard-github-repo-url' carved into
-;; `agent-shell/agent/decknix-agent-clipboard.el' alongside
-;; the pre-existing `decknix--agent-clipboard-url'.  Forward
-;; declarations live with the other clipboard declares above.
-
-;; `decknix--agent-current-conv-key' carved into
-;; `decknix-agent-buffer-lookup' (PR B.66) alongside the other
-;; buffer / conv-key lookups.
-
-(defun decknix-agent-link-pr ()
-  "Link a GitHub PR to the current session's conversation.
-Prompts for URL (defaults to clipboard if it looks like a PR URL).
-With prefix arg, prompts for PR type (authored/subject)."
-  (interactive)
-  (let* ((conv-key (decknix--agent-current-conv-key))
-         (_ (unless conv-key
-              (user-error "Not in an agent session buffer")))
-         (default-url (decknix--clipboard-github-pr-url))
-         (url (read-string
-               (if default-url
-                   (format "PR URL [%s]: "
-                           (truncate-string-to-width default-url 50))
-                 "PR URL: ")
-               nil nil default-url))
-         (_ (unless (decknix--agent-pr-parse-url url)
-              (user-error "Not a valid GitHub PR URL")))
-         (pr-type (if current-prefix-arg
-                      (completing-read "Type: " '("authored" "subject")
-                                       nil t nil nil "authored")
-                    "authored")))
-    (if (decknix--agent-link-pr conv-key url pr-type "manual")
-        (progn
-          (message "Linked %s PR: %s" pr-type url)
-          (when (get-buffer "*agent-shell-sidebar*")
-            (agent-shell-workspace-sidebar-refresh)))
-      (message "PR already linked"))))
-
-(defun decknix-agent-link-repo ()
-  "Link a GitHub repo + branch to the current session's conversation.
-Prompts for repo URL (defaults: clipboard if it looks like a repo URL,
-or the session's workspace remote if it points at github.com) and
-branch (defaulted via `decknix--detect-default-branch').
-
-Use this for repos where work goes directly to a branch (no PR) — the
-sidebar will show a commit row with HEAD SHA, age, CI status and DTSP
-deploy indicator, sorted intermixed with PR rows by recency."
-  (interactive)
-  (let* ((conv-key (decknix--agent-current-conv-key))
-         (_ (unless conv-key
-              (user-error "Not in an agent session buffer")))
-         (workspace (decknix--agent-workspace-for-conv-key conv-key))
-         (ws-remote (when (and workspace (file-directory-p workspace))
-                      (decknix--git-remote-url workspace)))
-         (clip-url (decknix--clipboard-github-repo-url))
-         (default-url (or clip-url ws-remote))
-         (url (read-string
-               (if default-url
-                   (format "Repo URL [%s]: "
-                           (truncate-string-to-width default-url 50))
-                 "Repo URL: ")
-               nil nil default-url))
-         (_ (unless (decknix--agent-repo-parse-url url)
-              (user-error "Not a valid GitHub repo URL (maybe a PR URL?)")))
-         (default-branch
-           (or (when (and workspace (file-directory-p workspace))
-                 (decknix--detect-default-branch workspace))
-               "main"))
-         (branch (read-string (format "Branch [%s]: " default-branch)
-                              nil nil default-branch)))
-    (if (decknix--agent-link-repo conv-key url branch "manual")
-        (progn
-          (message "Linked repo: %s@%s" url branch)
-          (when (get-buffer "*agent-shell-sidebar*")
-            (agent-shell-workspace-sidebar-refresh)))
-      (message "Repo+branch already linked"))))
-
-(defun decknix-agent-unlink-pr ()
-  "Unlink a GitHub PR or repo from the current session's conversation.
-Both PRs and repo links surface in the same picker so you can unlink
-either via a single command."
-  (interactive)
-  (let* ((conv-key (decknix--agent-current-conv-key))
-         (_ (unless conv-key
-              (user-error "Not in an agent session buffer")))
-         (linked (decknix--agent-linked-items conv-key)))
-    (if (not linked)
-        (message "No linked items")
-      (let* ((entries
-              (mapcar
-               (lambda (rec)
-                 (let* ((url (decknix--agent-pr-url-accessor rec "url"))
-                        (tp (or (decknix--agent-pr-url-accessor rec "type")
-                                "authored"))
-                        (branch (decknix--agent-pr-url-accessor rec "branch"))
-                        (label (if (equal tp "repo")
-                                   (format "[repo:%s] %s"
-                                           (or branch "?") url)
-                                 (format "[%s] %s" tp url))))
-                   (cons label (cons rec url))))
-               linked))
-             (choice (completing-read "Unlink item: "
-                                      (mapcar #'car entries) nil t))
-             (pair (cdr (assoc choice entries)))
-             (rec (car pair))
-             (url (cdr pair))
-             (tp (decknix--agent-pr-url-accessor rec "type"))
-             (branch (decknix--agent-pr-url-accessor rec "branch")))
-        (if (equal tp "repo")
-            (decknix--agent-unlink-repo conv-key url branch)
-          (decknix--agent-unlink-pr conv-key url))
-        (message "Unlinked: %s" url)
-        (when (get-buffer "*agent-shell-sidebar*")
-          (agent-shell-workspace-sidebar-refresh))))))
 
 ;; == MCP server listing ==
 
