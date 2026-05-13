@@ -3073,6 +3073,7 @@ cannot close over the surrounding `let' binding."
         (require 'decknix-webkit-page)
         (declare-function decknix--webkit-page-text    "decknix-webkit-page")
         (declare-function decknix--webkit-find-in-page "decknix-webkit-page" (needle))
+        (declare-function decknix--webkit-paste-text   "decknix-webkit-page" (text))
 
         ;; -- xwidget-webkit: enhanced keybindings --
         ;; Two principles:
@@ -3130,6 +3131,49 @@ cannot close over the surrounding `let' binding."
           (define-key xwidget-webkit-mode-map (kbd "C-c C-e") #'decknix--webkit-switch-to-eww)
           (define-key xwidget-webkit-mode-map (kbd "C-c C-i") #'decknix--webkit-focus-input)
           (define-key xwidget-webkit-mode-map (kbd "C-c C-s") #'decknix-webkit-consult-line)
+
+          ;; --- Paste-into-focused-input (PR B.83) ------------------------------
+          ;; xwidget-webkit on macOS intercepts the standard paste
+          ;; keystrokes (`C-y', `s-v' / Cmd+V) at the Emacs side and
+          ;; runs `yank' against the read-only WebKit buffer, so password
+          ;; fields and other web inputs never see the clipboard.  Bridge
+          ;; the gap by rebinding both keys to read the system clipboard
+          ;; and JS-inject into whatever element the page currently has
+          ;; focused (input / textarea / contenteditable).  Both keys
+          ;; matter: `C-y' is the universal Emacs paste, `s-v' is the
+          ;; macOS GUI paste; mapping them to the same command preserves
+          ;; the "C-y and Cmd+V both paste" parity that holds in every
+          ;; normal Emacs buffer.  Today's `yank' in xwidget-webkit is
+          ;; effectively a no-op (the buffer is read-only and the
+          ;; xwidget swallows the event before yank can reach the DOM)
+          ;; so nothing useful is being displaced.
+          ;; macOS Passwords autofill stays Safari-only -- that's a
+          ;; system restriction we can't unlock from xwidget -- but the
+          ;; manual "Copy from Passwords -> paste" workflow now works.
+          (defun decknix--webkit-paste ()
+            "Paste the system clipboard into the focused field of the WebKit page.
+Reads from the X CLIPBOARD selection when available, falling back to
+`current-kill' so the kill-ring serves as the secondary source.
+Echoes the number of characters inserted on success, or a hint when
+no editable element is focused / the clipboard is empty."
+            (interactive)
+            (let* ((clip (or (and (fboundp 'gui-get-selection)
+                                  (ignore-errors
+                                    (gui-get-selection 'CLIPBOARD)))
+                             (ignore-errors (current-kill 0 t))))
+                   (text (and clip (substring-no-properties clip))))
+              (cond
+               ((or (null text) (string-empty-p text))
+                (message "Clipboard is empty"))
+               ((null (ignore-errors (xwidget-webkit-current-session)))
+                (message "No xwidget-webkit session"))
+               (t
+                (decknix--webkit-paste-text text)
+                (message "Pasted %d char%s into focused field"
+                         (length text)
+                         (if (= 1 (length text)) "" "s"))))))
+          (define-key xwidget-webkit-mode-map (kbd "C-y") #'decknix--webkit-paste)
+          (define-key xwidget-webkit-mode-map (kbd "s-v") #'decknix--webkit-paste)
 
           ;; --- which-key labels for the C-c C- prefix --------------------------
           (when (fboundp 'which-key-add-keymap-based-replacements)

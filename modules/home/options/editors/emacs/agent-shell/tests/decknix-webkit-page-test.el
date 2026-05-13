@@ -106,6 +106,80 @@ buffer-local list bound to `executed' so callers can assert on it."
     (let ((script (car executed)))
       (should (string-match-p "\\\\\"hi\\\\\"" script)))))
 
+;; -- paste-script (pure builder) ----------------------------------
+
+(ert-deftest decknix-webkit-page--paste-script-nil-on-empty ()
+  "nil / empty / non-string TEXT yields nil (no script)."
+  (should-not (decknix--webkit-paste-script nil))
+  (should-not (decknix--webkit-paste-script ""))
+  (should-not (decknix--webkit-paste-script 42))
+  (should-not (decknix--webkit-paste-script t)))
+
+(ert-deftest decknix-webkit-page--paste-script-iife-shape ()
+  "A non-empty TEXT yields a self-invoking JS IIFE that calls execCommand."
+  (let ((script (decknix--webkit-paste-script "hello")))
+    (should (stringp script))
+    (should (string-prefix-p "(function()" script))
+    (should (string-suffix-p ")()" script))
+    (should (string-match-p "execCommand" script))
+    (should (string-match-p "insertText" script))
+    (should (string-match-p "activeElement" script))
+    ;; The literal payload is JSON-encoded into the script body.
+    (should (string-match-p "\"hello\"" script))))
+
+(ert-deftest decknix-webkit-page--paste-script-json-escapes-quotes ()
+  "TEXT containing quotes / backslashes is JSON-escaped, never raw-pasted."
+  (let ((script (decknix--webkit-paste-script "p\"a\\ss")))
+    (should (stringp script))
+    ;; Quote becomes \" inside the JSON-quoted literal.
+    (should (string-match-p "\\\\\"" script))
+    ;; Backslash becomes \\.
+    (should (string-match-p "\\\\\\\\" script))
+    ;; The raw character sequence does NOT appear unescaped.
+    (should-not (string-match-p "p\"a\\\\ss" script))))
+
+(ert-deftest decknix-webkit-page--paste-script-multibyte-survives ()
+  "Multibyte TEXT round-trips through JSON encoding."
+  (let ((script (decknix--webkit-paste-script "café\u00a0π")))
+    (should (stringp script))
+    ;; json-encode-string emits \u escapes or the literal char depending
+    ;; on `json-encoding-default-indentation' / Emacs version; either
+    ;; way the script must be a syntactically-closed IIFE.
+    (should (string-prefix-p "(function()" script))
+    (should (string-suffix-p ")()" script))))
+
+(ert-deftest decknix-webkit-page--paste-script-long-text-passes-through ()
+  "Long passwords / paragraphs do not crash the builder."
+  (let* ((text (make-string 4096 ?a))
+         (script (decknix--webkit-paste-script text)))
+    (should (stringp script))
+    (should (> (length script) 4096))))
+
+;; -- paste-text (bridge wrapper) ----------------------------------
+
+(ert-deftest decknix-webkit-page--paste-text-noop-on-empty ()
+  "nil / empty / non-string TEXT => no script executed."
+  (decknix-webkit-page-test--with-stubs 'session "ignored"
+    (decknix--webkit-paste-text nil)
+    (decknix--webkit-paste-text "")
+    (decknix--webkit-paste-text 42)
+    (should (null executed))))
+
+(ert-deftest decknix-webkit-page--paste-text-noop-without-session ()
+  "Valid TEXT but no session => no script executed."
+  (decknix-webkit-page-test--with-stubs nil "ignored"
+    (decknix--webkit-paste-text "secret")
+    (should (null executed))))
+
+(ert-deftest decknix-webkit-page--paste-text-injects-script ()
+  "A good session + non-empty TEXT invokes execute-script with the IIFE."
+  (decknix-webkit-page-test--with-stubs 'session "ignored"
+    (decknix--webkit-paste-text "secret")
+    (should (= 1 (length executed)))
+    (let ((script (car executed)))
+      (should (string-match-p "execCommand" script))
+      (should (string-match-p "\"secret\"" script)))))
+
 ;; -- search-history defvar ----------------------------------------
 
 (ert-deftest decknix-webkit-page--search-history-defaults-to-nil ()
@@ -115,11 +189,12 @@ buffer-local list bound to `executed' so callers can assert on it."
     (should (null decknix--webkit-search-history))))
 
 (ert-deftest decknix-webkit-page--primitives-do-not-mutate-history ()
-  "Neither primitive pushes onto the search history list."
+  "None of the primitives push onto the search history list."
   (decknix-webkit-page-test--with-stubs 'session "Line 1"
     (let ((decknix--webkit-search-history nil))
       (decknix--webkit-page-text)
       (decknix--webkit-find-in-page "needle")
+      (decknix--webkit-paste-text "secret")
       (should (null decknix--webkit-search-history)))))
 
 (provide 'decknix-webkit-page-test)
