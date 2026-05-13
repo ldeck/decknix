@@ -179,6 +179,9 @@
 (declare-function decknix--quickaction-target-window
                   "decknix-agent-quickaction-window"
                   (cur-is-sidebar cur main))
+(declare-function decknix--quit-pick-replacement
+                  "decknix-agent-quickaction-window"
+                  (mru-other-bufs visible-bufs))
 
 ;; Carved-package state vars consumed by this file.  Their values
 ;; live in the carved modules; the defvar below keeps the byte-
@@ -1564,26 +1567,43 @@ batch launches."
 Kills the buffer (which sends SIGHUP to auggie, saving the session).
 
 If other live agent-shell sessions exist, switches to the most
-recently used one (no prompt).  Use `C-c A s' afterwards to pick a
-different session.  If this was the last session, returns to the
-welcome screen or *scratch*."
+recently used one that is not already on screen in another window
+of the current frame, so a split-window view does not collapse
+into two panes showing the same session.  Use `C-c A s' afterwards
+to pick a different session.  If this was the last session,
+returns to the welcome screen or *scratch*."
   (interactive)
   (unless (derived-mode-p 'agent-shell-mode)
     (user-error "Not in an agent-shell buffer"))
   (when (y-or-n-p "Quit this agent session? ")
     (let* ((buf (current-buffer))
-           ;; agent-shell-buffers is MRU-first; after removing the
-           ;; current buffer, (car other-bufs) is the most recently
-           ;; used remaining live agent-shell buffer.
+           (this-win (selected-window))
+           ;; Snapshot buffers visible in OTHER windows of the
+           ;; current frame BEFORE the kill mutates window/buffer
+           ;; layout.  Multi-frame setups stay independent: only
+           ;; the current frame's panes are considered "visible".
+           (visible-bufs
+            (delq nil
+                  (mapcar (lambda (w)
+                            (unless (eq w this-win)
+                              (window-buffer w)))
+                          (window-list nil 'no-minibuffer))))
+           ;; agent-shell-buffers is MRU-first; remove the buffer
+           ;; being killed so the carved replacement picker only
+           ;; sees the surviving candidates.
            (other-bufs (remq buf
                              (when (fboundp 'agent-shell-buffers)
-                               (agent-shell-buffers)))))
+                               (agent-shell-buffers))))
+           ;; Pure pick: prefer the first MRU candidate not already
+           ;; visible elsewhere; falls back to MRU head when every
+           ;; candidate is already on screen.  Returns nil only
+           ;; when no other live sessions exist.
+           (replacement
+            (decknix--quit-pick-replacement other-bufs visible-bufs)))
       (kill-buffer buf)
       (cond
-       ;; Switch to MRU agent-shell buffer — natural "next session"
-       ;; flow, no picker prompt.  User can hit `C-c A s' to choose.
-       (other-bufs
-        (switch-to-buffer (car other-bufs)))
+       (replacement
+        (switch-to-buffer replacement))
        ;; Last session — return to welcome or scratch
        ((fboundp 'decknix-welcome)
         (decknix-welcome))

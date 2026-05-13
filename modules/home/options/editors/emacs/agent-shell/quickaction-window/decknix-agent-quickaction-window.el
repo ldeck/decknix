@@ -13,7 +13,7 @@
 ;; predicate and the target-window selection rule can be exercised
 ;; without an actual frame / sidebar / dedicated window.
 ;;
-;; Public surface (one predicate + one resolver):
+;; Public surface (predicates + resolvers):
 ;;
 ;;   (decknix--quickaction-window-is-sidebar-p SIDE-PARAM DEDICATED-P
 ;;                                              BUFFER-NAME SIDEBAR-NAME)
@@ -31,12 +31,30 @@
 ;;        (falling back to CUR if MAIN-WIN is nil); otherwise just
 ;;        return CUR so the new buffer replaces the caller in place.
 ;;
-;; Per AGENTS.md Rule 2 the actual `selected-window' / `window-main-window'
-;; resolution and the `agent-shell-start' invocation stay in main-bulk;
-;; this module only encodes the two bounded-context rules:
+;;   (decknix--quit-pick-replacement MRU-OTHER-BUFS VISIBLE-BUFS)
+;;     -> the buffer to switch to after killing the current session.
+;;        Prefers the first MRU candidate that is NOT already on
+;;        screen in another window of the same frame, so quitting
+;;        from a split-window view does not duplicate a session
+;;        already visible in the other pane.  Falls back to the head
+;;        of MRU-OTHER-BUFS when every candidate is already visible.
 ;;
-;;   "what counts as a sidebar?" and
-;;   "given that the caller is a sidebar, where should we display?"
+;;   (decknix--quickaction-window-candidates DESCRIPTORS)
+;;     -> ordered placement candidates for the spawn-into-which-pane
+;;        prompt.  Each DESCRIPTOR is (WIN BUFFER-NAME IS-CURRENT
+;;        IS-SIDEBAR); sidebar entries are filtered out and each
+;;        non-sidebar window expands into Replace / Split right /
+;;        Split below variants.  Returns nil when fewer than three
+;;        non-sidebar windows are present so the caller can skip the
+;;        prompt and use its existing fast-path.
+;;
+;; Per AGENTS.md Rule 2 the actual `selected-window' /
+;; `window-main-window' / `window-list' / `split-window' invocations
+;; stay in main-bulk; this module only encodes the bounded-context
+;; rules: "what counts as a sidebar?", "given the caller is a sidebar,
+;; where should we display?", "given a quit and the visible-elsewhere
+;; set, what's the next session to surface?", and "given a window
+;; layout, what placement choices should the prompt offer?".
 
 ;;; Code:
 
@@ -86,6 +104,63 @@ workspace tab keeps its layout."
   (if cur-is-sidebar
       (or main-win cur)
     cur))
+
+(defun decknix--quit-pick-replacement (mru-other-bufs visible-bufs)
+  "Pick the buffer to switch to after killing the current session.
+
+MRU-OTHER-BUFS is the list of remaining live agent-shell buffers
+in most-recently-used order, with the buffer being killed already
+removed.  VISIBLE-BUFS is the list of buffers currently displayed
+in OTHER windows of the same frame (the killed buffer's window
+excluded by the caller).
+
+Returns the first MRU candidate that is NOT in VISIBLE-BUFS so
+the replacement does not duplicate a session already on screen
+in another pane.  When every MRU candidate is already visible
+elsewhere — or only one option remains — falls back to the head
+of MRU-OTHER-BUFS.  Returns nil only when MRU-OTHER-BUFS is empty
+(caller routes to the welcome screen)."
+  (or (seq-find (lambda (buf) (not (memq buf visible-bufs)))
+                mru-other-bufs)
+      (car mru-other-bufs)))
+
+(defun decknix--quickaction-window-candidates (descriptors)
+  "Build placement candidates for the quickaction spawn prompt.
+
+DESCRIPTORS is a list of `(WIN BUFFER-NAME IS-CURRENT IS-SIDEBAR)'
+tuples covering every window of the current frame; the caller
+constructs them from `window-list' (sidebar status pre-classified
+via `decknix--quickaction-window-is-sidebar-p').
+
+Sidebar descriptors are filtered out.  Each remaining descriptor
+contributes three candidates: Replace, Split right, Split below.
+Within each variant the current window comes first so the prompt's
+default selection (RET) lands on \"Replace ‹current›\" — the
+historical fast-path behaviour.
+
+Returns a list of `(LABEL ACTION WIN)' entries, where ACTION is
+one of `:replace', `:split-right', `:split-below'.  Returns nil
+when fewer than three non-sidebar descriptors are present so the
+caller can skip the prompt and use its existing target-window
+fast-path (no new prompt for single-pane or 2-pane layouts)."
+  (let* ((non-sidebar (seq-remove (lambda (d) (nth 3 d)) descriptors))
+         (sorted (append (seq-filter (lambda (d) (nth 2 d)) non-sidebar)
+                         (seq-remove (lambda (d) (nth 2 d)) non-sidebar))))
+    (when (>= (length non-sidebar) 3)
+      (let (out)
+        (dolist (d sorted)
+          (push (list (format "Replace ‹%s›" (nth 1 d))
+                      :replace (nth 0 d))
+                out))
+        (dolist (d sorted)
+          (push (list (format "Split right of ‹%s›" (nth 1 d))
+                      :split-right (nth 0 d))
+                out))
+        (dolist (d sorted)
+          (push (list (format "Split below ‹%s›" (nth 1 d))
+                      :split-below (nth 0 d))
+                out))
+        (nreverse out)))))
 
 (provide 'decknix-agent-quickaction-window)
 ;;; decknix-agent-quickaction-window.el ends here

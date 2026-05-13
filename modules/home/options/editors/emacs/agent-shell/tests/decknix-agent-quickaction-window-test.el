@@ -70,5 +70,116 @@
   (should (eq 'cur-win
               (decknix--quickaction-target-window nil 'cur-win 'main-win))))
 
+;; --- quit-pick-replacement ---
+
+(ert-deftest decknix-quickaction-window--quit-empty-mru-returns-nil ()
+  "No remaining live sessions: caller routes to welcome / scratch."
+  (should (null (decknix--quit-pick-replacement nil nil)))
+  (should (null (decknix--quit-pick-replacement nil '(visible-a)))))
+
+(ert-deftest decknix-quickaction-window--quit-single-mru-returned ()
+  "Only one remaining session: it is returned even if visible elsewhere
+\(forced reuse — there is no other choice)."
+  (should (eq 'a (decknix--quit-pick-replacement '(a) nil)))
+  (should (eq 'a (decknix--quit-pick-replacement '(a) '(a)))))
+
+(ert-deftest decknix-quickaction-window--quit-prefers-hidden-mru ()
+  "When MRU head is visible elsewhere, pick the next hidden candidate."
+  (should (eq 'b
+              (decknix--quit-pick-replacement '(a b c) '(a))))
+  (should (eq 'c
+              (decknix--quit-pick-replacement '(a b c) '(a b)))))
+
+(ert-deftest decknix-quickaction-window--quit-no-overlap-returns-head ()
+  "When no MRU candidate is visible elsewhere, return the MRU head."
+  (should (eq 'a
+              (decknix--quit-pick-replacement '(a b c) nil)))
+  (should (eq 'a
+              (decknix--quit-pick-replacement '(a b c) '(x y)))))
+
+(ert-deftest decknix-quickaction-window--quit-all-visible-falls-back ()
+  "When every MRU candidate is on screen, fall back to MRU head."
+  (should (eq 'a
+              (decknix--quit-pick-replacement '(a b) '(a b)))))
+
+;; --- quickaction-window-candidates ---
+
+(ert-deftest decknix-quickaction-window--candidates-empty-returns-nil ()
+  "Empty descriptor list: nil (caller skips prompt)."
+  (should (null (decknix--quickaction-window-candidates nil))))
+
+(ert-deftest decknix-quickaction-window--candidates-single-pane-returns-nil ()
+  "Single non-sidebar pane: nil (no choice to offer)."
+  (should (null (decknix--quickaction-window-candidates
+                 '((win-a "*foo*" t nil))))))
+
+(ert-deftest decknix-quickaction-window--candidates-two-panes-returns-nil ()
+  "Two non-sidebar panes: still nil — threshold is >=3 (current pane
+just gets replaced via the existing fast-path)."
+  (should (null (decknix--quickaction-window-candidates
+                 '((win-a "*foo*" t nil)
+                   (win-b "*bar*" nil nil))))))
+
+(ert-deftest decknix-quickaction-window--candidates-sidebar-not-counted ()
+  "Sidebar descriptors do not contribute to the threshold."
+  (should (null (decknix--quickaction-window-candidates
+                 '((win-side "*agent-shell-sidebar*" nil t)
+                   (win-a "*foo*" t nil)
+                   (win-b "*bar*" nil nil))))))
+
+(ert-deftest decknix-quickaction-window--candidates-three-panes-nine-cands ()
+  "Three non-sidebar panes: nine candidates (3 replace + 3 split-right + 3 split-below)."
+  (let ((cands (decknix--quickaction-window-candidates
+                '((win-a "*foo*" t nil)
+                  (win-b "*bar*" nil nil)
+                  (win-c "*baz*" nil nil)))))
+    (should (= 9 (length cands)))
+    ;; First three entries are Replace; next three Split right;
+    ;; final three Split below.
+    (should (eq :replace (nth 1 (nth 0 cands))))
+    (should (eq :replace (nth 1 (nth 1 cands))))
+    (should (eq :replace (nth 1 (nth 2 cands))))
+    (should (eq :split-right (nth 1 (nth 3 cands))))
+    (should (eq :split-right (nth 1 (nth 4 cands))))
+    (should (eq :split-right (nth 1 (nth 5 cands))))
+    (should (eq :split-below (nth 1 (nth 6 cands))))
+    (should (eq :split-below (nth 1 (nth 7 cands))))
+    (should (eq :split-below (nth 1 (nth 8 cands))))))
+
+(ert-deftest decknix-quickaction-window--candidates-current-listed-first ()
+  "Current window leads each variant group so RET = today's behaviour."
+  (let ((cands (decknix--quickaction-window-candidates
+                '((win-a "*foo*" nil nil)
+                  (win-b "*bar*" t nil)
+                  (win-c "*baz*" nil nil)))))
+    ;; Within Replace group (first three), current window's anchor
+    ;; should appear first.
+    (should (eq 'win-b (nth 2 (nth 0 cands))))
+    ;; And again for the Split right / Split below groups.
+    (should (eq 'win-b (nth 2 (nth 3 cands))))
+    (should (eq 'win-b (nth 2 (nth 6 cands))))))
+
+(ert-deftest decknix-quickaction-window--candidates-sidebar-filtered ()
+  "Sidebar descriptors do not appear in the candidate list."
+  (let* ((cands (decknix--quickaction-window-candidates
+                 '((win-side "*agent-shell-sidebar*" nil t)
+                   (win-a "*foo*" t nil)
+                   (win-b "*bar*" nil nil)
+                   (win-c "*baz*" nil nil))))
+         (anchors (mapcar (lambda (e) (nth 2 e)) cands)))
+    (should (= 9 (length cands)))
+    (should-not (memq 'win-side anchors))))
+
+(ert-deftest decknix-quickaction-window--candidates-labels-include-buffer-name ()
+  "Each label embeds the anchor window's buffer name for discoverability."
+  (let ((cands (decknix--quickaction-window-candidates
+                '((win-a "*foo*" t nil)
+                  (win-b "*bar*" nil nil)
+                  (win-c "*baz*" nil nil)))))
+    (should (string-match-p "foo" (nth 0 (nth 0 cands))))
+    (should (string-match-p "Replace" (nth 0 (nth 0 cands))))
+    (should (string-match-p "Split right" (nth 0 (nth 3 cands))))
+    (should (string-match-p "Split below" (nth 0 (nth 6 cands))))))
+
 (provide 'decknix-agent-quickaction-window-test)
 ;;; decknix-agent-quickaction-window-test.el ends here
