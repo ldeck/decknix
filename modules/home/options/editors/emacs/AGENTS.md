@@ -581,6 +581,7 @@ workspace sidebar surface which sessions need attention.
 | `C-c C-w` | copy as markdown link `[title](url)` | |
 | `C-c C-e` | switch to EWW (real Emacs buffer; consult-line, embark, occur work) | |
 | `C-c C-i` | focus first text input on the page | |
+| `C-y` / `s-v` | paste system clipboard into the focused `<input>` / `<textarea>` / contenteditable. xwidget intercepts native paste so password fields can't otherwise receive clipboard text; both the universal Emacs `C-y` and the macOS GUI `Cmd+V` are bridged to the same JS-inject command (today's `yank` in xwidget is a no-op against the read-only buffer, so nothing useful is displaced). macOS Passwords autofill stays Safari-only — manual "Copy from Passwords → `C-y`" is the workflow. |
 
 ### Key Prefix Map
 
