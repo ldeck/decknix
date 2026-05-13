@@ -2455,6 +2455,12 @@ in
         (declare-function decknix--quickaction-target-window
                           "decknix-agent-quickaction-window"
                           (cur-is-sidebar cur main-win))
+        (declare-function decknix--quit-pick-replacement
+                          "decknix-agent-quickaction-window"
+                          (mru-other-bufs visible-bufs))
+        (declare-function decknix--quickaction-window-candidates
+                          "decknix-agent-quickaction-window"
+                          (descriptors))
 
         ;; Workspace-persist policy (PR B.81) -- pure decision +
         ;; ring-first-message accessor for the auto-persist safety
