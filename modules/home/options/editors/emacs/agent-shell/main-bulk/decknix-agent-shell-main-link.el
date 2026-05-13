@@ -86,6 +86,9 @@
 (declare-function decknix--quickaction-target-window
                   "decknix-agent-quickaction-window"
                   (cur-is-sidebar cur main-win))
+(declare-function decknix--quickaction-window-candidates
+                  "decknix-agent-quickaction-window"
+                  (descriptors))
 
 ;; Buffer lookup (PR B.66 — `buffer-lookup/decknix-agent-buffer-lookup').
 (declare-function decknix--agent-find-new-shell-buffer
@@ -146,7 +149,11 @@ Creates a new agent session, applies metadata, then subscribes to the
 fully established.  Returns immediately.
 When invoked from a dedicated or side window (e.g., the sidebar), the
 new session is displayed in the frame's main window instead of
-replacing the caller, preserving the sidebar."
+replacing the caller, preserving the sidebar.
+When the current frame has three or more non-sidebar windows the
+caller is prompted to pick a placement (Replace / Split right /
+Split below per pane); the default selection lands on
+\"Replace ‹current›\" so RET reproduces today's behaviour."
   ;; PR B.80: window-classification + target-selection are pinned
   ;; by `decknix-agent-quickaction-window' (carved, +10 ERT).
   ;; Bulk evaluates the frame/window I/O signals and hands them
@@ -186,6 +193,39 @@ replacing the caller, preserving the sidebar."
                                    (error "Invalid Auggie authentication")))
                             :context-buffer buffer)) t))
             base)))
+    ;; Placement prompt: when the caller is not the sidebar AND the
+    ;; current frame has 3+ non-sidebar windows, ask which pane the
+    ;; new session should land in (or split off).  The carved
+    ;; `decknix--quickaction-window-candidates' returns nil for
+    ;; single-pane / 2-pane / sidebar layouts so the existing
+    ;; target-win fast-path passes through untouched.
+    (unless cur-is-sidebar
+      (let* ((descriptors
+              (mapcar
+               (lambda (w)
+                 (let ((bn (buffer-name (window-buffer w))))
+                   (list w bn (eq w cur)
+                         (decknix--quickaction-window-is-sidebar-p
+                          (window-parameter w 'window-side)
+                          (window-dedicated-p w)
+                          bn sidebar-buf))))
+               (window-list nil 'no-minibuffer)))
+             (cands (decknix--quickaction-window-candidates descriptors)))
+        (when cands
+          (let* ((labels (mapcar #'car cands))
+                 (label (completing-read
+                         "Quickaction placement: "
+                         labels nil t nil nil (car labels)))
+                 (entry (assoc label cands))
+                 (action (nth 1 entry))
+                 (anchor (nth 2 entry)))
+            (when (and action (window-live-p anchor))
+              (setq target-win
+                    (pcase action
+                      (:replace anchor)
+                      (:split-right (split-window anchor nil 'right))
+                      (:split-below (split-window anchor nil 'below))
+                      (_ anchor))))))))
     ;; Override display-action to target the selected window,
     ;; preventing splits when called from sidebar or after
     ;; minibuffer exit.
