@@ -52,7 +52,7 @@
 (declare-function decknix--agent-pr-detect-workspace
                   "decknix-agent-shell-main")
 (declare-function decknix--agent-quickaction-start
-                  "decknix-agent-shell-main"
+                  "decknix-agent-shell-main-link"
                   (name tags workspace command))
 (declare-function decknix--batch-parse-buffer
                   "decknix-agent-batch-parse")
