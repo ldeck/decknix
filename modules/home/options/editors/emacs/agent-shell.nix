@@ -784,6 +784,25 @@ let
     ];
   };
 
+  # Async wait-not-busy helper used by the three interrupt-then-
+  # submit call sites (compose-submit interrupt branch, compose-
+  # interrupt-and-submit, review-submit-to-agent interrupt branch).
+  # Replaces the fixed `sit-for 0.3' / `run-at-time 0.3' delay that
+  # lost the race when the agent's interrupt acknowledgement took
+  # longer than the budget -- the new prompt landed in the agent-
+  # shell buffer ahead of the "[interrupted]" marker.  Splits the
+  # decision (pure: busy-p + elapsed + budget -> fire | continue)
+  # from the side-effecting timer wiring so the policy can be
+  # exercised by ERT without spinning up real timers.
+  decknix-agent-compose-wait-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-compose-wait";
+    src = ./agent-shell/compose-wait;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-compose-wait-test.el"
+    ];
+  };
+
   # PR B.28: tag-store JSON persistence + cache carved out of
   # `decknix-agent-shell-main' (main-bulk).  Owns the file path
   # defvar, the four cache state vars (hash + mtime + checked-at +
@@ -1493,6 +1512,7 @@ let
     src = ./agent-shell/review;
     packageRequires = [
       decknix-agent-review-format-el
+      decknix-agent-compose-wait-el
     ];
     testFiles = [
       "decknix-agent-review-submit-test.el"
@@ -1983,6 +2003,7 @@ in
           decknix-agent-grep-format-el
           decknix-agent-conv-format-el
           decknix-agent-compose-busy-el
+          decknix-agent-compose-wait-el
           decknix-agent-tags-store-el
           decknix-agent-link-store-el
           decknix-agent-conv-resolve-el
@@ -2308,6 +2329,19 @@ in
         (require 'decknix-agent-compose-busy)
         (declare-function decknix--compose-busy-action
                           "decknix-agent-compose-busy" (busy-p))
+
+        ;; Async wait-not-busy helper for the three interrupt-then-
+        ;; submit call sites (compose-submit interrupt branch,
+        ;; compose-interrupt-and-submit, review-submit-to-agent
+        ;; interrupt branch).  Replaces the fixed `sit-for 0.3' /
+        ;; `run-at-time 0.3' delay that lost the race when the agent
+        ;; took longer than the budget to ack the interrupt, causing
+        ;; the new prompt to land in the buffer ahead of the
+        ;; "[interrupted]" marker.
+        (require 'decknix-agent-compose-wait)
+        (declare-function decknix--compose-wait-not-busy
+                          "decknix-agent-compose-wait"
+                          (target on-ready &optional timeout interval))
 
         ;; Help renderers (PR B.64) -- pure presentation layer for
         ;; the welcome banner + the three `C-c ? <k|t|f>' help

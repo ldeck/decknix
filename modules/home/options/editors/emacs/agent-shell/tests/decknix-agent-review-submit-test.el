@@ -200,5 +200,38 @@ into `decknix-test--last-queue-input' for assertions."
     (should (string= "queued body" decknix-test--last-queue-input))
     (should (null decknix-test--last-submit-input))))
 
+(ert-deftest decknix-review-submit-to-agent--busy-interrupt-waits-then-submits ()
+  "Choosing [i]nterrupt-and-submit signals the agent, then submits via
+`decknix--compose-wait-not-busy' rather than a fixed-delay timer.
+Regression: the previous `sit-for 0.3' between interrupt and submit
+lost the race when the agent's ack arrived after the budget --
+the new prompt landed in the buffer before the \"[interrupted]\"
+marker.  Pinning the wait-helper handoff here means a future
+refactor that drops back to a fixed delay fails the build."
+  (let ((interrupted 0)
+        (wait-target nil)
+        (wait-callback nil))
+    (decknix-test-with-stubbed-agent-target
+      (with-current-buffer decknix--agent-review-source-buffer
+        (setq-local shell-maker--busy t))
+      (cl-letf (((symbol-function 'read-char-choice) (lambda (&rest _) ?i))
+                ((symbol-function 'agent-shell-interrupt)
+                 (lambda () (cl-incf interrupted)))
+                ((symbol-function 'decknix--compose-wait-not-busy)
+                 (lambda (target on-ready &rest _)
+                   (setq wait-target target
+                         wait-callback on-ready))))
+        (decknix--agent-review-submit-to-agent "interjected prompt")
+        ;; Interrupt was issued before any submit happened.
+        (should (= 1 interrupted))
+        (should (null decknix-test--last-submit-input))
+        ;; Wait helper was handed the agent buffer + a callback.
+        (should (eq wait-target decknix--agent-review-source-buffer))
+        (should (functionp wait-callback))
+        ;; Fire the callback (simulates busy clearing) -> submit lands.
+        (funcall wait-callback)
+        (should (string= "interjected prompt"
+                         decknix-test--last-submit-input))))))
+
 (provide 'decknix-agent-review-submit-test)
 ;;; decknix-agent-review-submit-test.el ends here
