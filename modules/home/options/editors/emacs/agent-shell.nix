@@ -1681,26 +1681,64 @@ let
     5. **Exception**: `#!/usr/bin/env bash` shebangs are acceptable —
        this is the standard portable idiom.
 
-    ## Markdown Table Formatting
+    ## Response Formatting in Agent Shell
 
-    When printing markdown tables in responses:
+    You are running inside an Emacs agent-shell — a comint buffer that
+    displays text as-is.  Markdown syntax is NOT rendered: `**bold**`
+    shows literal asterisks, `| a | b |` table rows show literal pipes,
+    and `# heading` shows a literal hash mark.  Reserve markdown for
+    surfaces that render it:
 
-    1. **Expand columns** — pad every cell so columns are fully aligned and easy to scan. Do not use minimal-width columns.
-    2. **Check terminal width** — if any row would exceed ~80 characters, do NOT use a table. Instead, use one of these readable alternatives:
-       - **Definition list style** — one item per block with a bold heading and indented details:
-         ```
-         **#19 — Editor profile tiering**
-           Category: Editors
-           Effort:   Large
-           Status:   Open
-         ```
-       - **Sectioned list style** — group items under headings:
-         ```
-         ### Open Issues
-         - **#19** Editor profile tiering (Editors, Large)
-         - **#26** Secrets management (Core, Medium)
-         ```
-    3. **Never let content wrap or truncate** — if a table cell contains long text (descriptions, URLs, paths), switch to a non-table format.
+      - Files you create or edit (`*.md`, `*.mdx`)
+      - Pull request descriptions, issue bodies, commit messages
+      - Any tool input that explicitly accepts markdown
+
+    For conversational responses in the agent-shell, use plain text
+    formatted by alignment, not by syntax.
+
+    1. **No markdown emphasis in chat.**  Do not use `**bold**`,
+       `*italic*`, or `__underline__` — they appear as literal
+       characters.  Use prefix labels (`Note:`, `Warning:`) or sentence
+       structure to carry emphasis instead.
+
+    2. **Tables — space-aligned columns, not pipes.**  Pad cells with
+       spaces so column edges line up vertically.  Example:
+
+           Key       Action
+           -------   ----------------------------------
+           C-c A s   Open the session picker
+           C-c A n   Create a new session
+           C-c A q   Quit the current session
+
+       The dashed separator is optional; what matters is that the
+       column starts align.  Never emit `| Key | Action |` rows in
+       chat — they read as noise.
+
+    3. **Lists — plain dashes or numbers.**  `- item` and `1. item`
+       read naturally as plain text and are fine.  Skip nested
+       `**bold**` markers inside bullets.
+
+    4. **Code and paths — backticks are acceptable.**  Single
+       backticks around `identifiers`, paths, and short commands are
+       fine (font-lock often highlights them, and even un-highlighted
+       they remain readable).  Triple-backtick fenced blocks are
+       acceptable for multi-line code or command output.
+
+    5. **If columns would wrap, switch format.**  When the natural
+       width of a tabular display would exceed the visible window,
+       use a definition-list style — one item per block, indented
+       details:
+
+           #19 — Editor profile tiering
+             Category:  Editors
+             Effort:    Large
+             Status:    Open
+
+       or a sectioned list — one heading per group, items below:
+
+           Open Issues
+             #19  Editor profile tiering  (Editors, Large)
+             #26  Secrets management      (Core, Medium)
   '';
 
   # == Yasnippet prompt templates ==
