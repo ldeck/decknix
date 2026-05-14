@@ -59,6 +59,17 @@
 (defvar agent-shell-confirm-interrupt)
 (declare-function decknix--compose-enqueue-prompt
                   "decknix-agent-shell-main" (target content))
+;; `decknix--compose-wait-not-busy' lives in the sibling carved
+;; package `decknix-agent-compose-wait' (separate src dir).  We
+;; forward-declare it here so byte-compile stays clean without
+;; cross-package `(require ...)' at file load time -- the heredoc's
+;; eager `(require 'decknix-agent-compose-wait)' (loaded before
+;; this file is exercised) brings the symbol into the daemon's
+;; load-path.  This avoids forcing every sibling review-package
+;; that shares this directory to inherit the same dependency.
+(declare-function decknix--compose-wait-not-busy
+                  "decknix-agent-compose-wait"
+                  (target on-ready &optional timeout interval))
 
 (defvar decknix-agent-review-jira-drafts-dir
   (expand-file-name "~/.config/decknix/review-jira-drafts")
@@ -79,9 +90,30 @@ ROUTE is one of `agent', `pr', `jira', `file'."
        ;; annotations) for human consumption.
        raw))))
 
+(defun decknix--agent-review-submit-do (target content)
+  "Submit CONTENT to TARGET and surface the agent buffer.
+
+Internal helper for `decknix--agent-review-submit-to-agent';
+runs either directly (idle agent) or from the wait-not-busy
+callback (after interrupt).  Returns silently when TARGET is
+dead -- the caller-issued interrupt may have killed the buffer
+and a user-error from a timer callback would be noisy."
+  (when (buffer-live-p target)
+    (with-current-buffer target
+      (goto-char (point-max))
+      (shell-maker-submit :input content))
+    (pop-to-buffer target)
+    (message "Review sent to %s" (buffer-name target))))
+
 (defun decknix--agent-review-submit-to-agent (content)
   "Send CONTENT to the source agent-shell as a new prompt.
-Handles the busy-prompt dance the same way the compose editor does."
+Handles the busy-prompt dance the same way the compose editor
+does.  The interrupt-and-submit branch waits on the agent's
+interrupt acknowledgement (via `decknix--compose-wait-not-busy')
+before calling `shell-maker-submit', so the new prompt lands
+AFTER the \"[interrupted]\" marker in the buffer.  The
+previous fixed `sit-for 0.3' lost the race when the ack took
+longer than the budget."
   (let ((target decknix--agent-review-source-buffer)
         (action 'submit))
     (unless (buffer-live-p target)
@@ -97,23 +129,23 @@ Handles the busy-prompt dance the same way the compose editor does."
         (pcase choice
           (?c (user-error "Submit cancelled"))
           (?q (setq action 'queue))
-          (?i
-           (with-current-buffer target
-             (when (fboundp 'agent-shell-interrupt)
-               (let ((agent-shell-confirm-interrupt nil))
-                 (agent-shell-interrupt))))
-           (sit-for 0.3)))))
+          (?i (setq action 'interrupt-submit)))))
     (pcase action
       ('queue
        (when (fboundp 'decknix--compose-enqueue-prompt)
          (decknix--compose-enqueue-prompt target content))
        (message "Queued review for agent"))
       ('submit
+       (decknix--agent-review-submit-do target content))
+      ('interrupt-submit
        (with-current-buffer target
-         (goto-char (point-max))
-         (shell-maker-submit :input content))
-       (pop-to-buffer target)
-       (message "Review sent to %s" (buffer-name target))))))
+         (when (fboundp 'agent-shell-interrupt)
+           (let ((agent-shell-confirm-interrupt nil))
+             (agent-shell-interrupt))))
+       (decknix--compose-wait-not-busy
+        target
+        (lambda ()
+          (decknix--agent-review-submit-do target content)))))))
 
 (defun decknix--agent-review-submit-pr (content)
   "Copy CONTENT to the kill-ring for pasting into a PR comment."

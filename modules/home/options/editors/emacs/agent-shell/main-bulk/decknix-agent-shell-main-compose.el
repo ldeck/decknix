@@ -62,6 +62,9 @@
 (declare-function decknix--compose-queue-action
                   "decknix-agent-compose-queue"
                   (queued-prompt buffer-live busy proc-live))
+(declare-function decknix--compose-wait-not-busy
+                  "decknix-agent-compose-wait"
+                  (target on-ready &optional timeout interval))
 (declare-function decknix--compose-build-header-line
                   "decknix-agent-compose-header" (sticky))
 (declare-function decknix--compose-find-target
@@ -381,6 +384,22 @@ side-effect indicated by the resolver's `:action'."
                             (decknix--compose-queue-poll))))
                      t)))))))
 
+(defun decknix--compose-submit-after-wait (target input)
+  "Submit INPUT to TARGET after the wait-not-busy coordination.
+
+Returns silently when TARGET is dead or its process has gone; the
+caller-issued interrupt may have killed the buffer, the compose
+buffer has already closed, and a user-error from a timer callback
+would be noisy.  The synchronous (non-interrupt) path still
+runs its own pre-submit liveness check and surfaces the user-
+error there."
+  (when (and (buffer-live-p target)
+             (get-buffer-process target)
+             (process-live-p (get-buffer-process target)))
+    (with-current-buffer target
+      (goto-char (point-max))
+      (shell-maker-submit :input input))))
+
 (defun decknix-agent-compose-submit ()
   "Submit the compose buffer content to the agent-shell.
 If the agent is busy, offers three options:
@@ -394,7 +413,15 @@ The busy-prompt dispatch lives in `decknix--compose-busy-action'
 over the returned action symbol rather than `cl-return-from'-ing
 out of nested branches, which both removes the
 `No catch for tag: --cl-block-...' bug class and pins the
-dispatch table under ERT."
+dispatch table under ERT.
+
+The `interrupt-submit' branch waits on the agent's interrupt
+acknowledgement (via `decknix--compose-wait-not-busy') before
+calling `shell-maker-submit', so the new prompt lands AFTER the
+\"[interrupted]\" marker in the buffer.  The previous fixed
+`sit-for 0.3' lost the race when the ack took longer than the
+budget and the new prompt was visually ordered before the
+interrupt."
   (interactive)
   (let* ((input (string-trim (buffer-string)))
          (target decknix--compose-target-buffer))
@@ -413,14 +440,20 @@ dispatch table under ERT."
            (decknix--compose-enqueue-prompt target input)
            (decknix--compose-finish)
            (message "Prompt queued — will submit when agent is ready"))
-          ((or 'submit 'interrupt-submit)
-           (when (eq action 'interrupt-submit)
-             (with-current-buffer target
-               (when (fboundp 'agent-shell-interrupt)
-                 (let ((agent-shell-confirm-interrupt nil))
-                   (agent-shell-interrupt))))
-             (sit-for 0.3))
-           ;; Verify the agent process is alive before submitting.
+          ('interrupt-submit
+           (with-current-buffer target
+             (when (fboundp 'agent-shell-interrupt)
+               (let ((agent-shell-confirm-interrupt nil))
+                 (agent-shell-interrupt))))
+           ;; Close the compose buffer now so the user sees the
+           ;; input depart; the actual submit fires from the wait
+           ;; callback once the agent has acked the interrupt.
+           (decknix--compose-finish)
+           (decknix--compose-wait-not-busy
+            target
+            (lambda ()
+              (decknix--compose-submit-after-wait target input))))
+          ('submit
            (unless (and (buffer-live-p target)
                         (get-buffer-process target)
                         (process-live-p (get-buffer-process target)))
@@ -451,39 +484,36 @@ After interrupting, you can compose your message and submit with
   "Interrupt any in-progress agent response, then submit the compose buffer.
 Use this when the agent is processing and you want to interject immediately
 rather than waiting for the current response to complete.
-The compose buffer is closed/cleared AFTER the submit, not before."
+
+The submit waits on the agent's interrupt acknowledgement (via
+`decknix--compose-wait-not-busy') before calling
+`shell-maker-submit', so the new prompt lands AFTER the
+\"[interrupted]\" marker in the buffer.  The compose buffer is
+closed/cleared from the wait callback, AFTER the submit, not
+before."
   (interactive)
   (let ((input (string-trim (buffer-string)))
         (target decknix--compose-target-buffer)
         (compose-buf (current-buffer)))
     (if (string-empty-p input)
         (user-error "Empty prompt — nothing to submit")
-      ;; Interrupt the agent first
+      ;; Interrupt the agent first.
       (when (buffer-live-p target)
         (with-current-buffer target
           (when (fboundp 'agent-shell-interrupt)
             (let ((agent-shell-confirm-interrupt nil))
               (agent-shell-interrupt)))))
-      ;; Submit after a brief delay to let the interrupt settle,
-      ;; then close/clear the compose buffer.
-      (let ((tgt target)
-            (inp input)
-            (cbuf compose-buf))
-        (run-at-time
-         0.3 nil
-         (eval
-          `(lambda ()
-             (when (and (buffer-live-p ,tgt)
-                        (get-buffer-process ,tgt)
-                        (process-live-p (get-buffer-process ,tgt)))
-               (with-current-buffer ,tgt
-                 (goto-char (point-max))
-                 (shell-maker-submit :input ,inp)))
-             ;; Now finish (clear/close) the compose buffer
-             (when (buffer-live-p ,cbuf)
-               (with-current-buffer ,cbuf
-                 (decknix--compose-finish))))
-          t))))))
+      ;; Wait for the busy flag to clear (or the safety-net timeout)
+      ;; before submitting; then close the compose buffer.  Lexical
+      ;; binding captures `target' / `input' / `compose-buf' cleanly
+      ;; -- the eval/quote dance the old `run-at-time' needed is gone.
+      (decknix--compose-wait-not-busy
+       target
+       (lambda ()
+         (decknix--compose-submit-after-wait target input)
+         (when (buffer-live-p compose-buf)
+           (with-current-buffer compose-buf
+             (decknix--compose-finish))))))))
 
 (defun decknix-agent-compose-cancel ()
   "Cancel/clear the compose buffer without submitting.
