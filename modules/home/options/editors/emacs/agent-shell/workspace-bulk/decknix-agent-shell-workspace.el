@@ -193,6 +193,25 @@
 (defvar decknix-hub-eager-clone-probe)
 (defvar decknix--sidebar-previous-sessions)
 (declare-function decknix--sidebar-previous-dedupe "decknix-sidebar-previous")
+;; Eager live-sessions persistence layer (own carved package).  The
+;; bulk wires the lifecycle hooks (record / forget) and the startup
+;; snapshot; the pure read/write/dedupe lives in the package itself.
+(declare-function decknix--live-sessions-record
+                  "decknix-agent-live-sessions" (entry))
+(declare-function decknix--live-sessions-forget
+                  "decknix-agent-live-sessions" (conv-key sid))
+(declare-function decknix--live-sessions-snapshot-and-truncate
+                  "decknix-agent-live-sessions" ())
+(declare-function decknix--live-sessions-dismiss
+                  "decknix-agent-live-sessions" (key))
+(declare-function decknix--live-sessions-dismissed-read
+                  "decknix-agent-live-sessions" ())
+(declare-function decknix--live-sessions-filter-dismissed
+                  "decknix-agent-live-sessions" (entries dismissed))
+(declare-function decknix--live-sessions-entry-key
+                  "decknix-agent-live-sessions" (entry))
+(declare-function decknix--live-sessions-write
+                  "decknix-agent-live-sessions" (entries))
 (defvar decknix--sidebar-show-keys)
 (defvar agent-shell-workspace-sidebar-buffer-name)
 (declare-function decknix--agent-session-resume "ext:decknix-agent-shell-main")
@@ -3456,27 +3475,12 @@ Bound to `S' at sidebar-global level."
 ;; remaining call sites here byte-compile clean.
 
 (defun decknix--sidebar-state-save ()
-  "Save sidebar toggle states and current live sessions to disk."
-  (let* ((live-info
-          (decknix--sidebar-previous-dedupe
-           (mapcar
-            (lambda (buf)
-              (with-current-buffer buf
-                (let* ((sid (decknix--agent-buffer-session-id))
-                       (conv-key (when sid
-                                   (ignore-errors
-                                     (decknix--agent-conversation-key-for-session sid))))
-                       (tags (when conv-key
-                               (decknix--agent-tags-for-conv-key conv-key)))
-                       (ws (when conv-key
-                             (decknix--agent-workspace-for-conv-key conv-key))))
-                  (list (cons 'session-id sid)
-                        (cons 'name (buffer-name buf))
-                        (cons 'workspace (or ws (expand-file-name default-directory)))
-                        (cons 'conv-key conv-key)
-                        (cons 'tags tags)))))
-            (seq-filter #'buffer-live-p (agent-shell-buffers)))))
-         (state
+  "Save sidebar toggle states to disk.
+Live-session tracking now lives in the dedicated
+`decknix--live-sessions-file' (eagerly updated via lifecycle hooks);
+this saver only writes UI preferences so a fresh-daemon idle save
+cannot clobber the Previous Sessions snapshot."
+  (let* ((state
           (list
            (cons 'display-mode decknix--sidebar-display-mode)
            (cons 'width-state decknix--sidebar-width-state)
@@ -3527,8 +3531,7 @@ Bound to `S' at sidebar-global level."
                    decknix--sidebar-tile-count))
            (cons 'show-progress
                  (when (boundp 'decknix--sidebar-show-progress)
-                   decknix--sidebar-show-progress))
-           (cons 'previous-sessions live-info))))
+                   decknix--sidebar-show-progress)))))
     (make-directory (file-name-directory decknix--sidebar-state-file) t)
     (with-temp-file decknix--sidebar-state-file
       (insert ";; Auto-generated — do not edit\n")
@@ -3616,15 +3619,106 @@ Bound to `S' at sidebar-global level."
           (let ((tc (alist-get 'tile-count state)))
             (when (and (integerp tc)
                        (boundp 'decknix--sidebar-tile-count))
-              (setq decknix--sidebar-tile-count tc)))
-          (when-let ((prev (alist-get 'previous-sessions state)))
-            ;; Collapse duplicates on load — existing state files
-            ;; written before dedup landed can carry multiple
-            ;; entries for the same conv-key.
-            (setq decknix--sidebar-previous-sessions
-                  (decknix--sidebar-previous-dedupe prev))))
+              (setq decknix--sidebar-tile-count tc))))
       (error
        (message "sidebar-state: restore failed: %s" (error-message-string err))))))
+
+;; -- Previous sessions: snapshot-and-truncate handoff --
+;;
+;; This is the new startup contract that replaces the legacy
+;; `previous-sessions' branch above (removed in PR live-sessions):
+;; read the eagerly-maintained `decknix--live-sessions-file', freeze
+;; its contents in `decknix--sidebar-previous-sessions' for the rest
+;; of this Emacs run, then truncate the file so the lifecycle hooks
+;; in this run rebuild the live set from zero.  See
+;; `agent-shell/live-sessions/decknix-agent-live-sessions.el' for
+;; the full design rationale (eager add / forget hooks, shutdown
+;; suppression flag, atomic writes).
+;;
+;; Migration: when the live file is missing/empty (typical on the
+;; first boot after deploy) but the legacy `sidebar-state.el' still
+;; carries a `previous-sessions' field, lift it across once so the
+;; user's Previous list isn't lost during the cutover.
+(defun decknix--sidebar-snapshot-previous-from-live ()
+  "Freeze the prior run's live set as this run's Previous Sessions list.
+Reads the eagerly-maintained live-sessions file, snapshots it into
+`decknix--sidebar-previous-sessions' (deduped + filtered through the
+persisted dismissed-keys set), then truncates the live file so this
+run's lifecycle hooks rebuild it from zero.
+
+When the live file is missing (first start after deploy), falls back
+to lifting the legacy `previous-sessions' field out of
+`decknix--sidebar-state-file' so users do not lose their list during
+the cutover."
+  (let* ((live (decknix--live-sessions-snapshot-and-truncate))
+         (snapshot
+          (or live
+              ;; One-time legacy migration: pull the field out of
+              ;; sidebar-state.el if it was written by a pre-cutover
+              ;; build.  No-op once the new saver stops emitting it.
+              (and (file-exists-p decknix--sidebar-state-file)
+                   (condition-case nil
+                       (let ((state (with-temp-buffer
+                                      (insert-file-contents
+                                       decknix--sidebar-state-file)
+                                      (read (current-buffer)))))
+                         (alist-get 'previous-sessions state))
+                     (error nil)))))
+         (dismissed (decknix--live-sessions-dismissed-read)))
+    (setq decknix--sidebar-previous-sessions
+          (decknix--live-sessions-filter-dismissed
+           (decknix--sidebar-previous-dedupe (or snapshot '()))
+           dismissed))))
+
+;; -- Lifecycle hook entry points (called from agent-shell.nix) --
+
+(defun decknix--sidebar-record-buffer-as-live (&optional buf)
+  "Record BUF (default: current buffer) into the live-sessions file.
+Best-effort: writes whatever conv-key / sid / workspace are currently
+known.  The writer is idempotent on conv-key (or sid as fallback) so
+the agent-shell-mode-hook safely calls this twice — once at mode
+entry, once after a delay — without producing duplicate rows."
+  (let ((b (or buf (current-buffer))))
+    (when (and b (buffer-live-p b))
+      (with-current-buffer b
+        (when (derived-mode-p 'agent-shell-mode)
+          (let* ((sid (decknix--agent-buffer-session-id))
+                 (conv-key
+                  (or (and (bound-and-true-p decknix--agent-conv-key)
+                           decknix--agent-conv-key)
+                      (and sid
+                           (ignore-errors
+                             (decknix--agent-conversation-key-for-session sid)))))
+                 (tags (when conv-key
+                         (decknix--agent-tags-for-conv-key conv-key)))
+                 (ws (or (when conv-key
+                           (decknix--agent-workspace-for-conv-key conv-key))
+                         (expand-file-name default-directory))))
+            ;; Need at least one identifier to be addressable on disk.
+            (when (or sid conv-key)
+              (decknix--live-sessions-record
+               (list (cons 'session-id sid)
+                     (cons 'name (buffer-name b))
+                     (cons 'workspace ws)
+                     (cons 'conv-key conv-key)
+                     (cons 'tags tags))))))))))
+
+(defun decknix--sidebar-forget-buffer-as-live ()
+  "Remove the current buffer's row from the live-sessions file.
+Wired into `kill-buffer-hook' as a buffer-local hook.  No-ops during
+shutdown via `decknix--live-sessions-suppress-write' so the buffer-
+kill cascade triggered by `kill-emacs' does not erase the file the
+next start needs to read as Previous Sessions."
+  (when (derived-mode-p 'agent-shell-mode)
+    (let* ((sid (decknix--agent-buffer-session-id))
+           (conv-key
+            (or (and (bound-and-true-p decknix--agent-conv-key)
+                     decknix--agent-conv-key)
+                (and sid
+                     (ignore-errors
+                       (decknix--agent-conversation-key-for-session sid))))))
+      (when (or sid conv-key)
+        (decknix--live-sessions-forget conv-key sid)))))
 
 ;; -- Previous sessions: sidebar rendering --
 (defun decknix--sidebar-render-previous-sessions (line-num)
@@ -3790,15 +3884,26 @@ Focuses the first restored session in the main window."
                               '(?r ?d ?q))))
                  (pcase choice
                    (?r (decknix--sidebar-restore-previous-session ',entry t))
-                   (?d (setq decknix--sidebar-previous-sessions
-                             (seq-filter
-                              (lambda (e)
-                                (not (equal (alist-get 'session-id e)
-                                            ',(alist-get 'session-id entry))))
-                              decknix--sidebar-previous-sessions))
-                       (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-                         (agent-shell-workspace-sidebar-refresh))
-                       (message "Dismissed"))
+                   (?d
+                    ;; Persist the dismissal so it survives restarts:
+                    ;; previously this was a setq on the in-memory
+                    ;; list, which the next idle save would reset
+                    ;; against the live set anyway — and now that
+                    ;; previous-sessions has its own snapshot file,
+                    ;; the dismissal needs its own file too.
+                    (let ((key
+                           (decknix--live-sessions-entry-key ',entry)))
+                      (when key
+                        (decknix--live-sessions-dismiss key)))
+                    (setq decknix--sidebar-previous-sessions
+                          (seq-filter
+                           (lambda (e)
+                             (not (equal (alist-get 'session-id e)
+                                         ',(alist-get 'session-id entry))))
+                           decknix--sidebar-previous-sessions))
+                    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                      (agent-shell-workspace-sidebar-refresh))
+                    (message "Dismissed"))
                    (?q (message "Cancelled"))))) t))))
 
 (provide 'decknix-agent-shell-workspace)

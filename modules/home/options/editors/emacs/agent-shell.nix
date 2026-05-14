@@ -222,6 +222,21 @@ let
     ];
   };
 
+  # Eager live-sessions persistence carved out of the
+  # `cfg.workspace.enable' heredoc.  Owns
+  # `~/.config/decknix/agent-live-sessions.el' (live set, updated
+  # via lifecycle hooks) and `~/.config/decknix/agent-dismissed-
+  # sessions.el' (sticky dismissals).  See the module commentary
+  # for the snapshot-and-truncate startup contract that the bulk
+  # wires into `emacs-startup-hook' below.  No external deps.
+  decknix-agent-live-sessions-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-live-sessions";
+    src = ./agent-shell/live-sessions;
+    testFiles = [
+      "decknix-agent-live-sessions-test.el"
+    ];
+  };
+
   decknix-sidebar-format-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-format";
     src = ./agent-shell/sidebar;
@@ -2064,6 +2079,7 @@ in
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-format-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-previous-el)
+        ++ (optional cfg.workspace.enable decknix-agent-live-sessions-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-tile-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-width-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-nav-cmd-el)
@@ -3508,6 +3524,32 @@ no editable element is focused / the clipboard is empty."
         (require 'decknix-sidebar-previous)
         (declare-function decknix--sidebar-previous-dedupe "decknix-sidebar-previous")
 
+        ;; Eager live-sessions persistence — splits "what is alive
+        ;; right now" out of `decknix--sidebar-state-file' so the
+        ;; idle-timer save no longer clobbers Previous Sessions when
+        ;; the live set is empty (e.g. fresh daemon, no buffers
+        ;; opened yet).  See the module commentary for the snapshot-
+        ;; and-truncate startup contract; the lifecycle hooks below
+        ;; (agent-shell-mode-hook for record, kill-buffer-hook for
+        ;; forget, kill-emacs-hook for shutdown suppression) are the
+        ;; eager update path.
+        (require 'decknix-agent-live-sessions)
+        (declare-function decknix--live-sessions-record
+                          "decknix-agent-live-sessions" (entry))
+        (declare-function decknix--live-sessions-forget
+                          "decknix-agent-live-sessions" (conv-key sid))
+        (declare-function decknix--live-sessions-snapshot-and-truncate
+                          "decknix-agent-live-sessions" ())
+        (declare-function decknix--live-sessions-dismiss
+                          "decknix-agent-live-sessions" (key))
+        (declare-function decknix--live-sessions-dismissed-read
+                          "decknix-agent-live-sessions" ())
+        (declare-function decknix--live-sessions-filter-dismissed
+                          "decknix-agent-live-sessions" (entries dismissed))
+        (declare-function decknix--live-sessions-entry-key
+                          "decknix-agent-live-sessions" (entry))
+        (defvar decknix--live-sessions-suppress-write)
+
         ;; Sidebar tile-cycle helpers (PR B.29) -- moved out of
         ;; the workspace heredoc.  Owns the desired-count defvar,
         ;; the current-count reader, the one-shot apply, the
@@ -3981,14 +4023,39 @@ no editable element is focused / the clipboard is empty."
         ;; ensures everything is bound before we try to set values.
         (add-hook 'kill-emacs-hook #'decknix--sidebar-state-save)
         (add-hook 'emacs-startup-hook #'decknix--sidebar-state-restore)
+        ;; Freeze the prior run's live set as this run's Previous
+        ;; Sessions list and reset the live file to empty so eager
+        ;; lifecycle hooks rebuild it from zero.  Runs after restore
+        ;; so the legacy migration path (lifting `previous-sessions'
+        ;; out of `sidebar-state.el' on first start after deploy)
+        ;; can read the legacy field before it stops being written.
+        (add-hook 'emacs-startup-hook
+                  #'decknix--sidebar-snapshot-previous-from-live
+                  100)
+        ;; Suppress live-sessions writes during shutdown.  Without
+        ;; this, the buffer-kill cascade triggered by `kill-emacs'
+        ;; would call `decknix--sidebar-forget-buffer-as-live' for
+        ;; every live buffer and erase the file the next start needs
+        ;; to read as Previous.  Append:t puts this BEFORE the
+        ;; ordinary `kill-emacs-hook' entries so the flag is set
+        ;; before any buffer is killed.
+        (add-hook 'kill-emacs-hook
+                  (lambda ()
+                    (setq decknix--live-sessions-suppress-write t)))
 
-        ;; Periodic idle-timer save so toggle state and previous-sessions
-        ;; survive force-quit / daemon crashes.  `kill-emacs-hook' alone
+        ;; Periodic idle-timer save so toggle state survives
+        ;; force-quit / daemon crashes.  `kill-emacs-hook' alone
         ;; loses everything when the daemon locks up and is force-killed,
         ;; which means user-set toggles like `decknix--hub-expand-prs'
         ;; silently revert on next start.  The 30 s idle threshold keeps
         ;; this out of the hot path during active use; repeat=t fires once
         ;; per idle period, not every 30 s of idleness.
+        ;;
+        ;; Note: the live-sessions list is NO longer routed through
+        ;; this saver — it has its own eager hook-driven file
+        ;; (`decknix--live-sessions-file').  See PR (this commit) for
+        ;; the rationale: the idle save kept clobbering Previous with
+        ;; the empty current-run live set on fresh daemons.
         (run-with-idle-timer 30 t #'decknix--sidebar-state-save)
 
         ;; Bind 'P' to restore all previous sessions
@@ -4504,6 +4571,29 @@ no editable element is focused / the clipboard is empty."
                     ;; for sessions created via any path (upstream c, resume,
                     ;; quickaction, etc.) so they never show as "unknown".
                     (decknix--agent-auto-persist-workspace)
+                    ;; Eagerly record this buffer in the live-sessions
+                    ;; file so the next Emacs run will see it in
+                    ;; Previous Sessions.  The conv-key / sid /
+                    ;; workspace are populated asynchronously after
+                    ;; mode entry, so do an initial best-effort
+                    ;; record now and a delayed re-record once the
+                    ;; metadata has settled.  Both writes are
+                    ;; idempotent on conv-key (or sid as fallback)
+                    ;; so the second one collapses onto the first.
+                    (decknix--sidebar-record-buffer-as-live)
+                    (let ((buf (current-buffer)))
+                      (run-at-time
+                       3.0 nil
+                       (eval `(lambda ()
+                                (when (buffer-live-p ,buf)
+                                  (with-current-buffer ,buf
+                                    (decknix--sidebar-record-buffer-as-live))))
+                             t)))
+                    ;; And forget on kill so closing a session does not
+                    ;; leave a stale row in next run's Previous list.
+                    ;; Buffer-local hook so we only act on this buffer.
+                    (add-hook 'kill-buffer-hook
+                              #'decknix--sidebar-forget-buffer-as-live nil t)
                     ;; Disable cape-file in agent-shell buffers — synchronous
                     ;; filesystem scans freeze the cursor during typing.
                     (setq-local completion-at-point-functions
