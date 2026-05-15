@@ -2966,7 +2966,7 @@ in
         ;; upstream cleanup unchanged.  Inspect captures with
         ;; `M-x decknix-agent-show-deaths'.
         (defvar decknix--agent-death-log-file
-          (expand-file-name "agent-deaths.log"
+          (expand-file-name "decknix/agent-deaths.log"
                             (or (getenv "XDG_CONFIG_HOME")
                                 (expand-file-name "~/.config")))
           "Append-only log of agent process deaths (printed s-expressions).")
