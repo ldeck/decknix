@@ -88,3 +88,49 @@ programs.emacs.decknix.agentShell.enable = true;  # Enable the entire ecosystem
 
 Disabling this single option removes all agent-shell packages and configuration.
 
+## Model Selection
+
+Auggie exposes several model families.  The framework default is
+`prism-a` — Augment's hybrid router that mixes Opus 4.7, Sonnet 4.6,
+and Gemini Flash per turn (around 28 % cheaper than uniform Opus 4.7
+on review-shaped workloads without losing depth where it matters).
+
+### Recommended Models by Task
+
+| Task                                  | Recommended | Why |
+|---------------------------------------|-------------|-----|
+| PR review (`/review-service-pr`)      | `prism-a`   | Router picks Opus on hard diffs, cheaper models on skim — best $/quality tradeoff. |
+| Implementation against a defined spec | `sonnet4.6` | Mechanical work doesn't need flagship reasoning; ~46 % cheaper than Opus. |
+| Debugging in a familiar codebase      | `sonnet4.6` | Same — context is local, reasoning is bounded. |
+| Architecture / planning               | `opus4.7`   | Long-horizon reasoning, opinionated codegen — earns its 167 % credit cost. |
+| Triage / classification               | `haiku4.5`  | ~33 % credit cost; fine for short, well-bounded prompts. |
+| Framework iteration (decknix)         | `prism-a`   | Varied workload — let the router pick. |
+
+### Override Levers
+
+Three layers, narrowest wins:
+
+1. **Per-session** — `C-c C-v` inside any agent-shell buffer picks a
+   model for the running conversation; persisted in
+   `~/.config/decknix/agent-sessions.json` and re-applied on resume
+   via `--model <id>`.  This is the right lever for one-off task
+   adjustments.
+2. **Per-quickaction** — `decknix-agent-review-pr-model` pins the
+   model for every `/review-service-pr` launch (PR-review entry
+   point, sidebar Requests row, batch processor).  Default `nil` =
+   inherit framework default.  Set in personal Emacs config:
+
+   ```elisp
+   (with-eval-after-load 'decknix-agent-shell-main-link
+     (setq decknix-agent-review-pr-model "prism-a"))
+   ```
+3. **Framework default** — `decknix.cli.auggie.settings.model` is
+   written to `~/.augment/settings.json` and used when no `--model`
+   flag is supplied.  Org and personal layers can override with
+   `lib.mkDefault` or plain assignment.
+
+Per-conversation overrides set via `C-c C-v` always win over the
+quickaction and framework defaults — on resume, the persisted model
+flows through `decknix--resume-command-build` and is appended to the
+auggie ACP command as `--model <id>`.
+

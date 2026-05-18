@@ -112,8 +112,13 @@ Navigate / Quick / Actions plus `T` for the toggles sub-transient.
 
 | In-buffer | Global | Action |
 |-----------|--------|--------|
-| `C-c v` | `C-c A v` | Pick model |
+| `C-c C-v` | — | Pick model (persists per-conversation; survives resume) |
 | `C-c M` | `C-c A M` | Pick mode |
+
+See [Model Selection](./foundation.md#model-selection) for the
+recommended-model-by-task table and the per-quickaction
+(`decknix-agent-review-pr-model`) / framework
+(`decknix.cli.auggie.settings.model`) override levers.
 
 ## Context (`C-c i` / `C-c A i`)
 
