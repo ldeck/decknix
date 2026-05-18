@@ -1040,9 +1040,15 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
                                                 (with-current-buffer (process-buffer proc)
                                                   (buffer-string)))))
                                   (if (/= exit-code 0)
-                                      (message "hub-pr-fetch: %s exited %d: %s"
-                                               ,url exit-code
-                                               (string-trim (or output "")))
+                                      (progn
+                                        (message "hub-pr-fetch: %s exited %d: %s"
+                                                 ,url exit-code
+                                                 (string-trim (or output "")))
+                                        ;; Cache an error sentinel to prevent
+                                        ;; tight retry loops when rate-limited.
+                                        (puthash ,url
+                                                 (cons (float-time) '((state . "ERROR")))
+                                                 decknix--hub-pr-cache))
                                     (condition-case err
                                         (let* ((data (json-parse-string output
                                                        :object-type 'alist
@@ -1191,9 +1197,17 @@ large bodies is expensive under dynamic binding."
                        (with-current-buffer (process-buffer proc)
                          (buffer-string)))))
         (if (/= exit-code 0)
-            (message "hub-repo-fetch: %s@%s exited %d: %s"
-                     url branch exit-code
-                     (string-trim (or output "")))
+            (progn
+              (message "hub-repo-fetch: %s@%s exited %d: %s"
+                       url branch exit-code
+                       (string-trim (or output "")))
+              ;; Cache an error sentinel so the sidebar does not retry on
+              ;; every 2-second refresh (e.g. when GitHub rate-limits us).
+              ;; The normal TTL (`decknix--hub-repo-cache-ttl', 300 s) gates
+              ;; the next attempt; the renderer treats state="ERROR" as a
+              ;; dim placeholder and does not trigger a fresh fetch.
+              (puthash key (cons (float-time) '((state . "ERROR")))
+                       decknix--hub-repo-cache))
           (condition-case err
               (let* ((data (json-parse-string output
                              :object-type 'alist
