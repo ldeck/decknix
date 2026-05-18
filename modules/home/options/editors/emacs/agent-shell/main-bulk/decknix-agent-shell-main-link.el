@@ -163,7 +163,7 @@ Split below per pane); the default selection lands on
          (cur (selected-window))
          (sidebar-buf (or (bound-and-true-p
                            agent-shell-workspace-sidebar-buffer-name)
-                          "*agent-shell-sidebar*"))
+                          "*Agent Sidebar*"))
          (cur-is-sidebar
           (decknix--quickaction-window-is-sidebar-p
            (window-parameter cur 'window-side)
@@ -332,7 +332,9 @@ With prefix arg, prompts for PR type (authored/subject)."
     (if (decknix--agent-link-pr conv-key url pr-type "manual")
         (progn
           (message "Linked %s PR: %s" pr-type url)
-          (when (get-buffer "*agent-shell-sidebar*")
+          (when (get-buffer (or (bound-and-true-p
+                                 agent-shell-workspace-sidebar-buffer-name)
+                                "*Agent Sidebar*"))
             (agent-shell-workspace-sidebar-refresh)))
       (message "PR already linked"))))
 
@@ -371,7 +373,9 @@ deploy indicator, sorted intermixed with PR rows by recency."
     (if (decknix--agent-link-repo conv-key url branch "manual")
         (progn
           (message "Linked repo: %s@%s" url branch)
-          (when (get-buffer "*agent-shell-sidebar*")
+          (when (get-buffer (or (bound-and-true-p
+                                 agent-shell-workspace-sidebar-buffer-name)
+                                "*Agent Sidebar*"))
             (agent-shell-workspace-sidebar-refresh)))
       (message "Repo+branch already linked"))))
 
@@ -410,7 +414,9 @@ either via a single command."
             (decknix--agent-unlink-repo conv-key url branch)
           (decknix--agent-unlink-pr conv-key url))
         (message "Unlinked: %s" url)
-        (when (get-buffer "*agent-shell-sidebar*")
+        (when (get-buffer (or (bound-and-true-p
+                               agent-shell-workspace-sidebar-buffer-name)
+                              "*Agent Sidebar*"))
           (agent-shell-workspace-sidebar-refresh))))))
 
 

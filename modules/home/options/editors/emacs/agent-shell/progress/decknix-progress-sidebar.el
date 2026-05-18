@@ -25,6 +25,7 @@
 
 ;; -- Forward declarations: functions defined elsewhere in agent-shell config --
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
+(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
 (defvar decknix--sidebar-state-file)
 
 ;; == Progress: sidebar badges (PR 3) ==
@@ -151,7 +152,7 @@ sidebar Toggles transient (Live section).")
          (lambda ()
            (setq decknix-progress--sidebar-refresh-timer nil)
            (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
-                      (get-buffer "*agent-shell-sidebar*"))
+                      (get-buffer agent-shell-workspace-sidebar-buffer-name))
              (ignore-errors
                (agent-shell-workspace-sidebar-refresh)))))))
 

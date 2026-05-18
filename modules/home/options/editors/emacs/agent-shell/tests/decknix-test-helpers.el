@@ -40,6 +40,12 @@
 (defvar decknix--hub-show-deploys t)
 (defvar decknix--hub-org-visibility nil)
 (defvar decknix--hub-mention-filter nil)
+;; Upstream `agent-shell-workspace' defines this with value "*Agent
+;; Sidebar*"; carved hub modules now consult the variable (not a
+;; literal) when deciding whether to refresh the sidebar, so the
+;; helper provides the same default so toggle tests see a bound
+;; symbol without loading the whole workspace package.
+(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
 (defvar decknix-progress--dir)
 (defvar decknix-progress--index-cache)
 (defvar decknix-progress--todo-cache)
