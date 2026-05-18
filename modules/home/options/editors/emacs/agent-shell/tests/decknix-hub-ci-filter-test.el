@@ -14,7 +14,8 @@
 ;; row visibility, and the bulk show-all / show-none verbs.
 ;;
 ;; The sidebar redraw side-effect inside `decknix--hub-ci-filter-refresh'
-;; is gated on `(get-buffer "*agent-shell-sidebar*")' which is nil in
+;; is gated on `(get-buffer agent-shell-workspace-sidebar-buffer-name)'
+;; (the upstream buffer name is "*Agent Sidebar*") which is nil in
 ;; ert-batch, so tests that call the per-bucket toggles do not need
 ;; to stub `agent-shell-workspace-sidebar-refresh'.
 

@@ -77,7 +77,7 @@
 
 (ert-deftest decknix-hub-age-presets/cycle-refreshes-when-sidebar-buffer-exists ()
   (let ((decknix--hub-age-filter nil)
-        (buf (generate-new-buffer "*agent-shell-sidebar*")))
+        (buf (generate-new-buffer "*Agent Sidebar*")))
     (unwind-protect
         (decknix-test-with-stubbed-deps
             (agent-shell-workspace-sidebar-refresh)
@@ -88,8 +88,8 @@
 
 (ert-deftest decknix-hub-age-presets/cycle-skips-refresh-when-buffer-absent ()
   (let ((decknix--hub-age-filter nil))
-    (when (get-buffer "*agent-shell-sidebar*")
-      (kill-buffer "*agent-shell-sidebar*"))
+    (when (get-buffer "*Agent Sidebar*")
+      (kill-buffer "*Agent Sidebar*"))
     (decknix-test-with-stubbed-deps
         (agent-shell-workspace-sidebar-refresh)
       (decknix--hub-cycle-age-filter)

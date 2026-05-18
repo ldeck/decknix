@@ -38,6 +38,7 @@
 
 ;; -- Forward declaration: defined in upstream `agent-shell-workspace' --
 (declare-function agent-shell-workspace-sidebar-refresh "agent-shell-workspace")
+(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
 
 (defvar decknix--hub-wip-hide-linked t
   "When non-nil, hide WIP PRs that are linked to a live session.
@@ -49,7 +50,7 @@ Toggle with `L' in the sidebar Toggles transient.")
   (interactive)
   (setq decknix--hub-wip-hide-linked
         (not decknix--hub-wip-hide-linked))
-  (when (get-buffer "*agent-shell-sidebar*")
+  (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
     (agent-shell-workspace-sidebar-refresh))
   (message "WIP hide linked: %s"
            (if decknix--hub-wip-hide-linked "on" "off")))

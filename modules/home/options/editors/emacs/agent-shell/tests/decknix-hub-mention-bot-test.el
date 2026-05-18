@@ -26,10 +26,12 @@
   "Build a hub PR item alist from PROPS (plist)."
   (let ((author (plist-get props :author))
         (mentioned (plist-get props :mentioned))
-        (team (plist-get props :team-requested)))
+        (team (plist-get props :team-requested))
+        (others (plist-get props :others-requested)))
     `((author . ,author)
       (mentioned . ,mentioned)
-      (team_requested . ,team))))
+      (team_requested . ,team)
+      (others_requested . ,others))))
 
 (defun decknix-test--make-hub-reviews-with-viewer (viewer)
   "Build a `decknix--hub-reviews'-shaped alist exposing VIEWER."
@@ -223,7 +225,73 @@
   (should-not (decknix--hub-bot-author-p ""))
   (should-not (decknix--hub-bot-author-p nil)))
 
-;; -- decknix--hub-bot-visible-p ------------------------------------
+;; -- decknix--hub-show-bots-normalize -----------------------------
+
+(ert-deftest decknix-hub-bot/normalize-passes-valid-symbols ()
+  (should (eq nil        (decknix--hub-show-bots-normalize nil)))
+  (should (eq 'show      (decknix--hub-show-bots-normalize 'show)))
+  (should (eq 'mentioned (decknix--hub-show-bots-normalize 'mentioned))))
+
+(ert-deftest decknix-hub-bot/normalize-migrates-legacy-t-to-show ()
+  (should (eq 'show (decknix--hub-show-bots-normalize t))))
+
+(ert-deftest decknix-hub-bot/normalize-coerces-garbage-to-nil ()
+  (should (eq nil (decknix--hub-show-bots-normalize 'bogus)))
+  (should (eq nil (decknix--hub-show-bots-normalize "show")))
+  (should (eq nil (decknix--hub-show-bots-normalize 42))))
+
+;; -- decknix--hub-show-bots-label ---------------------------------
+
+(ert-deftest decknix-hub-bot/label-known-states ()
+  (let ((decknix--hub-show-bots 'show))
+    (should (string= "show" (decknix--hub-show-bots-label))))
+  (let ((decknix--hub-show-bots 'mentioned))
+    (should (string= "mention" (decknix--hub-show-bots-label))))
+  (let ((decknix--hub-show-bots nil))
+    (should (string= "hide" (decknix--hub-show-bots-label))))
+  ;; Unknown state collapses to hide so the label cannot lie about
+  ;; what the predicate is doing.
+  (let ((decknix--hub-show-bots 'bogus))
+    (should (string= "hide" (decknix--hub-show-bots-label)))))
+
+;; -- decknix--hub-item-others-requested-p -------------------------
+
+(ert-deftest decknix-hub-bot/others-requested-p-flag-only ()
+  (should (decknix--hub-item-others-requested-p
+           (decknix-test--make-hub-item :others-requested t)))
+  (should-not (decknix--hub-item-others-requested-p
+               (decknix-test--make-hub-item :others-requested nil)))
+  (should-not (decknix--hub-item-others-requested-p
+               (decknix-test--make-hub-item))))
+
+;; -- decknix--hub-item-bot-mentioned-p ----------------------------
+
+(ert-deftest decknix-hub-bot/bot-mentioned-p-direct-mention-wins ()
+  ;; Direct mention is enough on its own.
+  (should (decknix--hub-item-bot-mentioned-p
+           (decknix-test--make-hub-item :mentioned t)))
+  ;; Even when others are tagged, my direct mention keeps it visible.
+  (should (decknix--hub-item-bot-mentioned-p
+           (decknix-test--make-hub-item
+            :mentioned t :others-requested t))))
+
+(ert-deftest decknix-hub-bot/bot-mentioned-p-team-without-others ()
+  (should (decknix--hub-item-bot-mentioned-p
+           (decknix-test--make-hub-item :team-requested t))))
+
+(ert-deftest decknix-hub-bot/bot-mentioned-p-team-with-others-hidden ()
+  (should-not (decknix--hub-item-bot-mentioned-p
+               (decknix-test--make-hub-item
+                :team-requested t :others-requested t))))
+
+(ert-deftest decknix-hub-bot/bot-mentioned-p-no-flags-hidden ()
+  (should-not (decknix--hub-item-bot-mentioned-p
+               (decknix-test--make-hub-item)))
+  ;; Others requested but neither me nor team: hidden.
+  (should-not (decknix--hub-item-bot-mentioned-p
+               (decknix-test--make-hub-item :others-requested t))))
+
+;; -- decknix--hub-bot-visible-p -----------------------------------
 
 (ert-deftest decknix-hub-bot/visible-p-default-hides-bots ()
   (let ((decknix--hub-show-bots nil))
@@ -235,14 +303,43 @@
     (should (decknix--hub-bot-visible-p
              (decknix-test--make-hub-item)))))
 
-(ert-deftest decknix-hub-bot/visible-p-show-bots-flag-overrides ()
-  (let ((decknix--hub-show-bots t))
+(ert-deftest decknix-hub-bot/visible-p-show-state-overrides ()
+  (let ((decknix--hub-show-bots 'show))
     (should (decknix--hub-bot-visible-p
              (decknix-test--make-hub-item :author "dependabot[bot]")))
     (should (decknix--hub-bot-visible-p
              (decknix-test--make-hub-item :author "renovate")))
     (should (decknix--hub-bot-visible-p
              (decknix-test--make-hub-item :author "alice")))))
+
+(ert-deftest decknix-hub-bot/visible-p-mentioned-state-keeps-humans ()
+  ;; Non-bot items are always visible regardless of mention flags.
+  (let ((decknix--hub-show-bots 'mentioned))
+    (should (decknix--hub-bot-visible-p
+             (decknix-test--make-hub-item :author "alice")))
+    (should (decknix--hub-bot-visible-p
+             (decknix-test--make-hub-item
+              :author "alice" :others-requested t)))))
+
+(ert-deftest decknix-hub-bot/visible-p-mentioned-state-filters-bots ()
+  (let ((decknix--hub-show-bots 'mentioned))
+    ;; Bot + I am directly mentioned: visible.
+    (should (decknix--hub-bot-visible-p
+             (decknix-test--make-hub-item
+              :author "dependabot[bot]" :mentioned t)))
+    ;; Bot + only my team requested + no other individuals: visible.
+    (should (decknix--hub-bot-visible-p
+             (decknix-test--make-hub-item
+              :author "dependabot[bot]" :team-requested t)))
+    ;; Bot + team requested + other individuals tagged: HIDDEN (noise).
+    (should-not (decknix--hub-bot-visible-p
+                 (decknix-test--make-hub-item
+                  :author "dependabot[bot]"
+                  :team-requested t :others-requested t)))
+    ;; Bot + no mention signals at all: HIDDEN.
+    (should-not (decknix--hub-bot-visible-p
+                 (decknix-test--make-hub-item
+                  :author "dependabot[bot]")))))
 
 (provide 'decknix-hub-mention-bot-test)
 ;;; decknix-hub-mention-bot-test.el ends here

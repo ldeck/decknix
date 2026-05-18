@@ -80,6 +80,8 @@
 (declare-function decknix--hub-bot-visible-p "decknix-hub-mention-bot")
 (declare-function decknix--hub-mention-filter-label "decknix-hub-mention-bot")
 (declare-function decknix--hub-mention-filter-normalize "decknix-hub-mention-bot")
+(declare-function decknix--hub-show-bots-label "decknix-hub-mention-bot")
+(declare-function decknix--hub-show-bots-normalize "decknix-hub-mention-bot")
 ;; Attention-filter cluster (PR B.33) -- engine + toggle commands
 ;; live in `decknix-hub-attention-filter'.  Declared up here because
 ;; the transient suffixes earlier in this file (line ~480 onward)
@@ -127,6 +129,7 @@
 (defvar decknix-hub-eager-clone-probe)
 (defvar decknix--hub-org-visibility)
 (defvar decknix--hub-show-bots)
+(defvar decknix--hub-show-bots-cycle)
 (defvar decknix--hub-mention-filter)
 (defvar decknix--hub-mention-filter-cycle)
 (defvar decknix--hub-requests-hide-needs-reply)
@@ -137,6 +140,7 @@
 (defvar decknix--hub-wip-hide-bot-pending)
 (defvar decknix--hub-wip-only-my-replies)
 (defvar decknix--hub-wip-hide-linked)
+(defvar decknix--hub-wip-hide-terminal)
 (defvar decknix--hub-expand-prs)
 (defvar decknix--hub-symbol-style)
 (defvar decknix--hub-repo-name-cap)
@@ -242,7 +246,7 @@ Re-reads only the changed file and refreshes the sidebar."
           (_ nil))
         ;; Refresh the sidebar if it exists
         (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
-                   (get-buffer "*agent-shell-sidebar*"))
+                   (get-buffer agent-shell-workspace-sidebar-buffer-name))
           (agent-shell-workspace-sidebar-refresh))))))
 
 (defun decknix--hub-start-watcher ()
@@ -281,14 +285,14 @@ picker's dynamic binding unwinds.")
   (when (cl-every (lambda (o) (gethash o decknix--hub-org-visibility))
                   (decknix--hub-discover-orgs))
     (setq decknix--hub-org-visibility nil))
-  (when (get-buffer "*agent-shell-sidebar*")
+  (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
     (agent-shell-workspace-sidebar-refresh)))
 
 (defun decknix--hub-org-filter-show-all ()
   "Show all orgs (clear filter)."
   (interactive)
   (setq decknix--hub-org-visibility nil)
-  (when (get-buffer "*agent-shell-sidebar*")
+  (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
     (agent-shell-workspace-sidebar-refresh))
   (message "Hub: showing all orgs"))
 
@@ -298,7 +302,7 @@ picker's dynamic binding unwinds.")
   (setq decknix--hub-org-visibility (make-hash-table :test 'equal))
   (dolist (org (decknix--hub-discover-orgs))
     (puthash org nil decknix--hub-org-visibility))
-  (when (get-buffer "*agent-shell-sidebar*")
+  (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
     (agent-shell-workspace-sidebar-refresh))
   (message "Hub: hiding all orgs"))
 
@@ -428,15 +432,16 @@ picker's dynamic binding unwinds.")
   :key "B"
   :description
   (lambda ()
-    (format "bots         %s"
-            (propertize
-             (if decknix--hub-show-bots "[show]" "[hide]")
-             'face (if decknix--hub-show-bots
-                       'font-lock-constant-face
-                     'font-lock-comment-face))))
+    (let ((label (decknix--hub-show-bots-label)))
+      (format "bots         %s"
+              (propertize
+               (format "[%s]" label)
+               'face (if (string= label "hide")
+                         'font-lock-comment-face
+                       'font-lock-constant-face)))))
   :transient t
   (interactive)
-  (call-interactively #'decknix--hub-toggle-bot-filter))
+  (call-interactively #'decknix--hub-cycle-bot-filter))
 
 ;; Requests row labels are icon-led to match the sidebar footer:
 ;; the comparable text-only labels (age, bots, ci, mention, sort)
@@ -612,6 +617,24 @@ picker's dynamic binding unwinds.")
   (interactive)
   (call-interactively #'decknix--hub-toggle-wip-hide-linked))
 
+;; Issue #137: WIP "hide terminal" suffix.  Default-on filter that
+;; suppresses MERGED / CLOSED rows so the section only carries
+;; actionable work.  Toggle off to audit terminal rows when planning
+;; worktree cleanup.
+(transient-define-suffix decknix-sidebar-transient--wip-hide-terminal ()
+  :key "m"
+  :description
+  (lambda ()
+    (format "stale       %s"
+            (propertize
+             (if decknix--hub-wip-hide-terminal "[hide]" "[show]")
+             'face (if decknix--hub-wip-hide-terminal
+                       'font-lock-constant-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix--hub-toggle-wip-hide-terminal))
+
 ;; Hub toggles now live in the T transient
 ;; (decknix-sidebar-toggles-transient) — no need to append here.
 
@@ -733,14 +756,24 @@ lint-only failures and still-running checks."
 (defalias 'decknix--hub-toggle-mention-filter
   'decknix--hub-cycle-mention-filter)
 
-(defun decknix--hub-toggle-bot-filter ()
-  "Toggle visibility of bot-authored PRs (e.g. dependabot)."
+(defun decknix--hub-cycle-bot-filter ()
+  "Cycle the bot-author visibility filter through its three states.
+Order: `hide' → `show' → `mentioned' → `hide'.  See
+`decknix--hub-show-bots' for the meaning of each state."
   (interactive)
-  (setq decknix--hub-show-bots (not decknix--hub-show-bots))
-  (when (get-buffer "*agent-shell-sidebar*")
+  (let* ((cycle decknix--hub-show-bots-cycle)
+         (rest (or (cdr (memq decknix--hub-show-bots cycle))
+                   cycle))
+         (next (car rest)))
+    (setq decknix--hub-show-bots next))
+  (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
     (agent-shell-workspace-sidebar-refresh))
-  (message "Bot PRs: %s"
-           (if decknix--hub-show-bots "shown" "hidden")))
+  (message "Bot PRs: %s" (decknix--hub-show-bots-label)))
+
+;; Backwards-compat alias for any caller / keybinding that still
+;; refers to the old binary toggle name.
+(defalias 'decknix--hub-toggle-bot-filter
+  'decknix--hub-cycle-bot-filter)
 
 ;; -- Hub: attention filters (needs-reply / bot-pending / replies-to-me) --
 ;;
@@ -866,7 +899,7 @@ Valid values: nil (badges only), `pr' (PR status lines),
           ('pipeline 'both)
           ('both nil)
           (_ nil)))
-  (when (get-buffer "*agent-shell-sidebar*")
+  (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
     (agent-shell-workspace-sidebar-refresh))
   (message "Session PRs: %s"
            (pcase decknix--hub-expand-prs
@@ -914,7 +947,7 @@ unknown conflict."
   (interactive)
   (setq decknix--hub-symbol-style
         (if (eq decknix--hub-symbol-style 'emoji) 'ascii 'emoji))
-  (when (get-buffer "*agent-shell-sidebar*")
+  (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
     (agent-shell-workspace-sidebar-refresh))
   (message "PR symbols: %s" decknix--hub-symbol-style))
 
@@ -943,6 +976,21 @@ unknown conflict."
 ;; in this file per AGENTS.md Rule 2.
 (declare-function decknix--hub-toggle-wip-hide-linked
                   "decknix-hub-wip-link-filter")
+
+;; Issue #137: WIP "hide terminal" toggle, sibling carve to
+;; `decknix-hub-wip-link-filter'.  Owns
+;; `decknix--hub-wip-hide-terminal' (default `t', forward-declared
+;; near line 140), `decknix--hub-wip-terminal-visible-p' (the pure
+;; predicate used inside `decknix--hub-render-wip', see ~line 2615),
+;; and `decknix--hub-toggle-wip-hide-terminal' (called from the
+;; transient suffix at ~line 615).  The transient suffix itself
+;; stays in this file per Rule 2.
+(declare-function decknix--hub-wip-terminal-visible-p
+                  "decknix-hub-wip-terminal-filter" (pr))
+(declare-function decknix--hub-wip-pr-terminal-p
+                  "decknix-hub-wip-terminal-filter" (pr))
+(declare-function decknix--hub-toggle-wip-hide-terminal
+                  "decknix-hub-wip-terminal-filter")
 
 ;; -- Hub: WIP join — look up live PR status from hub data --
 ;;
@@ -1058,14 +1106,14 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
                               ;; don't refresh N times for N concurrent fetches.
                               ;; The timer coalesces: if one is already pending
                               ;; the new one replaces it, so only the last fires.
-                              (when (get-buffer "*agent-shell-sidebar*")
+                              (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
                                 (when (timerp decknix--hub-pr-refresh-timer)
                                   (cancel-timer decknix--hub-pr-refresh-timer))
                                 (setq decknix--hub-pr-refresh-timer
                                       (run-at-time 0.3 nil
                                         (lambda ()
                                           (setq decknix--hub-pr-refresh-timer nil)
-                                          (when (get-buffer "*agent-shell-sidebar*")
+                                          (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
                                             (ignore-errors
                                               (agent-shell-workspace-sidebar-refresh))))))))))
                        t)))
@@ -1208,14 +1256,14 @@ large bodies is expensive under dynamic binding."
       (kill-buffer (process-buffer proc)))
     ;; Coalesced refresh — shared with the PR-fetch timer so a
     ;; burst of PR+repo fetches collapses to a single redraw.
-    (when (get-buffer "*agent-shell-sidebar*")
+    (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
       (when (timerp decknix--hub-pr-refresh-timer)
         (cancel-timer decknix--hub-pr-refresh-timer))
       (setq decknix--hub-pr-refresh-timer
             (run-at-time 0.3 nil
               (lambda ()
                 (setq decknix--hub-pr-refresh-timer nil)
-                (when (get-buffer "*agent-shell-sidebar*")
+                (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
                   (ignore-errors
                     (agent-shell-workspace-sidebar-refresh)))))))))
 
@@ -1427,14 +1475,14 @@ dynamic binding is expensive for large bodies — same reasoning as
     (when (buffer-live-p (process-buffer proc))
       (kill-buffer (process-buffer proc)))
     ;; Coalesced sidebar refresh (shares the PR-fetch timer).
-    (when (get-buffer "*agent-shell-sidebar*")
+    (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
       (when (timerp decknix--hub-pr-refresh-timer)
         (cancel-timer decknix--hub-pr-refresh-timer))
       (setq decknix--hub-pr-refresh-timer
             (run-at-time 0.3 nil
               (lambda ()
                 (setq decknix--hub-pr-refresh-timer nil)
-                (when (get-buffer "*agent-shell-sidebar*")
+                (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
                   (ignore-errors
                     (agent-shell-workspace-sidebar-refresh)))))))))
 
@@ -2415,9 +2463,17 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                             (decknix--hub-icon
                              "@" '(:foreground "#61afef" :weight bold))))
           (_        ""))
-        (if decknix--hub-show-bots
-            (concat " " (decknix--hub-icon "🤖" 'default))
-          "")
+        ;; Bot-filter badge:
+        ;;   nil       — no badge (default; bots hidden)
+        ;;   show      — 🤖 default colour (all bots visible)
+        ;;   mentioned — 🤖 + @ to signal the mention-only restriction
+        (pcase decknix--hub-show-bots
+          ('show      (concat " " (decknix--hub-icon "🤖" 'default)))
+          ('mentioned (concat " "
+                              (decknix--hub-icon "🤖" 'default)
+                              (decknix--hub-icon
+                               "@" '(:foreground "#d7af5f" :weight bold))))
+          (_          ""))
         (if decknix--hub-requests-sort-reverse " ⇅" ""))
        'requests)
       (setq line-num (1+ line-num))
@@ -2600,6 +2656,10 @@ primary action is a no-op until a PR materialises."
 Respects `decknix--hub-org-visibility'. Shows time since last update.
 Honours `decknix--hub-wip-hide-linked' — PRs linked to a live
 session are hidden (both from the header count and the listing).
+Honours `decknix--hub-wip-hide-terminal' (default on) — MERGED
+and CLOSED PRs are hidden so the section only carries actionable
+work; toggle off to audit terminal rows when planning worktree
+cleanup.
 Surfaces local worktrees lacking a matching open PR as dim
 `wip' placeholder rows so a freshly-created worktree appears at
 t=0 instead of waiting for the PR + GitHub Search indexing."
@@ -2608,10 +2668,13 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
          ;; Compute live-linked set once; empty when toggle is off.
          (linked-set (when decknix--hub-wip-hide-linked
                        (decknix--hub-live-linked-pr-set)))
+         ;; Age filter (`F') is Requests-only — WIP rows are my own
+         ;; in-flight PRs and hiding them by age silently truncates
+         ;; the section.  Sessions has its own `a' filter.
          (pr-visible-p
           (lambda (repo-full pr)
-            (and (decknix--hub-age-visible-p (alist-get 'updated pr))
-                 (decknix--hub-wip-attention-visible-p pr)
+            (and (decknix--hub-wip-attention-visible-p pr)
+                 (decknix--hub-wip-terminal-visible-p pr)
                  (not (decknix--hub-wip-pr-live-linked-p
                        repo-full (alist-get 'number pr) linked-set)))))
          ;; Filter repos by org, then filter PRs by age + link status
@@ -2688,6 +2751,13 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
                      (title (or (alist-get 'title pr) ""))
                      (pr-state (or (alist-get 'state pr) "OPEN"))
                      (merged-p (string= pr-state "MERGED"))
+                     (closed-p (string= pr-state "CLOSED"))
+                     ;; Issue #138: terminal-state PRs are normally
+                     ;; hidden by `decknix--hub-wip-hide-terminal'; if
+                     ;; the user has flipped the toggle off to audit
+                     ;; them, decorate the row with a `⊘' stale badge
+                     ;; so it is obviously not actionable.
+                     (terminal-p (decknix--hub-wip-pr-terminal-p pr))
                      (ci (alist-get 'ci pr))
                      (mergeable (alist-get 'mergeable pr))
                      (ci-str (if merged-p
@@ -2735,8 +2805,22 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
                      (short-title (if (> (length title) max-title)
                                       (concat (substring title 0 (- max-title 1)) "…")
                                     title))
-                     ;; Merged PRs get dimmed styling
+                     ;; Issue #138: prepend `⊘ ' badge to terminal
+                     ;; rows so they read as "stale -- here for
+                     ;; audit, not action".  The badge only ever
+                     ;; renders when the user has flipped the
+                     ;; hide-terminal toggle off (otherwise these
+                     ;; rows are filtered out upstream).
+                     (stale-badge (if terminal-p
+                                     (propertize "⊘ "
+                                                'face 'font-lock-comment-face)
+                                   ""))
+                     (short-title (concat stale-badge short-title))
+                     ;; Terminal PRs (MERGED/CLOSED) and drafts get
+                     ;; dimmed styling -- nothing actionable to do
+                     ;; from the row, the title is reference only.
                      (title-face (cond (merged-p 'font-lock-comment-face)
+                                       (closed-p 'font-lock-comment-face)
                                        (draft 'font-lock-comment-face)
                                        (t nil)))
                      ;; Worktree badge — branch is in scope from
@@ -2792,7 +2876,7 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
   "Toggle visibility of deployment pipeline indicators (DTSP) in WIP."
   (interactive)
   (setq decknix--hub-show-deploys (not decknix--hub-show-deploys))
-  (when (get-buffer "*agent-shell-sidebar*")
+  (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
     (agent-shell-workspace-sidebar-refresh))
   (message "Deploy indicators: %s"
            (if decknix--hub-show-deploys "shown" "hidden")))
