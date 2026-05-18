@@ -173,6 +173,12 @@
 (declare-function decknix--post-create-flush-mode
                   "decknix-agent-post-create"
                   (conv-key tags workspace))
+(declare-function decknix--header-status-icon
+                  "decknix-agent-header" (status))
+(declare-function decknix--header-status-face
+                  "decknix-agent-header" (status))
+(declare-function agent-shell-workspace--buffer-status
+                  "ext:agent-shell-workspace" (buffer))
 (declare-function decknix--quickaction-window-is-sidebar-p
                   "decknix-agent-quickaction-window"
                   (window-side dedicated-p buf-name sidebar-buf))
@@ -1072,11 +1078,44 @@ With \\[universal-argument], shows all individual session snapshots."
 ;; Like C-x b but scoped to live agent-shell buffers only.
 ;; Uses consult for live narrowing when available, else completing-read.
 ;; Excludes the current buffer; sorted by MRU. (#96)
+;;
+;; Each candidate is prefixed with the same status icon used by the
+;; unified header-line and the workspace sidebar's Live section (●/◐/◉
+;; etc., coloured by `decknix--header-status-face') so it stays obvious
+;; which sessions are working / awaiting permission / idle without
+;; having to switch into them.
+
+(defun decknix--agent-switch-buffer--status-prefix (buf)
+  "Return a coloured status-icon prefix for live buffer BUF.
+Falls back to two spaces when the upstream status helper or the
+header icon/face helpers aren't loaded yet (build-time stubbing,
+early daemon start) so the column stays aligned regardless."
+  (let ((status (and (fboundp 'agent-shell-workspace--buffer-status)
+                     (buffer-live-p buf)
+                     (ignore-errors
+                       (agent-shell-workspace--buffer-status buf)))))
+    (if (and status
+             (fboundp 'decknix--header-status-icon)
+             (fboundp 'decknix--header-status-face))
+        (concat (propertize (decknix--header-status-icon status)
+                            'face (decknix--header-status-face status))
+                " ")
+      "  ")))
+
+(defun decknix--agent-switch-buffer--decorated-label (buf)
+  "Build a status-decorated picker label for live buffer BUF."
+  (concat (decknix--agent-switch-buffer--status-prefix buf)
+          (decknix--agent-session-live-label buf)))
 
 (defun decknix-agent-switch-buffer ()
   "Switch to another live agent-shell buffer.
 Like \\[switch-to-buffer] but showing only agent-shell buffers.
-Excludes the current buffer. MRU ordering."
+Excludes the current buffer.  Most-recently-used ordering is
+preserved from `agent-shell-buffers' and forced through the
+completion UI via `display-sort-function = identity', so vertico /
+consult don't re-sort the candidates alphabetically.  Each entry is
+prefixed with the same status icon shown in the header-line and the
+sidebar's Live section."
   (interactive)
   (let* ((bufs (when (fboundp 'agent-shell-buffers)
                  (agent-shell-buffers)))
@@ -1091,11 +1130,19 @@ Excludes the current buffer. MRU ordering."
       (let ((ht (make-hash-table :test 'equal))
             (candidates nil))
         (dolist (buf others)
-          (let ((label (decknix--agent-session-live-label buf)))
+          (let ((label (decknix--agent-switch-buffer--decorated-label buf)))
             (puthash label buf ht)
             (push label candidates)))
         (setq candidates (nreverse candidates))
-        (let* ((chosen (completing-read "Agent buffer: " candidates nil t))
+        (let* ((table
+                (lambda (string pred action)
+                  (if (eq action 'metadata)
+                      '(metadata
+                        (category . agent-shell-buffer)
+                        (display-sort-function . identity)
+                        (cycle-sort-function . identity))
+                    (complete-with-action action candidates string pred))))
+               (chosen (completing-read "Agent buffer: " table nil t))
                (buf (gethash chosen ht)))
           (when (and buf (buffer-live-p buf))
             (switch-to-buffer buf))))))))
