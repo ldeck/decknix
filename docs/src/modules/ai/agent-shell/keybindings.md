@@ -44,13 +44,18 @@ The `C-c A` prefix is labelled "Agent" in which-key.
 | `M-n` | Next prompt (history) |
 | `M-r` | Search prompt history (consult) |
 
-## Templates (`C-c t` / `C-c A t`)
+## Templates (`C-c Y` / `C-c A t`)
+
+In-buffer, snippet insertion is handled by the upstream `C-c Y` ("+snippet")
+prefix — no decknix-specific in-buffer binding. The agent-namespaced
+`C-c A t` global prefix is preserved for explicit, namespaced access.
 
 | Key | Action |
 |-----|--------|
-| `t` | Insert a prompt template |
-| `n` | Create new template |
-| `e` | Edit existing template |
+| `C-c Y` | Snippet prefix (upstream) — insert / new / visit |
+| `C-c A t t` | Insert a prompt template |
+| `C-c A t n` | Create new template |
+| `C-c A t e` | Edit existing template |
 
 ## Commands (`C-c c` / `C-c A c`)
 
@@ -65,7 +70,21 @@ The `C-c A` prefix is labelled "Agent" in which-key.
 | `L` | Link repo+branch to session (direct-push repos) |
 | `u` | Unlink PR or repo (single picker) |
 
-## Tags (`C-c T` / `C-c A T`)
+## Tags
+
+Conversation-scoped tags (add / remove / list for this session) are now
+nested under the session sub-prefix at `C-c s t`. Global tags
+(rename / delete / cleanup across all sessions) remain at `C-c A T`.
+
+### Conversation-scoped (`C-c s t`)
+
+| Key | Action |
+|-----|--------|
+| `a` | Add tag (create or select) |
+| `r` | Remove tag |
+| `l` | List this session's tags |
+
+### Global (`C-c A T`)
 
 | Key | Action |
 |-----|--------|
@@ -75,6 +94,19 @@ The `C-c A` prefix is labelled "Agent" in which-key.
 | `e` | Rename a tag |
 | `d` | Delete tag globally |
 | `c` | Cleanup orphaned tags |
+
+## Sidebar Actions (`C-c W`)
+
+Trigger sidebar transients without switching focus away from the
+agent-shell buffer. `C-c W` opens `decknix-sidebar-transient` — the
+same parent menu that the sidebar's `?` / `h` opens — exposing
+Navigate / Quick / Actions plus `T` for the toggles sub-transient.
+
+| Key | Action |
+|-----|--------|
+| `C-c W` | Open sidebar action transient |
+| `C-c W T` | Toggles transient (filters, sort, indicators) |
+| `C-c w` | Toggle the workspace tab itself (unchanged) |
 
 ## Model & Mode
 
