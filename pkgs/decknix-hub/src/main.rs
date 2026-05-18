@@ -107,6 +107,8 @@ struct ReviewRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     team_requested: Option<bool>, // true when one of user's teams was requested as reviewer
     #[serde(skip_serializing_if = "Option::is_none")]
+    others_requested: Option<bool>, // true when any User reviewer other than me is requested
+    #[serde(skip_serializing_if = "Option::is_none")]
     needs_reply: Option<bool>, // true when latest comment/review is from someone else (bot or human)
     #[serde(skip_serializing_if = "Option::is_none")]
     bot_pending: Option<bool>, // true when the latest comment/review is from a bot
@@ -557,6 +559,7 @@ struct ReviewPrDetails {
     my_review: Option<String>,
     mentioned: Option<bool>,
     team_requested: Option<bool>,
+    others_requested: Option<bool>,
     needs_reply: Option<bool>,
     bot_pending: Option<bool>,
     replies_to_me: Option<bool>,
@@ -568,8 +571,9 @@ impl Default for ReviewPrDetails {
     fn default() -> Self {
         Self {
             ci: None, mergeable: None, my_review: None, mentioned: None,
-            team_requested: None, needs_reply: None, bot_pending: None,
-            replies_to_me: None, total_threads: None, unresolved_threads: None,
+            team_requested: None, others_requested: None, needs_reply: None,
+            bot_pending: None, replies_to_me: None, total_threads: None,
+            unresolved_threads: None,
         }
     }
 }
@@ -659,6 +663,26 @@ async fn fetch_pr_ci(
             let team_requested = view.review_requests.as_ref()
                 .map(|rrs| rrs.iter().any(|rr| rr.typename.as_deref() == Some("Team")))
                 .unwrap_or(false);
+            // Check if any User reviewer *other than me* is requested.  Drives
+            // the bot-filter's `mentioned' state: a team-requested PR with no
+            // other individuals tagged is treated as "for me / my team to
+            // handle", while one with Alice/Bob individually tagged is treated
+            // as team-noise that someone else is already on.
+            let others_requested = my_login.map(|login| {
+                view.review_requests.as_ref()
+                    .map(|rrs| rrs.iter().any(|rr| {
+                        rr.typename.as_deref() == Some("User")
+                            && rr.login.as_ref()
+                                .map(|l| !l.eq_ignore_ascii_case(login))
+                                .unwrap_or(false)
+                    }))
+                    .unwrap_or(false)
+            }).unwrap_or_else(|| {
+                // No my_login: any User entry counts as "others".
+                view.review_requests.as_ref()
+                    .map(|rrs| rrs.iter().any(|rr| rr.typename.as_deref() == Some("User")))
+                    .unwrap_or(false)
+            });
             // Check for @-mentions in comment/review bodies and classify the
             // trailing activity stream into needs_reply / bot_pending /
             // replies_to_me.  All four signals share the same pass.
@@ -723,6 +747,7 @@ async fn fetch_pr_ci(
                 my_review,
                 mentioned: Some(mentioned),
                 team_requested: Some(team_requested),
+                others_requested: Some(others_requested),
                 needs_reply: Some(needs_reply),
                 bot_pending: Some(bot_pending),
                 replies_to_me: Some(replies_to_me),
@@ -740,12 +765,18 @@ async fn fetch_pr_ci(
 
 /// Fetch PR reviews assigned to the current user.
 async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, String> {
+    // Limit 200 — `gh search prs` defaults to recency-sorted, so 50
+    // was capping older requests in heavy-review weeks (the sidebar
+    // `F all' preset had nothing >13d to show against the user's
+    // actual queue).  200 stays well under GitHub's per-page max
+    // and the per-PR enrichment cost is bearable at the default
+    // 60s poll cadence.
     let output = gh_json(&[
         "search", "prs",
         "--review-requested=@me",
         "--state=open",
         "--json", "number,title,url,createdAt,isDraft,labels,author,repository",
-        "--limit", "50",
+        "--limit", "200",
     ]).await?;
 
     let prs: Vec<GhSearchPr> = serde_json::from_str(&output)
@@ -796,6 +827,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             my_review: details.my_review,
             mentioned: details.mentioned,
             team_requested: details.team_requested,
+            others_requested: details.others_requested,
             needs_reply: details.needs_reply,
             bot_pending: details.bot_pending,
             replies_to_me: details.replies_to_me,

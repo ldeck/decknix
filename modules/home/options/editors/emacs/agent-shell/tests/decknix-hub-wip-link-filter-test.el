@@ -16,7 +16,8 @@
 ;;
 ;; The interactive cycler's
 ;; `agent-shell-workspace-sidebar-refresh' callback is guarded by
-;; `(get-buffer "*agent-shell-sidebar*")' in the module, so simply
+;; `(get-buffer agent-shell-workspace-sidebar-buffer-name)' in the
+;; module (the upstream buffer name is "*Agent Sidebar*"), so simply
 ;; running tests in a fresh batch Emacs (where that buffer never
 ;; exists) suffices to skip the call.
 
@@ -57,7 +58,7 @@
 The `get-buffer' guard ensures the upstream refresh call is
 skipped when the sidebar is not yet open."
   (let ((decknix--hub-wip-hide-linked nil))
-    (should-not (get-buffer "*agent-shell-sidebar*"))
+    (should-not (get-buffer "*Agent Sidebar*"))
     ;; Should complete without error.
     (call-interactively #'decknix--hub-toggle-wip-hide-linked)
     (should (eq decknix--hub-wip-hide-linked t))))

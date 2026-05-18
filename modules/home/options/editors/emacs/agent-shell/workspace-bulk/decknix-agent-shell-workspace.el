@@ -133,6 +133,9 @@
 (declare-function decknix--hub-mention-filter-label "decknix-hub-mention-bot")
 (declare-function decknix--hub-mention-filter-normalize "decknix-hub-mention-bot")
 (declare-function decknix--hub-bot-visible-p "decknix-hub-mention-bot")
+(declare-function decknix--hub-show-bots-label "decknix-hub-mention-bot")
+(declare-function decknix--hub-show-bots-normalize "decknix-hub-mention-bot")
+(declare-function decknix--hub-cycle-bot-filter "ext:decknix-agent-shell-hub")
 (declare-function decknix--hub-age-visible-p "decknix-hub-age-presets")
 (declare-function decknix--hub-worktree-canonical-repo "decknix-hub-worktree-parse")
 (declare-function decknix-hub-worktree-list "ext:decknix-agent-shell-main")
@@ -141,6 +144,8 @@
 ;; Sidebar-toggles symbols (in decknix-sidebar-toggles).
 (declare-function decknix-sidebar-toggle-saved-sessions "decknix-sidebar-toggles")
 (declare-function decknix-sidebar-toggle-sessions-hide-unknown "decknix-sidebar-toggles")
+(declare-function decknix--sidebar-session-workspace-visible-p
+                  "decknix-sidebar-toggles" (workspace))
 (declare-function decknix-sidebar-toggle-sessions-hide-live "decknix-sidebar-toggles")
 (declare-function decknix-sidebar-toggle-hidden "decknix-sidebar-toggles")
 (declare-function decknix-sidebar-cycle-sessions-age-filter "decknix-sidebar-toggles")
@@ -164,6 +169,7 @@
 (defvar decknix--sidebar-sessions-age-filter)
 (defvar decknix--hub-org-visibility)
 (defvar decknix--hub-show-bots)
+(defvar decknix--hub-show-bots-cycle)
 (defvar decknix--hub-mention-filter)
 (defvar decknix--hub-mention-filter-cycle)
 (defvar decknix--hub-requests-hide-needs-reply)
@@ -183,6 +189,7 @@
 (defvar decknix--hub-wip-hide-bot-pending)
 (defvar decknix--hub-wip-only-my-replies)
 (defvar decknix--hub-wip-hide-linked)
+(defvar decknix--hub-wip-hide-terminal)
 (defvar decknix--hub-expand-prs)
 (defvar decknix--hub-symbol-style)
 (defvar decknix--hub-repo-name-cap)
@@ -457,6 +464,7 @@ candidate movement uses the line text as the search needle."
 (defvar decknix--hub-mention-filter)
 (defvar decknix--hub-mention-filter-cycle)
 (defvar decknix--hub-show-bots)
+(defvar decknix--hub-show-bots-cycle)
 (defvar decknix--hub-bot-patterns)
 
 ;; Transient suffix descriptions that show live state
@@ -643,7 +651,8 @@ which advertises toggles by label only (no keys)."
    (decknix-sidebar-transient--wip-needs-reply)  ;; comments
    (decknix-sidebar-transient--wip-hide-linked)  ;; hide linked
    (decknix-sidebar-transient--deploy-indicator) ;; pipeline
-   (decknix-sidebar-transient--wip-my-replies)]  ;; replies
+   (decknix-sidebar-transient--wip-my-replies)   ;; replies
+   (decknix-sidebar-transient--wip-hide-terminal)] ;; stale (#137)
   ["Sessions"
    ;; Alphabetical by display label (case-insensitive):
    ;; age, live-backed, saved, unknown-ws.
@@ -760,11 +769,12 @@ All toggle keys are accessed via the T transient prefix."
                                        'font-lock-comment-face
                                      'font-lock-constant-face)))))
             (cons "B" (concat "bots "
-                          (propertize
-                           (if decknix--hub-show-bots "[show]" "[hide]")
-                           'face (if decknix--hub-show-bots
-                                     'font-lock-constant-face
-                                   'font-lock-comment-face))))
+                          (let ((label (decknix--hub-show-bots-label)))
+                            (propertize
+                             (format "[%s]" label)
+                             'face (if (string= label "hide")
+                                       'font-lock-comment-face
+                                     'font-lock-constant-face)))))
             (cons "C" (concat
                         "ci "
                         (propertize "[" 'face 'font-lock-comment-face)
@@ -903,6 +913,16 @@ All toggle keys are accessed via the T transient prefix."
                         (propertize
                          (if decknix--hub-wip-hide-bot-pending "[hide]" "[show]")
                          'face (if decknix--hub-wip-hide-bot-pending
+                                   'font-lock-constant-face
+                                 'font-lock-comment-face))))
+          ;; Issue #137: terminal-state filter (MERGED / CLOSED).
+          (cons "m" (format "stale %s"
+                        (propertize
+                         (if (and (boundp 'decknix--hub-wip-hide-terminal)
+                                  decknix--hub-wip-hide-terminal)
+                             "[hide]" "[show]")
+                         'face (if (and (boundp 'decknix--hub-wip-hide-terminal)
+                                        decknix--hub-wip-hide-terminal)
                                    'font-lock-constant-face
                                  'font-lock-comment-face))))))
         (sessions
@@ -1074,7 +1094,9 @@ Respects these toggles:
 - `decknix--sidebar-sessions-age-filter' — drop entries older than
   the configured window.
 - `decknix--sidebar-sessions-hide-unknown' — drop entries without a
-  resolvable workspace.
+  resolvable workspace OR whose workspace directory has been
+  deleted from disk (#139, e.g. a `git worktree remove' that ran
+  after the session was archived).
 
 Cap of `decknix--sidebar-max-saved' applied after all filters so
 the visible count matches the heading."
@@ -1103,9 +1125,10 @@ the visible count matches the heading."
                          (not live-p))
                      ;; age filter
                      (decknix--sidebar-session-age-visible-p modified)
-                     ;; unknown-workspace filter
-                     (or (not decknix--sidebar-sessions-hide-unknown)
-                         workspace))
+                     ;; unknown-workspace filter (#139: also drops
+                     ;; rows whose workspace dir vanished from disk)
+                     (decknix--sidebar-session-workspace-visible-p
+                      workspace))
                 (push (list name workspace conv-key latest modified
                             (and live-p t))
                       result)
@@ -1770,7 +1793,7 @@ Shows result in the echo area and triggers a hub refresh on success."
                     (not (string= (buffer-name (window-buffer win))
                                   (or (bound-and-true-p
                                        agent-shell-workspace-sidebar-buffer-name)
-                                      "*agent-shell-sidebar*"))))
+                                      "*Agent Sidebar*"))))
            (setq target win)))
        nil nil)
       (when target
@@ -1875,10 +1898,10 @@ when non-nil, names a variable holding the `ready-for-review' filter
 state — enabling M-r as an additional live toggle.
 
 M-m toggles MENTION-ONLY-VAR; M-r (when enabled) toggles READY-ONLY-VAR;
-M-b toggles `decknix--hub-show-bots'; M-s toggles
-`decknix--hub-requests-sort-reverse'.  Each aborts the current
-completing-read and returns the sentinel symbol `retry' so the caller
-can rebuild ENTRIES and re-invoke this function.
+M-b cycles `decknix--hub-show-bots' (hide → show → mentioned → hide);
+M-s toggles `decknix--hub-requests-sort-reverse'.  Each aborts the
+current completing-read and returns the sentinel symbol `retry' so the
+caller can rebuild ENTRIES and re-invoke this function.
 
 C-SPC marks the current candidate via `embark-select' (multi-select).
 When selections exist on RET the function returns a `multi' result so
@@ -1904,7 +1927,10 @@ Returns one of:
                    decknix--hub-requests-sort-reverse))
          (hints (concat (if mo "@ " "")
                         (if ro "✓ " "")
-                        (if bots "🤖 " "")
+                        (pcase bots
+                          ('show      "🤖 ")
+                          ('mentioned "🤖@ ")
+                          (_          ""))
                         (if rev "⇅ " "")))
          (full-prompt (format "%s%s(M-m@ %sM-b🤖 M-s⇅ C-SPC✓) "
                               prompt hints
@@ -1937,9 +1963,12 @@ Returns one of:
          (bot-fn
           (lambda ()
             (interactive)
-            (when (boundp 'decknix--hub-show-bots)
-              (setq decknix--hub-show-bots
-                    (not decknix--hub-show-bots)))
+            (when (and (boundp 'decknix--hub-show-bots)
+                       (boundp 'decknix--hub-show-bots-cycle))
+              (let* ((cycle decknix--hub-show-bots-cycle)
+                     (rest (or (cdr (memq decknix--hub-show-bots cycle))
+                               cycle)))
+                (setq decknix--hub-show-bots (car rest))))
             (setq retry t)
             (abort-recursive-edit)))
          (sort-fn
@@ -3586,10 +3615,13 @@ cannot clobber the Previous Sessions snapshot."
             (setq decknix--hub-mention-filter
                   (decknix--hub-mention-filter-normalize
                    (alist-get 'mention-filter state))))
-          ;; Bot filter: restore toggle
+          ;; Bot filter: restore toggle (3-state cycle).
+          ;; Migrates legacy boolean state via normalize helper:
+          ;; `t' → `show'; anything unrecognised → `nil'.
           (when (boundp 'decknix--hub-show-bots)
             (setq decknix--hub-show-bots
-                  (alist-get 'show-bots state)))
+                  (decknix--hub-show-bots-normalize
+                   (alist-get 'show-bots state))))
           ;; Requests sort direction: restore toggle
           (when (boundp 'decknix--hub-requests-sort-reverse)
             (setq decknix--hub-requests-sort-reverse

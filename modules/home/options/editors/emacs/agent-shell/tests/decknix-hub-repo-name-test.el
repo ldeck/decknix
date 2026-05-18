@@ -19,7 +19,9 @@
 ;;   absent.
 ;;
 ;; The interactive cycler's `agent-shell-workspace-sidebar-refresh'
-;; callback is guarded by `(get-buffer "*agent-shell-sidebar*")'
+;; callback is guarded by
+;; `(get-buffer agent-shell-workspace-sidebar-buffer-name)' (the
+;; upstream buffer name is "*Agent Sidebar*")
 ;; in the module, so simply running tests in a fresh batch Emacs
 ;; (where that buffer never exists) suffices to skip the call.
 

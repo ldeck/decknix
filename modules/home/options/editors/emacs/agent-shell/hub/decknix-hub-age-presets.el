@@ -28,6 +28,7 @@
 
 ;; -- Forward declarations: defined elsewhere in agent-shell config --
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
+(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
 
 (defvar decknix--hub-age-filter nil
   "Current age filter threshold in seconds, or nil for no filter.
@@ -55,7 +56,7 @@ Use `decknix--hub-cycle-age-filter' to cycle through presets.")
          (pos (cl-position decknix--hub-age-filter keys :test #'equal))
          (next-pos (mod (1+ (or pos 0)) (length keys))))
     (setq decknix--hub-age-filter (nth next-pos keys))
-    (when (get-buffer "*agent-shell-sidebar*")
+    (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
       (agent-shell-workspace-sidebar-refresh))
     (message "Hub age filter: %s" (decknix--hub-age-filter-label))))
 

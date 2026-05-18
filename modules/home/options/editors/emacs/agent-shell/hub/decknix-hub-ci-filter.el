@@ -40,6 +40,7 @@
 ;; clean.
 (declare-function agent-shell-workspace-sidebar-refresh
                   "ext:decknix-agent-shell-workspace" ())
+(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
 
 ;; -- Hub: CI status filter --
 ;; Tracks which CI statuses are visible (pass, fail, running, unknown).
@@ -102,7 +103,7 @@ to restore all when the list has been emptied."
 
 (defun decknix--hub-ci-filter-refresh ()
   "Refresh the sidebar after a CI filter change."
-  (when (get-buffer "*agent-shell-sidebar*")
+  (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
     (agent-shell-workspace-sidebar-refresh)))
 
 (defun decknix--hub-ci-filter-toggle-pass ()

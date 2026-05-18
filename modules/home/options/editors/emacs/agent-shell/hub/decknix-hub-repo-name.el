@@ -37,6 +37,7 @@
 
 ;; -- Forward declaration: defined in upstream `agent-shell-workspace' --
 (declare-function agent-shell-workspace-sidebar-refresh "agent-shell-workspace")
+(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
 
 (defvar decknix--hub-repo-name-cap 'short
   "Cap for the repo segment of an ungrouped PR line.
@@ -63,7 +64,7 @@ Irrelevant when PRs are grouped under a repo sub-header.")
           ('medium 'none)
           ('none   'short)
           (_       'short)))
-  (when (get-buffer "*agent-shell-sidebar*")
+  (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
     (agent-shell-workspace-sidebar-refresh))
   (message "Repo name cap: %s" decknix--hub-repo-name-cap))
 
