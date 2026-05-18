@@ -53,7 +53,8 @@
                   "decknix-agent-shell-main")
 (declare-function decknix--agent-quickaction-start
                   "decknix-agent-shell-main-link"
-                  (name tags workspace command))
+                  (name tags workspace command &optional model))
+(defvar decknix-agent-review-pr-model)
 (declare-function decknix--batch-parse-buffer
                   "decknix-agent-batch-parse")
 (declare-function decknix--batch-build-command
@@ -103,7 +104,8 @@ and accumulates results."
                        #'decknix--agent-pr-detect-workspace)))
       (condition-case err
           (progn
-            (decknix--agent-quickaction-start name tags workspace command)
+            (decknix--agent-quickaction-start name tags workspace command
+                                              decknix-agent-review-pr-model)
             (push (list name "launched" nil) decknix--batch-launch-results))
         (error
          (push (list name "failed" (error-message-string err))

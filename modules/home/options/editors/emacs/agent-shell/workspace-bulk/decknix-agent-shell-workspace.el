@@ -99,7 +99,9 @@
 (declare-function decknix-agent-link-repo "ext:decknix-agent-shell-main")
 (declare-function decknix-agent-unlink-pr "ext:decknix-agent-shell-main")
 (declare-function decknix-agent-review "ext:decknix-agent-shell-main")
-(declare-function decknix--agent-quickaction-start "ext:decknix-agent-shell-main")
+(declare-function decknix--agent-quickaction-start "ext:decknix-agent-shell-main"
+                  (name tags workspace command &optional model))
+(defvar decknix-agent-review-pr-model)
 (declare-function decknix--agent-conversation-set-hidden "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-conversation-key-for-session "decknix-agent-conv-resolve")
 (declare-function decknix--agent-tags-for-conv-key "ext:decknix-agent-shell-main")
@@ -1392,7 +1394,8 @@ preventing extra splits when called from the sidebar."
              (main (window-main-window (selected-frame))))
         (when (and main (window-live-p main))
           (select-window main))
-        (decknix--agent-quickaction-start name tags workspace command)
+        (decknix--agent-quickaction-start name tags workspace command
+                                          decknix-agent-review-pr-model)
         (message "Starting review: %s/%s#%s" owner repo number)))))
 
 ;; PR B.51: `decknix--hub-review-ready-requests' and
@@ -1570,7 +1573,8 @@ the review appears side-by-side with the current buffer."
                 agent-shell-display-action)))
         (when (and new-win (window-live-p new-win))
           (select-window new-win))
-        (decknix--agent-quickaction-start name tags workspace command)
+        (decknix--agent-quickaction-start name tags workspace command
+                                          decknix-agent-review-pr-model)
         (message "Starting review (split): %s/%s#%s"
                  owner repo number)))))
 

@@ -96,6 +96,16 @@
 (declare-function decknix--agent-current-conv-key
                   "decknix-agent-buffer-lookup")
 
+;; Per-conversation model override (`agent/decknix-agent-session-model').
+;; The quickaction primitive persists MODEL against the freshly-created
+;; conv-key so subsequent resumes pass `--model <id>' to auggie via
+;; `decknix--resume-command-build', keeping the session on the pinned
+;; model across restarts.
+(declare-function decknix--agent-session-save-model-for-conv-key
+                  "decknix-agent-session-model" (conv-key model-id))
+(declare-function decknix--agent-conversation-key
+                  "decknix-agent-conv-resolve" (first-message))
+
 ;; Conversation / link / workspace metadata (carved).
 (declare-function decknix--agent-workspace-for-conv-key
                   "decknix-agent-session-workspace" (conv-key))
@@ -140,13 +150,33 @@
 (defvar agent-shell-workspace-sidebar-buffer-name)
 
 
+;; -- User-tunable quickaction defaults --
+
+(defvar decknix-agent-review-pr-model nil
+  "Auggie model id to pin for `/review-service-pr' sessions.
+When non-nil (e.g. \"prism-a\", \"opus4.7\"), every PR-review
+quickaction passes `--model <id>' to auggie and persists the choice
+against the new conversation key so resumes continue on the same
+model.  When nil (default), the framework default from
+`~/.augment/settings.json' (see `decknix.cli.auggie.settings.model')
+is used and no per-conversation override is recorded.")
+
+
 ;; -- Quickaction primitive --
 
-(defun decknix--agent-quickaction-start (name tags workspace command)
+(defun decknix--agent-quickaction-start (name tags workspace command
+                                              &optional model)
   "Start a quick-action session with NAME, TAGS, WORKSPACE, and auto-send COMMAND.
 Creates a new agent session, applies metadata, then subscribes to the
 `prompt-ready' event to send COMMAND as soon as the ACP session is
 fully established.  Returns immediately.
+Optional MODEL pins a specific auggie model id (e.g. \"prism-a\",
+\"opus4.7\", \"sonnet4.6\") for the new session: injects
+`--model MODEL' into the ACP command line and persists the choice
+against the freshly-derived conversation key so resumes via
+`decknix--resume-command-build' continue on the same model.  When
+nil (default), no `--model' flag is added and auggie falls back to
+the framework default in `~/.augment/settings.json'.
 When invoked from a dedicated or side window (e.g., the sidebar), the
 new session is displayed in the frame's main window instead of
 replacing the caller, preserving the sidebar.
@@ -174,8 +204,12 @@ Split below per pane); the default selection lands on
           (decknix--quickaction-target-window
            cur-is-sidebar cur (window-main-window (selected-frame))))
          (before-buffers (buffer-list))
+         (model-args (when (and (stringp model)
+                                 (not (string-empty-p model)))
+                        (list "--model" model)))
          (augmented-cmd
           (append agent-shell-auggie-acp-command
+                  model-args
                   (list "--workspace-root" workspace)))
          (config
           (let ((base (agent-shell-auggie-make-agent-config)))
@@ -243,6 +277,19 @@ Split below per pane); the default selection lands on
     (setq decknix--agent-session-cache-time 0)
     (decknix--agent-session-new-post-create
      before-buffers name tags workspace command)
+    ;; Pin the per-conversation model override so subsequent resumes
+    ;; pass `--model MODEL' via `decknix--resume-command-build'.  The
+    ;; conv-key is derived deterministically from COMMAND (the first
+    ;; user message), matching the immediate-flush branch in
+    ;; `decknix--agent-session-new-post-create'.
+    (when (and (stringp model)
+               (not (string-empty-p model))
+               (stringp command)
+               (not (string-empty-p command)))
+      (let ((conv-key (decknix--agent-conversation-key command)))
+        (when conv-key
+          (decknix--agent-session-save-model-for-conv-key
+           conv-key model))))
     ;; Find the newly created shell buffer and subscribe to prompt-ready.
     ;; agent-shell-start creates the buffer synchronously (mode-hook fires
     ;; before it returns), so find-new-shell-buffer works immediately.
@@ -302,7 +349,8 @@ looks like a PR URL) and workspace (defaulting to current project)."
            (name (read-string (format "Session name [%s]: " name)
                               nil nil name))
            (command (format "/review-service-pr %s" url)))
-      (decknix--agent-quickaction-start name tags workspace command)
+      (decknix--agent-quickaction-start name tags workspace command
+                                        decknix-agent-review-pr-model)
       (message "Starting review: %s/%s#%s" owner repo number))))
 
 
