@@ -68,7 +68,7 @@ DEDICATED-P is `(window-dedicated-p WIN)';
 BUFFER-NAME is `(buffer-name (window-buffer WIN))';
 SIDEBAR-NAME is the configured sidebar buffer name (typically
 `agent-shell-workspace-sidebar-buffer-name' or the literal
-`*agent-shell-sidebar*').
+`*Agent Sidebar*').
 
 The predicate is true when ANY of three signals fires:
   * SIDE-PARAM is non-nil (it's a side window)

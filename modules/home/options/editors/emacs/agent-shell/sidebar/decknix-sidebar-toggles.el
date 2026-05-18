@@ -49,8 +49,17 @@ transient.")
 
 (defvar decknix--sidebar-sessions-hide-unknown nil
   "When non-nil, hide saved sessions whose workspace can't be resolved.
-These render under the \"unknown\" workspace group today.  Toggle
-with `U' in the Toggles transient.")
+Two failure modes are folded together (#139):
+- `unresolved' -- the session JSON lacks a workspace field, or the
+  workspace conv-key doesn't map to a known directory (rendered
+  under the \"unknown\" workspace group today).
+- `vanished'   -- the workspace path resolved fine but the directory
+  no longer exists on disk (e.g. a `git worktree remove' cleaned
+  it up after the session was archived).
+
+Both are treated the same: the row is dropped so the Sessions list
+only carries entries the user can actually open.  Toggle with `U'
+in the Toggles transient.")
 
 (defvar decknix--hub-show-saved-sessions t
   "When non-nil (default), the saved Sessions block is rendered.
@@ -97,14 +106,29 @@ Live section above is then the only place they appear)."
   (message "Sessions: live-backed rows %s"
            (if decknix--sidebar-sessions-hide-live "hidden" "dimmed")))
 
+(defun decknix--sidebar-session-workspace-visible-p (workspace)
+  "Return non-nil if WORKSPACE passes the unknown-ws filter (#139).
+When `decknix--sidebar-sessions-hide-unknown' is nil, every
+WORKSPACE is visible (including unresolved and vanished).  When
+the toggle is on, WORKSPACE must be both non-nil and refer to a
+directory that currently exists on disk (`file-directory-p').
+
+A WORKSPACE that points at a path that no longer exists -- e.g.
+a worktree the user removed via `git worktree remove' after the
+session was archived -- is treated the same as an unresolved
+workspace and dropped from the saved Sessions list."
+  (or (not decknix--sidebar-sessions-hide-unknown)
+      (and workspace
+           (file-directory-p workspace))))
+
 (defun decknix-sidebar-toggle-sessions-hide-unknown ()
-  "Toggle whether sessions with unresolved workspace are hidden."
+  "Toggle whether sessions with unresolved or vanished workspace are hidden."
   (interactive)
   (setq decknix--sidebar-sessions-hide-unknown
         (not decknix--sidebar-sessions-hide-unknown))
   (when (fboundp 'agent-shell-workspace-sidebar-refresh)
     (agent-shell-workspace-sidebar-refresh))
-  (message "Sessions: unknown-workspace rows %s"
+  (message "Sessions: unresolved/vanished workspace rows %s"
            (if decknix--sidebar-sessions-hide-unknown "hidden" "shown")))
 
 (defun decknix-sidebar-toggle-saved-sessions ()

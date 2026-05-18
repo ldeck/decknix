@@ -91,6 +91,35 @@
       (should (= 2 (decknix-test-stub-call-count
                     'agent-shell-workspace-sidebar-refresh))))))
 
+;; -- session-workspace-visible-p (#139) ---------------------------
+
+(ert-deftest decknix-sidebar-toggles/workspace-visible-toggle-off-shows-everything ()
+  "When toggle is off, every workspace passes -- including nil + missing dirs."
+  (let ((decknix--sidebar-sessions-hide-unknown nil))
+    (should (decknix--sidebar-session-workspace-visible-p nil))
+    (should (decknix--sidebar-session-workspace-visible-p "/no/such/dir/anywhere"))
+    (should (decknix--sidebar-session-workspace-visible-p
+             temporary-file-directory))))
+
+(ert-deftest decknix-sidebar-toggles/workspace-visible-toggle-on-hides-nil ()
+  "When toggle is on, nil workspace (unresolved) is dropped."
+  (let ((decknix--sidebar-sessions-hide-unknown t))
+    (should-not (decknix--sidebar-session-workspace-visible-p nil))))
+
+(ert-deftest decknix-sidebar-toggles/workspace-visible-toggle-on-hides-vanished ()
+  "When toggle is on, a workspace path that no longer exists is dropped (#139)."
+  (let* ((decknix--sidebar-sessions-hide-unknown t)
+         (gone (make-temp-file "decknix-vanished-ws" t)))
+    ;; Tear down so the path resolves to a non-existent directory.
+    (delete-directory gone t)
+    (should-not (decknix--sidebar-session-workspace-visible-p gone))))
+
+(ert-deftest decknix-sidebar-toggles/workspace-visible-toggle-on-keeps-existing ()
+  "When toggle is on, an existing directory is kept."
+  (let ((decknix--sidebar-sessions-hide-unknown t))
+    (should (decknix--sidebar-session-workspace-visible-p
+             temporary-file-directory))))
+
 ;; -- toggle-saved-sessions ----------------------------------------
 
 (ert-deftest decknix-sidebar-toggles/toggle-saved-sessions-flips-and-refreshes ()
