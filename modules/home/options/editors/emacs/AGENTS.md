@@ -159,6 +159,19 @@ Conventions:
    in a sibling tmp dir for the test run, so they never enter
    `installPhase' or get native-compiled into the daemon's
    load-path.
+5. **Sidebar buffer name comes from upstream** — Carved modules that
+   refresh the workspace sidebar (`agent-shell-workspace-sidebar-refresh`)
+   must consult the upstream variable `agent-shell-workspace-sidebar-buffer-name`,
+   NOT the literal `"*Agent Sidebar*"`.  Each carved module that
+   guards a refresh on buffer existence forward-declares the variable
+   with an initial value matching upstream so test runs (which don't
+   load `agent-shell-workspace`) see a bound symbol:
+   `(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")`.
+   At daemon load time the upstream defvar runs first (hard dep) and
+   the carved defvar is a no-op; values are identical so they can't
+   drift.  Skipping the variable lookup (using the literal) silently
+   breaks live toggle refresh because the actual buffer name has a
+   capital `A` / space / capital `S` — easy to mis-spell.
 
 ## Package Sourcing
 
@@ -290,7 +303,10 @@ The `decknix--context-update-header` function delegates to the unified header
   - `M-m` — @-mention only
   - `M-r` — ready-for-review only (CI passing, not conflicting, not
     draft, not yet reviewed by me) — replaces the old `R` key
-  - `M-b` — show bot-authored PRs (dependabot/renovate)
+  - `M-b` — cycle bot-authored PRs (hide → show → mentioned → hide,
+    where `mentioned` means I am directly @-mentioned/requested OR my
+    team is requested without any other individuals tagged, so
+    team-noise that someone else is already on stays hidden)
   - `M-s` — reverse sort
   - `C-SPC` — multi-select (launch reviews for every marked item)
   When a toggle filters the list to zero items, the picker stays open
@@ -458,7 +474,10 @@ The `decknix--context-update-header` function delegates to the unified header
   - **Global**: `O` org filter, `W` width
   - **Requests**: `@` mention, `F` age, `b` 🤖 bot-review (hide PRs where
     a bot posted last — default on, since a fix is likely needed before
-    approving sticks), `B` bot-authors (dependabot/renovate PRs),
+    approving sticks), `B` bot-authors (cycles hide → show → mention,
+    where `mention` keeps bot PRs only when I am directly @-mentioned
+    or my team is requested without other individuals tagged —
+    filters out team-noise where someone else is already handling it),
     `C` ci, `c` 💬 comments (hide PRs whose latest non-bot activity is
     someone else), `M` ↩ replies-to-me (show only PRs where a human
     replied in a thread I participated in), `s` sort ⇅ (flip
@@ -475,19 +494,26 @@ The `decknix--context-update-header` function delegates to the unified header
     shows `[off]`, `[N]` when active, or `[N pending]` when waiting
     for more live buffers; capped at upstream's 8)
   - **WIP**: `L` hide linked (PRs that are already live as sessions),
-    `P` pipeline/deploy indicators, `r` ↩ replies-to-me (parallel to
-    the Requests triad, independent state because WIP is about my own
-    PRs — I usually want to see 🤖 so I can push a fix), `n` 💬 comments,
-    `u` 🤖 bot-review
+    `m` stale (hide MERGED/CLOSED rows — default on, since the row
+    has nothing actionable left; flip off when auditing what to
+    clean up on disk, #137 — terminal rows surfaced by the toggle-off
+    path carry a `⊘` stale badge prefixed to the title and dimmed
+    title face so they read as reference-only at a glance, #138),
+    `P` pipeline/deploy indicators, `r` ↩ replies-to-me (parallel
+    to the Requests triad, independent state because WIP is about
+    my own PRs — I usually want to see 🤖 so I can push a fix),
+    `n` 💬 comments, `u` 🤖 bot-review
   - **Sessions**: `a` age filter (cycles `all/1d/3d/7d/14d/30d`,
     shares presets with Requests `F`), `V` live-backed (default `[dim]`
     — saved rows whose conversation is currently live render shadowed
     as context; flip to `[hide]` to drop them entirely so Live owns
     them), `h` saved (hide the entire Saved Sessions section — Live
     / Previous / Requests / WIP remain), `U` unknown-ws (hide saved
-    rows whose workspace can't be resolved). Active filters surface
-    in the `Sessions (N)` heading as a `[age: Nd]` badge; filter
-    state persists via `decknix--sidebar-state-file`.
+    rows whose workspace can't be resolved OR whose workspace
+    directory has been deleted from disk — e.g. a `git worktree
+    remove` that ran after the session was archived, #139). Active
+    filters surface in the `Sessions (N)` heading as a `[age: Nd]`
+    badge; filter state persists via `decknix--sidebar-state-file`.
 - All toggles are advertised in the sidebar footer under a `Toggles`
   heading (press `K` to hide).  Footer items are sorted by the same
   short labels (keys omitted — press `T` for the interactive transient).
@@ -603,7 +629,8 @@ workspace sidebar surface which sessions need attention.
 | `C-c A j` | Jump to next session needing attention; `C-u` to pick, `C-u C-u` dashboard |
 | `C-c A v` | Review last exchange (inline review buffer); `C-u` for full history |
 | `C-c A T` | Tags — global (list/filter conversations, rename, delete, cleanup) |
-| `C-c T` | Tags — conversation-scoped (show, add, remove) — in-buffer only (#78) |
+| `C-c s t` | Tags — conversation-scoped (show, add, remove) — in-buffer only (#78) |
+| `C-c W` | Sidebar action transient — open Navigate / Quick / Actions / Toggles (`T`) from any agent-shell buffer |
 | `C-c D` | Deckmacs — framework management (reload, status, diff, log) (#85) |
 | `C-c D r` | Reload default.el from current Nix profile; `C-u` to force |
 | `C-c D s` | Show framework status (loaded/current store paths, staleness) |

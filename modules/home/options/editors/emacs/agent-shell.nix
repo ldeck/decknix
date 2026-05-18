@@ -518,6 +518,24 @@ let
     ];
   };
 
+  # Issue #137: WIP "hide terminal" toggle.  Carved out alongside
+  # `decknix-hub-wip-link-filter' since both are single-purpose WIP
+  # filters with the same hide/show + sidebar-refresh-guard contract.
+  # Owns the toggle state defvar (`decknix--hub-wip-hide-terminal',
+  # default `t' so MERGED / CLOSED rows are hidden by default), the
+  # pure visibility predicate consumed by the WIP renderer, and the
+  # interactive flipper bound to the `m' suffix in the WIP section
+  # of the sidebar Toggles transient (the transient suffix itself
+  # stays in hub-bulk per AGENTS.md Rule 2).
+  decknix-hub-wip-terminal-filter-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-wip-terminal-filter";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-wip-terminal-filter-test.el"
+    ];
+  };
+
   decknix-hub-mention-bot-el = mkEmacsTestedPackage {
     pname = "decknix-hub-mention-bot";
     src = ./agent-shell/hub;
@@ -2069,6 +2087,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-ready-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-repo-name-el)
         ++ (optional cfg.hub.enable decknix-hub-wip-link-filter-el)
+        ++ (optional cfg.hub.enable decknix-hub-wip-terminal-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-mention-bot-el)
         ++ (optional cfg.hub.enable decknix-hub-worktree-parse-el)
         ++ (optional cfg.hub.enable decknix-hub-icons-el)
@@ -3101,9 +3120,9 @@ cannot close over the surrounding `let' binding."
             "C-c k"   "interrupt…"
             "C-c j"   "jump pending"
             "C-c w"   "workspace"
+            "C-c W"   "sidebar"
             "C-c s"   "sessions"
-            "C-c i"   "context"
-            "C-c T"   "tags")
+            "C-c i"   "context")
           (which-key-add-keymap-based-replacements decknix-agent-compose-interrupt-map
             "k"   "interrupt agent"
             "C-c" "interrupt+submit"))
@@ -4160,10 +4179,15 @@ no editable element is focused / the clipboard is empty."
         ;;     `decknix--hub-mention-visible-p'      (combined predicate)
         ;;
         ;;   bot:
-        ;;     `decknix--hub-show-bots'              (defvar, override)
+        ;;     `decknix--hub-show-bots'              (defvar, tri-state symbol)
+        ;;     `decknix--hub-show-bots-cycle'        (defvar, cycle order)
+        ;;     `decknix--hub-show-bots-normalize'    (legacy boolean migration)
+        ;;     `decknix--hub-show-bots-label'        (state -> label)
         ;;     `decknix--hub-bot-patterns'           (defvar, regexps)
         ;;     `decknix--hub-bot-author-p'           (regexp predicate)
-        ;;     `decknix--hub-bot-visible-p'          (item visibility)
+        ;;     `decknix--hub-item-others-requested-p' (alist gate)
+        ;;     `decknix--hub-item-bot-mentioned-p'   (me OR team-without-others)
+        ;;     `decknix--hub-bot-visible-p'          (item visibility, tri-state)
         ;;
         ;; The two interactive sidebar mutators below stay in the
         ;; heredoc — they refresh the sidebar buffer (a heredoc-side
@@ -4385,6 +4409,24 @@ no editable element is focused / the clipboard is empty."
         (defvar decknix--hub-wip-hide-linked)
         (declare-function decknix--hub-toggle-wip-hide-linked
                           "decknix-hub-wip-link-filter")
+
+        ;; -- WIP "hide terminal" toggle (#137) --
+        ;;
+        ;; Sidebar-clutter relief: hide WIP rows whose PR is
+        ;; MERGED / CLOSED by default so the section only carries
+        ;; rows the user can act on.  Mirrors the hide-linked
+        ;; cluster above -- defvar + pure predicate + interactive
+        ;; flipper bound to the `m' suffix in the WIP section of
+        ;; the sidebar Toggles transient (the transient suffix
+        ;; itself stays in hub-bulk per Rule 2).
+        (require 'decknix-hub-wip-terminal-filter)
+        (defvar decknix--hub-wip-hide-terminal)
+        (declare-function decknix--hub-wip-terminal-visible-p
+                          "decknix-hub-wip-terminal-filter" (pr))
+        (declare-function decknix--hub-wip-pr-terminal-p
+                          "decknix-hub-wip-terminal-filter" (pr))
+        (declare-function decknix--hub-toggle-wip-hide-terminal
+                          "decknix-hub-wip-terminal-filter")
 
 
 
@@ -4614,8 +4656,9 @@ no editable element is focused / the clipboard is empty."
                     (local-set-key (kbd "C-c E") 'decknix-agent-compose-interrupt)
                     (local-set-key (kbd "C-c ?") decknix-agent-help-map)
                     (local-set-key (kbd "C-c r") 'agent-shell-rename-buffer)
-                    ;; C-c s — session sub-prefix
-                    (let ((map (make-sparse-keymap)))
+                    ;; C-c s — session sub-prefix (includes C-c s t — session-scoped tags)
+                    (let ((map (make-sparse-keymap))
+                          (tag-map (make-sparse-keymap)))
                       (define-key map (kbd "s") 'decknix-agent-session-picker)
                       (define-key map (kbd "n") 'decknix-agent-session-new)
                       (define-key map (kbd "q") 'decknix-agent-session-quit)
@@ -4635,6 +4678,11 @@ no editable element is focused / the clipboard is empty."
                       (define-key map (kbd "l") 'decknix-agent-link-pr)
                       (define-key map (kbd "L") 'decknix-agent-link-repo)
                       (define-key map (kbd "u") 'decknix-agent-unlink-pr)
+                      ;; C-c s t — session-scoped tags sub-prefix
+                      (define-key tag-map (kbd "l") 'decknix-agent-tag-show)
+                      (define-key tag-map (kbd "a") 'decknix-agent-tag-add)
+                      (define-key tag-map (kbd "r") 'decknix-agent-tag-remove)
+                      (define-key map (kbd "t") tag-map)
                       (local-set-key (kbd "C-c s") map))
                     ;; which-key labels for C-c s session sub-prefix
                     (when (fboundp 'which-key-add-key-based-replacements)
@@ -4652,12 +4700,23 @@ no editable element is focused / the clipboard is empty."
                         "C-c s d" "toggle ID display"
                         "C-c s l" "link PR"
                         "C-c s L" "link repo+branch"
-                        "C-c s u" "unlink PR / repo"))
+                        "C-c s u" "unlink PR / repo"
+                        "C-c s t"   "tags…"
+                        "C-c s t l" "list / filter by tag"
+                        "C-c s t a" "add tag"
+                        "C-c s t r" "remove tag"))
                     ;; Conditional bindings (may not be loaded)
                     (when (fboundp 'agent-shell-manager-toggle)
                       (local-set-key (kbd "C-c m") 'agent-shell-manager-toggle))
                     (when (fboundp 'agent-shell-workspace-toggle)
                       (local-set-key (kbd "C-c w") 'agent-shell-workspace-toggle))
+                    ;; C-c W — open the sidebar action transient without
+                    ;; leaving the agent-shell buffer.  The parent transient
+                    ;; exposes Navigate / Quick / Actions and `T' for the
+                    ;; toggles sub-transient, so a single binding covers
+                    ;; every sidebar action from any agent-shell buffer.
+                    (when (fboundp 'decknix-sidebar-transient)
+                      (local-set-key (kbd "C-c W") 'decknix-sidebar-transient))
                     (when (fboundp 'agent-shell-attention-jump)
                       (local-set-key (kbd "C-c j") 'agent-shell-attention-jump))
                     ;; C-c i — context sub-prefix in-buffer
@@ -4677,25 +4736,19 @@ no editable element is focused / the clipboard is empty."
                       (decknix--context-restore)
                       (decknix--context-full-refresh)
                       (decknix--context-start-ci-polling))
-                    ;; C-c t — template sub-prefix in-buffer
-                    (when (fboundp 'yas-insert-snippet)
-                      (let ((map (make-sparse-keymap)))
-                        (define-key map (kbd "t") 'yas-insert-snippet)
-                        (define-key map (kbd "n") 'yas-new-snippet)
-                        (define-key map (kbd "e") 'yas-visit-snippet-file)
-                        (local-set-key (kbd "C-c t") map)))
+                    ;; In-buffer template prefix retired — `C-c Y' (doom
+                    ;; snippet prefix) already covers `yas-insert-snippet',
+                    ;; `yas-new-snippet', and `yas-visit-snippet-file'
+                    ;; globally.  The global `C-c A t' agent template map
+                    ;; is preserved for namespaced access.
                     ;; C-c c — commands sub-prefix in-buffer
                     (let ((map (make-sparse-keymap)))
                       (define-key map (kbd "c") 'decknix-agent-command-run)
                       (define-key map (kbd "n") 'decknix-agent-command-new)
                       (define-key map (kbd "e") 'decknix-agent-command-edit)
                       (local-set-key (kbd "C-c c") map))
-                    ;; C-c T — session-scoped tags sub-prefix in-buffer
-                    (let ((map (make-sparse-keymap)))
-                      (define-key map (kbd "l") 'decknix-agent-tag-show)      ; List this session's tags
-                      (define-key map (kbd "a") 'decknix-agent-tag-add)       ; Add tag (create or select)
-                      (define-key map (kbd "r") 'decknix-agent-tag-remove)    ; Remove tag
-                      (local-set-key (kbd "C-c T") map))
+                    ;; Session-scoped tags now live under `C-c s t' (a/l/r);
+                    ;; see the C-c s sub-prefix block above.
                     ;; Unified header-line: status + tags + workspace + context
                     (decknix--header-update)
                     (decknix--header-start-timer)
