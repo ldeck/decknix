@@ -42,20 +42,24 @@ in {
     settings = {
       model = mkOption {
         type = types.nullOr types.str;
-        default = "opus4.7";
-        example = "sonnet4.6";
+        default = "prism-a";
+        example = "opus4.7";
         description = ''
           Default model for new auggie sessions. Written to the
           `model` key of `~/.augment/settings.json`; auggie uses
           this when no `--model` flag is supplied on the command
           line. Run `auggie model list` to see available ids
-          (e.g. `opus4.7`, `sonnet4.6`).
+          (e.g. `prism-a`, `opus4.7`, `sonnet4.6`, `haiku4.5`).
 
-          The framework default tracks the current recommended
-          flagship model (bumped as new releases land). Org and
-          personal layers can override via plain assignment or
-          `lib.mkDefault`; set to `null` to omit the key entirely
-          and fall back to auggie's own built-in default.
+          The framework default is `prism-a` — Augment's hybrid
+          router that mixes Opus 4.7, Sonnet 4.6, and Gemini Flash
+          per turn, landing around 28% cheaper than uniform Opus
+          4.7 on review-shaped workloads without losing depth
+          where it matters. Org and personal layers can override
+          via plain assignment or `lib.mkDefault` (`opus4.7` is
+          the right choice for architecture / planning work; set
+          to `null` to omit the key entirely and fall back to
+          auggie's own built-in default).
 
           Per-session overrides (set via `C-c C-v` inside an
           agent-shell buffer) are persisted separately in
