@@ -1,10 +1,11 @@
 use clap::{Parser, Subcommand, CommandFactory};
-use serde::Deserialize;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
 // 1. Static Core Commands
 #[derive(Parser)]
@@ -34,6 +35,11 @@ enum Commands {
         #[arg(long, value_name = "INPUT=PATH")]
         r#override: Vec<String>,
     },
+    /// Manage git worktrees
+    Wt {
+        #[command(subcommand)]
+        action: WtAction,
+    },
     Help {
         /// The command to look up
         subcommand: Option<String>,
@@ -41,6 +47,40 @@ enum Commands {
     // This variant catches unknown commands to check extensions
     #[command(external_subcommand)]
     External(Vec<String>),
+}
+
+#[derive(Subcommand)]
+enum WtAction {
+    /// List all worktrees from the registry
+    List {
+        /// Filter by owner/repo
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Re-probe worktrees and update the cache
+    Refresh {
+        /// Specific repo to refresh
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Remove dead entries and prune git worktrees
+    Prune {
+        /// Specific repo to prune
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Sweep orphan fork remotes
+    CleanForkRemotes {
+        /// Don't actually delete
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Dump the registry
+    Registry {
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Expand ~ and validate a directory path, returning a canonical path.
@@ -108,10 +148,14 @@ fn load_merged_extensions() -> ExtensionMap {
 }
 
 // 1. Define the styles
+#[allow(dead_code)]
 enum Style {
     B, // bold
     U, // underline
     I, // Italic
+    Dim,
+    Cyan,
+    Green,
 }
 
 fn styled_str(text: &str, styles: &[Style]) -> String {
@@ -121,10 +165,275 @@ fn styled_str(text: &str, styles: &[Style]) -> String {
             Style::B => codes.push_str("\x1b[1m"),
             Style::U => codes.push_str("\x1b[4m"),
             Style::I => codes.push_str("\x1b[3m"),
+            Style::Dim => codes.push_str("\x1b[2m"),
+            Style::Cyan => codes.push_str("\x1b[36m"),
+            Style::Green => codes.push_str("\x1b[32m"),
         }
     }
     // apply codes, then text, then reset everything at the end
     format!("{}{}\x1b[0m", codes, text)
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WorktreeEntry {
+    repo: String,
+    primary: PathBuf,
+    worktrees: Vec<(String, PathBuf)>,
+    ts: f64,
+    stale: bool,
+}
+
+impl WorktreeEntry {
+    fn to_value(&self) -> lexpr::Value {
+        let mut wt_list = Vec::new();
+        for (branch, path) in &self.worktrees {
+            wt_list.push(lexpr::Value::cons(
+                lexpr::Value::string(branch.clone()),
+                lexpr::Value::string(path.to_string_lossy().to_string())
+            ));
+        }
+        lexpr::Value::list(vec![
+            lexpr::Value::string(self.repo.clone()),
+            lexpr::Value::keyword("primary"),
+            lexpr::Value::string(self.primary.to_string_lossy().to_string()),
+            lexpr::Value::keyword("worktrees"),
+            lexpr::Value::list(wt_list),
+            lexpr::Value::keyword("ts"),
+            lexpr::Value::from(self.ts),
+            lexpr::Value::keyword("stale"),
+            if self.stale { lexpr::Value::symbol("t") } else { lexpr::Value::Nil },
+        ])
+    }
+}
+
+fn registry_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".config/decknix/hub/worktrees.el")
+}
+
+fn load_registry() -> anyhow::Result<Vec<WorktreeEntry>> {
+    let path = registry_path();
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(&path)?;
+    let sexp_str = content.lines()
+        .filter(|l| !l.trim_start().starts_with(";;"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if sexp_str.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let value = lexpr::from_str(&sexp_str)?;
+    let mut entries = Vec::new();
+
+    if let Some(list) = value.list_iter() {
+        for entry_val in list {
+            if let Some(items) = entry_val.list_iter() {
+                let items: Vec<_> = items.collect();
+                if items.is_empty() { continue; }
+                let repo = items[0].as_str().unwrap_or_default().to_string();
+                let mut primary = PathBuf::new();
+                let mut worktrees = Vec::new();
+                let mut ts = 0.0;
+                let mut stale = false;
+
+                let mut i = 1;
+                while i + 1 < items.len() {
+                    let key_opt = items[i].as_symbol().or_else(|| items[i].as_keyword());
+                    if let Some(key) = key_opt {
+                        let val = items[i+1];
+                        match key {
+                            "primary" | ":primary" => primary = PathBuf::from(val.as_str().unwrap_or_default()),
+                            "ts" | ":ts" => ts = val.as_f64().unwrap_or_default(),
+                            "stale" | ":stale" => stale = !val.is_nil() && val.as_symbol() != Some("nil"),
+                            "worktrees" | ":worktrees" => {
+                                if let Some(wt_list) = val.list_iter() {
+                                    for wt_pair in wt_list {
+                                        if let Some(pair) = wt_pair.as_cons() {
+                                            let branch = pair.car().as_str().unwrap_or_default().to_string();
+                                            let path = PathBuf::from(pair.cdr().as_str().unwrap_or_default());
+                                            worktrees.push((branch, path));
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    i += 2;
+                }
+                entries.push(WorktreeEntry { repo, primary, worktrees, ts, stale });
+            }
+        }
+    }
+    Ok(entries)
+}
+
+fn save_registry(entries: &[WorktreeEntry]) -> anyhow::Result<()> {
+    let path = registry_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let sexps: Vec<_> = entries.iter().map(|e| e.to_value()).collect();
+    let value = lexpr::Value::list(sexps);
+
+    let mut f = fs::File::create(&path)?;
+    writeln!(f, ";; Auto-generated worktree registry — do not edit")?;
+    writeln!(f, ";; Format: ((\"owner/repo\" :primary PATH :worktrees ((BRANCH . PATH) ...) :ts FLOAT :stale BOOL) ...)")?;
+    lexpr::to_writer_custom(&mut f, &value, lexpr::print::Options::elisp())?;
+    writeln!(f)?;
+
+    let _ = Command::new("touch").arg(&path).status();
+    Ok(())
+}
+
+fn with_lock<F, R>(f: F) -> anyhow::Result<R>
+where F: FnOnce() -> anyhow::Result<R> {
+    let lock_path = dirs::home_dir().unwrap_or_default().join(".config/decknix/hub/worktrees.lock");
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(&lock_path)?;
+
+    let fd = std::os::unix::io::AsRawFd::as_raw_fd(&file);
+    let mut retries = 0;
+    loop {
+        let res = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if res == 0 { break; }
+        if retries >= 10 {
+            anyhow::bail!("Lock contention on worktrees.lock; wait timeout (1s)");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        retries += 1;
+    }
+
+    let result = f();
+    unsafe { libc::flock(fd, libc::LOCK_UN) };
+    result
+}
+
+fn get_git_root(path: &Path) -> Option<PathBuf> {
+    if !path.exists() { return None; }
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(path)
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Some(PathBuf::from(s));
+    }
+    None
+}
+
+fn get_repo_identity(path: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(path)
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let path_part = if let Some((_, p)) = url.split_once(':') {
+            p
+        } else if let Some(p) = url.strip_prefix("https://") {
+            p.split_once('/').map(|(_, rest)| rest).unwrap_or(p)
+        } else {
+            &url
+        };
+        let parts: Vec<&str> = path_part.trim_end_matches(".git").split('/').collect();
+        if parts.len() >= 2 {
+            let repo = format!("{}/{}", parts[parts.len()-2], parts[parts.len()-1]);
+            return Some(repo.to_lowercase());
+        }
+    }
+    None
+}
+
+fn list_worktrees(path: &Path) -> anyhow::Result<Vec<(String, PathBuf)>> {
+    let output = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(path)
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!("git worktree list failed");
+    }
+    let s = String::from_utf8_lossy(&output.stdout);
+    let mut wts = Vec::new();
+    let mut curr_path = PathBuf::new();
+    for line in s.lines() {
+        if line.starts_with("worktree ") {
+            curr_path = PathBuf::from(&line[9..]);
+        } else if line.starts_with("branch ") {
+            let branch = line[7..].trim_start_matches("refs/heads/").to_string();
+            wts.push((branch, curr_path.clone()));
+        }
+    }
+    Ok(wts)
+}
+
+fn discover_clones(registry: &[WorktreeEntry]) -> anyhow::Result<HashSet<PathBuf>> {
+    let mut clones = HashSet::new();
+    for entry in registry {
+        if entry.primary.exists() {
+            clones.insert(entry.primary.clone());
+        }
+    }
+    let sessions_path = dirs::home_dir().unwrap_or_default().join(".config/decknix/agent-sessions.json");
+    if sessions_path.exists() {
+        if let Ok(content) = fs::read_to_string(&sessions_path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(convs) = json.get("conversations").and_then(|v| v.as_object()) {
+                    for conv in convs.values() {
+                        if let Some(ws) = conv.get("workspace").and_then(|v| v.as_str()) {
+                            let path = PathBuf::from(ws);
+                            if let Some(root) = get_git_root(&path) {
+                                clones.insert(root);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(clones)
+}
+
+fn clean_fork_remotes(dry_run: bool) -> anyhow::Result<()> {
+    let registry = load_registry()?;
+    for entry in registry {
+        if !entry.primary.exists() { continue; }
+        let output = Command::new("git").args(["remote"]).current_dir(&entry.primary).output()?;
+        let remotes: Vec<String> = String::from_utf8_lossy(&output.stdout).lines().map(|s| s.to_string()).collect();
+        let output = Command::new("git").args(["for-each-ref", "--format=%(refname:short) %(upstream:remotename)", "refs/heads/"]).current_dir(&entry.primary).output()?;
+        let mut tracked_remotes = HashSet::new();
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() == 2 { tracked_remotes.insert(parts[1].to_string()); }
+        }
+        for remote in remotes {
+            if remote == "origin" || remote == "upstream" { continue; }
+            if remote.starts_with("origin-") || remote.starts_with("pr/") {
+                if !tracked_remotes.contains(&remote) {
+                    if dry_run {
+                        println!("🔍 [{}] Would remove orphan remote: {}", entry.repo, remote);
+                    } else {
+                        println!("🗑️  [{}] Removing orphan remote: {}", entry.repo, remote);
+                        let _ = Command::new("git").args(["remote", "remove", &remote]).current_dir(&entry.primary).status();
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 // Help Printer
@@ -373,6 +682,114 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 None => print_extended_help(&extensions),
+            }
+        }
+        Some(Commands::Wt { action }) => {
+            match action {
+                WtAction::List { repo } => {
+                    let registry = load_registry()?;
+                    for entry in registry {
+                        if let Some(r) = &repo {
+                            if !entry.repo.contains(r) { continue; }
+                        }
+                        let stale_marker = if entry.stale { " [STALE]" } else { "" };
+                        println!("{} ({}){}", styled_str(&entry.repo, &[Style::B, Style::Cyan]), entry.primary.display(), stale_marker);
+                        for (branch, path) in &entry.worktrees {
+                            println!("  \u{2514}\u{2500} {} -> {}", styled_str(branch, &[Style::Dim]), path.display());
+                        }
+                    }
+                }
+                WtAction::Refresh { repo } => {
+                    with_lock(|| {
+                        let mut registry = load_registry()?;
+                        let clones = discover_clones(&registry)?;
+                        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs_f64();
+
+                        let mut found_any = false;
+                        for path in clones {
+                            if let Some(identity) = get_repo_identity(&path) {
+                                if let Some(r) = &repo {
+                                    if !identity.contains(r) { continue; }
+                                }
+                                found_any = true;
+                                let wts = list_worktrees(&path)?;
+                                if let Some(existing) = registry.iter_mut().find(|e| e.repo == identity) {
+                                    existing.worktrees = wts;
+                                    existing.ts = now;
+                                    existing.stale = false;
+                                    println!("\u{2705} Refreshed {}", identity);
+                                } else {
+                                    registry.push(WorktreeEntry {
+                                        repo: identity.clone(),
+                                        primary: path,
+                                        worktrees: wts,
+                                        ts: now,
+                                        stale: false,
+                                    });
+                                    println!("\u{2728} Discovered {}", identity);
+                                }
+                            }
+                        }
+
+                        // Mark entries as stale if they no longer exist on disk
+                        for entry in registry.iter_mut() {
+                            if !entry.primary.exists() {
+                                if !entry.stale {
+                                    println!("\u{26a0}\u{fe0f}  Marking stale: {}", entry.repo);
+                                    entry.stale = true;
+                                }
+                            }
+                        }
+
+                        save_registry(&registry)?;
+                        if !found_any && repo.is_some() {
+                            println!("\u{274c} No matches found for repo: {:?}", repo.unwrap());
+                        }
+                        Ok(())
+                    })?;
+                }
+                WtAction::Prune { repo } => {
+                    with_lock(|| {
+                        let mut registry = load_registry()?;
+                        let count_before = registry.len();
+                        registry.retain(|e| {
+                            if let Some(r) = &repo {
+                                if !e.repo.contains(r) { return true; }
+                            }
+                            if !e.primary.exists() {
+                                println!("\u{1f5d1}\u{fe0f}  Pruning registry entry: {}", e.repo);
+                                return false;
+                            }
+                            true
+                        });
+
+                        for entry in &registry {
+                            if let Some(r) = &repo {
+                                if !entry.repo.contains(r) { continue; }
+                            }
+                            println!("\u{267b}\u{fe0f}  Pruning git worktrees: {}", entry.repo);
+                            let _ = Command::new("git")
+                                .args(["worktree", "prune"])
+                                .current_dir(&entry.primary)
+                                .status();
+                        }
+
+                        save_registry(&registry)?;
+                        println!("\u{2705} Pruned {} entries", count_before - registry.len());
+                        Ok(())
+                    })?;
+                }
+                WtAction::CleanForkRemotes { dry_run } => {
+                    clean_fork_remotes(dry_run)?;
+                }
+                WtAction::Registry { json } => {
+                    if json {
+                        let registry = load_registry()?;
+                        println!("{}", serde_json::to_string_pretty(&registry)?);
+                    } else {
+                        println!("{}", registry_path().display());
+                    }
+                }
             }
         }
         Some(Commands::External(args)) => {

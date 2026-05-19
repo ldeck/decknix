@@ -51,7 +51,7 @@ A bare `wt` shim alias gets installed when
 | `wt cd BRANCH`                   | Print the worktree path so `cd "$(wt cd BRANCH)"` works in shells.            |
 | `wt status`                      | Combined `git status --porcelain=v2 --branch` for cwd worktree.               |
 | `wt prune [--repo R]`            | `git worktree prune` for one repo or all.                                     |
-| `wt clean-fork-remotes [--dry]`  | Sweep orphan fork remotes (Q9, mirrors `M-x decknix-clean-fork-remotes`).     |
+| `wt clean-fork-remotes [--dry-run]` | Sweep orphan fork remotes (Q9, mirrors `M-x decknix-clean-fork-remotes`).  |
 | `wt refresh [--repo R]`          | Force re-probe (bypass 60 s TTL); useful after external `git worktree add`.   |
 | `wt registry [--json]`           | Dump the registry; default elisp form, `--json` for shell consumers.          |
 

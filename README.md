@@ -67,6 +67,8 @@ decknix switch              # Apply configuration
 decknix switch --dry-run    # Build without activating
 decknix switch --dev        # Test local framework changes
 decknix update              # Update all flake inputs
+decknix wt list             # List worktrees in the registry
+decknix wt refresh          # Re-probe worktrees and update cache
 ec filename                 # Open file in Emacs
 ```
 
