@@ -72,8 +72,10 @@ impl Default for GitHubConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            // With GraphQL batching, N uncached PRs cost ~1 call/repo rather
+            // than N calls, so 60s is safe even with large review queues.
             reviews_interval_secs: 60,
-            wip_interval_secs: 120,
+            wip_interval_secs: 60,
             review_repos: vec![],
         }
     }
@@ -120,7 +122,7 @@ struct ReviewRequest {
     unresolved_threads: Option<u32>, // unresolved threads where last comment author != me
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct CheckDetail {
     name: String,
     conclusion: Option<String>, // "SUCCESS", "FAILURE", "ACTION_REQUIRED", etc.
@@ -128,7 +130,7 @@ struct CheckDetail {
     url: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct CiStatus {
     status: String, // "pass", "fail", "running", "pending"
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -258,9 +260,19 @@ async fn gh_json(args: &[&str]) -> Result<String, String> {
         .output()
         .await
         .map_err(|e| format!("gh exec error: {e}"))?;
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("gh error ({}): {}", output.status, stderr.trim()));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let combined = format!("{}{}", stderr, stdout);
+        let error_msg = combined.trim();
+
+        if error_msg.contains("RATE_LIMIT") || error_msg.contains("rate limit exceeded") {
+            eprintln!("hub: GitHub rate limit hit, sleeping 60s before returning error...");
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+
+        return Err(format!("gh error ({}): {}", output.status, error_msg));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -334,6 +346,7 @@ struct GhSearchPr {
     title: String,
     url: String,
     created_at: String,
+    updated_at: Option<String>,
     is_draft: Option<bool>,
     #[serde(default)]
     labels: Vec<GhLabel>,
@@ -478,68 +491,23 @@ struct ReviewThreadStats {
     unresolved_to_me: u32,
 }
 
-/// Fetch review-thread stats via `gh api graphql`.  Returns `None` on
-/// any error so the caller falls back to the activity-based heuristic.
-async fn fetch_review_threads(
-    repo: &str,
-    number: u64,
-    my_login: Option<&str>,
-) -> Option<ReviewThreadStats> {
-    let (owner, name) = repo.split_once('/')?;
-    let number_s = number.to_string();
-    // Single-line query — Rust's `\` line continuation strips ALL
-    // following whitespace, which would glue adjacent GraphQL fields
-    // together (e.g. `isResolvedcomments`) and produce a parse error.
-    let query_arg = "query=query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { isResolved comments(last: 1) { nodes { author { login } } } } } } } }";
-    let output = gh_json(&[
-        "api", "graphql",
-        "-F", &format!("owner={owner}"),
-        "-F", &format!("repo={name}"),
-        "-F", &format!("number={number_s}"),
-        "-f", query_arg,
-    ]).await.ok()?;
-
-    #[derive(Deserialize)]
-    struct Resp { data: Option<RespData> }
-    #[derive(Deserialize)]
-    struct RespData { repository: Option<RespRepo> }
-    #[derive(Deserialize)]
-    struct RespRepo { #[serde(rename = "pullRequest")] pull_request: Option<RespPr> }
-    #[derive(Deserialize)]
-    struct RespPr { #[serde(rename = "reviewThreads")] review_threads: Option<RespThreads> }
-    #[derive(Deserialize)]
-    struct RespThreads { nodes: Option<Vec<RespThread>> }
-    #[derive(Deserialize)]
-    struct RespThread {
-        #[serde(rename = "isResolved")]
-        is_resolved: Option<bool>,
-        comments: Option<RespComments>,
-    }
-    #[derive(Deserialize)]
-    struct RespComments { nodes: Option<Vec<RespCommentNode>> }
-    #[derive(Deserialize)]
-    struct RespCommentNode { author: Option<RespAuthor> }
-    #[derive(Deserialize)]
-    struct RespAuthor { login: Option<String> }
-
-    let parsed: Resp = serde_json::from_str(&output).ok()?;
-    let nodes = parsed.data?
-        .repository?
-        .pull_request?
-        .review_threads?
-        .nodes
-        .unwrap_or_default();
-
+/// Parse a flat array of GraphQL review-thread nodes (as `serde_json::Value`)
+/// into `ReviewThreadStats`.  Shared by both the batched and the single-PR paths.
+fn parse_thread_nodes(nodes: &[serde_json::Value], my_login: Option<&str>) -> ReviewThreadStats {
     let total = nodes.len() as u32;
     let me = my_login.map(|s| s.to_ascii_lowercase());
     let unresolved_to_me = nodes.iter().filter(|t| {
-        let unresolved = !t.is_resolved.unwrap_or(false);
+        let unresolved = !t.get("isResolved")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if !unresolved { return false; }
-        let last_login = t.comments.as_ref()
-            .and_then(|c| c.nodes.as_ref())
-            .and_then(|ns| ns.last())
-            .and_then(|n| n.author.as_ref())
-            .and_then(|a| a.login.as_deref())
+        let last_login = t.get("comments")
+            .and_then(|c| c.get("nodes"))
+            .and_then(|ns| ns.as_array())
+            .and_then(|arr| arr.last())
+            .and_then(|n| n.get("author"))
+            .and_then(|a| a.get("login"))
+            .and_then(|l| l.as_str())
             .map(|s| s.to_ascii_lowercase());
         match (last_login, me.as_deref()) {
             (Some(ll), Some(m)) => ll != m,
@@ -548,11 +516,112 @@ async fn fetch_review_threads(
             _ => true,
         }
     }).count() as u32;
+    ReviewThreadStats { total, unresolved_to_me }
+}
 
-    Some(ReviewThreadStats { total, unresolved_to_me })
+/// Single-PR fallback: fetch review-thread stats for one PR via `gh api graphql`.
+/// Returns `None` on any error so the caller falls back to the activity-based heuristic.
+async fn fetch_review_threads_single(
+    repo: &str,
+    number: u64,
+    my_login: Option<&str>,
+) -> Option<ReviewThreadStats> {
+    let (owner, name) = repo.split_once('/')?;
+    let thread_fields =
+        "reviewThreads(first: 100) { nodes { isResolved comments(last: 1) { nodes { author { login } } } } }";
+    let query = format!(
+        "{{ repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ {thread_fields} }} }} }}"
+    );
+    let query_arg = format!("query={query}");
+    let output = gh_json(&["api", "graphql", "-f", &query_arg]).await.ok()?;
+    let json: serde_json::Value = serde_json::from_str(&output).ok()?;
+    let nodes = json.get("data")
+        .and_then(|d| d.get("repository"))
+        .and_then(|r| r.get("pullRequest"))
+        .and_then(|pr| pr.get("reviewThreads"))
+        .and_then(|rt| rt.get("nodes"))
+        .and_then(|n| n.as_array())?;
+    Some(parse_thread_nodes(nodes, my_login))
+}
+
+/// Batch-fetch review-thread stats for multiple PRs via a **single aliased
+/// GraphQL call per repository**.  Instead of N round-trips (one per PR),
+/// this issues one `gh api graphql` request per unique owner/repo, with each
+/// PR aliased as `p{number}` inside the repository block.
+///
+/// Returns a map from `(repo, number)` → `ReviewThreadStats`.  PRs that fail
+/// (repo parse error, individual alias missing from response, etc.) are simply
+/// absent from the returned map; callers fall back gracefully.
+async fn batch_fetch_review_threads(
+    prs: &[(String, u64)],
+    my_login: Option<&str>,
+) -> HashMap<(String, u64), ReviewThreadStats> {
+    // Group PR numbers by repo.
+    let mut by_repo: HashMap<String, Vec<u64>> = HashMap::new();
+    for (repo, number) in prs {
+        by_repo.entry(repo.clone()).or_default().push(*number);
+    }
+
+    let thread_fields =
+        "reviewThreads(first: 100) { nodes { isResolved comments(last: 1) { nodes { author { login } } } } }";
+
+    // One future per repo — all repos are queried concurrently.
+    let futs: Vec<_> = by_repo.iter().map(|(repo, numbers)| {
+        let repo = repo.clone();
+        let numbers = numbers.clone();
+        let my_login = my_login.map(|s| s.to_string());
+        async move {
+            let Some((owner, name)) = repo.split_once('/') else {
+                return (repo, HashMap::new());
+            };
+            // Build aliased query: p{n}: pullRequest(number: N) { ... }
+            let pr_aliases: String = numbers.iter()
+                .map(|n| format!("p{n}: pullRequest(number: {n}) {{ {thread_fields} }}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let query = format!(
+                "{{ repository(owner: \"{owner}\", name: \"{name}\") {{ {pr_aliases} }} }}"
+            );
+            let query_arg = format!("query={query}");
+
+            let Ok(output) = gh_json(&["api", "graphql", "-f", &query_arg]).await else {
+                return (repo, HashMap::new());
+            };
+            let Ok(json): Result<serde_json::Value, _> = serde_json::from_str(&output) else {
+                return (repo, HashMap::new());
+            };
+            let Some(repo_data) = json.get("data").and_then(|d| d.get("repository")) else {
+                return (repo, HashMap::new());
+            };
+
+            let mut stats: HashMap<(String, u64), ReviewThreadStats> = HashMap::new();
+            for number in &numbers {
+                let alias = format!("p{number}");
+                let Some(nodes) = repo_data.get(&alias)
+                    .and_then(|pr| pr.get("reviewThreads"))
+                    .and_then(|rt| rt.get("nodes"))
+                    .and_then(|n| n.as_array())
+                else { continue };
+                stats.insert(
+                    (repo.clone(), *number),
+                    parse_thread_nodes(nodes, my_login.as_deref()),
+                );
+            }
+            (repo, stats)
+        }
+    }).collect();
+
+    // Collect all per-repo results into a single map.
+    let mut results: HashMap<(String, u64), ReviewThreadStats> = HashMap::new();
+    for fut in futs {
+        let (_, repo_stats) = fut.await;
+        results.extend(repo_stats);
+    }
+    results
 }
 
 /// Result of fetching review-request PR details.
+#[derive(Clone)]
 struct ReviewPrDetails {
     ci: Option<CiStatus>,
     mergeable: Option<String>,
@@ -578,16 +647,26 @@ impl Default for ReviewPrDetails {
     }
 }
 
+
+static REVIEWS_CACHE: OnceLock<RwLock<HashMap<(String, u64), (String, ReviewPrDetails)>>> = OnceLock::new();
+fn reviews_cache() -> &'static RwLock<HashMap<(String, u64), (String, ReviewPrDetails)>> {
+    REVIEWS_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
 /// Fetch CI status, mergeable state, review state, mention, and reply status.
+/// `prefetched_threads` may be `Some` when the caller has already obtained
+/// thread stats via `batch_fetch_review_threads`; if `None` we fall back to
+/// an individual `fetch_review_threads` call so the function remains usable
+/// in isolation (e.g. tests or one-off invocations).
 async fn fetch_pr_ci(
     repo: &str,
     number: u64,
     my_login: Option<&str>,
+    prefetched_threads: Option<ReviewThreadStats>,
 ) -> ReviewPrDetails {
-    // Run the `gh pr view` and review-thread GraphQL fetches in parallel
-    // so the per-PR latency is dominated by the slower of the two.  The
-    // owned `number_s` and `args` outlive the future so the borrowed
-    // `&[&str]` slice in `gh_json` stays valid through the await.
+    // Run the `gh pr view` and (optional) review-thread GraphQL fetches in
+    // parallel.  When threads were already batch-fetched by the caller we skip
+    // the individual GraphQL round-trip entirely.
     let number_s = number.to_string();
     let args: [&str; 7] = [
         "pr", "view",
@@ -595,10 +674,11 @@ async fn fetch_pr_ci(
         "--repo", repo,
         "--json", "statusCheckRollup,mergeable,mergeStateStatus,latestReviews,comments,reviews,reviewRequests",
     ];
-    let pr_view_fut = gh_json(&args);
-    let threads_fut = fetch_review_threads(repo, number, my_login);
-    let (output, threads) = tokio::join!(pr_view_fut, threads_fut);
-    let output = match output {
+    let threads = match prefetched_threads {
+        Some(t) => Some(t),
+        None => fetch_review_threads_single(repo, number, my_login).await,
+    };
+    let output = match gh_json(&args).await {
         Ok(o) => o,
         Err(_) => return ReviewPrDetails {
             total_threads: threads.as_ref().map(|t| t.total),
@@ -775,7 +855,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         "search", "prs",
         "--review-requested=@me",
         "--state=open",
-        "--json", "number,title,url,createdAt,isDraft,labels,author,repository",
+        "--json", "number,title,url,createdAt,updatedAt,isDraft,labels,author,repository",
         "--limit", "200",
     ]).await?;
 
@@ -793,6 +873,25 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
     // Get current user's login for review state lookup
     let my_login = get_github_login().await;
 
+    // Identify which PRs are not in cache (need fresh detail + thread fetches).
+    let uncached_pairs: Vec<(String, u64)> = {
+        let cache = reviews_cache().read().await;
+        prs.iter()
+            .filter_map(|pr| {
+                let repo = pr.repository.as_ref()?.name_with_owner.clone();
+                if archived.contains(&repo) { return None; }
+                let updated_at = pr.updated_at.clone().unwrap_or_default();
+                let hit = cache.get(&(repo.clone(), pr.number))
+                    .map(|(ts, _)| ts == &updated_at)
+                    .unwrap_or(false);
+                if hit { None } else { Some((repo, pr.number)) }
+            })
+            .collect()
+    };
+
+    // Batch-fetch review threads for all uncached PRs — one GraphQL call per repo.
+    let batched_threads = batch_fetch_review_threads(&uncached_pairs, my_login.as_deref()).await;
+
     let mut items: Vec<ReviewRequest> = Vec::with_capacity(prs.len());
     for pr in &prs {
         let repo = pr.repository.as_ref()
@@ -802,12 +901,28 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         if archived.contains(&repo) {
             continue;
         }
-        // Fetch CI + mergeable + review state + mention + reply status per PR
-        let details = fetch_pr_ci(
-            &repo,
-            pr.number,
-            my_login.as_deref(),
-        ).await;
+        // Use cache when updatedAt unchanged; otherwise fetch with pre-batched threads.
+        let updated_at = pr.updated_at.clone().unwrap_or_default();
+        let cache_key = (repo.clone(), pr.number);
+
+        let cached_details = {
+            let cache = reviews_cache().read().await;
+            cache.get(&cache_key).and_then(|(ts, details)| {
+                if ts == &updated_at { Some(details.clone()) } else { None }
+            })
+        };
+
+        let details = if let Some(d) = cached_details {
+            d
+        } else {
+            let prefetched = batched_threads.get(&(repo.clone(), pr.number))
+                .map(|s| ReviewThreadStats { total: s.total, unresolved_to_me: s.unresolved_to_me });
+            let d = fetch_pr_ci(&repo, pr.number, my_login.as_deref(), prefetched).await;
+            let mut cache = reviews_cache().write().await;
+            cache.insert(cache_key, (updated_at, d.clone()));
+            d
+        };
+
         items.push(ReviewRequest {
             id: format!("gh:{}#{}", repo, pr.number),
             repo: repo.clone(),
@@ -851,6 +966,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
 // ---------------------------------------------------------------------------
 
 /// Result of fetching detailed PR information.
+#[derive(Clone)]
 struct PrDetails {
     branch: Option<String>,
     ci: Option<CiStatus>,
@@ -875,6 +991,11 @@ impl Default for PrDetails {
     }
 }
 
+static WIP_CACHE: OnceLock<RwLock<HashMap<(String, u64), (String, PrDetails)>>> = OnceLock::new();
+fn wip_cache() -> &'static RwLock<HashMap<(String, u64), (String, PrDetails)>> {
+    WIP_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
 /// Comment/review with author and timestamp for determining reply status.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -893,9 +1014,15 @@ struct GhReviewEntry {
 }
 
 /// Fetch branch, CI, mergeable, review decision, and reply status for a PR.
-async fn fetch_pr_details(repo: &str, number: u64, my_login: Option<&str>) -> PrDetails {
-    // Run the `gh pr view` and review-thread GraphQL fetches in parallel.
-    // Bind owned temps so the borrowed `&[&str]` slice outlives the await.
+/// `prefetched_threads` may be `Some` when the caller has already obtained
+/// thread stats via `batch_fetch_review_threads`; if `None` we fall back to
+/// an individual GraphQL call.
+async fn fetch_pr_details(
+    repo: &str,
+    number: u64,
+    my_login: Option<&str>,
+    prefetched_threads: Option<ReviewThreadStats>,
+) -> PrDetails {
     let number_s = number.to_string();
     let args: [&str; 7] = [
         "pr", "view",
@@ -903,10 +1030,11 @@ async fn fetch_pr_details(repo: &str, number: u64, my_login: Option<&str>) -> Pr
         "--repo", repo,
         "--json", "headRefName,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision,comments,reviews,mergedAt",
     ];
-    let pr_view_fut = gh_json(&args);
-    let threads_fut = fetch_review_threads(repo, number, my_login);
-    let (output, threads) = tokio::join!(pr_view_fut, threads_fut);
-    let output = match output {
+    let threads = match prefetched_threads {
+        Some(t) => Some(t),
+        None => fetch_review_threads_single(repo, number, my_login).await,
+    };
+    let output = match gh_json(&args).await {
         Ok(o) => o,
         Err(_) => return PrDetails {
             total_threads: threads.as_ref().map(|t| t.total),
@@ -1062,6 +1190,25 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
     // Get current user's login for reply detection
     let my_login = get_github_login().await;
 
+    // Identify which PRs are not in cache (need fresh detail + thread fetches).
+    let uncached_pairs: Vec<(String, u64)> = {
+        let cache = wip_cache().read().await;
+        all_prs.iter()
+            .filter_map(|pr| {
+                let repo = pr.repository.as_ref()?.name_with_owner.clone();
+                if archived.contains(&repo) { return None; }
+                let updated_at = pr.updated_at.clone().unwrap_or_default();
+                let hit = cache.get(&(repo.clone(), pr.number))
+                    .map(|(ts, _)| ts == &updated_at)
+                    .unwrap_or(false);
+                if hit { None } else { Some((repo, pr.number)) }
+            })
+            .collect()
+    };
+
+    // Batch-fetch review threads for all uncached PRs — one GraphQL call per repo.
+    let batched_threads = batch_fetch_review_threads(&uncached_pairs, my_login.as_deref()).await;
+
     // Group by repository
     let mut repo_map: std::collections::BTreeMap<String, Vec<WipPr>> =
         std::collections::BTreeMap::new();
@@ -1074,8 +1221,27 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
         if archived.contains(&repo) {
             continue;
         }
-        // Fetch branch + CI + mergeable + review decision + reply status per PR
-        let details = fetch_pr_details(&repo, pr.number, my_login.as_deref()).await;
+        // Use cache when updatedAt unchanged; otherwise fetch with pre-batched threads.
+        let updated_at = pr.updated_at.clone().unwrap_or_default();
+        let cache_key = (repo.clone(), pr.number);
+
+        let cached_details = {
+            let cache = wip_cache().read().await;
+            cache.get(&cache_key).and_then(|(ts, details)| {
+                if ts == &updated_at { Some(details.clone()) } else { None }
+            })
+        };
+
+        let details = if let Some(d) = cached_details {
+            d
+        } else {
+            let prefetched = batched_threads.get(&(repo.clone(), pr.number))
+                .map(|s| ReviewThreadStats { total: s.total, unresolved_to_me: s.unresolved_to_me });
+            let d = fetch_pr_details(&repo, pr.number, my_login.as_deref(), prefetched).await;
+            let mut cache = wip_cache().write().await;
+            cache.insert(cache_key, (updated_at, d.clone()));
+            d
+        };
         let entry = repo_map.entry(repo).or_default();
         let updated_ts = pr.updated_at.as_deref()
             .and_then(|s| s.parse::<DateTime<Utc>>().ok());
