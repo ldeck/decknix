@@ -83,6 +83,8 @@
                   "decknix-hub-mention-bot" (item))
 (declare-function decknix--hub-requests-attention-visible-p
                   "decknix-hub-attention-filter" (item))
+(declare-function decknix--hub-requests-reviewed-visible-p
+                  "decknix-hub-attention-filter" (item))
 (declare-function decknix--hub-sort-requests
                   "decknix-hub-attention-filter" (items))
 
@@ -128,6 +130,7 @@ Applies org, age, and CI visibility filters, then the ready predicate."
             (decknix--hub-ci-visible-p item)
             (decknix--hub-bot-visible-p item)
             (decknix--hub-requests-attention-visible-p item)
+            (decknix--hub-requests-reviewed-visible-p item)
             (decknix--hub-request-ready-p item)))
      (or all-items '()))))
 

@@ -117,6 +117,7 @@
 (declare-function decknix--hub-ci-filter-summary "decknix-hub-ci-filter")
 (declare-function decknix--hub-sort-requests "decknix-hub-attention-filter")
 (declare-function decknix--hub-requests-attention-visible-p "decknix-hub-attention-filter")
+(declare-function decknix--hub-requests-reviewed-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-wip-attention-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-request-has-live-session-p "ext:decknix-agent-shell-hub")
 (declare-function decknix--hub-request-tint-active "ext:decknix-agent-shell-hub")
@@ -629,12 +630,13 @@ which advertises toggles by label only (no keys)."
    (decknix-sidebar-transient--width)]           ;; Width
   ["Requests"
    ;; Order matches the sidebar footer: alphabetical text labels
-   ;; (age, bots, ci, mention, sort) then emoji-led labels by
+   ;; (age, bots, ci, mention, reviewed, sort) then emoji-led labels by
    ;; code-point (↩, 💬, 🤖).
    (decknix-sidebar-transient--age-filter)       ;; age
    (decknix-sidebar-transient--bot-filter)       ;; bots
    (decknix-sidebar-transient--ci-filter)        ;; ci
    (decknix-sidebar-transient--mention-filter)   ;; mention
+   (decknix-sidebar-transient--req-reviewed)     ;; reviewed
    (decknix-sidebar-transient--req-sort)         ;; sort
    (decknix-sidebar-transient--req-my-replies)   ;; ↩
    (decknix-sidebar-transient--req-needs-reply)  ;; 💬
@@ -1856,7 +1858,8 @@ Shows result in the echo area and triggers a hub refresh on success."
                           (decknix--hub-ci-visible-p item)
                           (decknix--hub-mention-visible-p item)
                           (decknix--hub-bot-visible-p item)
-                          (decknix--hub-requests-attention-visible-p item)))
+                          (decknix--hub-requests-attention-visible-p item)
+                          (decknix--hub-requests-reviewed-visible-p item)))
                    (or all-items '())))
            (keys decknix--nav-keys))
       (append

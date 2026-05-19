@@ -490,6 +490,20 @@ picker's dynamic binding unwinds.")
   (interactive)
   (call-interactively #'decknix--hub-toggle-requests-only-my-replies))
 
+(transient-define-suffix decknix-sidebar-transient--req-reviewed ()
+  :key "v"
+  :description
+  (lambda ()
+    (format "reviewed      %s"
+            (propertize
+             (if decknix--hub-requests-hide-reviewed "[hide]" "[show]")
+             'face (if decknix--hub-requests-hide-reviewed
+                       'font-lock-constant-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix--hub-toggle-requests-hide-reviewed))
+
 (transient-define-suffix decknix-sidebar-transient--req-sort ()
   :key "s"
   :description
@@ -795,6 +809,7 @@ Order: `hide' → `show' → `mentioned' → `hide'.  See
 (defvar decknix--hub-requests-hide-needs-reply)
 (defvar decknix--hub-requests-hide-bot-pending)
 (defvar decknix--hub-requests-only-my-replies)
+(defvar decknix--hub-requests-hide-reviewed)
 (defvar decknix--hub-requests-sort-reverse)
 (defvar decknix--hub-wip-hide-needs-reply)
 (defvar decknix--hub-wip-hide-bot-pending)
@@ -804,6 +819,8 @@ Order: `hide' → `show' → `mentioned' → `hide'.  See
                   "decknix-hub-attention-filter"
                   (item hide-reply hide-bot only-my))
 (declare-function decknix--hub-requests-attention-visible-p
+                  "decknix-hub-attention-filter" (item))
+(declare-function decknix--hub-requests-reviewed-visible-p
                   "decknix-hub-attention-filter" (item))
 (declare-function decknix--hub-wip-attention-visible-p
                   "decknix-hub-attention-filter" (pr))
@@ -2455,7 +2472,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                            (decknix--hub-ci-visible-p item)
                            (decknix--hub-mention-visible-p item)
                            (decknix--hub-bot-visible-p item)
-                           (decknix--hub-requests-attention-visible-p item)))
+                           (decknix--hub-requests-attention-visible-p item)
+                           (decknix--hub-requests-reviewed-visible-p item)))
                     (or all-items '())))
          (items (decknix--hub-sort-requests filtered)))
     (when items

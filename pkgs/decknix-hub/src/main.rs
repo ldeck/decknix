@@ -120,6 +120,8 @@ struct ReviewRequest {
     total_threads: Option<u32>, // total inline review threads on the PR
     #[serde(skip_serializing_if = "Option::is_none")]
     unresolved_threads: Option<u32>, // unresolved threads where last comment author != me
+    #[serde(skip_serializing_if = "Option::is_none")]
+    review_decision: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -634,6 +636,7 @@ struct ReviewPrDetails {
     replies_to_me: Option<bool>,
     total_threads: Option<u32>,
     unresolved_threads: Option<u32>,
+    review_decision: Option<String>,
 }
 
 impl Default for ReviewPrDetails {
@@ -642,7 +645,7 @@ impl Default for ReviewPrDetails {
             ci: None, mergeable: None, my_review: None, mentioned: None,
             team_requested: None, others_requested: None, needs_reply: None,
             bot_pending: None, replies_to_me: None, total_threads: None,
-            unresolved_threads: None,
+            unresolved_threads: None, review_decision: None,
         }
     }
 }
@@ -672,7 +675,7 @@ async fn fetch_pr_ci(
         "pr", "view",
         &number_s,
         "--repo", repo,
-        "--json", "statusCheckRollup,mergeable,mergeStateStatus,latestReviews,comments,reviews,reviewRequests",
+        "--json", "statusCheckRollup,mergeable,mergeStateStatus,latestReviews,comments,reviews,reviewRequests,reviewDecision",
     ];
     let threads = match prefetched_threads {
         Some(t) => Some(t),
@@ -698,6 +701,7 @@ async fn fetch_pr_ci(
         comments: Option<Vec<GhComment>>,
         reviews: Option<Vec<GhReviewEntry>>,
         review_requests: Option<Vec<GhReviewRequestEntry>>,
+        review_decision: Option<String>,
     }
 
     /// A review request entry — can be a User or Team.
@@ -833,6 +837,7 @@ async fn fetch_pr_ci(
                 replies_to_me: Some(replies_to_me),
                 total_threads: threads.as_ref().map(|t| t.total),
                 unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+                review_decision: view.review_decision,
             }
         }
         Err(_) => ReviewPrDetails {
@@ -948,6 +953,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             replies_to_me: details.replies_to_me,
             total_threads: details.total_threads,
             unresolved_threads: details.unresolved_threads,
+            review_decision: details.review_decision,
         });
     }
 

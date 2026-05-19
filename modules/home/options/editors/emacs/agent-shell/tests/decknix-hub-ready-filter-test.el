@@ -29,6 +29,11 @@
 ;; symbol as `special-variable-p' so the let binding is dynamic and
 ;; the module's `varref' resolves to it.
 (defvar decknix--hub-reviews nil)
+;; Forward-declare with nil so the reviewed-visible predicate
+;; (called from the filter chain in decknix--hub-review-ready-requests)
+;; sees a bound, special variable.  nil = filter off, show everything,
+;; which matches the "all stubs return t" test philosophy.
+(defvar decknix--hub-requests-hide-reviewed nil)
 
 (defmacro decknix-hub-ready-filter-test--with-ci (status &rest body)
   "Evaluate BODY with `decknix--hub-ci-classify' stubbed to return STATUS.
@@ -121,8 +126,8 @@ The stub ignores its argument so callers can pass any ITEM shape."
 
 ;; -- ready-requests reader ----------------------------------------
 ;;
-;; The reader composes seven predicates over `decknix--hub-reviews'.
-;; Tests stub all six visibility predicates plus `ci-classify' so the
+;; The reader composes eight predicates over `decknix--hub-reviews'.
+;; Tests stub all seven visibility predicates plus `ci-classify' so the
 ;; reader's filter composition is the only thing under test (the
 ;; predicates themselves are characterised in their own packages).
 
@@ -141,6 +146,8 @@ override specific stubs to flip their predicate to nil."
              ((symbol-function 'decknix--hub-bot-visible-p)
               (lambda (_item) t))
              ((symbol-function 'decknix--hub-requests-attention-visible-p)
+              (lambda (_item) t))
+             ((symbol-function 'decknix--hub-requests-reviewed-visible-p)
               (lambda (_item) t))
              ((symbol-function 'decknix--hub-ci-classify)
               (lambda (_ci) "pass")))
