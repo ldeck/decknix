@@ -30,6 +30,7 @@
 ;;   `decknix--hub-requests-hide-needs-reply'   bound nil  (toggle `c')
 ;;   `decknix--hub-requests-hide-bot-pending'   bound t    (toggle `b')
 ;;   `decknix--hub-requests-only-my-replies'    bound nil  (toggle `M')
+;;   `decknix--hub-requests-hide-reviewed'      bound t    (toggle `v')
 ;;   `decknix--hub-requests-sort-reverse'       bound nil  (toggle `s')
 ;;   `decknix--hub-wip-hide-needs-reply'        bound nil  (toggle `n')
 ;;   `decknix--hub-wip-hide-bot-pending'        bound nil  (toggle `u')
@@ -50,6 +51,7 @@
 ;;   `decknix--hub-toggle-requests-hide-needs-reply'   (`c')
 ;;   `decknix--hub-toggle-requests-hide-bot-pending'   (`b')
 ;;   `decknix--hub-toggle-requests-only-my-replies'    (`M')
+;;   `decknix--hub-toggle-requests-hide-reviewed'      (`v')
 ;;   `decknix--hub-toggle-requests-sort-reverse'       (`s')
 ;;   `decknix--hub-toggle-wip-hide-needs-reply'        (`n')
 ;;   `decknix--hub-toggle-wip-hide-bot-pending'        (`u')
@@ -85,6 +87,14 @@ Toggle with `b'.")
   "When non-nil, only show Requests PRs carrying the ↩ icon.
 Filters IN PRs where a human posted a reply after one of my own
 comments or reviews.  Toggle with `M'.")
+
+(defvar decknix--hub-requests-hide-reviewed t
+  "When non-nil (default), hide Requests PRs that no longer need attention.
+Hides PRs where: (a) I have already submitted APPROVED or CHANGES_REQUESTED
+and the author has not re-requested my review (mentioned = nil); OR (b) the
+aggregate `review_decision' is APPROVED or CHANGES_REQUESTED (a colleague has
+already approved or blocked the PR).  When the author re-requests my review
+(mentioned = t), the PR reappears regardless.  Toggle with `v'.")
 
 (defvar decknix--hub-requests-sort-reverse nil
   "When nil (default), Requests are sorted oldest-first.
@@ -161,6 +171,23 @@ the owning section."
    decknix--hub-requests-hide-bot-pending
    decknix--hub-requests-only-my-replies))
 
+(defun decknix--hub-requests-reviewed-visible-p (item)
+  "Return non-nil if ITEM passes the hide-reviewed filter.
+When `decknix--hub-requests-hide-reviewed' is non-nil, hides PRs that
+already have a conclusive review outcome and don't need further attention:
+- I reviewed (APPROVED/CHANGES_REQUESTED) and the author has not re-requested.
+- A colleague approved or requested changes (`review_decision' is APPROVED or
+  CHANGES_REQUESTED).
+When the author re-requests my review (`mentioned' = t), always shows."
+  (or (not decknix--hub-requests-hide-reviewed)
+      ;; Re-requested → always show regardless of review state
+      (eq (alist-get 'mentioned item) t)
+      ;; No conclusive review state → show
+      (let ((my-review (alist-get 'my_review item))
+            (review-decision (alist-get 'review_decision item)))
+        (not (or (member my-review '("APPROVED" "CHANGES_REQUESTED"))
+                 (member review-decision '("APPROVED" "CHANGES_REQUESTED")))))))
+
 (defun decknix--hub-wip-attention-visible-p (pr)
   "Return non-nil if PR passes the WIP attention filters."
   (decknix--hub-attention-visible-p
@@ -199,6 +226,13 @@ the owning section."
   (decknix--hub-toggle-and-refresh
    'decknix--hub-requests-only-my-replies
    "Requests ↩ only-my-replies: %s"))
+
+(defun decknix--hub-toggle-requests-hide-reviewed ()
+  "Toggle hiding Requests PRs already reviewed or conclusively decided."
+  (interactive)
+  (decknix--hub-toggle-and-refresh
+   'decknix--hub-requests-hide-reviewed
+   "Requests reviewed filter: %s"))
 
 (defun decknix--hub-toggle-requests-sort-reverse ()
   "Toggle Requests sort direction (oldest↔newest) in the sidebar.
