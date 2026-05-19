@@ -664,6 +664,19 @@ which advertises toggles by label only (no keys)."
    (decknix-sidebar-transient--sessions-hide-unknown)];; unknown-ws
   ["" ("q" "Done" transient-quit-one)])
 
+(defun decknix-sidebar-refresh ()
+  "Refresh the sidebar, first updating the worktree registry via `decknix wt refresh'.
+Fires the CLI asynchronously; the sidebar redraws immediately (optimistic)
+and again once the registry write completes."
+  (interactive)
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (decknix--wt-cli-async
+   (list "refresh")
+   (lambda (_out)
+     (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+       (agent-shell-workspace-sidebar-refresh)))))
+
 (transient-define-prefix decknix-sidebar-transient ()
   "Sidebar actions and toggles."
   ["Navigate"
@@ -677,7 +690,7 @@ which advertises toggles by label only (no keys)."
    ("c"   "New session"   agent-shell-workspace-sidebar-new)
    ("RET" "Open / goto"   agent-shell-workspace-sidebar-goto)
    ("q"   "Quit sidebar"  quit-window)
-   ("g"   "Refresh"       agent-shell-workspace-sidebar-refresh)]
+   ("g"   "Refresh"       decknix-sidebar-refresh)]
   ["Actions (a …)"
    ("a r" "Restart"       agent-shell-workspace-sidebar-restart)
    ("a R" "Rename"        agent-shell-workspace-sidebar-rename)
@@ -1342,7 +1355,9 @@ the target.  Sessions and tags are moved to the target."
    ("v" "Review"        decknix-sidebar-review-at-point)]
   ["Tiling"
    ("a" "Add tile"      agent-shell-workspace-tile-add)
-   ("x" "Remove tile"   agent-shell-workspace-tile-remove)])
+   ("x" "Remove tile"   agent-shell-workspace-tile-remove)]
+  ["Worktree"
+   ("F" "Clean fork remotes" decknix--sb-act-clean-fork-remotes)])
 
 ;; -- Section navigation: item pickers --
 ;; Each section key opens a transient showing lettered items.
@@ -3049,7 +3064,43 @@ properties yet (rare — most hub rows do, but e.g. headers wouldn't)."
   (or (null (decknix--sb-act-wt-repo))
       (null (decknix--sb-act-wt-branch))))
 
-;; -- Async git wrappers --
+;; -- Async wrappers (git and decknix wt CLI) --
+
+(defun decknix--wt-cli-async (args on-success)
+  "Run `decknix wt ARGS' asynchronously.
+ARGS is a list of strings (e.g. '(\"prune\" \"--repo\" \"owner/repo\")).
+ON-SUCCESS is a function of one argument (stdout string) called on
+exit-0.  Errors are reported via `message'."
+  (let ((buf (generate-new-buffer " *decknix-wt*")))
+    (condition-case err
+        (let ((proc (apply #'make-process
+                           :name "decknix-wt"
+                           :buffer buf
+                           :connection-type 'pipe
+                           :command (append (list "decknix" "wt") args)
+                           nil)))
+          (set-process-sentinel
+           proc
+           (lambda (proc _event)
+             (when (memq (process-status proc) '(exit signal))
+               (let* ((code (process-exit-status proc))
+                      (out (when (buffer-live-p (process-buffer proc))
+                             (with-current-buffer (process-buffer proc)
+                               (buffer-string)))))
+                 (unwind-protect
+                     (cond
+                      ((zerop code)
+                       (when on-success
+                         (funcall on-success (or out ""))))
+                      (t
+                       (message "decknix wt %s failed (%d): %s"
+                                (car args) code
+                                (string-trim (or out "")))))
+                   (when (buffer-live-p (process-buffer proc))
+                     (kill-buffer (process-buffer proc)))))))))
+      (error
+       (when (buffer-live-p buf) (kill-buffer buf))
+       (message "decknix wt spawn error: %s" (error-message-string err))))))
 
 (defun decknix--hub-worktree-git-async (primary args repo on-success)
   "Run `git -C PRIMARY ARGS' asynchronously for REPO.
@@ -3211,22 +3262,23 @@ Prefix arg overrides the dirty/session guard via `git worktree remove --force'."
       (message "No worktree for this branch"))))
 
 (transient-define-suffix decknix--sb-act-wt-prune ()
-  "Prune stale worktree records for the active row's primary clone."
+  "Prune stale worktree records for the active row's primary clone.
+Calls `decknix wt prune' which cleans both the registry and git
+worktree metadata.  Prefix arg adds --dry-run."
   :description "Prune stale worktrees"
   :inapt-if #'decknix--sb-act-wt-no-clone-p
   (interactive)
-  (let ((repo (decknix--sb-act-wt-repo))
-        (primary (decknix--sb-act-wt-primary)))
-    (decknix--hub-worktree-git-async
-     primary
-     (list "worktree" "prune" "-v")
-     repo
-     (eval `(lambda (out)
-              (let ((trimmed (string-trim (or out ""))))
-                (if (string-empty-p trimmed)
-                    (message "Pruned %s: nothing to remove" ,repo)
-                  (message "Pruned %s:\n%s" ,repo trimmed))))
-           t))))
+  (let* ((repo (decknix--sb-act-wt-repo))
+         (dry-run current-prefix-arg)
+         (args (append (list "prune" "--repo" repo)
+                       (when dry-run (list "--dry-run")))))
+    (decknix--wt-cli-async
+     args
+     (lambda (out)
+       (let ((trimmed (string-trim (or out ""))))
+         (if (string-empty-p trimmed)
+             (message "Pruned %s: nothing to remove" repo)
+           (message "Pruned %s:\n%s" repo trimmed)))))))
 
 (transient-define-suffix decknix--sb-act-wt-status ()
   "Show git status for the worktree (or the primary clone if none).
@@ -3271,6 +3323,25 @@ Uses `magit-status' when available; falls back to `vc-dir' otherwise."
      ((and repo branch) (format "%s @ %s — %s" repo branch state-str))
      (repo (format "%s — %s" repo state-str))
      (t "Worktree (no repo context)"))))
+
+(transient-define-suffix decknix--sb-act-clean-fork-remotes ()
+  "Clean orphan fork remotes from all live clones.
+Prefix arg runs `--dry-run' (shows what would be removed without acting)."
+  :description "Clean fork remotes"
+  (interactive)
+  (let* ((dry-run current-prefix-arg)
+         (args (append (list "clean-fork-remotes")
+                       (when dry-run (list "--dry-run")))))
+    (if (or dry-run
+            (yes-or-no-p "Remove orphan fork remotes from all live clones? "))
+        (decknix--wt-cli-async
+         args
+         (lambda (out)
+           (let ((trimmed (string-trim (or out ""))))
+             (if (string-empty-p trimmed)
+                 (message "Clean fork remotes: nothing to remove")
+               (message "Clean fork remotes:\n%s" trimmed)))))
+      (message "Cancelled"))))
 
 (transient-define-prefix decknix-sidebar-worktree-menu ()
   "Worktree submenu (#129; spec §3.6.4).
