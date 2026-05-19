@@ -52,7 +52,14 @@ in
       reviewsInterval = mkOption {
         type = types.int;
         default = 60;
-        description = "Seconds between GitHub review-request polls.";
+        description = ''
+          Seconds between GitHub review-request polls.
+
+          With GraphQL batching, all uncached PRs share a single
+          reviewThreads request per repo, so 60s is safe even with
+          large review queues (≈3–5 GraphQL calls/cycle regardless
+          of queue depth).
+        '';
       };
 
       wipInterval = mkOption {
@@ -65,9 +72,8 @@ in
           this list and uses it as the authoritative source for "this PR
           is still open".  When a PR drops off the WIP list, the sidebar
           treats that as a strong signal that GitHub state changed and
-          schedules an `gh pr view` refresh within ~30s, so this poll
-          interval is the dominant component of "Open → Merged" latency
-          for linked PRs.  Defaults to 60s to match `reviewsInterval`.
+          schedules a refresh, so this poll interval is the dominant
+          component of "Open → Merged" latency for linked PRs.
         '';
       };
 
