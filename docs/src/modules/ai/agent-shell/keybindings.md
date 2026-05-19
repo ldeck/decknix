@@ -19,6 +19,8 @@ The `C-c A` prefix is labelled "Agent" in which-key.
 | — | `C-c A a` | Start / switch to agent |
 | — | `C-c A n` | Force new session |
 | — | `C-c A k` | Interrupt agent |
+| `C-c b` | `C-c A b` | Switch agent buffer (live only) — MRU order, status-coloured |
+
 
 ## Input & Editing
 
