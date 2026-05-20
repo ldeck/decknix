@@ -127,6 +127,11 @@
 (declare-function decknix--agent-session-save-model-for-conv-key
                   "decknix-agent-session-model" (conv-key model-id))
 
+;; -- Session file path helper --
+;; Defined in agent-shell/agent/decknix-agent-session-history.el.
+(declare-function decknix--agent-session-file
+                  "decknix-agent-session-history" (session-id))
+
 (defun decknix-agent-set-session-model ()
   "Change the model for the current agent-shell session and persist it.
 Wraps `agent-shell-set-session-model' with an on-success callback
@@ -533,6 +538,74 @@ Otherwise copy the shortened 8-character hash."
     (force-mode-line-update))
   (message "Session ID display: %s"
            (if decknix--agent-show-full-session-id "full" "short (8 chars)")))
+
+
+;; -- Session info display (C-c s i) --
+
+(defun decknix-agent-session-info ()
+  "Display information about the current agent-shell session in the minibuffer.
+Shows: session ID, conversation key, model, tags, workspace, and
+timestamps (created, last modified, exchange count) from the session JSON.
+
+Bound to \\[decknix-agent-session-info] in agent-shell buffers."
+  (interactive)
+  (unless (derived-mode-p 'agent-shell-mode)
+    (user-error "Not in an agent-shell buffer"))
+  (let* ((session-id (or (and (boundp 'decknix--agent-auggie-session-id)
+                              decknix--agent-auggie-session-id)
+                         (ignore-errors
+                           (map-nested-elt (agent-shell--state)
+                                           '(:session :id)))))
+         (conv-key   (and (boundp 'decknix--agent-conv-key)
+                          decknix--agent-conv-key))
+         (workspace  (and (boundp 'decknix--agent-session-workspace)
+                          decknix--agent-session-workspace))
+         (model      (and conv-key
+                          (decknix--agent-session-model-for-conv-key conv-key)))
+         (tags       (and conv-key
+                          (decknix--agent-tags-for-conv-key conv-key)))
+         ;; Read session JSON for timestamps + exchange count
+         (json-data  (when session-id
+                       (condition-case nil
+                           (let* ((json-array-type 'list)
+                                  (json-object-type 'alist)
+                                  (json-key-type 'symbol)
+                                  (file (decknix--agent-session-file session-id)))
+                             (when (file-exists-p file)
+                               (json-read-file file)))
+                         (error nil))))
+         (created    (when json-data (alist-get 'created json-data)))
+         (modified   (when json-data (alist-get 'modified json-data)))
+         (exchanges  (when json-data (alist-get 'exchangeCount json-data 0)))
+         ;; Format helpers
+         (fmt-time   (lambda (iso)
+                       (if (and iso (stringp iso) (> (length iso) 0))
+                           (condition-case nil
+                               (format-time-string
+                                "%Y-%m-%d %H:%M"
+                                (date-to-time iso))
+                             (error iso))
+                         "unknown")))
+         (id-display (if session-id
+                         (substring session-id 0 (min 16 (length session-id)))
+                       "none"))
+         (key-display (if conv-key
+                          (substring conv-key 0 (min 16 (length conv-key)))
+                        "none")))
+    (message
+     (concat "Session: %s  Conv: %s\n"
+             "Model: %s  Exchanges: %s\n"
+             "Tags: %s\n"
+             "Workspace: %s\n"
+             "Created: %s  Modified: %s")
+     id-display
+     key-display
+     (or model "default")
+     (or (and exchanges (number-to-string exchanges)) "?")
+     (if tags (mapconcat (lambda (tag) (format "#%s" tag)) tags " ") "none")
+     (or workspace "none")
+     (funcall fmt-time created)
+     (funcall fmt-time modified))))
 
 (provide 'decknix-agent-shell-main-tags)
 ;;; decknix-agent-shell-main-tags.el ends here

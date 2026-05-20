@@ -4678,6 +4678,7 @@ no editable element is focused / the clipboard is empty."
                       (define-key map (kbd "l") 'decknix-agent-link-pr)
                       (define-key map (kbd "L") 'decknix-agent-link-repo)
                       (define-key map (kbd "u") 'decknix-agent-unlink-pr)
+                      (define-key map (kbd "i") 'decknix-agent-session-info)
                       ;; C-c s t — session-scoped tags sub-prefix
                       (define-key tag-map (kbd "l") 'decknix-agent-tag-show)
                       (define-key tag-map (kbd "a") 'decknix-agent-tag-add)
@@ -4701,6 +4702,7 @@ no editable element is focused / the clipboard is empty."
                         "C-c s l" "link PR"
                         "C-c s L" "link repo+branch"
                         "C-c s u" "unlink PR / repo"
+                        "C-c s i" "session info"
                         "C-c s t"   "tags…"
                         "C-c s t l" "list / filter by tag"
                         "C-c s t a" "add tag"
