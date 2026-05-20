@@ -619,6 +619,111 @@ candidate movement uses the line text as the search needle."
   (interactive)
   (call-interactively #'decknix-sidebar-cycle-width))
 
+;; -- Worktrees toggle suffixes (§3.6.12) --
+;; Ordered alphabetically by display label to match the sidebar footer.
+
+(transient-define-suffix decknix-sidebar-transient--wt-age-filter ()
+  :key "a"
+  :description
+  (lambda ()
+    (let ((label (if (fboundp 'decknix--sidebar-wt-age-label)
+                     (decknix--sidebar-wt-age-label)
+                   "all")))
+      (format "age           %s"
+              (propertize
+               (format "[%s]" label)
+               'face (if (string= label "all")
+                         'font-lock-comment-face
+                       'font-lock-constant-face)))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-sidebar-cycle-wt-age-filter))
+
+(transient-define-suffix decknix-sidebar-transient--wt-hide-clean ()
+  :key "d"
+  :description
+  (lambda ()
+    (format "dirty-only    %s"
+            (propertize
+             (if (and (boundp 'decknix--sidebar-wt-hide-clean)
+                      decknix--sidebar-wt-hide-clean)
+                 "[on]" "[off]")
+             'face (if (and (boundp 'decknix--sidebar-wt-hide-clean)
+                            decknix--sidebar-wt-hide-clean)
+                       'font-lock-constant-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-sidebar-toggle-wt-hide-clean))
+
+(transient-define-suffix decknix-sidebar-transient--wt-live-only ()
+  :key "l"
+  :description
+  (lambda ()
+    (format "live-only     %s"
+            (propertize
+             (if (and (boundp 'decknix--sidebar-wt-live-only)
+                      decknix--sidebar-wt-live-only)
+                 "[on]" "[off]")
+             'face (if (and (boundp 'decknix--sidebar-wt-live-only)
+                            decknix--sidebar-wt-live-only)
+                       'font-lock-constant-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-sidebar-toggle-wt-live-only))
+
+(transient-define-suffix decknix-sidebar-transient--wt-hide-merged ()
+  :key "o"
+  :description
+  (lambda ()
+    (format "merged        %s"
+            (propertize
+             (if (and (boundp 'decknix--sidebar-wt-hide-merged)
+                      decknix--sidebar-wt-hide-merged)
+                 "[hide]" "[show]")
+             'face (if (and (boundp 'decknix--sidebar-wt-hide-merged)
+                            decknix--sidebar-wt-hide-merged)
+                       'font-lock-constant-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-sidebar-toggle-wt-hide-merged))
+
+(transient-define-suffix decknix-sidebar-transient--wt-hide-placeholders ()
+  :key "p"
+  :description
+  (lambda ()
+    (format "placeholders  %s"
+            (propertize
+             (if (and (boundp 'decknix--sidebar-wt-hide-placeholders)
+                      decknix--sidebar-wt-hide-placeholders)
+                 "[hide]" "[show]")
+             'face (if (and (boundp 'decknix--sidebar-wt-hide-placeholders)
+                            decknix--sidebar-wt-hide-placeholders)
+                       'font-lock-constant-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-sidebar-toggle-wt-hide-placeholders))
+
+(transient-define-suffix decknix-sidebar-transient--wt-group-by-repo ()
+  :key "r"
+  :description
+  (lambda ()
+    (format "repo-grouped  %s"
+            (propertize
+             (if (and (boundp 'decknix--sidebar-wt-group-by-repo)
+                      decknix--sidebar-wt-group-by-repo)
+                 "[on]" "[off]")
+             'face (if (and (boundp 'decknix--sidebar-wt-group-by-repo)
+                            decknix--sidebar-wt-group-by-repo)
+                       'font-lock-constant-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-sidebar-toggle-wt-group-by-repo))
+
 (transient-define-prefix decknix-sidebar-toggles-transient ()
   "Sidebar toggles grouped by section.
 Suffixes within each section are ordered alphabetically by their
@@ -664,6 +769,15 @@ which advertises toggles by label only (no keys)."
    (decknix-sidebar-transient--sessions-hide-live)    ;; live-backed
    (decknix-sidebar-transient--show-saved-sessions)   ;; saved
    (decknix-sidebar-transient--sessions-hide-unknown)];; unknown-ws
+  ["Worktrees"
+   ;; Alphabetical by display label: age, dirty-only, live-only,
+   ;; merged, placeholders, repo-grouped.
+   (decknix-sidebar-transient--wt-age-filter)         ;; age
+   (decknix-sidebar-transient--wt-hide-clean)         ;; dirty-only
+   (decknix-sidebar-transient--wt-live-only)          ;; live-only
+   (decknix-sidebar-transient--wt-hide-merged)        ;; merged
+   (decknix-sidebar-transient--wt-hide-placeholders)  ;; placeholders
+   (decknix-sidebar-transient--wt-group-by-repo)]     ;; repo-grouped
   ["" ("q" "Done" transient-quit-one)])
 
 (defun decknix-sidebar-refresh ()
@@ -969,6 +1083,64 @@ All toggle keys are accessed via the T transient prefix."
                          'face (if decknix--sidebar-sessions-hide-unknown
                                    'font-lock-constant-face
                                  'font-lock-comment-face)))))))
+        (worktrees
+         ;; Alphabetical by display label: age, dirty-only, live-only,
+         ;; merged, placeholders, repo-grouped.
+         (list
+          (cons "a" (format "age %s"
+                        (let ((label (if (fboundp 'decknix--sidebar-wt-age-label)
+                                         (decknix--sidebar-wt-age-label)
+                                       "all")))
+                          (propertize
+                           (format "[%s]" label)
+                           'face (if (string= label "all")
+                                     'font-lock-comment-face
+                                   'font-lock-constant-face)))))
+          (cons "d" (format "dirty-only %s"
+                        (propertize
+                         (if (and (boundp 'decknix--sidebar-wt-hide-clean)
+                                  decknix--sidebar-wt-hide-clean)
+                             "[on]" "[off]")
+                         'face (if (and (boundp 'decknix--sidebar-wt-hide-clean)
+                                        decknix--sidebar-wt-hide-clean)
+                                   'font-lock-constant-face
+                                 'font-lock-comment-face))))
+          (cons "l" (format "live-only %s"
+                        (propertize
+                         (if (and (boundp 'decknix--sidebar-wt-live-only)
+                                  decknix--sidebar-wt-live-only)
+                             "[on]" "[off]")
+                         'face (if (and (boundp 'decknix--sidebar-wt-live-only)
+                                        decknix--sidebar-wt-live-only)
+                                   'font-lock-constant-face
+                                 'font-lock-comment-face))))
+          (cons "o" (format "merged %s"
+                        (propertize
+                         (if (and (boundp 'decknix--sidebar-wt-hide-merged)
+                                  decknix--sidebar-wt-hide-merged)
+                             "[hide]" "[show]")
+                         'face (if (and (boundp 'decknix--sidebar-wt-hide-merged)
+                                        decknix--sidebar-wt-hide-merged)
+                                   'font-lock-constant-face
+                                 'font-lock-comment-face))))
+          (cons "p" (format "placeholders %s"
+                        (propertize
+                         (if (and (boundp 'decknix--sidebar-wt-hide-placeholders)
+                                  decknix--sidebar-wt-hide-placeholders)
+                             "[hide]" "[show]")
+                         'face (if (and (boundp 'decknix--sidebar-wt-hide-placeholders)
+                                        decknix--sidebar-wt-hide-placeholders)
+                                   'font-lock-constant-face
+                                 'font-lock-comment-face))))
+          (cons "r" (format "repo-grouped %s"
+                        (propertize
+                         (if (and (boundp 'decknix--sidebar-wt-group-by-repo)
+                                  decknix--sidebar-wt-group-by-repo)
+                             "[on]" "[off]")
+                         'face (if (and (boundp 'decknix--sidebar-wt-group-by-repo)
+                                        decknix--sidebar-wt-group-by-repo)
+                                   'font-lock-constant-face
+                                 'font-lock-comment-face))))))
     ;; Return as sectioned list
     (delq nil
           (list
@@ -976,7 +1148,8 @@ All toggle keys are accessed via the T transient prefix."
            (when requests (cons "Requests" requests))
            (cons "Live" live)
            (cons "WIP" wip)
-           (cons "Sessions" sessions)))))
+           (cons "Sessions" sessions)
+           (cons "Worktrees" worktrees)))))
 
 (defun decknix--sidebar-render-toggle-sections (sections &optional col-width)
   "Render toggle SECTIONS with sub-headings.
@@ -3638,7 +3811,26 @@ cannot clobber the Previous Sessions snapshot."
                    decknix--sidebar-tile-count))
            (cons 'show-progress
                  (when (boundp 'decknix--sidebar-show-progress)
-                   decknix--sidebar-show-progress)))))
+                   decknix--sidebar-show-progress))
+           ;; Worktree toggles (§3.6.12)
+           (cons 'wt-live-only
+                 (when (boundp 'decknix--sidebar-wt-live-only)
+                   decknix--sidebar-wt-live-only))
+           (cons 'wt-group-by-repo
+                 (when (boundp 'decknix--sidebar-wt-group-by-repo)
+                   decknix--sidebar-wt-group-by-repo))
+           (cons 'wt-age-filter
+                 (when (boundp 'decknix--sidebar-wt-age-filter)
+                   decknix--sidebar-wt-age-filter))
+           (cons 'wt-hide-clean
+                 (when (boundp 'decknix--sidebar-wt-hide-clean)
+                   decknix--sidebar-wt-hide-clean))
+           (cons 'wt-hide-placeholders
+                 (when (boundp 'decknix--sidebar-wt-hide-placeholders)
+                   decknix--sidebar-wt-hide-placeholders))
+           (cons 'wt-hide-merged
+                 (when (boundp 'decknix--sidebar-wt-hide-merged)
+                   decknix--sidebar-wt-hide-merged)))))
     (make-directory (file-name-directory decknix--sidebar-state-file) t)
     (with-temp-file decknix--sidebar-state-file
       (insert ";; Auto-generated — do not edit\n")
@@ -3729,7 +3921,33 @@ cannot clobber the Previous Sessions snapshot."
           (let ((tc (alist-get 'tile-count state)))
             (when (and (integerp tc)
                        (boundp 'decknix--sidebar-tile-count))
-              (setq decknix--sidebar-tile-count tc))))
+              (setq decknix--sidebar-tile-count tc)))
+          ;; Worktree toggles (§3.6.12): use `missing' sentinel so
+          ;; absent keys in older state files leave the defaults intact.
+          (let ((wlo (alist-get 'wt-live-only state 'missing)))
+            (unless (eq wlo 'missing)
+              (when (boundp 'decknix--sidebar-wt-live-only)
+                (setq decknix--sidebar-wt-live-only wlo))))
+          (let ((wgr (alist-get 'wt-group-by-repo state 'missing)))
+            (unless (eq wgr 'missing)
+              (when (boundp 'decknix--sidebar-wt-group-by-repo)
+                (setq decknix--sidebar-wt-group-by-repo wgr))))
+          (let ((waf (alist-get 'wt-age-filter state 'missing)))
+            (unless (eq waf 'missing)
+              (when (boundp 'decknix--sidebar-wt-age-filter)
+                (setq decknix--sidebar-wt-age-filter waf))))
+          (let ((whc (alist-get 'wt-hide-clean state 'missing)))
+            (unless (eq whc 'missing)
+              (when (boundp 'decknix--sidebar-wt-hide-clean)
+                (setq decknix--sidebar-wt-hide-clean whc))))
+          (let ((whp (alist-get 'wt-hide-placeholders state 'missing)))
+            (unless (eq whp 'missing)
+              (when (boundp 'decknix--sidebar-wt-hide-placeholders)
+                (setq decknix--sidebar-wt-hide-placeholders whp))))
+          (let ((whm (alist-get 'wt-hide-merged state 'missing)))
+            (unless (eq whm 'missing)
+              (when (boundp 'decknix--sidebar-wt-hide-merged)
+                (setq decknix--sidebar-wt-hide-merged whm)))))
       (error
        (message "sidebar-state: restore failed: %s" (error-message-string err))))))
 

@@ -2607,10 +2607,24 @@ index has caught up to a freshly-pushed PR.
 
 Repo keys are canonicalised (lowercased) so the dedup against WIP
 data is case-insensitive — `gh search prs' may return mixed casing
-for `owner/repo' but the worktree registry stores lowercase."
+for `owner/repo' but the worktree registry stores lowercase.
+
+Respects `decknix--sidebar-wt-live-only' (§3.6.12): when on, only
+worktrees with an active session (⎇* badge) are included.
+Respects `decknix--sidebar-wt-age-filter' (§3.6.12): worktrees older
+than the cutoff (by directory mtime) are filtered out."
   (let* ((data decknix--hub-wip)
          (all-repos (when data (alist-get 'repos data)))
          (existing (make-hash-table :test 'equal))
+         ;; Worktree toggles (§3.6.12) — use safe boundp guards so
+         ;; this function works when sidebar-toggles hasn't loaded.
+         (live-only (and (boundp 'decknix--sidebar-wt-live-only)
+                         decknix--sidebar-wt-live-only))
+         (age-cutoff (and (boundp 'decknix--sidebar-wt-age-filter)
+                          decknix--sidebar-wt-age-filter))
+         ;; Live workspaces set: computed once when live-only is on.
+         (live-set (when live-only
+                     (decknix--hub-worktree-live-workspaces)))
          (out nil))
     (dolist (repo-entry all-repos)
       (let* ((repo (decknix--hub-worktree-canonical-repo
@@ -2628,14 +2642,30 @@ for `owner/repo' but the worktree registry stores lowercase."
              (taken (gethash repo existing))
              rows)
         (dolist (wt worktrees)
-          (let ((branch (car wt))
-                (path (cdr wt)))
+          (let* ((branch (car wt))
+                 (path (cdr wt))
+                 ;; Age check: skip if path mtime exceeds cutoff.
+                 (mtime (and age-cutoff path (file-exists-p path)
+                             (file-attribute-modification-time
+                              (file-attributes path))))
+                 (age-secs (and mtime
+                                (float-time
+                                 (time-subtract (current-time) mtime))))
+                 (too-old (and age-cutoff age-secs
+                               (> age-secs age-cutoff)))
+                 ;; Live-only check: skip if worktree path not in live set.
+                 (wt-live (and live-only path
+                               (gethash (file-name-as-directory
+                                         (expand-file-name path))
+                                        live-set))))
             (when (and branch path
                        (not (member branch taken))
                        (not (and primary
                                  (file-exists-p path)
                                  (file-exists-p primary)
-                                 (file-equal-p path primary))))
+                                 (file-equal-p path primary)))
+                       (not too-old)
+                       (or (not live-only) wt-live))
               (push (cons branch path) rows))))
         (when rows
           (push (cons repo (nreverse rows)) out))))
@@ -2723,7 +2753,12 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
          ;; placeholder rows so newly-created worktrees show up
          ;; in WIP at t=0 instead of waiting for `gh pr create'
          ;; + GitHub Search indexing.
-         (placeholders (decknix--hub-wip-placeholder-rows))
+         ;; §3.6.12 `T → w p': when wt-hide-placeholders is on,
+         ;; set placeholders to nil so all downstream code no-ops.
+         (placeholders (if (and (boundp 'decknix--sidebar-wt-hide-placeholders)
+                                decknix--sidebar-wt-hide-placeholders)
+                           nil
+                         (decknix--hub-wip-placeholder-rows)))
          ;; Repos with placeholders that are NOT already in
          ;; `repos' (no real PRs visible).  These get a fresh
          ;; sub-header below the PR-bearing repos.

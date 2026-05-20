@@ -159,5 +159,124 @@ toggles share vocabulary (all/1d/3d/7d/14d/30d)."
     (message "Sessions age filter: %s"
              (decknix--sidebar-sessions-age-label))))
 
+
+;; == Worktree toggles (§3.6.12) ==
+
+(defvar decknix--sidebar-wt-live-only nil
+  "When non-nil, show only WIP placeholder rows whose worktree has a
+live session (⎇* badge).  Collapses the placeholder list to actively
+in-flight branches so the user can focus on current work.
+Toggle with `l' in the `T → w' Worktrees group.")
+
+(defvar decknix--sidebar-wt-group-by-repo t
+  "When non-nil (default), group worktree rows by repository.
+When nil, render a flat alphabetical list (requires §3.6.10 Worktrees
+section — flat mode is a no-op until that section ships).
+Toggle with `r' in the `T → w' Worktrees group.")
+
+(defvar decknix--sidebar-wt-age-filter nil
+  "Age cutoff in seconds for WIP placeholder rows; nil = no limit.
+Cycles through `all / 7d / 14d / 30d' using the dedicated
+`decknix--sidebar-wt-age-presets' alist.
+Toggle with `a' in the `T → w' Worktrees group.")
+
+(defvar decknix--sidebar-wt-hide-clean nil
+  "When non-nil, hide worktrees with no uncommitted changes.
+Requires async `git status' checks; filtering is deferred pending
+the §3.6.10 Worktrees section.  The variable persists now so the
+preference survives across sessions and the toggle is discoverable.
+Toggle with `d' in the `T → w' Worktrees group.")
+
+(defvar decknix--sidebar-wt-hide-placeholders nil
+  "When non-nil, hide all WIP placeholder rows (worktrees without a PR).
+Disables the §3.6.7 placeholder feature entirely so only real PRs
+appear in the WIP section.
+Toggle with `p' in the `T → w' Worktrees group.")
+
+(defvar decknix--sidebar-wt-hide-merged nil
+  "When non-nil, hide WIP placeholder rows whose branch is fully merged.
+Requires merged-PR tracking across the WIP dataset; filtering is
+deferred until the hub daemon surfaces closed/merged state for
+branches without an active open PR.  The variable persists now.
+Toggle with `o' in the `T → w' Worktrees group.")
+
+(defvar decknix--sidebar-wt-age-presets
+  '((nil . "all")
+    (604800  . "7d")
+    (1209600 . "14d")
+    (2592000 . "30d"))
+  "Age presets for the Worktree age filter (`T → w a').
+Subset of `decknix--hub-age-presets': all / 7d / 14d / 30d.")
+
+(defun decknix--sidebar-wt-age-label ()
+  "Return a short label for the current worktree age filter."
+  (or (alist-get decknix--sidebar-wt-age-filter
+                 decknix--sidebar-wt-age-presets)
+      "all"))
+
+(defun decknix-sidebar-toggle-wt-live-only ()
+  "Toggle whether only live-session worktrees are shown in WIP placeholders."
+  (interactive)
+  (setq decknix--sidebar-wt-live-only
+        (not decknix--sidebar-wt-live-only))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Worktrees: live-only %s"
+           (if decknix--sidebar-wt-live-only "on" "off")))
+
+(defun decknix-sidebar-toggle-wt-group-by-repo ()
+  "Toggle whether worktrees are grouped by repo."
+  (interactive)
+  (setq decknix--sidebar-wt-group-by-repo
+        (not decknix--sidebar-wt-group-by-repo))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Worktrees: group-by-repo %s"
+           (if decknix--sidebar-wt-group-by-repo "on" "off")))
+
+(defun decknix-sidebar-cycle-wt-age-filter ()
+  "Cycle the worktree age filter through presets (all/7d/14d/30d)."
+  (interactive)
+  (let* ((presets decknix--sidebar-wt-age-presets)
+         (keys (mapcar #'car presets))
+         (pos (cl-position decknix--sidebar-wt-age-filter
+                           keys :test #'equal))
+         (next-pos (mod (1+ (or pos 0)) (length keys))))
+    (setq decknix--sidebar-wt-age-filter (nth next-pos keys))
+    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+      (agent-shell-workspace-sidebar-refresh))
+    (message "Worktrees age filter: %s"
+             (decknix--sidebar-wt-age-label))))
+
+(defun decknix-sidebar-toggle-wt-hide-clean ()
+  "Toggle whether clean (non-dirty) worktrees are hidden."
+  (interactive)
+  (setq decknix--sidebar-wt-hide-clean
+        (not decknix--sidebar-wt-hide-clean))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Worktrees: hide-clean %s"
+           (if decknix--sidebar-wt-hide-clean "on (pending §3.6.10)" "off")))
+
+(defun decknix-sidebar-toggle-wt-hide-placeholders ()
+  "Toggle whether WIP placeholder rows are hidden globally."
+  (interactive)
+  (setq decknix--sidebar-wt-hide-placeholders
+        (not decknix--sidebar-wt-hide-placeholders))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Worktrees: placeholders %s"
+           (if decknix--sidebar-wt-hide-placeholders "hidden" "shown")))
+
+(defun decknix-sidebar-toggle-wt-hide-merged ()
+  "Toggle whether worktrees with fully-merged branches are hidden."
+  (interactive)
+  (setq decknix--sidebar-wt-hide-merged
+        (not decknix--sidebar-wt-hide-merged))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Worktrees: hide-merged %s"
+           (if decknix--sidebar-wt-hide-merged "on (pending hub support)" "off")))
+
 (provide 'decknix-sidebar-toggles)
 ;;; decknix-sidebar-toggles.el ends here
