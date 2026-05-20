@@ -568,6 +568,188 @@ rows, so users who scope WIP to a single org don't see worktrees from
 others.  The `L hide-linked` toggle is a no-op on placeholder rows
 because there is no PR to link.
 
+#### 3.6.8 Extended per-worktree verbs (PR follow-up)
+
+The eight verbs in §3.6.4 cover the create / open / inspect / remove
+lifecycle.  Real-world worktree workflows need three further verb
+categories — **mutation** (move, rename, sync), **publish** (push,
+PR-create, post-merge cleanup), and **inspect-deep** (diff, log, test).
+These earn permanent slots in the worktree submenu under a second
+column so the stable-shape contract from §3.6.4 holds — every verb
+always rendered, dimmed via `:inapt-if` when state disqualifies it.
+
+| Verb                        | Key | Category   | Enabled when                                                  |
+|-----------------------------|-----|------------|---------------------------------------------------------------|
+| Move worktree               | `m` | Mutate     | worktree exists; runs §3.6.6 session-interlock first          |
+| Rename branch               | `R` | Mutate     | worktree exists; warns when an open PR uses the old branch    |
+| Update from primary         | `u` | Mutate     | worktree exists; runs `git fetch + rebase origin/<default>`   |
+| Push branch                 | `P` | Publish    | worktree exists, branch has commits ahead of upstream         |
+| Squash & cleanup post-merge | `S` | Publish    | PR is `MERGED` (sourced from Linked PR / WIP row)             |
+| Diff vs primary             | `D` | Inspect    | worktree exists; opens `magit-diff` against `origin/<default>`|
+| Show log                    | `L` | Inspect    | worktree exists; opens `magit-log` of `<default>..HEAD`       |
+| Run tests                   | `t` | Inspect    | worktree exists; invokes `compile` in the worktree dir        |
+
+All four mutation verbs (`m R u P`) inherit the §3.6.6 session-interlock —
+they abort by default when any saved session's workspace points at the
+worktree and `C-u` opts in to the prompt path.  `S` is the only verb that
+requires the row to carry PR state (Linked PR / WIP); on Request / Linked
+Repo rows it is dimmed with the rationale "no merged PR for this branch".
+
+The submenu grows to two columns (`Worktree | Mutate` and
+`Inspect | Publish`).  The 8-key footprint of the original menu is
+preserved as the first column so muscle memory survives.
+
+#### 3.6.9 Sub-agent dispatch onto a worktree
+
+The current `W → s` "Start session in worktree" creates a session
+rooted at the worktree (auto-creating the worktree if missing).  Two
+adjacent verbs cover the cases where the user already has a task in
+mind:
+
+| Verb                                  | Key | Behaviour                                                                 |
+|---------------------------------------|-----|---------------------------------------------------------------------------|
+| Spawn agent on this worktree…         | `a` | Prompts for task description + quick-action template; reuses worktree     |
+| Spawn agent on a fresh worktree…      | `A` | Prompts for branch name, creates sibling worktree, then dispatches `a`    |
+
+Implementation reuses `decknix--agent-quickaction-start` (already
+behind `C-c A c r` PR-review and `C-c A c B` batch).  Templates are the
+same set the quick-action picker uses today — review / investigate /
+refactor / batch — plus a free-form "custom prompt" option that just
+threads the task description as the auto-send command.
+
+**Session ↔ worktree linkage.**  `agent-sessions.json` gains an
+optional `worktree: {repo, branch, path}` field.  Today the link is
+implicit via `default-directory`; recording it explicitly lets the
+Sessions section render a `⎇ feat/foo` badge on the row and unlocks
+two `S Session…` verbs in a follow-up PR — `S w` (jump to this
+session's worktree) and `S W` (open the worktree submenu against
+the session's branch).
+
+#### 3.6.10 First-class Worktrees sidebar section
+
+A new section between **WIP** and **Live**, off by default, toggled
+via the new worktree-toggles group from §3.6.11.  Layout:
+
+```
+Worktrees (12)
+  decknix
+    main          ⎇  primary HEAD       (no session)
+    feat/sidebar  ⎇* 2 sessions         📥 1
+    fix/bug-123   ⎇  3d  clean          (no session)
+  nc-config
+    main          ⎇  primary HEAD       (no session)
+```
+
+Columns: `<badge> <branch> <age> <status> <session-count>`.  The
+badge is the same 2-column glyph (§3.6.3) every other hub row uses.
+Status is one of `clean / dirty / ahead N / behind N / conflict`,
+derived from a 60 s-TTL `git status --porcelain=v2 --branch` probe
+per worktree (one cheap `make-process` per refresh tick, cached
+between).  Session count counts live + saved sessions whose
+workspace path matches the worktree.
+
+`RET` on a Worktrees row opens the existing
+`decknix-sidebar-worktree-menu` (no new submenu — the row's
+`(repo, branch)` is sufficient to drive every verb).  `M-RET` /
+`C-u RET` runs the row's primary action: open the worktree in
+`dired` (the same action `W → o` performs).
+
+A standalone tabulated view ships alongside the section.
+**`M-x decknix-worktree-list`** opens a `tabulated-list-mode` buffer
+over the registry, sortable by repo / branch / age / state /
+session-count, with the same eight verbs bound at row level.  The
+buffer is the worktree equivalent of `M-x project-list-projects` —
+useful when the sidebar is hidden or the user wants a Magit-shaped
+view rather than a sidebar section.  Reachable via `C-c A W` (or
+`s w` in the sidebar's session-ops prefix).
+
+#### 3.6.11 Cross-worktree hygiene transient
+
+The CLI already exposes `wt prune` and `wt clean-fork-remotes`.
+Three further cross-cutting verbs cover the "what's safe to delete?"
+audit workflow:
+
+| CLI                          | Emacs entry                | Behaviour                                                                                          |
+|------------------------------|----------------------------|----------------------------------------------------------------------------------------------------|
+| `wt clean --older-than 7d`   | hygiene transient `c`      | Remove worktrees: no session activity for N days **and** clean state **and** branch fully merged   |
+| `wt audit`                   | `M-x decknix-worktree-audit` | Dry-run report: stale / dirty / orphan-fork-remote / branch-deleted-upstream / session-stranded   |
+| `wt orphans`                 | `M-x decknix-worktree-orphans` | List worktrees whose branch is deleted upstream; safe-to-remove candidates                       |
+
+`wt clean` defaults to **dry-run** and requires explicit `--apply` to
+delete.  It always runs the §3.6.6 session-interlock per worktree and
+emits a per-skipped-worktree explanation so the user can resolve the
+blocker and re-run.
+
+These verbs are surfaced via a top-level **`M-x decknix-worktree-hygiene`**
+transient (also bound `H` inside the worktree submenu) so users meet
+them without needing to remember the CLI flag set:
+
+```
+Worktree hygiene — across all clones
+  Audit
+   a   Audit (dry-run report)
+   o   List orphan branches
+  Prune
+   p   Prune stale worktree records (registry + git)
+   c   Clean old worktrees (--older-than N days)
+   f   Clean orphan fork remotes
+```
+
+#### 3.6.12 Worktree visibility toggles
+
+A new `Worktrees` group in the Toggles transient (`T`), gated on
+either §3.6.10 (the new Worktrees section) or the existing
+placeholder rendering.  State persists via `decknix--sidebar-state-file`
+like every other toggle.
+
+| Key       | Toggle                                              | Default |
+|-----------|-----------------------------------------------------|---------|
+| `T → w l` | Live-session worktrees only                         | off     |
+| `T → w r` | Group by repo (vs flat list)                        | on      |
+| `T → w a` | Age filter (cycles `all/7d/14d/30d`)                | `all`   |
+| `T → w d` | Hide clean worktrees (show only dirty)              | off     |
+| `T → w p` | Hide WIP placeholders globally                      | off     |
+| `T → w o` | Hide worktrees whose branch is fully merged         | off     |
+
+`T → w l` is the "focus on current work" toggle: it collapses the
+Worktrees section to only `⎇*` rows so the user sees what is actively
+in flight.  `T → w p` lets users who find the §3.6.7 placeholder rows
+noisy hide them outright (the placeholders were intended to close the
+GitHub indexing gap, not be a permanent fixture).
+
+#### 3.6.13 Additional worktree affordances (deferred)
+
+The following are spec'd for completeness so their key allocations
+are reserved; each ships as a separate PR after §3.6.8–§3.6.12 land.
+
+- **`C-u W → n` branch picker.**  Today `n` infers the branch from
+  the active row.  Prefix arg opens a consult-style picker over
+  `git branch -a` so a worktree can be created for any branch
+  without first navigating to a row that mentions it.
+- **`W → f` fork PR checkout.**  Wraps `gh pr checkout <number>` and
+  records the fork remote in the registry per §6 Q9.  Today this
+  takes three manual steps; the verb is the natural place for
+  "review a colleague's PR locally".
+- **Worktree → tab-bar tab.**  Optional defcustom
+  `decknix.worktree.dedicated-tab` opens a dedicated tab-bar tab
+  per worktree (like the Agents tab) so `C-x t o` cycles between
+  workspaces with their own buffer set.  Off by default; useful
+  with 3+ active worktrees.
+- **`consult-decknix-worktree` source.**  A `consult--multi` source
+  surfacing worktrees in `C-x b` so `C-x b feat/foo` jumps straight
+  to the worktree's `dired` or `magit-status`.
+- **Pre-removal safety net.**  When `W → x` would be a force-remove
+  (dirty **and** session-interlocked), the menu offers a "stash to
+  `~/.decknix/worktree-graveyard/<repo>/<branch>-<ts>.patch` first"
+  option.  Insurance against a `C-u x` rage-click eating uncommitted
+  work.
+- **`wt cd BRANCH` shell integration.**  Spec'd in
+  [`worktree-cli.md`](./worktree-cli.md) §4.  Once shipped a zsh
+  widget bound to `^G^W` fuzzy-matches branches via
+  `wt registry --json | fzf` so non-Emacs shells get parity with the
+  sidebar.
+
+
 ### 3.7 Category submenus & uppercase shortcuts
 
 The Action Menu accumulated 12–15 verbs per row variant by the time
@@ -704,6 +886,38 @@ short, optional track that can slot in after the dispatcher (#4) lands.
     command sweeps the leftovers.
 15. **`docs(agent-shell): document sidebar RET / M-RET + worktree contract
     in AGENTS.md`** — ships alongside #4 and #10.
+16. **`feat(sidebar): worktree submenu — extended verbs (m R u P S D L t)`**
+    (§3.6.8) — extends the eight-verb baseline with mutation / publish /
+    deep-inspect categories under the same stable-shape policy.  Mutation
+    verbs reuse §3.6.6 session-interlock; `S` depends on PR state from the
+    Linked-PR / WIP row.  No new data layer.
+17. **`feat(sidebar): worktree submenu — sub-agent dispatch (W → a, W → A)`**
+    (§3.6.9) — wires `decknix--agent-quickaction-start` into the worktree
+    submenu so a task can be dispatched onto an existing or freshly-created
+    worktree in one transient.  Adds optional `worktree` field to
+    `agent-sessions.json` so future Session-submenu verbs can navigate to
+    the linked worktree.  Depends on #16 only for menu layout.
+18. **`feat(sidebar): first-class Worktrees section + decknix-worktree-list`**
+    (§3.6.10) — adds the Worktrees sidebar section between WIP and Live and
+    the `M-x decknix-worktree-list` tabulated buffer.  Adds a per-worktree
+    status probe (`git status --porcelain=v2 --branch`, 60 s TTL).  RET on
+    a row routes to the existing worktree submenu — no new transient.
+19. **`feat(cli+emacs): worktree hygiene (wt clean / wt audit / wt orphans)`**
+    (§3.6.11) — adds three cross-cutting CLI verbs and surfaces them via
+    the `decknix-worktree-hygiene` transient (bound `H` inside the worktree
+    submenu).  `wt clean` defaults to dry-run, requires `--apply`, and
+    always runs the session-interlock per worktree.
+20. **`feat(sidebar): worktree visibility toggles (T → w l/r/a/d/p/o)`**
+    (§3.6.12) — adds the `Worktrees` group to the Toggles transient.
+    State persists via `decknix--sidebar-state-file`.  Depends on #18 for
+    the section to filter; `T → w p` (hide placeholders) is independently
+    useful against §3.6.7 and can ship as a smaller standalone PR.
+21. **`feat(sidebar): worktree affordances follow-ups (§3.6.13)`** —
+    umbrella for the deferred items: `C-u W → n` branch picker, `W → f`
+    fork PR checkout, `decknix.worktree.dedicated-tab` tab-bar
+    integration, `consult-decknix-worktree` source, pre-removal stash
+    safety net, and the `wt cd BRANCH` zsh widget.  Each lands as its own
+    PR; tracked together so the key allocations stay coordinated.
 
 ## 6. Resolutions
 

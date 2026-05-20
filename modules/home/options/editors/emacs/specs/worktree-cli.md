@@ -52,6 +52,9 @@ A bare `wt` shim alias gets installed when
 | `wt status`                      | Combined `git status --porcelain=v2 --branch` for cwd worktree.               |
 | `wt prune [--repo R]`            | `git worktree prune` for one repo or all.                                     |
 | `wt clean-fork-remotes [--dry-run]` | Sweep orphan fork remotes (Q9, mirrors `M-x decknix-clean-fork-remotes`).  |
+| `wt clean [--older-than D] [--apply]` | Remove worktrees with no session activity for D days, clean state, and merged branch.  Default `--dry-run`; `--apply` to act.  Always runs the §3.6.6 session-interlock per worktree. |
+| `wt audit [--json]`              | Dry-run report: stale / dirty / orphan-fork-remote / branch-deleted-upstream / session-stranded worktrees across all clones. |
+| `wt orphans [--json]`            | List worktrees whose branch is deleted upstream; safe-to-remove candidates.   |
 | `wt refresh [--repo R]`          | Force re-probe (bypass 60 s TTL); useful after external `git worktree add`.   |
 | `wt registry [--json]`           | Dump the registry; default elisp form, `--json` for shell consumers.          |
 
@@ -126,5 +129,11 @@ file is a *cache*, not source of truth. Source of truth is always
   session-interlock rule as #129 `x`. Lands after #129.
 - **`feat(cli): wt prune / clean-fork-remotes / refresh`** — hygiene
   commands; mirrors #133.
+- **`feat(cli): wt clean / audit / orphans — cross-worktree hygiene`** —
+  surfaces the three audit verbs the Emacs side exposes via the
+  `decknix-worktree-hygiene` transient (sidebar-ret.md §3.6.11).
+  `wt clean` defaults to `--dry-run` and requires `--apply` to act;
+  always runs the session-interlock per worktree.  `audit` and
+  `orphans` are read-only and support `--json` for shell pipelines.
 - **`docs(cli): wt integration — vim / tmux / shell snippets`** — picks up
   the README updates.
