@@ -1899,6 +1899,21 @@ unable to display."
 
 ;; -- WIP PR actions via gh CLI --
 
+(defcustom decknix--hub-pr-comment-presets
+  '("@dependabot rebase"
+    "@dependabot recreate"
+    "@dependabot merge"
+    "@dependabot squash and merge"
+    "auggie review"
+    "auggie review --all"
+    "@copilot review"
+    "please rebase on main")
+  "Preset comment bodies offered by `decknix--hub-wip-comment'.
+Shown as completions in the minibuffer; free-form text is always
+accepted regardless of whether it matches a preset."
+  :type '(repeat string)
+  :group 'decknix)
+
 (defun decknix--hub-wip-merge (repo number)
   "Merge PR NUMBER in REPO via gh CLI.
 Prompts for merge method: rebase, squash, or merge commit."
@@ -1930,12 +1945,15 @@ Prompts for merge method: rebase, squash, or merge commit."
            "-R" repo))))
 
 (defun decknix--hub-wip-comment (repo number)
-  "Add a comment to PR NUMBER in REPO via gh CLI."
-  (let ((body (read-string
-               (format "Comment on %s#%d: "
-                       (car (last (split-string repo "/")))
-                       number))))
-    (when (and body (not (string-empty-p body)))
+  "Add a comment to PR NUMBER in REPO via gh CLI.
+Offers preset comment bodies from `decknix--hub-pr-comment-presets'
+via `completing-read'; type any text to enter a free-form comment
+instead.  Presets are not enforced — arbitrary input is always accepted."
+  (let* ((short (car (last (split-string repo "/"))))
+         (prompt (format "Comment on %s#%d: " short number))
+         (body (completing-read prompt decknix--hub-pr-comment-presets
+                                nil nil nil nil nil)))
+    (when (and body (not (string-empty-p (string-trim body))))
       (decknix--hub-gh-async
        "comment" repo number
        (list "pr" "comment" (number-to-string number)
@@ -3020,7 +3038,9 @@ message so users can find the tracking ticket."
 Per spec §3.7, review verbs (`r s c R') and the worktree submenu
 live under the uppercase category keys `R Review…' / `W Worktree…'
 — a one-tap step costs +1 keypress vs. the pre-§3.7 layout but
-unifies the menu with the sidebar-global `R W S' fast-paths."
+unifies the menu with the sidebar-global `R W S' fast-paths.
+`M comment' mirrors the Task menu so quick comments (dependabot rebase,
+auggie review, etc.) are one tap from any PR row."
   [:description decknix--sidebar-action-description
    ["Navigate"
     ("o" decknix--sb-act-open)
@@ -3029,6 +3049,8 @@ unifies the menu with the sidebar-global `R W S' fast-paths."
    ["Submenus"
     ("R" decknix--sb-act-review-submenu)
     ("W" decknix--sb-act-worktree)]
+   ["Direct"
+    ("M" decknix--sb-act-comment)]
    ["Pipeline"
     ("C" decknix--sb-act-jump-ci)]
    ["Other"
@@ -3038,7 +3060,8 @@ unifies the menu with the sidebar-global `R W S' fast-paths."
 (transient-define-prefix decknix-sidebar-wip-menu ()
   "Action menu for a WIP row (my open PR).
 Per spec §3.7, review verbs and the worktree submenu live under
-the uppercase category keys `R Review…' / `W Worktree…'."
+the uppercase category keys `R Review…' / `W Worktree…'.
+`M comment' mirrors the Task and Request menus for quick PR comments."
   [:description decknix--sidebar-action-description
    ["Navigate"
     ("o" decknix--sb-act-open)
@@ -3049,7 +3072,8 @@ the uppercase category keys `R Review…' / `W Worktree…'."
     ("W" decknix--sb-act-worktree)]
    ["Status"
     ("m" decknix--sb-act-merge)
-    ("x" decknix--sb-act-close)]
+    ("x" decknix--sb-act-close)
+    ("M" decknix--sb-act-comment)]
    ["Pipeline"
     ("C" decknix--sb-act-jump-ci)
     ("D" decknix--sb-act-jump-deploy
@@ -3099,7 +3123,8 @@ the canonical uppercase `W'."
     ("m" decknix--sb-act-merge
      :inapt-if decknix--sb-act-not-authored-p)
     ("x" decknix--sb-act-close
-     :inapt-if decknix--sb-act-not-authored-p)]
+     :inapt-if decknix--sb-act-not-authored-p)
+    ("M" decknix--sb-act-comment)]
    ["Pipeline"
     ("C" decknix--sb-act-jump-ci)
     ("D" decknix--sb-act-jump-deploy
