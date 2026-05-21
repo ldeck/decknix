@@ -87,13 +87,13 @@
 (ert-deftest decknix-hub-review-icon--approved ()
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-review-icon '((my_review . "APPROVED"))))
-                 "✓")))
+                 "★")))
 
 (ert-deftest decknix-hub-review-icon--changes-requested ()
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-review-icon
                    '((my_review . "CHANGES_REQUESTED"))))
-                 "✗")))
+                 "⚑")))
 
 (ert-deftest decknix-hub-review-icon--commented ()
   (should (equal (decknix-test--icon-glyph
@@ -122,13 +122,13 @@
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-wip-review-icon
                    '((review_decision . "APPROVED"))))
-                 "✓")))
+                 "★")))
 
 (ert-deftest decknix-hub-wip-review-icon--changes-requested ()
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-wip-review-icon
                    '((review_decision . "CHANGES_REQUESTED"))))
-                 "✗")))
+                 "⚑")))
 
 (ert-deftest decknix-hub-wip-review-icon--review-required ()
   (should (equal (decknix-test--icon-glyph

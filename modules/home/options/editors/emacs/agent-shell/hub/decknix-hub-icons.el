@@ -57,11 +57,11 @@
 (defun decknix--hub-review-icon (item)
   "Return a review state icon for ITEM, or empty string if none.
 Shows whether the current user has already responded to this PR.
-  ✎ = commented (cyan), ✓ = approved (green), ✗ = changes requested (red)."
+  ✎ = commented (cyan), ★ = approved (green), ⚑ = changes requested (red)."
   (let ((state (alist-get 'my_review item)))
     (pcase state
-      ("APPROVED"          (decknix--hub-icon "✓" 'success))
-      ("CHANGES_REQUESTED" (decknix--hub-icon "✗" 'error))
+      ("APPROVED"          (decknix--hub-icon "★" 'success))
+      ("CHANGES_REQUESTED" (decknix--hub-icon "⚑" 'error))
       ("COMMENTED"         (decknix--hub-icon "✎" '(:foreground "#5fafaf")))
       ("DISMISSED"         (decknix--hub-icon "−" 'font-lock-comment-face))
       ("PENDING"           (decknix--hub-icon "…" 'warning))
@@ -70,12 +70,12 @@ Shows whether the current user has already responded to this PR.
 (defun decknix--hub-wip-review-icon (pr)
   "Return a review decision icon for a WIP PR, or empty string.
 Shows the overall review status of the user's own PR:
-  ✓ = approved (green), ✗ = changes requested (red),
+  ★ = approved (green), ⚑ = changes requested (red),
   ◐ = review required (yellow), (none) = no review policy."
   (let ((decision (alist-get 'review_decision pr)))
     (pcase decision
-      ("APPROVED"          (decknix--hub-icon "✓" 'success))
-      ("CHANGES_REQUESTED" (decknix--hub-icon "✗" 'error))
+      ("APPROVED"          (decknix--hub-icon "★" 'success))
+      ("CHANGES_REQUESTED" (decknix--hub-icon "⚑" 'error))
       ("REVIEW_REQUIRED"   (decknix--hub-icon "◐" 'warning))
       (_ ""))))
 
