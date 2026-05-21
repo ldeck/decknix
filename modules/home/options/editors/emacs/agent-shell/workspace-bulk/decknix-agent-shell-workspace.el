@@ -153,6 +153,14 @@
 (declare-function decknix-sidebar-toggle-hidden "decknix-sidebar-toggles")
 (declare-function decknix-sidebar-cycle-sessions-age-filter "decknix-sidebar-toggles")
 (declare-function decknix--sidebar-sessions-age-label "decknix-sidebar-toggles")
+;; Worktree toggle commands + label helper (§3.6.12).
+(declare-function decknix-sidebar-cycle-wt-age-filter "decknix-sidebar-toggles")
+(declare-function decknix-sidebar-toggle-wt-hide-clean "decknix-sidebar-toggles")
+(declare-function decknix-sidebar-toggle-wt-live-only "decknix-sidebar-toggles")
+(declare-function decknix-sidebar-toggle-wt-hide-merged "decknix-sidebar-toggles")
+(declare-function decknix-sidebar-toggle-wt-hide-placeholders "decknix-sidebar-toggles")
+(declare-function decknix-sidebar-toggle-wt-group-by-repo "decknix-sidebar-toggles")
+(declare-function decknix--sidebar-wt-age-label "decknix-sidebar-toggles")
 ;; Workspace upstream symbols + xwidget.
 (declare-function agent-shell-workspace--tile "ext:agent-shell-workspace")
 (declare-function agent-shell-workspace--untile "ext:agent-shell-workspace")
@@ -1082,7 +1090,7 @@ All toggle keys are accessed via the T transient prefix."
                          (if decknix--sidebar-sessions-hide-unknown "[hide]" "[show]")
                          'face (if decknix--sidebar-sessions-hide-unknown
                                    'font-lock-constant-face
-                                 'font-lock-comment-face)))))))
+                                 'font-lock-comment-face))))))
         (worktrees
          ;; Alphabetical by display label: age, dirty-only, live-only,
          ;; merged, placeholders, repo-grouped.
@@ -1140,7 +1148,7 @@ All toggle keys are accessed via the T transient prefix."
                          'face (if (and (boundp 'decknix--sidebar-wt-group-by-repo)
                                         decknix--sidebar-wt-group-by-repo)
                                    'font-lock-constant-face
-                                 'font-lock-comment-face))))))
+                                 'font-lock-comment-face)))))))
     ;; Return as sectioned list
     (delq nil
           (list
