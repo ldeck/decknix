@@ -155,15 +155,17 @@ any improvements to agent-shell--make-header automatically."
         (agent-shell--make-header (agent-shell--state))))))
 
 (defun decknix--header-build ()
-  "Build the unified two-line header-line string for the current agent-shell buffer.
-Line 1 (stable):  status icon + label  │  conversation tags  │  context badge.
-Line 2 (animated): agent-shell upstream header — agent name, model, mode,
-                   workspace, session ID, usage, busy animation.
+  "Build the unified header-line string for the current agent-shell buffer.
+Order (left to right, stable before animated):
+  status icon + label  │  conversation tags  │  context badge  │  upstream
 
-Splitting onto two lines ensures the model and session info is always visible
-even in narrow split windows — nothing is ever truncated regardless of window
-width.  Emacs 29+ renders multi-line header-line-format strings natively;
-the header area expands to fit both lines."
+Stable items (status, tags) come first so they are never truncated in narrow
+windows.  The upstream header (agent name, model, mode, workspace, busy
+animation) follows as the trailing item — truncation there is acceptable
+because the most glanceable info is already in the stable prefix.
+
+Note: `header-line-format' is a mode-line format spec; literal \\n in a string
+renders as ^J, not a line break.  All items therefore live on one line."
   (let* ((raw-status (decknix--header-detect-status))
          ;; Track transitions: working -> ready = finished
          (status (cond
@@ -176,7 +178,7 @@ the header area expands to fit both lines."
          (face (decknix--header-status-face status))
          (upstream (decknix--header-upstream))
          (tags (decknix--header-tags))
-         (line1-parts nil))
+         (parts nil))
     ;; Clear "finished" once user returns to the buffer
     (when (and (string= status "finished")
                (eq (current-buffer) (window-buffer (selected-window))))
@@ -186,31 +188,26 @@ the header area expands to fit both lines."
       (setq decknix--header-prev-status raw-status))
     (when (not (member raw-status '("working" "waiting")))
       (setq decknix--header-prev-status nil))
-    ;; Line 1, item 1: Status icon + label
+    ;; Item 1: Status icon + label (stable, always first)
     (push (propertize (format " %s %s" icon status)
                       'face face)
-          line1-parts)
-    ;; Line 1, item 2: Conversation tags
+          parts)
+    ;; Item 2: Conversation tags (stable)
     (when tags
       (push (propertize
              (mapconcat (lambda (tg) (format "#%s" tg)) tags " ")
              'face 'font-lock-type-face)
-            line1-parts))
-    ;; Line 1, item 3: Context panel badge (collapsed by default)
+            parts))
+    ;; Item 3: Context panel badge (stable)
     (when (fboundp 'decknix--context-header-string)
       (let ((ctx (decknix--context-header-string)))
-        (when ctx (push ctx line1-parts))))
-    ;; Line 2: upstream header (agent, model, mode, workspace,
-    ;;         session-id, usage, busy animation).
-    ;; Kept on its own line so the animated busy indicator never
-    ;; displaces the stable status/tags on line 1, and so model
-    ;; info is always visible regardless of how many tags exist.
-    (let ((line1 (mapconcat #'identity (nreverse line1-parts) "  │  "))
-          (line2 (when (and upstream (not (string-empty-p upstream)))
-                   (string-trim upstream))))
-      (if line2
-          (concat line1 "\n" line2)
-        line1))))
+        (when ctx (push ctx parts))))
+    ;; Item 4: upstream header — agent name, model, mode, workspace,
+    ;;         session-id, usage, busy animation (animated, last so
+    ;;         truncation only touches this trailing item).
+    (when (and upstream (not (string-empty-p upstream)))
+      (push (string-trim upstream) parts))
+    (mapconcat #'identity (nreverse parts) "  │  ")))
 
 (defun decknix--header-update ()
   "Update the header-line-format for the current agent-shell buffer."
