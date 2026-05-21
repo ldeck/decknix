@@ -1737,10 +1737,38 @@ let
     ## Response Formatting in Agent Shell
 
     You are running inside an Emacs agent-shell — a comint buffer that
-    displays text as-is.  Markdown syntax is NOT rendered: `**bold**`
-    shows literal asterisks, `| a | b |` table rows show literal pipes,
-    and `# heading` shows a literal hash mark.  Reserve markdown for
-    surfaces that render it:
+    displays text as-is.  Markdown syntax is NOT rendered.  `**bold**`
+    shows literal asterisks; `| a | b |` table rows show literal pipes;
+    `# heading` shows a literal hash mark.
+
+    ### HARD RULE — MUST NOT emit markdown tables in chat
+
+    Do NOT use pipe-delimited tables (`| col | col |`) or markdown
+    header-separator rows (`| --- | --- |`) in conversational
+    responses.  They render as a wall of pipes and dashes that is
+    actively unreadable inside the comint buffer.
+
+    Wrong (do NOT send this):
+
+        | Key     | Action                   |
+        | ------- | ------------------------ |
+        | C-c A s | Open the session picker  |
+        | C-c A n | Create a new session     |
+        | C-c A q | Quit the current session |
+
+    Right (send this instead — space-aligned columns):
+
+        Key       Action
+        -------   ------------------------
+        C-c A s   Open the session picker
+        C-c A n   Create a new session
+        C-c A q   Quit the current session
+
+    Pad cells with spaces so column starts line up vertically.  The
+    dashed separator row is optional; what matters is that the
+    columns align without pipe characters.
+
+    Markdown remains correct on surfaces that render it:
 
       - Files you create or edit (`*.md`, `*.mdx`)
       - Pull request descriptions, issue bodies, commit messages
@@ -1754,18 +1782,8 @@ let
        characters.  Use prefix labels (`Note:`, `Warning:`) or sentence
        structure to carry emphasis instead.
 
-    2. **Tables — space-aligned columns, not pipes.**  Pad cells with
-       spaces so column edges line up vertically.  Example:
-
-           Key       Action
-           -------   ----------------------------------
-           C-c A s   Open the session picker
-           C-c A n   Create a new session
-           C-c A q   Quit the current session
-
-       The dashed separator is optional; what matters is that the
-       column starts align.  Never emit `| Key | Action |` rows in
-       chat — they read as noise.
+    2. **Tables — space-aligned columns, not pipes.**  See the HARD
+       RULE above.  Never emit `| col | col |` rows in chat.
 
     3. **Lists — plain dashes or numbers.**  `- item` and `1. item`
        read naturally as plain text and are fine.  Skip nested
@@ -1792,6 +1810,20 @@ let
            Open Issues
              #19  Editor profile tiering  (Editors, Large)
              #26  Secrets management      (Core, Medium)
+
+    ### Pre-send checklist
+
+    Before sending any conversational response in the agent-shell,
+    scan the draft for:
+
+      - `|` characters used as column separators between cells
+      - `| --- |` or `|---|` header-separator rows
+      - `**bold**`, `*italic*`, or `__underline__` emphasis
+      - `# `, `## `, `### ` heading prefixes at the start of a line
+
+    If any of those appear, re-render the affected block as
+    space-aligned columns (for tables) or plain prose with prefix
+    labels (for emphasis / headings) before sending.
   '';
 
   # == Yasnippet prompt templates ==
