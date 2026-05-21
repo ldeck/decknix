@@ -144,6 +144,30 @@ the session-id-based lookup if conv-key is not set yet."
              (not (string-empty-p decknix--agent-session-workspace)))
     (abbreviate-file-name decknix--agent-session-workspace)))
 
+(defun decknix--header-available-width ()
+  "Return the usable character width for the current buffer's header-line.
+Falls back to `frame-width' when the buffer has no displayed window."
+  (let ((win (get-buffer-window (current-buffer))))
+    (if win (window-body-width win) (frame-width))))
+
+(defun decknix--header-fit-parts (ordered-parts available)
+  "Join ORDERED-PARTS into a string that fits within AVAILABLE characters.
+ORDERED-PARTS is a list of propertized strings in descending stability
+order: the first element is most stable (never dropped); the last is most
+expendable (dropped first).  Parts are joined with \"  │  \".
+If only the first part remains and still exceeds AVAILABLE, it is
+hard-truncated at the right edge with a trailing ellipsis character (…)."
+  (let ((sep "  │  ")
+        (parts (copy-sequence ordered-parts)))
+    (while (and (cdr parts)
+                (> (string-width (mapconcat #'identity parts sep))
+                   available))
+      (setq parts (butlast parts)))
+    (let ((joined (mapconcat #'identity parts sep)))
+      (if (> (string-width joined) available)
+          (truncate-string-to-width joined available 0 nil "…")
+        joined))))
+
 (defun decknix--header-upstream ()
   "Return agent-shell's text header string.
 This embeds the upstream header (agent name, model, mode, workspace,
@@ -159,10 +183,15 @@ any improvements to agent-shell--make-header automatically."
 Order (left to right, stable before animated):
   status icon + label  │  conversation tags  │  context badge  │  upstream
 
-Stable items (status, tags) come first so they are never truncated in narrow
-windows.  The upstream header (agent name, model, mode, workspace, busy
-animation) follows as the trailing item — truncation there is acceptable
-because the most glanceable info is already in the stable prefix.
+Parts are built in priority order — status first (never dropped), upstream
+last (dropped first) — then passed to `decknix--header-fit-parts' which
+iteratively removes trailing parts until the string fits the window width.
+If only the status part remains and still overflows, it is hard-truncated
+with an ellipsis.  This gives a graceful degradation path:
+  wide:   status │ tags │ ctx │ upstream
+  medium: status │ tags │ ctx
+  narrow: status │ tags
+  tiny:   status (possibly truncated)
 
 Note: `header-line-format' is a mode-line format spec; literal \\n in a string
 renders as ^J, not a line break.  All items therefore live on one line."
@@ -207,7 +236,8 @@ renders as ^J, not a line break.  All items therefore live on one line."
     ;;         truncation only touches this trailing item).
     (when (and upstream (not (string-empty-p upstream)))
       (push (string-trim upstream) parts))
-    (mapconcat #'identity (nreverse parts) "  │  ")))
+    (decknix--header-fit-parts (nreverse parts)
+                               (decknix--header-available-width))))
 
 (defun decknix--header-update ()
   "Update the header-line-format for the current agent-shell buffer."
