@@ -3614,16 +3614,46 @@ Prefix arg adds --dry-run to preview without mutating state."
              (message "Prune (all repos): nothing to remove")
            (message "Prune (all repos):\n%s" trimmed)))))))
 
+(transient-define-suffix decknix--hyg-clean ()
+  "Remove old clean merged worktrees via `decknix wt clean'.
+Prompts for the age threshold in days (default 7).  Requires
+--apply to actually delete; prefix arg runs a --dry-run preview first.
+The underlying CLI skips any worktree that is dirty, has live session
+activity, or whose branch is not fully merged (§3.6.6 interlock)."
+  :description "Clean old worktrees (N days)"
+  (interactive)
+  (let* ((dry-run current-prefix-arg)
+         (days (read-number
+                (if dry-run
+                    "Dry-run: remove worktrees inactive for N days: "
+                  "Remove clean merged worktrees inactive for N days: ")
+                7))
+         (args (append (list "clean" "--older-than" (format "%dd" days))
+                       (unless dry-run (list "--apply")))))
+    (if (or dry-run
+            (yes-or-no-p
+             (format "Remove clean merged worktrees older than %d days? "
+                     days)))
+        (decknix--wt-cli-async
+         args
+         (lambda (out)
+           (let ((trimmed (string-trim (or out ""))))
+             (if (string-empty-p trimmed)
+                 (message "Clean: nothing to remove")
+               (message "Clean:\n%s" trimmed)))))
+      (message "Cancelled"))))
+
 (transient-define-prefix decknix-worktree-hygiene ()
   "Cross-worktree hygiene transient (spec §3.6.11).
-Read-only verbs (a, o) produce reports; prune (p) mutates but with
-confirmation; fork-remotes (f) also prompts.
+Read-only verbs (a, o) produce reports; mutating verbs (p, c, f)
+gate on a C-u dry-run or yes-or-no-p prompt.
 Also accessible as `M-x decknix-worktree-hygiene' from any buffer."
   ["Audit"
    ("a" decknix--hyg-audit)
    ("o" decknix--hyg-orphans)]
   ["Prune"
    ("p" decknix--hyg-prune-all)
+   ("c" decknix--hyg-clean)
    ("f" decknix--sb-act-clean-fork-remotes)]
   [("q" "Cancel" transient-quit-one)])
 
