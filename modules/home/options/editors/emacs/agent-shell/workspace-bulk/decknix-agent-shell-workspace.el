@@ -3552,10 +3552,86 @@ Prefix arg runs `--dry-run' (shows what would be removed without acting)."
                (message "Clean fork remotes:\n%s" trimmed)))))
       (message "Cancelled"))))
 
+;; -- Cross-worktree hygiene transient (spec §3.6.11) --
+;;
+;; Three read-only / confirmation-gated verbs surface the "what's safe
+;; to delete?" audit workflow across ALL repos — not just the one the
+;; active sidebar row happens to resolve.
+;;
+;; Implementation note: `decknix--hyg-audit' and `decknix--hyg-orphans'
+;; surface their output in a dedicated *decknix wt …* buffer rather than
+;; the minibuffer so multi-line reports are readable.  `decknix--hyg-prune-all'
+;; uses message so the result stays ephemeral (it's a short summary).
+
+(defun decknix--hyg-display-output (buf-name out)
+  "Show OUT in a buffer named BUF-NAME, or echo a no-results notice."
+  (let ((trimmed (string-trim (or out ""))))
+    (if (string-empty-p trimmed)
+        (message "%s: nothing to report" buf-name)
+      (with-current-buffer (get-buffer-create buf-name)
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert trimmed)
+          (goto-char (point-min)))
+        (display-buffer (current-buffer))))))
+
+(transient-define-suffix decknix--hyg-audit ()
+  "Dry-run report: stale / dirty / orphan-fork / branch-deleted-upstream.
+Calls `decknix wt audit'; output appears in *decknix wt audit* buffer."
+  :description "Audit (dry-run report)"
+  (interactive)
+  (message "Running audit…")
+  (decknix--wt-cli-async
+   (list "audit")
+   (lambda (out)
+     (decknix--hyg-display-output "*decknix wt audit*" out))))
+
+(transient-define-suffix decknix--hyg-orphans ()
+  "List worktrees whose upstream branch has been deleted.
+Calls `decknix wt orphans'; output appears in *decknix wt orphans* buffer."
+  :description "List orphan branches"
+  (interactive)
+  (message "Checking for orphan branches…")
+  (decknix--wt-cli-async
+   (list "orphans")
+   (lambda (out)
+     (decknix--hyg-display-output "*decknix wt orphans*" out))))
+
+(transient-define-suffix decknix--hyg-prune-all ()
+  "Prune stale worktree records across ALL repos.
+Calls `decknix wt prune' (no --repo) to sweep every registered clone.
+Prefix arg adds --dry-run to preview without mutating state."
+  :description "Prune stale (all repos)"
+  (interactive)
+  (let* ((dry-run current-prefix-arg)
+         (args (append (list "prune")
+                       (when dry-run (list "--dry-run")))))
+    (decknix--wt-cli-async
+     args
+     (lambda (out)
+       (let ((trimmed (string-trim (or out ""))))
+         (if (string-empty-p trimmed)
+             (message "Prune (all repos): nothing to remove")
+           (message "Prune (all repos):\n%s" trimmed)))))))
+
+(transient-define-prefix decknix-worktree-hygiene ()
+  "Cross-worktree hygiene transient (spec §3.6.11).
+Read-only verbs (a, o) produce reports; prune (p) mutates but with
+confirmation; fork-remotes (f) also prompts.
+Also accessible as `M-x decknix-worktree-hygiene' from any buffer."
+  ["Audit"
+   ("a" decknix--hyg-audit)
+   ("o" decknix--hyg-orphans)]
+  ["Prune"
+   ("p" decknix--hyg-prune-all)
+   ("f" decknix--sb-act-clean-fork-remotes)]
+  [("q" "Cancel" transient-quit-one)])
+
 (transient-define-prefix decknix-sidebar-worktree-menu ()
   "Worktree submenu (#129; spec §3.6.4).
 Eight verbs with stable layout; verbs that don't apply for the
-current `(repo, branch, state)' are dimmed via `:inapt-if'."
+current `(repo, branch, state)' are dimmed via `:inapt-if'.
+Press H to open the cross-repo hygiene transient (spec §3.6.11)."
   [:description decknix--sb-act-wt-description
    ["Worktree"
     ("o" decknix--sb-act-wt-open)
@@ -3567,7 +3643,8 @@ current `(repo, branch, state)' are dimmed via `:inapt-if'."
     ("d" decknix--sb-act-wt-status)
     ("c" decknix--sb-act-wt-copy)
     ("p" decknix--sb-act-wt-prune)]]
-  [("q" "Cancel" transient-quit-one)])
+  [("H" "Hygiene…" decknix-worktree-hygiene)
+   ("q" "Cancel" transient-quit-one)])
 
 (transient-define-suffix decknix--sb-act-worktree ()
   "Open the worktree submenu for the active row."
