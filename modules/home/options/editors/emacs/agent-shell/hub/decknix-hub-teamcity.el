@@ -57,11 +57,11 @@ Returns nil if no match or no TC data."
        ((string= state "queued")
         (propertize "◌" 'face 'font-lock-comment-face))
        ((string= status "SUCCESS")
-        (propertize "✓" 'face '(:foreground "#98c379")))
+        (propertize "▴" 'face '(:foreground "#98c379")))
        ((string= status "FAILURE")
-        (propertize "✗" 'face '(:foreground "#e06c75")))
+        (propertize "▾" 'face '(:foreground "#e06c75")))
        ((string= status "ERROR")
-        (propertize "✗" 'face '(:foreground "#e06c75")))
+        (propertize "▾" 'face '(:foreground "#e06c75")))
        (t (propertize "?" 'face 'font-lock-comment-face))))))
 
 ;; -- Deploy pipeline indicator (DTSP) --

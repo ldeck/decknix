@@ -80,19 +80,19 @@
 (ert-deftest decknix-hub-tc/icon-success ()
   (let* ((build (decknix-test-make-teamcity-build :status "SUCCESS"))
          (icon (decknix--hub-tc-icon build)))
-    (should (string= "✓" (substring-no-properties icon)))
+    (should (string= "▴" (substring-no-properties icon)))
     (should (equal '(:foreground "#98c379") (decknix-test--face-at icon 0)))))
 
 (ert-deftest decknix-hub-tc/icon-failure ()
   (let* ((build (decknix-test-make-teamcity-build :status "FAILURE"))
          (icon (decknix--hub-tc-icon build)))
-    (should (string= "✗" (substring-no-properties icon)))
+    (should (string= "▾" (substring-no-properties icon)))
     (should (equal '(:foreground "#e06c75") (decknix-test--face-at icon 0)))))
 
 (ert-deftest decknix-hub-tc/icon-error-shares-failure-color ()
   (let* ((build (decknix-test-make-teamcity-build :status "ERROR"))
          (icon (decknix--hub-tc-icon build)))
-    (should (string= "✗" (substring-no-properties icon)))
+    (should (string= "▾" (substring-no-properties icon)))
     (should (equal '(:foreground "#e06c75") (decknix-test--face-at icon 0)))))
 
 (ert-deftest decknix-hub-tc/icon-unknown-status-falls-back-to-question-mark ()
