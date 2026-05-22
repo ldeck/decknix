@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand, CommandFactory};
+use clap::{Parser, Subcommand, Args, CommandFactory};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::process::Command;
@@ -86,22 +87,51 @@ enum WtAction {
         /// Output in JSON format
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        filter: WtFilter,
+        /// Remove matching worktrees (use --apply to actually delete; otherwise dry-run)
+        #[arg(long)]
+        clean: bool,
+        /// Actually perform the deletion (only meaningful with --clean)
+        #[arg(long)]
+        apply: bool,
     },
     /// List worktrees whose upstream branch has been deleted
     Orphans {
         /// Output in JSON format
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        filter: WtFilter,
+        /// Remove matching orphan worktrees (use --apply to actually delete)
+        #[arg(long)]
+        clean: bool,
+        /// Actually perform the deletion (only meaningful with --clean)
+        #[arg(long)]
+        apply: bool,
     },
     /// Remove old clean merged worktrees
     Clean {
-        /// Threshold for inactivity (e.g. 7d)
-        #[arg(long, default_value = "7d")]
-        older_than: String,
+        #[command(flatten)]
+        filter: WtFilter,
+        /// Restrict to orphan worktrees (upstream branch deleted), ignoring --older-than default
+        #[arg(long)]
+        orphans: bool,
         /// Actually perform the deletion
         #[arg(long)]
         apply: bool,
     },
+}
+
+/// Find-style filter options shared by audit / orphans / clean.
+#[derive(Args, Debug, Clone, Default)]
+struct WtFilter {
+    /// Regex matched against repo identifier or worktree path
+    #[arg(long, short = 'r')]
+    regex: Option<String>,
+    /// Only include worktrees whose mtime is older than this (e.g. 7d, 12h, 30m)
+    #[arg(long)]
+    older_than: Option<String>,
 }
 
 /// Expand ~ and validate a directory path, returning a canonical path.
@@ -698,6 +728,124 @@ fn parse_duration(s: &str) -> anyhow::Result<Duration> {
     }
 }
 
+/// Compiled filter — regex + age threshold pre-parsed once per command.
+struct CompiledFilter {
+    regex: Option<Regex>,
+    min_age: Option<Duration>,
+}
+
+fn compile_filter(filter: &WtFilter) -> anyhow::Result<CompiledFilter> {
+    let regex = match &filter.regex {
+        Some(pat) => Some(Regex::new(pat).map_err(|e| anyhow::anyhow!("invalid --regex {:?}: {}", pat, e))?),
+        None => None,
+    };
+    let min_age = match &filter.older_than {
+        Some(s) => Some(parse_duration(s)?),
+        None => None,
+    };
+    Ok(CompiledFilter { regex, min_age })
+}
+
+/// Returns true if a worktree (identified by repo + path + age) passes the filter.
+/// All predicates AND together; an empty filter matches everything.
+fn filter_matches(filter: &CompiledFilter, repo: &str, path: &Path, age: Duration) -> bool {
+    if let Some(re) = &filter.regex {
+        let path_s = path.to_string_lossy();
+        if !re.is_match(repo) && !re.is_match(&path_s) {
+            return false;
+        }
+    }
+    if let Some(min) = filter.min_age {
+        if age < min { return false; }
+    }
+    true
+}
+
+/// Age of `path` as the wall-clock interval since its mtime, or 0 on error.
+fn mtime_age(path: &Path, now: SystemTime) -> Duration {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|m| now.duration_since(m).ok())
+        .unwrap_or(Duration::from_secs(0))
+}
+
+/// Iterate the registry applying `filter` (and optionally `orphans_only`) and
+/// remove matching worktrees via `clean_one_worktree`. Used by audit --clean,
+/// orphans --clean, and the standalone clean subcommand.
+fn run_clean(
+    registry: &[WorktreeEntry],
+    sessions: &HashSet<PathBuf>,
+    filter: &CompiledFilter,
+    orphans_only: bool,
+    require_merged: bool,
+    apply: bool,
+) {
+    let now = SystemTime::now();
+    if !apply {
+        println!("{}", styled_str("Dry-run: Worktree Cleanup", &[Style::B, Style::U]));
+    }
+    let mut considered = 0usize;
+    for entry in registry {
+        if !entry.primary.exists() { continue; }
+        for (branch, path) in &entry.worktrees {
+            let age = mtime_age(path, now);
+            if !filter_matches(filter, &entry.repo, path, age) { continue; }
+            let orphan = is_orphan(&entry.primary, branch);
+            if orphans_only && !orphan { continue; }
+            considered += 1;
+            let dirty = is_dirty(path);
+            let merged = is_merged(&entry.primary, branch);
+            let active = sessions.contains(path);
+            clean_one_worktree(
+                &entry.repo, branch, path, &entry.primary,
+                dirty, merged, active, age, apply, require_merged,
+            );
+        }
+    }
+    if considered == 0 {
+        println!("(no worktrees matched the filter)");
+    }
+    if !apply {
+        println!("\n(Use --apply to perform actual deletion)");
+    }
+}
+
+/// Remove a single worktree honouring safety interlocks (active session, dirty,
+/// unmerged). Prints a skip/remove line per worktree. `require_merged` lets
+/// orphan-targeted cleans bypass the "must be merged" check, since an orphan
+/// upstream means the merge state is no longer meaningful.
+#[allow(clippy::too_many_arguments)]
+fn clean_one_worktree(
+    repo: &str,
+    branch: &str,
+    path: &Path,
+    primary: &Path,
+    dirty: bool,
+    merged: bool,
+    active: bool,
+    age: Duration,
+    apply: bool,
+    require_merged: bool,
+) {
+    let skip_reason = if active { Some("Active session") }
+        else if dirty { Some("Uncommitted changes") }
+        else if require_merged && !merged { Some("Not merged into base branch") }
+        else { None };
+
+    if let Some(reason) = skip_reason {
+        println!("\u{23e9} Skipping {} [{}]: {}", repo, branch, reason);
+    } else if apply {
+        println!("\u{1f5d1}\u{fe0f}  Removing {} [{}]...", repo, branch);
+        let _ = Command::new("git")
+            .args(["worktree", "remove", &path.to_string_lossy()])
+            .current_dir(primary)
+            .status();
+    } else {
+        println!("\u{1f5d1}\u{fe0f}  Would remove {} [{}] (age: {}d)", repo, branch, age.as_secs() / 86400);
+    }
+}
+
 fn main() -> anyhow::Result<()> {
 
     let extensions = load_merged_extensions();
@@ -896,21 +1044,22 @@ fn main() -> anyhow::Result<()> {
                         println!("{}", registry_path().display());
                     }
                 }
-                WtAction::Audit { json } => {
+                WtAction::Audit { json, filter, clean, apply } => {
+                    let compiled = compile_filter(&filter)?;
                     let registry = load_registry()?;
                     let sessions = get_active_sessions();
                     let now = SystemTime::now();
 
-                    if json {
+                    if clean {
+                        run_clean(&registry, &sessions, &compiled, /*orphans_only*/ false, /*require_merged*/ true, apply);
+                    } else if json {
                         let mut report = Vec::new();
-                        for entry in registry {
+                        for entry in &registry {
                             let mut wt_reports = Vec::new();
                             if entry.primary.exists() {
                                 for (branch, path) in &entry.worktrees {
-                                    let metadata = fs::metadata(path).ok();
-                                    let age = metadata.and_then(|m| m.modified().ok())
-                                        .and_then(|m| now.duration_since(m).ok())
-                                        .unwrap_or(Duration::from_secs(0));
+                                    let age = mtime_age(path, now);
+                                    if !filter_matches(&compiled, &entry.repo, path, age) { continue; }
 
                                     wt_reports.push(serde_json::json!({
                                         "branch": branch,
@@ -933,13 +1082,20 @@ fn main() -> anyhow::Result<()> {
                         println!("{}", serde_json::to_string_pretty(&report)?);
                     } else {
                         println!("{}", styled_str("Worktree Audit Report", &[Style::B, Style::U]));
-                        for entry in registry {
+                        for entry in &registry {
                             if !entry.primary.exists() {
+                                if !filter_matches(&compiled, &entry.repo, &entry.primary, Duration::from_secs(0)) { continue; }
                                 println!("{} - {} ({})", styled_str(&entry.repo, &[Style::B, Style::Cyan]), styled_str("STALE (primary missing)", &[Style::Green]), entry.primary.display());
                                 continue;
                             }
-                            println!("{} ({})", styled_str(&entry.repo, &[Style::B, Style::Cyan]), entry.primary.display());
+                            let mut printed_header = false;
                             for (branch, path) in &entry.worktrees {
+                                let age = mtime_age(path, now);
+                                if !filter_matches(&compiled, &entry.repo, path, age) { continue; }
+                                if !printed_header {
+                                    println!("{} ({})", styled_str(&entry.repo, &[Style::B, Style::Cyan]), entry.primary.display());
+                                    printed_header = true;
+                                }
                                 let mut issues = Vec::new();
                                 if is_dirty(path) { issues.push(styled_str("DIRTY", &[Style::Green])); }
                                 if is_orphan(&entry.primary, branch) { issues.push(styled_str("ORPHAN (upstream gone)", &[Style::Green])); }
@@ -953,82 +1109,58 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                 }
-                WtAction::Orphans { json } => {
+                WtAction::Orphans { json, filter, clean, apply } => {
+                    let compiled = compile_filter(&filter)?;
                     let registry = load_registry()?;
-                    if json {
+                    let sessions = get_active_sessions();
+                    let now = SystemTime::now();
+
+                    if clean {
+                        // Orphan-targeted cleans bypass the merged check (upstream is gone).
+                        run_clean(&registry, &sessions, &compiled, /*orphans_only*/ true, /*require_merged*/ false, apply);
+                    } else if json {
                         let mut orphans = Vec::new();
-                        for entry in registry {
+                        for entry in &registry {
                             if !entry.primary.exists() { continue; }
                             for (branch, path) in &entry.worktrees {
-                                if is_orphan(&entry.primary, branch) {
-                                    orphans.push(serde_json::json!({
-                                        "repo": entry.repo,
-                                        "branch": branch,
-                                        "path": path,
-                                    }));
-                                }
+                                if !is_orphan(&entry.primary, branch) { continue; }
+                                let age = mtime_age(path, now);
+                                if !filter_matches(&compiled, &entry.repo, path, age) { continue; }
+                                orphans.push(serde_json::json!({
+                                    "repo": entry.repo,
+                                    "branch": branch,
+                                    "path": path,
+                                    "age_days": age.as_secs() / 86400,
+                                }));
                             }
                         }
                         println!("{}", serde_json::to_string_pretty(&orphans)?);
                     } else {
                         println!("{}", styled_str("Worktrees with Deleted Upstream Branches", &[Style::B, Style::U]));
-                        for entry in registry {
+                        for entry in &registry {
                             if !entry.primary.exists() { continue; }
                             for (branch, path) in &entry.worktrees {
-                                if is_orphan(&entry.primary, branch) {
-                                    println!("{} [{}] -> {}", styled_str(&entry.repo, &[Style::Cyan]), branch, path.display());
-                                }
+                                if !is_orphan(&entry.primary, branch) { continue; }
+                                let age = mtime_age(path, now);
+                                if !filter_matches(&compiled, &entry.repo, path, age) { continue; }
+                                println!("{} [{}] -> {}", styled_str(&entry.repo, &[Style::Cyan]), branch, path.display());
                             }
                         }
                     }
                 }
-                WtAction::Clean { older_than, apply } => {
-                    let threshold = parse_duration(&older_than)?;
-                    let now = SystemTime::now();
+                WtAction::Clean { mut filter, orphans, apply } => {
+                    // Backward-compat: if no age filter is given, default to 7d
+                    // (unless --orphans is set, in which case age is irrelevant).
+                    if filter.older_than.is_none() && !orphans {
+                        filter.older_than = Some("7d".to_string());
+                    }
+                    let compiled = compile_filter(&filter)?;
                     let registry = load_registry()?;
                     let sessions = get_active_sessions();
 
-                    if !apply {
-                        println!("{}", styled_str("Dry-run: Worktree Cleanup", &[Style::B, Style::U]));
-                    }
-
-                    for entry in registry {
-                        if !entry.primary.exists() { continue; }
-                        for (branch, path) in &entry.worktrees {
-                            let metadata = fs::metadata(path)?;
-                            let mtime = metadata.modified()?;
-                            let age = now.duration_since(mtime).unwrap_or(Duration::from_secs(0));
-
-                            if age < threshold { continue; }
-
-                            let dirty = is_dirty(path);
-                            let merged = is_merged(&entry.primary, branch);
-                            let active = sessions.contains(path);
-
-                            let mut skip_reason = None;
-                            if active { skip_reason = Some("Active session"); }
-                            else if dirty { skip_reason = Some("Uncommitted changes"); }
-                            else if !merged { skip_reason = Some("Not merged into base branch"); }
-
-                            if let Some(reason) = skip_reason {
-                                println!("\u{23e9} Skipping {} [{}]: {}", entry.repo, branch, reason);
-                            } else {
-                                if apply {
-                                    println!("\u{1f5d1}\u{fe0f}  Removing {} [{}]...", entry.repo, branch);
-                                    let _ = Command::new("git")
-                                        .args(["worktree", "remove", &path.to_string_lossy()])
-                                        .current_dir(&entry.primary)
-                                        .status();
-                                } else {
-                                    println!("\u{1f5d1}\u{fe0f}  Would remove {} [{}] (age: {}d)", entry.repo, branch, age.as_secs() / 86400);
-                                }
-                            }
-                        }
-                    }
-
-                    if !apply {
-                        println!("\n(Use --apply to perform actual deletion)");
-                    }
+                    // Orphan-targeted cleans bypass the merged check; age-targeted cleans
+                    // still require a merged branch as a safety net (matches old default).
+                    run_clean(&registry, &sessions, &compiled, orphans, /*require_merged*/ !orphans, apply);
                 }
             }
         }
@@ -1087,5 +1219,45 @@ mod tests {
     fn test_parse_duration_invalid() {
         assert!(parse_duration("abc").is_err());
         assert!(parse_duration("").is_err());
+    }
+
+    #[test]
+    fn test_filter_empty_matches_everything() {
+        let f = compile_filter(&WtFilter::default()).unwrap();
+        assert!(filter_matches(&f, "owner/repo", Path::new("/tmp/foo"), Duration::from_secs(0)));
+        assert!(filter_matches(&f, "x", Path::new("/y"), Duration::from_secs(999_999)));
+    }
+
+    #[test]
+    fn test_filter_regex_matches_repo_or_path() {
+        let f = compile_filter(&WtFilter { regex: Some("trade".into()), older_than: None }).unwrap();
+        assert!(filter_matches(&f, "raywhite/trademe-integration", Path::new("/x"), Duration::from_secs(0)));
+        assert!(filter_matches(&f, "x", Path::new("/tmp/trade-stuff/wt"), Duration::from_secs(0)));
+        assert!(!filter_matches(&f, "raywhite/other", Path::new("/tmp/other/wt"), Duration::from_secs(0)));
+    }
+
+    #[test]
+    fn test_filter_invalid_regex_errors() {
+        let bad = WtFilter { regex: Some("[unclosed".into()), older_than: None };
+        assert!(compile_filter(&bad).is_err());
+    }
+
+    #[test]
+    fn test_filter_older_than_threshold() {
+        let f = compile_filter(&WtFilter { regex: None, older_than: Some("7d".into()) }).unwrap();
+        let week = Duration::from_secs(7 * 86400);
+        assert!(!filter_matches(&f, "r", Path::new("/x"), week - Duration::from_secs(1)));
+        assert!(filter_matches(&f, "r", Path::new("/x"), week));
+        assert!(filter_matches(&f, "r", Path::new("/x"), week + Duration::from_secs(86400)));
+    }
+
+    #[test]
+    fn test_filter_combines_regex_and_age() {
+        // Both predicates must match (AND, find-style).
+        let f = compile_filter(&WtFilter { regex: Some("foo".into()), older_than: Some("1d".into()) }).unwrap();
+        let day = Duration::from_secs(86400);
+        assert!(filter_matches(&f, "owner/foo", Path::new("/x"), day));
+        assert!(!filter_matches(&f, "owner/foo", Path::new("/x"), Duration::from_secs(0))); // regex ok, age fails
+        assert!(!filter_matches(&f, "owner/bar", Path::new("/x"), day)); // age ok, regex fails
     }
 }
