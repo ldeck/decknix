@@ -58,22 +58,28 @@ to it instead of the shell-maker fallback."
 
 ;; -- Icon / face tables ------------------------------------------
 
-(ert-deftest decknix-header-status-icon--every-state-has-distinct-icon ()
-  "All seven canonical states get a distinct icon, plus the `?'
-fallback for unknown."
-  (let ((icons (mapcar #'decknix--header-status-icon
-                       '("ready" "finished" "working" "waiting"
-                         "initializing" "killed"))))
-    (should (= (length icons) (length (cl-remove-duplicates icons :test #'equal))))
-    (should (equal (decknix--header-status-icon "garbage") "?"))))
+(ert-deftest decknix-header-status-icon--shape-family-mapping ()
+  "Icons follow the Circle shape-family system.
+○ = pre-active, ◐ = in-progress, ● = settled."
+  (should (equal (decknix--header-status-icon "ready")        "●"))
+  (should (equal (decknix--header-status-icon "finished")     "●"))
+  (should (equal (decknix--header-status-icon "working")      "◐"))
+  (should (equal (decknix--header-status-icon "waiting")      "◐"))
+  (should (equal (decknix--header-status-icon "initializing") "○"))
+  (should (equal (decknix--header-status-icon "killed")       "●"))
+  (should (equal (decknix--header-status-icon "garbage")      "○")))
 
-(ert-deftest decknix-header-status-face--every-state-has-distinct-face ()
-  "Every canonical state maps to a distinct face spec."
-  (let ((faces (mapcar #'decknix--header-status-face
-                       '("ready" "finished" "working" "waiting"
-                         "initializing" "killed"))))
-    (should (= (length faces) (length (cl-remove-duplicates faces :test #'equal))))
-    (should (eq (decknix--header-status-face "garbage") 'shadow))))
+(ert-deftest decknix-header-status-face--colour-semantics ()
+  "Faces follow the colour-semantic system.
+green = ready, cyan = finished, yellow = working, red = blocked/killed,
+grey = initializing/unknown."
+  (should (eq   (decknix--header-status-face "ready")        'success))
+  (should (equal (decknix--header-status-face "finished")     '(:foreground "cyan" :weight bold)))
+  (should (eq   (decknix--header-status-face "working")      'warning))
+  (should (eq   (decknix--header-status-face "waiting")      'error))
+  (should (eq   (decknix--header-status-face "initializing") 'shadow))
+  (should (eq   (decknix--header-status-face "killed")       'error))
+  (should (eq   (decknix--header-status-face "garbage")      'shadow)))
 
 ;; -- Tags lookup -------------------------------------------------
 
