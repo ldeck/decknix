@@ -205,6 +205,15 @@ let
       "decknix-sidebar-row-actions-test.el"
     ];
   };
+  decknix-worktree-picker-el = mkEmacsTestedPackage {
+    pname = "decknix-worktree-picker";
+    src = ./agent-shell/workspace-bulk;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-worktree-picker-test.el"
+    ];
+  };
+
 
   # PR B.23: Previous-Sessions list + dedupe carved out of the
   # `cfg.workspace.enable' heredoc.  Pure list -> list helper plus
@@ -2152,6 +2161,7 @@ in
         ++ (optional cfg.context.enable decknix-agent-shell-context-el)
         ++ (optional cfg.hub.enable decknix-agent-shell-hub-el)
         ++ [ decknix-agent-shell-main-el ]
+        ++ (optional cfg.workspace.enable decknix-worktree-picker-el)
         ++ (optional cfg.workspace.enable decknix-agent-shell-workspace-el);
 
       extraConfig = ''
@@ -3210,6 +3220,7 @@ cannot close over the surrounding `let' binding."
         ;; state (define-key on agent-shell-workspace-sidebar-mode-
         ;; map, with-eval-after-load wiring, hook + advice) stay
         ;; here, immediately after the require.
+        (require 'decknix-worktree-picker)
         (require 'decknix-agent-shell-workspace)
 
         ;; == Workspace: dedicated tab-bar tab with sidebar ==

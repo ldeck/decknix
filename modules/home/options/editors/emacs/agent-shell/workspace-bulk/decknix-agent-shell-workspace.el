@@ -3650,7 +3650,8 @@ gate on a C-u dry-run or yes-or-no-p prompt.
 Also accessible as `M-x decknix-worktree-hygiene' from any buffer."
   ["Audit"
    ("a" decknix--hyg-audit)
-   ("o" decknix--hyg-orphans)]
+   ("o" decknix--hyg-orphans)
+   ("s" "Select worktrees to clean…" decknix-worktree-picker)]
   ["Prune"
    ("p" decknix--hyg-prune-all)
    ("c" decknix--hyg-clean)
