@@ -1741,6 +1741,18 @@ let
     shows literal asterisks; `| a | b |` table rows show literal pipes;
     `# heading` shows a literal hash mark.
 
+    ### HARD RULE — MUST NOT emit XML tool-call markup in chat
+
+    Do NOT narrate planned tool calls as XML in conversational responses.
+    Text like `<parallel_tool_calls>`, `<tool_call>`, `<str_replace_editor>`,
+    `<past_tool_call>`, or any other angle-bracket pseudo-invocation must
+    NEVER appear in the chat output.  If you intend to call tools, call
+    them natively — do not describe the calls as text first.
+
+    This failure mode occurs when a model "previews" its plan rather than
+    executing it.  The correct behaviour is to execute tool calls immediately
+    and then summarise what was done in plain prose, with no XML visible.
+
     ### HARD RULE — MUST NOT emit markdown tables in chat
 
     Do NOT use pipe-delimited tables (`| col | col |`) or markdown
@@ -1816,14 +1828,15 @@ let
     Before sending any conversational response in the agent-shell,
     scan the draft for:
 
+      - `<parallel_tool_calls>`, `<tool_call>`, or any XML angle-bracket tags
       - `|` characters used as column separators between cells
       - `| --- |` or `|---|` header-separator rows
       - `**bold**`, `*italic*`, or `__underline__` emphasis
       - `# `, `## `, `### ` heading prefixes at the start of a line
 
-    If any of those appear, re-render the affected block as
-    space-aligned columns (for tables) or plain prose with prefix
-    labels (for emphasis / headings) before sending.
+    If XML tags appear, remove them and execute the tool calls natively
+    instead.  If markdown appears, re-render as space-aligned columns (for
+    tables) or plain prose with prefix labels (for emphasis / headings).
   '';
 
   # == Yasnippet prompt templates ==
