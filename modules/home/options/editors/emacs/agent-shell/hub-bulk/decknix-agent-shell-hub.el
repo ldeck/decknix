@@ -1972,6 +1972,7 @@ the state word since every downstream signal is moot."
          (ci (alist-get 'ci-status status))
          (stale (alist-get 'stale status))
          (merged-at (alist-get 'merged_at status))
+         (title (or (alist-get 'title status) ""))
          (_ (or width 40))
          ;; Resolve expand mode flags — state + age + CI always
          ;; visible; bot/cmt/approval only in `pr'/`both';
