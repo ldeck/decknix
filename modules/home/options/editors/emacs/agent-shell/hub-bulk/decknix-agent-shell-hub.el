@@ -60,7 +60,10 @@
 (declare-function decknix--hub-icon "decknix-hub-ci")
 (declare-function decknix--hub-ci-icon "decknix-hub-ci")
 (declare-function decknix--hub-ci-classify "decknix-hub-ci")
-(declare-function decknix--hub-review-icon "decknix-hub-icons")
+(declare-function decknix--hub-primary-status-icon "decknix-hub-icons")
+
+(defvar decknix--hub-display-mode)
+
 (declare-function decknix--hub-wip-review-icon "decknix-hub-icons")
 (declare-function decknix--hub-activity-icons "decknix-hub-icons")
 (declare-function decknix--hub-wip-reply-icon "decknix-hub-icons")
@@ -2081,21 +2084,35 @@ the state word since every downstream signal is moot."
     ;; preserved on no-badge rows).
     (let* ((wt-badge (decknix--hub-worktree-row-badge
                       repo-full branch))
-           (line (if grouped
-                    (format "  %s%s%s%s %s %s%s"
-                            wt-badge
-                            refresh-str
-                            type-prefix num-str
-                            age-str
-                            state-word
-                            signal-zone)
-                  (format "%s%s%s%s%s %s %s%s"
-                          wt-badge
-                          refresh-str
-                          type-prefix repo-label num-str
-                          age-str
-                          state-word
-                          signal-zone))))
+           (primary-icon (decknix--hub-primary-status-icon status 'wip))
+           (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
+                     (let* ((phase (pcase state
+                                     ("OPEN" (if draft "[draft]" "[open]"))
+                                     ("DRAFT" "[draft]")
+                                     ("MERGED" "[merged]")
+                                     ("CLOSED" "[closed]")
+                                     (_ "[?]")))
+                            (phase-str (propertize phase 'face 'font-lock-comment-face))
+                            (max-title (max 8 (- (window-width) 14)))
+                            (title-str (if (> (length title) max-title)
+                                           (concat (substring title 0 (- max-title 1)) "…")
+                                         title)))
+                       (format "%s  %s %s%s %s" primary-icon phase-str type-prefix num-str title-str))
+                   (if grouped
+                       (format "  %s%s%s%s %s %s%s"
+                               wt-badge
+                               refresh-str
+                               type-prefix num-str
+                               age-str
+                               state-word
+                               signal-zone)
+                     (format "%s%s%s%s%s %s %s%s"
+                             wt-badge
+                             refresh-str
+                             type-prefix repo-label num-str
+                             age-str
+                             state-word
+                             signal-zone)))))
       (propertize line
                   'decknix-hub-type 'linked-pr
                   'decknix-hub-url url
@@ -2187,15 +2204,18 @@ Layout:
     ;; part of the leading indent so total width is preserved).
     (let* ((wt-badge (decknix--hub-worktree-row-badge
                       repo-full branch))
-           (line (if grouped
-                    (format "  %s%s%s %s %s%s"
-                            wt-badge
-                            refresh-str branch-str sha7-str age-str
-                            signal-zone)
-                  (format "%s%s%s %s %s %s%s"
-                          wt-badge
-                          refresh-str repo-label branch-str sha7-str
-                          age-str signal-zone))))
+           (primary-icon (decknix--hub-primary-status-icon (list (cons 'ci ci)) 'placeholder))
+           (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
+                     (format "%s  [repo] %s %s" primary-icon branch-str repo-label)
+                   (if grouped
+                       (format "  %s%s%s %s %s%s"
+                               wt-badge
+                               refresh-str branch-str sha7-str age-str
+                               signal-zone)
+                     (format "%s%s%s %s %s %s%s"
+                             wt-badge
+                             refresh-str repo-label branch-str sha7-str
+                             age-str signal-zone)))))
       (propertize line
                   'decknix-hub-type 'linked-repo
                   'decknix-hub-url url
@@ -2572,15 +2592,25 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                ;; `  ' — enough to flag missing local clones).
                (wt-badge (decknix--hub-worktree-row-badge
                           repo-full nil))
-               (line (format "%s%3s %s#%d %s %s"
-                             wt-badge
-                             (propertize age 'face age-face)
-                             (propertize (or repo "") 'face 'font-lock-type-face)
-                             number
-                             status-str
-                             (if draft
-                                 (propertize short-title 'face 'font-lock-comment-face)
-                               short-title))))
+               (primary-icon (decknix--hub-primary-status-icon item 'review))
+               (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
+                         (let* ((phase-str (propertize "[open]" 'face 'font-lock-comment-face))
+                                (max-title (max 8 (- (window-width) 14)))
+                                (short-title (if (> (length title) max-title)
+                                                 (concat (substring title 0 (- max-title 1)) "…")
+                                               title)))
+                           (format "%s  %s %s%s %s"
+                                   primary-icon phase-str
+                                   mention-str reply-str short-title))
+                       (format "%s%3s %s#%d %s %s"
+                               wt-badge
+                               (propertize age 'face age-face)
+                               (propertize (or repo "") 'face 'font-lock-type-face)
+                               number
+                               status-str
+                               (if draft
+                                   (propertize short-title 'face 'font-lock-comment-face)
+                                 short-title)))))
           ;; Tint the row yellow when a live session is already
           ;; reviewing this PR (composes with per-column faces).
           (decknix--hub-request-tint-active line item)
@@ -2695,16 +2725,24 @@ primary action is a no-op until a PR materialises."
                    (format-time-string "%FT%T%z" mtime))
                 "?"))
          (wt-badge (decknix--hub-worktree-row-badge repo-full branch))
-         (max-title (max 8 (- (window-width) 14)))
-         (short-branch (if (> (length branch) max-title)
-                           (concat (substring branch 0 (- max-title 1)) "…")
-                         branch))
-         (line (format "%s%3s %-4s %s"
-                       wt-badge
-                       (propertize age 'face 'font-lock-comment-face)
-                       (propertize "wip" 'face 'font-lock-comment-face)
-                       (propertize short-branch
-                                   'face 'font-lock-comment-face))))
+         (primary-icon (decknix--hub-primary-status-icon '() 'placeholder))
+         (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
+                   (let* ((phase-str (propertize "[wip]" 'face 'font-lock-comment-face))
+                          (max-title (max 8 (- (window-width) 14)))
+                          (short-branch (if (> (length branch) max-title)
+                                            (concat (substring branch 0 (- max-title 1)) "…")
+                                          branch)))
+                     (format "%s  %s %s" primary-icon phase-str short-branch))
+                 (let* ((max-title (max 8 (- (window-width) 14)))
+                        (short-branch (if (> (length branch) max-title)
+                                          (concat (substring branch 0 (- max-title 1)) "…")
+                                        branch)))
+                   (format "%s%3s %-4s %s"
+                           wt-badge
+                           (propertize age 'face 'font-lock-comment-face)
+                           (propertize "wip" 'face 'font-lock-comment-face)
+                           (propertize short-branch
+                                       'face 'font-lock-comment-face)))))
     (insert (propertize line
                         'decknix-hub-type 'wip-placeholder
                         'decknix-hub-repo repo-full
@@ -2895,15 +2933,24 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
                      ;; `↓ ' as defined in spec §3.6.3.
                      (wt-badge (decknix--hub-worktree-row-badge
                                 repo-full branch))
-                     (line (format "%s%3s #%d %s %s"
-                                  wt-badge
-                                  (propertize age 'face 'font-lock-comment-face)
-                                  number
-                                  ci-str
-                                  (if title-face
-                                      (propertize short-title
-                                                 'face title-face)
-                                    short-title))))
+                     (primary-icon (decknix--hub-primary-status-icon pr 'wip))
+                     (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
+                               (let* ((phase (if (eq (alist-get 'draft pr) t) "[draft]" "[open]"))
+                                      (phase-str (propertize phase 'face 'font-lock-comment-face))
+                                      (max-title (max 8 (- (window-width) 14)))
+                                      (short-title (if (> (length title) max-title)
+                                                       (concat (substring title 0 (- max-title 1)) "…")
+                                                     title)))
+                                 (format "%s  %s %s" primary-icon phase-str short-title))
+                             (format "%s%3s #%d %s %s"
+                                     wt-badge
+                                     (propertize age 'face 'font-lock-comment-face)
+                                     number
+                                     ci-str
+                                     (if title-face
+                                         (propertize short-title
+                                                    'face title-face)
+                                       short-title)))))
                 (insert (propertize line
                                    'decknix-hub-url url
                                    'decknix-hub-type 'wip

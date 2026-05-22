@@ -284,7 +284,7 @@ The `decknix--context-update-header` function delegates to the unified header
   flag seeds the `r` picker so the sidebar and picker start in sync;
   inside the picker, `M-s` flips the order ephemerally without touching
   the persisted state.  Shows age (color-coded: 3d+ = red, <3d = yellow),
-  repo, PR number, CI status icon (✓/✗/⟳), and title.  `RET` opens the
+  repo, PR number, CI status icon (●/◐/○), and title.  `RET` opens the
   PR in the browser.  **Active-review tint**: when a live agent-shell
   session is already reviewing a request (matched on the `pr-<repo>-<n>`
   buffer-name pattern), the row is tinted gold (`#d7af5f`, the same
@@ -296,6 +296,9 @@ The `decknix--context-update-header` function delegates to the unified header
   receives the gold.  The `◉` glyph on the row is preserved as a
   compact secondary cue.  The same tint is applied in the `r` picker
   (consult, transient, and consult-multi variants).
+  **Layout D (minimal)**: toggle with `D` to show only the primary glyph,
+  optional mention/reply, phase tag, and title, using the unified
+  shape-family system: `○` pre-PR, `★` draft, `◐`/`●` open, `▣`/`■` post-merge.
 - **Requests picker (`r`)**: a single entry-point for navigating reviews.
   Toggles are all minibuffer-local and never leak into the sidebar's
   global filters (a refresh-suspend flag freezes sidebar re-renders

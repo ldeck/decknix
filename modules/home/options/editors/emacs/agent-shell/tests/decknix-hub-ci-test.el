@@ -184,42 +184,42 @@
 
 ;; -- decknix--hub-ci-icon: glyph + face per classification --------
 
-(ert-deftest decknix-hub-ci/ci-icon-pass-is-checkmark-success ()
+(ert-deftest decknix-hub-ci/ci-icon-pass-is-circle-success ()
   (let ((icon (decknix--hub-ci-icon (decknix-test--make-ci "pass"))))
-    (should (equal "✓" (decknix-test--icon-glyph icon)))
+    (should (equal "●" (decknix-test--icon-glyph icon)))
     (should (eq 'success (decknix-test--icon-face icon)))))
 
-(ert-deftest decknix-hub-ci/ci-icon-soft-fail-is-warning-glyph ()
+(ert-deftest decknix-hub-ci/ci-icon-soft-fail-is-circle-warning ()
   (let* ((ci (decknix-test--make-ci
               "fail"
               (list (decknix-test--make-check "codacy" "FAILURE"))))
          (icon (decknix--hub-ci-icon ci)))
-    (should (equal "⚠" (decknix-test--icon-glyph icon)))
-    (should (eq 'warning (decknix-test--icon-face icon)))))
+    (should (equal "●" (decknix-test--icon-glyph icon)))
+    (should (equal '(:foreground "orange" :weight bold) (decknix-test--icon-face icon)))))
 
-(ert-deftest decknix-hub-ci/ci-icon-fail-is-cross-error ()
+(ert-deftest decknix-hub-ci/ci-icon-fail-is-circle-error ()
   (let* ((ci (decknix-test--make-ci
               "fail"
               (list (decknix-test--make-check "build" "FAILURE"))))
          (icon (decknix--hub-ci-icon ci)))
-    (should (equal "✗" (decknix-test--icon-glyph icon)))
+    (should (equal "●" (decknix-test--icon-glyph icon)))
     (should (eq 'error (decknix-test--icon-face icon)))))
 
-(ert-deftest decknix-hub-ci/ci-icon-running-is-spinner-warning ()
+(ert-deftest decknix-hub-ci/ci-icon-running-is-half-circle-warning ()
   (let ((icon (decknix--hub-ci-icon (decknix-test--make-ci "running"))))
-    (should (equal "⟳" (decknix-test--icon-glyph icon)))
+    (should (equal "◐" (decknix-test--icon-glyph icon)))
     (should (eq 'warning (decknix-test--icon-face icon)))))
 
-(ert-deftest decknix-hub-ci/ci-icon-unknown-is-question-comment-face ()
-  ;; nil ci -> classify=unknown -> ? glyph + comment face.
+(ert-deftest decknix-hub-ci/ci-icon-unknown-is-hollow-circle-shadow ()
+  ;; nil ci -> classify=unknown -> ○ glyph + shadow face.
   (let ((icon (decknix--hub-ci-icon nil)))
-    (should (equal "?" (decknix-test--icon-glyph icon)))
-    (should (eq 'font-lock-comment-face (decknix-test--icon-face icon)))))
+    (should (equal "○" (decknix-test--icon-glyph icon)))
+    (should (eq 'shadow (decknix-test--icon-face icon)))))
 
 (ert-deftest decknix-hub-ci/ci-icon-conflicting-appends-merge-glyph ()
   (let ((icon (decknix--hub-ci-icon (decknix-test--make-ci "pass") "CONFLICTING")))
-    ;; Concatenated string: ✓ then ⇌
-    (should (equal "✓⇌" (decknix-test--icon-glyph icon)))
+    ;; Concatenated string: ● then ⇌
+    (should (equal "●⇌" (decknix-test--icon-glyph icon)))
     ;; First char keeps success face, second is error.
     (should (eq 'success (get-text-property 0 'face icon)))
     (should (eq 'error (get-text-property 1 'face icon)))))
@@ -227,9 +227,9 @@
 (ert-deftest decknix-hub-ci/ci-icon-non-conflicting-mergeable-no-append ()
   ;; Anything other than the literal "CONFLICTING" string is ignored.
   (let ((icon (decknix--hub-ci-icon (decknix-test--make-ci "pass") "MERGEABLE")))
-    (should (equal "✓" (decknix-test--icon-glyph icon))))
+    (should (equal "●" (decknix-test--icon-glyph icon))))
   (let ((icon (decknix--hub-ci-icon (decknix-test--make-ci "pass") nil)))
-    (should (equal "✓" (decknix-test--icon-glyph icon)))))
+    (should (equal "●" (decknix-test--icon-glyph icon)))))
 
 (provide 'decknix-hub-ci-test)
 ;;; decknix-hub-ci-test.el ends here

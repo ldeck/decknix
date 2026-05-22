@@ -215,7 +215,7 @@ assert input order is preserved.  Composes with
                ((symbol-function 'decknix--hub-format-age)
                 (lambda (_iso) "1h"))
                ((symbol-function 'decknix--hub-ci-icon)
-                (lambda (_ci &optional _m) "✓"))
+                (lambda (_ci &optional _m) "●"))
                ((symbol-function 'decknix--hub-review-icon)
                 (lambda (_item) ""))
                ((symbol-function 'decknix--hub-request-has-live-session-p)

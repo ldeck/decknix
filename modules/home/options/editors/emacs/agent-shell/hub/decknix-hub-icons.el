@@ -57,27 +57,64 @@
 (defun decknix--hub-review-icon (item)
   "Return a review state icon for ITEM, or empty string if none.
 Shows whether the current user has already responded to this PR.
-  ✎ = commented (cyan), ★ = approved (green), ⚑ = changes requested (red)."
+  ◐ = commented (cyan), ● = approved (green), ◐ = changes requested (red)."
   (let ((state (alist-get 'my_review item)))
     (pcase state
-      ("APPROVED"          (decknix--hub-icon "★" 'success))
-      ("CHANGES_REQUESTED" (decknix--hub-icon "⚑" 'error))
-      ("COMMENTED"         (decknix--hub-icon "✎" '(:foreground "#5fafaf")))
-      ("DISMISSED"         (decknix--hub-icon "−" 'font-lock-comment-face))
+      ("APPROVED"          (decknix--hub-icon "●" 'success))
+      ("CHANGES_REQUESTED" (decknix--hub-icon "◐" 'error))
+      ("COMMENTED"         (decknix--hub-icon "◐" '(:foreground "cyan" :weight bold)))
+      ("DISMISSED"         (decknix--hub-icon "−" 'shadow))
       ("PENDING"           (decknix--hub-icon "…" 'warning))
       (_ ""))))
 
 (defun decknix--hub-wip-review-icon (pr)
   "Return a review decision icon for a WIP PR, or empty string.
 Shows the overall review status of the user's own PR:
-  ★ = approved (green), ⚑ = changes requested (red),
+  ● = approved (green), ◐ = changes requested (red),
   ◐ = review required (yellow), (none) = no review policy."
   (let ((decision (alist-get 'review_decision pr)))
     (pcase decision
-      ("APPROVED"          (decknix--hub-icon "★" 'success))
-      ("CHANGES_REQUESTED" (decknix--hub-icon "⚑" 'error))
+      ("APPROVED"          (decknix--hub-icon "●" 'success))
+      ("CHANGES_REQUESTED" (decknix--hub-icon "◐" 'error))
       ("REVIEW_REQUIRED"   (decknix--hub-icon "◐" 'warning))
       (_ ""))))
+
+(defun decknix--hub-primary-status-icon (item kind)
+  "Return a primary status icon for ITEM of KIND.
+KIND is one of 'wip, 'review, 'placeholder, or 'done.
+Follows the shape-family system: ○ ★ ◐ ● ▣ ■."
+  (let* ((state (alist-get 'state item))
+         (draft (eq (alist-get 'draft item) t))
+         (ci (alist-get 'ci item))
+         (classified (decknix--hub-ci-classify ci))
+         (decision (cond ((eq kind 'wip) (alist-get 'review_decision item))
+                         ((eq kind 'review) (alist-get 'my_review item))
+                         (t nil))))
+    (cond
+     ((eq kind 'placeholder)
+      (decknix--hub-icon "○" 'shadow))
+     ((string= state "MERGED")
+      (decknix--hub-icon "■" 'success))
+     ((string= state "CLOSED")
+      (decknix--hub-icon "■" 'shadow))
+     (draft
+      (let ((face (pcase classified
+                    ("pass"      'success)
+                    ("running"   'warning)
+                    ("fail"      'error)
+                    ("soft_fail" '(:foreground "orange" :weight bold))
+                    (_           'shadow))))
+        (decknix--hub-icon "★" face)))
+     ((equal decision "APPROVED")
+      (decknix--hub-icon "●" 'success))
+     ((member decision '("CHANGES_REQUESTED" "REVIEW_REQUIRED" "COMMENTED"))
+      (let ((face (cond ((equal decision "CHANGES_REQUESTED") 'error)
+                        ((equal decision "COMMENTED")         '(:foreground "cyan" :weight bold))
+                        (t                                    'warning))))
+        (decknix--hub-icon "◐" face)))
+     (t
+      ;; Open PR, no decision yet
+      (decknix--hub-icon "◐" 'shadow)))))
 
 (defun decknix--hub-activity-icons (pr)
   "Return concatenated attention icons for PR.

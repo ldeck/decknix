@@ -93,11 +93,11 @@ Uses individual check details to distinguish soft from hard failures.
 When MERGEABLE is \"CONFLICTING\", appends a conflict indicator."
   (let* ((classified (decknix--hub-ci-classify ci))
          (ci-icon (pcase classified
-                    ("pass"      (decknix--hub-icon "✓" 'success))
-                    ("soft_fail" (decknix--hub-icon "⚠" 'warning))
-                    ("fail"      (decknix--hub-icon "✗" 'error))
-                    ("running"   (decknix--hub-icon "⟳" 'warning))
-                    (_           (decknix--hub-icon "?" 'font-lock-comment-face))))
+                    ("pass"      (decknix--hub-icon "●" 'success))
+                    ("soft_fail" (decknix--hub-icon "●" '(:foreground "orange" :weight bold)))
+                    ("fail"      (decknix--hub-icon "●" 'error))
+                    ("running"   (decknix--hub-icon "◐" 'warning))
+                    (_           (decknix--hub-icon "○" 'shadow))))
          (merge-icon (when (equal mergeable "CONFLICTING")
                        (decknix--hub-icon "⇌" 'error))))
     (if merge-icon
