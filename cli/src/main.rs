@@ -81,6 +81,27 @@ enum WtAction {
         #[arg(long)]
         json: bool,
     },
+    /// Dry-run report: stale / dirty / orphan-fork / branch-deleted-upstream
+    Audit {
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+    /// List worktrees whose upstream branch has been deleted
+    Orphans {
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove old clean merged worktrees
+    Clean {
+        /// Threshold for inactivity (e.g. 7d)
+        #[arg(long, default_value = "7d")]
+        older_than: String,
+        /// Actually perform the deletion
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 /// Expand ~ and validate a directory path, returning a canonical path.
@@ -593,7 +614,92 @@ fn restart_changed_agents(
     }
 }
 
+fn get_active_sessions() -> HashSet<PathBuf> {
+    let mut sessions = HashSet::new();
+    let sessions_path = dirs::home_dir().unwrap_or_default().join(".config/decknix/agent-sessions.json");
+    if sessions_path.exists() {
+        if let Ok(content) = fs::read_to_string(&sessions_path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(convs) = json.get("conversations").and_then(|v| v.as_object()) {
+                    for conv in convs.values() {
+                        if let Some(ws) = conv.get("workspace").and_then(|v| v.as_str()) {
+                            sessions.insert(PathBuf::from(ws));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    sessions
+}
+
+fn is_dirty(path: &Path) -> bool {
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(path)
+        .output();
+    match output {
+        Ok(o) => !o.stdout.is_empty(),
+        Err(_) => false,
+    }
+}
+
+fn is_merged(path: &Path, branch: &str) -> bool {
+    for base in &["origin/main", "origin/master", "main", "master"] {
+        let output = Command::new("git")
+            .args(["branch", "--merged", base])
+            .current_dir(path)
+            .output();
+        if let Ok(o) = output {
+            if o.status.success() {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                if stdout.lines().any(|l| {
+                    let b = l.trim().trim_start_matches('*').trim();
+                    b == branch
+                }) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn is_orphan(path: &Path, branch: &str) -> bool {
+    let output = Command::new("git")
+        .args(["branch", "-vv"])
+        .current_dir(path)
+        .output();
+    if let Ok(o) = output {
+        let stdout = String::from_utf8_lossy(&o.stdout);
+        for line in stdout.lines() {
+            if line.contains(branch) && line.contains(": gone]") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn parse_duration(s: &str) -> anyhow::Result<Duration> {
+    let s = s.trim().to_lowercase();
+    if s.ends_with('d') {
+        let days: u64 = s[..s.len() - 1].parse()?;
+        Ok(Duration::from_secs(days * 24 * 3600))
+    } else if s.ends_with('h') {
+        let hours: u64 = s[..s.len() - 1].parse()?;
+        Ok(Duration::from_secs(hours * 3600))
+    } else if s.ends_with('m') {
+        let mins: u64 = s[..s.len() - 1].parse()?;
+        Ok(Duration::from_secs(mins * 60))
+    } else {
+        let secs: u64 = s.parse()?;
+        Ok(Duration::from_secs(secs))
+    }
+}
+
 fn main() -> anyhow::Result<()> {
+
     let extensions = load_merged_extensions();
 
     // parse args
@@ -790,6 +896,140 @@ fn main() -> anyhow::Result<()> {
                         println!("{}", registry_path().display());
                     }
                 }
+                WtAction::Audit { json } => {
+                    let registry = load_registry()?;
+                    let sessions = get_active_sessions();
+                    let now = SystemTime::now();
+
+                    if json {
+                        let mut report = Vec::new();
+                        for entry in registry {
+                            let mut wt_reports = Vec::new();
+                            if entry.primary.exists() {
+                                for (branch, path) in &entry.worktrees {
+                                    let metadata = fs::metadata(path).ok();
+                                    let age = metadata.and_then(|m| m.modified().ok())
+                                        .and_then(|m| now.duration_since(m).ok())
+                                        .unwrap_or(Duration::from_secs(0));
+
+                                    wt_reports.push(serde_json::json!({
+                                        "branch": branch,
+                                        "path": path,
+                                        "dirty": is_dirty(path),
+                                        "orphan": is_orphan(&entry.primary, branch),
+                                        "active": sessions.contains(path),
+                                        "merged": is_merged(&entry.primary, branch),
+                                        "age_days": age.as_secs() / 86400,
+                                    }));
+                                }
+                            }
+                            report.push(serde_json::json!({
+                                "repo": entry.repo,
+                                "primary": entry.primary,
+                                "stale": entry.stale || !entry.primary.exists(),
+                                "worktrees": wt_reports,
+                            }));
+                        }
+                        println!("{}", serde_json::to_string_pretty(&report)?);
+                    } else {
+                        println!("{}", styled_str("Worktree Audit Report", &[Style::B, Style::U]));
+                        for entry in registry {
+                            if !entry.primary.exists() {
+                                println!("{} - {} ({})", styled_str(&entry.repo, &[Style::B, Style::Cyan]), styled_str("STALE (primary missing)", &[Style::Green]), entry.primary.display());
+                                continue;
+                            }
+                            println!("{} ({})", styled_str(&entry.repo, &[Style::B, Style::Cyan]), entry.primary.display());
+                            for (branch, path) in &entry.worktrees {
+                                let mut issues = Vec::new();
+                                if is_dirty(path) { issues.push(styled_str("DIRTY", &[Style::Green])); }
+                                if is_orphan(&entry.primary, branch) { issues.push(styled_str("ORPHAN (upstream gone)", &[Style::Green])); }
+                                if sessions.contains(path) { issues.push(styled_str("SESSION ACTIVE", &[Style::Cyan])); }
+                                let merged = is_merged(&entry.primary, branch);
+                                if merged { issues.push(styled_str("MERGED", &[Style::Dim])); }
+
+                                let status = if issues.is_empty() { "[OK]".to_string() } else { issues.join(", ") };
+                                println!("  \u{2514}\u{2500} {} -> {} [{}]", styled_str(branch, &[Style::Dim]), path.display(), status);
+                            }
+                        }
+                    }
+                }
+                WtAction::Orphans { json } => {
+                    let registry = load_registry()?;
+                    if json {
+                        let mut orphans = Vec::new();
+                        for entry in registry {
+                            if !entry.primary.exists() { continue; }
+                            for (branch, path) in &entry.worktrees {
+                                if is_orphan(&entry.primary, branch) {
+                                    orphans.push(serde_json::json!({
+                                        "repo": entry.repo,
+                                        "branch": branch,
+                                        "path": path,
+                                    }));
+                                }
+                            }
+                        }
+                        println!("{}", serde_json::to_string_pretty(&orphans)?);
+                    } else {
+                        println!("{}", styled_str("Worktrees with Deleted Upstream Branches", &[Style::B, Style::U]));
+                        for entry in registry {
+                            if !entry.primary.exists() { continue; }
+                            for (branch, path) in &entry.worktrees {
+                                if is_orphan(&entry.primary, branch) {
+                                    println!("{} [{}] -> {}", styled_str(&entry.repo, &[Style::Cyan]), branch, path.display());
+                                }
+                            }
+                        }
+                    }
+                }
+                WtAction::Clean { older_than, apply } => {
+                    let threshold = parse_duration(&older_than)?;
+                    let now = SystemTime::now();
+                    let registry = load_registry()?;
+                    let sessions = get_active_sessions();
+
+                    if !apply {
+                        println!("{}", styled_str("Dry-run: Worktree Cleanup", &[Style::B, Style::U]));
+                    }
+
+                    for entry in registry {
+                        if !entry.primary.exists() { continue; }
+                        for (branch, path) in &entry.worktrees {
+                            let metadata = fs::metadata(path)?;
+                            let mtime = metadata.modified()?;
+                            let age = now.duration_since(mtime).unwrap_or(Duration::from_secs(0));
+
+                            if age < threshold { continue; }
+
+                            let dirty = is_dirty(path);
+                            let merged = is_merged(&entry.primary, branch);
+                            let active = sessions.contains(path);
+
+                            let mut skip_reason = None;
+                            if active { skip_reason = Some("Active session"); }
+                            else if dirty { skip_reason = Some("Uncommitted changes"); }
+                            else if !merged { skip_reason = Some("Not merged into base branch"); }
+
+                            if let Some(reason) = skip_reason {
+                                println!("\u{23e9} Skipping {} [{}]: {}", entry.repo, branch, reason);
+                            } else {
+                                if apply {
+                                    println!("\u{1f5d1}\u{fe0f}  Removing {} [{}]...", entry.repo, branch);
+                                    let _ = Command::new("git")
+                                        .args(["worktree", "remove", &path.to_string_lossy()])
+                                        .current_dir(&entry.primary)
+                                        .status();
+                                } else {
+                                    println!("\u{1f5d1}\u{fe0f}  Would remove {} [{}] (age: {}d)", entry.repo, branch, age.as_secs() / 86400);
+                                }
+                            }
+                        }
+                    }
+
+                    if !apply {
+                        println!("\n(Use --apply to perform actual deletion)");
+                    }
+                }
             }
         }
         Some(Commands::External(args)) => {
@@ -827,4 +1067,25 @@ fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_duration() {
+        assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86400));
+        assert_eq!(parse_duration("2h").unwrap(), Duration::from_secs(7200));
+        assert_eq!(parse_duration("30m").unwrap(), Duration::from_secs(1800));
+        assert_eq!(parse_duration("45").unwrap(), Duration::from_secs(45));
+        assert_eq!(parse_duration(" 1D ").unwrap(), Duration::from_secs(86400));
+    }
+
+    #[test]
+    fn test_parse_duration_invalid() {
+        assert!(parse_duration("abc").is_err());
+        assert!(parse_duration("").is_err());
+    }
 }
