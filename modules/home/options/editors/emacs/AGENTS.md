@@ -141,9 +141,26 @@ agent-shell/tests/
 
 Conventions:
 
-1. **Characterisation only** — tests pin current behaviour, not
-   intended behaviour.  Use them as a safety net before a refactor;
-   change them only when intentionally changing the contract.
+1. **TDD — tests describe intended behaviour, not just current behaviour.**
+   The ERT suite is wired into the Nix build derivation; a red test fails the
+   entire system build.  Treat every test as the authoritative specification
+   for its function's contract.
+
+   Follow the red → green → refactor cycle for all changes:
+
+   - **New behaviour**: write the failing test first, then implement.
+   - **Changing an existing contract** (glyphs, faces, data shapes): update the
+     test(s) to the new intended contract first so they go red, *then* update
+     the implementation.  Never ship a commit where implementation and tests
+     describe different contracts — the Nix build will catch the mismatch but
+     only after a full build cycle.
+   - **Bug fixes**: write a reproducing test that fails before fixing the bug.
+
+   For first-time documentation of *existing* code with no tests yet, a
+   characterisation pass (pinning what the code currently does) is fine as a
+   starting point — but treat it as technical debt to be replaced with
+   specification-first tests when that code next changes.
+
 2. **Lexical-binding tests, dynamic free vars** — `let'-binding a free
    variable that the byte-compiled module accesses via `varref`
    (e.g. `decknix--hub-wip`) requires the variable to be globally
