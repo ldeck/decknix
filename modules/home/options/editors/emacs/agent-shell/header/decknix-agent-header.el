@@ -99,24 +99,28 @@ otherwise falls back to shell-maker--busy."
    (t "unknown")))
 
 (defun decknix--header-status-icon (status)
-  "Return a status icon string for STATUS."
+  "Return a status icon string for STATUS.
+Uses the shape-family system: ○ = pre-active (initializing),
+◐ = in-progress (working/waiting), ● = settled (ready/finished/killed)."
   (pcase status
     ("ready"        "●")
-    ("finished"     "✔")
+    ("finished"     "●")
     ("working"      "◐")
-    ("waiting"      "◉")
+    ("waiting"      "◐")
     ("initializing" "○")
-    ("killed"       "✕")
-    (_              "?")))
+    ("killed"       "●")
+    (_              "○")))
 
 (defun decknix--header-status-face (status)
-  "Return a face for STATUS."
+  "Return a face for STATUS.
+Colour semantics: green = good/ready, cyan = finished/transitioning,
+yellow = in-progress, red = blocked/killed, grey = idle/initializing."
   (pcase status
     ("ready"        'success)
     ("finished"     '(:foreground "cyan" :weight bold))
     ("working"      'warning)
-    ("waiting"      '(:foreground "red" :weight bold))
-    ("initializing" 'font-lock-comment-face)
+    ("waiting"      'error)
+    ("initializing" 'shadow)
     ("killed"       'error)
     (_              'shadow)))
 

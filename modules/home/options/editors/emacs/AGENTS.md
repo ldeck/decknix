@@ -255,10 +255,11 @@ The largest module (~4400 lines). Key subsystems:
 
 ### Unified Header-Line
 Every agent-shell buffer displays a persistent header-line combining:
-1. **Status icon + label** — `● ready`, `◐ working`, `◉ waiting`,
-   `✔ finished`, `○ initializing`, `✕ killed`. Color-coded (green/yellow/red/cyan).
-   Uses `agent-shell-workspace`'s rich detection when available, falls back to
-   `shell-maker--busy`.
+1. **Status icon + label** — Circle shape-family: `○ initializing` (grey),
+   `◐ working` (yellow), `◐ waiting` (red), `● ready` (green),
+   `● finished` (cyan), `● killed` (red). Shape encodes lifecycle stage;
+   colour encodes state within that stage. Uses `agent-shell-workspace`'s
+   rich detection when available, falls back to `shell-maker--busy`.
 2. **Session tags** — from `agent-sessions.json`, shown as `#tag1 #tag2`.
 3. **Workspace path** — abbreviated (e.g., `~/tools/decknix`).
 4. **Context panel items** — issues, PRs, CI, reviews (when context module enabled).
