@@ -61,45 +61,44 @@
   (let* ((build (decknix-test-make-teamcity-build
                  :state "running" :status "" :progress-pct 42))
          (icon (decknix--hub-tc-icon build)))
-    (should (string-match-p "⟳42%" icon))
-    (should (equal '(:foreground "#e5c07b")
-                   (decknix-test--face-at icon 0)))))
+    (should (string-match-p "◐42%" icon))
+    (should (eq 'warning (decknix-test--face-at icon 0)))))
 
 (ert-deftest decknix-hub-tc/icon-running-without-pct ()
   (let* ((build (decknix-test-make-teamcity-build
                  :state "running" :status "" :progress-pct nil))
          (icon (decknix--hub-tc-icon build)))
-    (should (string= "⟳" (substring-no-properties icon)))))
+    (should (string= "◐" (substring-no-properties icon)))))
 
 (ert-deftest decknix-hub-tc/icon-queued ()
   (let* ((build (decknix-test-make-teamcity-build :state "queued" :status ""))
          (icon (decknix--hub-tc-icon build)))
-    (should (string= "◌" (substring-no-properties icon)))
-    (should (eq 'font-lock-comment-face (decknix-test--face-at icon 0)))))
+    (should (string= "○" (substring-no-properties icon)))
+    (should (eq 'shadow (decknix-test--face-at icon 0)))))
 
 (ert-deftest decknix-hub-tc/icon-success ()
   (let* ((build (decknix-test-make-teamcity-build :status "SUCCESS"))
          (icon (decknix--hub-tc-icon build)))
-    (should (string= "▴" (substring-no-properties icon)))
-    (should (equal '(:foreground "#98c379") (decknix-test--face-at icon 0)))))
+    (should (string= "●" (substring-no-properties icon)))
+    (should (eq 'success (decknix-test--face-at icon 0)))))
 
 (ert-deftest decknix-hub-tc/icon-failure ()
   (let* ((build (decknix-test-make-teamcity-build :status "FAILURE"))
          (icon (decknix--hub-tc-icon build)))
-    (should (string= "▾" (substring-no-properties icon)))
-    (should (equal '(:foreground "#e06c75") (decknix-test--face-at icon 0)))))
+    (should (string= "●" (substring-no-properties icon)))
+    (should (eq 'error (decknix-test--face-at icon 0)))))
 
 (ert-deftest decknix-hub-tc/icon-error-shares-failure-color ()
   (let* ((build (decknix-test-make-teamcity-build :status "ERROR"))
          (icon (decknix--hub-tc-icon build)))
-    (should (string= "▾" (substring-no-properties icon)))
-    (should (equal '(:foreground "#e06c75") (decknix-test--face-at icon 0)))))
+    (should (string= "●" (substring-no-properties icon)))
+    (should (eq 'error (decknix-test--face-at icon 0)))))
 
 (ert-deftest decknix-hub-tc/icon-unknown-status-falls-back-to-question-mark ()
   (let* ((build (decknix-test-make-teamcity-build :status "WEIRD"))
          (icon (decknix--hub-tc-icon build)))
-    (should (string= "?" (substring-no-properties icon)))
-    (should (eq 'font-lock-comment-face (decknix-test--face-at icon 0)))))
+    (should (string= "○" (substring-no-properties icon)))
+    (should (eq 'shadow (decknix-test--face-at icon 0)))))
 
 ;; -- decknix--hub-deploy-indicator --------------------------------
 
