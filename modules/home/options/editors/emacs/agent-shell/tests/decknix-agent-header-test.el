@@ -29,6 +29,7 @@
 (defvar decknix--agent-auggie-session-id nil)
 (defvar decknix--agent-session-workspace nil)
 (defvar shell-maker--busy nil)
+(defvar agent-shell--state nil)
 
 ;; -- Status detection --------------------------------------------
 
@@ -130,6 +131,131 @@ grey = initializing/unknown."
   (let ((decknix--agent-session-workspace ""))
     (should (null (decknix--header-workspace-short)))))
 
+;; -- Agent glyph -------------------------------------------------
+
+(ert-deftest decknix-header-agent-glyph--auggie ()
+  "Auggie maps to \"A\" via the alist."
+  (cl-letf (((symbol-function 'map-nested-elt)
+             (lambda (_state _keys) "Auggie")))
+    (let ((agent-shell--state '(:agent-config (:buffer-name "Auggie"))))
+      (should (equal (decknix--header-agent-glyph) "A")))))
+
+(ert-deftest decknix-header-agent-glyph--claude ()
+  "Claude maps to \"C\"."
+  (cl-letf (((symbol-function 'map-nested-elt)
+             (lambda (_state _keys) "Claude")))
+    (let ((agent-shell--state '(:agent-config (:buffer-name "Claude"))))
+      (should (equal (decknix--header-agent-glyph) "C")))))
+
+(ert-deftest decknix-header-agent-glyph--codex ()
+  "Codex maps to \"X\"."
+  (cl-letf (((symbol-function 'map-nested-elt)
+             (lambda (_state _keys) "Codex")))
+    (let ((agent-shell--state '(:agent-config (:buffer-name "Codex"))))
+      (should (equal (decknix--header-agent-glyph) "X")))))
+
+(ert-deftest decknix-header-agent-glyph--gemini ()
+  "Gemini maps to \"G\"."
+  (cl-letf (((symbol-function 'map-nested-elt)
+             (lambda (_state _keys) "Gemini")))
+    (let ((agent-shell--state '(:agent-config (:buffer-name "Gemini"))))
+      (should (equal (decknix--header-agent-glyph) "G")))))
+
+(ert-deftest decknix-header-agent-glyph--unknown-falls-back-to-first-char ()
+  "Unknown agent name falls back to first character uppercased."
+  (cl-letf (((symbol-function 'map-nested-elt)
+             (lambda (_state _keys) "nova")))
+    (let ((agent-shell--state '(:agent-config (:buffer-name "nova"))))
+      (should (equal (decknix--header-agent-glyph) "N")))))
+
+(ert-deftest decknix-header-agent-glyph--default-when-no-state ()
+  "Without state, defaults to \"A\" (Auggie is the default agent)."
+  (let ((agent-shell--state nil))
+    (should (equal (decknix--header-agent-glyph) "A"))))
+
+;; -- Workspace basename ------------------------------------------
+
+(ert-deftest decknix-header-workspace-basename--last-component ()
+  "Returns the last path component."
+  (let ((decknix--agent-session-workspace
+         "/Users/foo/Code/nurturecloud/decknix-config"))
+    (should (equal (decknix--header-workspace-basename)
+                   "decknix-config"))))
+
+(ert-deftest decknix-header-workspace-basename--handles-trailing-slash ()
+  "Strips a trailing slash before extracting the basename."
+  (let ((decknix--agent-session-workspace "/Users/foo/tools/decknix/"))
+    (should (equal (decknix--header-workspace-basename) "decknix"))))
+
+(ert-deftest decknix-header-workspace-basename--nil-when-empty ()
+  "Returns nil for nil or empty workspace."
+  (let ((decknix--agent-session-workspace nil))
+    (should (null (decknix--header-workspace-basename))))
+  (let ((decknix--agent-session-workspace ""))
+    (should (null (decknix--header-workspace-basename)))))
+
+;; -- Model short -------------------------------------------------
+
+(ert-deftest decknix-header-model-short--delegates-to-session-lookup ()
+  "Dispatches to `decknix--agent-session-model-for-conv-key' with the
+buffer-local `decknix--agent-conv-key'."
+  (cl-letf (((symbol-function 'decknix--agent-session-model-for-conv-key)
+             (lambda (k)
+               (should (equal k "ck-42"))
+               "sonnet-4-5")))
+    (let ((decknix--agent-conv-key "ck-42"))
+      (should (equal (decknix--header-model-short) "sonnet-4-5")))))
+
+(ert-deftest decknix-header-model-short--nil-when-no-conv-key ()
+  "Returns nil when conv-key is not set."
+  (let ((decknix--agent-conv-key nil))
+    (should (null (decknix--header-model-short)))))
+
+;; -- Essentials --------------------------------------------------
+
+(ert-deftest decknix-header-essentials--glyph-model-workspace ()
+  "Composes the full \"<glyph> ▶ <model> @ <ws>\" string."
+  (cl-letf (((symbol-function 'decknix--header-agent-glyph)
+             (lambda () "A"))
+            ((symbol-function 'decknix--header-model-short)
+             (lambda () "sonnet-4-5"))
+            ((symbol-function 'decknix--header-workspace-basename)
+             (lambda () "decknix")))
+    (should (equal (substring-no-properties (decknix--header-essentials))
+                   "A ▶ sonnet-4-5 @ decknix"))))
+
+(ert-deftest decknix-header-essentials--model-only ()
+  "Omits workspace segment when ws is nil."
+  (cl-letf (((symbol-function 'decknix--header-agent-glyph)
+             (lambda () "A"))
+            ((symbol-function 'decknix--header-model-short)
+             (lambda () "sonnet-4-5"))
+            ((symbol-function 'decknix--header-workspace-basename)
+             (lambda () nil)))
+    (should (equal (substring-no-properties (decknix--header-essentials))
+                   "A ▶ sonnet-4-5"))))
+
+(ert-deftest decknix-header-essentials--workspace-only ()
+  "Omits model segment when model is nil."
+  (cl-letf (((symbol-function 'decknix--header-agent-glyph)
+             (lambda () "A"))
+            ((symbol-function 'decknix--header-model-short)
+             (lambda () nil))
+            ((symbol-function 'decknix--header-workspace-basename)
+             (lambda () "decknix")))
+    (should (equal (substring-no-properties (decknix--header-essentials))
+                   "A @ decknix"))))
+
+(ert-deftest decknix-header-essentials--nil-when-no-model-or-ws ()
+  "Returns nil when both model and ws are nil."
+  (cl-letf (((symbol-function 'decknix--header-agent-glyph)
+             (lambda () "A"))
+            ((symbol-function 'decknix--header-model-short)
+             (lambda () nil))
+            ((symbol-function 'decknix--header-workspace-basename)
+             (lambda () nil)))
+    (should (null (decknix--header-essentials)))))
+
 ;; -- Header build ------------------------------------------------
 
 (ert-deftest decknix-header-build--includes-status-and-tags ()
@@ -139,11 +265,34 @@ grey = initializing/unknown."
             ((symbol-function 'decknix--header-upstream)
              (lambda () nil))
             ((symbol-function 'decknix--header-tags)
-             (lambda () '("foo" "bar"))))
+             (lambda () '("foo" "bar")))
+            ((symbol-function 'decknix--header-essentials)
+             (lambda () nil)))
     (let ((out (decknix--header-build)))
       (should (string-match-p "ready" out))
       (should (string-match-p "#foo" out))
       (should (string-match-p "#bar" out)))))
+
+(ert-deftest decknix-header-build--includes-essentials-after-tags ()
+  "Essentials substring appears after the tags substring in the joined header."
+  (cl-letf (((symbol-function 'decknix--header-detect-status)
+             (lambda () "ready"))
+            ((symbol-function 'decknix--header-upstream)
+             (lambda () nil))
+            ((symbol-function 'decknix--header-tags)
+             (lambda () '("foo")))
+            ((symbol-function 'decknix--header-agent-glyph)
+             (lambda () "A"))
+            ((symbol-function 'decknix--header-model-short)
+             (lambda () "sonnet-4-5"))
+            ((symbol-function 'decknix--header-workspace-basename)
+             (lambda () "decknix")))
+    (let* ((out (substring-no-properties (decknix--header-build)))
+           (tags-pos (string-match "#foo" out))
+           (essentials-pos (string-match "A ▶ sonnet-4-5 @ decknix" out)))
+      (should tags-pos)
+      (should essentials-pos)
+      (should (< tags-pos essentials-pos)))))
 
 (ert-deftest decknix-header-build--working-then-ready-renders-finished ()
   "After `working' the next `ready' tick renders as `finished'

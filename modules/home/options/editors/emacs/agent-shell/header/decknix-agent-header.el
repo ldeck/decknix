@@ -44,6 +44,8 @@
 
 ;;; Code:
 
+(require 'map)
+
 ;; -- Forward declarations ----------------------------------------
 
 ;; Upstream agent-shell / shell-maker symbols touched at runtime.
@@ -52,6 +54,7 @@
 (declare-function agent-shell--make-header "agent-shell" (state))
 (declare-function agent-shell--state "agent-shell")
 (defvar agent-shell-header-style)
+(defvar agent-shell--state)
 (defvar shell-maker--busy)
 
 ;; Sibling carved modules.
@@ -59,6 +62,8 @@
                   "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--agent-tags-for-session
                   "decknix-agent-tags-read" (session-id))
+(declare-function decknix--agent-session-model-for-conv-key
+                  "decknix-agent-session-model" (conv-key))
 
 ;; Symbols owned by main-bulk (buffer-local defvars / contextual
 ;; helpers).  Forward-declared as `defvar' without value so the
@@ -148,6 +153,68 @@ the session-id-based lookup if conv-key is not set yet."
              (not (string-empty-p decknix--agent-session-workspace)))
     (abbreviate-file-name decknix--agent-session-workspace)))
 
+;; -- Essentials block (glyph ▶ model @ workspace) ----------------
+
+(defvar decknix--header-agent-glyph-alist
+  '(("Auggie" . "A")
+    ("Claude" . "C")
+    ("Codex"  . "X")
+    ("Gemini" . "G"))
+  "Map of agent `:buffer-name' to single-character glyph.
+Used by `decknix--header-agent-glyph' to build the abbreviated
+essentials block.  Unknown agents fall back to the uppercase first
+character of the name; no agent at all defaults to \"A\" (Auggie).")
+
+(defun decknix--header-agent-glyph ()
+  "Return a single-character glyph for the current buffer's agent.
+Looks up the agent's `:buffer-name' from `agent-shell--state' against
+`decknix--header-agent-glyph-alist'.  Falls back to the uppercase first
+character of the name, or \"A\" when no state exists."
+  (let* ((state (and (boundp 'agent-shell--state) agent-shell--state))
+         (name  (and state
+                     (ignore-errors
+                       (map-nested-elt state '(:agent-config :buffer-name)))))
+         (hit   (and name
+                     (cdr (assoc name decknix--header-agent-glyph-alist)))))
+    (cond
+     (hit hit)
+     ((and (stringp name) (> (length name) 0))
+      (upcase (substring name 0 1)))
+     (t "A"))))
+
+(defun decknix--header-workspace-basename ()
+  "Return the last path component of the current session's workspace.
+Returns nil when the workspace is unset or empty.  A trailing slash on
+the workspace path is stripped before the basename is extracted."
+  (when (and (boundp 'decknix--agent-session-workspace)
+             decknix--agent-session-workspace
+             (not (string-empty-p decknix--agent-session-workspace)))
+    (file-name-nondirectory
+     (directory-file-name decknix--agent-session-workspace))))
+
+(defun decknix--header-model-short ()
+  "Return a short model identifier for the current conversation, or nil.
+Delegates to `decknix--agent-session-model-for-conv-key' keyed by the
+buffer-local `decknix--agent-conv-key'."
+  (when (bound-and-true-p decknix--agent-conv-key)
+    (ignore-errors
+      (decknix--agent-session-model-for-conv-key decknix--agent-conv-key))))
+
+(defun decknix--header-essentials ()
+  "Return the abbreviated essentials string, or nil.
+Format is \"<glyph> ▶ <model> @ <workspace>\"; the `▶ <model>' and
+`@ <workspace>' segments are each omitted when their underlying value
+is nil.  Returns nil entirely when both model and workspace are nil so
+the part can be cheaply skipped by `decknix--header-build'."
+  (let ((glyph (decknix--header-agent-glyph))
+        (model (decknix--header-model-short))
+        (ws    (decknix--header-workspace-basename)))
+    (when (or model ws)
+      (propertize (concat glyph
+                          (when model (concat " ▶ " model))
+                          (when ws    (concat " @ " ws)))
+                  'face 'font-lock-keyword-face))))
+
 (defun decknix--header-available-width ()
   "Return the usable character width for the current buffer's header-line.
 Falls back to `frame-width' when the buffer has no displayed window."
@@ -185,16 +252,21 @@ any improvements to agent-shell--make-header automatically."
 (defun decknix--header-build ()
   "Build the unified header-line string for the current agent-shell buffer.
 Order (left to right, stable before animated):
-  status icon + label  │  conversation tags  │  context badge  │  upstream
+  status icon + label  │  conversation tags  │  essentials  │  context badge  │  upstream
+
+The `essentials' part is the abbreviated `<glyph> ▶ <model> @ <ws>'
+block produced by `decknix--header-essentials'; it sits between tags
+and the context badge so it survives longer than context/upstream when
+the window narrows.
 
 Parts are built in priority order — status first (never dropped), upstream
 last (dropped first) — then passed to `decknix--header-fit-parts' which
 iteratively removes trailing parts until the string fits the window width.
 If only the status part remains and still overflows, it is hard-truncated
 with an ellipsis.  This gives a graceful degradation path:
-  wide:   status │ tags │ ctx │ upstream
-  medium: status │ tags │ ctx
-  narrow: status │ tags
+  wide:   status │ tags │ essentials │ ctx │ upstream
+  medium: status │ tags │ essentials │ ctx
+  narrow: status │ tags │ essentials
   tiny:   status (possibly truncated)
 
 Note: `header-line-format' is a mode-line format spec; literal \\n in a string
@@ -211,6 +283,7 @@ renders as ^J, not a line break.  All items therefore live on one line."
          (face (decknix--header-status-face status))
          (upstream (decknix--header-upstream))
          (tags (decknix--header-tags))
+         (essentials (decknix--header-essentials))
          (parts nil))
     ;; Clear "finished" once user returns to the buffer
     (when (and (string= status "finished")
@@ -231,11 +304,16 @@ renders as ^J, not a line break.  All items therefore live on one line."
              (mapconcat (lambda (tg) (format "#%s" tg)) tags " ")
              'face 'font-lock-type-face)
             parts))
-    ;; Item 3: Context panel badge (stable)
+    ;; Item 3: Essentials (glyph ▶ model @ workspace) — kept between
+    ;;         tags and context so the abbreviated block survives the
+    ;;         medium/narrow drops.
+    (when essentials
+      (push essentials parts))
+    ;; Item 4: Context panel badge (stable)
     (when (fboundp 'decknix--context-header-string)
       (let ((ctx (decknix--context-header-string)))
         (when ctx (push ctx parts))))
-    ;; Item 4: upstream header — agent name, model, mode, workspace,
+    ;; Item 5: upstream header — agent name, model, mode, workspace,
     ;;         session-id, usage, busy animation (animated, last so
     ;;         truncation only touches this trailing item).
     (when (and upstream (not (string-empty-p upstream)))
