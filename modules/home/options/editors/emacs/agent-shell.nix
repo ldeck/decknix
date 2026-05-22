@@ -2363,14 +2363,19 @@ in
 
         ;; Pure session formatters (PR B.54) -- carved from main-bulk.
         ;; `preview' renders one row of the saved-sessions picker;
-        ;; `display-name' derives the `*Auggie: <name>*' buffer name
-        ;; on resume.  Loaded after tags-read / conv-resolve /
-        ;; format because it composes all three at call time.
+        ;; `derive-name' is the canonical naming helper shared by new
+        ;; session creation and resume; `display-name' wraps it for
+        ;; the resume path (extracts tags/first-msg from session alist).
+        ;; Loaded after tags-read / conv-resolve / format because it
+        ;; composes all three at call time.
         (require 'decknix-agent-session-format)
         (declare-function decknix--agent-session-preview
                           "decknix-agent-session-format" (session))
         (declare-function decknix--agent-session-display-name
                           "decknix-agent-session-format" (session))
+        (declare-function decknix--agent-session-derive-name
+                          "decknix-agent-session-format"
+                          (tags &optional workspace branch first-message sid))
 
         ;; Conversation aggregation + live-buffer label (PR B.56) --
         ;; carved from main-bulk.  `group-by-conversation' buckets

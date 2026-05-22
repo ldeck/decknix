@@ -109,6 +109,9 @@
                   "decknix-agent-session-format" (session))
 (declare-function decknix--agent-session-display-name
                   "decknix-agent-session-format" (session))
+(declare-function decknix--agent-session-derive-name
+                  "decknix-agent-session-format"
+                  (tags &optional workspace branch first-message sid))
 (declare-function decknix--agent-session-group-by-conversation
                   "decknix-agent-session-group"
                   (sessions &optional include-hidden))
@@ -282,6 +285,9 @@ Prevents the auto-persist hook from firing repeatedly.")
                   "decknix-agent-session-format" (session))
 (declare-function decknix--agent-session-display-name
                   "decknix-agent-session-format" (session))
+(declare-function decknix--agent-session-derive-name
+                  "decknix-agent-session-format"
+                  (tags &optional workspace branch first-message sid))
 
 ;; Conversation aggregation + live-buffer label live in
 ;; `decknix-agent-session-group' (PR B.56, `agent-shell/agent/').
@@ -1437,24 +1443,20 @@ Whichever fires first wins; the other no-ops via the
            t))))
 (defun decknix-agent-session-new (&optional quick)
   "Start a new agent session with guided setup.
-Prompts for workspace directory, session name, and initial tags.
+Prompts for workspace directory and initial tags.  The buffer name is
+derived automatically via `decknix--agent-session-derive-name': tags
+joined by '/' if any were supplied, else <dir>/<branch> from the chosen
+workspace.  This matches the naming convention used when restoring saved
+sessions, so live and resumed buffers are always consistently labelled.
 
 With prefix argument QUICK, skip prompts and use defaults:
-workspace = project root, name = auto-generated, no tags."
+workspace = project root, no tags; name is still derived automatically."
   (interactive "P")
   (let* ((default-ws (decknix--agent-detect-workspace))
          (workspace (if quick default-ws
                       (read-directory-name "Workspace: " default-ws nil t)))
          (workspace (expand-file-name workspace))
-         (dir-name (file-name-nondirectory
-                    (directory-file-name workspace)))
          (branch (decknix--agent-detect-branch workspace))
-         (default-name (if branch
-                           (format "%s/%s" dir-name branch)
-                         dir-name))
-         (name (if quick default-name
-                 (read-string (format "Session name [%s]: " default-name)
-                              nil nil default-name)))
          (tags (unless quick
                  (let ((input (completing-read-multiple
                                "Tags (comma-separated): "
@@ -1462,6 +1464,7 @@ workspace = project root, name = auto-generated, no tags."
                                nil nil)))
                    (mapcar #'string-trim
                            (seq-remove #'string-empty-p input)))))
+         (name (decknix--agent-session-derive-name tags workspace branch nil nil))
          (before-buffers (buffer-list))
          ;; Build an augmented command with --workspace-root.
          ;; We must capture this in a closure rather than using a let-binding

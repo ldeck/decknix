@@ -23,10 +23,16 @@
 ;;       saved-sessions section of the `consult--multi' picker and
 ;;       the conversation-collapsed header line.
 ;;
-;;   `decknix--agent-session-display-name' (session) -- short buffer
-;;       name preferred order: tags joined by `/' if any, else a
-;;       40-char first-message preview, else the 8-char session id
-;;       prefix.  Drives the `*Auggie: <name>*' rename on resume.
+;;   `decknix--agent-session-derive-name'
+;;       (tags &optional workspace branch first-message sid) -- canonical
+;;       buffer name derivation shared by new-session creation and resume.
+;;       Priority: tags joined by `/' > <dir>/<branch> from workspace >
+;;       40-char first-message preview > 8-char session id prefix.
+;;
+;;   `decknix--agent-session-display-name' (session) -- thin wrapper
+;;       around `decknix--agent-session-derive-name' for the resume path:
+;;       extracts tags, first-message, and session-id from SESSION and
+;;       delegates.  Drives the `*Auggie: <name>*' rename on resume.
 
 ;;; Code:
 
@@ -58,22 +64,46 @@
             truncated
             tag-str)))
 
+(defun decknix--agent-session-derive-name
+    (tags &optional workspace branch first-message sid)
+  "Derive a canonical session buffer name from the given parameters.
+Priority:
+  1. TAGS joined by '/' (if any)
+  2. <dir>/<BRANCH> or <dir> from WORKSPACE (if provided)
+  3. Truncated FIRST-MESSAGE preview (40 chars, first line only)
+  4. SID prefix (8 chars)
+
+This is the single source of truth for session naming, shared by new
+session creation and resume.  New sessions supply WORKSPACE and BRANCH
+but not FIRST-MESSAGE (not sent yet); resumed sessions supply
+FIRST-MESSAGE and SID but not workspace details."
+  (let ((dir-name (when workspace
+                    (file-name-nondirectory
+                     (directory-file-name (expand-file-name workspace))))))
+    (cond
+     (tags (string-join tags "/"))
+     ((and dir-name branch) (format "%s/%s" dir-name branch))
+     (dir-name dir-name)
+     ((and first-message
+           (not (string-empty-p first-message)))
+      (let ((preview (car (split-string first-message "\n" t))))
+        (if (and preview (not (string-empty-p preview)))
+            (truncate-string-to-width preview 40 nil nil "...")
+          (if sid (substring sid 0 (min 8 (length sid))) ""))))
+     (sid (substring sid 0 (min 8 (length sid))))
+     (t ""))))
+
 (defun decknix--agent-session-display-name (session)
   "Derive a short buffer display name from SESSION data.
-Uses tags if available, otherwise truncates the first user message."
+Thin wrapper around `decknix--agent-session-derive-name' for the resume
+path.  Extracts tags via conv-key lookup, plus first-message and
+session-id from SESSION, then delegates.  Priority: tags > first-message
+preview > session-id prefix."
   (let* ((sid (alist-get 'sessionId session ""))
          (first-msg (alist-get 'firstUserMessage session ""))
          (conv-key (decknix--agent-conversation-key first-msg))
-         (tags (when conv-key (decknix--agent-tags-for-conv-key conv-key)))
-         (preview (car (split-string first-msg "\n" t))))
-    (cond
-     ;; If there are tags, use them as the name
-     (tags (string-join tags "/"))
-     ;; Otherwise use a truncated preview of the first message
-     ((and preview (not (string-empty-p preview)))
-      (truncate-string-to-width preview 40 nil nil "..."))
-     ;; Fallback to session ID prefix
-     (t (substring sid 0 (min 8 (length sid)))))))
+         (tags (when conv-key (decknix--agent-tags-for-conv-key conv-key))))
+    (decknix--agent-session-derive-name tags nil nil first-msg sid)))
 
 (provide 'decknix-agent-session-format)
 ;;; decknix-agent-session-format.el ends here

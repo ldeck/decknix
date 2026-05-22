@@ -135,5 +135,58 @@
       (should (equal (decknix--agent-session-display-name s)
                      "headline")))))
 
+;; -- derive-name -------------------------------------------------
+
+(ert-deftest decknix-agent-session-format/derive-name-prefers-tags ()
+  "Tags win over workspace/branch, joined with '/'."
+  (should (equal (decknix--agent-session-derive-name
+                  '("review" "conn-2034") "/ws/foo" "main" nil nil)
+                 "review/conn-2034")))
+
+(ert-deftest decknix-agent-session-format/derive-name-dir-branch ()
+  "No tags: workspace dir + branch form the name."
+  (should (equal (decknix--agent-session-derive-name
+                  nil "/Users/me/tools/decknix" "main" nil nil)
+                 "decknix/main")))
+
+(ert-deftest decknix-agent-session-format/derive-name-dir-only ()
+  "No tags, no branch: workspace dir alone becomes the name."
+  (should (equal (decknix--agent-session-derive-name
+                  nil "/Users/me/tools/decknix" nil nil nil)
+                 "decknix")))
+
+(ert-deftest decknix-agent-session-format/derive-name-preview-fallback ()
+  "No tags, no workspace: first-message preview (40 chars)."
+  (let ((msg "Refactor the login flow to use JWT tokens everywhere"))
+    (let ((name (decknix--agent-session-derive-name nil nil nil msg nil)))
+      (should (string-match-p "\\.\\.\\." name))
+      (should (<= (length name) 40)))))
+
+(ert-deftest decknix-agent-session-format/derive-name-preview-first-line ()
+  "Multi-line first-message uses only the first non-empty line."
+  (let ((msg "headline\nbody body body"))
+    (should (equal (decknix--agent-session-derive-name nil nil nil msg nil)
+                   "headline"))))
+
+(ert-deftest decknix-agent-session-format/derive-name-sid-fallback ()
+  "No tags, no workspace, empty first-message: 8-char sid prefix."
+  (should (equal (decknix--agent-session-derive-name nil nil nil "" "deadbeef-1234")
+                 "deadbeef")))
+
+(ert-deftest decknix-agent-session-format/derive-name-tags-beat-workspace ()
+  "Tags win even when workspace+branch are both supplied."
+  (should (equal (decknix--agent-session-derive-name
+                  '("feat") "/ws/myproject" "feature/login" nil nil)
+                 "feat")))
+
+(ert-deftest decknix-agent-session-format/display-name-via-derive ()
+  "display-name delegates to derive-name (tags > preview > sid)."
+  (let ((s (decknix-agent-session-format-test--session
+            "sid1234-abcd" "Hello world" 3 nil)))
+    (cl-letf (((symbol-function 'decknix--agent-tags-for-conv-key)
+               (lambda (_) '("api" "v2"))))
+      (should (equal (decknix--agent-session-display-name s)
+                     "api/v2")))))
+
 (provide 'decknix-agent-session-format-test)
 ;;; decknix-agent-session-format-test.el ends here
