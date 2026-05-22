@@ -218,8 +218,8 @@
 
 (ert-deftest decknix-hub-ci/ci-icon-conflicting-appends-merge-glyph ()
   (let ((icon (decknix--hub-ci-icon (decknix-test--make-ci "pass") "CONFLICTING")))
-    ;; Concatenated string: ● then ⇌
-    (should (equal "●⇌" (decknix-test--icon-glyph icon)))
+    ;; Concatenated string: ● then ▣ (shape-family conflict glyph)
+    (should (equal "●▣" (decknix-test--icon-glyph icon)))
     ;; First char keeps success face, second is error.
     (should (eq 'success (get-text-property 0 'face icon)))
     (should (eq 'error (get-text-property 1 'face icon)))))
