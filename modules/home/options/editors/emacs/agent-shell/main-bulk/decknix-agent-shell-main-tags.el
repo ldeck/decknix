@@ -576,8 +576,28 @@ Bound to \\[decknix-agent-session-info] in agent-shell buffers."
                           decknix--agent-conv-key))
          (workspace  (and (boundp 'decknix--agent-session-workspace)
                           decknix--agent-session-workspace))
-         (model      (and conv-key
-                          (decknix--agent-session-model-for-conv-key conv-key)))
+         ;; Prefer live ACP state (model-id + human name) over the
+         ;; persisted override so the display always reflects reality.
+         (live-model-id (ignore-errors
+                          (map-nested-elt (agent-shell--state)
+                                         '(:session :model-id))))
+         (live-models   (ignore-errors
+                          (map-nested-elt (agent-shell--state)
+                                         '(:session :models))))
+         (live-model-name (when live-model-id
+                            (map-elt (seq-find
+                                      (lambda (m)
+                                        (string= (map-elt m :model-id)
+                                                 live-model-id))
+                                      live-models)
+                                     :name)))
+         (persisted-model (and conv-key
+                               (decknix--agent-session-model-for-conv-key conv-key)))
+         ;; Show "name (id)" when we have a name, else just the id or override.
+         (model      (cond
+                      (live-model-name (format "%s (%s)" live-model-name live-model-id))
+                      (live-model-id   live-model-id)
+                      (persisted-model persisted-model)))
          (tags       (and conv-key
                           (decknix--agent-tags-for-conv-key conv-key)))
          ;; Read session JSON for timestamps + exchange count
