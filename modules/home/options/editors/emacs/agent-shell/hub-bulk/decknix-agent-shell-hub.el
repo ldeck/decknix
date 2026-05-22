@@ -2743,7 +2743,7 @@ primary action is a no-op until a PR materialises."
                            (propertize age 'face 'font-lock-comment-face)
                            (propertize "wip" 'face 'font-lock-comment-face)
                            (propertize short-branch
-                                       'face 'font-lock-comment-face)))))
+                                       'face 'font-lock-comment-face))))))
     (insert (propertize line
                         'decknix-hub-type 'wip-placeholder
                         'decknix-hub-repo repo-full
