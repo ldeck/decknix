@@ -137,21 +137,37 @@
 Wraps `agent-shell-set-session-model' with an on-success callback
 that records the new model-id against the current conversation in
 agent-sessions.json so subsequent resumes pass `--model <id>' to
-auggie."
+auggie.
+
+The current model is annotated with \" ← current\" in the picker so
+it is immediately visible when browsing candidates."
   (interactive)
-  (agent-shell-set-session-model
-   (eval `(lambda ()
-            (let ((model-id (map-nested-elt
-                             (agent-shell--state)
-                             '(:session :model-id)))
-                  (conv-key (bound-and-true-p
-                             decknix--agent-conv-key)))
-              (when (and conv-key model-id)
-                (decknix--agent-session-save-model-for-conv-key
-                 conv-key model-id)
-                (message "Model %s saved for this conversation"
-                         model-id))))
-         t)))
+  ;; `completion-extra-properties' is a dynamically-scoped special
+  ;; variable (defvar'd by Emacs core), so this let-binding is active
+  ;; inside the upstream completing-read call even though this file
+  ;; uses lexical-binding.
+  (let* ((current-model-id (map-nested-elt (agent-shell--state)
+                                           '(:session :model-id)))
+         (completion-extra-properties
+          (when current-model-id
+            (list :annotation-function
+                  (lambda (candidate)
+                    (when (string-match-p (regexp-quote current-model-id)
+                                         candidate)
+                      " ← current"))))))
+    (agent-shell-set-session-model
+     (eval `(lambda ()
+              (let ((model-id (map-nested-elt
+                               (agent-shell--state)
+                               '(:session :model-id)))
+                    (conv-key (bound-and-true-p
+                               decknix--agent-conv-key)))
+                (when (and conv-key model-id)
+                  (decknix--agent-session-save-model-for-conv-key
+                   conv-key model-id)
+                  (message "Model %s saved for this conversation"
+                           model-id))))
+           t))))
 
 ;; -- PR / repo linking: store/retrieve linked items per conversation --
 ;; Source moved into agent-shell/agent/decknix-agent-link-store.el.
