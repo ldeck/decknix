@@ -40,6 +40,10 @@
   "Strip text properties from S to compare bare glyph."
   (when (stringp s) (substring-no-properties s)))
 
+(defun decknix-test--icon-face (s)
+  "Get the face property from S."
+  (when (stringp s) (get-text-property 0 'face s)))
+
 ;; -- format-age: boundary checks -----------------------------------
 
 (ert-deftest decknix-hub-format-age--nil ()
@@ -143,6 +147,13 @@
 
 ;; -- activity-icons: flag combinations -----------------------------
 
+(ert-deftest decknix-hub-activity-icons--approved-hides-all ()
+  "Approved PRs (decision=APPROVED) yield empty activity icons."
+  (let ((pr '((review_decision . "APPROVED")
+              (needs_reply . t)
+              (replies_to_me . t))))
+    (should (equal (decknix--hub-activity-icons pr) ""))))
+
 (ert-deftest decknix-hub-activity-icons--none ()
   "All flags absent or false yield empty string."
   (should (equal (decknix--hub-activity-icons '()) ""))
@@ -216,11 +227,45 @@
                     (decknix--hub-primary-status-icon item 'wip))
                    "●"))))
 
+(ert-deftest decknix-hub-icons--primary-status-open-approved-tc-fail ()
+  "Approved but failing TeamCity build should be red."
+  (let ((item '((state . "OPEN") (review_decision . "APPROVED")))
+        (tc '((status . "FAILURE"))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-primary-status-icon item 'wip tc))
+                   "●"))
+    (should (equal (decknix-test--icon-face
+                    (decknix--hub-primary-status-icon item 'wip tc))
+                   'error))))
+
 (ert-deftest decknix-hub-icons--primary-status-open-needs-review ()
   (let ((item '((state . "OPEN") (review_decision . "REVIEW_REQUIRED"))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-primary-status-icon item 'wip))
                    "◐"))))
+
+(ert-deftest decknix-hub-icons--primary-status-open-approved-ci-fail ()
+  "Approved but failing CI should be red."
+  (let ((item '((state . "OPEN")
+                 (review_decision . "APPROVED")
+                 (ci . ((status . "fail"))))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-primary-status-icon item 'wip))
+                   "●"))
+    (should (equal (decknix-test--icon-face
+                    (decknix--hub-primary-status-icon item 'wip))
+                   'error))))
+
+(ert-deftest decknix-hub-icons--primary-status-conflicting ()
+  "Conflicting PRs use the square-with-dot glyph."
+  (let ((item '((state . "OPEN")
+                 (mergeable . "CONFLICTING"))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-primary-status-icon item 'wip))
+                   "▣"))
+    (should (equal (decknix-test--icon-face
+                    (decknix--hub-primary-status-icon item 'wip))
+                   'error))))
 
 (ert-deftest decknix-hub-icons--primary-status-merged ()
   (let ((item '((state . "MERGED"))))

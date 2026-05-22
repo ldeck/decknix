@@ -79,14 +79,21 @@ Shows the overall review status of the user's own PR:
       ("REVIEW_REQUIRED"   (decknix--hub-icon "◐" 'warning))
       (_ ""))))
 
-(defun decknix--hub-primary-status-icon (item kind)
+(defun decknix--hub-primary-status-icon (item kind &optional tc-status)
   "Return a primary status icon for ITEM of KIND.
 KIND is one of 'wip, 'review, 'placeholder, or 'done.
-Follows the shape-family system: ○ ★ ◐ ● ▣ ■."
+OPTIONAL TC-STATUS is a TeamCity build alist.
+Follows the shape-family system: ○ ★ ◐ ● ▣ ■.
+Incorporates CI and mergeable status into the primary signal to
+reduce sidebar duplication."
   (let* ((state (alist-get 'state item))
          (draft (eq (alist-get 'draft item) t))
          (ci (alist-get 'ci item))
+         (mergeable (alist-get 'mergeable item))
+         (conflicting (equal mergeable "CONFLICTING"))
          (classified (decknix--hub-ci-classify ci))
+         (tc-fail (member (alist-get 'status tc-status) '("FAILURE" "ERROR")))
+         (tc-running (string= (alist-get 'state tc-status) "running"))
          (decision (cond ((eq kind 'wip) (alist-get 'review_decision item))
                          ((eq kind 'review) (alist-get 'my_review item))
                          (t nil))))
@@ -97,6 +104,8 @@ Follows the shape-family system: ○ ★ ◐ ● ▣ ■."
       (decknix--hub-icon "■" 'success))
      ((string= state "CLOSED")
       (decknix--hub-icon "■" 'shadow))
+     (conflicting
+      (decknix--hub-icon "▣" 'error))
      (draft
       (let ((face (pcase classified
                     ("pass"      'success)
@@ -105,16 +114,22 @@ Follows the shape-family system: ○ ★ ◐ ● ▣ ■."
                     ("soft_fail" '(:foreground "orange" :weight bold))
                     (_           'shadow))))
         (decknix--hub-icon "★" face)))
-     ((equal decision "APPROVED")
-      (decknix--hub-icon "●" 'success))
-     ((member decision '("CHANGES_REQUESTED" "REVIEW_REQUIRED" "COMMENTED"))
-      (let ((face (cond ((equal decision "CHANGES_REQUESTED") 'error)
-                        ((equal decision "COMMENTED")         '(:foreground "cyan" :weight bold))
-                        (t                                    'warning))))
-        (decknix--hub-icon "◐" face)))
      (t
-      ;; Open PR, no decision yet
-      (decknix--hub-icon "◐" 'shadow)))))
+      ;; Open PR: combine CI and Review status
+      (let* ((approved (equal decision "APPROVED"))
+             (blocked (or (equal decision "CHANGES_REQUESTED")
+                          (equal classified "fail")
+                          tc-fail))
+             (running (or (equal decision "REVIEW_REQUIRED")
+                          (equal classified "running")
+                          tc-running))
+             (face (cond (blocked   'error)
+                         (running   'warning)
+                         (approved  'success)
+                         ((equal decision "COMMENTED") '(:foreground "cyan" :weight bold))
+                         (t         'shadow)))
+             (glyph (if approved "●" "◐")))
+        (decknix--hub-icon glyph face))))))
 
 (defun decknix--hub-activity-icons (pr)
   "Return concatenated attention icons for PR.
@@ -126,20 +141,28 @@ Shows, in order:
   else and no bot posted after them.
 - ↩ (replies-to-me) when a human posted after one of my own comments
   or reviews; co-exists with 🤖/💬 because it is a distinct signal
-  about a thread I participated in."
-  (let ((needs-reply   (eq (alist-get 'needs_reply pr) t))
-        (bot-pending   (eq (alist-get 'bot_pending pr) t))
-        (replies-to-me (eq (alist-get 'replies_to_me pr) t)))
-    (concat
-     (cond
-      (bot-pending
-       (decknix--hub-icon "🤖" '(:foreground "#af5f87")))
-      (needs-reply
-       (decknix--hub-icon "💬" '(:foreground "#d7af5f")))
-      (t ""))
-     (if replies-to-me
-         (decknix--hub-icon "↩" '(:foreground "#87d7af" :weight bold))
-       ""))))
+  about a thread I participated in.
+
+Activity icons are suppressed for APPROVED PRs."
+  (let* ((needs-reply   (eq (alist-get 'needs_reply pr) t))
+         (bot-pending   (eq (alist-get 'bot_pending pr) t))
+         (replies-to-me (eq (alist-get 'replies_to_me pr) t))
+         ;; Use both possible decision fields
+         (decision      (or (alist-get 'review_decision pr)
+                            (alist-get 'my_review pr)))
+         (approved      (equal decision "APPROVED")))
+    (if approved
+        ""
+      (concat
+       (cond
+        (bot-pending
+         (decknix--hub-icon "🤖" '(:foreground "#af5f87")))
+        (needs-reply
+         (decknix--hub-icon "💬" '(:foreground "#d7af5f")))
+        (t ""))
+       (if replies-to-me
+           (decknix--hub-icon "↩" '(:foreground "#87d7af" :weight bold))
+         "")))))
 
 (defun decknix--hub-wip-reply-icon (pr)
   "Back-compat shim: return `decknix--hub-activity-icons' for PR."
