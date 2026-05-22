@@ -61,6 +61,11 @@ Both are treated the same: the row is dropped so the Sessions list
 only carries entries the user can actually open.  Toggle with `U'
 in the Toggles transient.")
 
+(defvar decknix--hub-display-mode 'default
+  "Display mode for hub items (Requests/WIP).
+Valid values: `default' (full details), `minimal' (Layout D).
+Toggle with `D' in the sidebar.")
+
 (defvar decknix--hub-show-saved-sessions t
   "When non-nil (default), the saved Sessions block is rendered.
 When nil, the entire Saved Sessions section (heading + per-workspace
@@ -277,6 +282,15 @@ Subset of `decknix--hub-age-presets': all / 7d / 14d / 30d.")
     (agent-shell-workspace-sidebar-refresh))
   (message "Worktrees: hide-merged %s"
            (if decknix--sidebar-wt-hide-merged "on (pending hub support)" "off")))
+
+(defun decknix-sidebar-toggle-hub-display-mode ()
+  "Toggle hub display mode: default → minimal → default."
+  (interactive)
+  (setq decknix--hub-display-mode
+        (if (eq decknix--hub-display-mode 'default) 'minimal 'default))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Hub display: %s" decknix--hub-display-mode))
 
 (provide 'decknix-sidebar-toggles)
 ;;; decknix-sidebar-toggles.el ends here

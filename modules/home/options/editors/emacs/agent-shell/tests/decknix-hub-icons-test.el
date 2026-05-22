@@ -87,18 +87,18 @@
 (ert-deftest decknix-hub-review-icon--approved ()
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-review-icon '((my_review . "APPROVED"))))
-                 "★")))
+                 "●")))
 
 (ert-deftest decknix-hub-review-icon--changes-requested ()
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-review-icon
                    '((my_review . "CHANGES_REQUESTED"))))
-                 "⚑")))
+                 "◐")))
 
 (ert-deftest decknix-hub-review-icon--commented ()
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-review-icon '((my_review . "COMMENTED"))))
-                 "✎")))
+                 "◐")))
 
 (ert-deftest decknix-hub-review-icon--dismissed ()
   (should (equal (decknix-test--icon-glyph
@@ -122,13 +122,13 @@
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-wip-review-icon
                    '((review_decision . "APPROVED"))))
-                 "★")))
+                 "●")))
 
 (ert-deftest decknix-hub-wip-review-icon--changes-requested ()
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-wip-review-icon
                    '((review_decision . "CHANGES_REQUESTED"))))
-                 "⚑")))
+                 "◐")))
 
 (ert-deftest decknix-hub-wip-review-icon--review-required ()
   (should (equal (decknix-test--icon-glyph
@@ -199,5 +199,33 @@
                  (decknix--hub-activity-icons
                   '((bot_pending . t))))))
 
-(provide 'decknix-hub-icons-test)
+(ert-deftest decknix-hub-icons--primary-status-placeholder ()
+  (should (equal (decknix-test--icon-glyph
+                  (decknix--hub-primary-status-icon '() 'placeholder))
+                 "○")))
+
+(ert-deftest decknix-hub-icons--primary-status-draft ()
+  (let ((item '((state . "OPEN") (draft . t) (ci . ((status . "running"))))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-primary-status-icon item 'wip))
+                   "★"))))
+
+(ert-deftest decknix-hub-icons--primary-status-open-approved ()
+  (let ((item '((state . "OPEN") (review_decision . "APPROVED"))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-primary-status-icon item 'wip))
+                   "●"))))
+
+(ert-deftest decknix-hub-icons--primary-status-open-needs-review ()
+  (let ((item '((state . "OPEN") (review_decision . "REVIEW_REQUIRED"))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-primary-status-icon item 'wip))
+                   "◐"))))
+
+(ert-deftest decknix-hub-icons--primary-status-merged ()
+  (let ((item '((state . "MERGED"))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-primary-status-icon item 'wip))
+                   "■"))))
+
 ;;; decknix-hub-icons-test.el ends here
