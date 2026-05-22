@@ -13,7 +13,7 @@ rustPlatform.buildRustPackage {
 
   # This hash locks dependencies.
   # Set to lib.fakeHash initially; Nix will error and give you the real one.
-  cargoHash = "sha256-yxj203+qy4UIvHWSCpXjoOj5NeukpiaDmO3KHwF4jiQ=";
+  cargoHash = "sha256-XznsvR5mq+dOYq2sN6+IHup4Po/xIrRRS6CzFoD15FY=";
 
   meta = with lib; {
     description = "The Decknix CLI Manager";
