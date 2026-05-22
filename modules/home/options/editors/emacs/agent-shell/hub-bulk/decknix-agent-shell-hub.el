@@ -2538,13 +2538,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                (repo (car (last (split-string repo-full "/"))))
                (number (alist-get 'number item))
                (title (or (alist-get 'title item) ""))
-               (ci (alist-get 'ci item))
-               (mergeable (alist-get 'mergeable item))
-               (ci-str (decknix--hub-ci-icon ci mergeable))
-               (rev-str (decknix--hub-review-icon item))
-               (status-str (if (string-empty-p rev-str)
-                               ci-str
-                             (concat ci-str rev-str)))
+               (primary-icon (decknix--hub-primary-status-icon item 'review))
+               (status-str primary-icon)
                ;; @ indicator — yellow when I am directly
                ;; requested / @-mentioned (`me'); blue when only
                ;; one of my teams is requested (`team').  When
@@ -2593,7 +2588,6 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                ;; `  ' — enough to flag missing local clones).
                (wt-badge (decknix--hub-worktree-row-badge
                           repo-full nil))
-               (primary-icon (decknix--hub-primary-status-icon item 'review))
                (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
                          (let* ((phase-str (propertize "[open]" 'face 'font-lock-comment-face))
                                 (max-title (max 8 (- (window-width) 14)))
@@ -2738,8 +2732,9 @@ primary action is a no-op until a PR materialises."
                         (short-branch (if (> (length branch) max-title)
                                           (concat (substring branch 0 (- max-title 1)) "…")
                                         branch)))
-                   (format "%s%3s %-4s %s"
+                   (format "%s%s%3s %-4s %s"
                            wt-badge
+                           primary-icon
                            (propertize age 'face 'font-lock-comment-face)
                            (propertize "wip" 'face 'font-lock-comment-face)
                            (propertize short-branch
@@ -2866,41 +2861,27 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
                      (terminal-p (decknix--hub-wip-pr-terminal-p pr))
                      (ci (alist-get 'ci pr))
                      (mergeable (alist-get 'mergeable pr))
-                     (ci-str (if merged-p
-                                (decknix--hub-icon "⏣" 'font-lock-constant-face)
-                              (decknix--hub-ci-icon ci mergeable)))
+                     (primary-icon (decknix--hub-primary-status-icon pr 'wip))
                      (draft (alist-get 'draft pr))
                      (branch (alist-get 'branch pr))
                      (url (alist-get 'url pr))
                      ;; TeamCity build status for this branch
                      (tc-build (when (fboundp 'decknix--hub-tc-build-for-branch)
                                  (decknix--hub-tc-build-for-branch branch)))
-                     (tc-str (if tc-build
-                                 (decknix--hub-tc-icon tc-build)
-                               ""))
-                     ;; Deploy pipeline indicator (DTSP).  Pass
-                     ;; merged_at for merged PRs so envs whose
-                     ;; last deploy predates the merge render as
-                     ;; grey (not-yet-deployed).
+                     ;; Primary status (GitHub CI + TC + Review + Mergeable)
+                     (primary-icon (decknix--hub-primary-status-icon pr 'wip tc-build))
+                     ;; Deploy pipeline indicator (DTSP).
                      (deploy-str
                       (if (fboundp 'decknix--hub-deploy-indicator)
                           (decknix--hub-deploy-indicator
                            repo-full branch
                            (when merged-p (alist-get 'merged_at pr)))
                         ""))
-                     ;; Combine CI indicators: GH + TC + Deploy
-                     (ci-str (concat ci-str
-                                    (if (string-empty-p tc-str) "" tc-str)
-                                    deploy-str))
-                     ;; Review decision (approved/changes requested)
-                     (rev-str (unless merged-p
-                                (decknix--hub-wip-review-icon pr)))
-                     (ci-str (if (and rev-str (not (string-empty-p rev-str)))
-                                (concat ci-str rev-str)
-                              ci-str))
+                     ;; Combine signals: DTSP and activity.
+                     (ci-str deploy-str)
                      ;; Reply needed indicator
                      (reply-str (unless merged-p
-                                  (decknix--hub-wip-reply-icon pr)))
+                                  (decknix--hub-activity-icons pr)))
                      (ci-str (if (and reply-str (not (string-empty-p reply-str)))
                                 (concat ci-str reply-str)
                               ci-str))
@@ -2934,7 +2915,6 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
                      ;; `↓ ' as defined in spec §3.6.3.
                      (wt-badge (decknix--hub-worktree-row-badge
                                 repo-full branch))
-                     (primary-icon (decknix--hub-primary-status-icon pr 'wip))
                      (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
                                (let* ((phase (if (eq (alist-get 'draft pr) t) "[draft]" "[open]"))
                                       (phase-str (propertize phase 'face 'font-lock-comment-face))
@@ -2943,8 +2923,9 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
                                                        (concat (substring title 0 (- max-title 1)) "…")
                                                      title)))
                                  (format "%s  %s %s" primary-icon phase-str short-title))
-                             (format "%s%3s #%d %s %s"
+                             (format "%s%s%3s #%d %s %s"
                                      wt-badge
+                                     primary-icon
                                      (propertize age 'face 'font-lock-comment-face)
                                      number
                                      ci-str

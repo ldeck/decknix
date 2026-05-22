@@ -4059,6 +4059,10 @@ no editable element is focused / the clipboard is empty."
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "v") #'decknix-sidebar-review-at-point)
 
+        ;; H = cross-repo worktree hygiene (prune / clean)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "H") #'decknix-worktree-hygiene)
+
         ;; RET = action menu transient for the row at point (#123).
         ;; M-RET (and C-u RET) = primary action — opens the row's URL in
         ;; xwidget/EWW for hub rows, or defers to the existing handler for

@@ -99,7 +99,7 @@ When MERGEABLE is \"CONFLICTING\", appends a conflict indicator."
                     ("running"   (decknix--hub-icon "◐" 'warning))
                     (_           (decknix--hub-icon "○" 'shadow))))
          (merge-icon (when (equal mergeable "CONFLICTING")
-                       (decknix--hub-icon "⇌" 'error))))
+                       (decknix--hub-icon "▣" 'error))))
     (if merge-icon
         (concat ci-icon merge-icon)
       ci-icon)))
