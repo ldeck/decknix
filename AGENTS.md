@@ -74,16 +74,55 @@ non-negotiable. Specifically:
 - Reference issues: `(#73)`, `(#74)`.
 - Do NOT commit or push without explicit user permission.
 
-### 4. Testing Changes
+### 4. Testing Changes — Follow TDD
 
-- Always build before declaring a change complete:
-  ```bash
-  cd ~/.config/decknix && nix build .#darwinConfigurations.default.system \
-    --impure --override-input decknix path:$HOME/tools/decknix
-  ```
-- For Elisp changes, verify parenthesis balance — the byte compiler catches
-  this during build, but check early to avoid wasted build cycles.
-- Test activation with `decknix switch --override decknix=~/tools/decknix` only when the user requests it.
+The build runs all ERT test suites as part of the Nix derivation. A red test
+breaks the build for everyone. The test suite is the authoritative specification
+of intended behaviour — not a trailing record of what the code happens to do.
+
+**The TDD cycle for every code change:**
+
+1. **Red** — Before touching implementation, write or update the test(s) to
+   describe the *intended* new behaviour. The test must fail at this point.
+2. **Green** — Change the implementation until the tests pass.
+3. **Refactor** — Clean up while keeping the tests green.
+
+This applies to all change types:
+
+- **New behaviour**: write the failing test first, then implement.
+- **Changing an existing contract** (glyphs, faces, data shapes, function
+  signatures): update the tests to the new contract first (red), then update the
+  implementation (green). Never ship a contract change where implementation and
+  tests diverge — the Nix build will catch it, but it creates wasted cycles.
+- **Bug fixes**: write a reproducing test first, then fix.
+
+**Quick local test run** (faster feedback than a full Nix build):
+
+```bash
+# Elisp — run one test file in isolation
+emacs -Q -batch \
+  -L modules/home/options/editors/emacs/agent-shell/hub/ \
+  -L modules/home/options/editors/emacs/agent-shell/tests/ \
+  -l decknix-hub-teamcity -l decknix-test-helpers \
+  -l decknix-hub-teamcity-test \
+  --eval "(ert-run-tests-batch-and-exit t)"
+
+# Rust (cli / decknix-hub)
+cargo test --manifest-path cli/Cargo.toml
+cargo test --manifest-path pkgs/decknix-hub/Cargo.toml
+```
+
+**Full build verification** (required before declaring a change complete):
+
+```bash
+cd ~/.config/decknix && nix build .#darwinConfigurations.default.system \
+  --impure --override-input decknix path:$HOME/tools/decknix
+```
+
+- For Elisp changes, verify parenthesis balance early — the byte compiler
+  catches this during the Nix build, but catching it locally saves a full cycle.
+- Test activation with `decknix switch --override decknix=~/tools/decknix` only
+  when the user requests it.
 
 ### 5. Command Execution — Prefer Nix-managed Tools
 
