@@ -69,6 +69,8 @@ decknix switch --dev        # Test local framework changes
 decknix update              # Update all flake inputs
 decknix wt list             # List worktrees in the registry
 decknix wt refresh          # Re-probe worktrees and update cache
+decknix wt prune            # Expunge stale worktrees (full sweep)
+decknix wt clean            # Remove old merged worktrees
 ec filename                 # Open file in Emacs
 ```
 

@@ -64,11 +64,25 @@ enum WtAction {
         #[arg(long)]
         repo: Option<String>,
     },
-    /// Remove dead entries and prune git worktrees
-    Prune {
-        /// Specific repo to prune
+    /// Prune git worktree metadata (only)
+    PruneMetadata {
+        /// Specific repo to prune metadata
         #[arg(long)]
         repo: Option<String>,
+    },
+    /// Expunge stale worktrees (full sweep: directory + branch + metadata + fork-remotes)
+    Prune {
+        /// Actually perform the deletion
+        #[arg(long)]
+        apply: bool,
+        /// Only include these worktree paths (file with one path per line)
+        #[arg(long)]
+        paths_file: Option<PathBuf>,
+        /// Use 'git branch -d' instead of '-D'
+        #[arg(long)]
+        safe_delete_branch: bool,
+        #[command(flatten)]
+        filter: WtFilter,
     },
     /// Sweep orphan fork remotes
     CleanForkRemotes {
@@ -761,6 +775,19 @@ fn filter_matches(filter: &CompiledFilter, repo: &str, path: &Path, age: Duratio
     true
 }
 
+fn is_stale(merged: bool, orphan: bool, dirty: bool, active: bool) -> bool {
+    (merged || orphan) && !dirty && !active
+}
+
+fn parse_paths_file(path: &Path) -> anyhow::Result<HashSet<PathBuf>> {
+    let content = fs::read_to_string(path)?;
+    Ok(content.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(PathBuf::from)
+        .collect())
+}
+
 /// Age of `path` as the wall-clock interval since its mtime, or 0 on error.
 fn mtime_age(path: &Path, now: SystemTime) -> Duration {
     fs::metadata(path)
@@ -1002,7 +1029,7 @@ fn main() -> anyhow::Result<()> {
                         Ok(())
                     })?;
                 }
-                WtAction::Prune { repo } => {
+                WtAction::PruneMetadata { repo } => {
                     with_lock(|| {
                         let mut registry = load_registry()?;
                         let count_before = registry.len();
@@ -1032,6 +1059,87 @@ fn main() -> anyhow::Result<()> {
                         println!("\u{2705} Pruned {} entries", count_before - registry.len());
                         Ok(())
                     })?;
+                }
+                WtAction::Prune { apply, paths_file, safe_delete_branch, filter } => {
+                    let compiled = compile_filter(&filter)?;
+                    let mut registry = load_registry()?;
+                    let sessions = get_active_sessions();
+                    let now = SystemTime::now();
+
+                    let paths_to_prune = if let Some(pf) = &paths_file {
+                        Some(parse_paths_file(pf)?)
+                    } else {
+                        None
+                    };
+
+                    let mut repos_to_git_prune = HashSet::new();
+                    let mut any_removed = false;
+
+                    for entry in registry.iter_mut() {
+                        if !entry.primary.exists() { continue; }
+
+                        let mut to_remove = Vec::new();
+                        for (branch, path) in &entry.worktrees {
+                            let age = mtime_age(path, now);
+                            let matches_filter = filter_matches(&compiled, &entry.repo, path, age);
+
+                            let should_prune = if let Some(allowed) = &paths_to_prune {
+                                matches_filter && allowed.contains(path)
+                            } else {
+                                matches_filter && is_stale(
+                                    is_merged(&entry.primary, branch),
+                                    is_orphan(&entry.primary, branch),
+                                    is_dirty(path),
+                                    sessions.contains(path)
+                                )
+                            };
+
+                            if should_prune {
+                                to_remove.push((branch.clone(), path.clone()));
+                            }
+                        }
+
+                        for (branch, path) in to_remove {
+                            println!("{} Pruning worktree: {} ({})",
+                                if apply { "\u{1f5d1}\u{fe0f} " } else { "\u{1f50d} [DRY RUN]" },
+                                path.display(), branch);
+
+                            if apply {
+                                // 1. git worktree remove
+                                let _ = Command::new("git")
+                                    .args(["worktree", "remove", &path.to_string_lossy()])
+                                    .current_dir(&entry.primary)
+                                    .status();
+
+                                // 2. git branch -D (or -d)
+                                let branch_flag = if safe_delete_branch { "-d" } else { "-D" };
+                                let _ = Command::new("git")
+                                    .args(["branch", branch_flag, &branch])
+                                    .current_dir(&entry.primary)
+                                    .status();
+
+                                entry.worktrees.retain(|(b, _)| b != &branch);
+                                any_removed = true;
+                            }
+                            repos_to_git_prune.insert(entry.primary.clone());
+                        }
+                    }
+
+                    if apply {
+                        if any_removed {
+                            save_registry(&registry)?;
+                        }
+                        for repo_path in repos_to_git_prune {
+                            let _ = Command::new("git")
+                                .args(["worktree", "prune"])
+                                .current_dir(&repo_path)
+                                .status();
+                        }
+                        // 4. clean fork remotes
+                        clean_fork_remotes(false)?;
+                    } else {
+                        println!("\nUse --apply to perform these actions.");
+                    }
                 }
                 WtAction::CleanForkRemotes { dry_run } => {
                     clean_fork_remotes(dry_run)?;
@@ -1227,6 +1335,30 @@ mod tests {
         assert!(filter_matches(&f, "owner/repo", Path::new("/tmp/foo"), Duration::from_secs(0)));
         assert!(filter_matches(&f, "x", Path::new("/y"), Duration::from_secs(999_999)));
     }
+    #[test]
+    fn test_is_stale() {
+        // stale = (merged or orphan) and not dirty and not active
+        assert!(is_stale(true, false, false, false)); // merged
+        assert!(is_stale(false, true, false, false)); // orphan
+        assert!(is_stale(true, true, false, false));  // both
+        assert!(!is_stale(false, false, false, false)); // neither
+        assert!(!is_stale(true, false, true, false));  // dirty
+        assert!(!is_stale(true, false, false, true));  // active session
+    }
+
+    #[test]
+    fn test_parse_paths_file() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let path = temp.path();
+        fs::write(path, "/path/1\n  /path/2  \n\n# comment\n/path/3").unwrap();
+
+        let paths = parse_paths_file(path).unwrap();
+        assert_eq!(paths.len(), 3);
+        assert!(paths.contains(&PathBuf::from("/path/1")));
+        assert!(paths.contains(&PathBuf::from("/path/2")));
+        assert!(paths.contains(&PathBuf::from("/path/3")));
+    }
+
 
     #[test]
     fn test_filter_regex_matches_repo_or_path() {
