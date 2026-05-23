@@ -14,3 +14,6 @@ libc = "0.2.183"
 chrono = { version = "0.4", features = ["serde"] }
 lexpr = "0.2.7"
 regex = "1.12.3"
+
+[dev-dependencies]
+tempfile = "3.27.0"

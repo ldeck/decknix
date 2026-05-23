@@ -3436,7 +3436,7 @@ start the session in the resulting path."
   "Remove the worktree for the active (repo, branch).
 Aborts if any saved session's workspace points at the worktree.
 Prefix arg overrides the dirty/session guard via `git worktree remove --force'."
-  :description "Remove worktree"
+  :description "Remove (files only)"
   :inapt-if #'decknix--sb-act-wt-no-worktree-p
   (interactive)
   (let* ((repo (decknix--sb-act-wt-repo))
@@ -3460,36 +3460,28 @@ Prefix arg overrides the dirty/session guard via `git worktree remove --force'."
                 (message "Worktree removed: %s" ,path))
              t))))))
 
-(transient-define-suffix decknix--sb-act-wt-reveal ()
-  "Reveal the worktree directory in macOS Finder."
-  :description "Reveal in Finder"
+(transient-define-suffix decknix--sb-act-wt-prune ()
+  "Full sweep (sweep branch/dir/metadata) for the active row."
+  :description "Prune (sweep branch/dir/metadata)"
   :inapt-if #'decknix--sb-act-wt-no-worktree-p
   (interactive)
-  (let ((path (decknix--sb-act-wt-path)))
-    (if path
-        (call-process "open" nil 0 nil (expand-file-name path))
-      (message "No worktree for this branch"))))
+  (let ((path (decknix--sb-act-wt-path))
+        (branch (decknix--sb-act-wt-branch)))
+    (decknix--wt-run-prune-sweep (list path)
+                                (format "Prune worktree %s [%s] (sweep branch/dir/metadata)? " path branch))))
 
-(transient-define-suffix decknix--sb-act-wt-prune ()
-  "Prune stale worktree records for the active row's primary clone.
-Calls `decknix wt prune' which cleans both the registry and git
-worktree metadata.  Prefix arg adds --dry-run."
-  :description "Prune stale worktrees"
+(transient-define-suffix decknix--sb-act-wt-prune-metadata ()
+  "Prune dead worktree metadata for the active row's repo."
+  :description "Prune metadata only"
   :inapt-if #'decknix--sb-act-wt-no-clone-p
   (interactive)
-  (let* ((repo (decknix--sb-act-wt-repo))
-         (dry-run current-prefix-arg)
-         (args (append (list "prune" "--repo" repo)
-                       (when dry-run (list "--dry-run")))))
-    (decknix--wt-cli-async
-     args
-     (lambda (out)
-       (let ((trimmed (string-trim (or out ""))))
-         (if (string-empty-p trimmed)
-             (message "Pruned %s: nothing to remove" repo)
-           (message "Pruned %s:\n%s" repo trimmed)))))))
+  (let ((repo (decknix--sb-act-wt-repo)))
+    (if (or current-prefix-arg (yes-or-no-p (format "Prune dead worktree metadata for %s? " repo)))
+        (decknix--wt-cli-async (list "wt" "prune-metadata" "--repo" repo)
+                              (lambda (out) (message "Prune %s: %s" repo (string-trim (or out "")))))
+      (message "Cancelled"))))
 
-(transient-define-suffix decknix--sb-act-wt-status ()
+(transient-define-suffix decknix--sb-act-wt-reveal ()
   "Show git status for the worktree (or the primary clone if none).
 Uses `magit-status' when available; falls back to `vc-dir' otherwise."
   :description "Status summary"
@@ -3597,23 +3589,6 @@ Calls `decknix wt orphans'; output appears in *decknix wt orphans* buffer."
    (lambda (out)
      (decknix--hyg-display-output "*decknix wt orphans*" out))))
 
-(transient-define-suffix decknix--hyg-prune-all ()
-  "Prune stale worktree records across ALL repos.
-Calls `decknix wt prune' (no --repo) to sweep every registered clone.
-Prefix arg adds --dry-run to preview without mutating state."
-  :description "Prune stale (all repos)"
-  (interactive)
-  (let* ((dry-run current-prefix-arg)
-         (args (append (list "prune")
-                       (when dry-run (list "--dry-run")))))
-    (decknix--wt-cli-async
-     args
-     (lambda (out)
-       (let ((trimmed (string-trim (or out ""))))
-         (if (string-empty-p trimmed)
-             (message "Prune (all repos): nothing to remove")
-           (message "Prune (all repos):\n%s" trimmed)))))))
-
 (transient-define-suffix decknix--hyg-clean ()
   "Remove old clean merged worktrees via `decknix wt clean'.
 Prompts for the age threshold in days (default 7).  Requires
@@ -3643,6 +3618,24 @@ activity, or whose branch is not fully merged (§3.6.6 interlock)."
                (message "Clean:\n%s" trimmed)))))
       (message "Cancelled"))))
 
+(declare-function decknix--wt-run-prune-sweep \"decknix-worktree-picker\")
+
+(transient-define-suffix decknix--hyg-sweep ()
+  \"Full sweep of all stale worktrees (dir + branch + metadata + remotes).\"
+  :description \"Sweep stale worktrees (full)\"
+  (interactive)
+  (decknix--wt-run-prune-sweep nil \"Sweep all stale worktrees (merged/orphan)? \"))
+
+(transient-define-suffix decknix--hyg-prune-all ()
+  \"Prune dead worktree metadata across all repos.\"
+  :description \"Prune metadata only (all repos)\"
+  (interactive)
+  (if (or current-prefix-arg (yes-or-no-p \"Prune all dead worktree metadata? \"))
+      (decknix--wt-cli-async '(\"wt\" \"prune-metadata\")
+                            (lambda (out) (message \"Prune: %s\" (string-trim (or out \"\")))))
+    (message \"Cancelled\")))
+
+
 (transient-define-prefix decknix-worktree-hygiene ()
   "Cross-worktree hygiene transient (spec §3.6.11).
 Read-only verbs (a, o) produce reports; mutating verbs (p, c, f)
@@ -3653,7 +3646,8 @@ Also accessible as `M-x decknix-worktree-hygiene' from any buffer."
    ("o" decknix--hyg-orphans)
    ("s" "Select worktrees to clean…" decknix-worktree-picker)]
   ["Prune"
-   ("p" decknix--hyg-prune-all)
+   ("p" decknix--hyg-sweep)
+   ("M" decknix--hyg-prune-all)
    ("c" decknix--hyg-clean)
    ("f" decknix--sb-act-clean-fork-remotes)]
   [("q" "Cancel" transient-quit-one)])
@@ -3668,12 +3662,13 @@ Press H to open the cross-repo hygiene transient (spec §3.6.11)."
     ("o" decknix--sb-act-wt-open)
     ("n" decknix--sb-act-wt-new)
     ("s" decknix--sb-act-wt-session)
-    ("x" decknix--sb-act-wt-remove)]
+    ("x" decknix--sb-act-wt-prune)
+    ("X" decknix--sb-act-wt-remove)]
    ["Inspect"
     ("r" decknix--sb-act-wt-reveal)
     ("d" decknix--sb-act-wt-status)
     ("c" decknix--sb-act-wt-copy)
-    ("p" decknix--sb-act-wt-prune)]]
+    ("p" decknix--sb-act-wt-prune-metadata)]]
   [("H" "Hygiene…" decknix-worktree-hygiene)
    ("q" "Cancel" transient-quit-one)])
 
