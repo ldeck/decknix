@@ -122,6 +122,24 @@ Current in-tree packages:
 | `agent-shell/progress/decknix-progress-ui.el` | `*decknix-progress*` buffer | Magit-style hierarchical view |
 | `agent-shell/progress/decknix-progress-sidebar.el` | Sidebar badge integration | Mtime-cached `index.json` reads |
 
+### Verification
+
+The Nix build derivation native-compiles all Elisp.  A syntax error or
+missing `declare-function` will fail the build.
+
+**Before committing Elisp changes:**
+
+1. **Syntax Check**: Run `emacs -Q -batch -f batch-byte-compile <file>.el`. This
+   is significantly faster than a full Nix build and catches 90% of issues
+   (unbalanced parens, missing requires, unknown functions).
+2. **Heredoc Unescaping**: If you are moving code from the `agent-shell.nix`
+   heredoc into a standalone `.el` file, you **must** unescape all `\"` back to
+   plain `"`.  Failing to do so results in `Interactive form missing` errors
+   because the byte-compiler sees one giant malformed string.
+3. **Check `declare-function`**: Ensure all cross-file dependencies (including
+   built-in tabulated-list or transient functions if they aren't loading) are
+   forward-declared.
+
 ### Tests (`agent-shell/tests/`)
 
 Every in-tree package wires its ERT characterisation suite into the
