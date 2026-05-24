@@ -112,7 +112,16 @@ cargo test --manifest-path cli/Cargo.toml
 cargo test --manifest-path pkgs/decknix-hub/Cargo.toml
 ```
 
-**Full build verification** (required before declaring a change complete):
+**Incremental & Full Build Verification** (required before declaring a change complete):
+
+Before committing, always run incremental checks based on what changed:
+
+- **Nix Packages**: If you changed `Cargo.toml`, `Cargo.lock`, or source code for a package in `pkgs/`, verify the `cargoHash`/`vendorHash` by running a build of that specific derivation.
+- **Elisp Syntax**: For changes to standalone `.el` files, verify they parse and byte-compile cleanly:
+  ```bash
+  emacs -Q -batch -f batch-byte-compile <file>.el
+  ```
+- **Nix Modules**: Verify the full system derivation builds (this catches Nix syntax errors and cross-module Elisp failures):
 
 ```bash
 cd ~/.config/decknix && nix build .#darwinConfigurations.default.system \
@@ -121,6 +130,10 @@ cd ~/.config/decknix && nix build .#darwinConfigurations.default.system \
 
 - For Elisp changes, verify parenthesis balance early — the byte compiler
   catches this during the Nix build, but catching it locally saves a full cycle.
+- **Heredoc Escaping Warning**: When moving code between `agent-shell.nix` (which
+  requires `\"` escaping for quotes) and standalone `.el` files (which require
+  plain `"`), ensure you unescape/escape accordingly. A standalone `.el` file
+  with `\"` will fail to parse with `Interactive form missing` errors.
 - Test activation with `decknix switch --override decknix=~/tools/decknix` only
   when the user requests it.
 
