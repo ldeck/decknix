@@ -12,3 +12,7 @@ docs/src/data/
 
 # Ignore agent-shell transcripts
 .agent-shell/transcripts/
+
+
+# Ignore Emacs compiled files
+*.elc
