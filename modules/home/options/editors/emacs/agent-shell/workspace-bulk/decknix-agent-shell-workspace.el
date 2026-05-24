@@ -3618,22 +3618,22 @@ activity, or whose branch is not fully merged (§3.6.6 interlock)."
                (message "Clean:\n%s" trimmed)))))
       (message "Cancelled"))))
 
-(declare-function decknix--wt-run-prune-sweep \"decknix-worktree-picker\")
+(declare-function decknix--wt-run-prune-sweep "decknix-worktree-picker")
 
 (transient-define-suffix decknix--hyg-sweep ()
-  \"Full sweep of all stale worktrees (dir + branch + metadata + remotes).\"
-  :description \"Sweep stale worktrees (full)\"
+  "Full sweep of all stale worktrees (dir + branch + metadata + remotes)."
+  :description "Sweep stale worktrees (full)"
   (interactive)
-  (decknix--wt-run-prune-sweep nil \"Sweep all stale worktrees (merged/orphan)? \"))
+  (decknix--wt-run-prune-sweep nil "Sweep all stale worktrees (merged/orphan)? "))
 
 (transient-define-suffix decknix--hyg-prune-all ()
-  \"Prune dead worktree metadata across all repos.\"
-  :description \"Prune metadata only (all repos)\"
+  "Prune dead worktree metadata across all repos."
+  :description "Prune metadata only (all repos)"
   (interactive)
-  (if (or current-prefix-arg (yes-or-no-p \"Prune all dead worktree metadata? \"))
-      (decknix--wt-cli-async '(\"wt\" \"prune-metadata\")
-                            (lambda (out) (message \"Prune: %s\" (string-trim (or out \"\")))))
-    (message \"Cancelled\")))
+  (if (or current-prefix-arg (yes-or-no-p "Prune all dead worktree metadata? "))
+      (decknix--wt-cli-async '("wt" "prune-metadata")
+                            (lambda (out) (message "Prune: %s" (string-trim (or out "")))))
+    (message "Cancelled")))
 
 
 (transient-define-prefix decknix-worktree-hygiene ()

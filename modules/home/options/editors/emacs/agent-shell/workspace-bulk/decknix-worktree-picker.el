@@ -19,11 +19,15 @@
 (require 'tabulated-list)
 (require 'transient)
 
+(declare-function tabulated-list-get-tag "tabulated-list")
+(declare-function tabulated-list-get-id "tabulated-list")
+(declare-function tabulated-list-put-tag "tabulated-list" (tag &optional advance))
+
 (defvar decknix--hub-wip)
 (defvar decknix--hub-worktree-cache)
 
 (defvar decknix-wt-prune-safe-branch-delete nil
-  "When non-nil, use 'git branch -d' instead of '-D' during prune sweep.")
+  "When non-nil, use `git branch -d' instead of `-D' during prune sweep.")
 
 (defvar-local decknix-worktree-picker--filter-merged t
   "When non-nil, show worktrees whose branch is merged into main/master.")
@@ -185,7 +189,7 @@ Toggle filters with `f M' (merged), `f C' (closed), `f S' (active session),
     (nreverse marked)))
 
 (defun decknix-worktree-picker-execute ()
-  "Deprecated: use `decknix-worktree-picker-prune' or `decknix-worktree-picker-remove'."
+  "Deprecated: use `decknix-worktree-picker-prune' or `-remove'."
   (interactive)
   (decknix-worktree-picker-prune))
 
@@ -207,7 +211,7 @@ Toggle filters with `f M' (merged), `f C' (closed), `f S' (active session),
                :name "git-worktree-remove"
                :buffer nil
                :command (list "git" "worktree" "remove" path)
-               :sentinel (lambda (proc event)
+               :sentinel (lambda (_proc event)
                            (when (string= event "finished\n")
                              (message "Removed %s [%s]" repo branch)))))))))))
 
