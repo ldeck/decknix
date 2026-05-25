@@ -3424,6 +3424,57 @@ no editable element is focused / the clipboard is empty."
                 (when (and sidebar-win (window-live-p sidebar-win))
                   (select-window sidebar-win))))))
 
+        ;; -- C-c A w timing trace --
+        ;; Toggle with M-x decknix-toggle-trace.  When on, each C-c A w press
+        ;; emits millisecond-resolution phase logs to *Messages* (C-h e or
+        ;; M-x view-echo-area-messages to read them after the toggle returns).
+        (defvar decknix--trace-toggle nil
+          "When non-nil log C-c A w phase timings to *Messages*.")
+        (defvar decknix--trace-t0 nil
+          "Absolute start time set at the beginning of a traced toggle.
+Let-bound by the outermost :around advice on `agent-shell-workspace-toggle'
+so all callees see it dynamically via the defvar's special binding.")
+        (defun decknix--trace-log (label)
+          "Log LABEL with elapsed ms since `decknix--trace-t0' to *Messages*.
+No-op when `decknix--trace-toggle' is nil."
+          (when decknix--trace-toggle
+            (message "[toggle-trace] %5dms  %s"
+                     (if decknix--trace-t0
+                         (round (* 1000 (float-time (time-since decknix--trace-t0))))
+                       0)
+                     label)))
+        (defun decknix-toggle-trace ()
+          "Toggle C-c A w timing tracing on/off.
+When on, each invocation of `agent-shell-workspace-toggle' (bound to
+C-c A w) emits timestamped phase logs to *Messages*.  Read them with
+C-h e or M-x view-echo-area-messages after the toggle completes."
+          (interactive)
+          (setq decknix--trace-toggle (not decknix--trace-toggle))
+          (message "decknix toggle-trace %s"
+                   (if decknix--trace-toggle "ON" "OFF")))
+        ;; Outermost timing wrapper for agent-shell-workspace-toggle.
+        ;; Added AFTER the :after focus-sidebar advice above so this :around
+        ;; ends up outermost in the advice chain and measures the full
+        ;; wall-clock span including the focus-sidebar step.
+        (advice-add 'agent-shell-workspace-toggle :around
+          (lambda (orig-fn &rest args)
+            "Optionally wrap toggle with ms-resolution timing trace."
+            (if (not decknix--trace-toggle)
+                (apply orig-fn args)
+              (let ((decknix--trace-t0 (current-time)))
+                (message "[toggle-trace]     0ms  toggle START")
+                (unwind-protect
+                    (apply orig-fn args)
+                  (decknix--trace-log "toggle RETURN"))))))
+        ;; Trace our own decknix-sidebar-refresh wrapper, which fires an
+        ;; optimistic sidebar-refresh immediately then spawns the async
+        ;; `decknix wt refresh' CLI call.
+        (advice-add 'decknix-sidebar-refresh :around
+          (lambda (orig-fn &rest args)
+            (decknix--trace-log "decknix-sidebar-refresh START")
+            (apply orig-fn args)
+            (decknix--trace-log "decknix-sidebar-refresh RETURN (wt async spawned)")))
+
         ;; -- Buffer isolation: teach workspace that compose/batch buffers
         ;; belong in the Agents tab.  Without this, opening compose
         ;; triggers the redirect rule which switches away from the Agents
@@ -4189,7 +4240,26 @@ no editable element is focused / the clipboard is empty."
             (lambda (&rest _)
               "Engage `decknix--sidebar-tile-count' once enough buffers exist."
               (unless decknix--sidebar-refresh-suspended
-                (ignore-errors (decknix--sidebar-maybe-apply-tile-pref))))))
+                (ignore-errors (decknix--sidebar-maybe-apply-tile-pref)))))
+          ;; Time each upstream sidebar-refresh call when tracing is on.
+          ;; Reports absolute elapsed ms from toggle start and per-call duration.
+          ;; Added last so this :around is outermost among the sidebar-refresh
+          ;; advices, i.e. it measures the total cost including the suspend-check
+          ;; :around and the tile-pref :after.
+          (advice-add 'agent-shell-workspace-sidebar-refresh :around
+            (lambda (orig-fn &rest args)
+              (if (not decknix--trace-toggle)
+                  (apply orig-fn args)
+                (let ((t1 (current-time)))
+                  (decknix--trace-log "sidebar-refresh ENTER")
+                  (apply orig-fn args)
+                  (let ((abs-ms (if decknix--trace-t0
+                                    (round (* 1000 (float-time
+                                                    (time-since decknix--trace-t0))))
+                                  0))
+                        (call-ms (round (* 1000 (float-time (time-since t1))))))
+                    (message "[toggle-trace] %5dms  sidebar-refresh DONE (+%dms)"
+                             abs-ms call-ms)))))))
 
         ;; Add Hub group to the sidebar transient
         ;; -- Hub: org filter (multi-select transient) --
