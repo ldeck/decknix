@@ -4723,20 +4723,37 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
         ;; This advice scrolls all windows showing the buffer to the bottom,
         ;; but ONLY if their point was already at or near the end (i.e., the
         ;; user hadn't scrolled up to read earlier output).
+        ;;
+        ;; The :before half records which windows were at the bottom BEFORE
+        ;; the insert so the :after half can restore them to the new bottom.
+        ;; This handles multi-chunk output (e.g., the > Notices ACP
+        ;; notification that arrives shortly after session start) reliably,
+        ;; because the displacement-based check can misfire when `_string'
+        ;; is shorter than the actual content inserted by other code paths.
+        (defvar decknix--agent-scroll-windows-at-bottom nil
+          \"Windows that were at point-max immediately before the last output.\")
+        (advice-add 'shell-maker--output-filter :before
+                    (lambda (_process _string)
+                      (when (derived-mode-p 'agent-shell-shell-mode)
+                        (let ((buf (current-buffer))
+                              (pm (point-max)))
+                          (setq-local decknix--agent-scroll-windows-at-bottom
+                                (cl-remove-if-not
+                                 (lambda (win)
+                                   ;; \"At bottom\" = window-point within
+                                   ;; 500 chars of the current end.
+                                   (>= (window-point win) (- pm 500)))
+                                 (get-buffer-window-list buf nil t)))))))
         (advice-add 'shell-maker--output-filter :after
                     (lambda (_process _string)
                       (when (derived-mode-p 'agent-shell-shell-mode)
-                        (let ((buf (current-buffer)))
-                          (dolist (win (get-buffer-window-list buf nil t))
-                            ;; If the window's point was at the end before
-                            ;; the insert, scroll it to the new end.
-                            ;; We check if window-point is within a few chars
-                            ;; of point-max (the insert moved point-max forward,
-                            ;; but the window's old point is now "behind").
-                            (let ((wp (window-point win))
-                                  (pm (point-max)))
-                              (when (>= wp (- pm (length (or _string ""))))
-                                (set-window-point win pm))))))))
+                        (let ((pm (point-max)))
+                          (dolist (win decknix--agent-scroll-windows-at-bottom)
+                            (when (window-live-p win)
+                              (set-window-point win pm)))
+                          (setq-local decknix--agent-scroll-windows-at-bottom
+                                      nil)))))
+
 
         ;; Disable line numbers in agent-shell buffers
         ;; TAB dispatches between snippet field navigation and expansion
@@ -4889,7 +4906,34 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
                     ;; Unified header-line: status + tags + workspace + context
                     (decknix--header-update)
                     (decknix--header-start-timer)
-                    (add-hook 'kill-buffer-hook #'decknix--header-stop-timer nil t)))
+                    (add-hook 'kill-buffer-hook #'decknix--header-stop-timer nil t)
+                    ;; Scroll to fresh prompt after ACP init notifications settle.
+                    ;; Upstream agent-shell-auggie emits a > Notices collapsible
+                    ;; section shortly (~1-2 s) after a new session starts.  This
+                    ;; notification goes through a path that does not always trigger
+                    ;; the shell-maker--output-filter scroll advice (above), leaving
+                    ;; the window stranded at the old prompt position and forcing the
+                    ;; user to press RET once to reach the fresh prompt.  A 3-second
+                    ;; one-shot timer fires after the notification has settled and
+                    ;; scrolls all windows showing the buffer to point-max — safe
+                    ;; because no reply is expected in the first 3 s and the window
+                    ;; is only moved if no text has been typed (input region empty).
+                    (let ((buf (current-buffer)))
+                      (run-at-time
+                       3.0 nil
+                       (eval `(lambda ()
+                                (when (buffer-live-p ,buf)
+                                  (with-current-buffer ,buf
+                                    (let* ((proc (get-buffer-process ,buf))
+                                           (pm   (and proc
+                                                      (process-live-p proc)
+                                                      (process-mark proc))))
+                                      (dolist (win (get-buffer-window-list ,buf nil t))
+                                        ;; Only scroll if no user input has been
+                                        ;; typed (process mark == point-max).
+                                        (when (or (null pm) (>= pm (- (point-max) 1)))
+                                          (set-window-point win (point-max))))))))
+                             t)))))
       '';
     };
   };
