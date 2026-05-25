@@ -858,6 +858,31 @@ dedupes against live buffers before calling here."
 (defvar decknix--session-picker-expand nil
   "Non-nil shows all snapshots instead of collapsed conversations.")
 
+;; Multi-select support: C-SPC marks candidates (via embark-select)
+;; and RET confirms.  A captured-selections var holds embark's list;
+;; a multi-mode flag suppresses the single-select :action so the
+;; unified dispatch handler can iterate all marked items instead.
+(defcustom decknix-agent-picker-hide-live-backed t
+  "Hide saved sessions whose conversation is currently live in the picker.
+When non-nil (default), the Saved Sessions section omits entries whose
+conv-key matches a live buffer — those conversations are already shown in
+the Live Sessions section and duplicating them adds noise.
+Set to nil to always show all saved sessions."
+  :type 'boolean
+  :group 'decknix)
+
+(defvar decknix--session-picker-captured-selections nil
+  "Embark-captured candidate strings from the current picker invocation.
+Populated by the minibuffer-exit-hook in `decknix-agent-session-picker'
+when the user marks candidates with C-SPC.  Reset at the start of each
+picker call so stale values from a previous invocation never leak.")
+
+(defvar decknix--session-picker-multi-mode nil
+  "Non-nil while multi-select post-processing runs in the session picker.
+Each source's :action lambda is a no-op when this flag is set;
+`decknix--session-picker-dispatch' iterates the captured selections
+instead, routing each candidate to the correct restore/resume action.")
+
 (defvar decknix--session-source-live
   (list :name     "Live Sessions"
         :narrow   ?l
@@ -883,15 +908,17 @@ dedupes against live buffers before calling here."
             (nreverse ordered)))
         :action
         (lambda (cand)
-          (when cand
-            (let ((buf (gethash cand decknix--session-picker-live-map)))
-              (when (and buf (buffer-live-p buf))
-                ;; Select main window first so the buffer doesn't
-                ;; try to display in the dedicated sidebar window.
-                (let ((main (window-main-window (selected-frame))))
-                  (when (and main (window-live-p main))
-                    (select-window main)))
-                (switch-to-buffer buf))))))
+          ;; No-op during multi-select: dispatch handles all items.
+          (unless decknix--session-picker-multi-mode
+            (when cand
+              (let ((buf (gethash cand decknix--session-picker-live-map)))
+                (when (and buf (buffer-live-p buf))
+                  ;; Select main window first so the buffer doesn't
+                  ;; try to display in the dedicated sidebar window.
+                  (let ((main (window-main-window (selected-frame))))
+                    (when (and main (window-live-p main))
+                      (select-window main)))
+                  (switch-to-buffer buf)))))))
   "Consult multi-source for live agent-shell buffers.")
 
 (defvar decknix--session-source-saved
@@ -901,7 +928,33 @@ dedupes against live buffers before calling here."
         :face     'consult-file
         :items
         (lambda ()
-          (let* ((sessions (decknix--agent-session-list))
+          (let* (;; Compute live conv-keys so we can hide saved sessions
+                 ;; that duplicate a conversation already in Live section.
+                 (live-bufs
+                  (seq-filter #'buffer-live-p
+                              (when (fboundp 'agent-shell-buffers)
+                                (agent-shell-buffers))))
+                 (live-conv-keys
+                  (when decknix-agent-picker-hide-live-backed
+                    (delq nil
+                          (mapcar (lambda (b)
+                                    (with-current-buffer b
+                                      (and (bound-and-true-p decknix--agent-conv-key)
+                                           decknix--agent-conv-key)))
+                                  live-bufs))))
+                 ;; Filter the session list: when hide-live-backed is on and
+                 ;; there are live conversations, drop sessions whose conv-key
+                 ;; is already open in a live buffer.
+                 (sessions
+                  (let ((all (decknix--agent-session-list)))
+                    (if live-conv-keys
+                        (seq-filter
+                         (lambda (session)
+                           (let* ((first-msg (alist-get 'firstUserMessage session ""))
+                                  (ck (decknix--agent-conversation-key first-msg)))
+                             (not (member ck live-conv-keys))))
+                         all)
+                      all)))
                  (ht (make-hash-table :test 'equal))
                  (ordered nil))
             (if decknix--session-picker-expand
@@ -944,45 +997,47 @@ dedupes against live buffers before calling here."
             (nreverse ordered)))
         :action
         (lambda (cand)
-          (when cand
-            (let* ((session (gethash cand decknix--session-picker-saved-map))
-                   ;; Workspace was pre-resolved during :items
-                   (workspace (alist-get '__workspace session)))
-              (when session
-                (let ((conv-key (decknix--agent-conversation-key
-                                (alist-get 'firstUserMessage
-                                           session ""))))
-                  ;; If no stored workspace, prompt the user so the
-                  ;; session opens in the right directory.
-                  (unless workspace
-                    (setq workspace
-                          (read-directory-name
-                           "Workspace for this session: "
-                           nil nil t))
-                    ;; Persist for future resumes (best-effort)
-                    (when (and conv-key workspace)
-                      (decknix--agent-session-save-workspace-for-conv-key
-                       conv-key workspace)))
-                  ;; Select main window and override display-action
-                  ;; so the buffer displays there (not in the sidebar).
-                  (let ((main (window-main-window (selected-frame))))
-                    (when (and main (window-live-p main))
-                      (select-window main))
-                    (let ((agent-shell-display-action
-                           (if (and main (window-live-p main))
-                               (eval `(cons (lambda (buffer alist)
-                                              (let ((win ,main))
-                                                (when (window-live-p win)
-                                                  (window--display-buffer
-                                                   buffer win 'reuse alist))))
-                                            nil)
-                                     t)
-                             agent-shell-display-action)))
-                      (decknix--agent-session-resume
-                       (alist-get 'sessionId session)
-                       decknix-agent-session-history-count
-                       (decknix--agent-session-display-name session)
-                       workspace conv-key)))))))))
+          ;; No-op during multi-select: dispatch handles all items.
+          (unless decknix--session-picker-multi-mode
+            (when cand
+              (let* ((session (gethash cand decknix--session-picker-saved-map))
+                     ;; Workspace was pre-resolved during :items
+                     (workspace (alist-get '__workspace session)))
+                (when session
+                  (let ((conv-key (decknix--agent-conversation-key
+                                   (alist-get 'firstUserMessage
+                                              session ""))))
+                    ;; If no stored workspace, prompt the user so the
+                    ;; session opens in the right directory.
+                    (unless workspace
+                      (setq workspace
+                            (read-directory-name
+                             "Workspace for this session: "
+                             nil nil t))
+                      ;; Persist for future resumes (best-effort)
+                      (when (and conv-key workspace)
+                        (decknix--agent-session-save-workspace-for-conv-key
+                         conv-key workspace)))
+                    ;; Select main window and override display-action
+                    ;; so the buffer displays there (not in the sidebar).
+                    (let ((main (window-main-window (selected-frame))))
+                      (when (and main (window-live-p main))
+                        (select-window main))
+                      (let ((agent-shell-display-action
+                             (if (and main (window-live-p main))
+                                 (eval `(cons (lambda (buffer alist)
+                                                (let ((win ,main))
+                                                  (when (window-live-p win)
+                                                    (window--display-buffer
+                                                     buffer win 'reuse alist))))
+                                              nil)
+                                       t)
+                               agent-shell-display-action)))
+                        (decknix--agent-session-resume
+                         (alist-get 'sessionId session)
+                         decknix-agent-session-history-count
+                         (decknix--agent-session-display-name session)
+                         workspace conv-key))))))))))
   "Consult multi-source for saved auggie sessions.")
 
 (defvar decknix--session-picker-previous-map nil
@@ -1043,10 +1098,12 @@ dedupes against live buffers before calling here."
             (nreverse ordered)))
         :action
         (lambda (cand)
-          (when cand
-            (let ((entry (gethash cand decknix--session-picker-previous-map)))
-              (when entry
-                (decknix--sidebar-restore-previous-session entry t))))))
+          ;; No-op during multi-select: dispatch handles all items.
+          (unless decknix--session-picker-multi-mode
+            (when cand
+              (let ((entry (gethash cand decknix--session-picker-previous-map)))
+                (when entry
+                  (decknix--sidebar-restore-previous-session entry t)))))))
   "Consult multi-source for previous (restorable) sessions.")
 
 (defvar decknix--session-source-new
@@ -1059,6 +1116,56 @@ dedupes against live buffers before calling here."
                     (decknix-agent-session-new)))
   "Consult multi-source for starting a new session.")
 
+(defun decknix--session-picker-dispatch (cand)
+  "Route CAND to the correct restore/resume action based on source maps.
+Used by the multi-select path in `decknix-agent-session-picker' to
+process each embark-marked candidate after the picker exits.  Checks
+the three source lookup tables in priority order: live → previous →
+saved.  Falls through to `decknix-agent-session-new' for unrecognised
+candidates (e.g., the New section placeholder)."
+  (cond
+   ;; Live session: switch to buffer (without focus on non-first items).
+   ((and decknix--session-picker-live-map
+         (gethash cand decknix--session-picker-live-map))
+    (let ((buf (gethash cand decknix--session-picker-live-map)))
+      (when (and buf (buffer-live-p buf))
+        (let ((main (window-main-window (selected-frame))))
+          (when (and main (window-live-p main))
+            (select-window main)))
+        (switch-to-buffer buf))))
+   ;; Previous session: restore without auto-focus (caller manages it).
+   ((and decknix--session-picker-previous-map
+         (gethash cand decknix--session-picker-previous-map))
+    (let ((entry (gethash cand decknix--session-picker-previous-map)))
+      (when entry
+        (decknix--sidebar-restore-previous-session entry nil))))
+   ;; Saved session: resume without prompting for workspace on multi-pick.
+   ((and decknix--session-picker-saved-map
+         (gethash cand decknix--session-picker-saved-map))
+    (let* ((session (gethash cand decknix--session-picker-saved-map))
+           (workspace (alist-get '__workspace session)))
+      (when session
+        (let ((conv-key (decknix--agent-conversation-key
+                         (alist-get 'firstUserMessage session ""))))
+          (let ((main (window-main-window (selected-frame))))
+            (when (and main (window-live-p main))
+              (select-window main))
+            (let ((agent-shell-display-action
+                   (if (and main (window-live-p main))
+                       (eval `(cons (lambda (buffer alist)
+                                      (let ((win ,main))
+                                        (when (window-live-p win)
+                                          (window--display-buffer
+                                           buffer win 'reuse alist))))
+                                    nil)
+                             t)
+                     agent-shell-display-action)))
+              (decknix--agent-session-resume
+               (alist-get 'sessionId session)
+               decknix-agent-session-history-count
+               (decknix--agent-session-display-name session)
+               workspace conv-key)))))))))
+
 (defun decknix-agent-session-picker (arg)
   "Pick from live agent-shell buffers and saved auggie sessions.
 Sections are separated by dividers (like `consult-buffer' / C-x b):
@@ -1067,18 +1174,54 @@ Sections are separated by dividers (like `consult-buffer' / C-x b):
   Saved Sessions    — past conversations from ~/.augment/sessions
   New               — start a new session (fallback)
 
+Press C-SPC to mark candidates and RET to confirm.  When one or more
+candidates are marked all of them are processed (restored or resumed) in
+one go — the same multi-select pattern as the sidebar requests picker.
+When no candidates are marked the highlighted item is opened normally.
+
+Saved sessions whose conversation already has a live buffer are hidden
+by default (controlled by `decknix-agent-picker-hide-live-backed').
+
 By default, saved sessions are collapsed by conversation.
 With \\[universal-argument], shows all individual session snapshots."
   (interactive "P")
   (require 'consult)
   (setq decknix--session-picker-expand arg)
-  (consult--multi (list decknix--session-source-live
-                       decknix--session-source-previous
-                       decknix--session-source-saved
-                       decknix--session-source-new)
-                  :prompt (format "Agent session%s: "
-                                  (if arg " (all snapshots)" ""))
-                  :sort nil))
+  (setq decknix--session-picker-captured-selections nil)
+  (setq decknix--session-picker-multi-mode nil)
+  (let ((setup-fn
+         (lambda ()
+           ;; Wire C-SPC → embark-select so the user can mark candidates.
+           (when (fboundp 'embark-select)
+             (local-set-key (kbd "C-SPC") 'embark-select))
+           ;; Capture embark selections BEFORE completing-read unwinds;
+           ;; `embark-selected-candidates' is minibuffer-local so it
+           ;; disappears as soon as the minibuffer exits.
+           (add-hook 'minibuffer-exit-hook
+             (lambda ()
+               (when (fboundp 'embark-selected-candidates)
+                 (let ((sels (embark-selected-candidates)))
+                   (when (> (length sels) 0)
+                     (setq decknix--session-picker-multi-mode t)
+                     (setq decknix--session-picker-captured-selections sels)))))
+             nil t))))
+    (minibuffer-with-setup-hook setup-fn
+      (consult--multi (list decknix--session-source-live
+                            decknix--session-source-previous
+                            decknix--session-source-saved
+                            decknix--session-source-new)
+                      :prompt (format "Agent session%s (C-SPC=multi): "
+                                      (if arg " (all snapshots)" ""))
+                      :sort nil)))
+  ;; Multi-select post-processing: when the user marked items with
+  ;; C-SPC, the :action lambdas were suppressed (no-op) and we now
+  ;; route every captured candidate through dispatch ourselves.
+  (when decknix--session-picker-multi-mode
+    (setq decknix--session-picker-multi-mode nil)
+    (let ((sels decknix--session-picker-captured-selections))
+      (setq decknix--session-picker-captured-selections nil)
+      (dolist (cand sels)
+        (decknix--session-picker-dispatch cand)))))
 
 ;; == Agent buffer switch: C-c b (in-buffer) / C-c A b (global) ==
 ;; Like C-x b but scoped to live agent-shell buffers only.

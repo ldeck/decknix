@@ -189,13 +189,17 @@ DISMISSED is the list returned by `decknix--live-sessions-dismissed-read'."
 
 (defun decknix--live-sessions--write-file (path value header)
   "Atomically write VALUE (printed via `prin1') to PATH with HEADER.
+Forces fsync so an unexpected shutdown cannot lose recent writes —
+`write-region-inhibit-fsync' defaults to t (no fsync) for performance,
+but session persistence is more important than write latency here.
 No-ops when `decknix--live-sessions-suppress-write' is non-nil."
   (unless decknix--live-sessions-suppress-write
     (make-directory (file-name-directory path) t)
-    (with-temp-file path
-      (insert header)
-      (prin1 value (current-buffer))
-      (insert "\n"))))
+    (let ((write-region-inhibit-fsync nil))
+      (with-temp-file path
+        (insert header)
+        (prin1 value (current-buffer))
+        (insert "\n")))))
 
 (defun decknix--live-sessions-read ()
   "Read the live-sessions file and return the entries (or nil)."
@@ -236,9 +240,20 @@ No-ops when `decknix--live-sessions-suppress-write' is non-nil."
   "Read the live-sessions file, then truncate it; return the prior entries.
 Used at startup to freeze the previous run's live set as this run's
 Previous Sessions list while resetting the file so eager updates in
-this run start from zero."
+this run start from zero.
+
+The truncation is best-effort: if writing nil fails (e.g., disk full),
+the snapshot is still returned so the caller can populate the Previous
+Sessions list — stale data on the next run is safer than losing the list.
+When the file is already empty or missing, skip the truncation write so we
+do not mask the real absence of prior sessions with a redundant no-op write."
   (let ((snapshot (decknix--live-sessions-read)))
-    (decknix--live-sessions-write nil)
+    ;; Only write nil when there was content — avoids an unnecessary IO
+    ;; round-trip on a clean first boot or when the file was already empty.
+    (when snapshot
+      (condition-case nil
+          (decknix--live-sessions-write nil)
+        (error nil)))                   ; best-effort — never lose snapshot
     snapshot))
 
 (defun decknix--live-sessions-dismiss (key)
