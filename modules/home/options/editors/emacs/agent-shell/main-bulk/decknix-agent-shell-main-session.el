@@ -75,6 +75,8 @@
                   "ext:decknix-agent-shell-workspace" (entry interactive))
 (declare-function agent-shell-workspace-sidebar-refresh
                   "ext:decknix-agent-shell-workspace")
+(declare-function decknix--session-delete-by-id
+                  "decknix-sidebar-row-actions" (sid conv-key))
 
 ;; Carved pure helpers consumed by the session lifecycle.  Each
 ;; mirrors a `decknix-agent-*' package required by the heredoc
@@ -887,6 +889,12 @@ Each source's :action lambda is a no-op when this flag is set;
 `decknix--session-picker-dispatch' iterates the captured selections
 instead, routing each candidate to the correct restore/resume action.")
 
+(defvar decknix--session-picker-action nil
+  "Special action to perform on the selected candidate(s) after the picker exits.
+One of nil (open/resume — normal behaviour), `kill', or `delete'.
+Reset to nil at the start of each picker call.  Set by the C-k / C-d
+key bindings wired inside `decknix-agent-session-picker's setup hook.")
+
 (defvar decknix--session-source-live
   (list :name     "Live Sessions"
         :narrow   ?l
@@ -1178,6 +1186,98 @@ the off-by-one tail and RET appears to do nothing."
                (decknix--agent-session-display-name session)
                workspace conv-key))))))))))
 
+;; -- Session-picker action helpers (C-k kill, C-d delete) --
+;;
+;; These operate on the candidate list captured by the picker's
+;; minibuffer-exit-hook after C-k or C-d exits the minibuffer.
+;; `decknix--session-picker-kill-cands'  — kill live buffer(s).
+;; `decknix--session-picker-delete-cands' — delete saved/previous sessions.
+;; `decknix--session-picker-do-action'   — routes to either helper.
+
+(defun decknix--session-picker-kill-cands (cands)
+  "Kill live session buffer(s) for candidates CANDS.
+Resolves each candidate key against `decknix--session-picker-live-map'.
+Non-live candidates are skipped.  Prompts once (single: `Kill session?';
+multiple: `Kill N sessions?') before touching any buffer."
+  (let* ((bufs (delq nil
+                     (mapcar
+                      (lambda (cand)
+                        (let ((key (decknix-picker-selections-cand-key cand)))
+                          (and decknix--session-picker-live-map
+                               (gethash key decknix--session-picker-live-map))))
+                      cands)))
+         (live (seq-filter #'buffer-live-p bufs))
+         (n (length live)))
+    (if (null live)
+        (message "No live sessions in selection — use C-d to delete saved sessions")
+      (when (yes-or-no-p
+             (format "Kill %d live session%s? " n (if (= 1 n) "" "s")))
+        (dolist (buf live)
+          (kill-buffer buf))
+        (message "Killed %d session%s" n (if (= 1 n) "" "s"))))))
+
+(defun decknix--session-picker-delete-cands (cands)
+  "Permanently delete saved/previous sessions for candidates CANDS.
+Live candidates are refused with an explanatory message.  Resolves each
+candidate key against `decknix--session-picker-previous-map' and
+`decknix--session-picker-saved-map', collecting (SID . CONV-KEY) pairs.
+Prompts once before touching anything, then calls
+`decknix--session-delete-by-id' for each session and refreshes the sidebar."
+  (let ((deletable nil)
+        (live-count 0))
+    ;; Pass 1: categorise candidates
+    (dolist (cand cands)
+      (let ((key (decknix-picker-selections-cand-key cand)))
+        (cond
+         ;; Live: refuse
+         ((and decknix--session-picker-live-map
+               (gethash key decknix--session-picker-live-map))
+          (cl-incf live-count))
+         ;; Previous session
+         ((and decknix--session-picker-previous-map
+               (gethash key decknix--session-picker-previous-map))
+          (let ((entry (gethash key decknix--session-picker-previous-map)))
+            (push (cons (alist-get 'session-id entry)
+                        (alist-get 'conv-key entry))
+                  deletable)))
+         ;; Saved session
+         ((and decknix--session-picker-saved-map
+               (gethash key decknix--session-picker-saved-map))
+          (let* ((session (gethash key decknix--session-picker-saved-map))
+                 (sid (alist-get 'sessionId session))
+                 (conv-key (decknix--agent-conversation-key
+                            (alist-get 'firstUserMessage session ""))))
+            (when sid
+              (push (cons sid conv-key) deletable)))))))
+    ;; Report live refusals
+    (when (> live-count 0)
+      (message "%d live session%s skipped — kill %s first with C-k"
+               live-count
+               (if (= 1 live-count) "" "s")
+               (if (= 1 live-count) "it" "them")))
+    ;; Pass 2: confirm + delete
+    (when deletable
+      (let ((n (length deletable)))
+        (when (yes-or-no-p
+               (format "Permanently delete %d session%s? "
+                       n (if (= 1 n) "" "s")))
+          (dolist (pair deletable)
+            (when (fboundp 'decknix--session-delete-by-id)
+              (decknix--session-delete-by-id (car pair) (cdr pair))))
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (agent-shell-workspace-sidebar-refresh))
+          (message "Deleted %d session%s" n (if (= 1 n) "" "s")))))))
+
+(defun decknix--session-picker-do-action (action cands)
+  "Perform ACTION on CANDS from the session picker.
+ACTION is one of `kill' (kill live buffers) or `delete' (permanently
+remove saved/previous sessions from disk and metadata).  CANDS is the
+list of candidate strings captured by the picker's minibuffer-exit-hook."
+  (pcase action
+    ('kill   (decknix--session-picker-kill-cands cands))
+    ('delete (decknix--session-picker-delete-cands cands))
+    (_ (message "Unknown session-picker action: %s" action))))
+
 (defun decknix-agent-session-picker (arg)
   "Pick from live agent-shell buffers and saved auggie sessions.
 Sections are separated by dividers (like `consult-buffer' / C-x b):
@@ -1186,10 +1286,14 @@ Sections are separated by dividers (like `consult-buffer' / C-x b):
   Saved Sessions    — past conversations from ~/.augment/sessions
   New               — start a new session (fallback)
 
-Press C-SPC to mark candidates and RET to confirm.  When one or more
-candidates are marked all of them are processed (restored or resumed) in
-one go — the same multi-select pattern as the sidebar requests picker.
-When no candidates are marked the highlighted item is opened normally.
+Press RET to open the highlighted session.  Press C-SPC to mark
+candidates (multi-select) and RET to open all of them at once.
+
+In-picker action keys (work on the highlighted item or all C-SPC marks):
+  C-k  — Kill the live session buffer(s).  Prompts for confirmation.
+          Non-live candidates are ignored.
+  C-d  — Permanently delete saved/previous session(s) from disk and
+          metadata.  Live sessions are refused; kill them first with C-k.
 
 Saved sessions whose conversation already has a live buffer are hidden
 by default (controlled by `decknix-agent-picker-hide-live-backed').
@@ -1201,19 +1305,32 @@ With \\[universal-argument], shows all individual session snapshots."
   (setq decknix--session-picker-expand arg)
   (setq decknix--session-picker-captured-selections nil)
   (setq decknix--session-picker-multi-mode nil)
+  (setq decknix--session-picker-action nil)
   (let ((setup-fn
          (lambda ()
            ;; Wire C-SPC → embark-select so the user can mark candidates.
            (when (fboundp 'embark-select)
              (local-set-key (kbd "C-SPC") 'embark-select))
-           ;; Capture embark selections BEFORE completing-read unwinds;
-           ;; `embark-selected-candidates' is minibuffer-local so it
-           ;; disappears as soon as the minibuffer exits.  Embark
-           ;; returns `(TYPE . CANDS)' (the leading symbol is the
-           ;; multi-category type), not a flat candidate list -- the
-           ;; coerce helper strips it so the dispatch loop below
-           ;; doesn't feed the type symbol to `gethash' (which would
-           ;; silently no-op and make RET appear to do nothing).
+           ;; Wire C-k → kill-action, C-d → delete-action.
+           ;; Both set multi-mode (suppresses the normal :action lambdas)
+           ;; and exit the minibuffer; the minibuffer-exit-hook below then
+           ;; captures the highlighted candidate into captured-selections.
+           (local-set-key (kbd "C-k")
+             (lambda () (interactive)
+               (setq decknix--session-picker-action 'kill)
+               (setq decknix--session-picker-multi-mode t)
+               (exit-minibuffer)))
+           (local-set-key (kbd "C-d")
+             (lambda () (interactive)
+               (setq decknix--session-picker-action 'delete)
+               (setq decknix--session-picker-multi-mode t)
+               (exit-minibuffer)))
+           ;; Capture selections BEFORE completing-read unwinds.
+           ;; Embark returns `(TYPE . CANDS)' — the coerce helper strips the
+           ;; leading symbol.  When an action key (C-k/C-d) was used without
+           ;; first marking with C-SPC, capture the currently highlighted
+           ;; candidate via `vertico--candidate' (internal but widely used by
+           ;; embark itself; guarded with fboundp + ignore-errors for safety).
            (add-hook 'minibuffer-exit-hook
              (lambda ()
                (when (fboundp 'embark-selected-candidates)
@@ -1221,25 +1338,38 @@ With \\[universal-argument], shows all individual session snapshots."
                         (sels (decknix-picker-selections-coerce raw)))
                    (when sels
                      (setq decknix--session-picker-multi-mode t)
-                     (setq decknix--session-picker-captured-selections sels)))))
+                     (setq decknix--session-picker-captured-selections sels))))
+               ;; C-k / C-d without C-SPC marks: capture the current candidate.
+               (when (and decknix--session-picker-action
+                          (null decknix--session-picker-captured-selections))
+                 (let ((cur (and (fboundp 'vertico--candidate)
+                                 (ignore-errors (vertico--candidate)))))
+                   (when cur
+                     (setq decknix--session-picker-captured-selections
+                           (list cur))))))
              nil t))))
     (minibuffer-with-setup-hook setup-fn
       (consult--multi (list decknix--session-source-live
                             decknix--session-source-previous
                             decknix--session-source-saved
                             decknix--session-source-new)
-                      :prompt (format "Agent session%s (C-SPC=multi): "
+                      :prompt (format "Agent session%s (C-SPC mark; C-k kill, C-d delete): "
                                       (if arg " (all snapshots)" ""))
                       :sort nil)))
-  ;; Multi-select post-processing: when the user marked items with
-  ;; C-SPC, the :action lambdas were suppressed (no-op) and we now
-  ;; route every captured candidate through dispatch ourselves.
+  ;; Multi-select / action-mode post-processing:
+  ;; When multi-mode is set (C-SPC multi-select, C-k kill, or C-d delete),
+  ;; the :action lambdas were suppressed (no-op) and we route every captured
+  ;; candidate through either the action handler or the normal dispatch.
   (when decknix--session-picker-multi-mode
     (setq decknix--session-picker-multi-mode nil)
-    (let ((sels decknix--session-picker-captured-selections))
+    (let ((sels decknix--session-picker-captured-selections)
+          (action decknix--session-picker-action))
       (setq decknix--session-picker-captured-selections nil)
-      (dolist (cand sels)
-        (decknix--session-picker-dispatch cand)))))
+      (setq decknix--session-picker-action nil)
+      (if action
+          (decknix--session-picker-do-action action sels)
+        (dolist (cand sels)
+          (decknix--session-picker-dispatch cand))))))
 
 ;; == Agent buffer switch: C-c b (in-buffer) / C-c A b (global) ==
 ;; Like C-x b but scoped to live agent-shell buffers only.
