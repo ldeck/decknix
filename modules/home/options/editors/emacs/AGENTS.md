@@ -546,8 +546,8 @@ The `decknix--context-update-header` function delegates to the unified header
     shares presets with Requests `F`), `V` live-backed (default `[dim]`
     — saved rows whose conversation is currently live render shadowed
     as context; flip to `[hide]` to drop them entirely so Live owns
-    them), `h` saved (hide the entire Saved Sessions section — Live
-    / Previous / Requests / WIP remain), `U` unknown-ws (hide saved
+    them), `h` saved (show/hide the Saved Sessions section — hidden
+    by default; Live / Previous / Requests / WIP remain), `U` unknown-ws (hide saved
     rows whose workspace can't be resolved OR whose workspace
     directory has been deleted from disk — e.g. a `git worktree
     remove` that ran after the session was archived, #139). Active

@@ -66,12 +66,12 @@ in the Toggles transient.")
 Valid values: `default' (full details), `minimal' (Layout D).
 Toggle with `D' in the sidebar.")
 
-(defvar decknix--hub-show-saved-sessions t
-  "When non-nil (default), the saved Sessions block is rendered.
-When nil, the entire Saved Sessions section (heading + per-workspace
-groups) is omitted from the sidebar.  Live, Previous, Requests and
-WIP sections remain unaffected.  Toggle with `h' in the Toggles
-transient.")
+(defvar decknix--hub-show-saved-sessions nil
+  "When non-nil, the saved Sessions block is rendered in the sidebar.
+When nil (default), the entire Saved Sessions section (heading +
+per-workspace groups) is omitted.  Live, Previous, Requests and WIP
+sections remain unaffected.  Toggle with `h' in the Toggles
+transient to show/hide the section.")
 
 (defun decknix--sidebar-sessions-age-label ()
   "Return a short label for the current sessions age filter.
