@@ -1599,6 +1599,22 @@ let
     packageRequires = [ ];
   };
 
+  # Picker selection coerce: pure helper that unwraps
+  # `embark-selected-candidates' (returns `(TYPE . CANDS)' where TYPE
+  # is the multi-category symbol and CANDS is the list of bare
+  # candidate strings) into a flat candidate list the session picker
+  # can iterate without feeding the leading symbol to `gethash'.
+  # Carved out of `decknix-agent-session-picker' (main-bulk) so the
+  # contract is independently testable without a live minibuffer.
+  decknix-picker-selections-el = mkEmacsTestedPackage {
+    pname = "decknix-picker-selections";
+    src = ./agent-shell/picker-selections;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-picker-selections-test.el"
+    ];
+  };
+
   # PR B-Bulk.3a: bulk extraction of the always-loaded core (always-1
   # + always-tail sub-heredocs).  Verbatim move of 254 declarations
   # (~4,800 lines) packaged via plain trivialBuild, isolated in its
@@ -1609,7 +1625,10 @@ let
     pname = "decknix-agent-shell-main";
     version = "0.1";
     src = ./agent-shell/main-bulk;
-    packageRequires = [ ];
+    # `decknix-picker-selections' is required at runtime by
+    # `decknix-agent-shell-main-session.el' for the multi-select
+    # post-processing in `decknix-agent-session-picker'.
+    packageRequires = [ decknix-picker-selections-el ];
   };
 
   # PR B-Bulk.3b: bulk extraction of the cfg.workspace.enable
@@ -2178,6 +2197,7 @@ in
         ++ (optional cfg.workspace.enable decknix-webkit-page-el)
         ++ (optional cfg.context.enable decknix-agent-shell-context-el)
         ++ (optional cfg.hub.enable decknix-agent-shell-hub-el)
+        ++ [ decknix-picker-selections-el ]
         ++ [ decknix-agent-shell-main-el ]
         ++ (optional cfg.workspace.enable decknix-worktree-picker-el)
         ++ (optional cfg.workspace.enable decknix-agent-shell-workspace-el);
@@ -2223,6 +2243,14 @@ in
         (declare-function decknix--agent-repo-parse-url "decknix-agent-url-parse")
         (declare-function decknix--agent-pr-url-accessor "decknix-agent-url-parse")
         (declare-function decknix--hub-repo-cache-key "decknix-agent-url-parse")
+
+        ;; Picker selection coerce -- consumed by
+        ;; `decknix-agent-session-picker' (main-bulk) to unwrap
+        ;; embark's `(TYPE . CANDS)' return shape into a flat list
+        ;; the multi-select dispatch can iterate.
+        (require 'decknix-picker-selections)
+        (declare-function decknix-picker-selections-coerce
+                          "decknix-picker-selections")
         (require 'decknix-agent-format)
         (declare-function decknix--agent-session-time-ago "decknix-agent-format")
         (declare-function decknix--agent-session-time-compact "decknix-agent-format")
