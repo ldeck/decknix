@@ -2207,7 +2207,11 @@ Layout:
                       repo-full branch))
            (primary-icon (decknix--hub-primary-status-icon (list (cons 'ci ci)) 'placeholder))
            (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
-                     (format "%s  [repo] %s %s" primary-icon branch-str repo-label)
+                     ;; [wip] matches the mockup shape-family legend: hollow
+                     ;; circle ○ = pre-PR local branch, phase tag = [wip].
+                     (format "%s  %s %s %s" primary-icon
+                             (propertize "[wip]" 'face 'font-lock-comment-face)
+                             branch-str repo-label)
                    (if grouped
                        (format "  %s%s%s %s %s%s"
                                wt-badge
@@ -2916,7 +2920,16 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
                      (wt-badge (decknix--hub-worktree-row-badge
                                 repo-full branch))
                      (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
-                               (let* ((phase (if (eq (alist-get 'draft pr) t) "[draft]" "[open]"))
+                               (let* (;; Phase label maps the mockup shape-family legend:
+                                      ;;   ★  draft  → [draft]
+                                      ;;   ◐● open   → [open]
+                                      ;;   ▣  merged/ship → [ship]
+                                      ;;   ●  closed  → [closed]
+                                      (phase (cond
+                                              (merged-p "[ship]")
+                                              (closed-p "[closed]")
+                                              ((eq (alist-get 'draft pr) t) "[draft]")
+                                              (t "[open]")))
                                       (phase-str (propertize phase 'face 'font-lock-comment-face))
                                       (max-title (max 8 (- (window-width) 14)))
                                       (short-title (if (> (length title) max-title)
