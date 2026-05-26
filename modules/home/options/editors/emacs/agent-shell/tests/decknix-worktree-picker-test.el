@@ -383,5 +383,43 @@ have to expand everything just to read one long branch name."
           (should (= (nth 1 (aref tabulated-list-format 1))
                      orig-branch-w)))))))
 
+(ert-deftest decknix-worktree-picker--menu-bar--exposes-dired-like-menus ()
+  "The mode keymap must publish menu-bar entries so mouse users can
+discover the available commands without consulting the docstring or
+header-line.  Dired exposes Operate / Mark / Regexp / Immediate as
+separate top-level menus; the worktree picker mirrors that pattern
+with Operate / Mark / Filter / View."
+  (let ((map decknix-worktree-picker-mode-map))
+    (dolist (key '(operate mark filter view))
+      (let ((entry (lookup-key map (vector 'menu-bar key))))
+        (should (keymapp entry))))))
+
+(ert-deftest decknix-worktree-picker--menu-bar--wires-destructive-verbs ()
+  "The Operate menu must surface the destructive verbs (prune and
+remove) by name -- not by the cryptic `x'/`X' keys -- so a mouse
+user can read the consequence before invoking it.  Guarding both
+verbs catches the easy regression of dropping one (only `prune'
+on the keymap, only `remove' on the menu, etc.)."
+  (let* ((map decknix-worktree-picker-mode-map)
+         (operate (lookup-key map [menu-bar operate]))
+         (commands (let (acc)
+                     (map-keymap
+                      (lambda (_ev binding)
+                        (let ((cmd (cond
+                                    ((symbolp binding) binding)
+                                    ;; menu-item form: (menu-item NAME CMD . PROPS)
+                                    ((and (consp binding)
+                                          (eq (car binding) 'menu-item))
+                                     (nth 2 binding))
+                                    ;; legacy form: (NAME . CMD)
+                                    ((and (consp binding)
+                                          (symbolp (cdr binding)))
+                                     (cdr binding)))))
+                          (when cmd (push cmd acc))))
+                      operate)
+                     acc)))
+    (should (memq 'decknix-worktree-picker-prune commands))
+    (should (memq 'decknix-worktree-picker-remove commands))))
+
 (provide 'decknix-worktree-picker-test)
 ;;; decknix-worktree-picker-test.el ends here
