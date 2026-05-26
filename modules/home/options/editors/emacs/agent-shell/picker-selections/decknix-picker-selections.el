@@ -36,6 +36,18 @@
 ;; The third clause keeps the picker working if a future embark
 ;; release flips back to returning just the candidate list -- we don't
 ;; want a silent regression on the call site.
+;;
+;; The package also exposes `decknix-picker-selections-cand-key', which
+;; extracts the canonical hash-table key from a propertized candidate.
+;; consult--multi appends a trailing character marked `consult-strip'
+;; to every candidate (so vertico filtering can hide source-grouping
+;; suffixes); embark hands that propertized 161-char string back via
+;; `embark-selected-candidates'.  The :items lambdas, however, keyed
+;; their hash-tables on the 160-char display string they built, so a
+;; direct `(gethash cand MAP)' silently misses and RET appears to do
+;; nothing.  The canonical key lives on text-property `multi-category'
+;; as a (TYPE . KEY) cons -- the helper returns KEY when present and
+;; falls back to the candidate itself otherwise.
 
 ;;; Code:
 
@@ -54,6 +66,21 @@ file commentary for the three shapes this function accepts."
    ((listp raw) raw)
    ;; Single non-list value: wrap in a list so callers can `dolist'.
    (t (list raw))))
+
+(defun decknix-picker-selections-cand-key (cand)
+  "Return the canonical hash-table key for CAND.
+CAND is the propertized string a consult--multi/embark candidate
+yields.  When the candidate carries a `multi-category' text
+property of the form (TYPE . KEY), KEY is returned -- that is the
+exact display string the source's :items lambda used to build its
+hash-table.  Otherwise CAND is returned unchanged so plain string
+candidates and non-string payloads still work."
+  (if (stringp cand)
+      (let ((mc (get-text-property 0 'multi-category cand)))
+        (if (and (consp mc) (stringp (cdr mc)))
+            (cdr mc)
+          cand))
+    cand))
 
 (provide 'decknix-picker-selections)
 ;;; decknix-picker-selections.el ends here

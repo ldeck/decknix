@@ -67,5 +67,44 @@ used to gate multi-mode."
              (length (decknix-picker-selections-coerce
                       '(agent-session-saved "a" "b"))))))
 
+;; == decknix-picker-selections-cand-key ==
+;;
+;; consult--multi candidates arrive with a trailing `consult-strip'
+;; character and a `multi-category' text property whose cdr is the
+;; canonical display key the source's :items lambda used as its
+;; hash-table key.  The picker dispatch must look maps up by that
+;; canonical key, not by the propertized 161-char candidate string,
+;; or every `gethash' silently misses and RET no-ops on the user.
+
+(ert-deftest decknix-picker-selections-cand-key--plain-string ()
+  "A bare string with no `multi-category' property maps to itself."
+  (should (equal "session-foo"
+                 (decknix-picker-selections-cand-key "session-foo"))))
+
+(ert-deftest decknix-picker-selections-cand-key--multi-category-property ()
+  "When the candidate carries a `multi-category' (TYPE . KEY) property,
+the helper returns KEY -- the canonical hash key the source built."
+  (let* ((key "059df5e8  display string")
+         (cand (concat key (propertize " " 'invisible t 'consult-strip t))))
+    (add-text-properties 0 (length key)
+                         (list 'multi-category (cons 'agent-session-saved key))
+                         cand)
+    (should (equal key (decknix-picker-selections-cand-key cand)))))
+
+(ert-deftest decknix-picker-selections-cand-key--non-string-passthrough ()
+  "Defensive: a non-string candidate is returned unchanged so callers
+that already hold a payload (e.g. an alist) don't crash."
+  (let ((alist '((firstUserMessage . "hi"))))
+    (should (eq alist (decknix-picker-selections-cand-key alist)))))
+
+(ert-deftest decknix-picker-selections-cand-key--malformed-property-fallback ()
+  "If `multi-category' is present but not a (SYMBOL . STRING) cons,
+the helper falls back to the candidate string itself."
+  (let ((cand (copy-sequence "session-foo")))
+    (add-text-properties 0 (length cand)
+                         '(multi-category agent-session-saved)
+                         cand)
+    (should (equal cand (decknix-picker-selections-cand-key cand)))))
+
 (provide 'decknix-picker-selections-test)
 ;;; decknix-picker-selections-test.el ends here

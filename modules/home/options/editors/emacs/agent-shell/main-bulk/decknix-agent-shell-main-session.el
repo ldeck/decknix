@@ -193,6 +193,8 @@
                   (mru-other-bufs visible-bufs))
 (declare-function decknix-picker-selections-coerce
                   "decknix-picker-selections" (raw))
+(declare-function decknix-picker-selections-cand-key
+                  "decknix-picker-selections" (cand))
 
 ;; Carved-package state vars consumed by this file.  Their values
 ;; live in the carved modules; the defvar below keeps the byte-
@@ -1124,28 +1126,36 @@ Used by the multi-select path in `decknix-agent-session-picker' to
 process each embark-marked candidate after the picker exits.  Checks
 the three source lookup tables in priority order: live → previous →
 saved.  Falls through to `decknix-agent-session-new' for unrecognised
-candidates (e.g., the New section placeholder)."
-  (cond
-   ;; Live session: switch to buffer (without focus on non-first items).
-   ((and decknix--session-picker-live-map
-         (gethash cand decknix--session-picker-live-map))
-    (let ((buf (gethash cand decknix--session-picker-live-map)))
-      (when (and buf (buffer-live-p buf))
-        (let ((main (window-main-window (selected-frame))))
-          (when (and main (window-live-p main))
-            (select-window main)))
-        (switch-to-buffer buf))))
-   ;; Previous session: restore without auto-focus (caller manages it).
-   ((and decknix--session-picker-previous-map
-         (gethash cand decknix--session-picker-previous-map))
-    (let ((entry (gethash cand decknix--session-picker-previous-map)))
-      (when entry
-        (decknix--sidebar-restore-previous-session entry nil))))
-   ;; Saved session: resume without prompting for workspace on multi-pick.
-   ((and decknix--session-picker-saved-map
-         (gethash cand decknix--session-picker-saved-map))
-    (let* ((session (gethash cand decknix--session-picker-saved-map))
-           (workspace (alist-get '__workspace session)))
+candidates (e.g., the New section placeholder).
+
+CAND arrives as the propertized 161-char consult--multi candidate
+(160-char display string + a trailing `consult-strip' char), so the
+canonical 160-char key the :items lambda used to build each
+hash-table is extracted via `decknix-picker-selections-cand-key'
+before any lookup -- otherwise every `gethash' silently misses on
+the off-by-one tail and RET appears to do nothing."
+  (let ((key (decknix-picker-selections-cand-key cand)))
+    (cond
+     ;; Live session: switch to buffer (without focus on non-first items).
+     ((and decknix--session-picker-live-map
+           (gethash key decknix--session-picker-live-map))
+      (let ((buf (gethash key decknix--session-picker-live-map)))
+        (when (and buf (buffer-live-p buf))
+          (let ((main (window-main-window (selected-frame))))
+            (when (and main (window-live-p main))
+              (select-window main)))
+          (switch-to-buffer buf))))
+     ;; Previous session: restore without auto-focus (caller manages it).
+     ((and decknix--session-picker-previous-map
+           (gethash key decknix--session-picker-previous-map))
+      (let ((entry (gethash key decknix--session-picker-previous-map)))
+        (when entry
+          (decknix--sidebar-restore-previous-session entry nil))))
+     ;; Saved session: resume without prompting for workspace on multi-pick.
+     ((and decknix--session-picker-saved-map
+           (gethash key decknix--session-picker-saved-map))
+      (let* ((session (gethash key decknix--session-picker-saved-map))
+             (workspace (alist-get '__workspace session)))
       (when session
         (let ((conv-key (decknix--agent-conversation-key
                          (alist-get 'firstUserMessage session ""))))
@@ -1166,7 +1176,7 @@ candidates (e.g., the New section placeholder)."
                (alist-get 'sessionId session)
                decknix-agent-session-history-count
                (decknix--agent-session-display-name session)
-               workspace conv-key)))))))))
+               workspace conv-key))))))))))
 
 (defun decknix-agent-session-picker (arg)
   "Pick from live agent-shell buffers and saved auggie sessions.
@@ -1207,8 +1217,8 @@ With \\[universal-argument], shows all individual session snapshots."
            (add-hook 'minibuffer-exit-hook
              (lambda ()
                (when (fboundp 'embark-selected-candidates)
-                 (let ((sels (decknix-picker-selections-coerce
-                              (embark-selected-candidates))))
+                 (let* ((raw (embark-selected-candidates))
+                        (sels (decknix-picker-selections-coerce raw)))
                    (when sels
                      (setq decknix--session-picker-multi-mode t)
                      (setq decknix--session-picker-captured-selections sels)))))
