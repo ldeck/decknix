@@ -41,6 +41,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'transient)
+(require 'ansi-color)
 
 ;; Forward declarations for symbols defined in the heredoc, in
 ;; agent-shell-workspace upstream, in helper modules, or in the
@@ -3564,6 +3565,8 @@ Prefix arg runs `--dry-run' (shows what would be removed without acting)."
         (let ((inhibit-read-only t))
           (erase-buffer)
           (insert trimmed)
+          (ansi-color-apply-on-region (point-min) (point-max))
+          (special-mode)
           (goto-char (point-min)))
         (display-buffer (current-buffer))))))
 

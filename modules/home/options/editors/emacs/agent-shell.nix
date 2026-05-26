@@ -1846,6 +1846,24 @@ let
     If XML tags appear, remove them and execute the tool calls natively
     instead.  If markdown appears, re-render as space-aligned columns (for
     tables) or plain prose with prefix labels (for emphasis / headings).
+
+    ## Branch and PR Ownership
+
+    Before pushing to any branch or modifying any PR, always check who
+    authored it.  If the author is not the current user, stop and ask
+    before doing anything.  Do not:
+
+      - Push commits to another author's branch
+      - Convert another author's draft PR to ready
+      - Overwrite another author's PR description
+
+    Even if the work looks stalled or incomplete, the right action is to
+    flag it to the user and let them coordinate with the author.
+
+    To check authorship quickly:
+
+        gh pr view <number> --json author --jq '.author.login'
+        git log origin/<branch> -1 --format="%ae"
   '';
 
   # == Yasnippet prompt templates ==
