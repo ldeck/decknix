@@ -119,6 +119,8 @@
 (declare-function decknix--hub-sort-requests "decknix-hub-attention-filter")
 (declare-function decknix--hub-requests-attention-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-requests-reviewed-visible-p "decknix-hub-attention-filter")
+(declare-function decknix--hub-requests-conflict-visible-p "decknix-hub-attention-filter")
+(declare-function decknix--hub-toggle-requests-hide-conflict "decknix-hub-attention-filter")
 (declare-function decknix--hub-wip-attention-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-request-has-live-session-p "ext:decknix-agent-shell-hub")
 (declare-function decknix--hub-request-tint-active "ext:decknix-agent-shell-hub")
@@ -187,6 +189,7 @@
 (defvar decknix--hub-requests-hide-needs-reply)
 (defvar decknix--hub-requests-hide-bot-pending)
 (defvar decknix--hub-requests-only-my-replies)
+(defvar decknix--hub-requests-hide-conflict)
 (defvar decknix--hub-requests-sort-reverse)
 ;; Picker-scoped toggle state for `decknix-sidebar-nav-requests-consult'.
 ;; These variables are only ever `let'-bound by the picker entry point
@@ -754,7 +757,8 @@ which advertises toggles by label only (no keys)."
    (decknix-sidebar-transient--req-sort)         ;; sort
    (decknix-sidebar-transient--req-my-replies)   ;; ↩
    (decknix-sidebar-transient--req-needs-reply)  ;; 💬
-   (decknix-sidebar-transient--req-bot-pending)] ;; 🤖
+   (decknix-sidebar-transient--req-bot-pending)  ;; 🤖
+   (decknix-sidebar-transient--req-conflict)]    ;; ⚠ conflict
   ["Live"
    (decknix-sidebar-transient--display-mode)     ;; Display mode
    (decknix-sidebar-transient--hidden-toggle)    ;; Hidden
@@ -956,6 +960,14 @@ All toggle keys are accessed via the T transient prefix."
                           (propertize
                            (if decknix--hub-requests-hide-bot-pending "[hide]" "[show]")
                            'face (if decknix--hub-requests-hide-bot-pending
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
+            (cons "X" (concat
+                          (decknix--hub-icon "⚠" 'default)
+                          " conflict "
+                          (propertize
+                           (if decknix--hub-requests-hide-conflict "[hide]" "[show]")
+                           'face (if decknix--hub-requests-hide-conflict
                                      'font-lock-constant-face
                                    'font-lock-comment-face)))))))
         (live
