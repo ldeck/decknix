@@ -62,16 +62,26 @@
     sessions))
 
 (defun decknix-worktree-picker--get-pr-map ()
-  "Return a map of (repo . branch) -> PR state."
+  "Return a map of (repo . branch) -> PR state.
+`decknix--hub-wip' is the parsed `github-wip.json' payload whose
+canonical shape is
+
+  ((updated . T) (repos . (((repo . R) (prs . (PR ...))) ...)))
+
+Each PR carries `branch' and `state' (lowercase strings:
+open / merged / closed).  The repo identifier lives on the outer
+entry, NOT on the PR alist, so the map must be built by walking
+`repos' -> `prs' rather than iterating `decknix--hub-wip' as if
+it were a flat list (doing so would feed the leading
+`(updated . T)' cons to `assoc' and raise `wrong-type-argument
+listp')"
   (let ((pr-map (make-hash-table :test 'equal)))
-    (dolist (pr decknix--hub-wip)
-      (let* ((repo (cdr (assoc 'repo pr)))
-             (branch (cdr (assoc 'branch pr)))
-             (state (cdr (assoc 'state pr)))
-             (merged (cdr (assoc 'merged_at pr))))
-        (puthash (cons repo branch)
-                 (if merged "merged" state)
-                 pr-map)))
+    (dolist (repo-entry (alist-get 'repos decknix--hub-wip))
+      (let ((repo (alist-get 'repo repo-entry)))
+        (dolist (pr (alist-get 'prs repo-entry))
+          (let ((branch (alist-get 'branch pr))
+                (state  (alist-get 'state pr)))
+            (puthash (cons repo branch) state pr-map)))))
     pr-map))
 
 (defun decknix-worktree-picker-list-entries ()
