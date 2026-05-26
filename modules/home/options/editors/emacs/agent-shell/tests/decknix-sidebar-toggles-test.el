@@ -33,7 +33,7 @@
   (should (equal nil (default-value 'decknix--sidebar-sessions-hide-live)))
   (should (equal nil (default-value 'decknix--sidebar-sessions-age-filter)))
   (should (equal nil (default-value 'decknix--sidebar-sessions-hide-unknown)))
-  (should (equal t   (default-value 'decknix--hub-show-saved-sessions))))
+  (should (equal nil (default-value 'decknix--hub-show-saved-sessions))))
 
 ;; -- toggle-keys --------------------------------------------------
 
