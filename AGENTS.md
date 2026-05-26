@@ -72,6 +72,7 @@ non-negotiable. Specifically:
   `docs(scope):`, `refactor(scope):`.
 - Scope is the module or area: `emacs`, `cli`, `shell`, `darwin`, `agent-shell`.
 - Reference issues: `(#73)`, `(#74)`.
+- Do NOT add co-author footers (e.g. `Co-authored-by:`) to commits or messages.
 - Do NOT commit or push without explicit user permission.
 
 ### 4. Testing Changes — Follow TDD
