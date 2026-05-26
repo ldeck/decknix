@@ -63,5 +63,169 @@ the leading (updated . T) cons to assoc as if it were a PR."
       (should (equal (gethash (cons "o/r1" "feat") m) "merged"))
       (should (equal (gethash (cons "o/r2" "dev")  m) "closed")))))
 
+(ert-deftest decknix-worktree-picker--get-pr-map--normalizes-repo-case ()
+  "PR-map keys must be normalised to lowercase so that audit data
+\(which surfaces repos as `upsiderealty/foo') matches hub-wip
+data (which preserves the GitHub casing `UpsideRealty/foo').
+Without normalisation every PR-map lookup misses and the picker
+shows `none' for every row."
+  (let ((decknix--hub-wip
+         '((updated . "2026-05-26T00:00:00Z")
+           (repos . (((repo . "UpsideRealty/proptrack-integration")
+                      (prs . (((branch . "feature/x") (state . "open"))))))))))
+    (let ((m (decknix-worktree-picker--get-pr-map)))
+      (should (equal (gethash (cons "upsiderealty/proptrack-integration"
+                                    "feature/x")
+                              m)
+                     "open")))))
+
+(ert-deftest decknix-worktree-picker-list-entries--mixed-case-repo-state ()
+  "Joining audit (lowercase repo) with hub-wip (mixed case) must
+populate the PR State column with the lowercase state, not the
+`-' fallback used when no PR is associated."
+  (let ((decknix--hub-worktree-cache (make-hash-table :test 'equal))
+        (decknix--hub-wip
+         '((updated . "2026-05-26T00:00:00Z")
+           (repos . (((repo . "UpsideRealty/trademe-integration")
+                      (prs . (((branch . "feature/foo") (state . "open"))))))))))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_)
+                 (json-encode
+                  (list
+                   '((repo . "upsiderealty/trademe-integration")
+                     (primary . "/tmp/tm")
+                     (stale . nil)
+                     (worktrees . (((branch . "feature/foo")
+                                    (path . "/tmp/tm-wt/feature/foo")
+                                    (dirty . nil)
+                                    (orphan . nil)
+                                    (active . nil)
+                                    (merged . nil)
+                                    (age_days . 1))))))))))
+      (let ((entries (decknix-worktree-picker-list-entries)))
+        (should (= (length entries) 1))
+        (let ((cols (cadr (car entries))))
+          (should (string-match-p "open" (aref cols 3))))))))
+
+(ert-deftest decknix-worktree-picker-list-entries--no-pr-uses-dash ()
+  "When no PR exists for a (repo, branch) the PR State column
+should show `-', not the legacy `none' placeholder."
+  (let ((decknix--hub-worktree-cache (make-hash-table :test 'equal))
+        (decknix--hub-wip '((updated . "x") (repos . ()))))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_)
+                 (json-encode
+                  (list
+                   '((repo . "owner/repo")
+                     (primary . "/tmp/r")
+                     (stale . nil)
+                     (worktrees . (((branch . "feature/orphan-wt")
+                                    (path . "/tmp/r-wt/feature/orphan-wt")
+                                    (dirty . nil)
+                                    (orphan . nil)
+                                    (active . nil)
+                                    (merged . t)
+                                    (age_days . 4))))))))))
+      (let ((entries (decknix-worktree-picker-list-entries)))
+        (should (= (length entries) 1))
+        (let ((cols (cadr (car entries))))
+          (should (string-match-p "\\`-\\'"
+                                  (substring-no-properties (aref cols 3))))
+          (should-not (string-match-p "none"
+                                      (substring-no-properties (aref cols 3)))))))))
+
+(ert-deftest decknix-worktree-picker-list-entries--closed-state-is-lowercase ()
+  "The closed filter must trip on the lowercase `closed' state
+emitted by the hub adapter; the legacy `CLOSED' comparison
+silently misses every real-world PR."
+  (let ((decknix--hub-worktree-cache (make-hash-table :test 'equal))
+        (decknix--hub-wip
+         '((updated . "x")
+           (repos . (((repo . "owner/repo")
+                      (prs . (((branch . "feature/bar") (state . "closed"))))))))))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_)
+                 (json-encode
+                  (list
+                   '((repo . "owner/repo")
+                     (primary . "/tmp/r")
+                     (stale . nil)
+                     (worktrees . (((branch . "feature/bar")
+                                    (path . "/tmp/r-wt/feature/bar")
+                                    (dirty . nil)
+                                    (orphan . nil)
+                                    (active . nil)
+                                    (merged . nil)
+                                    (age_days . 5))))))))))
+      ;; Only the closed filter is active; all others off.  The row must
+      ;; still show up, proving the lowercase state was matched.
+      (let ((decknix-worktree-picker--filter-merged nil)
+            (decknix-worktree-picker--filter-closed t)
+            (decknix-worktree-picker--filter-no-session nil)
+            (decknix-worktree-picker--filter-dirty nil)
+            (decknix-worktree-picker--filter-orphans nil)
+            (decknix-worktree-picker--filter-repo nil)
+            (decknix-worktree-picker--filter-min-age nil))
+        (let ((entries (decknix-worktree-picker-list-entries)))
+          (should (= (length entries) 1)))))))
+
+(ert-deftest decknix-worktree-picker-list-entries--filter-by-repo ()
+  "When `decknix-worktree-picker--filter-repo' is set to a
+substring, only worktrees whose repo contains that substring
+\(case-insensitive) survive the filter."
+  (let ((decknix--hub-worktree-cache (make-hash-table :test 'equal))
+        (decknix--hub-wip '((updated . "x") (repos . ()))))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_)
+                 (json-encode
+                  (list
+                   '((repo . "owner/alpha")
+                     (primary . "/tmp/a") (stale . nil)
+                     (worktrees . (((branch . "main") (path . "/tmp/a")
+                                    (dirty . nil) (orphan . nil) (active . nil)
+                                    (merged . nil) (age_days . 1)))))
+                   '((repo . "owner/beta")
+                     (primary . "/tmp/b") (stale . nil)
+                     (worktrees . (((branch . "main") (path . "/tmp/b")
+                                    (dirty . nil) (orphan . nil) (active . nil)
+                                    (merged . nil) (age_days . 1))))))))))
+      (let ((decknix-worktree-picker--filter-merged nil)
+            (decknix-worktree-picker--filter-closed nil)
+            (decknix-worktree-picker--filter-no-session t)
+            (decknix-worktree-picker--filter-dirty nil)
+            (decknix-worktree-picker--filter-orphans nil)
+            (decknix-worktree-picker--filter-repo "ALPHA")
+            (decknix-worktree-picker--filter-min-age nil))
+        (let ((entries (decknix-worktree-picker-list-entries)))
+          (should (= (length entries) 1))
+          (should (equal (nth 0 (car (car entries))) "owner/alpha")))))))
+
+(ert-deftest decknix-worktree-picker-list-entries--filter-by-min-age ()
+  "When `decknix-worktree-picker--filter-min-age' is set to N,
+only worktrees aged at least N days survive."
+  (let ((decknix--hub-worktree-cache (make-hash-table :test 'equal))
+        (decknix--hub-wip '((updated . "x") (repos . ()))))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_)
+                 (json-encode
+                  (list
+                   '((repo . "owner/repo") (primary . "/tmp/r") (stale . nil)
+                     (worktrees . (((branch . "fresh") (path . "/tmp/r/fresh")
+                                    (dirty . nil) (orphan . nil) (active . nil)
+                                    (merged . nil) (age_days . 1))
+                                   ((branch . "old")   (path . "/tmp/r/old")
+                                    (dirty . nil) (orphan . nil) (active . nil)
+                                    (merged . nil) (age_days . 30))))))))))
+      (let ((decknix-worktree-picker--filter-merged nil)
+            (decknix-worktree-picker--filter-closed nil)
+            (decknix-worktree-picker--filter-no-session t)
+            (decknix-worktree-picker--filter-dirty nil)
+            (decknix-worktree-picker--filter-orphans nil)
+            (decknix-worktree-picker--filter-repo nil)
+            (decknix-worktree-picker--filter-min-age 7))
+        (let ((entries (decknix-worktree-picker-list-entries)))
+          (should (= (length entries) 1))
+          (should (equal (nth 1 (car (car entries))) "old")))))))
+
 (provide 'decknix-worktree-picker-test)
 ;;; decknix-worktree-picker-test.el ends here

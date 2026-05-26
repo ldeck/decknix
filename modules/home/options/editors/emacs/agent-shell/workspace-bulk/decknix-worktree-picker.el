@@ -44,6 +44,17 @@
 (defvar-local decknix-worktree-picker--filter-orphans t
   "When non-nil, show worktrees whose upstream branch is deleted.")
 
+(defvar-local decknix-worktree-picker--filter-repo nil
+  "When a non-empty string, only worktrees whose repo contains it
+\(case-insensitive substring) are shown.  Stacks on top of the
+inclusion toggles (`-merged', `-closed', `-no-session', `-dirty',
+`-orphans') as an additional restriction.")
+
+(defvar-local decknix-worktree-picker--filter-min-age nil
+  "When a positive integer N, only worktrees aged at least N days
+are shown.  Stacks on top of the inclusion toggles as an
+additional restriction.")
+
 (defun decknix-worktree-picker--get-sessions ()
   "Return a set of workspace paths for all active sessions."
   (let ((sessions (make-hash-table :test 'equal))
@@ -74,21 +85,47 @@ entry, NOT on the PR alist, so the map must be built by walking
 `repos' -> `prs' rather than iterating `decknix--hub-wip' as if
 it were a flat list (doing so would feed the leading
 `(updated . T)' cons to `assoc' and raise `wrong-type-argument
-listp')"
+listp').
+
+Repo keys are normalised to lowercase because hub data preserves
+the GitHub canonical casing (`UpsideRealty/foo') while
+`decknix wt audit --json' lowercases everything
+(`upsiderealty/foo').  Without normalisation every join misses
+and the picker shows `none' for every row."
   (let ((pr-map (make-hash-table :test 'equal)))
     (dolist (repo-entry (alist-get 'repos decknix--hub-wip))
       (let ((repo (alist-get 'repo repo-entry)))
         (dolist (pr (alist-get 'prs repo-entry))
           (let ((branch (alist-get 'branch pr))
                 (state  (alist-get 'state pr)))
-            (puthash (cons repo branch) state pr-map)))))
+            (puthash (cons (and repo (downcase repo)) branch) state pr-map)))))
     pr-map))
 
 (defun decknix-worktree-picker-list-entries ()
-  "Build entries for the worktree picker using `decknix wt audit --json'."
+  "Build entries for the worktree picker using `decknix wt audit --json'.
+
+The inclusion toggles (`--filter-merged', `--filter-closed',
+`--filter-no-session', `--filter-dirty', `--filter-orphans')
+combine with OR -- a worktree appears if any active toggle
+matches.  The restriction filters (`--filter-repo',
+`--filter-min-age') combine with AND on top, narrowing the
+inclusion set down to a target subset.
+
+Repo keys from the audit JSON are lowercase; the PR-map is keyed
+on lowercase repo names so the join survives the case mismatch
+between `decknix wt audit --json' and `github-wip.json'.  PR
+state values are lowercase (`open' / `closed' / `merged'); rows
+with no associated PR get `-' rather than the legacy `none'
+placeholder so the column reads as `no PR' at a glance."
   (let* ((json-str (shell-command-to-string "decknix wt audit --json"))
          (report (json-parse-string json-str :object-type 'alist :array-type 'list :null-object nil :false-object nil))
          (pr-map (decknix-worktree-picker--get-pr-map))
+         (repo-filter (and (stringp decknix-worktree-picker--filter-repo)
+                           (not (string-empty-p decknix-worktree-picker--filter-repo))
+                           (downcase decknix-worktree-picker--filter-repo)))
+         (min-age (and (integerp decknix-worktree-picker--filter-min-age)
+                       (> decknix-worktree-picker--filter-min-age 0)
+                       decknix-worktree-picker--filter-min-age))
          (entries nil))
     (dolist (repo-report report)
       (let ((repo-key (cdr (assoc 'repo repo-report)))
@@ -102,18 +139,31 @@ listp')"
                  (active (cdr (assoc 'active wt)))
                  (merged (cdr (assoc 'merged wt)))
                  (age (cdr (assoc 'age_days wt)))
-                 (pr-state (gethash (cons repo-key branch) pr-map "none"))
-                 (closed (string= pr-state "CLOSED")))
+                 (pr-state (gethash (cons (and repo-key (downcase repo-key))
+                                          branch)
+                                    pr-map
+                                    "-"))
+                 (closed (string= pr-state "closed")))
 
-            ;; Filter logic
-            (when (or (and decknix-worktree-picker--filter-merged merged)
-                      (and decknix-worktree-picker--filter-closed closed)
-                      (and decknix-worktree-picker--filter-no-session (not active))
-                      (and decknix-worktree-picker--filter-dirty dirty)
-                      (and decknix-worktree-picker--filter-orphans orphan)
-                      ;; If no filters are active, show everything?
-                      ;; Actually, let's just show what matched the toggles.
-                      )
+            (when (and
+                   ;; Inclusion toggles (OR'd): show rows that match at
+                   ;; least one active toggle.  If every toggle is off
+                   ;; the picker is empty by design -- use the toggle
+                   ;; keys (`f M / C / S / D / O') to widen the view.
+                   (or (and decknix-worktree-picker--filter-merged merged)
+                       (and decknix-worktree-picker--filter-closed closed)
+                       (and decknix-worktree-picker--filter-no-session (not active))
+                       (and decknix-worktree-picker--filter-dirty dirty)
+                       (and decknix-worktree-picker--filter-orphans orphan))
+                   ;; Restriction filters (AND'd on top): repo substring
+                   ;; and minimum age in days.  Both are no-ops when
+                   ;; unset so existing toggle behaviour is preserved.
+                   (or (null repo-filter)
+                       (and (stringp repo-key)
+                            (string-match-p (regexp-quote repo-filter)
+                                            (downcase repo-key))))
+                   (or (null min-age)
+                       (and (integerp age) (>= age min-age))))
 
               (push (list (list repo-key branch abs-path) ;; ID
                           (vector
@@ -126,9 +176,10 @@ listp')"
                             (if orphan (propertize "⊘" 'face 'error) " "))
                            (propertize pr-state 'face
                                        (pcase pr-state
-                                         ("OPEN" 'font-lock-keyword-face)
+                                         ("open"   'font-lock-keyword-face)
                                          ("merged" 'font-lock-doc-face)
-                                         (_ 'font-lock-comment-face)))
+                                         ("closed" 'error)
+                                         (_        'font-lock-comment-face)))
                            (format "%dd" age)))
                     entries))))))
     (nreverse entries)))
@@ -146,9 +197,44 @@ listp')"
     (define-key map (kbd "f S") #'decknix-worktree-picker-toggle-session)
     (define-key map (kbd "f D") #'decknix-worktree-picker-toggle-dirty)
     (define-key map (kbd "f O") #'decknix-worktree-picker-toggle-orphans)
+    (define-key map (kbd "f r") #'decknix-worktree-picker-filter-repo)
+    (define-key map (kbd "f a") #'decknix-worktree-picker-filter-min-age)
+    (define-key map (kbd "f x") #'decknix-worktree-picker-clear-restrictions)
     (define-key map (kbd "g") #'revert-buffer)
     map)
   "Keymap for `decknix-worktree-picker-mode'.")
+
+(defun decknix-worktree-picker--header-line ()
+  "Render the persistent header-line documenting picker actions
+and reflecting active restriction filters.  Inclusion toggle
+state is intentionally not surfaced here -- toggles overlap and
+listing every state would crowd the line -- but every active
+restriction filter is shown so the user always knows why the
+view may look empty."
+  (let ((restrictions
+         (delq nil
+               (list
+                (and (stringp decknix-worktree-picker--filter-repo)
+                     (not (string-empty-p decknix-worktree-picker--filter-repo))
+                     (format "repo~%S" decknix-worktree-picker--filter-repo))
+                (and (integerp decknix-worktree-picker--filter-min-age)
+                     (> decknix-worktree-picker--filter-min-age 0)
+                     (format "age>=%dd"
+                             decknix-worktree-picker--filter-min-age))))))
+    (concat
+     (propertize " Worktree Picker " 'face '(:background "#3d5a80" :foreground "white"))
+     "  "
+     (propertize "m" 'face 'font-lock-keyword-face) " mark  "
+     (propertize "u" 'face 'font-lock-keyword-face) " unmark  "
+     (propertize "x" 'face 'font-lock-keyword-face) " prune  "
+     (propertize "g" 'face 'font-lock-keyword-face) " refresh  "
+     (propertize "f r" 'face 'font-lock-keyword-face) " repo  "
+     (propertize "f a" 'face 'font-lock-keyword-face) " age  "
+     (propertize "f x" 'face 'font-lock-keyword-face) " clear"
+     (when restrictions
+       (concat "   "
+               (propertize (concat "[" (mapconcat #'identity restrictions " ") "]")
+                           'face 'font-lock-doc-face))))))
 
 (define-derived-mode decknix-worktree-picker-mode tabulated-list-mode "Worktree Picker"
   "Major mode for selecting worktrees to clean up.
@@ -156,16 +242,21 @@ listp')"
 Mark worktrees with `m', unmark with `u'.
 Execute full sweep (branch/dir/metadata) on marked with `x' or `p'.
 Execute legacy removal (dir only) on marked with `X'.
-Toggle filters with `f M' (merged), `f C' (closed), `f S' (active session),
-`f D' (dirty), `f O' (orphans)."
-  (setq tabulated-list-format [("Repo" 20 t)
-                               ("Branch" 30 t)
+
+Inclusion toggles (combine with OR, decide which rows can appear):
+  `f M' merged   `f C' closed   `f S' inactive   `f D' dirty   `f O' orphans
+
+Restriction filters (combine with AND, narrow the inclusion set):
+  `f r' repo substring    `f a' minimum age (days)    `f x' clear restrictions"
+  (setq tabulated-list-format [("Repo" 40 t)
+                               ("Branch" 40 t)
                                ("S" 5 nil)
                                ("PR State" 10 t)
                                ("Age" 5 t)])
   (setq tabulated-list-padding 1)
   (setq tabulated-list-sort-key '("Repo" . nil))
   (setq tabulated-list-entries #'decknix-worktree-picker-list-entries)
+  (setq header-line-format '(:eval (decknix-worktree-picker--header-line)))
   (tabulated-list-init-header))
 
 (defun decknix-worktree-picker-mark ()
@@ -298,6 +389,37 @@ If PATHS is nil, runs a general sweep of all stale worktrees."
   "Toggle orphans filter."
   (interactive)
   (setq decknix-worktree-picker--filter-orphans (not decknix-worktree-picker--filter-orphans))
+  (revert-buffer))
+
+(defun decknix-worktree-picker-filter-repo (substring)
+  "Set the repo restriction to SUBSTRING (empty to clear).
+The match is case-insensitive against `OWNER/REPO'."
+  (interactive
+   (list (read-string
+          (format "Filter repo substring (current: %s): "
+                  (or decknix-worktree-picker--filter-repo "none"))
+          nil nil "")))
+  (setq decknix-worktree-picker--filter-repo
+        (and (stringp substring) (not (string-empty-p substring)) substring))
+  (revert-buffer))
+
+(defun decknix-worktree-picker-filter-min-age (days)
+  "Set the minimum age restriction to DAYS (0 to clear)."
+  (interactive
+   (list (read-number
+          (format "Minimum age in days (0 to clear; current: %s): "
+                  (or decknix-worktree-picker--filter-min-age 0))
+          (or decknix-worktree-picker--filter-min-age 0))))
+  (setq decknix-worktree-picker--filter-min-age
+        (and (integerp days) (> days 0) days))
+  (revert-buffer))
+
+(defun decknix-worktree-picker-clear-restrictions ()
+  "Clear both restriction filters (repo + minimum age).
+Inclusion toggles (`f M / C / S / D / O') are left untouched."
+  (interactive)
+  (setq decknix-worktree-picker--filter-repo nil
+        decknix-worktree-picker--filter-min-age nil)
   (revert-buffer))
 
 (defun decknix-worktree-picker ()
