@@ -227,5 +227,57 @@ only worktrees aged at least N days survive."
           (should (= (length entries) 1))
           (should (equal (nth 1 (car (car entries))) "old")))))))
 
+(ert-deftest decknix-worktree-picker--get-marked--returns-marked-ids ()
+  "After marking rows with `m', `--get-marked' returns the IDs of
+the tagged rows in document order.  Regression: the previous
+implementation called `tabulated-list-get-tag', which is not a
+real function in Emacs and raised `void-function' on `x'/`X'."
+  (let ((decknix--hub-worktree-cache (make-hash-table :test 'equal))
+        (decknix--hub-wip '((updated . "x") (repos . ()))))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_)
+                 (json-encode
+                  (list
+                   '((repo . "owner/repo") (primary . "/tmp/r") (stale . nil)
+                     (worktrees . (((branch . "a") (path . "/tmp/r/a")
+                                    (dirty . nil) (orphan . nil) (active . nil)
+                                    (merged . t) (age_days . 1))
+                                   ((branch . "b") (path . "/tmp/r/b")
+                                    (dirty . nil) (orphan . nil) (active . nil)
+                                    (merged . t) (age_days . 2))
+                                   ((branch . "c") (path . "/tmp/r/c")
+                                    (dirty . nil) (orphan . nil) (active . nil)
+                                    (merged . t) (age_days . 3))))))))))
+      (with-temp-buffer
+        (decknix-worktree-picker-mode)
+        (tabulated-list-print)
+        (goto-char (point-min))
+        ;; Mark rows 1 and 3, leave row 2 unmarked.
+        (decknix-worktree-picker-mark)   ; a (advances)
+        (forward-line 1)                 ; skip b
+        (decknix-worktree-picker-mark)   ; c
+        (let ((marked (decknix-worktree-picker--get-marked)))
+          (should (= (length marked) 2))
+          (should (equal (nth 1 (nth 0 marked)) "a"))
+          (should (equal (nth 1 (nth 1 marked)) "c")))))))
+
+(ert-deftest decknix-worktree-picker--get-marked--empty-when-none-marked ()
+  "With no rows tagged, `--get-marked' returns nil rather than
+collecting every row by accident."
+  (let ((decknix--hub-worktree-cache (make-hash-table :test 'equal))
+        (decknix--hub-wip '((updated . "x") (repos . ()))))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_)
+                 (json-encode
+                  (list
+                   '((repo . "owner/repo") (primary . "/tmp/r") (stale . nil)
+                     (worktrees . (((branch . "a") (path . "/tmp/r/a")
+                                    (dirty . nil) (orphan . nil) (active . nil)
+                                    (merged . t) (age_days . 1))))))))))
+      (with-temp-buffer
+        (decknix-worktree-picker-mode)
+        (tabulated-list-print)
+        (should (null (decknix-worktree-picker--get-marked)))))))
+
 (provide 'decknix-worktree-picker-test)
 ;;; decknix-worktree-picker-test.el ends here

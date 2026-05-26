@@ -19,8 +19,8 @@
 (require 'tabulated-list)
 (require 'transient)
 
-(declare-function tabulated-list-get-tag "tabulated-list")
 (declare-function tabulated-list-get-id "tabulated-list")
+(declare-function tabulated-list-get-entry "tabulated-list")
 (declare-function tabulated-list-put-tag "tabulated-list" (tag &optional advance))
 
 (defvar decknix--hub-wip)
@@ -278,13 +278,23 @@ Restriction filters (combine with AND, narrow the inclusion set):
       (tabulated-list-put-tag " ")
       (forward-line 1))))
 
+(defun decknix-worktree-picker--line-tag ()
+  "Return the tag character for the current line, or nil on a non-entry line.
+`tabulated-list-put-tag' writes the tag into the padding area at
+column 0; there is no upstream reader, so we inspect the leading
+char directly.  Lines that do not carry an entry (e.g. the
+trailing newline after the last row) return nil so callers can
+ignore them."
+  (when (tabulated-list-get-entry)
+    (char-to-string (char-after (line-beginning-position)))))
+
 (defun decknix-worktree-picker--get-marked ()
-  "Return list of marked item IDs."
+  "Return list of marked item IDs in document order."
   (let ((marked nil))
     (save-excursion
       (goto-char (point-min))
       (while (not (eobp))
-        (when (equal (tabulated-list-get-tag) "D")
+        (when (equal (decknix-worktree-picker--line-tag) "D")
           (push (tabulated-list-get-id) marked))
         (forward-line 1)))
     (nreverse marked)))
