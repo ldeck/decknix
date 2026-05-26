@@ -231,6 +231,11 @@ The largest module (~4400 lines). Key subsystems:
   `jq`, cached with 2-min TTL, pre-fetched on daemon start. Default view is
   **conversation-collapsed** (one row per conversation). `C-u C-c A s` expands
   to show all individual session snapshots.
+  In-picker action keys: `M-w` toggles the **workspace filter** (all workspaces
+  ↔ the workspace of the calling buffer); the active filter appears in the prompt
+  as `[~/path/to/ws]`. `C-k` kills the highlighted live session buffer(s);
+  `C-d` permanently deletes saved/previous sessions from disk and metadata.
+  `C-SPC` marks multiple candidates for batch `C-k`/`C-d`/`RET`.
 - **Conversation identity**: Derived by hashing `firstUserMessage` (SHA-256,
   truncated to 16 chars). Provides stable identity across resumed sessions (#78).
 - **Session creation** (`C-c A n`): Guided flow — workspace dir, name, tags.

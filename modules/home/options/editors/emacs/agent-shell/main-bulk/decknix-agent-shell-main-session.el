@@ -895,6 +895,24 @@ One of nil (open/resume — normal behaviour), `kill', or `delete'.
 Reset to nil at the start of each picker call.  Set by the C-k / C-d
 key bindings wired inside `decknix-agent-session-picker's setup hook.")
 
+(defvar decknix--session-picker-workspace-filter nil
+  "Workspace path to restrict the session picker's Saved/Previous sections.
+When nil (default) all workspaces are shown.  When set to a directory
+path string, only sessions whose recorded workspace is a prefix-match
+of (or equal to) this path are shown.  Toggled by M-w inside the
+picker; persists across re-opens so the filter survives the close-and-
+reopen cycle triggered by the toggle.")
+
+(defvar decknix--session-picker-current-ws nil
+  "Workspace of the buffer that invoked the session picker, or `default-directory'.
+Captured at `decknix-agent-session-picker' call time; used as the
+M-w cycle target so the filter snaps to the caller's context.")
+
+(defvar decknix--session-picker-reopen nil
+  "When non-nil, `decknix-agent-session-picker' re-invokes itself on exit.
+Set by the M-w workspace-filter toggle; cleared immediately before the
+recursive call so only one level of re-entry occurs.")
+
 (defvar decknix--session-source-live
   (list :name     "Live Sessions"
         :narrow   ?l
@@ -967,6 +985,24 @@ key bindings wired inside `decknix-agent-session-picker's setup hook.")
                              (not (member ck live-conv-keys))))
                          all)
                       all)))
+                 ;; Workspace filter: when set, only show sessions whose
+                 ;; recorded workspace path matches the filter (exact or prefix).
+                 (ws-filter decknix--session-picker-workspace-filter)
+                 (ws-filter-true (when ws-filter
+                                   (ignore-errors (file-truename ws-filter))))
+                 (sessions
+                  (if (null ws-filter-true) sessions
+                    (seq-filter
+                     (lambda (session)
+                       (let* ((first-msg (alist-get 'firstUserMessage session ""))
+                              (ck (decknix--agent-conversation-key first-msg))
+                              (ws (when ck
+                                    (decknix--agent-workspace-for-conv-key ck)))
+                              (ws-true (when ws
+                                         (ignore-errors (file-truename ws)))))
+                         (and ws-true
+                              (string-prefix-p ws-filter-true ws-true))))
+                     sessions)))
                  (ht (make-hash-table :test 'equal))
                  (ordered nil))
             (if decknix--session-picker-expand
@@ -1290,6 +1326,10 @@ Press RET to open the highlighted session.  Press C-SPC to mark
 candidates (multi-select) and RET to open all of them at once.
 
 In-picker action keys (work on the highlighted item or all C-SPC marks):
+  M-w  — Toggle workspace filter: cycles between all workspaces and the
+          workspace of the buffer that opened the picker.  The picker
+          closes and reopens immediately with the new scope; the filter
+          label appears in the prompt (e.g. \"[~/projects/foo]\").
   C-k  — Kill the live session buffer(s).  Prompts for confirmation.
           Non-live candidates are ignored.
   C-d  — Permanently delete saved/previous session(s) from disk and
@@ -1306,11 +1346,35 @@ With \\[universal-argument], shows all individual session snapshots."
   (setq decknix--session-picker-captured-selections nil)
   (setq decknix--session-picker-multi-mode nil)
   (setq decknix--session-picker-action nil)
+  (setq decknix--session-picker-reopen nil)
+  ;; Capture current workspace at invocation time as M-w cycle target.
+  ;; Use the buffer-local session workspace if available; fall back to
+  ;; default-directory.  Stored into decknix--session-picker-current-ws
+  ;; so the M-w handler can reference it even after focus moves to the
+  ;; minibuffer.
+  (setq decknix--session-picker-current-ws
+        (expand-file-name
+         (or (and (bound-and-true-p decknix--agent-session-workspace)
+                  (file-exists-p decknix--agent-session-workspace)
+                  decknix--agent-session-workspace)
+             default-directory)))
   (let ((setup-fn
          (lambda ()
            ;; Wire C-SPC → embark-select so the user can mark candidates.
            (when (fboundp 'embark-select)
              (local-set-key (kbd "C-SPC") 'embark-select))
+           ;; M-w: cycle workspace filter (all workspaces ↔ current workspace).
+           ;; Because consult--multi builds static candidate lists, we close
+           ;; the picker and reopen it; the filter persists via its defvar so
+           ;; re-entry immediately applies the new scope.
+           (local-set-key (kbd "M-w")
+             (lambda () (interactive)
+               (setq decknix--session-picker-workspace-filter
+                     (if decknix--session-picker-workspace-filter
+                         nil
+                       decknix--session-picker-current-ws))
+               (setq decknix--session-picker-reopen t)
+               (exit-minibuffer)))
            ;; Wire C-k → kill-action, C-d → delete-action.
            ;; Both set multi-mode (suppresses the normal :action lambdas)
            ;; and exit the minibuffer; the minibuffer-exit-hook below then
@@ -1353,23 +1417,35 @@ With \\[universal-argument], shows all individual session snapshots."
                             decknix--session-source-previous
                             decknix--session-source-saved
                             decknix--session-source-new)
-                      :prompt (format "Agent session%s (C-SPC mark; C-k kill, C-d delete): "
-                                      (if arg " (all snapshots)" ""))
+                      :prompt (format "Agent session%s%s (M-w ws; C-SPC mark; C-k kill, C-d delete): "
+                                      (if arg " (all snapshots)" "")
+                                      (if decknix--session-picker-workspace-filter
+                                          (format " [%s]"
+                                                  (abbreviate-file-name
+                                                   decknix--session-picker-workspace-filter))
+                                        ""))
                       :sort nil)))
-  ;; Multi-select / action-mode post-processing:
-  ;; When multi-mode is set (C-SPC multi-select, C-k kill, or C-d delete),
-  ;; the :action lambdas were suppressed (no-op) and we route every captured
-  ;; candidate through either the action handler or the normal dispatch.
-  (when decknix--session-picker-multi-mode
-    (setq decknix--session-picker-multi-mode nil)
-    (let ((sels decknix--session-picker-captured-selections)
-          (action decknix--session-picker-action))
-      (setq decknix--session-picker-captured-selections nil)
-      (setq decknix--session-picker-action nil)
-      (if action
-          (decknix--session-picker-do-action action sels)
-        (dolist (cand sels)
-          (decknix--session-picker-dispatch cand))))))
+  ;; Reopen after M-w workspace filter toggle: loop back into the picker
+  ;; with the new filter already set.  Capture the flag first, then clear
+  ;; it to prevent double-reopen if something goes wrong.
+  (let ((reopen decknix--session-picker-reopen))
+    (setq decknix--session-picker-reopen nil)
+    (if reopen
+        (decknix-agent-session-picker arg)
+      ;; Multi-select / action-mode post-processing:
+      ;; When multi-mode is set (C-SPC multi-select, C-k kill, or C-d delete),
+      ;; the :action lambdas were suppressed (no-op) and we route every captured
+      ;; candidate through either the action handler or the normal dispatch.
+      (when decknix--session-picker-multi-mode
+        (setq decknix--session-picker-multi-mode nil)
+        (let ((sels decknix--session-picker-captured-selections)
+              (action decknix--session-picker-action))
+          (setq decknix--session-picker-captured-selections nil)
+          (setq decknix--session-picker-action nil)
+          (if action
+              (decknix--session-picker-do-action action sels)
+            (dolist (cand sels)
+              (decknix--session-picker-dispatch cand))))))))
 
 ;; == Agent buffer switch: C-c b (in-buffer) / C-c A b (global) ==
 ;; Like C-x b but scoped to live agent-shell buffers only.
