@@ -15,6 +15,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'easymenu)
 (require 'json)
 (require 'tabulated-list)
 (require 'transient)
@@ -300,6 +301,69 @@ want to read it without expanding everything."
     (define-key map (kbd "g") #'revert-buffer)
     map)
   "Keymap for `decknix-worktree-picker-mode'.")
+
+;; Dired-style menu bar: four discoverable top-level menus so mouse
+;; users (and anyone trying to recall a verb they only used once)
+;; never have to read the docstring or the header-line legend to find
+;; the destructive `prune'/`remove' verbs or the filter toggles.
+
+(easy-menu-define decknix-worktree-picker-operate-menu
+  decknix-worktree-picker-mode-map
+  "Operate menu for `decknix-worktree-picker-mode'."
+  '("Operate"
+    ["Prune marked (full sweep)" decknix-worktree-picker-prune
+     :help "Remove branch refs, worktree dir and Git metadata for every marked row"]
+    ["Remove marked (directory only)" decknix-worktree-picker-remove
+     :help "Remove only the worktree directory; leave branch refs intact"]
+    "--"
+    ["Refresh list" revert-buffer
+     :help "Re-read the worktree audit and rebuild the picker"]))
+
+(easy-menu-define decknix-worktree-picker-mark-menu
+  decknix-worktree-picker-mode-map
+  "Mark menu for `decknix-worktree-picker-mode'."
+  '("Mark"
+    ["Mark this worktree"   decknix-worktree-picker-mark
+     :help "Tag the current row for the next Operate verb"]
+    ["Unmark this worktree" decknix-worktree-picker-unmark
+     :help "Clear the tag on the current row"]
+    ["Unmark all"           decknix-worktree-picker-unmark-all
+     :help "Clear every tag in the buffer"]))
+
+(easy-menu-define decknix-worktree-picker-filter-menu
+  decknix-worktree-picker-mode-map
+  "Filter menu for `decknix-worktree-picker-mode'."
+  '("Filter"
+    ("Inclusion (OR -- decide which rows can appear)"
+     ["Include merged"           decknix-worktree-picker-toggle-merged
+      :style toggle :selected decknix-worktree-picker--filter-merged]
+     ["Include closed/abandoned" decknix-worktree-picker-toggle-closed
+      :style toggle :selected decknix-worktree-picker--filter-closed]
+     ["Include inactive (no live session)"
+      decknix-worktree-picker-toggle-session
+      :style toggle :selected decknix-worktree-picker--filter-no-session]
+     ["Include dirty"            decknix-worktree-picker-toggle-dirty
+      :style toggle :selected decknix-worktree-picker--filter-dirty]
+     ["Include orphans"          decknix-worktree-picker-toggle-orphans
+      :style toggle :selected decknix-worktree-picker--filter-orphans])
+    "--"
+    ["By repo substring..."     decknix-worktree-picker-filter-repo
+     :help "Restrict rows to repos whose name matches a substring"]
+    ["By minimum age (days)..." decknix-worktree-picker-filter-min-age
+     :help "Restrict rows to worktrees at least N days old"]
+    ["Clear all restrictions"   decknix-worktree-picker-clear-restrictions
+     :help "Drop the repo-substring and minimum-age restrictions"]))
+
+(easy-menu-define decknix-worktree-picker-view-menu
+  decknix-worktree-picker-mode-map
+  "View menu for `decknix-worktree-picker-mode'."
+  '("View"
+    ["Fit all columns to widest value" decknix-worktree-picker-expand-all-columns
+     :help "Resize every column so its widest cell is visible"]
+    ["Fit column at point"             decknix-worktree-picker-expand-column-at-point
+     :help "Resize only the column under point"]
+    "--"
+    ["Refresh list" revert-buffer]))
 
 (defun decknix-worktree-picker--header-line ()
   "Render the persistent header-line documenting picker actions
