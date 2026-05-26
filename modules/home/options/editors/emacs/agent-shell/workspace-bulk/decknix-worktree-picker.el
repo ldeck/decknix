@@ -184,6 +184,101 @@ placeholder so the column reads as `no PR' at a glance."
                     entries))))))
     (nreverse entries)))
 
+(defun decknix-worktree-picker--age-sort (a b)
+  "Numeric sort predicate for the Age column.
+A and B are tabulated-list entries shaped as (ID VECTOR).  The
+age cell is formatted as \"Nd\"; lexicographic comparison places
+\"30d\" before \"3d\" (because \"0\" < \"d\"), which buries the
+genuinely-oldest worktrees in the middle of the list.  Parse the
+leading integer instead so the column reads as time-on-disk."
+  (< (string-to-number (aref (cadr a) 4))
+     (string-to-number (aref (cadr b) 4))))
+
+(defun decknix-worktree-picker--max-widths ()
+  "Return a list of max display widths per column in the rendered buffer.
+Walks the buffer via `tabulated-list-get-entry' so the result
+reflects exactly what is on screen (post-filter, post-sort) and
+avoids re-running the (potentially slow) audit shell command.
+Each column header acts as a width floor so short values never
+collapse the label below readable length."
+  (let* ((cols (length tabulated-list-format))
+         (widths (mapcar (lambda (spec) (string-width (nth 0 spec)))
+                         (append tabulated-list-format nil))))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((entry (tabulated-list-get-entry)))
+          (when (vectorp entry)
+            (dotimes (i cols)
+              (let ((cell (aref entry i)))
+                (when (stringp cell)
+                  (setf (nth i widths)
+                        (max (nth i widths) (string-width cell))))))))
+        (forward-line 1)))
+    widths))
+
+(defun decknix-worktree-picker--column-index-at-point ()
+  "Return the 0-based column index of point on the current row.
+Computed from `current-column' minus `tabulated-list-padding'
+and the cumulative column widths from `tabulated-list-format'.
+Falls back to the last column when point sits past the final
+column boundary (e.g. trailing whitespace)."
+  (let* ((col (- (current-column) (or tabulated-list-padding 0)))
+         (acc 0)
+         (found nil)
+         (last (1- (length tabulated-list-format))))
+    (when (< col 0) (setq found 0))
+    (cl-loop for i from 0 to last
+             until found
+             for w = (nth 1 (aref tabulated-list-format i))
+             do (cl-incf acc w)
+             (when (< col acc) (setq found i))
+             ;; One-space inter-column separator added by
+             ;; `tabulated-list-print-col'.
+             (cl-incf acc 1))
+    (or found last)))
+
+(defun decknix-worktree-picker--rebuild-format (index-width-alist)
+  "Return a fresh copy of `tabulated-list-format' with widths overridden.
+INDEX-WIDTH-ALIST is a list of (INDEX . WIDTH) pairs.  A fresh
+vector and fresh inner specs avoid mutating the shared literal
+created by `decknix-worktree-picker-mode' across buffers."
+  (let ((fmt (copy-sequence tabulated-list-format)))
+    (dotimes (i (length fmt))
+      (let ((spec (copy-sequence (aref fmt i)))
+            (override (cdr (assq i index-width-alist))))
+        (when override
+          (setf (nth 1 spec) override))
+        (aset fmt i spec)))
+    fmt))
+
+(defun decknix-worktree-picker-expand-all-columns ()
+  "Resize every column to fit its widest rendered value.
+The column header width acts as a floor.  Re-renders the buffer
+so the new widths take effect; cursor position is preserved by
+`tabulated-list-print's REMEMBER-POS argument."
+  (interactive)
+  (let* ((widths (decknix-worktree-picker--max-widths))
+         (alist (cl-loop for i from 0 below (length widths)
+                         collect (cons i (nth i widths)))))
+    (setq-local tabulated-list-format
+                (decknix-worktree-picker--rebuild-format alist)))
+  (tabulated-list-init-header)
+  (tabulated-list-print t))
+
+(defun decknix-worktree-picker-expand-column-at-point ()
+  "Resize only the column under point to fit its widest value.
+Useful when one branch name is much longer than the rest and you
+want to read it without expanding everything."
+  (interactive)
+  (let* ((idx (decknix-worktree-picker--column-index-at-point))
+         (widths (decknix-worktree-picker--max-widths)))
+    (setq-local tabulated-list-format
+                (decknix-worktree-picker--rebuild-format
+                 (list (cons idx (nth idx widths))))))
+  (tabulated-list-init-header)
+  (tabulated-list-print t))
+
 (defvar decknix-worktree-picker-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "m") #'decknix-worktree-picker-mark)
@@ -200,6 +295,8 @@ placeholder so the column reads as `no PR' at a glance."
     (define-key map (kbd "f r") #'decknix-worktree-picker-filter-repo)
     (define-key map (kbd "f a") #'decknix-worktree-picker-filter-min-age)
     (define-key map (kbd "f x") #'decknix-worktree-picker-clear-restrictions)
+    (define-key map (kbd "=") #'decknix-worktree-picker-expand-all-columns)
+    (define-key map (kbd "+") #'decknix-worktree-picker-expand-column-at-point)
     (define-key map (kbd "g") #'revert-buffer)
     map)
   "Keymap for `decknix-worktree-picker-mode'.")
@@ -230,7 +327,9 @@ view may look empty."
      (propertize "g" 'face 'font-lock-keyword-face) " refresh  "
      (propertize "f r" 'face 'font-lock-keyword-face) " repo  "
      (propertize "f a" 'face 'font-lock-keyword-face) " age  "
-     (propertize "f x" 'face 'font-lock-keyword-face) " clear"
+     (propertize "f x" 'face 'font-lock-keyword-face) " clear  "
+     (propertize "=" 'face 'font-lock-keyword-face) " fit-all  "
+     (propertize "+" 'face 'font-lock-keyword-face) " fit-col"
      (when restrictions
        (concat "   "
                (propertize (concat "[" (mapconcat #'identity restrictions " ") "]")
@@ -247,12 +346,20 @@ Inclusion toggles (combine with OR, decide which rows can appear):
   `f M' merged   `f C' closed   `f S' inactive   `f D' dirty   `f O' orphans
 
 Restriction filters (combine with AND, narrow the inclusion set):
-  `f r' repo substring    `f a' minimum age (days)    `f x' clear restrictions"
-  (setq tabulated-list-format [("Repo" 40 t)
-                               ("Branch" 40 t)
-                               ("S" 5 nil)
-                               ("PR State" 10 t)
-                               ("Age" 5 t)])
+  `f r' repo substring    `f a' minimum age (days)    `f x' clear restrictions
+
+Column widths:
+  `=' fit every column to its widest value    `+' fit only the column at point"
+  ;; A fresh format vector per buffer.  Mutating a shared literal in
+  ;; place (`tabulated-list-format' is buffer-local but each binding
+  ;; would point at the same backing vector) would leak width changes
+  ;; from one picker to every other picker.
+  (setq tabulated-list-format
+        (vector (list "Repo"     40 t)
+                (list "Branch"   40 t)
+                (list "S"         5 nil)
+                (list "PR State" 10 t)
+                (list "Age"       5 #'decknix-worktree-picker--age-sort)))
   (setq tabulated-list-padding 1)
   (setq tabulated-list-sort-key '("Repo" . nil))
   (setq tabulated-list-entries #'decknix-worktree-picker-list-entries)
