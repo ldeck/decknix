@@ -191,6 +191,8 @@
 (declare-function decknix--quit-pick-replacement
                   "decknix-agent-quickaction-window"
                   (mru-other-bufs visible-bufs))
+(declare-function decknix-picker-selections-coerce
+                  "decknix-picker-selections" (raw))
 
 ;; Carved-package state vars consumed by this file.  Their values
 ;; live in the carved modules; the defvar below keeps the byte-
@@ -1196,12 +1198,18 @@ With \\[universal-argument], shows all individual session snapshots."
              (local-set-key (kbd "C-SPC") 'embark-select))
            ;; Capture embark selections BEFORE completing-read unwinds;
            ;; `embark-selected-candidates' is minibuffer-local so it
-           ;; disappears as soon as the minibuffer exits.
+           ;; disappears as soon as the minibuffer exits.  Embark
+           ;; returns `(TYPE . CANDS)' (the leading symbol is the
+           ;; multi-category type), not a flat candidate list -- the
+           ;; coerce helper strips it so the dispatch loop below
+           ;; doesn't feed the type symbol to `gethash' (which would
+           ;; silently no-op and make RET appear to do nothing).
            (add-hook 'minibuffer-exit-hook
              (lambda ()
                (when (fboundp 'embark-selected-candidates)
-                 (let ((sels (embark-selected-candidates)))
-                   (when (> (length sels) 0)
+                 (let ((sels (decknix-picker-selections-coerce
+                              (embark-selected-candidates))))
+                   (when sels
                      (setq decknix--session-picker-multi-mode t)
                      (setq decknix--session-picker-captured-selections sels)))))
              nil t))))
