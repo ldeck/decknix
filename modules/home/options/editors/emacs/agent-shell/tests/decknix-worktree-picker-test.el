@@ -279,5 +279,109 @@ collecting every row by accident."
         (tabulated-list-print)
         (should (null (decknix-worktree-picker--get-marked)))))))
 
+(ert-deftest decknix-worktree-picker--age-sort--numeric-order ()
+  "Age column must sort by the leading integer, not by string
+comparison.  Lexicographically \"30d\" < \"3d\" (because \"0\" <
+\"d\"), which buries the genuinely-oldest rows in the middle of
+the list -- the opposite of what the user expects when sorting
+worktrees by age."
+  (let ((entries (list (list 'id1 (vector "r" "b1" "" "-" "30d"))
+                       (list 'id2 (vector "r" "b2" "" "-" "3d"))
+                       (list 'id3 (vector "r" "b3" "" "-" "5d")))))
+    (let ((sorted (sort (copy-sequence entries)
+                        #'decknix-worktree-picker--age-sort)))
+      (should (equal (aref (cadr (nth 0 sorted)) 4) "3d"))
+      (should (equal (aref (cadr (nth 1 sorted)) 4) "5d"))
+      (should (equal (aref (cadr (nth 2 sorted)) 4) "30d")))))
+
+(ert-deftest decknix-worktree-picker--max-widths--from-rendered-buffer ()
+  "`--max-widths' must walk the printed buffer (not re-fetch the
+audit JSON) and return the max display width per column, with
+the column header acting as a floor so very narrow values do
+not collapse the header label."
+  (let ((decknix--hub-worktree-cache (make-hash-table :test 'equal))
+        (decknix--hub-wip '((updated . "x") (repos . ()))))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_)
+                 (json-encode
+                  (list
+                   '((repo . "owner/very-long-repo-name")
+                     (primary . "/tmp/r") (stale . nil)
+                     (worktrees . (((branch . "feat/much-longer-branch-than-the-default")
+                                    (path . "/tmp/r/x") (dirty . nil)
+                                    (orphan . nil) (active . nil)
+                                    (merged . t) (age_days . 100))))))))))
+      (with-temp-buffer
+        (decknix-worktree-picker-mode)
+        (tabulated-list-print)
+        (let ((widths (decknix-worktree-picker--max-widths)))
+          (should (>= (nth 0 widths) (length "owner/very-long-repo-name")))
+          (should (>= (nth 1 widths)
+                      (length "feat/much-longer-branch-than-the-default")))
+          ;; Header floor: PR State header is wider than "-".
+          (should (>= (nth 3 widths) (length "PR State")))
+          (should (>= (nth 4 widths) (length "100d"))))))))
+
+(ert-deftest decknix-worktree-picker-expand-all-columns--resizes-format ()
+  "`expand-all-columns' must rewrite `tabulated-list-format' so
+each column's width equals its widest rendered cell (or column
+header, whichever is wider).  Mutating the literal vector
+in-place would leak across buffers, so the new format must be a
+fresh structure (`eq' to neither the original vector nor its
+inner specs)."
+  (let ((decknix--hub-worktree-cache (make-hash-table :test 'equal))
+        (decknix--hub-wip '((updated . "x") (repos . ()))))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_)
+                 (json-encode
+                  (list
+                   '((repo . "owner/very-long-repo-name")
+                     (primary . "/tmp/r") (stale . nil)
+                     (worktrees . (((branch . "feat/much-longer-branch")
+                                    (path . "/tmp/r/x") (dirty . nil)
+                                    (orphan . nil) (active . nil)
+                                    (merged . t) (age_days . 100))))))))))
+      (with-temp-buffer
+        (decknix-worktree-picker-mode)
+        (tabulated-list-print)
+        (let ((original tabulated-list-format))
+          (decknix-worktree-picker-expand-all-columns)
+          (should-not (eq tabulated-list-format original))
+          (should (>= (nth 1 (aref tabulated-list-format 0))
+                      (length "owner/very-long-repo-name")))
+          (should (>= (nth 1 (aref tabulated-list-format 1))
+                      (length "feat/much-longer-branch")))
+          (should (>= (nth 1 (aref tabulated-list-format 4))
+                      (length "100d"))))))))
+
+(ert-deftest decknix-worktree-picker-expand-column-at-point--resizes-one ()
+  "`expand-column-at-point' must widen only the column at point
+and leave the others untouched.  Without this, the user would
+have to expand everything just to read one long branch name."
+  (let ((decknix--hub-worktree-cache (make-hash-table :test 'equal))
+        (decknix--hub-wip '((updated . "x") (repos . ()))))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_)
+                 (json-encode
+                  (list
+                   '((repo . "owner/very-long-repo-name")
+                     (primary . "/tmp/r") (stale . nil)
+                     (worktrees . (((branch . "short")
+                                    (path . "/tmp/r/x") (dirty . nil)
+                                    (orphan . nil) (active . nil)
+                                    (merged . t) (age_days . 1))))))))))
+      (with-temp-buffer
+        (decknix-worktree-picker-mode)
+        (tabulated-list-print)
+        (goto-char (point-min))
+        ;; Position into the first column (Repo, after padding).
+        (forward-char (1+ (or tabulated-list-padding 0)))
+        (let ((orig-branch-w (nth 1 (aref tabulated-list-format 1))))
+          (decknix-worktree-picker-expand-column-at-point)
+          (should (>= (nth 1 (aref tabulated-list-format 0))
+                      (length "owner/very-long-repo-name")))
+          (should (= (nth 1 (aref tabulated-list-format 1))
+                     orig-branch-w)))))))
+
 (provide 'decknix-worktree-picker-test)
 ;;; decknix-worktree-picker-test.el ends here
