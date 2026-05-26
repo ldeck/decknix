@@ -4749,7 +4749,7 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
         ;; because the displacement-based check can misfire when `_string'
         ;; is shorter than the actual content inserted by other code paths.
         (defvar decknix--agent-scroll-windows-at-bottom nil
-          \"Windows that were at point-max immediately before the last output.\")
+          "Windows that were at point-max immediately before the last output.")
         (advice-add 'shell-maker--output-filter :before
                     (lambda (_process _string)
                       (when (derived-mode-p 'agent-shell-shell-mode)
@@ -4758,7 +4758,7 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
                           (setq-local decknix--agent-scroll-windows-at-bottom
                                 (cl-remove-if-not
                                  (lambda (win)
-                                   ;; \"At bottom\" = window-point within
+                                   ;; "At bottom" = window-point within
                                    ;; 500 chars of the current end.
                                    (>= (window-point win) (- pm 500)))
                                  (get-buffer-window-list buf nil t)))))))
