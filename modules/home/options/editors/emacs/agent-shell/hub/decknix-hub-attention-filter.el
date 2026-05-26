@@ -31,6 +31,7 @@
 ;;   `decknix--hub-requests-hide-bot-pending'   bound t    (toggle `b')
 ;;   `decknix--hub-requests-only-my-replies'    bound nil  (toggle `M')
 ;;   `decknix--hub-requests-hide-reviewed'      bound t    (toggle `v')
+;;   `decknix--hub-requests-hide-conflict'      bound t    (toggle `X')
 ;;   `decknix--hub-requests-sort-reverse'       bound nil  (toggle `s')
 ;;   `decknix--hub-wip-hide-needs-reply'        bound nil  (toggle `n')
 ;;   `decknix--hub-wip-hide-bot-pending'        bound nil  (toggle `u')
@@ -52,6 +53,7 @@
 ;;   `decknix--hub-toggle-requests-hide-bot-pending'   (`b')
 ;;   `decknix--hub-toggle-requests-only-my-replies'    (`M')
 ;;   `decknix--hub-toggle-requests-hide-reviewed'      (`v')
+;;   `decknix--hub-toggle-requests-hide-conflict'      (`X')
 ;;   `decknix--hub-toggle-requests-sort-reverse'       (`s')
 ;;   `decknix--hub-toggle-wip-hide-needs-reply'        (`n')
 ;;   `decknix--hub-toggle-wip-hide-bot-pending'        (`u')
@@ -95,6 +97,15 @@ and the author has not re-requested my review (mentioned = nil); OR (b) the
 aggregate `review_decision' is APPROVED or CHANGES_REQUESTED (a colleague has
 already approved or blocked the PR).  When the author re-requests my review
 (mentioned = t), the PR reappears regardless.  Toggle with `v'.")
+
+(defvar decknix--hub-requests-hide-conflict t
+  "When non-nil (default), hide Requests PRs with a merge conflict.
+Merge-conflicting PRs (GitHub `mergeable = CONFLICTING') cannot be
+landed without a rebase or merge-commit; reviewing them is premature
+because the code will change after the conflict is resolved.  Hiding
+them by default keeps the list focused on PRs that are actually
+review-ready.  Toggle with `X' in the Requests section of the Toggles
+transient.")
 
 (defvar decknix--hub-requests-sort-reverse nil
   "When nil (default), Requests are sorted oldest-first.
@@ -188,6 +199,15 @@ When the author re-requests my review (`mentioned' = t), always shows."
         (not (or (member my-review '("APPROVED" "CHANGES_REQUESTED"))
                  (member review-decision '("APPROVED" "CHANGES_REQUESTED")))))))
 
+(defun decknix--hub-requests-conflict-visible-p (item)
+  "Return non-nil if ITEM passes the conflict filter.
+When `decknix--hub-requests-hide-conflict' is non-nil (default), hides
+PRs whose `mergeable' field is \"CONFLICTING\" (GitHub's merge-conflict
+marker).  A nil mergeable field (e.g. unknown/queued) is treated as
+non-conflicting so new PRs are not inadvertently suppressed."
+  (or (not decknix--hub-requests-hide-conflict)
+      (not (equal (alist-get 'mergeable item) "CONFLICTING"))))
+
 (defun decknix--hub-wip-attention-visible-p (pr)
   "Return non-nil if PR passes the WIP attention filters."
   (decknix--hub-attention-visible-p
@@ -233,6 +253,13 @@ When the author re-requests my review (`mentioned' = t), always shows."
   (decknix--hub-toggle-and-refresh
    'decknix--hub-requests-hide-reviewed
    "Requests reviewed filter: %s"))
+
+(defun decknix--hub-toggle-requests-hide-conflict ()
+  "Toggle hiding Requests PRs with a merge conflict (⚠ glyph)."
+  (interactive)
+  (decknix--hub-toggle-and-refresh
+   'decknix--hub-requests-hide-conflict
+   "Requests ⚠ conflict filter: %s"))
 
 (defun decknix--hub-toggle-requests-sort-reverse ()
   "Toggle Requests sort direction (oldest↔newest) in the sidebar.

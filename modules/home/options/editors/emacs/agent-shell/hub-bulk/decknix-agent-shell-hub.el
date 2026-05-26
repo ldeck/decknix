@@ -138,6 +138,7 @@
 (defvar decknix--hub-requests-hide-needs-reply)
 (defvar decknix--hub-requests-hide-bot-pending)
 (defvar decknix--hub-requests-only-my-replies)
+(defvar decknix--hub-requests-hide-conflict)
 (defvar decknix--hub-requests-sort-reverse)
 (defvar decknix--hub-wip-hide-needs-reply)
 (defvar decknix--hub-wip-hide-bot-pending)
@@ -506,6 +507,20 @@ picker's dynamic binding unwinds.")
   :transient t
   (interactive)
   (call-interactively #'decknix--hub-toggle-requests-hide-reviewed))
+
+(transient-define-suffix decknix-sidebar-transient--req-conflict ()
+  :key "X"
+  :description
+  (lambda ()
+    (format "⚠ conflict    %s"
+            (propertize
+             (if decknix--hub-requests-hide-conflict "[hide]" "[show]")
+             'face (if decknix--hub-requests-hide-conflict
+                       'font-lock-constant-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix--hub-toggle-requests-hide-conflict))
 
 (transient-define-suffix decknix-sidebar-transient--req-sort ()
   :key "s"
@@ -2498,7 +2513,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                            (decknix--hub-mention-visible-p item)
                            (decknix--hub-bot-visible-p item)
                            (decknix--hub-requests-attention-visible-p item)
-                           (decknix--hub-requests-reviewed-visible-p item)))
+                           (decknix--hub-requests-reviewed-visible-p item)
+                           (decknix--hub-requests-conflict-visible-p item)))
                     (or all-items '())))
          (items (decknix--hub-sort-requests filtered)))
     (when items

@@ -29,6 +29,7 @@
 (ert-deftest decknix-hub-attention-filter--defaults ()
   "Documented default values match the constants at module load."
   (should     decknix--hub-requests-hide-bot-pending)   ; default ON
+  (should     decknix--hub-requests-hide-conflict)      ; default ON
   (should-not decknix--hub-requests-hide-needs-reply)
   (should-not decknix--hub-requests-only-my-replies)
   (should-not decknix--hub-requests-sort-reverse)
@@ -142,6 +143,43 @@
   (let ((decknix--hub-wip-only-my-replies nil))
     (call-interactively #'decknix--hub-toggle-wip-only-my-replies)
     (should decknix--hub-wip-only-my-replies)))
+
+;; -- conflict filter ----------------------------------------------
+
+(ert-deftest decknix-hub-attention-filter--conflict-default-is-on ()
+  "decknix--hub-requests-hide-conflict defaults to t (hide conflicts)."
+  (should decknix--hub-requests-hide-conflict))
+
+(ert-deftest decknix-hub-attention-filter--conflict-hides-conflicting ()
+  "Conflict filter hides items with mergeable = CONFLICTING when on."
+  (let ((item '((mergeable . "CONFLICTING")))
+        (decknix--hub-requests-hide-conflict t))
+    (should-not (decknix--hub-requests-conflict-visible-p item))))
+
+(ert-deftest decknix-hub-attention-filter--conflict-shows-non-conflicting ()
+  "Conflict filter passes items that are not CONFLICTING."
+  (let ((mergeable-item '((mergeable . "MERGEABLE")))
+        (nil-item       '((mergeable . nil)))
+        (absent-item    '())
+        (decknix--hub-requests-hide-conflict t))
+    (should (decknix--hub-requests-conflict-visible-p mergeable-item))
+    (should (decknix--hub-requests-conflict-visible-p nil-item))
+    (should (decknix--hub-requests-conflict-visible-p absent-item))))
+
+(ert-deftest decknix-hub-attention-filter--conflict-filter-off-shows-all ()
+  "When the conflict filter is off, CONFLICTING items are visible."
+  (let ((item '((mergeable . "CONFLICTING")))
+        (decknix--hub-requests-hide-conflict nil))
+    (should (decknix--hub-requests-conflict-visible-p item))))
+
+(ert-deftest decknix-hub-attention-filter--conflict-toggle-flips-state ()
+  "Interactive toggle flips decknix--hub-requests-hide-conflict."
+  (let ((decknix--hub-requests-hide-conflict nil))
+    (call-interactively #'decknix--hub-toggle-requests-hide-conflict)
+    (should decknix--hub-requests-hide-conflict))
+  (let ((decknix--hub-requests-hide-conflict t))
+    (call-interactively #'decknix--hub-toggle-requests-hide-conflict)
+    (should-not decknix--hub-requests-hide-conflict)))
 
 (provide 'decknix-hub-attention-filter-test)
 ;;; decknix-hub-attention-filter-test.el ends here

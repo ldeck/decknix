@@ -526,7 +526,10 @@ The `decknix--context-update-header` function delegates to the unified header
     someone else), `M` ↩ replies-to-me (show only PRs where a human
     replied in a thread I participated in), `s` sort ⇅ (flip
     oldest→newest; picker honours the same flag, `M-s` inside a picker
-    flips it ephemerally)
+    flips it ephemerally), `X` ⚠ conflict (hide PRs with a merge
+    conflict — `mergeable = CONFLICTING` — default on; conflicting PRs
+    need a rebase before reviewing makes sense, so they're hidden until
+    the conflict is resolved)
   - **Live**: `d` display mode, `H` hidden, `S` quick-switch,
     `N` repo-name cap (short/medium/full),
     `E` PRs (4-way cycle: off/PR/pipeline/both),
