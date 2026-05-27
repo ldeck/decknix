@@ -743,7 +743,10 @@ display label (case-insensitive) to match the sidebar footer,
 which advertises toggles by label only (no keys)."
   :transient-suffix 'transient--do-stay
   ["Global"
+   (decknix-sidebar-transient--hub-display-mode) ;; Layout
    (decknix-sidebar-transient--org-filter)       ;; Org filter
+   (decknix-sidebar-transient--saved-sessions-toggle) ;; Saved Sessions
+   (decknix-sidebar-transient--show-keys)        ;; show keys
    (decknix-sidebar-transient--width)]           ;; Width
   ["Requests"
    ;; Order matches the sidebar footer: alphabetical text labels

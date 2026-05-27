@@ -508,6 +508,24 @@ picker's dynamic binding unwinds.")
   (interactive)
   (call-interactively #'decknix--hub-toggle-requests-hide-reviewed))
 
+(transient-define-suffix decknix-sidebar-transient--hub-display-mode ()
+  :key "D"
+  :description
+  (lambda ()
+    (let ((mode (bound-and-true-p decknix--hub-display-mode)))
+      (format "Layout        %s"
+              (propertize
+               (pcase mode
+                 ('A "[A] full")
+                 ('B "[B] scoped")
+                 ('C "[C] label")
+                 ('D "[D] minimal")
+                 (_  "[A] full"))
+               'face 'font-lock-constant-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-sidebar-toggle-hub-display-mode))
+
 (transient-define-suffix decknix-sidebar-transient--req-conflict ()
   :key "X"
   :description
@@ -2101,34 +2119,50 @@ the state word since every downstream signal is moot."
     (let* ((wt-badge (decknix--hub-worktree-row-badge
                       repo-full branch))
            (primary-icon (decknix--hub-primary-status-icon status 'wip))
-           (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
-                     (let* ((phase (pcase state
-                                     ("OPEN" (if draft "[draft]" "[open]"))
-                                     ("DRAFT" "[draft]")
-                                     ("MERGED" "[merged]")
-                                     ("CLOSED" "[closed]")
-                                     (_ "[?]")))
-                            (phase-str (propertize phase 'face 'font-lock-comment-face))
-                            (max-title (max 8 (- (window-width) 14)))
-                            (title-str (if (> (length title) max-title)
-                                           (concat (substring title 0 (- max-title 1)) "…")
-                                         title)))
-                       (format "%s  %s %s%s %s" primary-icon phase-str type-prefix num-str title-str))
-                   (if grouped
-                       (format "  %s%s%s%s %s %s%s"
-                               wt-badge
-                               refresh-str
-                               type-prefix num-str
-                               age-str
-                               state-word
-                               signal-zone)
-                     (format "%s%s%s%s%s %s %s%s"
-                             wt-badge
-                             refresh-str
-                             type-prefix repo-label num-str
-                             age-str
-                             state-word
-                             signal-zone)))))
+           (line (pcase (bound-and-true-p decknix--hub-display-mode)
+                     ('D ;; Minimal
+                      (let* ((phase (pcase state
+                                      ("OPEN" (if draft "[draft]" "[open]"))
+                                      ("DRAFT" "[draft]")
+                                      ("MERGED" "[ship]")
+                                      ("CLOSED" "[closed]")
+                                      (_ "[?]")))
+                             (phase-str (propertize phase 'face 'font-lock-comment-face))
+                             (max-title (max 8 (- (window-width) 14)))
+                             (title-str (if (> (length title) max-title)
+                                            (concat (substring title 0 (- max-title 1)) "…")
+                                          title)))
+                        (format "%s  %s %s%s %s" primary-icon phase-str type-prefix num-str title-str)))
+                     ('C ;; Label
+                      (let* ((label (decknix--hub-format-row-label status))
+                             (label-str (propertize label 'face 'font-lock-comment-face))
+                             (max-title (max 8 (- (window-width) 20)))
+                             (title-str (if (> (length title) max-title)
+                                            (concat (substring title 0 (- max-title 1)) "…")
+                                          title)))
+                        (format "%s %-16s %s%s %s" primary-icon label-str type-prefix num-str title-str)))
+                     ('B ;; Scoped
+                      (format "%s%s %s%s %s"
+                              wt-badge
+                              primary-icon
+                              type-prefix num-str
+                              title))
+                     (_ ;; A (Full)
+                      (if grouped
+                          (format "  %s%s%s%s %s %s%s"
+                                  wt-badge
+                                  refresh-str
+                                  type-prefix num-str
+                                  age-str
+                                  state-word
+                                  signal-zone)
+                        (format "%s%s%s%s%s %s %s%s"
+                                wt-badge
+                                refresh-str
+                                type-prefix repo-label num-str
+                                age-str
+                                state-word
+                                signal-zone))))))
       (propertize line
                   'decknix-hub-type 'linked-pr
                   'decknix-hub-url url
@@ -2608,24 +2642,41 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                ;; `  ' — enough to flag missing local clones).
                (wt-badge (decknix--hub-worktree-row-badge
                           repo-full nil))
-               (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
-                         (let* ((phase-str (propertize "[open]" 'face 'font-lock-comment-face))
-                                (max-title (max 8 (- (window-width) 14)))
-                                (short-title (if (> (length title) max-title)
-                                                 (concat (substring title 0 (- max-title 1)) "…")
-                                               title)))
-                           (format "%s  %s %s%s %s"
-                                   primary-icon phase-str
-                                   mention-str reply-str short-title))
-                       (format "%s%3s %s#%d %s %s"
-                               wt-badge
-                               (propertize age 'face age-face)
-                               (propertize (or repo "") 'face 'font-lock-type-face)
-                               number
-                               status-str
-                               (if draft
-                                   (propertize short-title 'face 'font-lock-comment-face)
-                                 short-title)))))
+               (line (pcase (bound-and-true-p decknix--hub-display-mode)
+                         ('D ;; Minimal
+                          (let* ((phase-str (propertize "[open]" 'face 'font-lock-comment-face))
+                                 (max-title (max 8 (- (window-width) 14)))
+                                 (short-title (if (> (length title) max-title)
+                                                  (concat (substring title 0 (- max-title 1)) "…")
+                                                title)))
+                            (format "%s  %s %s%s %s"
+                                    primary-icon phase-str
+                                    mention-str reply-str short-title)))
+                         ('C ;; Label
+                          (let* ((label (decknix--hub-format-row-label item))
+                                 (label-str (propertize label 'face 'font-lock-comment-face))
+                                 (max-title (max 8 (- (window-width) 20)))
+                                 (short-title (if (> (length title) max-title)
+                                                  (concat (substring title 0 (- max-title 1)) "…")
+                                                title)))
+                            (format "%s %-16s %s"
+                                    primary-icon label-str
+                                    (if draft (propertize short-title 'face 'font-lock-comment-face) short-title))))
+                         ('B ;; Scoped
+                          (format "%s %s%s %s"
+                                  primary-icon
+                                  mention-str reply-str
+                                  (if draft (propertize short-title 'face 'font-lock-comment-face) short-title)))
+                         (_ ;; A (Full)
+                          (format "%s%3s %s#%d %s %s"
+                                  wt-badge
+                                  (propertize age 'face age-face)
+                                  (propertize (or repo "") 'face 'font-lock-type-face)
+                                  number
+                                  status-str
+                                  (if draft
+                                      (propertize short-title 'face 'font-lock-comment-face)
+                                    short-title))))))
           ;; Tint the row yellow when a live session is already
           ;; reviewing this PR (composes with per-column faces).
           (decknix--hub-request-tint-active line item)
@@ -2741,24 +2792,43 @@ primary action is a no-op until a PR materialises."
                 "?"))
          (wt-badge (decknix--hub-worktree-row-badge repo-full branch))
          (primary-icon (decknix--hub-primary-status-icon '() 'placeholder))
-         (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
-                   (let* ((phase-str (propertize "[wip]" 'face 'font-lock-comment-face))
-                          (max-title (max 8 (- (window-width) 14)))
-                          (short-branch (if (> (length branch) max-title)
-                                            (concat (substring branch 0 (- max-title 1)) "…")
-                                          branch)))
-                     (format "%s  %s %s" primary-icon phase-str short-branch))
-                 (let* ((max-title (max 8 (- (window-width) 14)))
-                        (short-branch (if (> (length branch) max-title)
-                                          (concat (substring branch 0 (- max-title 1)) "…")
-                                        branch)))
-                   (format "%s%s%3s %-4s %s"
-                           wt-badge
-                           primary-icon
-                           (propertize age 'face 'font-lock-comment-face)
-                           (propertize "wip" 'face 'font-lock-comment-face)
-                           (propertize short-branch
-                                       'face 'font-lock-comment-face))))))
+         (line (pcase (bound-and-true-p decknix--hub-display-mode)
+                   ('D ;; Minimal
+                    (let* ((phase-str (propertize "[wip]" 'face 'font-lock-comment-face))
+                           (max-title (max 8 (- (window-width) 14)))
+                           (short-branch (if (> (length branch) max-title)
+                                             (concat (substring branch 0 (- max-title 1)) "…")
+                                           branch)))
+                      (format "%s  %s %s" primary-icon phase-str short-branch)))
+                   ('C ;; Label
+                    (let* ((label-str (propertize "local branch" 'face 'font-lock-comment-face))
+                           (max-title (max 8 (- (window-width) 20)))
+                           (short-branch (if (> (length branch) max-title)
+                                             (concat (substring branch 0 (- max-title 1)) "…")
+                                           branch)))
+                      (format "%s %-16s %s" primary-icon label-str
+                              (propertize short-branch 'face 'font-lock-comment-face))))
+                   ('B ;; Scoped
+                    (let* ((max-title (max 8 (- (window-width) 14)))
+                           (short-branch (if (> (length branch) max-title)
+                                             (concat (substring branch 0 (- max-title 1)) "…")
+                                           branch)))
+                      (format "%s%s %-4s %s"
+                              wt-badge
+                              primary-icon
+                              (propertize "wip" 'face 'font-lock-comment-face)
+                              (propertize short-branch 'face 'font-lock-comment-face))))
+                   (_ ;; A (Full)
+                    (let* ((max-title (max 8 (- (window-width) 14)))
+                           (short-branch (if (> (length branch) max-title)
+                                             (concat (substring branch 0 (- max-title 1)) "…")
+                                           branch)))
+                      (format "%s%s%3s %-4s %s"
+                              wt-badge
+                              primary-icon
+                              (propertize age 'face 'font-lock-comment-face)
+                              (propertize "wip" 'face 'font-lock-comment-face)
+                              (propertize short-branch 'face 'font-lock-comment-face)))))))
     (insert (propertize line
                         'decknix-hub-type 'wip-placeholder
                         'decknix-hub-repo repo-full
@@ -2935,33 +3005,42 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
                      ;; `↓ ' as defined in spec §3.6.3.
                      (wt-badge (decknix--hub-worktree-row-badge
                                 repo-full branch))
-                     (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
-                               (let* (;; Phase label maps the mockup shape-family legend:
-                                      ;;   ★  draft  → [draft]
-                                      ;;   ◐● open   → [open]
-                                      ;;   ▣  merged/ship → [ship]
-                                      ;;   ●  closed  → [closed]
-                                      (phase (cond
-                                              (merged-p "[ship]")
-                                              (closed-p "[closed]")
-                                              ((eq (alist-get 'draft pr) t) "[draft]")
-                                              (t "[open]")))
-                                      (phase-str (propertize phase 'face 'font-lock-comment-face))
-                                      (max-title (max 8 (- (window-width) 14)))
-                                      (short-title (if (> (length title) max-title)
-                                                       (concat (substring title 0 (- max-title 1)) "…")
-                                                     title)))
-                                 (format "%s  %s %s" primary-icon phase-str short-title))
-                             (format "%s%s%3s #%d %s %s"
-                                     wt-badge
-                                     primary-icon
-                                     (propertize age 'face 'font-lock-comment-face)
-                                     number
-                                     ci-str
-                                     (if title-face
-                                         (propertize short-title
-                                                    'face title-face)
-                                       short-title)))))
+                     (line (pcase (bound-and-true-p decknix--hub-display-mode)
+                               ('D ;; Minimal
+                                (let* ((phase (cond (merged-p "[ship]")
+                                                    (closed-p "[closed]")
+                                                    (draft "[draft]")
+                                                    (t "[open]")))
+                                       (phase-str (propertize phase 'face 'font-lock-comment-face))
+                                       (max-title (max 8 (- (window-width) 14)))
+                                       (short-title (if (> (length title) max-title)
+                                                        (concat (substring title 0 (- max-title 1)) "…")
+                                                      title)))
+                                  (format "%s  %s %s" primary-icon phase-str
+                                          (if title-face (propertize short-title 'face title-face) short-title))))
+                               ('C ;; Label
+                                (let* ((label (decknix--hub-format-row-label pr tc-build))
+                                       (label-str (propertize label 'face 'font-lock-comment-face))
+                                       (max-title (max 8 (- (window-width) 20)))
+                                       (short-title (if (> (length title) max-title)
+                                                        (concat (substring title 0 (- max-title 1)) "…")
+                                                      title)))
+                                  (format "%s %-16s %s" primary-icon label-str
+                                          (if title-face (propertize short-title 'face title-face) short-title))))
+                               ('B ;; Scoped
+                                (format "%s%s %s %s"
+                                        wt-badge
+                                        primary-icon
+                                        ci-str
+                                        (if title-face (propertize short-title 'face title-face) short-title)))
+                               (_ ;; A (Full)
+                                (format "%s%s%3s #%d %s %s"
+                                        wt-badge
+                                        primary-icon
+                                        (propertize age 'face 'font-lock-comment-face)
+                                        number
+                                        ci-str
+                                        (if title-face (propertize short-title 'face title-face) short-title))))))
                 (insert (propertize line
                                    'decknix-hub-url url
                                    'decknix-hub-type 'wip

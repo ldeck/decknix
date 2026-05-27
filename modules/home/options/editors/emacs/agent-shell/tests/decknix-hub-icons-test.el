@@ -273,4 +273,31 @@
                     (decknix--hub-primary-status-icon item 'wip))
                    "■"))))
 
+;; -- format-row-label ----------------------------------------------
+
+(ert-deftest decknix-hub-icons/format-row-label-merged ()
+  (should (equal (decknix--hub-format-row-label '((state . "MERGED"))) "merged")))
+
+(ert-deftest decknix-hub-icons/format-row-label-closed ()
+  (should (equal (decknix--hub-format-row-label '((state . "CLOSED"))) "closed")))
+
+(ert-deftest decknix-hub-icons/format-row-label-conflict ()
+  (should (equal (decknix--hub-format-row-label '((state . "OPEN") (mergeable . "CONFLICTING"))) "merge conflict")))
+
+(ert-deftest decknix-hub-icons/format-row-label-draft ()
+  (should (equal (decknix--hub-format-row-label '((state . "OPEN") (draft . t))) "drafting")))
+
+(ert-deftest decknix-hub-icons/format-row-label-ci-failing ()
+  (should (equal (decknix--hub-format-row-label '((state . "OPEN") (ci . ((status . "fail"))))) "CI failing")))
+
+(ert-deftest decknix-hub-icons/format-row-label-ci-running ()
+  (should (equal (decknix--hub-format-row-label '((state . "OPEN") (ci . ((status . "running"))))) "CI running")))
+
+(ert-deftest decknix-hub-icons/format-row-label-awaiting-review ()
+  (should (equal (decknix--hub-format-row-label '((state . "OPEN") (review_decision . "REVIEW_REQUIRED"))) "awaiting review")))
+
+(ert-deftest decknix-hub-icons/format-row-label-approved ()
+  (should (equal (decknix--hub-format-row-label '((state . "OPEN") (review_decision . "APPROVED"))) "approved")))
+
+(provide 'decknix-hub-icons-test)
 ;;; decknix-hub-icons-test.el ends here

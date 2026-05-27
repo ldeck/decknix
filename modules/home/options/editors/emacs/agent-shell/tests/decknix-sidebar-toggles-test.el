@@ -33,9 +33,11 @@
   (should (equal nil (default-value 'decknix--sidebar-sessions-hide-live)))
   (should (equal nil (default-value 'decknix--sidebar-sessions-age-filter)))
   (should (equal nil (default-value 'decknix--sidebar-sessions-hide-unknown)))
-  (should (equal nil (default-value 'decknix--hub-show-saved-sessions))))
+  (should (equal nil (default-value 'decknix--hub-show-saved-sessions)))
+  (should (equal 'A  (default-value 'decknix--hub-display-mode))))
 
 ;; -- toggle-keys --------------------------------------------------
+
 
 (ert-deftest decknix-sidebar-toggles/toggle-keys-flips-and-refreshes ()
   (let ((decknix--sidebar-show-keys t))
@@ -174,6 +176,20 @@
     (decknix-test-with-stubbed-deps (agent-shell-workspace-sidebar-refresh)
       (decknix-sidebar-cycle-sessions-age-filter)
       (should (equal 86400 decknix--sidebar-sessions-age-filter)))))
+
+(ert-deftest decknix-sidebar-toggles/toggle-hub-display-mode-cycles ()
+  (let ((decknix--hub-display-mode 'A))
+    (decknix-test-with-stubbed-deps (agent-shell-workspace-sidebar-refresh)
+      (decknix-sidebar-toggle-hub-display-mode)
+      (should (equal 'B decknix--hub-display-mode))
+      (decknix-sidebar-toggle-hub-display-mode)
+      (should (equal 'C decknix--hub-display-mode))
+      (decknix-sidebar-toggle-hub-display-mode)
+      (should (equal 'D decknix--hub-display-mode))
+      (decknix-sidebar-toggle-hub-display-mode)
+      (should (equal 'A decknix--hub-display-mode))
+      (should (= 4 (decknix-test-stub-call-count
+                    'agent-shell-workspace-sidebar-refresh))))))
 
 (provide 'decknix-sidebar-toggles-test)
 ;;; decknix-sidebar-toggles-test.el ends here

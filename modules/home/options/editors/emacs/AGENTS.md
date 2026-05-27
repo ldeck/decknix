@@ -336,9 +336,11 @@ The `decknix--context-update-header` function delegates to the unified header
   receives the gold.  The `◉` glyph on the row is preserved as a
   compact secondary cue.  The same tint is applied in the `r` picker
   (consult, transient, and consult-multi variants).
-  **Layout D (minimal)**: toggle with `D` to show only the primary glyph,
-  optional mention/reply, phase tag, and title, using the unified
-  shape-family system: `○` pre-PR, `★` draft, `◐`/`●` open, `▣`/`■` post-merge.
+  **Layouts (cycle with `D`)**:
+  - **Layout A (full)**: the current default. Everything always visible (age, number, CI, bot, cmt, approval, DTSP).
+  - **Layout B (scoped)**: phase-aware columns. Hides irrelevant signals based on the PR's state (e.g. hiding review columns for drafts or local branches).
+  - **Layout C (label)**: primary signal plus readable state description (e.g. "CI failing", "awaiting review").
+  - **Layout D (minimal)**: high-signal, compact view. Only primary glyph, optional mention/reply, phase tag (e.g. `[draft]`, `[open]`), and title. Using the unified shape-family system: `○` pre-PR, `★` draft, `◐`/`●` open, `▣`/`■` post-merge.
 - **Requests picker (`r`)**: a single entry-point for navigating reviews.
   Toggles are all minibuffer-local and never leak into the sidebar's
   global filters (a refresh-suspend flag freezes sidebar re-renders
