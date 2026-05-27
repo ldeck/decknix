@@ -52,10 +52,16 @@ in
   # 2. NIX SETTINGS
   #services.nix-daemon.enable = true; # deprecated
 
-  # Lists (like this one) merge automatically. 
-  # You generally do NOT need mkDefault here unless you want to allow 
+  # Lists (like this one) merge automatically.
+  # You generally do NOT need mkDefault here unless you want to allow
   # the user to strictly *remove* your experimental features.
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
+
+  # Allow the primary user to pass per-build settings (e.g. `system`) to the
+  # nix-daemon. Without this, devenv and other per-shell tools emit:
+  #   "ignoring the client-specified setting 'system', because it is a
+  #    restricted setting and you are not a trusted user"
+  nix.settings.trusted-users = [ "root" username ];
 
   # Include user-managed access tokens (e.g. GitHub API auth) so the
   # nix-daemon can make authenticated requests. The token file is
