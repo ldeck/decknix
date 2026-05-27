@@ -38,6 +38,8 @@
 (require 'iso8601)
 (require 'decknix-hub-ci)
 
+(declare-function decknix--hub-bot-author-p "decknix-hub-mention-bot" (author))
+
 (defun decknix--hub-format-age (iso-time)
   "Format an ISO timestamp as a compact age string (e.g. 3d, 5h, 12m)."
   (if (and iso-time (stringp iso-time))
@@ -81,12 +83,14 @@ Shows the overall review status of the user's own PR:
 
 (defun decknix--hub-primary-status-icon (item kind &optional tc-status)
   "Return a primary status icon for ITEM of KIND.
-KIND is one of 'wip, 'review, 'placeholder, or 'done.
+KIND is one of `wip', `review', `placeholder', or `done'.
 OPTIONAL TC-STATUS is a TeamCity build alist.
-Follows the shape-family system: ○ ★ ◐ ● ▣ ■.
+Follows the shape-family system: ○ ★ ◐ ● ▣ ■ plus bot icon π.
 Incorporates CI and mergeable status into the primary signal to
 reduce sidebar duplication."
   (let* ((state (alist-get 'state item))
+         (author (alist-get 'author item))
+         (is-bot (decknix--hub-bot-author-p author))
          (draft (eq (alist-get 'draft item) t))
          (ci (alist-get 'ci item))
          (mergeable (alist-get 'mergeable item))
@@ -98,6 +102,8 @@ reduce sidebar duplication."
                          ((eq kind 'review) (alist-get 'my_review item))
                          (t nil))))
     (cond
+     (is-bot
+      (decknix--hub-icon "π" '(:foreground "#af5f87"))) ;; Bot author (pinkish)
      ((eq kind 'placeholder)
       (decknix--hub-icon "○" 'shadow))
      ((string= state "MERGED")

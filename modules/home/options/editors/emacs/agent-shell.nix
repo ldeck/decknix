@@ -3807,63 +3807,67 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
                 (decknix--hub-write-linked-prs))
 
               ;; ── Live Sessions ──
-              (decknix--sidebar-render-section-header
-               (format "Live (%d)" (length buffers))
-               'live)
-              (setq line-num (1+ line-num)) ;; section header line
-              (if (null buffers)
-                  (progn
-                    (insert (propertize "  (none)" 'face 'font-lock-comment-face) "\n")
-                    (setq line-num (1+ line-num)))
-                (dolist (buf buffers)
-                  (let* ((agent-icon (agent-shell-workspace--agent-icon buf))
-                         (status (agent-shell-workspace--track-status
-                                  buf (agent-shell-workspace--buffer-status buf)))
-                         (status-face (agent-shell-workspace--status-face status))
-                         (short-name (agent-shell-workspace--short-name buf))
-                         (tile-indicator (if (memq buf tiled) " ▫" ""))
-                         (display-face (if (string= status "finished") "cyan" status-face))
-                         (logo-box (agent-shell-workspace--make-logo-box
-                                    agent-icon display-face))
-                         (name-box (agent-shell-workspace--make-name-box
-                                    short-name display-face max-name-width))
-                         (name-box-styled
-                          (if (string= status "waiting")
-                              (propertize name-box 'face '(:background "#3a1515"))
-                            name-box))
-                         (selection-indicator (if (eq buf selected) ">" " "))
-                         ;; PR badge (collapsed) — get conv-key for this buffer
-                         (buf-conv-key
-                          (with-current-buffer buf
-                            (decknix--agent-current-conv-key)))
-                         (pr-badge (if buf-conv-key
-                                       (decknix--hub-pr-badge buf-conv-key)
-                                     ""))
-                         (attention-icons
-                          (if buf-conv-key
-                              (decknix--hub-session-attention-icons buf-conv-key)
-                            ""))
-                         (progress-badge
-                          (if (and decknix--sidebar-show-progress
-                                   buf-conv-key
-                                   (fboundp 'decknix-progress--sidebar-badge))
-                              (decknix-progress--sidebar-badge buf-conv-key)
-                            ""))
-                         (line (concat selection-indicator " "
-                                      logo-box name-box-styled tile-indicator
-                                      pr-badge attention-icons progress-badge)))
-                    (setq line-num (1+ line-num))
-                    (when (eq buf selected)
-                      (setq target-line line-num))
-                    (setq line (propertize line
-                                          'agent-shell-workspace-buffer buf))
-                    (insert line "\n")
-                    ;; Expanded PR lines when toggle is on — grouped by repo
-                    (when (and decknix--hub-expand-prs buf-conv-key)
-                      (setq line-num
-                            (+ line-num
-                               (decknix--hub-render-session-prs
-                                buf-conv-key decknix--hub-expand-prs)))))))
+              (if (fboundp 'decknix--sidebar-render-live-sessions)
+                  (setq line-num
+                        (decknix--sidebar-render-live-sessions
+                         line-num buffers selected tiled max-name-width))
+                (decknix--sidebar-render-section-header
+                 (format "Live (%d)" (length buffers))
+                 'live)
+                (setq line-num (1+ line-num))
+                (if (null buffers)
+                    (progn
+                      (insert (propertize "  (none)" 'face 'font-lock-comment-face) "\n")
+                      (setq line-num (1+ line-num)))
+                  (dolist (buf buffers)
+                    (let* ((agent-icon (agent-shell-workspace--agent-icon buf))
+                           (status (agent-shell-workspace--track-status
+                                    buf (agent-shell-workspace--buffer-status buf)))
+                           (status-face (agent-shell-workspace--status-face status))
+                           (short-name (agent-shell-workspace--short-name buf))
+                           (tile-indicator (if (memq buf tiled) " ▫" ""))
+                           (display-face (if (string= status "finished") "cyan" status-face))
+                           (logo-box (agent-shell-workspace--make-logo-box
+                                      agent-icon display-face))
+                           (name-box (agent-shell-workspace--make-name-box
+                                      short-name display-face max-name-width))
+                           (name-box-styled
+                            (if (string= status "waiting")
+                                (propertize name-box 'face '(:background "#3a1515"))
+                              name-box))
+                           (selection-indicator (if (eq buf selected) ">" " "))
+                           ;; PR badge (collapsed) — get conv-key for this buffer
+                           (buf-conv-key
+                            (with-current-buffer buf
+                              (decknix--agent-current-conv-key)))
+                           (pr-badge (if buf-conv-key
+                                         (decknix--hub-pr-badge buf-conv-key)
+                                       ""))
+                           (attention-icons
+                            (if buf-conv-key
+                                (decknix--hub-session-attention-icons buf-conv-key)
+                              ""))
+                           (progress-badge
+                            (if (and decknix--sidebar-show-progress
+                                     buf-conv-key
+                                     (fboundp 'decknix-progress--sidebar-badge))
+                                (decknix-progress--sidebar-badge buf-conv-key)
+                              ""))
+                           (line (concat selection-indicator " "
+                                        logo-box name-box-styled tile-indicator
+                                        pr-badge attention-icons progress-badge)))
+                      (setq line-num (1+ line-num))
+                      (when (eq buf selected)
+                        (setq target-line line-num))
+                      (setq line (propertize line
+                                            'agent-shell-workspace-buffer buf))
+                      (insert line "\n")
+                      ;; Expanded PR lines when toggle is on — grouped by repo
+                      (when (and decknix--hub-expand-prs buf-conv-key)
+                        (setq line-num
+                              (+ line-num
+                                 (decknix--hub-render-session-prs
+                                  buf-conv-key decknix--hub-expand-prs))))))))
 
               ;; ── Previous sessions (greyed-out, from last exit) ──
               (when (fboundp 'decknix--sidebar-render-previous-sessions)

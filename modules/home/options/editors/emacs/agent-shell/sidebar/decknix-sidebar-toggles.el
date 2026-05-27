@@ -30,6 +30,20 @@
   "When non-nil, show categorised key listing in the sidebar footer.
 Defaults to t for discoverability; toggle with K.")
 
+(defvar decknix--sidebar-show-toggles t
+  "When non-nil, show the Toggles state line in the sidebar footer.
+Toggle with `T' in the transient (Planned) or via other means.")
+
+(defvar decknix--sidebar-live-view-mode 'flat
+  "View mode for live sessions in the sidebar.
+Valid values: `flat' (as-is), `workspace' (grouped by workspace),
+`path' (grouped by workspace last path, excluding matching tags).")
+
+(defvar decknix--sidebar-wip-group-mode 'repo
+  "Grouping mode for the WIP section.
+Valid values: `repo' (group by repository only),
+`worktree' (group by worktree then repo).")
+
 (defvar decknix--sidebar-show-hidden nil
   "When non-nil, include hidden/background sessions in the Sessions list.
 Hidden sessions are marked via `decknix--agent-conversation-set-hidden'.
@@ -81,6 +95,36 @@ and Requests age toggles share vocabulary."
            (alist-get decknix--sidebar-sessions-age-filter
                       decknix--hub-age-presets))
       "all"))
+
+(defun decknix-sidebar-toggle-toggles ()
+  "Toggle the visibility of the Toggles state in the sidebar footer."
+  (interactive)
+  (setq decknix--sidebar-show-toggles (not decknix--sidebar-show-toggles))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Sidebar toggles: %s"
+           (if decknix--sidebar-show-toggles "shown" "hidden")))
+
+(defun decknix-sidebar-cycle-live-view-mode ()
+  "Cycle live-session view mode: flat → workspace → path → flat."
+  (interactive)
+  (setq decknix--sidebar-live-view-mode
+        (pcase decknix--sidebar-live-view-mode
+          ('flat 'workspace)
+          ('workspace 'path)
+          (_ 'flat)))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Live view mode: %s" decknix--sidebar-live-view-mode))
+
+(defun decknix-sidebar-toggle-wip-group-mode ()
+  "Toggle WIP grouping mode: repo ↔ worktree."
+  (interactive)
+  (setq decknix--sidebar-wip-group-mode
+        (if (eq decknix--sidebar-wip-group-mode 'repo) 'worktree 'repo))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "WIP grouping: %s" decknix--sidebar-wip-group-mode))
 
 (defun decknix-sidebar-toggle-keys ()
   "Toggle the inline key listing in the sidebar footer."

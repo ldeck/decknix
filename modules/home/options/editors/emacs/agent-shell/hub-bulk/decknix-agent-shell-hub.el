@@ -1654,12 +1654,13 @@ with `⎇*' instead of plain `⎇'."
 
 (defun decknix--hub-worktree-row-badge (repo branch)
   "Return a 2-char propertized badge for REPO @ BRANCH (spec §3.6.3).
-Glyphs:
-  `⎇*' branch is live in some agent session (worktree path matches a
-       buffer's `default-directory').
-  `⎇ ' branch has its own worktree but no live session.
-  `↓ ' repo has no local clone yet.
-  `  ' otherwise (primary HEAD, branch ref only, missing context).
+Glyphs from ~/Downloads/decknix-ansi.rtf:
+  `⎇ ' (green)  branch is live in some agent session (worktree path matches
+                a buffer's `default-directory').
+  `⎇ ' (cyan)   branch has its own worktree but no live session (idle).
+  `⎇ ' (blue)   branch has its own worktree.
+  `↓ ' (grey)   repo has no local clone yet.
+  `  ' (space)  otherwise (primary HEAD, branch ref only, missing context).
 The badge always occupies 2 columns so adjacent rows align even when
 the worktree state differs."
   (let* ((repo (and repo (stringp repo)
@@ -1672,16 +1673,20 @@ the worktree state differs."
      ((not primary)
       (propertize "↓ "
                   'face '(:foreground "#5c6370" :weight bold)))
-     ((not wt-path) "  ")
+     ((not wt-path)
+      (propertize "↓ "
+                  'face '(:foreground "#5c6370" :weight bold)))
      ((file-equal-p wt-path primary) "  ")
      (t
       (let* ((live (decknix--hub-worktree-live-workspaces))
              (target (file-name-as-directory
                       (expand-file-name wt-path)))
              (in-use (gethash target live)))
-        (if in-use
-            (propertize "⎇*"
-                        'face '(:foreground "#98c379" :weight bold))
+        (cond
+         (in-use
+          (propertize "⎇ "
+                      'face '(:foreground "#98c379" :weight bold)))
+         (t
           (propertize "⎇ "
                       'face '(:foreground "#61afef"))))))))
 
@@ -2837,6 +2842,108 @@ primary action is a no-op until a PR materialises."
             "\n")
     (1+ line-num)))
 
+(defun decknix--hub-render-wip-pr (line-num repo-full pr)
+  "Render a single WIP PR row. Returns updated LINE-NUM."
+  (let* ((number (alist-get 'number pr))
+         (title (or (alist-get 'title pr) ""))
+         (pr-state (or (alist-get 'state pr) "OPEN"))
+         (merged-p (string= pr-state "MERGED"))
+         (closed-p (string= pr-state "CLOSED"))
+         ;; Issue #138: terminal-state PRs are normally
+         ;; hidden by `decknix--hub-wip-hide-terminal'; if
+         ;; the user has flipped the toggle off to audit
+         ;; them, decorate the row with a `⊘' stale badge
+         ;; so it is obviously not actionable.
+         (terminal-p (decknix--hub-wip-pr-terminal-p pr))
+         (draft (eq (alist-get 'draft pr) t))
+         (branch (alist-get 'branch pr))
+         (url (alist-get 'url pr))
+         ;; TeamCity build status for this branch
+         (tc-build (when (fboundp 'decknix--hub-tc-build-for-branch)
+                     (decknix--hub-tc-build-for-branch branch)))
+         ;; Primary status (GitHub CI + TC + Review + Mergeable)
+         (primary-icon (decknix--hub-primary-status-icon pr 'wip tc-build))
+         ;; Deploy pipeline indicator (DTSP).
+         (deploy-str
+          (if (fboundp 'decknix--hub-deploy-indicator)
+              (decknix--hub-deploy-indicator
+               repo-full branch
+               (when merged-p (alist-get 'merged_at pr)))
+            ""))
+         ;; Combine signals: DTSP and activity.
+         (ci-str deploy-str)
+         ;; Reply needed indicator
+         (reply-str (unless merged-p
+                      (decknix--hub-activity-icons pr)))
+         (ci-str (if (and reply-str (not (string-empty-p reply-str)))
+                    (concat ci-str reply-str)
+                  ci-str))
+         (age (decknix--hub-format-age
+               (or (alist-get 'merged_at pr)
+                   (alist-get 'updated pr))))
+         (max-title (max 8 (- (window-width) 20)))
+         (short-title (if (> (length title) max-title)
+                          (concat (substring title 0 (- max-title 1)) "…")
+                        title))
+         ;; Issue #138: prepend `⊘ ' badge to terminal rows.
+         (stale-badge (if terminal-p
+                         (propertize "⊘ "
+                                    'face 'font-lock-comment-face)
+                       ""))
+         (short-title (concat stale-badge short-title))
+         ;; Terminal PRs (MERGED/CLOSED) and drafts get dimmed styling.
+         (title-face (cond (merged-p 'font-lock-comment-face)
+                           (closed-p 'font-lock-comment-face)
+                           (draft 'font-lock-comment-face)
+                           (t nil)))
+         ;; Worktree badge — branch is in scope from the WIP record.
+         (wt-badge (decknix--hub-worktree-row-badge
+                    repo-full branch))
+         (line (pcase (bound-and-true-p decknix--hub-display-mode)
+                   ('D ;; Minimal
+                    (let* ((phase (cond (merged-p "[ship]")
+                                        (closed-p "[closed]")
+                                        (draft "[draft]")
+                                        (t "[open]")))
+                           (phase-str (propertize phase 'face 'font-lock-comment-face))
+                           (max-title (max 8 (- (window-width) 14)))
+                           (short-title (if (> (length title) max-title)
+                                            (concat (substring title 0 (- max-title 1)) "…")
+                                          title)))
+                      (format "%s  %s %s" primary-icon phase-str
+                              (if title-face (propertize short-title 'face title-face) short-title))))
+                   ('C ;; Label
+                    (let* ((label (decknix--hub-format-row-label pr tc-build))
+                           (label-str (propertize label 'face 'font-lock-comment-face))
+                           (max-title (max 8 (- (window-width) 20)))
+                           (short-title (if (> (length title) max-title)
+                                            (concat (substring title 0 (- max-title 1)) "…")
+                                          title)))
+                      (format "%s %-16s %s" primary-icon label-str
+                              (if title-face (propertize short-title 'face title-face) short-title))))
+                   ('B ;; Scoped
+                    (format "%s%s %s %s"
+                            wt-badge
+                            primary-icon
+                            ci-str
+                            (if title-face (propertize short-title 'face title-face) short-title)))
+                   (_ ;; A (Full)
+                    (format "%s%s%3s #%d %s %s"
+                            wt-badge
+                            primary-icon
+                            (propertize age 'face 'font-lock-comment-face)
+                            number
+                            ci-str
+                            (if title-face (propertize short-title 'face title-face) short-title))))))
+    (insert (propertize line
+                       'decknix-hub-url url
+                       'decknix-hub-type 'wip
+                       'decknix-hub-repo repo-full
+                       'decknix-hub-number number
+                       'decknix-hub-branch branch)
+            "\n")
+    (1+ line-num)))
+
 (defun decknix--hub-render-wip (line-num)
   "Render the WIP (my open PRs) section. Returns updated LINE-NUM.
 Respects `decknix--hub-org-visibility'. Shows time since last update.
@@ -2920,161 +3027,88 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
        (format "WIP (%d)" total)
        'wip)
       (setq line-num (1+ line-num))
-      (dolist (repo-entry repos)
-        (let* ((repo-full (or (alist-get 'repo repo-entry) ""))
-               (repo-key (decknix--hub-worktree-canonical-repo
-                          repo-full))
-               (repo (car (last (split-string repo-full "/"))))
-               (prs (seq-filter
-                     (lambda (pr) (funcall pr-visible-p repo-full pr))
-                     (alist-get 'prs repo-entry)))
-               (placeholder-branches
-                (cdr (assoc repo-key placeholders))))
-          (when (or prs placeholder-branches)
-            ;; Repo sub-header
-            (insert (propertize (format "  %s" repo)
-                               'face 'font-lock-type-face)
-                    "\n")
-            (setq line-num (1+ line-num))
-            ;; PRs under this repo
-            (dolist (pr prs)
-              (let* ((number (alist-get 'number pr))
-                     (title (or (alist-get 'title pr) ""))
-                     (pr-state (or (alist-get 'state pr) "OPEN"))
-                     (merged-p (string= pr-state "MERGED"))
-                     (closed-p (string= pr-state "CLOSED"))
-                     ;; Issue #138: terminal-state PRs are normally
-                     ;; hidden by `decknix--hub-wip-hide-terminal'; if
-                     ;; the user has flipped the toggle off to audit
-                     ;; them, decorate the row with a `⊘' stale badge
-                     ;; so it is obviously not actionable.
-                     (terminal-p (decknix--hub-wip-pr-terminal-p pr))
-                     (ci (alist-get 'ci pr))
-                     (mergeable (alist-get 'mergeable pr))
-                     (primary-icon (decknix--hub-primary-status-icon pr 'wip))
-                     (draft (alist-get 'draft pr))
-                     (branch (alist-get 'branch pr))
-                     (url (alist-get 'url pr))
-                     ;; TeamCity build status for this branch
-                     (tc-build (when (fboundp 'decknix--hub-tc-build-for-branch)
-                                 (decknix--hub-tc-build-for-branch branch)))
-                     ;; Primary status (GitHub CI + TC + Review + Mergeable)
-                     (primary-icon (decknix--hub-primary-status-icon pr 'wip tc-build))
-                     ;; Deploy pipeline indicator (DTSP).
-                     (deploy-str
-                      (if (fboundp 'decknix--hub-deploy-indicator)
-                          (decknix--hub-deploy-indicator
-                           repo-full branch
-                           (when merged-p (alist-get 'merged_at pr)))
-                        ""))
-                     ;; Combine signals: DTSP and activity.
-                     (ci-str deploy-str)
-                     ;; Reply needed indicator
-                     (reply-str (unless merged-p
-                                  (decknix--hub-activity-icons pr)))
-                     (ci-str (if (and reply-str (not (string-empty-p reply-str)))
-                                (concat ci-str reply-str)
-                              ci-str))
-                     (age (decknix--hub-format-age
-                           (or (alist-get 'merged_at pr)
-                               (alist-get 'updated pr))))
-                     (max-title (max 8 (- (window-width) 20)))
-                     (short-title (if (> (length title) max-title)
-                                      (concat (substring title 0 (- max-title 1)) "…")
-                                    title))
-                     ;; Issue #138: prepend `⊘ ' badge to terminal
-                     ;; rows so they read as "stale -- here for
-                     ;; audit, not action".  The badge only ever
-                     ;; renders when the user has flipped the
-                     ;; hide-terminal toggle off (otherwise these
-                     ;; rows are filtered out upstream).
-                     (stale-badge (if terminal-p
-                                     (propertize "⊘ "
-                                                'face 'font-lock-comment-face)
-                                   ""))
-                     (short-title (concat stale-badge short-title))
-                     ;; Terminal PRs (MERGED/CLOSED) and drafts get
-                     ;; dimmed styling -- nothing actionable to do
-                     ;; from the row, the title is reference only.
-                     (title-face (cond (merged-p 'font-lock-comment-face)
-                                       (closed-p 'font-lock-comment-face)
-                                       (draft 'font-lock-comment-face)
-                                       (t nil)))
-                     ;; Worktree badge — branch is in scope from
-                     ;; the WIP record; surfaces `⎇*' / `⎇ ' /
-                     ;; `↓ ' as defined in spec §3.6.3.
-                     (wt-badge (decknix--hub-worktree-row-badge
-                                repo-full branch))
-                     (line (pcase (bound-and-true-p decknix--hub-display-mode)
-                               ('D ;; Minimal
-                                (let* ((phase (cond (merged-p "[ship]")
-                                                    (closed-p "[closed]")
-                                                    (draft "[draft]")
-                                                    (t "[open]")))
-                                       (phase-str (propertize phase 'face 'font-lock-comment-face))
-                                       (max-title (max 8 (- (window-width) 14)))
-                                       (short-title (if (> (length title) max-title)
-                                                        (concat (substring title 0 (- max-title 1)) "…")
-                                                      title)))
-                                  (format "%s  %s %s" primary-icon phase-str
-                                          (if title-face (propertize short-title 'face title-face) short-title))))
-                               ('C ;; Label
-                                (let* ((label (decknix--hub-format-row-label pr tc-build))
-                                       (label-str (propertize label 'face 'font-lock-comment-face))
-                                       (max-title (max 8 (- (window-width) 20)))
-                                       (short-title (if (> (length title) max-title)
-                                                        (concat (substring title 0 (- max-title 1)) "…")
-                                                      title)))
-                                  (format "%s %-16s %s" primary-icon label-str
-                                          (if title-face (propertize short-title 'face title-face) short-title))))
-                               ('B ;; Scoped
-                                (format "%s%s %s %s"
-                                        wt-badge
-                                        primary-icon
-                                        ci-str
-                                        (if title-face (propertize short-title 'face title-face) short-title)))
-                               (_ ;; A (Full)
-                                (format "%s%s%3s #%d %s %s"
-                                        wt-badge
-                                        primary-icon
-                                        (propertize age 'face 'font-lock-comment-face)
-                                        number
-                                        ci-str
-                                        (if title-face (propertize short-title 'face title-face) short-title))))))
-                (insert (propertize line
-                                   'decknix-hub-url url
-                                   'decknix-hub-type 'wip
-                                   'decknix-hub-repo repo-full
-                                   'decknix-hub-number number
-                                   'decknix-hub-branch branch)
+      (if (eq (bound-and-true-p decknix--sidebar-wip-group-mode) 'worktree)
+          ;; ── Group by worktree then repo ──
+          (let ((wt-groups (make-hash-table :test 'equal))
+                (wt-list '()))
+            (dolist (repo-entry repos)
+              (let* ((repo-full (alist-get 'repo repo-entry))
+                     (repo-key (decknix--hub-worktree-canonical-repo repo-full))
+                     (prs (seq-filter
+                           (lambda (pr) (funcall pr-visible-p repo-full pr))
+                           (alist-get 'prs repo-entry)))
+                     (placeholder-branches (cdr (assoc repo-key placeholders))))
+                (dolist (pr prs)
+                  (let* ((branch (alist-get 'branch pr))
+                         (wt (decknix-hub-worktree-find repo-full branch))
+                         (wt-norm (if wt (directory-file-name (expand-file-name wt)) "none")))
+                    (unless (gethash wt-norm wt-groups) (push wt-norm wt-list))
+                    (push (list 'pr repo-full pr) (gethash wt-norm wt-groups))))
+                (dolist (wt-entry placeholder-branches)
+                  (let* ((wt (cdr wt-entry))
+                         (wt-norm (if wt (directory-file-name (expand-file-name wt)) "none")))
+                    (unless (gethash wt-norm wt-groups) (push wt-norm wt-list))
+                    (push (list 'placeholder repo-full wt-entry) (gethash wt-norm wt-groups)))))))
+            (dolist (wt-norm (nreverse wt-list))
+              (let ((items (nreverse (gethash wt-norm wt-groups))))
+                (insert (propertize (format " %s" (if (string= wt-norm "none") "Remote only" (abbreviate-file-name wt-norm)))
+                                    'face 'font-lock-doc-face)
                         "\n")
-                (setq line-num (1+ line-num))))
-            ;; Worktree placeholder rows for branches with no
-            ;; matching open PR yet — folded under the same
-            ;; repo sub-header so a freshly-pushed branch
-            ;; appears alongside the repo's other PRs while
-            ;; the GitHub Search index catches up.
-            (dolist (wt placeholder-branches)
-              (setq line-num
-                    (decknix--hub-render-wip-placeholder
-                     line-num repo-full wt))))))
+                (setq line-num (1+ line-num))
+                (dolist (item items)
+                  (pcase (car item)
+                    ('pr
+                     (let* ((repo-full (nth 1 item))
+                            (pr (nth 2 item)))
+                       (setq line-num (decknix--hub-render-wip-pr line-num repo-full pr))))
+                    ('placeholder
+                     (let* ((repo-full (nth 1 item))
+                            (wt-entry (nth 2 item)))
+                       (setq line-num (decknix--hub-render-wip-placeholder line-num repo-full wt-entry))))))))))
+        ;; ── Group by repo only (original) ──
+        (dolist (repo-entry repos)
+          (let* ((repo-full (or (alist-get 'repo repo-entry) ""))
+                 (repo-key (decknix--hub-worktree-canonical-repo
+                            repo-full))
+                 (repo (car (last (split-string repo-full "/"))))
+                 (prs (seq-filter
+                       (lambda (pr) (funcall pr-visible-p repo-full pr))
+                       (alist-get 'prs repo-entry)))
+                 (placeholder-branches
+                  (cdr (assoc repo-key placeholders))))
+            (when (or prs placeholder-branches)
+              ;; Repo sub-header
+              (insert (propertize (format "  %s" repo)
+                                 'face 'font-lock-type-face)
+                      "\n")
+              (setq line-num (1+ line-num))
+              ;; PRs under this repo
+              (dolist (pr prs)
+                (setq line-num (decknix--hub-render-wip-pr line-num repo-full pr)))
+              ;; Placeholder worktrees under this same repo
+              (dolist (wt placeholder-branches)
+                (setq line-num
+                      (decknix--hub-render-wip-placeholder
+                       line-num repo-full wt)))))))
       ;; Repos that have only placeholder worktrees (no open
       ;; PRs in WIP yet) — render a fresh sub-header so these
       ;; show up at the bottom of the WIP section.
-      (dolist (entry placeholder-only-repos)
-        (let* ((repo-full (car entry))
-               (repo (car (last (split-string repo-full "/")))))
-          (insert (propertize (format "  %s" repo)
-                              'face 'font-lock-type-face)
-                  "\n")
-          (setq line-num (1+ line-num))
-          (dolist (wt (cdr entry))
-            (setq line-num
-                  (decknix--hub-render-wip-placeholder
-                   line-num repo-full wt)))))
+      ;; Only used in repo-grouping mode (worktree mode already includes placeholders).
+      (unless (eq (bound-and-true-p decknix--sidebar-wip-group-mode) 'worktree)
+        (dolist (entry placeholder-only-repos)
+          (let* ((repo-full (car entry))
+                 (repo (car (last (split-string repo-full "/")))))
+            (insert (propertize (format "  %s" repo)
+                                'face 'font-lock-type-face)
+                    "\n")
+            (setq line-num (1+ line-num))
+            (dolist (wt (cdr entry))
+              (setq line-num
+                    (decknix--hub-render-wip-placeholder
+                     line-num repo-full wt))))))
       (insert "\n")
-      (setq line-num (1+ line-num))))
-  line-num)
+      (setq line-num (1+ line-num)))
+    line-num)
 
 (defun decknix--hub-toggle-deploy-indicator ()
   "Toggle visibility of deployment pipeline indicators (DTSP) in WIP."

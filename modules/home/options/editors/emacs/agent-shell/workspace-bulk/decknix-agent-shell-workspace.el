@@ -41,6 +41,8 @@
 (require 'json)
 (require 'subr-x)
 (require 'transient)
+(defvar target-line nil)
+
 (require 'ansi-color)
 
 ;; Forward declarations for symbols defined in the heredoc, in
@@ -540,6 +542,24 @@ candidate movement uses the line text as the search needle."
   (interactive)
   (call-interactively #'decknix-sidebar-tile-cycle))
 
+(transient-define-suffix decknix-sidebar-transient--live-view-mode ()
+  "Cycle live-session view mode."
+  :description "view"
+  (interactive)
+  (decknix-sidebar-cycle-live-view-mode))
+
+(transient-define-suffix decknix-sidebar-transient--wip-group-mode ()
+  "Toggle WIP grouping mode."
+  :description "group"
+  (interactive)
+  (decknix-sidebar-toggle-wip-group-mode))
+
+(transient-define-suffix decknix-sidebar-transient--show-toggles ()
+  "Toggle Toggles visibility in footer."
+  :description "footer toggles"
+  (interactive)
+  (decknix-sidebar-toggle-toggles))
+
 (transient-define-suffix decknix-sidebar-transient--display-mode ()
   :key "d"
   :description
@@ -743,6 +763,7 @@ display label (case-insensitive) to match the sidebar footer,
 which advertises toggles by label only (no keys)."
   :transient-suffix 'transient--do-stay
   ["Global"
+   (decknix-sidebar-transient--show-toggles)     ;; footer toggles
    (decknix-sidebar-transient--hub-display-mode) ;; Layout
    (decknix-sidebar-transient--org-filter)       ;; Org filter
    (decknix-sidebar-transient--width)]           ;; Width
@@ -768,10 +789,12 @@ which advertises toggles by label only (no keys)."
    (decknix-sidebar-transient--repo-name-cap)    ;; repo name
    (decknix-sidebar-transient--expand-prs)       ;; session PRs
    (decknix-sidebar-transient--symbol-style)     ;; symbols
-   (decknix-sidebar-transient--tile-cycle)]      ;; Tile cycle (off/2/3/4)
+   (decknix-sidebar-transient--tile-cycle)       ;; Tile cycle (off/2/3/4)
+   (decknix-sidebar-transient--live-view-mode)]  ;; view
   ["WIP"
    (decknix-sidebar-transient--wip-bot-pending)  ;; bot review
    (decknix-sidebar-transient--wip-needs-reply)  ;; comments
+   (decknix-sidebar-transient--wip-group-mode)   ;; group
    (decknix-sidebar-transient--wip-hide-linked)  ;; hide linked
    (decknix-sidebar-transient--deploy-indicator) ;; pipeline
    (decknix-sidebar-transient--wip-my-replies)   ;; replies
@@ -845,8 +868,115 @@ and again once the registry write completes."
   "What to show for saved sessions in the sidebar.
 Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
 
-;; Sidebar render primitives carved out into
-;; agent-shell/sidebar/decknix-sidebar-format.el (PR B.26).
+(defun decknix--sidebar-render-live-sessions (line-num buffers selected tiled max-name-width)
+  "Render the Live Sessions section. Returns updated LINE-NUM.
+BUFFERS is the list of live agent-shell buffers.
+SELECTED is the currently active buffer.
+TILED is the list of buffers participating in tiling.
+MAX-NAME-WIDTH is the cap for repo name display."
+  (decknix--sidebar-render-section-header
+   (format "Live (%d)" (length buffers))
+   'live)
+  (setq line-num (1+ line-num))
+  (if (null buffers)
+      (progn
+        (insert (propertize "  (none)" 'face 'font-lock-comment-face) "\n")
+        (setq line-num (1+ line-num)))
+    (let ((view-mode (if (boundp 'decknix--sidebar-live-view-mode)
+                         decknix--sidebar-live-view-mode 'flat)))
+      (pcase view-mode
+        ('flat
+         (dolist (buf buffers)
+           (setq line-num
+                 (decknix--sidebar-render-live-buffer
+                  line-num buf selected (memq buf tiled) max-name-width))))
+        ((or 'workspace 'path)
+         (let ((groups (make-hash-table :test 'equal))
+               (ws-list '()))
+           ;; Group buffers by workspace
+           (dolist (buf buffers)
+             (let* ((ws (with-current-buffer buf default-directory))
+                    (ws-norm (directory-file-name (expand-file-name ws))))
+               (unless (gethash ws-norm groups)
+                 (push ws-norm ws-list))
+               (puthash ws-norm (cons buf (gethash ws-norm groups)) groups)))
+           ;; Render groups
+           (dolist (ws (nreverse ws-list))
+             (let* ((group-bufs (nreverse (gethash ws groups)))
+                    (ws-label (if (eq view-mode 'path)
+                                  (file-name-nondirectory ws)
+                                (abbreviate-file-name ws))))
+               (insert (propertize (format " %s" ws-label)
+                                   'face 'font-lock-doc-face)
+                       "\n")
+               (setq line-num (1+ line-num))
+               (dolist (buf group-bufs)
+                 (setq line-num
+                       (decknix--sidebar-render-live-buffer
+                        line-num buf selected (memq buf tiled)
+                        max-name-width (eq view-mode 'path))))))))))
+    line-num))
+
+(defun decknix--sidebar-render-live-buffer (line-num buf selected is-tiled max-name-width &optional strip-tag)
+  "Render a single live buffer row. Returns updated LINE-NUM.
+If STRIP-TAG is non-nil, remove the tag matching the workspace name from the title."
+  (let* ((agent-icon (agent-shell-workspace--agent-icon buf))
+         (status (agent-shell-workspace--track-status
+                  buf (agent-shell-workspace--buffer-status buf)))
+         (status-face (agent-shell-workspace--status-face status))
+         (short-name (agent-shell-workspace--short-name buf))
+         (name (if strip-tag
+                   (let* ((ws (with-current-buffer buf default-directory))
+                          (ws-name (file-name-nondirectory (directory-file-name ws))))
+                     (replace-regexp-in-string (format "#%s ?" ws-name) "" short-name))
+                 short-name))
+         (tile-indicator (if is-tiled " ▫" ""))
+         (display-face (if (string= status "finished") "cyan" status-face))
+         (logo-box (agent-shell-workspace--make-logo-box
+                    agent-icon display-face))
+         (name-box (agent-shell-workspace--make-name-box
+                    name display-face max-name-width))
+         (name-box-styled
+          (if (string= status "waiting")
+              (propertize name-box 'face '(:background "#3a1515"))
+            name-box))
+         (selection-indicator (if (eq buf selected) ">" " "))
+         (buf-conv-key
+          (with-current-buffer buf
+            (decknix--agent-current-conv-key)))
+         (pr-badge (if buf-conv-key
+                       (decknix--hub-pr-badge buf-conv-key)
+                     ""))
+         (attention-icons
+          (if buf-conv-key
+              (decknix--hub-session-attention-icons buf-conv-key)
+            ""))
+         (progress-badge
+          (if (and (boundp 'decknix--sidebar-show-progress)
+                   decknix--sidebar-show-progress
+                   buf-conv-key
+                   (fboundp 'decknix-progress--sidebar-badge))
+              (decknix-progress--sidebar-badge buf-conv-key)
+            ""))
+         (line (concat selection-indicator " "
+                      logo-box name-box-styled tile-indicator
+                      pr-badge attention-icons progress-badge)))
+    (when (eq buf selected)
+      (setq target-line line-num))
+    (setq line (propertize line
+                          'agent-shell-workspace-buffer buf))
+    (insert line "\n")
+    (setq line-num (1+ line-num))
+    ;; Expanded PR lines
+    (when (and (boundp 'decknix--hub-expand-prs)
+               decknix--hub-expand-prs
+               buf-conv-key
+               (fboundp 'decknix--hub-render-session-prs))
+      (setq line-num
+            (+ line-num
+               (decknix--hub-render-session-prs
+                buf-conv-key decknix--hub-expand-prs))))
+    line-num))
 ;; Forward declarations keep the rest of this file's byte-compile
 ;; clean.  All four are pure formatters that `insert' into the
 ;; current buffer; the heredoc and hub-bulk continue to call them
@@ -879,299 +1009,312 @@ Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
 Returns a list of (HEADING . KEYS-ALIST) for sectioned display.
 Each section has a heading and its toggle key/value pairs.
 All toggle keys are accessed via the T transient prefix."
-  ;; Items within each section are ordered alphabetically by
-  ;; their short label (the text shown in the sidebar); the key
-  ;; is intentionally hidden in the footer (press T for keys).
-  ;; Emoji-only labels sort after text labels by code-point.
-  (let ((global
-         (list
-          (cons "O" (format "org %s"
-                        (if (fboundp 'decknix--hub-org-filter-summary)
-                            (let ((summary (decknix--hub-org-filter-summary)))
-                              (propertize
-                               (format "[%s]" summary)
-                               'face (if (string= summary "all")
-                                         'font-lock-comment-face
-                                       'font-lock-constant-face)))
-                          (propertize "[off]" 'face 'font-lock-comment-face))))
-          (cons "W" (format "width %s"
-                        (propertize
-                         (format "[%s]" (symbol-name decknix--sidebar-width-state))
-                         'face 'font-lock-constant-face)))))
-        (requests
-         (when (fboundp 'decknix--hub-org-filter-dispatch)
-           ;; Canonical Requests order: alphabetical text labels
-           ;; first (age, bots, ci, mention, sort) then emoji-led
-           ;; labels by code-point (↩, 💬, 🤖).  The transient mirrors
-           ;; the same sequence so the footer and the `T' menu look
-           ;; identical except for the visible shortcut keys.
+  (if (not (and (boundp 'decknix--sidebar-show-toggles)
+                decknix--sidebar-show-toggles))
+      '()
+    ;; Items within each section are ordered alphabetically by
+    ;; their short label (the text shown in the sidebar); the key
+    ;; is intentionally hidden in the footer (press T for keys).
+    ;; Emoji-only labels sort after text labels by code-point.
+    (let ((global
            (list
-            (cons "F" (concat "age "
-                          (let ((label (decknix--hub-age-filter-label)))
+            (cons "O" (format "org %s"
+                          (if (fboundp 'decknix--hub-org-filter-summary)
+                              (let ((summary (decknix--hub-org-filter-summary)))
+                                (propertize
+                                 (format "[%s]" summary)
+                                 'face (if (string= summary "all")
+                                           'font-lock-comment-face
+                                         'font-lock-constant-face)))
+                            (propertize "[off]" 'face 'font-lock-comment-face))))
+            (cons "W" (format "width %s"
+                          (propertize
+                           (format "[%s]" (symbol-name decknix--sidebar-width-state))
+                           'face 'font-lock-constant-face)))))
+          (requests
+           (when (fboundp 'decknix--hub-org-filter-dispatch)
+             ;; Canonical Requests order: alphabetical text labels
+             ;; first (age, bots, ci, mention, sort) then emoji-led
+             ;; labels by code-point (↩, 💬, 🤖).  The transient mirrors
+             ;; the same sequence so the footer and the `T' menu look
+             ;; identical except for the visible shortcut keys.
+             (list
+              (cons "F" (concat "age "
+                            (let ((label (decknix--hub-age-filter-label)))
+                              (propertize
+                               (format "[%s]" label)
+                               'face (if (string= label "all")
+                                         'font-lock-comment-face
+                                       'font-lock-constant-face)))))
+              (cons "B" (concat "bots "
+                            (let ((label (decknix--hub-show-bots-label)))
+                              (propertize
+                               (format "[%s]" label)
+                               'face (if (string= label "hide")
+                                         'font-lock-comment-face
+                                       'font-lock-constant-face)))))
+              (cons "C" (concat
+                          "ci "
+                          (propertize "[" 'face 'font-lock-comment-face)
+                          ;; Summary already carries per-icon faces
+                          ;; (status colour when enabled, shadow when
+                          ;; disabled) — don't re-propertize.
+                          (decknix--hub-ci-filter-summary)
+                          (propertize "]" 'face 'font-lock-comment-face)))
+              (cons "@" (concat "mention "
+                            (let ((label (decknix--hub-mention-filter-label)))
+                              (propertize
+                               (format "[%s]" label)
+                               'face (if (string= label "off")
+                                         'font-lock-comment-face
+                                       'font-lock-constant-face)))))
+              (cons "s" (concat "sort "
+                            (propertize
+                             (if decknix--hub-requests-sort-reverse "[new→old]" "[old→new]")
+                             'face (if decknix--hub-requests-sort-reverse
+                                       'font-lock-constant-face
+                                     'font-lock-comment-face))))
+              (cons "M" (concat "↩ "
+                            (propertize
+                             (if decknix--hub-requests-only-my-replies "[only]" "[all]")
+                             'face (if decknix--hub-requests-only-my-replies
+                                       'font-lock-constant-face
+                                     'font-lock-comment-face))))
+              (cons "c" (concat
+                            (decknix--hub-icon "💬" 'default)
+                            " "
+                            (propertize
+                             (if decknix--hub-requests-hide-needs-reply "[hide]" "[show]")
+                             'face (if decknix--hub-requests-hide-needs-reply
+                                       'font-lock-constant-face
+                                     'font-lock-comment-face))))
+              (cons "b" (concat
+                            (decknix--hub-icon "🤖" 'default)
+                            " "
+                            (propertize
+                             (if decknix--hub-requests-hide-bot-pending "[hide]" "[show]")
+                             'face (if decknix--hub-requests-hide-bot-pending
+                                       'font-lock-constant-face
+                                     'font-lock-comment-face))))
+              (cons "X" (concat
+                            (decknix--hub-icon "⚠" 'default)
+                            " conflict "
+                            (propertize
+                             (if decknix--hub-requests-hide-conflict "[hide]" "[show]")
+                             'face (if decknix--hub-requests-hide-conflict
+                                       'font-lock-constant-face
+                                     'font-lock-comment-face)))))))
+          (live
+           (list
+            (cons "d" (format "display %s"
+                          (propertize
+                           (format "[%s]" (symbol-name decknix--sidebar-display-mode))
+                           'face 'font-lock-constant-face)))
+            (cons "H" (format "hidden %s"
+                          (propertize
+                           (if decknix--sidebar-show-hidden "[shown]" "[hidden]")
+                           'face (if decknix--sidebar-show-hidden
+                                     'warning 'font-lock-comment-face))))
+            (cons "v" (format "view %s"
+                          (propertize
+                           (format "[%s]" (symbol-name (if (boundp 'decknix--sidebar-live-view-mode)
+                                                           decknix--sidebar-live-view-mode 'flat)))
+                           'face 'font-lock-constant-face)))
+            (cons "E" (format "PRs %s"
+                          (propertize
+                           (pcase decknix--hub-expand-prs
+                             ('nil "[off]")
+                             ('pr "[PR]")
+                             ('pipeline "[pipe]")
+                             ('both "[both]")
+                             (_ "[off]"))
+                           'face (if decknix--hub-expand-prs
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
+            (cons "p" (format "progress %s"
+                          (propertize
+                           (if (and (boundp 'decknix--sidebar-show-progress)
+                                    decknix--sidebar-show-progress)
+                               "[on]" "[off]")
+                           'face (if (and (boundp 'decknix--sidebar-show-progress)
+                                          decknix--sidebar-show-progress)
+                                     'success 'font-lock-comment-face))))
+            (cons "S" (format "quick %s"
+                          (propertize
+                           (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
+                                    agent-shell-workspace-sidebar--quick-switch)
+                               "[on]" "[off]")
+                           'face (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
+                                          agent-shell-workspace-sidebar--quick-switch)
+                                     'success 'font-lock-comment-face))))
+            (cons "N" (format "repo %s"
+                          (propertize
+                           (format "[%s]"
+                                   (if (boundp 'decknix--hub-repo-name-cap)
+                                       decknix--hub-repo-name-cap
+                                     "short"))
+                           'face 'font-lock-constant-face)))
+            (cons "y" (format "symbols %s"
+                          (propertize
+                           (format "[%s]"
+                                   (if (boundp 'decknix--hub-symbol-style)
+                                       decknix--hub-symbol-style
+                                     "ascii"))
+                           'face 'font-lock-constant-face)))
+            (cons "t" (format "tile %s"
+                          (let* ((n decknix--sidebar-tile-count)
+                                 (active (> (decknix--sidebar-tile-current-count) 0))
+                                 (label (cond ((= n 0) "[off]")
+                                              (active (format "[%d]" n))
+                                              (t (format "[%d pending]" n)))))
+                            (propertize label
+                                        'face (if active 'success 'font-lock-comment-face)))))))
+          (wip
+           (list
+            (cons "L" (format "linked %s"
+                          (propertize
+                           (if (and (boundp 'decknix--hub-wip-hide-linked)
+                                    decknix--hub-wip-hide-linked)
+                               "[hide]" "[show]")
+                           'face (if (and (boundp 'decknix--hub-wip-hide-linked)
+                                          decknix--hub-wip-hide-linked)
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
+            (cons "G" (format "group %s"
+                          (propertize
+                           (format "[%s]" (symbol-name (if (boundp 'decknix--sidebar-wip-group-mode)
+                                                           decknix--sidebar-wip-group-mode 'repo)))
+                           'face 'font-lock-constant-face)))
+            (cons "P" (format "pipe %s"
+                          (propertize
+                           (if decknix--hub-show-deploys "[show]" "[hide]")
+                           'face (if decknix--hub-show-deploys
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
+            (cons "r" (format "↩ %s"
+                          (propertize
+                           (if decknix--hub-wip-only-my-replies "[only]" "[all]")
+                           'face (if decknix--hub-wip-only-my-replies
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
+            (cons "n" (format "%s %s"
+                          (decknix--hub-icon "💬" 'default)
+                          (propertize
+                           (if decknix--hub-wip-hide-needs-reply "[hide]" "[show]")
+                           'face (if decknix--hub-wip-hide-needs-reply
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
+            (cons "u" (format "%s %s"
+                          (decknix--hub-icon "🤖" 'default)
+                          (propertize
+                           (if decknix--hub-wip-hide-bot-pending "[hide]" "[show]")
+                           'face (if decknix--hub-wip-hide-bot-pending
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
+            ;; Issue #137: terminal-state filter (MERGED / CLOSED).
+            (cons "m" (format "stale %s"
+                          (propertize
+                           (if (and (boundp 'decknix--hub-wip-hide-terminal)
+                                    decknix--hub-wip-hide-terminal)
+                               "[hide]" "[show]")
+                           'face (if (and (boundp 'decknix--hub-wip-hide-terminal)
+                                          decknix--hub-wip-hide-terminal)
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))))
+          (sessions
+           (list
+            (cons "a" (format "age %s"
+                          (let ((label (decknix--sidebar-sessions-age-label)))
                             (propertize
                              (format "[%s]" label)
                              'face (if (string= label "all")
                                        'font-lock-comment-face
                                      'font-lock-constant-face)))))
-            (cons "B" (concat "bots "
-                          (let ((label (decknix--hub-show-bots-label)))
+            (cons "V" (format "live-backed %s"
+                          (propertize
+                           (if decknix--sidebar-sessions-hide-live "[hide]" "[dim]")
+                           'face (if decknix--sidebar-sessions-hide-live
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
+            (cons "h" (format "saved %s"
+                          (propertize
+                           (if decknix--hub-show-saved-sessions "[show]" "[hide]")
+                           'face (if decknix--hub-show-saved-sessions
+                                     'font-lock-comment-face
+                                   'font-lock-constant-face))))
+            (cons "U" (format "unknown-ws %s"
+                          (propertize
+                           (if decknix--sidebar-sessions-hide-unknown "[hide]" "[show]")
+                           'face (if decknix--sidebar-sessions-hide-unknown
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))))
+          (worktrees
+           ;; Alphabetical by display label: age, dirty-only, live-only,
+           ;; merged, placeholders, repo-grouped.
+           (list
+            (cons "a" (format "age %s"
+                          (let ((label (if (fboundp 'decknix--sidebar-wt-age-label)
+                                           (decknix--sidebar-wt-age-label)
+                                         "all")))
                             (propertize
                              (format "[%s]" label)
-                             'face (if (string= label "hide")
+                             'face (if (string= label "all")
                                        'font-lock-comment-face
                                      'font-lock-constant-face)))))
-            (cons "C" (concat
-                        "ci "
-                        (propertize "[" 'face 'font-lock-comment-face)
-                        ;; Summary already carries per-icon faces
-                        ;; (status colour when enabled, shadow when
-                        ;; disabled) — don't re-propertize.
-                        (decknix--hub-ci-filter-summary)
-                        (propertize "]" 'face 'font-lock-comment-face)))
-            (cons "@" (concat "mention "
-                          (let ((label (decknix--hub-mention-filter-label)))
-                            (propertize
-                             (format "[%s]" label)
-                             'face (if (string= label "off")
-                                       'font-lock-comment-face
-                                     'font-lock-constant-face)))))
-            (cons "s" (concat "sort "
+            (cons "d" (format "dirty-only %s"
                           (propertize
-                           (if decknix--hub-requests-sort-reverse "[new→old]" "[old→new]")
-                           'face (if decknix--hub-requests-sort-reverse
+                           (if (and (boundp 'decknix--sidebar-wt-hide-clean)
+                                    decknix--sidebar-wt-hide-clean)
+                               "[on]" "[off]")
+                           'face (if (and (boundp 'decknix--sidebar-wt-hide-clean)
+                                          decknix--sidebar-wt-hide-clean)
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
-            (cons "M" (concat "↩ "
+            (cons "l" (format "live-only %s"
                           (propertize
-                           (if decknix--hub-requests-only-my-replies "[only]" "[all]")
-                           'face (if decknix--hub-requests-only-my-replies
+                           (if (and (boundp 'decknix--sidebar-wt-live-only)
+                                    decknix--sidebar-wt-live-only)
+                               "[on]" "[off]")
+                           'face (if (and (boundp 'decknix--sidebar-wt-live-only)
+                                          decknix--sidebar-wt-live-only)
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
-            (cons "c" (concat
-                          (decknix--hub-icon "💬" 'default)
-                          " "
+            (cons "o" (format "merged %s"
                           (propertize
-                           (if decknix--hub-requests-hide-needs-reply "[hide]" "[show]")
-                           'face (if decknix--hub-requests-hide-needs-reply
+                           (if (and (boundp 'decknix--sidebar-wt-hide-merged)
+                                    decknix--sidebar-wt-hide-merged)
+                               "[hide]" "[show]")
+                           'face (if (and (boundp 'decknix--sidebar-wt-hide-merged)
+                                          decknix--sidebar-wt-hide-merged)
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
-            (cons "b" (concat
-                          (decknix--hub-icon "🤖" 'default)
-                          " "
+            (cons "p" (format "placeholders %s"
                           (propertize
-                           (if decknix--hub-requests-hide-bot-pending "[hide]" "[show]")
-                           'face (if decknix--hub-requests-hide-bot-pending
+                           (if (and (boundp 'decknix--sidebar-wt-hide-placeholders)
+                                    decknix--sidebar-wt-hide-placeholders)
+                               "[hide]" "[show]")
+                           'face (if (and (boundp 'decknix--sidebar-wt-hide-placeholders)
+                                          decknix--sidebar-wt-hide-placeholders)
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
-            (cons "X" (concat
-                          (decknix--hub-icon "⚠" 'default)
-                          " conflict "
+            (cons "r" (format "repo-grouped %s"
                           (propertize
-                           (if decknix--hub-requests-hide-conflict "[hide]" "[show]")
-                           'face (if decknix--hub-requests-hide-conflict
+                           (if (and (boundp 'decknix--sidebar-wt-group-by-repo)
+                                    decknix--sidebar-wt-group-by-repo)
+                               "[on]" "[off]")
+                           'face (if (and (boundp 'decknix--sidebar-wt-group-by-repo)
+                                          decknix--sidebar-wt-group-by-repo)
                                      'font-lock-constant-face
                                    'font-lock-comment-face)))))))
-        (live
-         (list
-          (cons "d" (format "display %s"
-                        (propertize
-                         (format "[%s]" (symbol-name decknix--sidebar-display-mode))
-                         'face 'font-lock-constant-face)))
-          (cons "H" (format "hidden %s"
-                        (propertize
-                         (if decknix--sidebar-show-hidden "[shown]" "[hidden]")
-                         'face (if decknix--sidebar-show-hidden
-                                   'warning 'font-lock-comment-face))))
-          (cons "E" (format "PRs %s"
-                        (propertize
-                         (pcase decknix--hub-expand-prs
-                           ('nil "[off]")
-                           ('pr "[PR]")
-                           ('pipeline "[pipe]")
-                           ('both "[both]")
-                           (_ "[off]"))
-                         'face (if decknix--hub-expand-prs
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face))))
-          (cons "p" (format "progress %s"
-                        (propertize
-                         (if (and (boundp 'decknix--sidebar-show-progress)
-                                  decknix--sidebar-show-progress)
-                             "[on]" "[off]")
-                         'face (if (and (boundp 'decknix--sidebar-show-progress)
-                                        decknix--sidebar-show-progress)
-                                   'success 'font-lock-comment-face))))
-          (cons "S" (format "quick %s"
-                        (propertize
-                         (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
-                                  agent-shell-workspace-sidebar--quick-switch)
-                             "[on]" "[off]")
-                         'face (if (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
-                                        agent-shell-workspace-sidebar--quick-switch)
-                                   'success 'font-lock-comment-face))))
-          (cons "N" (format "repo %s"
-                        (propertize
-                         (format "[%s]"
-                                 (if (boundp 'decknix--hub-repo-name-cap)
-                                     decknix--hub-repo-name-cap
-                                   "short"))
-                         'face 'font-lock-constant-face)))
-          (cons "y" (format "symbols %s"
-                        (propertize
-                         (format "[%s]"
-                                 (if (boundp 'decknix--hub-symbol-style)
-                                     decknix--hub-symbol-style
-                                   "ascii"))
-                         'face 'font-lock-constant-face)))
-          (cons "t" (format "tile %s"
-                        (let* ((n decknix--sidebar-tile-count)
-                               (active (> (decknix--sidebar-tile-current-count) 0))
-                               (label (cond ((= n 0) "[off]")
-                                            (active (format "[%d]" n))
-                                            (t (format "[%d pending]" n)))))
-                          (propertize label
-                                      'face (if active 'success 'font-lock-comment-face)))))))
-        (wip
-         (list
-          (cons "L" (format "linked %s"
-                        (propertize
-                         (if (and (boundp 'decknix--hub-wip-hide-linked)
-                                  decknix--hub-wip-hide-linked)
-                             "[hide]" "[show]")
-                         'face (if (and (boundp 'decknix--hub-wip-hide-linked)
-                                        decknix--hub-wip-hide-linked)
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face))))
-          (cons "P" (format "pipe %s"
-                        (propertize
-                         (if decknix--hub-show-deploys "[show]" "[hide]")
-                         'face (if decknix--hub-show-deploys
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face))))
-          (cons "r" (format "↩ %s"
-                        (propertize
-                         (if decknix--hub-wip-only-my-replies "[only]" "[all]")
-                         'face (if decknix--hub-wip-only-my-replies
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face))))
-          (cons "n" (format "%s %s"
-                        (decknix--hub-icon "💬" 'default)
-                        (propertize
-                         (if decknix--hub-wip-hide-needs-reply "[hide]" "[show]")
-                         'face (if decknix--hub-wip-hide-needs-reply
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face))))
-          (cons "u" (format "%s %s"
-                        (decknix--hub-icon "🤖" 'default)
-                        (propertize
-                         (if decknix--hub-wip-hide-bot-pending "[hide]" "[show]")
-                         'face (if decknix--hub-wip-hide-bot-pending
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face))))
-          ;; Issue #137: terminal-state filter (MERGED / CLOSED).
-          (cons "m" (format "stale %s"
-                        (propertize
-                         (if (and (boundp 'decknix--hub-wip-hide-terminal)
-                                  decknix--hub-wip-hide-terminal)
-                             "[hide]" "[show]")
-                         'face (if (and (boundp 'decknix--hub-wip-hide-terminal)
-                                        decknix--hub-wip-hide-terminal)
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face))))))
-        (sessions
-         (list
-          (cons "a" (format "age %s"
-                        (let ((label (decknix--sidebar-sessions-age-label)))
-                          (propertize
-                           (format "[%s]" label)
-                           'face (if (string= label "all")
-                                     'font-lock-comment-face
-                                   'font-lock-constant-face)))))
-          (cons "V" (format "live-backed %s"
-                        (propertize
-                         (if decknix--sidebar-sessions-hide-live "[hide]" "[dim]")
-                         'face (if decknix--sidebar-sessions-hide-live
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face))))
-          (cons "h" (format "saved %s"
-                        (propertize
-                         (if decknix--hub-show-saved-sessions "[show]" "[hide]")
-                         'face (if decknix--hub-show-saved-sessions
-                                   'font-lock-comment-face
-                                 'font-lock-constant-face))))
-          (cons "U" (format "unknown-ws %s"
-                        (propertize
-                         (if decknix--sidebar-sessions-hide-unknown "[hide]" "[show]")
-                         'face (if decknix--sidebar-sessions-hide-unknown
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face))))))
-        (worktrees
-         ;; Alphabetical by display label: age, dirty-only, live-only,
-         ;; merged, placeholders, repo-grouped.
-         (list
-          (cons "a" (format "age %s"
-                        (let ((label (if (fboundp 'decknix--sidebar-wt-age-label)
-                                         (decknix--sidebar-wt-age-label)
-                                       "all")))
-                          (propertize
-                           (format "[%s]" label)
-                           'face (if (string= label "all")
-                                     'font-lock-comment-face
-                                   'font-lock-constant-face)))))
-          (cons "d" (format "dirty-only %s"
-                        (propertize
-                         (if (and (boundp 'decknix--sidebar-wt-hide-clean)
-                                  decknix--sidebar-wt-hide-clean)
-                             "[on]" "[off]")
-                         'face (if (and (boundp 'decknix--sidebar-wt-hide-clean)
-                                        decknix--sidebar-wt-hide-clean)
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face))))
-          (cons "l" (format "live-only %s"
-                        (propertize
-                         (if (and (boundp 'decknix--sidebar-wt-live-only)
-                                  decknix--sidebar-wt-live-only)
-                             "[on]" "[off]")
-                         'face (if (and (boundp 'decknix--sidebar-wt-live-only)
-                                        decknix--sidebar-wt-live-only)
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face))))
-          (cons "o" (format "merged %s"
-                        (propertize
-                         (if (and (boundp 'decknix--sidebar-wt-hide-merged)
-                                  decknix--sidebar-wt-hide-merged)
-                             "[hide]" "[show]")
-                         'face (if (and (boundp 'decknix--sidebar-wt-hide-merged)
-                                        decknix--sidebar-wt-hide-merged)
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face))))
-          (cons "p" (format "placeholders %s"
-                        (propertize
-                         (if (and (boundp 'decknix--sidebar-wt-hide-placeholders)
-                                  decknix--sidebar-wt-hide-placeholders)
-                             "[hide]" "[show]")
-                         'face (if (and (boundp 'decknix--sidebar-wt-hide-placeholders)
-                                        decknix--sidebar-wt-hide-placeholders)
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face))))
-          (cons "r" (format "repo-grouped %s"
-                        (propertize
-                         (if (and (boundp 'decknix--sidebar-wt-group-by-repo)
-                                  decknix--sidebar-wt-group-by-repo)
-                             "[on]" "[off]")
-                         'face (if (and (boundp 'decknix--sidebar-wt-group-by-repo)
-                                        decknix--sidebar-wt-group-by-repo)
-                                   'font-lock-constant-face
-                                 'font-lock-comment-face)))))))
-    ;; Return as sectioned list
-    (delq nil
-          (list
-           (cons "Global" global)
-           (when requests (cons "Requests" requests))
-           (cons "Live" live)
-           (cons "WIP" wip)
-           (cons "Sessions" sessions)
-           (cons "Worktrees" worktrees)))))
+      ;; Return as sectioned list
+      (delq nil
+            (list
+             (cons "Global" global)
+             (when requests (cons "Requests" requests))
+             (cons "Live" live)
+             (cons "WIP" wip)
+             (cons "Sessions" sessions)
+             (cons "Worktrees" worktrees))))))
 
 (defun decknix--sidebar-render-toggle-sections (sections &optional col-width)
   "Render toggle SECTIONS with sub-headings.
@@ -1269,12 +1412,16 @@ items inline (horizontal).  Press K to toggle, ? for full transient."
             (let ((col (/ w 2)))
               (decknix--sidebar-render-key-groups-side-by-side
                "Navigate" nav-keys "Quick" quick-keys col)
-              (decknix--sidebar-render-toggle-sections
-               toggle-sections col))
+              (when (and (boundp 'decknix--sidebar-show-toggles)
+                         decknix--sidebar-show-toggles)
+                (decknix--sidebar-render-toggle-sections
+                 toggle-sections col)))
           ;; ── Narrow: all groups inline, toggles stack vertically ──
           (decknix--sidebar-render-key-group-inline "Navigate" nav-keys)
           (decknix--sidebar-render-key-group-inline "Quick" quick-keys)
-          (decknix--sidebar-render-toggle-sections toggle-sections))
+          (when (and (boundp 'decknix--sidebar-show-toggles)
+                     decknix--sidebar-show-toggles)
+            (decknix--sidebar-render-toggle-sections toggle-sections)))
         ;; Trailing hint (always)
         (insert (propertize " K " 'face 'font-lock-keyword-face)
                 (propertize "hide" 'face 'font-lock-comment-face)
