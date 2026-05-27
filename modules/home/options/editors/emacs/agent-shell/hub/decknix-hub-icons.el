@@ -168,5 +168,29 @@ Activity icons are suppressed for APPROVED PRs."
   "Back-compat shim: return `decknix--hub-activity-icons' for PR."
   (decknix--hub-activity-icons pr))
 
+(defun decknix--hub-format-row-label (pr &optional tc-status)
+  "Return a human-readable state label for PR.
+OPTIONAL TC-STATUS is a TeamCity build alist."
+  (let* ((state (alist-get 'state pr))
+         (draft (eq (alist-get 'draft pr) t))
+         (ci (alist-get 'ci pr))
+         (mergeable (alist-get 'mergeable pr))
+         (classified (decknix--hub-ci-classify ci))
+         (decision (or (alist-get 'review_decision pr)
+                       (alist-get 'my_review pr)))
+         (tc-fail (member (alist-get 'status tc-status) '("FAILURE" "ERROR")))
+         (tc-running (string= (alist-get 'state tc-status) "running")))
+    (cond
+     ((string= state "MERGED") "merged")
+     ((string= state "CLOSED") "closed")
+     ((equal mergeable "CONFLICTING") "merge conflict")
+     (draft "drafting")
+     ((or tc-fail (equal classified "fail")) "CI failing")
+     ((or tc-running (equal classified "running")) "CI running")
+     ((equal decision "CHANGES_REQUESTED") "changes requested")
+     ((equal decision "APPROVED") "approved")
+     ((equal decision "REVIEW_REQUIRED") "awaiting review")
+     (t "open"))))
+
 (provide 'decknix-hub-icons)
 ;;; decknix-hub-icons.el ends here
