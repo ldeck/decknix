@@ -4160,6 +4160,10 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "K") #'decknix-sidebar-toggle-keys)
 
+        ;; D = cycle hub display layout (A full → B scoped → C label → D minimal)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "D") #'decknix-sidebar-toggle-hub-display-mode)
+
         ;; T = toggles transient (sectioned: Global, Requests, Live, WIP)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "T") (lambda () (interactive)
