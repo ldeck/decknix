@@ -73,7 +73,10 @@ non-negotiable. Specifically:
 - Scope is the module or area: `emacs`, `cli`, `shell`, `darwin`, `agent-shell`.
 - Reference issues: `(#73)`, `(#74)`.
 - Do NOT add co-author footers (e.g. `Co-authored-by:`) to commits or messages.
-- Do NOT commit or push without explicit user permission.
+- **Commit incrementally** on the main branch — after each logically complete unit of work
+  (e.g. after tests pass, after a bug fix is verified), commit immediately without waiting
+  for explicit user instruction. This keeps the history clean and progress visible.
+- Do NOT **push** (to remote) without explicit user permission.
 
 ### 4. Testing Changes — Follow TDD
 
