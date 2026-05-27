@@ -1,0 +1,80 @@
+Decknix Sidebar Demo — Toggle Modes
+====================================
+
+This file demonstrates how the sidebar sections change under different toggle modes.
+
+1. WIP Grouping Toggle (T → W G)
+---------------------------------
+
+[REPO ONLY] (Current default)
+WIP (3)
+  decknix
+    ⎇  ● 15d pr #123 feature/foo
+    ↓  π 2d  draft #130 dependabot/npm/...
+  decknix-config
+    ⎇  ○ 1h  wip feature/bar
+
+[WORKTREE THEN REPO]
+WIP (3)
+ ~/tools/decknix
+    ⎇  ● 15d pr #123 feature/foo
+ ~/tools/decknix-worktrees/feature/bar
+    ⎇  ○ 1h  wip feature/bar
+ Remote only
+    ↓  π 2d  draft #130 dependabot/npm/...
+
+2. Live Sessions View Toggles (T → v)
+-------------------------------------
+
+[FLAT]
+Live (3)
+ > [A] #feature/foo decknix
+   [●] #feature/bar decknix-config
+   [◐] #review decknix
+
+[GROUPED BY WORKSPACE]
+Live (3)
+ ~/tools/decknix
+   > [A] #feature/foo
+     [◐] #review
+ ~/Code/nurturecloud/decknix-config
+     [●] #feature/bar
+
+[GROUPED BY PATH (Last component + Strip Tag)]
+Live (3)
+ decknix
+   > [A] feature/foo
+     [◐] review
+ decknix-config
+     [●] feature/bar
+
+3. Worktree Glyphs (ANSI-Legend)
+--------------------------------
+
+The worktree badge (leftmost) now uses the new glyphs:
+  ⎇ (green)  = live in a session
+  ⎇ (cyan)   = worktree exists but idle
+  ↓ (grey)   = no local worktree
+  π (pink)   = bot author (primary icon)
+
+Example:
+    ↓ π 15d draft #130 dependabot/...  (No worktree, bot PR)
+    ⎇ ● 2d  pr    #123 feature/foo      (Live worktree, green ⎇)
+
+4. Footer Toggles Hidden
+------------------------
+
+[TOGGLES SHOWN] (K to toggle footer, T to open menu)
+ Navigate ...
+ Quick ...
+ Toggles
+   Global: org [all] width [med] ...
+   Live: display [A] hidden [hide] view [flat] ...
+
+[TOGGLES HIDDEN] (T still works to see/change them)
+ Navigate ...
+ Quick ...
+ (Toggles state line is removed)
+
+---
+Co-authored by Augment Code
