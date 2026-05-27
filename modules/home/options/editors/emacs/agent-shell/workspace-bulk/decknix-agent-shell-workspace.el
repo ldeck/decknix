@@ -745,8 +745,6 @@ which advertises toggles by label only (no keys)."
   ["Global"
    (decknix-sidebar-transient--hub-display-mode) ;; Layout
    (decknix-sidebar-transient--org-filter)       ;; Org filter
-   (decknix-sidebar-transient--saved-sessions-toggle) ;; Saved Sessions
-   (decknix-sidebar-transient--show-keys)        ;; show keys
    (decknix-sidebar-transient--width)]           ;; Width
   ["Requests"
    ;; Order matches the sidebar footer: alphabetical text labels
