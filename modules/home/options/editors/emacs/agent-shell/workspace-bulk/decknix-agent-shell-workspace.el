@@ -544,18 +544,21 @@ candidate movement uses the line text as the search needle."
 
 (transient-define-suffix decknix-sidebar-transient--live-view-mode ()
   "Cycle live-session view mode."
+  :key "v"
   :description "view"
   (interactive)
   (decknix-sidebar-cycle-live-view-mode))
 
 (transient-define-suffix decknix-sidebar-transient--wip-group-mode ()
   "Toggle WIP grouping mode."
+  :key "g"
   :description "group"
   (interactive)
   (decknix-sidebar-toggle-wip-group-mode))
 
 (transient-define-suffix decknix-sidebar-transient--show-toggles ()
   "Toggle Toggles visibility in footer."
+  :key "f"
   :description "footer toggles"
   (interactive)
   (decknix-sidebar-toggle-toggles))
