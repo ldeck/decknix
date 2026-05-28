@@ -47,6 +47,22 @@ Valid values:
 `worktree'   group by workspace short name; show repo sub-header only
              when the repo name differs from the workspace name.")
 
+(defvar decknix--sidebar-requests-display-mode nil
+  "Display mode for the Requests section; nil means inherit from global.
+Valid values: nil, `A' (Full), `B' (Scoped), `C' (Label), `D' (Minimal).")
+
+(defvar decknix--sidebar-wip-display-mode nil
+  "Display mode for the WIP section; nil means inherit from global.
+Valid values: nil, `A' (Full), `B' (Scoped), `C' (Label), `D' (Minimal).")
+
+(defvar decknix--sidebar-live-display-mode nil
+  "Display mode for the Live section (linked PRs); nil means inherit from global.
+Valid values: nil, `A' (Full), `B' (Scoped), `C' (Label), `D' (Minimal).")
+
+(defvar decknix--sidebar-sessions-display-mode 'name
+  "What to show for saved sessions in the sidebar.
+Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
+
 (defvar decknix--sidebar-show-hidden nil
   "When non-nil, include hidden/background sessions in the Sessions list.
 Hidden sessions are marked via `decknix--agent-conversation-set-hidden'.
@@ -131,6 +147,64 @@ and Requests age toggles share vocabulary."
   (when (fboundp 'agent-shell-workspace-sidebar-refresh)
     (agent-shell-workspace-sidebar-refresh))
   (message "WIP grouping: %s" decknix--sidebar-wip-group-mode))
+
+(defun decknix-sidebar-cycle-requests-display-mode ()
+  "Cycle Requests display mode: inherit → A → B → C → D → inherit."
+  (interactive)
+  (setq decknix--sidebar-requests-display-mode
+        (pcase decknix--sidebar-requests-display-mode
+          ('nil 'A)
+          ('A   'B)
+          ('B   'C)
+          ('C   'D)
+          (_    nil)))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Requests layout: %s"
+           (or decknix--sidebar-requests-display-mode "inherit")))
+
+(defun decknix-sidebar-cycle-wip-display-mode ()
+  "Cycle WIP display mode: inherit → A → B → C → D → inherit."
+  (interactive)
+  (setq decknix--sidebar-wip-display-mode
+        (pcase decknix--sidebar-wip-display-mode
+          ('nil 'A)
+          ('A   'B)
+          ('B   'C)
+          ('C   'D)
+          (_    nil)))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "WIP layout: %s"
+           (or decknix--sidebar-wip-display-mode "inherit")))
+
+(defun decknix-sidebar-cycle-live-display-mode ()
+  "Cycle Live display mode: inherit → A → B → C → D → inherit."
+  (interactive)
+  (setq decknix--sidebar-live-display-mode
+        (pcase decknix--sidebar-live-display-mode
+          ('nil 'A)
+          ('A   'B)
+          ('B   'C)
+          ('C   'D)
+          (_    nil)))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Live layout: %s"
+           (or decknix--sidebar-live-display-mode "inherit")))
+
+(defun decknix-sidebar-cycle-sessions-display-mode ()
+  "Cycle sidebar display mode for sessions: name → tags → both → name."
+  (interactive)
+  (setq decknix--sidebar-sessions-display-mode
+        (pcase decknix--sidebar-sessions-display-mode
+          ('name 'tags)
+          ('tags 'both)
+          ('both 'name)
+          (_ 'name)))
+  (message "Sessions display: %s" decknix--sidebar-sessions-display-mode)
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh)))
 
 (defun decknix-sidebar-toggle-keys ()
   "Toggle the inline key listing in the sidebar footer."

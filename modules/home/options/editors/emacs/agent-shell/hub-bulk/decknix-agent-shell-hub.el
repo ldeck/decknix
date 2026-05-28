@@ -63,6 +63,9 @@
 (declare-function decknix--hub-primary-status-icon "decknix-hub-icons")
 
 (defvar decknix--hub-display-mode)
+(defvar decknix--sidebar-requests-display-mode)
+(defvar decknix--sidebar-wip-display-mode)
+(defvar decknix--sidebar-live-display-mode)
 
 (declare-function decknix--hub-wip-review-icon "decknix-hub-icons")
 (declare-function decknix--hub-activity-icons "decknix-hub-icons")
@@ -2124,20 +2127,20 @@ the state word since every downstream signal is moot."
     (let* ((wt-badge (decknix--hub-worktree-row-badge
                       repo-full branch))
            (primary-icon (decknix--hub-primary-status-icon status 'wip))
-           (line (pcase (bound-and-true-p decknix--hub-display-mode)
+           (line (pcase (decknix--hub-get-display-mode 'wip)
                      ('D ;; Minimal
-                      (let* ((phase (pcase state
-                                      ("OPEN" (if draft "[draft]" "[open]"))
-                                      ("DRAFT" "[draft]")
-                                      ("MERGED" "[ship]")
-                                      ("CLOSED" "[closed]")
-                                      (_ "[?]")))
-                             (phase-str (propertize phase 'face 'font-lock-comment-face))
-                             (max-title (max 8 (- (window-width) 14)))
+                      (let* ((age-face (cond
+                                        ((string-match-p "d$" raw-age)
+                                         (if (>= (string-to-number raw-age) 3)
+                                             'error 'warning))
+                                        (t 'font-lock-comment-face)))
+                             (age-display (propertize (format "%4s" raw-age) 'face age-face))
+                             (overhead (+ 2 4 1 1 1))
+                             (max-title (max 8 (- (window-width) overhead)))
                              (title-str (if (> (length title) max-title)
                                             (concat (substring title 0 (- max-title 1)) "…")
                                           title)))
-                        (format "%s  %s %s%s %s" primary-icon phase-str type-prefix num-str title-str)))
+                        (format "%s%s %s %s" wt-badge age-display primary-icon title-str)))
                      ('C ;; Label
                       (let* ((label (decknix--hub-format-row-label status))
                              (label-str (propertize label 'face 'font-lock-comment-face))
@@ -2260,12 +2263,16 @@ Layout:
     (let* ((wt-badge (decknix--hub-worktree-row-badge
                       repo-full branch))
            (primary-icon (decknix--hub-primary-status-icon (list (cons 'ci ci)) 'placeholder))
-           (line (if (eq (bound-and-true-p decknix--hub-display-mode) 'minimal)
+           (line (if (eq (decknix--hub-get-display-mode 'wip) 'D)
                      ;; [wip] matches the mockup shape-family legend: hollow
                      ;; circle ○ = pre-PR local branch, phase tag = [wip].
-                     (format "%s  %s %s %s" primary-icon
+                     (format "%s%4s %s %s %s %s"
+                             wt-badge
+                             (propertize (format "%4s" raw-age)
+                                         'face 'font-lock-comment-face)
+                             " " primary-icon
                              (propertize "[wip]" 'face 'font-lock-comment-face)
-                             branch-str repo-label)
+                             branch-str)
                    (if grouped
                        (format "  %s%s%s %s %s%s"
                                wt-badge
@@ -2647,16 +2654,19 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                ;; `  ' — enough to flag missing local clones).
                (wt-badge (decknix--hub-worktree-row-badge
                           repo-full nil))
-               (line (pcase (bound-and-true-p decknix--hub-display-mode)
+               (line (pcase (decknix--hub-get-display-mode 'requests)
                          ('D ;; Minimal
-                          (let* ((phase-str (propertize "[open]" 'face 'font-lock-comment-face))
-                                 (max-title (max 8 (- (window-width) 14)))
+                          (let* ((age-str (propertize age 'face age-face))
+                                 (ref (format "%s#%d" (or repo "") number))
+                                 (detail (concat (or mention-str "") (or reply-str "")))
+                                 (overhead (+ 2 4 1 (max 1 (length detail)) 1 1 1 (length ref) 1))
+                                 (max-title (max 8 (- (window-width) overhead)))
                                  (short-title (if (> (length title) max-title)
                                                   (concat (substring title 0 (- max-title 1)) "…")
                                                 title)))
-                            (format "%s  %s %s%s %s"
-                                    primary-icon phase-str
-                                    mention-str reply-str short-title)))
+                            (format "%s%4s %s %s %s %s"
+                                    wt-badge age-str (if (string-empty-p detail) " " detail)
+                                    primary-icon ref short-title)))
                          ('C ;; Label
                           (let* ((label (decknix--hub-format-row-label item))
                                  (label-str (propertize label 'face 'font-lock-comment-face))
@@ -2797,7 +2807,7 @@ primary action is a no-op until a PR materialises."
                 "?"))
          (wt-badge (decknix--hub-worktree-row-badge repo-full branch))
          (primary-icon (decknix--hub-primary-status-icon '() 'placeholder))
-         (line (pcase (bound-and-true-p decknix--hub-display-mode)
+         (line (pcase (decknix--hub-get-display-mode 'wip)
                    ('D ;; Minimal
                     (let* ((phase-str (propertize "[wip]" 'face 'font-lock-comment-face))
                            (max-title (max 8 (- (window-width) 14)))
@@ -2899,7 +2909,7 @@ primary action is a no-op until a PR materialises."
          ;; Worktree badge — branch is in scope from the WIP record.
          (wt-badge (decknix--hub-worktree-row-badge
                     repo-full branch))
-         (line (pcase (bound-and-true-p decknix--hub-display-mode)
+         (line (pcase (decknix--hub-get-display-mode 'live)
                    ('D ;; Minimal
                     (let* ((phase (cond (merged-p "[ship]")
                                         (closed-p "[closed]")
@@ -2943,6 +2953,17 @@ primary action is a no-op until a PR materialises."
                        'decknix-hub-branch branch)
             "\n")
     (1+ line-num)))
+
+(defun decknix--hub-get-display-mode (section)
+  "Return the effective display mode for SECTION.
+SECTION is one of `requests', `wip', or `live'.
+Fallback to `decknix--hub-display-mode' if per-section mode is nil."
+  (let ((mode (pcase section
+                ('requests (bound-and-true-p decknix--sidebar-requests-display-mode))
+                ('wip      (bound-and-true-p decknix--sidebar-wip-display-mode))
+                ('live     (bound-and-true-p decknix--sidebar-live-display-mode))
+                (_         nil))))
+    (or mode (bound-and-true-p decknix--hub-display-mode) 'A)))
 
 (defun decknix--hub-render-wip (line-num)
   "Render the WIP (my open PRs) section. Returns updated LINE-NUM.
