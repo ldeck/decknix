@@ -3027,8 +3027,10 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
        (format "WIP (%d)" total)
        'wip)
       (setq line-num (1+ line-num))
-      (if (eq (bound-and-true-p decknix--sidebar-wip-group-mode) 'worktree)
-          ;; ── Group by worktree then repo ──
+      (let ((grp-mode (bound-and-true-p decknix--sidebar-wip-group-mode)))
+        (cond
+         ((eq grp-mode 'workspace)
+          ;; ── Group by full workspace path ──
           (let ((wt-groups (make-hash-table :test 'equal))
                 (wt-list '()))
             (dolist (repo-entry repos)
@@ -3064,9 +3066,75 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
                     ('placeholder
                      (let* ((repo-full (nth 1 item))
                             (wt-entry (nth 2 item)))
-                       (setq line-num (decknix--hub-render-wip-placeholder line-num repo-full wt-entry)))))))))
-        ;; ── Group by repo only (original) ──
-        (dolist (repo-entry repos)
+                       (setq line-num (decknix--hub-render-wip-placeholder line-num repo-full wt-entry))))))))))
+         ((eq grp-mode 'worktree)
+          ;; ── Group by workspace short name; repo sub-header when distinct ──
+          (let ((ws-groups (make-hash-table :test 'equal))
+                (ws-list '()))
+            (dolist (repo-entry repos)
+              (let* ((repo-full (alist-get 'repo repo-entry))
+                     (repo-key  (decknix--hub-worktree-canonical-repo repo-full))
+                     (prs       (seq-filter
+                                 (lambda (pr) (funcall pr-visible-p repo-full pr))
+                                 (alist-get 'prs repo-entry)))
+                     (placeholder-branches
+                      (cdr (assoc repo-key placeholders))))
+                (dolist (pr prs)
+                  (let* ((branch  (alist-get 'branch pr))
+                         (wt      (decknix-hub-worktree-find repo-full branch))
+                         (ws-key  (if wt
+                                      (file-name-nondirectory
+                                       (directory-file-name (expand-file-name wt)))
+                                    "remote")))
+                    (unless (gethash ws-key ws-groups)
+                      (push ws-key ws-list)
+                      (puthash ws-key '() ws-groups))
+                    (puthash ws-key
+                             (append (gethash ws-key ws-groups)
+                                     (list (list 'pr repo-full pr)))
+                             ws-groups)))
+                (dolist (wt-entry placeholder-branches)
+                  (let* ((wt     (cdr wt-entry))
+                         (ws-key (if wt
+                                     (file-name-nondirectory
+                                      (directory-file-name (expand-file-name wt)))
+                                   "remote")))
+                    (unless (gethash ws-key ws-groups)
+                      (push ws-key ws-list)
+                      (puthash ws-key '() ws-groups))
+                    (puthash ws-key
+                             (append (gethash ws-key ws-groups)
+                                     (list (list 'placeholder repo-full wt-entry)))
+                             ws-groups)))))
+            (dolist (ws-key (nreverse ws-list))
+              (insert (propertize (format " %s" ws-key) 'face 'font-lock-doc-face)
+                      "\n")
+              (setq line-num (1+ line-num))
+              (let ((last-repo nil))
+                (dolist (item (gethash ws-key ws-groups))
+                  (let* ((repo-full  (nth 1 item))
+                         (repo-name  (car (last (split-string repo-full "/")))))
+                    (when (and (not (string= repo-name ws-key))
+                               (not (equal repo-name last-repo)))
+                      (insert (propertize (format "   %s" repo-name)
+                                          'face 'font-lock-type-face) "\n")
+                      (setq line-num (1+ line-num))
+                      (setq last-repo repo-name))
+                    (pcase (car item)
+                      ('pr
+                       (let* ((rf (nth 1 item))
+                              (pr (nth 2 item)))
+                         (setq line-num
+                               (decknix--hub-render-wip-pr line-num rf pr))))
+                      ('placeholder
+                       (let* ((rf (nth 1 item))
+                              (we (nth 2 item)))
+                         (setq line-num
+                               (decknix--hub-render-wip-placeholder
+                                line-num rf we)))))))))))
+         (t
+          ;; ── Group by repo only (default) ──
+          (dolist (repo-entry repos)
           (let* ((repo-full (or (alist-get 'repo repo-entry) ""))
                  (repo-key (decknix--hub-worktree-canonical-repo
                             repo-full))
@@ -3089,23 +3157,22 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
               (dolist (wt placeholder-branches)
                 (setq line-num
                       (decknix--hub-render-wip-placeholder
+                       line-num repo-full wt))))))))
+        ;; Repos with only placeholder worktrees (no open PRs visible).
+        ;; Only rendered in repo-grouping mode; workspace and worktree modes
+        ;; include placeholder-branches inline within their workspace grouping.
+        (unless (memq grp-mode '(workspace worktree))
+          (dolist (entry placeholder-only-repos)
+            (let* ((repo-full (car entry))
+                   (repo (car (last (split-string repo-full "/")))))
+              (insert (propertize (format "  %s" repo)
+                                  'face 'font-lock-type-face)
+                      "\n")
+              (setq line-num (1+ line-num))
+              (dolist (wt (cdr entry))
+                (setq line-num
+                      (decknix--hub-render-wip-placeholder
                        line-num repo-full wt)))))))
-      ;; Repos that have only placeholder worktrees (no open
-      ;; PRs in WIP yet) — render a fresh sub-header so these
-      ;; show up at the bottom of the WIP section.
-      ;; Only used in repo-grouping mode (worktree mode already includes placeholders).
-      (unless (eq (bound-and-true-p decknix--sidebar-wip-group-mode) 'worktree)
-        (dolist (entry placeholder-only-repos)
-          (let* ((repo-full (car entry))
-                 (repo (car (last (split-string repo-full "/")))))
-            (insert (propertize (format "  %s" repo)
-                                'face 'font-lock-type-face)
-                    "\n")
-            (setq line-num (1+ line-num))
-            (dolist (wt (cdr entry))
-              (setq line-num
-                    (decknix--hub-render-wip-placeholder
-                     line-num repo-full wt))))))
       (insert "\n")
       (setq line-num (1+ line-num)))
     line-num))
