@@ -76,5 +76,35 @@ Example:
  Quick ...
  (Toggles state line is removed)
 
+5. Requests — Minimal View (D layout)
+-------------------------------------
+
+  E. Minimal (primary glyph only, title carries the rest)
+  Single circle/star/square per row. Phase tag prefixes the title.
+  Pro: maximum focus.  Con: needs hover/expand for detail.
+
+Requests (20)
+  200d @  ○   widget#16568         OPS-195: lorem epsom — team building
+  180d @  ○   widget#16568         OPS-193: lorem epsom — team build failed
+  160d @  ○   widget#16568         OPS-193: lorem epsom — team build passing
+  140d @  ★   widget#16568         OPS-193: lorem epsom — team draft active
+  130d @  ★   widget#16568         OPS-193: lorem epsom — team draft analysing
+  120d @  ★   widget#16568         OPS-193: lorem epsom — team draft success
+  140d @  ★   widget#16568         OPS-193: lorem epsom — team draft warnings
+  140d @  ★   widget#16568         OPS-193: lorem epsom — me draft failed
+  140d π  ◐   widget#16568         bump: dependency update — team/bot CI success
+  140d @  ◐   widget#16568         OPS-193: lorem epsom — team CI failed
+⇣ 140d π  ◐   crmapp-service#123   bump: dependency update — me/bot CI building (non-checked-out repo)
+  140d ¶  ●   widget#16568         OPS-193: lorem epsom — reply to me CI success
+  140d @  ●   widget#16568         OPS-193: lorem epsom — team CI success
+    2d @  ●   widget#16568         OPS-193: lorem epsom — me CI failed
+
+Column anatomy (left → right):
+  ⇣      worktree badge (only on origin-only / non-checked-out repos)
+  140d   age of the request
+  @ π ¶  detail glyph: @=team mention, π=bot author, ¶=reply-to-me
+  ○ ★ ◐ ●   primary status icon (lifecycle shape, colour = state)
+  repo#num + title carries everything else (phase tag implied by glyph)
+
 ---
 Co-authored by Augment Code
