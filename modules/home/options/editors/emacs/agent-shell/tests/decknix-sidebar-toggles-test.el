@@ -191,5 +191,35 @@
       (should (= 4 (decknix-test-stub-call-count
                     'agent-shell-workspace-sidebar-refresh))))))
 
+;; -- toggle-wip-group-mode ----------------------------------------
+
+(ert-deftest decknix-sidebar-toggles/toggle-wip-group-mode-cycles ()
+  "Three-way cycle: repo → workspace → worktree → repo."
+  (let ((decknix--sidebar-wip-group-mode 'repo))
+    (decknix-test-with-stubbed-deps (agent-shell-workspace-sidebar-refresh)
+      (decknix-sidebar-toggle-wip-group-mode)
+      (should (equal 'workspace decknix--sidebar-wip-group-mode))
+      (decknix-sidebar-toggle-wip-group-mode)
+      (should (equal 'worktree decknix--sidebar-wip-group-mode))
+      (decknix-sidebar-toggle-wip-group-mode)
+      (should (equal 'repo decknix--sidebar-wip-group-mode))
+      (should (= 3 (decknix-test-stub-call-count
+                    'agent-shell-workspace-sidebar-refresh))))))
+
+;; -- cycle-live-view-mode -----------------------------------------
+
+(ert-deftest decknix-sidebar-toggles/cycle-live-view-mode-cycles ()
+  "Three-way cycle: flat → workspace → path → flat."
+  (let ((decknix--sidebar-live-view-mode 'flat))
+    (decknix-test-with-stubbed-deps (agent-shell-workspace-sidebar-refresh)
+      (decknix-sidebar-cycle-live-view-mode)
+      (should (equal 'workspace decknix--sidebar-live-view-mode))
+      (decknix-sidebar-cycle-live-view-mode)
+      (should (equal 'path decknix--sidebar-live-view-mode))
+      (decknix-sidebar-cycle-live-view-mode)
+      (should (equal 'flat decknix--sidebar-live-view-mode))
+      (should (= 3 (decknix-test-stub-call-count
+                    'agent-shell-workspace-sidebar-refresh))))))
+
 (provide 'decknix-sidebar-toggles-test)
 ;;; decknix-sidebar-toggles-test.el ends here

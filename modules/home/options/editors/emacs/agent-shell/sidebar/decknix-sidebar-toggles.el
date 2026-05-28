@@ -41,8 +41,11 @@ Valid values: `flat' (as-is), `workspace' (grouped by workspace),
 
 (defvar decknix--sidebar-wip-group-mode 'repo
   "Grouping mode for the WIP section.
-Valid values: `repo' (group by repository only),
-`worktree' (group by worktree then repo).")
+Valid values:
+`repo'       group by repository only (default).
+`workspace'  group by full workspace path, then repo/branch within.
+`worktree'   group by workspace short name; show repo sub-header only
+             when the repo name differs from the workspace name.")
 
 (defvar decknix--sidebar-show-hidden nil
   "When non-nil, include hidden/background sessions in the Sessions list.
@@ -118,10 +121,13 @@ and Requests age toggles share vocabulary."
   (message "Live view mode: %s" decknix--sidebar-live-view-mode))
 
 (defun decknix-sidebar-toggle-wip-group-mode ()
-  "Toggle WIP grouping mode: repo ↔ worktree."
+  "Cycle WIP grouping mode: repo → workspace → worktree → repo."
   (interactive)
   (setq decknix--sidebar-wip-group-mode
-        (if (eq decknix--sidebar-wip-group-mode 'repo) 'worktree 'repo))
+        (pcase decknix--sidebar-wip-group-mode
+          ('repo      'workspace)
+          ('workspace 'worktree)
+          (_          'repo)))
   (when (fboundp 'agent-shell-workspace-sidebar-refresh)
     (agent-shell-workspace-sidebar-refresh))
   (message "WIP grouping: %s" decknix--sidebar-wip-group-mode))
