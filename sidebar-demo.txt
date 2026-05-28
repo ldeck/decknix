@@ -3,8 +3,8 @@ Decknix Sidebar Demo — Toggle Modes
 
 This file demonstrates how the sidebar sections change under different toggle modes.
 
-1. WIP Grouping Toggle (T → W G)
----------------------------------
+1. WIP Grouping Toggle (T → g)
+-------------------------------
 
 [REPO ONLY] (Current default)
 WIP (3)
@@ -14,14 +14,22 @@ WIP (3)
   decknix-config
     ⎇  ○ 1h  wip feature/bar
 
-[WORKTREE THEN REPO]
-WIP (3)
+[WORKSPACE THEN REPO|WORKTREE]
+WIP (4)
  ~/tools/decknix
     ⎇  ● 15d pr #123 feature/foo
- ~/tools/decknix-worktrees/feature/bar
     ⎇  ○ 1h  wip feature/bar
- Remote only
     ↓  π 2d  draft #130 dependabot/npm/...
+ ~/Code/foobar
+    ↓  π 2d  draft monolith#130 dependabot/npm/...
+
+[WORKSPACE [THEN REPO] THEN WORKTREE]
+WIP (2)
+ decknix
+   ↓  π 2d  draft #130 dependabot/npm/...
+ foobar
+   monolith
+     ↓  π 2d  draft #130 dependabot/npm/...
 
 2. Live Sessions View Toggles (T → v)
 -------------------------------------
@@ -84,20 +92,20 @@ Example:
   Pro: maximum focus.  Con: needs hover/expand for detail.
 
 Requests (20)
-  200d @  ○   upside#16568         CSE-195: lorem epsom — team building
-  180d @  ○   upside#16568         CSE-193: lorem epsom — team build failed
-  160d @  ○   upside#16568         CSE-193: lorem epsom — team build passing
-  140d @  ★   upside#16568         CSE-193: lorem epsom — team draft active
-  130d @  ★   upside#16568         CSE-193: lorem epsom — team draft analysing
-  120d @  ★   upside#16568         CSE-193: lorem epsom — team draft success
-  140d @  ★   upside#16568         CSE-193: lorem epsom — team draft warnings
-  140d @  ★   upside#16568         CSE-193: lorem epsom — me draft failed
-  140d π  ◐   upside#16568         bump: dependency update — team/bot CI success
-  140d @  ◐   upside#16568         CSE-193: lorem epsom — team CI failed
-⇣ 140d π  ◐   reapit-service#123   bump: dependency update — me/bot CI building (non-checked-out repo)
-  140d ¶  ●   upside#16568         CSE-193: lorem epsom — reply to me CI success
-  140d @  ●   upside#16568         CSE-193: lorem epsom — team CI success
-    2d @  ●   upside#16568         CSE-193: lorem epsom — me CI failed
+  200d @ ○ upside#16568       CSE-195: lorem epsom — team building
+  180d @ ○ upside#16568       CSE-193: lorem epsom — team build failed
+  160d @ ○ upside#16568       CSE-193: lorem epsom — team build passing
+  140d @ ★ upside#16568       CSE-193: lorem epsom — team draft active
+  130d @ ★ upside#16568       CSE-193: lorem epsom — team draft analysing
+  120d @ ★ upside#16568       CSE-193: lorem epsom — team draft success
+  140d @ ★ upside#16568       CSE-193: lorem epsom — team draft warnings
+  140d @ ★ upside#16568       CSE-193: lorem epsom — me draft failed
+  140d π ◐ upside#16568       bump: dependency update — team/bot CI success
+  140d @ ◐ upside#16568       CSE-193: lorem epsom — team CI failed
+⇣ 140d π ◐ reapit-service#123 bump: dependency update — me/bot CI building (non-checked-out repo)
+  140d ¶ ● upside#16568       CSE-193: lorem epsom — reply to me CI success
+  140d @ ● upside#16568       CSE-193: lorem epsom — team CI success
+    2d @ ● upside#16568       CSE-193: lorem epsom — me CI failed
 
 Column anatomy (left → right):
   ⇣      worktree badge (only on origin-only / non-checked-out repos)
@@ -105,6 +113,8 @@ Column anatomy (left → right):
   @ π ¶  detail glyph: @=team mention, π=bot author, ¶=reply-to-me
   ○ ★ ◐ ●   primary status icon (lifecycle shape, colour = state)
   repo#num + title carries everything else (phase tag implied by glyph)
+  spacing single space between columns
+  can toggle to align column widths or shrink per row
 
 ---
 Co-authored by Augment Code
