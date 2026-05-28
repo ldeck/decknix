@@ -177,6 +177,70 @@
       (decknix-sidebar-cycle-sessions-age-filter)
       (should (equal 86400 decknix--sidebar-sessions-age-filter)))))
 
+(ert-deftest decknix-sidebar-toggles/cycle-requests-display-mode-cycles ()
+  "Five-way cycle: inherit → A → B → C → D → inherit."
+  (let ((decknix--sidebar-requests-display-mode nil))
+    (decknix-test-with-stubbed-deps (agent-shell-workspace-sidebar-refresh)
+      (decknix-sidebar-cycle-requests-display-mode)
+      (should (equal 'A decknix--sidebar-requests-display-mode))
+      (decknix-sidebar-cycle-requests-display-mode)
+      (should (equal 'B decknix--sidebar-requests-display-mode))
+      (decknix-sidebar-cycle-requests-display-mode)
+      (should (equal 'C decknix--sidebar-requests-display-mode))
+      (decknix-sidebar-cycle-requests-display-mode)
+      (should (equal 'D decknix--sidebar-requests-display-mode))
+      (decknix-sidebar-cycle-requests-display-mode)
+      (should (equal nil decknix--sidebar-requests-display-mode))
+      (should (= 5 (decknix-test-stub-call-count
+                    'agent-shell-workspace-sidebar-refresh))))))
+
+(ert-deftest decknix-sidebar-toggles/cycle-wip-display-mode-cycles ()
+  "Five-way cycle: inherit → A → B → C → D → inherit."
+  (let ((decknix--sidebar-wip-display-mode nil))
+    (decknix-test-with-stubbed-deps (agent-shell-workspace-sidebar-refresh)
+      (decknix-sidebar-cycle-wip-display-mode)
+      (should (equal 'A decknix--sidebar-wip-display-mode))
+      (decknix-sidebar-cycle-wip-display-mode)
+      (should (equal 'B decknix--sidebar-wip-display-mode))
+      (decknix-sidebar-cycle-wip-display-mode)
+      (should (equal 'C decknix--sidebar-wip-display-mode))
+      (decknix-sidebar-cycle-wip-display-mode)
+      (should (equal 'D decknix--sidebar-wip-display-mode))
+      (decknix-sidebar-cycle-wip-display-mode)
+      (should (equal nil decknix--sidebar-wip-display-mode))
+      (should (= 5 (decknix-test-stub-call-count
+                    'agent-shell-workspace-sidebar-refresh))))))
+
+(ert-deftest decknix-sidebar-toggles/cycle-live-display-mode-cycles ()
+  "Five-way cycle: inherit → A → B → C → D → inherit."
+  (let ((decknix--sidebar-live-display-mode nil))
+    (decknix-test-with-stubbed-deps (agent-shell-workspace-sidebar-refresh)
+      (decknix-sidebar-cycle-live-display-mode)
+      (should (equal 'A decknix--sidebar-live-display-mode))
+      (decknix-sidebar-cycle-live-display-mode)
+      (should (equal 'B decknix--sidebar-live-display-mode))
+      (decknix-sidebar-cycle-live-display-mode)
+      (should (equal 'C decknix--sidebar-live-display-mode))
+      (decknix-sidebar-cycle-live-display-mode)
+      (should (equal 'D decknix--sidebar-live-display-mode))
+      (decknix-sidebar-cycle-live-display-mode)
+      (should (equal nil decknix--sidebar-live-display-mode))
+      (should (= 5 (decknix-test-stub-call-count
+                    'agent-shell-workspace-sidebar-refresh))))))
+
+(ert-deftest decknix-sidebar-toggles/cycle-sessions-display-mode-cycles ()
+  "Three-way cycle: name → tags → both → name."
+  (let ((decknix--sidebar-sessions-display-mode 'name))
+    (decknix-test-with-stubbed-deps (agent-shell-workspace-sidebar-refresh)
+      (decknix-sidebar-cycle-sessions-display-mode)
+      (should (equal 'tags decknix--sidebar-sessions-display-mode))
+      (decknix-sidebar-cycle-sessions-display-mode)
+      (should (equal 'both decknix--sidebar-sessions-display-mode))
+      (decknix-sidebar-cycle-sessions-display-mode)
+      (should (equal 'name decknix--sidebar-sessions-display-mode))
+      (should (= 3 (decknix-test-stub-call-count
+                    'agent-shell-workspace-sidebar-refresh))))))
+
 (ert-deftest decknix-sidebar-toggles/toggle-hub-display-mode-cycles ()
   (let ((decknix--hub-display-mode 'A))
     (decknix-test-with-stubbed-deps (agent-shell-workspace-sidebar-refresh)

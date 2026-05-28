@@ -579,16 +579,55 @@ candidate movement uses the line text as the search needle."
   (interactive)
   (decknix-sidebar-toggle-toggles))
 
-(transient-define-suffix decknix-sidebar-transient--display-mode ()
+(transient-define-suffix decknix-sidebar-transient--sessions-display-mode ()
   :key "d"
   :description
   (lambda ()
-    (format "Display mode  %s"
+    (format "display       %s"
             (propertize
-             (format "[%s]" (symbol-name decknix--sidebar-display-mode))
+             (format "[%s]" (symbol-name decknix--sidebar-sessions-display-mode))
              'face 'font-lock-constant-face)))
   (interactive)
-  (call-interactively #'decknix-sidebar-cycle-display-mode))
+  (decknix-sidebar-cycle-sessions-display-mode))
+
+(transient-define-suffix decknix-sidebar-transient--requests-display-mode ()
+  :key "d"
+  :description
+  (lambda ()
+    (let ((mode decknix--sidebar-requests-display-mode))
+      (format "Layout        %s"
+              (propertize
+               (format "[%s]" (if mode (symbol-name mode) "inherit"))
+               'face 'font-lock-constant-face))))
+  :transient t
+  (interactive)
+  (decknix-sidebar-cycle-requests-display-mode))
+
+(transient-define-suffix decknix-sidebar-transient--wip-display-mode ()
+  :key "d"
+  :description
+  (lambda ()
+    (let ((mode decknix--sidebar-wip-display-mode))
+      (format "Layout        %s"
+              (propertize
+               (format "[%s]" (if mode (symbol-name mode) "inherit"))
+               'face 'font-lock-constant-face))))
+  :transient t
+  (interactive)
+  (decknix-sidebar-cycle-wip-display-mode))
+
+(transient-define-suffix decknix-sidebar-transient--live-display-mode ()
+  :key "d"
+  :description
+  (lambda ()
+    (let ((mode decknix--sidebar-live-display-mode))
+      (format "Layout        %s"
+              (propertize
+               (format "[%s]" (if mode (symbol-name mode) "inherit"))
+               'face 'font-lock-constant-face))))
+  :transient t
+  (interactive)
+  (decknix-sidebar-cycle-live-display-mode))
 
 (transient-define-suffix decknix-sidebar-transient--hidden-toggle ()
   :key "H"
@@ -788,11 +827,12 @@ which advertises toggles by label only (no keys)."
    (decknix-sidebar-transient--width)]           ;; Width
   ["Requests"
    ;; Order matches the sidebar footer: alphabetical text labels
-   ;; (age, bots, ci, mention, reviewed, sort) then emoji-led labels by
-   ;; code-point (↩, 💬, 🤖).
+   ;; (age, bots, ci, layout, mention, reviewed, sort) then emoji-led
+   ;; labels by code-point (↩, 💬, 🤖).
    (decknix-sidebar-transient--age-filter)       ;; age
    (decknix-sidebar-transient--bot-filter)       ;; bots
    (decknix-sidebar-transient--ci-filter)        ;; ci
+   (decknix-sidebar-transient--requests-display-mode) ;; Layout (d)
    (decknix-sidebar-transient--mention-filter)   ;; mention
    (decknix-sidebar-transient--req-reviewed)     ;; reviewed
    (decknix-sidebar-transient--req-sort)         ;; sort
@@ -801,27 +841,29 @@ which advertises toggles by label only (no keys)."
    (decknix-sidebar-transient--req-bot-pending)  ;; 🤖
    (decknix-sidebar-transient--req-conflict)]    ;; ⚠ conflict
   ["Live"
-   (decknix-sidebar-transient--display-mode)     ;; Display mode
-   (decknix-sidebar-transient--hidden-toggle)    ;; Hidden
+   (decknix-sidebar-transient--live-display-mode) ;; Layout (d)
+   (decknix-sidebar-transient--hidden-toggle)    ;; Hidden (H)
    (decknix-sidebar-transient--show-progress)    ;; progress
    (decknix-sidebar-transient--quick-switch)     ;; Quick-switch
    (decknix-sidebar-transient--repo-name-cap)    ;; repo name
    (decknix-sidebar-transient--expand-prs)       ;; session PRs
    (decknix-sidebar-transient--symbol-style)     ;; symbols
    (decknix-sidebar-transient--tile-cycle)       ;; Tile cycle (off/2/3/4)
-   (decknix-sidebar-transient--live-view-mode)]  ;; view
+   (decknix-sidebar-transient--live-view-mode)]  ;; view (v)
   ["WIP"
    (decknix-sidebar-transient--wip-bot-pending)  ;; bot review
    (decknix-sidebar-transient--wip-needs-reply)  ;; comments
-   (decknix-sidebar-transient--wip-group-mode)   ;; group
+   (decknix-sidebar-transient--wip-group-mode)   ;; group (g)
    (decknix-sidebar-transient--wip-hide-linked)  ;; hide linked
+   (decknix-sidebar-transient--wip-display-mode) ;; Layout (d)
    (decknix-sidebar-transient--deploy-indicator) ;; pipeline
    (decknix-sidebar-transient--wip-my-replies)   ;; replies
    (decknix-sidebar-transient--wip-hide-terminal)] ;; stale (#137)
   ["Sessions"
    ;; Alphabetical by display label (case-insensitive):
-   ;; age, live-backed, saved, unknown-ws.
+   ;; age, display, live-backed, saved, unknown-ws.
    (decknix-sidebar-transient--sessions-age)          ;; age
+   (decknix-sidebar-transient--sessions-display-mode) ;; display (d)
    (decknix-sidebar-transient--sessions-hide-live)    ;; live-backed
    (decknix-sidebar-transient--show-saved-sessions)   ;; saved
    (decknix-sidebar-transient--sessions-hide-unknown)];; unknown-ws
@@ -882,10 +924,6 @@ and again once the registry write completes."
 ;; workspace and a vertical key-help footer below the session lists.
 (defvar decknix--sidebar-max-saved 8
   "Maximum number of recent saved conversations to show in sidebar.")
-
-(defvar decknix--sidebar-display-mode 'name
-  "What to show for saved sessions in the sidebar.
-Valid values: `name' (tags/preview), `tags' (raw tags), `both' (tags + name).")
 
 (defun decknix--sidebar-render-live-sessions (line-num buffers selected tiled max-name-width)
   "Render the Live Sessions section. Returns updated LINE-NUM.
@@ -1052,11 +1090,6 @@ All toggle keys are accessed via the T transient prefix."
                            'face 'font-lock-constant-face)))))
           (requests
            (when (fboundp 'decknix--hub-org-filter-dispatch)
-             ;; Canonical Requests order: alphabetical text labels
-             ;; first (age, bots, ci, mention, sort) then emoji-led
-             ;; labels by code-point (↩, 💬, 🤖).  The transient mirrors
-             ;; the same sequence so the footer and the `T' menu look
-             ;; identical except for the visible shortcut keys.
              (list
               (cons "F" (concat "age "
                             (let ((label (decknix--hub-age-filter-label)))
@@ -1072,14 +1105,16 @@ All toggle keys are accessed via the T transient prefix."
                                'face (if (string= label "hide")
                                          'font-lock-comment-face
                                        'font-lock-constant-face)))))
-              (cons "C" (concat
-                          "ci "
-                          (propertize "[" 'face 'font-lock-comment-face)
-                          ;; Summary already carries per-icon faces
-                          ;; (status colour when enabled, shadow when
-                          ;; disabled) — don't re-propertize.
-                          (decknix--hub-ci-filter-summary)
-                          (propertize "]" 'face 'font-lock-comment-face)))
+              (cons "C" (concat "ci "
+                            (propertize "[" 'face 'font-lock-comment-face)
+                            (decknix--hub-ci-filter-summary)
+                            (propertize "]" 'face 'font-lock-comment-face)))
+              (cons "d" (format "layout %s"
+                            (propertize
+                             (format "[%s]" (if decknix--sidebar-requests-display-mode
+                                                decknix--sidebar-requests-display-mode
+                                              "inherit"))
+                             'face 'font-lock-constant-face)))
               (cons "@" (concat "mention "
                             (let ((label (decknix--hub-mention-filter-label)))
                               (propertize
@@ -1099,25 +1134,19 @@ All toggle keys are accessed via the T transient prefix."
                              'face (if decknix--hub-requests-only-my-replies
                                        'font-lock-constant-face
                                      'font-lock-comment-face))))
-              (cons "c" (concat
-                            (decknix--hub-icon "💬" 'default)
-                            " "
+              (cons "c" (concat (decknix--hub-icon "💬" 'default) " "
                             (propertize
                              (if decknix--hub-requests-hide-needs-reply "[hide]" "[show]")
                              'face (if decknix--hub-requests-hide-needs-reply
                                        'font-lock-constant-face
                                      'font-lock-comment-face))))
-              (cons "b" (concat
-                            (decknix--hub-icon "🤖" 'default)
-                            " "
+              (cons "b" (concat (decknix--hub-icon "🤖" 'default) " "
                             (propertize
                              (if decknix--hub-requests-hide-bot-pending "[hide]" "[show]")
                              'face (if decknix--hub-requests-hide-bot-pending
                                        'font-lock-constant-face
                                      'font-lock-comment-face))))
-              (cons "X" (concat
-                            (decknix--hub-icon "⚠" 'default)
-                            " conflict "
+              (cons "X" (concat (decknix--hub-icon "⚠" 'default) " conflict "
                             (propertize
                              (if decknix--hub-requests-hide-conflict "[hide]" "[show]")
                              'face (if decknix--hub-requests-hide-conflict
@@ -1125,31 +1154,17 @@ All toggle keys are accessed via the T transient prefix."
                                      'font-lock-comment-face)))))))
           (live
            (list
-            (cons "d" (format "display %s"
-                          (propertize
-                           (format "[%s]" (symbol-name decknix--sidebar-display-mode))
-                           'face 'font-lock-constant-face)))
             (cons "H" (format "hidden %s"
                           (propertize
                            (if decknix--sidebar-show-hidden "[shown]" "[hidden]")
                            'face (if decknix--sidebar-show-hidden
                                      'warning 'font-lock-comment-face))))
-            (cons "v" (format "view %s"
+            (cons "d" (format "layout %s"
                           (propertize
-                           (format "[%s]" (symbol-name (if (boundp 'decknix--sidebar-live-view-mode)
-                                                           decknix--sidebar-live-view-mode 'flat)))
+                           (format "[%s]" (if decknix--sidebar-live-display-mode
+                                              decknix--sidebar-live-display-mode
+                                            "inherit"))
                            'face 'font-lock-constant-face)))
-            (cons "E" (format "PRs %s"
-                          (propertize
-                           (pcase decknix--hub-expand-prs
-                             ('nil "[off]")
-                             ('pr "[PR]")
-                             ('pipeline "[pipe]")
-                             ('both "[both]")
-                             (_ "[off]"))
-                           'face (if decknix--hub-expand-prs
-                                     'font-lock-constant-face
-                                   'font-lock-comment-face))))
             (cons "p" (format "progress %s"
                           (propertize
                            (if (and (boundp 'decknix--sidebar-show-progress)
@@ -1173,6 +1188,17 @@ All toggle keys are accessed via the T transient prefix."
                                        decknix--hub-repo-name-cap
                                      "short"))
                            'face 'font-lock-constant-face)))
+            (cons "E" (format "session PRs %s"
+                          (propertize
+                           (pcase decknix--hub-expand-prs
+                             ('nil "[off]")
+                             ('pr "[PR]")
+                             ('pipeline "[pipe]")
+                             ('both "[both]")
+                             (_ "[off]"))
+                           'face (if decknix--hub-expand-prs
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
             (cons "y" (format "symbols %s"
                           (propertize
                            (format "[%s]"
@@ -1187,10 +1213,32 @@ All toggle keys are accessed via the T transient prefix."
                                               (active (format "[%d]" n))
                                               (t (format "[%d pending]" n)))))
                             (propertize label
-                                        'face (if active 'success 'font-lock-comment-face)))))))
+                                        'face (if active 'success 'font-lock-comment-face)))))
+            (cons "v" (format "view %s"
+                          (propertize
+                           (format "[%s]" (symbol-name (if (boundp 'decknix--sidebar-live-view-mode)
+                                                           decknix--sidebar-live-view-mode 'flat)))
+                           'face 'font-lock-constant-face)))))
           (wip
            (list
-            (cons "L" (format "linked %s"
+            (cons "u" (format "bot review %s %s" (decknix--hub-icon "🤖" 'default)
+                          (propertize
+                           (if decknix--hub-wip-hide-bot-pending "[hide]" "[show]")
+                           'face (if decknix--hub-wip-hide-bot-pending
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
+            (cons "n" (format "comments %s %s" (decknix--hub-icon "💬" 'default)
+                          (propertize
+                           (if decknix--hub-wip-hide-needs-reply "[hide]" "[show]")
+                           'face (if decknix--hub-wip-hide-needs-reply
+                                     'font-lock-constant-face
+                                   'font-lock-comment-face))))
+            (cons "G" (format "group %s"
+                          (propertize
+                           (format "[%s]" (symbol-name (if (boundp 'decknix--sidebar-wip-group-mode)
+                                                           decknix--sidebar-wip-group-mode 'repo)))
+                           'face 'font-lock-constant-face)))
+            (cons "L" (format "hide linked %s"
                           (propertize
                            (if (and (boundp 'decknix--hub-wip-hide-linked)
                                     decknix--hub-wip-hide-linked)
@@ -1199,38 +1247,24 @@ All toggle keys are accessed via the T transient prefix."
                                           decknix--hub-wip-hide-linked)
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
-            (cons "G" (format "group %s"
+            (cons "d" (format "layout %s"
                           (propertize
-                           (format "[%s]" (symbol-name (if (boundp 'decknix--sidebar-wip-group-mode)
-                                                           decknix--sidebar-wip-group-mode 'repo)))
+                           (format "[%s]" (if decknix--sidebar-wip-display-mode
+                                              decknix--sidebar-wip-display-mode
+                                            "inherit"))
                            'face 'font-lock-constant-face)))
-            (cons "P" (format "pipe %s"
+            (cons "P" (format "pipeline %s"
                           (propertize
                            (if decknix--hub-show-deploys "[show]" "[hide]")
                            'face (if decknix--hub-show-deploys
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
-            (cons "r" (format "↩ %s"
+            (cons "r" (format "replies %s"
                           (propertize
                            (if decknix--hub-wip-only-my-replies "[only]" "[all]")
                            'face (if decknix--hub-wip-only-my-replies
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
-            (cons "n" (format "%s %s"
-                          (decknix--hub-icon "💬" 'default)
-                          (propertize
-                           (if decknix--hub-wip-hide-needs-reply "[hide]" "[show]")
-                           'face (if decknix--hub-wip-hide-needs-reply
-                                     'font-lock-constant-face
-                                   'font-lock-comment-face))))
-            (cons "u" (format "%s %s"
-                          (decknix--hub-icon "🤖" 'default)
-                          (propertize
-                           (if decknix--hub-wip-hide-bot-pending "[hide]" "[show]")
-                           'face (if decknix--hub-wip-hide-bot-pending
-                                     'font-lock-constant-face
-                                   'font-lock-comment-face))))
-            ;; Issue #137: terminal-state filter (MERGED / CLOSED).
             (cons "m" (format "stale %s"
                           (propertize
                            (if (and (boundp 'decknix--hub-wip-hide-terminal)
@@ -1249,6 +1283,10 @@ All toggle keys are accessed via the T transient prefix."
                              'face (if (string= label "all")
                                        'font-lock-comment-face
                                      'font-lock-constant-face)))))
+            (cons "d" (format "display %s"
+                          (propertize
+                           (format "[%s]" (symbol-name decknix--sidebar-sessions-display-mode))
+                           'face 'font-lock-constant-face)))
             (cons "V" (format "live-backed %s"
                           (propertize
                            (if decknix--sidebar-sessions-hide-live "[hide]" "[dim]")
@@ -1559,19 +1597,6 @@ comment for why this is cached.")
             (error 0)))))
 
 ;; -- New sidebar commands --
-(defun decknix-sidebar-cycle-display-mode ()
-  "Cycle sidebar display mode: name → tags → both → name."
-  (interactive)
-  (setq decknix--sidebar-display-mode
-        (pcase decknix--sidebar-display-mode
-          ('name 'tags)
-          ('tags 'both)
-          ('both 'name)
-          (_ 'name)))
-  (message "Sidebar display: %s" decknix--sidebar-display-mode)
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh)))
-
 (defun decknix-sidebar-set-workspace ()
   "Set or change the workspace for the saved session at point."
   (interactive)
@@ -4080,7 +4105,7 @@ this saver only writes UI preferences so a fresh-daemon idle save
 cannot clobber the Previous Sessions snapshot."
   (let* ((state
           (list
-           (cons 'display-mode decknix--sidebar-display-mode)
+           (cons 'sessions-display-mode decknix--sidebar-sessions-display-mode)
            (cons 'width-state decknix--sidebar-width-state)
            (cons 'show-keys decknix--sidebar-show-keys)
            (cons 'quick-switch
@@ -4162,8 +4187,9 @@ cannot clobber the Previous Sessions snapshot."
         (let ((state (with-temp-buffer
                        (insert-file-contents decknix--sidebar-state-file)
                        (read (current-buffer)))))
-          (when-let ((dm (alist-get 'display-mode state)))
-            (setq decknix--sidebar-display-mode dm))
+          (when-let ((dm (or (alist-get 'sessions-display-mode state)
+                             (alist-get 'display-mode state))))
+            (setq decknix--sidebar-sessions-display-mode dm))
           (when-let ((ws (alist-get 'width-state state)))
             (setq decknix--sidebar-width-state ws))
           (let ((sk (alist-get 'show-keys state 'missing)))
