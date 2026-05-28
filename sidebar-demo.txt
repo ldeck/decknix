@@ -72,7 +72,7 @@ Example:
 4. Footer Toggles Hidden
 ------------------------
 
-[TOGGLES SHOWN] (K to toggle footer, T to open menu)
+[TOGGLES SHOWN] (T f to toggle state line, T to open menu)
  Navigate ...
  Quick ...
  Toggles
@@ -83,6 +83,11 @@ Example:
  Navigate ...
  Quick ...
  (Toggles state line is removed)
+
+[KEYS HIDDEN] (K to toggle Navigate/Quick sections)
+ Toggles
+   Global: org [all] width [med] ...
+   Live: display [A] hidden [hide] view [flat] ...
 
 5. Requests — Minimal View (D layout)
 -------------------------------------
