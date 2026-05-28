@@ -1688,7 +1688,7 @@ the worktree state differs."
                       'face '(:foreground "#98c379" :weight bold)))
          (t
           (propertize "⎇ "
-                      'face '(:foreground "#61afef"))))))))
+                      'face '(:foreground "#61afef")))))))))
 
 
 
@@ -3048,7 +3048,7 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
                   (let* ((wt (cdr wt-entry))
                          (wt-norm (if wt (directory-file-name (expand-file-name wt)) "none")))
                     (unless (gethash wt-norm wt-groups) (push wt-norm wt-list))
-                    (push (list 'placeholder repo-full wt-entry) (gethash wt-norm wt-groups)))))))
+                    (push (list 'placeholder repo-full wt-entry) (gethash wt-norm wt-groups))))))
             (dolist (wt-norm (nreverse wt-list))
               (let ((items (nreverse (gethash wt-norm wt-groups))))
                 (insert (propertize (format " %s" (if (string= wt-norm "none") "Remote only" (abbreviate-file-name wt-norm)))
@@ -3064,7 +3064,7 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
                     ('placeholder
                      (let* ((repo-full (nth 1 item))
                             (wt-entry (nth 2 item)))
-                       (setq line-num (decknix--hub-render-wip-placeholder line-num repo-full wt-entry))))))))))
+                       (setq line-num (decknix--hub-render-wip-placeholder line-num repo-full wt-entry)))))))))
         ;; ── Group by repo only (original) ──
         (dolist (repo-entry repos)
           (let* ((repo-full (or (alist-get 'repo repo-entry) ""))
@@ -3108,7 +3108,7 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
                      line-num repo-full wt))))))
       (insert "\n")
       (setq line-num (1+ line-num)))
-    line-num)
+    line-num))
 
 (defun decknix--hub-toggle-deploy-indicator ()
   "Toggle visibility of deployment pipeline indicators (DTSP) in WIP."
