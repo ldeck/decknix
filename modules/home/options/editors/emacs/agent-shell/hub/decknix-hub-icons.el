@@ -37,8 +37,7 @@
 
 (require 'iso8601)
 (require 'decknix-hub-ci)
-
-(declare-function decknix--hub-bot-author-p "decknix-hub-mention-bot" (author))
+(require 'decknix-hub-mention-bot)
 
 (defun decknix--hub-format-age (iso-time)
   "Format an ISO timestamp as a compact age string (e.g. 3d, 5h, 12m)."
