@@ -567,10 +567,13 @@ let
     pname = "decknix-hub-icons";
     src = ./agent-shell/hub;
     # Top-level `(require 'decknix-hub-ci)' pulls in `decknix--hub-
-    # icon'.  Required at the package level so native-comp's
-    # `package-activate-all' on the post-install pass can resolve
-    # the load (same need as the other hub-ci consumers above).
-    packageRequires = [ decknix-hub-ci-el ];
+    # icon'.  Top-level `(require 'decknix-hub-mention-bot)' pulls
+    # in `decknix--hub-bot-author-p' used by the primary-status icon
+    # to surface bot-authored PRs with the `π' glyph.  Both required
+    # at the package level so native-comp's `package-activate-all'
+    # on the post-install pass can resolve the load (same need as
+    # the other hub-ci consumers above).
+    packageRequires = [ decknix-hub-ci-el decknix-hub-mention-bot-el ];
     testFiles = [
       "decknix-hub-icons-test.el"
     ];
