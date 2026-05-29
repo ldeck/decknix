@@ -60,6 +60,7 @@
 # Reference
 
 - [Configuration Hub](./hub.md)
+- [Pair Protocol v1 (draft)](./pair-protocol.md)
 
 ---
 
