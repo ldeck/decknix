@@ -826,9 +826,17 @@ dedupes against live buffers before calling here."
                    (if ,term
                        (decknix--agent-session-jump-to-match
                         shell-buf ,term)
-                     (let ((win (get-buffer-window shell-buf)))
-                       (when (and win (window-live-p win))
-                         (set-window-point win (point-max))))))
+                     (progn
+                       (let ((win (get-buffer-window shell-buf)))
+                         (when (and win (window-live-p win))
+                           (set-window-point win (point-max))))
+                       ;; Hint: context is collapsed; tell the user
+                       ;; how to open the viewer without them needing
+                       ;; to ask "Where were we?"
+                       (when decknix--agent-history-cache
+                         (message
+                          "Context restored (%d turns) — press C-c s c to view previous interactions"
+                          (length decknix--agent-history-cache))))))
                (message "Could not find agent-shell buffer for session %s"
                         (substring ,sid 0 8)))))
         t))
