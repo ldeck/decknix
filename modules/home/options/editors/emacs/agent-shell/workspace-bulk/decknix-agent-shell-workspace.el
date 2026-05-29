@@ -580,7 +580,7 @@ candidate movement uses the line text as the search needle."
   (decknix-sidebar-toggle-toggles))
 
 (transient-define-suffix decknix-sidebar-transient--sessions-display-mode ()
-  :key "d"
+  :key "e"
   :description
   (lambda ()
     (format "display       %s"
@@ -603,8 +603,12 @@ candidate movement uses the line text as the search needle."
   (interactive)
   (decknix-sidebar-cycle-requests-display-mode))
 
+;; key "d" is reserved for Requests layout above; Live and WIP use
+;; distinct keys ("i" and "j") so all three can coexist in the same
+;; flat transient keymap without the last definition silently winning.
+
 (transient-define-suffix decknix-sidebar-transient--wip-display-mode ()
-  :key "d"
+  :key "j"
   :description
   (lambda ()
     (let ((mode decknix--sidebar-wip-display-mode))
@@ -617,7 +621,7 @@ candidate movement uses the line text as the search needle."
   (decknix-sidebar-cycle-wip-display-mode))
 
 (transient-define-suffix decknix-sidebar-transient--live-display-mode ()
-  :key "d"
+  :key "i"
   :description
   (lambda ()
     (let ((mode decknix--sidebar-live-display-mode))
@@ -730,7 +734,7 @@ candidate movement uses the line text as the search needle."
   (call-interactively #'decknix-sidebar-cycle-wt-age-filter))
 
 (transient-define-suffix decknix-sidebar-transient--wt-hide-clean ()
-  :key "d"
+  :key "f"
   :description
   (lambda ()
     (format "dirty-only    %s"
@@ -1159,7 +1163,7 @@ All toggle keys are accessed via the T transient prefix."
                            (if decknix--sidebar-show-hidden "[shown]" "[hidden]")
                            'face (if decknix--sidebar-show-hidden
                                      'warning 'font-lock-comment-face))))
-            (cons "d" (format "layout %s"
+            (cons "i" (format "layout %s"
                           (propertize
                            (format "[%s]" (if decknix--sidebar-live-display-mode
                                               decknix--sidebar-live-display-mode
@@ -1247,7 +1251,7 @@ All toggle keys are accessed via the T transient prefix."
                                           decknix--hub-wip-hide-linked)
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
-            (cons "d" (format "layout %s"
+            (cons "j" (format "layout %s"
                           (propertize
                            (format "[%s]" (if decknix--sidebar-wip-display-mode
                                               decknix--sidebar-wip-display-mode
@@ -4134,6 +4138,40 @@ cannot clobber the Previous Sessions snapshot."
            (cons 'requests-sort-reverse
                  (when (boundp 'decknix--hub-requests-sort-reverse)
                    decknix--hub-requests-sort-reverse))
+           ;; Requests attention filters (not persisted before; use
+           ;; 'missing-sentinel pattern in restore so nil defaults
+           ;; survive an older state file that lacks these keys).
+           (cons 'requests-hide-needs-reply
+                 (when (boundp 'decknix--hub-requests-hide-needs-reply)
+                   decknix--hub-requests-hide-needs-reply))
+           (cons 'requests-hide-bot-pending
+                 (when (boundp 'decknix--hub-requests-hide-bot-pending)
+                   decknix--hub-requests-hide-bot-pending))
+           (cons 'requests-only-my-replies
+                 (when (boundp 'decknix--hub-requests-only-my-replies)
+                   decknix--hub-requests-only-my-replies))
+           (cons 'requests-hide-reviewed
+                 (when (boundp 'decknix--hub-requests-hide-reviewed)
+                   decknix--hub-requests-hide-reviewed))
+           (cons 'requests-hide-conflict
+                 (when (boundp 'decknix--hub-requests-hide-conflict)
+                   decknix--hub-requests-hide-conflict))
+           ;; WIP attention filters (parallel set for WIP section).
+           (cons 'wip-hide-needs-reply
+                 (when (boundp 'decknix--hub-wip-hide-needs-reply)
+                   decknix--hub-wip-hide-needs-reply))
+           (cons 'wip-hide-bot-pending
+                 (when (boundp 'decknix--hub-wip-hide-bot-pending)
+                   decknix--hub-wip-hide-bot-pending))
+           (cons 'wip-only-my-replies
+                 (when (boundp 'decknix--hub-wip-only-my-replies)
+                   decknix--hub-wip-only-my-replies))
+           ;; Per-section display/layout modes.
+           (cons 'requests-display-mode decknix--sidebar-requests-display-mode)
+           (cons 'wip-display-mode      decknix--sidebar-wip-display-mode)
+           (cons 'live-display-mode     decknix--sidebar-live-display-mode)
+           ;; WIP grouping mode.
+           (cons 'wip-group-mode        decknix--sidebar-wip-group-mode)
            (cons 'expand-prs
                  (when (boundp 'decknix--hub-expand-prs)
                    decknix--hub-expand-prs))
@@ -4240,6 +4278,55 @@ cannot clobber the Previous Sessions snapshot."
           (when (boundp 'decknix--hub-requests-sort-reverse)
             (setq decknix--hub-requests-sort-reverse
                   (alist-get 'requests-sort-reverse state)))
+          ;; Requests attention filters: restore using 'missing sentinel
+          ;; so older state files that lack these keys don't flip defaults.
+          (let ((rhn (alist-get 'requests-hide-needs-reply state 'missing)))
+            (unless (eq rhn 'missing)
+              (when (boundp 'decknix--hub-requests-hide-needs-reply)
+                (setq decknix--hub-requests-hide-needs-reply rhn))))
+          (let ((rhb (alist-get 'requests-hide-bot-pending state 'missing)))
+            (unless (eq rhb 'missing)
+              (when (boundp 'decknix--hub-requests-hide-bot-pending)
+                (setq decknix--hub-requests-hide-bot-pending rhb))))
+          (let ((rom (alist-get 'requests-only-my-replies state 'missing)))
+            (unless (eq rom 'missing)
+              (when (boundp 'decknix--hub-requests-only-my-replies)
+                (setq decknix--hub-requests-only-my-replies rom))))
+          (let ((rhr (alist-get 'requests-hide-reviewed state 'missing)))
+            (unless (eq rhr 'missing)
+              (when (boundp 'decknix--hub-requests-hide-reviewed)
+                (setq decknix--hub-requests-hide-reviewed rhr))))
+          (let ((rhc (alist-get 'requests-hide-conflict state 'missing)))
+            (unless (eq rhc 'missing)
+              (when (boundp 'decknix--hub-requests-hide-conflict)
+                (setq decknix--hub-requests-hide-conflict rhc))))
+          ;; WIP attention filters: same pattern.
+          (let ((whn (alist-get 'wip-hide-needs-reply state 'missing)))
+            (unless (eq whn 'missing)
+              (when (boundp 'decknix--hub-wip-hide-needs-reply)
+                (setq decknix--hub-wip-hide-needs-reply whn))))
+          (let ((whb (alist-get 'wip-hide-bot-pending state 'missing)))
+            (unless (eq whb 'missing)
+              (when (boundp 'decknix--hub-wip-hide-bot-pending)
+                (setq decknix--hub-wip-hide-bot-pending whb))))
+          (let ((wom (alist-get 'wip-only-my-replies state 'missing)))
+            (unless (eq wom 'missing)
+              (when (boundp 'decknix--hub-wip-only-my-replies)
+                (setq decknix--hub-wip-only-my-replies wom))))
+          ;; Per-section display/layout modes.
+          (let ((rdm (alist-get 'requests-display-mode state 'missing)))
+            (unless (eq rdm 'missing)
+              (setq decknix--sidebar-requests-display-mode rdm)))
+          (let ((wdm (alist-get 'wip-display-mode state 'missing)))
+            (unless (eq wdm 'missing)
+              (setq decknix--sidebar-wip-display-mode wdm)))
+          (let ((ldm (alist-get 'live-display-mode state 'missing)))
+            (unless (eq ldm 'missing)
+              (setq decknix--sidebar-live-display-mode ldm)))
+          ;; WIP grouping mode.
+          (let ((wgm (alist-get 'wip-group-mode state 'missing)))
+            (unless (eq wgm 'missing)
+              (setq decknix--sidebar-wip-group-mode wgm)))
           ;; PR expand: restore toggle (normalise legacy boolean t → pr)
           (when (boundp 'decknix--hub-expand-prs)
             (let ((val (alist-get 'expand-prs state)))

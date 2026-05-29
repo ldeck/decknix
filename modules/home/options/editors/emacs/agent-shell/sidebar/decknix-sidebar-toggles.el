@@ -314,7 +314,7 @@ Toggle with `a' in the `T → w' Worktrees group.")
 Requires async `git status' checks; filtering is deferred pending
 the §3.6.10 Worktrees section.  The variable persists now so the
 preference survives across sessions and the toggle is discoverable.
-Toggle with `d' in the `T → w' Worktrees group.")
+Toggle with `f' (filthy/dirty-only) in the `T → Worktrees' group.")
 
 (defvar decknix--sidebar-wt-hide-placeholders nil
   "When non-nil, hide all WIP placeholder rows (worktrees without a PR).
