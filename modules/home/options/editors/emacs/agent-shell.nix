@@ -1075,6 +1075,20 @@ let
     ];
   };
 
+  # Context-history viewer (follow-up to PR B.68): read-only
+  # bottom-window buffer showing ALL turns from the session's
+  # history cache, with n/p navigation, search (consult-line /
+  # isearch), and a jump-to-source verb.  Bound to `C-c s c'
+  # (no prefix = open viewer; C-u C-c s c = legacy inline toggle).
+  decknix-agent-context-viewer-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-context-viewer";
+    src = ./agent-shell/context-history;
+    packageRequires = [
+      decknix-agent-context-history-el
+    ];
+    testFiles = [ ];
+  };
+
   # PR B.69: Compose-buffer internal helpers carved out of
   # `decknix-agent-shell-main' (main-bulk).  Owns the four
   # completion-at-point pieces (`-command-completion-at-point',
@@ -2147,6 +2161,7 @@ in
           decknix-agent-buffer-lookup-el
           decknix-agent-conv-hidden-el
           decknix-agent-context-history-el
+          decknix-agent-context-viewer-el
           decknix-agent-compose-internals-el
           decknix-agent-tags-mutate-el
           decknix-agent-batch-parse-el
@@ -2559,6 +2574,13 @@ in
                           (session-id n))
         (defvar decknix--agent-history-cache)
         (defvar decknix--agent-history-cursor)
+
+        ;; Context-history viewer (bottom-window all-turns reader).
+        ;; Entry point is `decknix-agent-context-viewer-open-or-toggle':
+        ;; no prefix → open viewer; C-u → legacy inline toggle.
+        (require 'decknix-agent-context-viewer)
+        (declare-function decknix-agent-context-viewer-open-or-toggle
+                          "decknix-agent-context-viewer")
 
         ;; Compose-buffer internal helpers (PR B.69) -- target
         ;; resolver, display-buffer spec, and the four completion-
@@ -4873,7 +4895,10 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
                       (define-key map (kbd "q") 'decknix-agent-session-quit)
                       (define-key map (kbd "g") 'decknix-agent-session-grep)
                       (define-key map (kbd "h") 'decknix-agent-session-history)
-                      (define-key map (kbd "c") 'decknix--agent-context-toggle)
+                      ;; C-c s c: open context viewer (bottom window,
+                      ;; all turns, most-recent first).  C-u C-c s c
+                      ;; falls back to the legacy inline ▶/▼ toggle.
+                      (define-key map (kbd "c") 'decknix-agent-context-viewer-open-or-toggle)
                       ;; Timeline navigation (#136) — page the
                       ;; restored Context window without reloading
                       ;; the session JSON.  Buffer-local twins of
@@ -4903,7 +4928,7 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
                         "C-c s q" "quit session"
                         "C-c s g" "grep all sessions"
                         "C-c s h" "history"
-                        "C-c s c" "toggle context history"
+                        "C-c s c" "view context history"
                         "C-c s [" "context: older turns"
                         "C-c s ]" "context: newer turns"
                         "C-c s y" "copy session ID"
