@@ -148,16 +148,39 @@ Shows, in order:
   or reviews; co-exists with 🤖/💬 because it is a distinct signal
   about a thread I participated in.
 
-Activity icons are suppressed for APPROVED PRs."
-  (let* ((needs-reply   (eq (alist-get 'needs_reply pr) t))
-         (bot-pending   (eq (alist-get 'bot_pending pr) t))
-         (replies-to-me (eq (alist-get 'replies_to_me pr) t))
+Activity icons are suppressed for APPROVED PRs.
+
+Thread-aware Tier 1 suppression: when `total_threads' is present and
+greater than zero, 💬 and ↩ are suppressed if `unresolved_threads'
+equals zero (all threads resolved).  🤖 is not suppressed because
+bots post top-level review comments that are not tracked as inline
+threads.  When `total_threads' is absent or zero (PR-level comments
+only), the legacy stream-based ladder applies unchanged."
+  (let* ((needs-reply    (eq (alist-get 'needs_reply pr) t))
+         (bot-pending    (eq (alist-get 'bot_pending pr) t))
+         (replies-to-me  (eq (alist-get 'replies_to_me pr) t))
          ;; Use both possible decision fields
-         (decision      (or (alist-get 'review_decision pr)
-                            (alist-get 'my_review pr)))
-         (approved      (equal decision "APPROVED")))
-    (if approved
-        ""
+         (decision       (or (alist-get 'review_decision pr)
+                             (alist-get 'my_review pr)))
+         (approved       (equal decision "APPROVED"))
+         ;; Thread-aware suppression: suppress 💬/↩ when all inline
+         ;; threads are resolved.  Only applies when total_threads > 0
+         ;; so PRs with only PR-level comments fall back to stream logic.
+         (total-threads  (alist-get 'total_threads pr))
+         (unresolved     (alist-get 'unresolved_threads pr))
+         (all-resolved   (and total-threads
+                              (> total-threads 0)
+                              unresolved
+                              (= unresolved 0))))
+    (if (or approved all-resolved)
+        ;; APPROVED always suppresses all icons; all-resolved suppresses
+        ;; only the stream-based 💬/↩ (bot still shown — handled below).
+        (if (and all-resolved (not approved))
+            ;; Threads resolved but not APPROVED: bot icon may still surface.
+            (if bot-pending
+                (decknix--hub-icon "🤖" '(:foreground "#af5f87"))
+              "")
+          "")
       (concat
        (cond
         (bot-pending
