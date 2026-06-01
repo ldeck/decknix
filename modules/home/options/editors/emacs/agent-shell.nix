@@ -181,6 +181,20 @@ let
     ];
   };
 
+  # Pure event-shape helper carved out of `decknix-agent-shell-hub'
+  # (hub-bulk).  Normalises atomic-rename (`*.tmp' -> final) events
+  # so the directory watcher matches the canonical JSON name
+  # regardless of which kqueue backend surfaces the event first.
+  # Required by `decknix-agent-shell-hub-el' at byte-compile time.
+  decknix-hub-file-event-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-file-event";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-file-event-test.el"
+    ];
+  };
+
   decknix-sidebar-toggles-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-toggles";
     src = ./agent-shell/sidebar;
@@ -1613,7 +1627,9 @@ let
     pname = "decknix-agent-shell-hub";
     version = "0.1";
     src = ./agent-shell/hub-bulk;
-    packageRequires = [ ];
+    # Bulk module `(require 'decknix-hub-file-event)' at top-level for
+    # the atomic-rename-aware file-notify event helper.
+    packageRequires = [ decknix-hub-file-event-el ];
   };
 
   # Picker selection coerce: pure helper that unwraps
@@ -2187,6 +2203,7 @@ in
         ]
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
+        ++ (optional cfg.hub.enable decknix-hub-file-event-el)
         ++ (optional cfg.hub.enable decknix-hub-teamcity-el)
         ++ (optional cfg.hub.enable decknix-hub-org-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-jira-tasks-el)

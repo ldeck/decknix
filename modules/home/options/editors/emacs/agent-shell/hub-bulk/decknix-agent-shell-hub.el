@@ -42,6 +42,10 @@
 (require 'subr-x)
 (require 'filenotify)
 (require 'transient)
+;; Pure helper that normalises file-notify events (atomic rename
+;; targets, `.tmp' siblings) into a canonical JSON filename — see
+;; `decknix--hub-on-file-change' below.
+(require 'decknix-hub-file-event)
 
 ;; Forward declarations for symbols defined elsewhere in the heredoc
 ;; or in already-extracted helper modules (most are resolved at runtime
@@ -239,22 +243,27 @@ Returns nil on any error (file missing, parse failure, etc.)."
 
 (defun decknix--hub-on-file-change (event)
   "Handle a file-notify EVENT for the hub directory.
-Re-reads only the changed file and refreshes the sidebar."
-  (let ((file (nth 2 event)))
-    (when (and file (stringp file))
-      (let ((name (file-name-nondirectory file)))
-        (pcase name
-          ("github-reviews.json"  (decknix--hub-refresh-reviews))
-          ("github-wip.json"      (decknix--hub-refresh-wip))
-          ("meta.json"            (decknix--hub-refresh-meta))
-          ("jira-tasks.json"      (decknix--hub-refresh-jira))
-          ("teamcity-builds.json" (decknix--hub-refresh-teamcity))
-          ("teamcity-deploys.json" (decknix--hub-refresh-deploys))
-          (_ nil))
-        ;; Refresh the sidebar if it exists
-        (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
-                   (get-buffer agent-shell-workspace-sidebar-buffer-name))
-          (agent-shell-workspace-sidebar-refresh))))))
+Re-reads only the changed file and refreshes the sidebar.
+
+The hub daemon writes JSON atomically (`*.tmp' → `rename'); the
+helper `decknix--hub-event-filename' normalises both halves of
+that two-step write back onto the canonical JSON name so the
+`pcase' below matches regardless of which event the kqueue
+backend surfaces first."
+  (let ((name (decknix--hub-event-filename event)))
+    (when name
+      (pcase name
+        ("github-reviews.json"  (decknix--hub-refresh-reviews))
+        ("github-wip.json"      (decknix--hub-refresh-wip))
+        ("meta.json"            (decknix--hub-refresh-meta))
+        ("jira-tasks.json"      (decknix--hub-refresh-jira))
+        ("teamcity-builds.json" (decknix--hub-refresh-teamcity))
+        ("teamcity-deploys.json" (decknix--hub-refresh-deploys))
+        (_ nil))
+      ;; Refresh the sidebar if it exists
+      (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
+                 (get-buffer agent-shell-workspace-sidebar-buffer-name))
+        (agent-shell-workspace-sidebar-refresh)))))
 
 (defun decknix--hub-start-watcher ()
   "Start watching the hub directory for changes."
