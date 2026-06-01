@@ -201,6 +201,80 @@
   (should (equal (decknix--hub-activity-icons
                   '((bot_pending . "true") (needs_reply . 1))) "")))
 
+;; -- activity-icons: thread-aware Tier 1 suppression ---------------
+
+(ert-deftest decknix-hub-activity-icons--all-threads-resolved-hides-needs-reply ()
+  "0 unresolved out of >0 total: bubble suppressed even if needs-reply set."
+  (let ((pr '((total_threads . 22)
+              (unresolved_threads . 0)
+              (needs_reply . t))))
+    (should (equal (decknix--hub-activity-icons pr) ""))))
+
+(ert-deftest decknix-hub-activity-icons--all-threads-resolved-hides-replies ()
+  "0 unresolved out of >0 total: return-arrow suppressed even if replies-to-me set."
+  (let ((pr '((total_threads . 22)
+              (unresolved_threads . 0)
+              (replies_to_me . t))))
+    (should (equal (decknix--hub-activity-icons pr) ""))))
+
+(ert-deftest decknix-hub-activity-icons--all-threads-resolved-hides-both ()
+  "0 unresolved out of >0 total: both icons suppressed.
+Reproduces the bug where a fully-resolved PR was decorated with
+bubble + return-arrow from the stream-based ladder even though
+all 22 threads were resolved."
+  (let ((pr '((total_threads . 22)
+              (unresolved_threads . 0)
+              (needs_reply . t)
+              (replies_to_me . t)
+              (review_decision . "REVIEW_REQUIRED"))))
+    (should (equal (decknix--hub-activity-icons pr) ""))))
+
+(ert-deftest decknix-hub-activity-icons--unresolved-keeps-needs-reply ()
+  "Some unresolved: bubble still rendered."
+  (let ((pr '((total_threads . 22)
+              (unresolved_threads . 3)
+              (needs_reply . t))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-activity-icons pr))
+                   "💬"))))
+
+(ert-deftest decknix-hub-activity-icons--unresolved-keeps-replies ()
+  "Some unresolved: return-arrow still rendered alongside bubble."
+  (let ((pr '((total_threads . 22)
+              (unresolved_threads . 1)
+              (needs_reply . t)
+              (replies_to_me . t))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-activity-icons pr))
+                   "💬↩"))))
+
+(ert-deftest decknix-hub-activity-icons--bot-pending-survives-resolution ()
+  "Bot icon still surfaces even when threads are all resolved.
+Bots commonly post top-level review comments (Codacy / CI / Copilot)
+that aren't tracked as inline threads."
+  (let ((pr '((total_threads . 22)
+              (unresolved_threads . 0)
+              (bot_pending . t))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-activity-icons pr))
+                   "🤖"))))
+
+(ert-deftest decknix-hub-activity-icons--no-thread-data-falls-back ()
+  "No total_threads field: legacy stream-based behaviour applies."
+  (let ((pr '((needs_reply . t) (replies_to_me . t))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-activity-icons pr))
+                   "💬↩"))))
+
+(ert-deftest decknix-hub-activity-icons--zero-total-threads-falls-back ()
+  "total_threads = 0 means PR-level comments only, no inline threads.
+Stream-based ladder still applies."
+  (let ((pr '((total_threads . 0)
+              (unresolved_threads . 0)
+              (needs_reply . t))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-activity-icons pr))
+                   "💬"))))
 ;; -- wip-reply-icon: legacy alias ----------------------------------
 
 (ert-deftest decknix-hub-wip-reply-icon--delegates ()
