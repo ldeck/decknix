@@ -822,64 +822,69 @@ candidate movement uses the line text as the search needle."
   "Sidebar toggles grouped by section.
 Suffixes within each section are ordered alphabetically by their
 display label (case-insensitive) to match the sidebar footer,
-which advertises toggles by label only (no keys)."
+which advertises toggles by label only (no keys).
+
+Sections are laid out as two rows of three columns so the
+transient popup stays compact instead of stretching into a
+single tall column.  Row 1: Global / Requests / Live.  Row 2:
+WIP / Sessions / Worktrees."
   :transient-suffix 'transient--do-stay
-  ["Global"
-   (decknix-sidebar-transient--show-toggles)     ;; footer toggles
-   (decknix-sidebar-transient--hub-display-mode) ;; Layout
-   (decknix-sidebar-transient--org-filter)       ;; Org filter
-   (decknix-sidebar-transient--width)]           ;; Width
-  ["Requests"
-   ;; Order matches the sidebar footer: alphabetical text labels
-   ;; (age, bots, ci, layout, mention, reviewed, sort) then emoji-led
-   ;; labels by code-point (↩, 💬, 🤖).
-   (decknix-sidebar-transient--age-filter)       ;; age
-   (decknix-sidebar-transient--bot-filter)       ;; bots
-   (decknix-sidebar-transient--ci-filter)        ;; ci
-   (decknix-sidebar-transient--requests-display-mode) ;; Layout (d)
-   (decknix-sidebar-transient--mention-filter)   ;; mention
-   (decknix-sidebar-transient--req-reviewed)     ;; reviewed
-   (decknix-sidebar-transient--req-sort)         ;; sort
-   (decknix-sidebar-transient--req-my-replies)   ;; ↩
-   (decknix-sidebar-transient--req-needs-reply)  ;; 💬
-   (decknix-sidebar-transient--req-bot-pending)  ;; 🤖
-   (decknix-sidebar-transient--req-conflict)]    ;; ⚠ conflict
-  ["Live"
-   (decknix-sidebar-transient--live-display-mode) ;; Layout (d)
-   (decknix-sidebar-transient--hidden-toggle)    ;; Hidden (H)
-   (decknix-sidebar-transient--show-progress)    ;; progress
-   (decknix-sidebar-transient--quick-switch)     ;; Quick-switch
-   (decknix-sidebar-transient--repo-name-cap)    ;; repo name
-   (decknix-sidebar-transient--expand-prs)       ;; session PRs
-   (decknix-sidebar-transient--symbol-style)     ;; symbols
-   (decknix-sidebar-transient--tile-cycle)       ;; Tile cycle (off/2/3/4)
-   (decknix-sidebar-transient--live-view-mode)]  ;; view (v)
-  ["WIP"
-   (decknix-sidebar-transient--wip-bot-pending)  ;; bot review
-   (decknix-sidebar-transient--wip-needs-reply)  ;; comments
-   (decknix-sidebar-transient--wip-group-mode)   ;; group (g)
-   (decknix-sidebar-transient--wip-hide-linked)  ;; hide linked
-   (decknix-sidebar-transient--wip-display-mode) ;; Layout (d)
-   (decknix-sidebar-transient--deploy-indicator) ;; pipeline
-   (decknix-sidebar-transient--wip-my-replies)   ;; replies
-   (decknix-sidebar-transient--wip-hide-terminal)] ;; stale (#137)
-  ["Sessions"
-   ;; Alphabetical by display label (case-insensitive):
-   ;; age, display, live-backed, saved, unknown-ws.
-   (decknix-sidebar-transient--sessions-age)          ;; age
-   (decknix-sidebar-transient--sessions-display-mode) ;; display (d)
-   (decknix-sidebar-transient--sessions-hide-live)    ;; live-backed
-   (decknix-sidebar-transient--show-saved-sessions)   ;; saved
-   (decknix-sidebar-transient--sessions-hide-unknown)];; unknown-ws
-  ["Worktrees"
-   ;; Alphabetical by display label: age, dirty-only, live-only,
-   ;; merged, placeholders, repo-grouped.
-   (decknix-sidebar-transient--wt-age-filter)         ;; age
-   (decknix-sidebar-transient--wt-hide-clean)         ;; dirty-only
-   (decknix-sidebar-transient--wt-live-only)          ;; live-only
-   (decknix-sidebar-transient--wt-hide-merged)        ;; merged
-   (decknix-sidebar-transient--wt-hide-placeholders)  ;; placeholders
-   (decknix-sidebar-transient--wt-group-by-repo)]     ;; repo-grouped
+  [["Global"
+    (decknix-sidebar-transient--show-toggles)     ;; footer toggles
+    (decknix-sidebar-transient--hub-display-mode) ;; Layout
+    (decknix-sidebar-transient--org-filter)       ;; Org filter
+    (decknix-sidebar-transient--width)]           ;; Width
+   ["Requests"
+    ;; Order matches the sidebar footer: alphabetical text labels
+    ;; (age, bots, ci, layout, mention, reviewed, sort) then emoji-led
+    ;; labels by code-point (↩, 💬, 🤖).
+    (decknix-sidebar-transient--age-filter)       ;; age
+    (decknix-sidebar-transient--bot-filter)       ;; bots
+    (decknix-sidebar-transient--ci-filter)        ;; ci
+    (decknix-sidebar-transient--requests-display-mode) ;; Layout (d)
+    (decknix-sidebar-transient--mention-filter)   ;; mention
+    (decknix-sidebar-transient--req-reviewed)     ;; reviewed
+    (decknix-sidebar-transient--req-sort)         ;; sort
+    (decknix-sidebar-transient--req-my-replies)   ;; ↩
+    (decknix-sidebar-transient--req-needs-reply)  ;; 💬
+    (decknix-sidebar-transient--req-bot-pending)  ;; 🤖
+    (decknix-sidebar-transient--req-conflict)]    ;; ⚠ conflict
+   ["Live"
+    (decknix-sidebar-transient--live-display-mode) ;; Layout (d)
+    (decknix-sidebar-transient--hidden-toggle)    ;; Hidden (H)
+    (decknix-sidebar-transient--show-progress)    ;; progress
+    (decknix-sidebar-transient--quick-switch)     ;; Quick-switch
+    (decknix-sidebar-transient--repo-name-cap)    ;; repo name
+    (decknix-sidebar-transient--expand-prs)       ;; session PRs
+    (decknix-sidebar-transient--symbol-style)     ;; symbols
+    (decknix-sidebar-transient--tile-cycle)       ;; Tile cycle (off/2/3/4)
+    (decknix-sidebar-transient--live-view-mode)]] ;; view (v)
+  [["WIP"
+    (decknix-sidebar-transient--wip-bot-pending)  ;; bot review
+    (decknix-sidebar-transient--wip-needs-reply)  ;; comments
+    (decknix-sidebar-transient--wip-group-mode)   ;; group (g)
+    (decknix-sidebar-transient--wip-hide-linked)  ;; hide linked
+    (decknix-sidebar-transient--wip-display-mode) ;; Layout (d)
+    (decknix-sidebar-transient--deploy-indicator) ;; pipeline
+    (decknix-sidebar-transient--wip-my-replies)   ;; replies
+    (decknix-sidebar-transient--wip-hide-terminal)] ;; stale (#137)
+   ["Sessions"
+    ;; Alphabetical by display label (case-insensitive):
+    ;; age, display, live-backed, saved, unknown-ws.
+    (decknix-sidebar-transient--sessions-age)          ;; age
+    (decknix-sidebar-transient--sessions-display-mode) ;; display (d)
+    (decknix-sidebar-transient--sessions-hide-live)    ;; live-backed
+    (decknix-sidebar-transient--show-saved-sessions)   ;; saved
+    (decknix-sidebar-transient--sessions-hide-unknown)];; unknown-ws
+   ["Worktrees"
+    ;; Alphabetical by display label: age, dirty-only, live-only,
+    ;; merged, placeholders, repo-grouped.
+    (decknix-sidebar-transient--wt-age-filter)         ;; age
+    (decknix-sidebar-transient--wt-hide-clean)         ;; dirty-only
+    (decknix-sidebar-transient--wt-live-only)          ;; live-only
+    (decknix-sidebar-transient--wt-hide-merged)        ;; merged
+    (decknix-sidebar-transient--wt-hide-placeholders)  ;; placeholders
+    (decknix-sidebar-transient--wt-group-by-repo)]]    ;; repo-grouped
   ["" ("q" "Done" transient-quit-one)])
 
 (defun decknix-sidebar-refresh ()
