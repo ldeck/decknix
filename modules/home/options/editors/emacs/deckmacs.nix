@@ -116,6 +116,15 @@ in
 
       ;; == Reload ==
 
+      (defvar deckmacs-post-reload-hook nil
+        "Normal hook run after `deckmacs-reload' completes successfully.
+      All decknix-* features have been reloaded and the new store path
+      is active when these hooks fire.  Use this hook to restore runtime
+      state that was reset by the feature unload/reload cycle — e.g.
+      sidebar toggle states (`decknix--sidebar-state-restore').
+      Add only symbol-named functions so they are deduplicated across
+      repeated reloads.")
+
       (defun deckmacs-reload ()
         "Reload the current Nix profile's default.el without restarting the daemon.
       Compares store paths to detect changes. With \\[universal-argument], force
@@ -154,7 +163,12 @@ in
                          " (initial load tracked)")
                        (deckmacs--short-store-path new-store)
                        rewritten
-                       (length unloaded)))))))
+                       (length unloaded))
+              ;; Notify listeners that the reload cycle is complete and all
+              ;; decknix-* features are live at the new store path.
+              ;; Hooks added to this variable survive the unload step because
+              ;; the variable is defined here in deckmacs (not in any feature).
+              (run-hooks 'deckmacs-post-reload-hook)))))))
 
       ;; == Status ==
 

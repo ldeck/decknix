@@ -2918,7 +2918,7 @@ primary action is a no-op until a PR materialises."
          ;; Worktree badge — branch is in scope from the WIP record.
          (wt-badge (decknix--hub-worktree-row-badge
                     repo-full branch))
-         (line (pcase (decknix--hub-get-display-mode 'live)
+         (line (pcase (decknix--hub-get-display-mode 'wip)
                    ('D ;; Minimal
                     (let* ((phase (cond (merged-p "[ship]")
                                         (closed-p "[closed]")

@@ -4254,6 +4254,15 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
         ;; ensures everything is bound before we try to set values.
         (add-hook 'kill-emacs-hook #'decknix--sidebar-state-save)
         (add-hook 'emacs-startup-hook #'decknix--sidebar-state-restore)
+        ;; Also restore after a hot-reload (`decknix switch').
+        ;; `deckmacs-reload' force-unloads then reloads every decknix-*
+        ;; feature; unload-feature unbinds defvar'd variables, so the
+        ;; defvar forms on reload reset them to defaults (tile-count → 0,
+        ;; display modes → nil, etc.).  emacs-startup-hook does not re-fire
+        ;; on a hot-reload so we use deckmacs-post-reload-hook instead.
+        ;; Symbol-form ensures the hook is deduplicated across reloads.
+        (when (boundp 'deckmacs-post-reload-hook)
+          (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-state-restore))
         ;; Freeze the prior run's live set as this run's Previous
         ;; Sessions list and reset the live file to empty so eager
         ;; lifecycle hooks rebuild it from zero.  Runs after restore
