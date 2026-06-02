@@ -9,6 +9,11 @@
 (require 'ert)
 (require 'decknix-agent-batch-build)
 
+;; Mock dependencies from main-link
+(unless (fboundp 'decknix--agent-review-get-params)
+  (defun decknix--agent-review-get-params (url)
+    (list nil "/review-service-pr")))
+
 ;; --- build-command ---
 
 (ert-deftest decknix-batch-build--command-ungrouped-takes-first ()
