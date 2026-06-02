@@ -30,6 +30,7 @@
   "Documented default values match the constants at module load."
   (should     decknix--hub-requests-hide-bot-pending)   ; default ON
   (should     decknix--hub-requests-hide-conflict)      ; default ON
+  (should (eq decknix--hub-requests-hide-reviewed 'hide-any)) ; default hide-any
   (should-not decknix--hub-requests-hide-needs-reply)
   (should-not decknix--hub-requests-only-my-replies)
   (should-not decknix--hub-requests-sort-reverse)
@@ -180,6 +181,73 @@
   (let ((decknix--hub-requests-hide-conflict t))
     (call-interactively #'decknix--hub-toggle-requests-hide-conflict)
     (should-not decknix--hub-requests-hide-conflict)))
+
+;; -- hide-reviewed filter (3-state cycle) ------------------------
+
+(ert-deftest decknix-hub-attention-filter--hide-reviewed-nil-shows-all ()
+  "State nil: all items are visible regardless of review outcome."
+  (let ((decknix--hub-requests-hide-reviewed nil))
+    ;; I approved, not mentioned
+    (should (decknix--hub-requests-reviewed-visible-p
+             '((my_review . "APPROVED") (mentioned . :json-false))))
+    ;; Colleague approved, not mentioned
+    (should (decknix--hub-requests-reviewed-visible-p
+             '((my_review . nil) (review_decision . "APPROVED")
+               (mentioned . :json-false))))))
+
+(ert-deftest decknix-hub-attention-filter--hide-reviewed-hide-mine-hides-my-review ()
+  "State hide-mine: hides PRs where I approved or CHANGES_REQUESTED."
+  (let ((decknix--hub-requests-hide-reviewed 'hide-mine))
+    (should-not (decknix--hub-requests-reviewed-visible-p
+                 '((my_review . "APPROVED") (mentioned . :json-false))))
+    (should-not (decknix--hub-requests-reviewed-visible-p
+                 '((my_review . "CHANGES_REQUESTED") (mentioned . :json-false))))))
+
+(ert-deftest decknix-hub-attention-filter--hide-reviewed-hide-mine-shows-colleague-approved ()
+  "State hide-mine: still shows PRs where only a colleague approved."
+  (let ((decknix--hub-requests-hide-reviewed 'hide-mine))
+    (should (decknix--hub-requests-reviewed-visible-p
+             '((my_review . nil) (review_decision . "APPROVED")
+               (mentioned . :json-false))))))
+
+(ert-deftest decknix-hub-attention-filter--hide-reviewed-hide-any-hides-all-concluded ()
+  "State hide-any: hides PRs where any conclusive review outcome exists."
+  (let ((decknix--hub-requests-hide-reviewed 'hide-any))
+    ;; I approved
+    (should-not (decknix--hub-requests-reviewed-visible-p
+                 '((my_review . "APPROVED") (mentioned . :json-false))))
+    ;; Colleague approved (review_decision)
+    (should-not (decknix--hub-requests-reviewed-visible-p
+                 '((my_review . nil) (review_decision . "APPROVED")
+                   (mentioned . :json-false))))))
+
+(ert-deftest decknix-hub-attention-filter--hide-reviewed-mentioned-always-shows ()
+  "Re-requested PRs (mentioned = t) always show in hide-mine and hide-any."
+  (let ((item '((my_review . "APPROVED") (review_decision . "APPROVED")
+                (mentioned . t))))
+    (let ((decknix--hub-requests-hide-reviewed 'hide-mine))
+      (should (decknix--hub-requests-reviewed-visible-p item)))
+    (let ((decknix--hub-requests-hide-reviewed 'hide-any))
+      (should (decknix--hub-requests-reviewed-visible-p item)))))
+
+(ert-deftest decknix-hub-attention-filter--hide-reviewed-label ()
+  "`decknix--hub-requests-reviewed-label' returns the right short string."
+  (let ((decknix--hub-requests-hide-reviewed nil))
+    (should (string= "show" (decknix--hub-requests-reviewed-label))))
+  (let ((decknix--hub-requests-hide-reviewed 'hide-mine))
+    (should (string= "hide-mine" (decknix--hub-requests-reviewed-label))))
+  (let ((decknix--hub-requests-hide-reviewed 'hide-any))
+    (should (string= "hide-any" (decknix--hub-requests-reviewed-label)))))
+
+(ert-deftest decknix-hub-attention-filter--hide-reviewed-cycle-advances-state ()
+  "Cycle advances nil → hide-mine → hide-any → nil."
+  (let ((decknix--hub-requests-hide-reviewed nil))
+    (call-interactively #'decknix--hub-cycle-requests-hide-reviewed)
+    (should (eq decknix--hub-requests-hide-reviewed 'hide-mine))
+    (call-interactively #'decknix--hub-cycle-requests-hide-reviewed)
+    (should (eq decknix--hub-requests-hide-reviewed 'hide-any))
+    (call-interactively #'decknix--hub-cycle-requests-hide-reviewed)
+    (should (eq decknix--hub-requests-hide-reviewed nil))))
 
 (provide 'decknix-hub-attention-filter-test)
 ;;; decknix-hub-attention-filter-test.el ends here
