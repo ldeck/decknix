@@ -11,9 +11,39 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::signal;
+
+// ---------------------------------------------------------------------------
+// PR-details cache TTL
+// ---------------------------------------------------------------------------
+//
+// Both the WIP and Reviews caches key on (repo, number) and invalidate when
+// GitHub's `updatedAt` changes.  That is sufficient for fields tied to the
+// PR itself (CI, review decision, comments) but NOT for `mergeable` /
+// `mergeStateStatus`, which flip to `CONFLICTING` / `DIRTY` when a *different*
+// branch merges to main — an event that does NOT bump this PR's `updatedAt`.
+// Without a TTL the sidebar can show a stale green ● indefinitely while the
+// PR actually has a fresh merge conflict.
+//
+// We layer a TTL on top of the updatedAt key so quiet PRs still get refreshed
+// periodically.  Five minutes balances API budget (5 polls of grace at the
+// default 60s cadence) against worst-case staleness for conflict surfacing.
+const PR_CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// Pure freshness check shared by the WIP and Reviews caches.  Returns true
+/// when the caller can re-use the cached entry instead of refetching.
+fn cache_entry_fresh(
+    cached_updated_at: &str,
+    current_updated_at: &str,
+    inserted_at: Instant,
+    now: Instant,
+    ttl: Duration,
+) -> bool {
+    cached_updated_at == current_updated_at
+        && now.saturating_duration_since(inserted_at) < ttl
+}
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -651,8 +681,8 @@ impl Default for ReviewPrDetails {
 }
 
 
-static REVIEWS_CACHE: OnceLock<RwLock<HashMap<(String, u64), (String, ReviewPrDetails)>>> = OnceLock::new();
-fn reviews_cache() -> &'static RwLock<HashMap<(String, u64), (String, ReviewPrDetails)>> {
+static REVIEWS_CACHE: OnceLock<RwLock<HashMap<(String, u64), (String, Instant, ReviewPrDetails)>>> = OnceLock::new();
+fn reviews_cache() -> &'static RwLock<HashMap<(String, u64), (String, Instant, ReviewPrDetails)>> {
     REVIEWS_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
@@ -879,6 +909,9 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
     let my_login = get_github_login().await;
 
     // Identify which PRs are not in cache (need fresh detail + thread fetches).
+    // Cache hit requires updatedAt match AND insertion within `PR_CACHE_TTL` —
+    // see the TTL rationale at the top of this file.
+    let now = Instant::now();
     let uncached_pairs: Vec<(String, u64)> = {
         let cache = reviews_cache().read().await;
         prs.iter()
@@ -887,7 +920,9 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
                 if archived.contains(&repo) { return None; }
                 let updated_at = pr.updated_at.clone().unwrap_or_default();
                 let hit = cache.get(&(repo.clone(), pr.number))
-                    .map(|(ts, _)| ts == &updated_at)
+                    .map(|(ts, inserted, _)| {
+                        cache_entry_fresh(ts, &updated_at, *inserted, now, PR_CACHE_TTL)
+                    })
                     .unwrap_or(false);
                 if hit { None } else { Some((repo, pr.number)) }
             })
@@ -906,14 +941,18 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         if archived.contains(&repo) {
             continue;
         }
-        // Use cache when updatedAt unchanged; otherwise fetch with pre-batched threads.
+        // Use cache when updatedAt unchanged AND within TTL; otherwise refetch.
         let updated_at = pr.updated_at.clone().unwrap_or_default();
         let cache_key = (repo.clone(), pr.number);
 
         let cached_details = {
             let cache = reviews_cache().read().await;
-            cache.get(&cache_key).and_then(|(ts, details)| {
-                if ts == &updated_at { Some(details.clone()) } else { None }
+            cache.get(&cache_key).and_then(|(ts, inserted, details)| {
+                if cache_entry_fresh(ts, &updated_at, *inserted, now, PR_CACHE_TTL) {
+                    Some(details.clone())
+                } else {
+                    None
+                }
             })
         };
 
@@ -924,7 +963,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
                 .map(|s| ReviewThreadStats { total: s.total, unresolved_to_me: s.unresolved_to_me });
             let d = fetch_pr_ci(&repo, pr.number, my_login.as_deref(), prefetched).await;
             let mut cache = reviews_cache().write().await;
-            cache.insert(cache_key, (updated_at, d.clone()));
+            cache.insert(cache_key, (updated_at, Instant::now(), d.clone()));
             d
         };
 
@@ -997,8 +1036,8 @@ impl Default for PrDetails {
     }
 }
 
-static WIP_CACHE: OnceLock<RwLock<HashMap<(String, u64), (String, PrDetails)>>> = OnceLock::new();
-fn wip_cache() -> &'static RwLock<HashMap<(String, u64), (String, PrDetails)>> {
+static WIP_CACHE: OnceLock<RwLock<HashMap<(String, u64), (String, Instant, PrDetails)>>> = OnceLock::new();
+fn wip_cache() -> &'static RwLock<HashMap<(String, u64), (String, Instant, PrDetails)>> {
     WIP_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
@@ -1197,6 +1236,11 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
     let my_login = get_github_login().await;
 
     // Identify which PRs are not in cache (need fresh detail + thread fetches).
+    // Cache hit requires updatedAt match AND insertion within `PR_CACHE_TTL` —
+    // `mergeable` can flip to CONFLICTING when a sibling branch merges to main
+    // without bumping this PR's updatedAt, so we must re-fetch periodically
+    // even for quiet PRs.
+    let now = Instant::now();
     let uncached_pairs: Vec<(String, u64)> = {
         let cache = wip_cache().read().await;
         all_prs.iter()
@@ -1205,7 +1249,9 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
                 if archived.contains(&repo) { return None; }
                 let updated_at = pr.updated_at.clone().unwrap_or_default();
                 let hit = cache.get(&(repo.clone(), pr.number))
-                    .map(|(ts, _)| ts == &updated_at)
+                    .map(|(ts, inserted, _)| {
+                        cache_entry_fresh(ts, &updated_at, *inserted, now, PR_CACHE_TTL)
+                    })
                     .unwrap_or(false);
                 if hit { None } else { Some((repo, pr.number)) }
             })
@@ -1227,14 +1273,18 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
         if archived.contains(&repo) {
             continue;
         }
-        // Use cache when updatedAt unchanged; otherwise fetch with pre-batched threads.
+        // Use cache when updatedAt unchanged AND within TTL; otherwise refetch.
         let updated_at = pr.updated_at.clone().unwrap_or_default();
         let cache_key = (repo.clone(), pr.number);
 
         let cached_details = {
             let cache = wip_cache().read().await;
-            cache.get(&cache_key).and_then(|(ts, details)| {
-                if ts == &updated_at { Some(details.clone()) } else { None }
+            cache.get(&cache_key).and_then(|(ts, inserted, details)| {
+                if cache_entry_fresh(ts, &updated_at, *inserted, now, PR_CACHE_TTL) {
+                    Some(details.clone())
+                } else {
+                    None
+                }
             })
         };
 
@@ -1245,7 +1295,7 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
                 .map(|s| ReviewThreadStats { total: s.total, unresolved_to_me: s.unresolved_to_me });
             let d = fetch_pr_details(&repo, pr.number, my_login.as_deref(), prefetched).await;
             let mut cache = wip_cache().write().await;
-            cache.insert(cache_key, (updated_at, d.clone()));
+            cache.insert(cache_key, (updated_at, Instant::now(), d.clone()));
             d
         };
         let entry = repo_map.entry(repo).or_default();
@@ -1494,5 +1544,43 @@ async fn main() {
             Ok(()) => eprintln!("hub: shutting down"),
             Err(e) => eprintln!("hub: signal error: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_entry_fresh_same_ts_within_ttl_is_hit() {
+        let now = Instant::now();
+        let inserted = now;
+        assert!(cache_entry_fresh("t1", "t1", inserted, now, Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn cache_entry_fresh_different_ts_is_miss() {
+        let now = Instant::now();
+        let inserted = now;
+        assert!(!cache_entry_fresh("t1", "t2", inserted, now, Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn cache_entry_fresh_expired_ttl_is_miss_even_with_same_ts() {
+        // This is the scenario that motivated the TTL: a quiet PR whose
+        // `updatedAt' hasn't changed, but whose `mergeable' flipped because
+        // a sibling branch merged to main.  Without the TTL the cache would
+        // hold the stale `MERGEABLE' value indefinitely.
+        let now = Instant::now();
+        let inserted = now.checked_sub(Duration::from_secs(600)).unwrap();
+        assert!(!cache_entry_fresh("t1", "t1", inserted, now, Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn cache_entry_fresh_exact_ttl_boundary_is_miss() {
+        // `<` not `<=' — at exactly TTL we refetch.
+        let now = Instant::now();
+        let inserted = now.checked_sub(Duration::from_secs(300)).unwrap();
+        assert!(!cache_entry_fresh("t1", "t1", inserted, now, Duration::from_secs(300)));
     }
 }
