@@ -49,8 +49,11 @@
 
 (require 'cl-lib)
 
+(declare-function decknix--agent-review-get-params "decknix-agent-shell-main-link")
+
 (defun decknix--batch-build-command (grouped items)
   "Build the `/review-service-pr' command string for ITEMS.
+Aware of bot authors via `decknix--agent-review-get-params'.
 
 When GROUPED is non-nil, every item gets its own
 `/review-service-pr <url>' line, joined with newlines so the
@@ -64,9 +67,11 @@ function does not validate.  The 200 200-character spec keeps
 this strictly textual."
   (if grouped
       (mapconcat (lambda (item)
-                   (format "/review-service-pr %s" item))
+                   (let ((params (decknix--agent-review-get-params item)))
+                     (format "%s %s" (cadr params) item)))
                  items "\n")
-    (format "/review-service-pr %s" (car items))))
+    (let ((params (decknix--agent-review-get-params (car items))))
+      (format "%s %s" (cadr params) (car items)))))
 
 (defun decknix--batch-build-tags (items parser-fn)
   "Return the tag list derived from ITEMS using PARSER-FN.
