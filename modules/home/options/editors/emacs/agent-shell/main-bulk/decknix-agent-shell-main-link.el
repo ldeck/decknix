@@ -161,6 +161,16 @@ model.  When nil (default), the framework default from
 `~/.augment/settings.json' (see `decknix.cli.auggie.settings.model')
 is used and no per-conversation override is recorded.")
 
+(defvar decknix-agent-review-bot-pr-model "haiku4.5"
+  "Auggie model id to pin for bot-authored PR reviews.
+See `decknix-agent-review-pr-model' for behaviour.  This model is
+selected automatically when the PR author matches
+`decknix--hub-bot-author-p'.")
+
+(defvar decknix-agent-review-bot-pr-command "/review-bot-pr"
+  "Slash command to send for bot-authored PR reviews.
+Defaults to the specialized `/review-bot-pr' command.")
+
 
 ;; -- Quickaction primitive --
 
@@ -309,13 +319,64 @@ Split below per pane); the default selection lands on
                t))))))
 
 
+(declare-function decknix--hub-bot-author-p "decknix-hub-mention-bot")
+(defvar decknix--hub-reviews)
+(defvar decknix--hub-wip)
+
+
 ;; -- PR review quick action --
+
+(defun decknix--agent-hub-pr-author (owner repo number)
+  "Find the author of the PR (OWNER/REPO#NUMBER) in the hub cache.
+Returns nil if not found."
+  (let* ((items (append (and (boundp 'decknix--hub-reviews) decknix--hub-reviews)
+                        (and (boundp 'decknix--hub-wip) decknix--hub-wip)))
+         (match (cl-find-if
+                 (lambda (item)
+                   (and (string= (alist-get 'owner item) owner)
+                        (string= (alist-get 'repo item) repo)
+                        (let ((n (alist-get 'number item)))
+                          (if (stringp n)
+                              (string= n (number-to-string number))
+                            (= n number)))))
+                 items)))
+    (when match
+      (alist-get 'author match))))
+
+(defun decknix--agent-pr-author (url)
+  "Detect the author of the PR at URL.
+Tries the hub cache first, falls back to `gh pr view'."
+  (let ((parsed (decknix--agent-parse-pr-url url)))
+    (when parsed
+      (let* ((owner (alist-get 'owner parsed))
+             (repo (alist-get 'repo parsed))
+             (number (alist-get 'number parsed))
+             ;; 1. Hub cache lookup
+             (author (decknix--agent-hub-pr-author owner repo number)))
+        (or author
+            ;; 2. gh fallback (synchronous, acceptable per user)
+            (let ((output (shell-command-to-string
+                           (format "gh pr view %s --json author --jq .author.login"
+                                   url))))
+              (when (and output (> (length output) 0))
+                (string-trim output))))))))
+
+(defun decknix--agent-review-get-params (url)
+  "Get (MODEL COMMAND) for the PR at URL, aware of bot authors."
+  (let* ((author (decknix--agent-pr-author url))
+         (is-bot (and author (fboundp 'decknix--hub-bot-author-p)
+                      (decknix--hub-bot-author-p author))))
+    (if is-bot
+        (list (or decknix-agent-review-bot-pr-model decknix-agent-review-pr-model)
+              decknix-agent-review-bot-pr-command)
+      (list decknix-agent-review-pr-model "/review-service-pr"))))
 
 (defun decknix-agent-review-pr (url)
   "Start a PR review session for URL.
 Parses the GitHub PR URL, creates a new session with auto-generated
-name and tags, then sends /review-service-pr.  Metadata enrichment
-\(author, Jira key, title\) is handled by the review command itself.
+name and tags, then sends the review command (aware of bot authors).
+Metadata enrichment (author, Jira key, title) is handled by the
+review command itself.
 
 Interactively, prompts for URL (defaulting to clipboard if it
 looks like a PR URL) and workspace (defaulting to current project)."
@@ -348,9 +409,12 @@ looks like a PR URL) and workspace (defaulting to current project)."
            ;; Confirm name
            (name (read-string (format "Session name [%s]: " name)
                               nil nil name))
-           (command (format "/review-service-pr %s" url)))
-      (decknix--agent-quickaction-start name tags workspace command
-                                        decknix-agent-review-pr-model)
+           ;; Bot-aware model and command selection
+           (params (decknix--agent-review-get-params url))
+           (model (car params))
+           (command-base (cadr params))
+           (command (format "%s %s" command-base url)))
+      (decknix--agent-quickaction-start name tags workspace command model)
       (message "Starting review: %s/%s#%s" owner repo number))))
 
 
