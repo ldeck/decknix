@@ -111,6 +111,10 @@
                   "decknix-hub-attention-filter")
 (declare-function decknix--hub-toggle-wip-only-my-replies
                   "decknix-hub-attention-filter")
+(declare-function decknix--hub-cycle-requests-hide-reviewed
+                  "decknix-hub-attention-filter")
+(declare-function decknix--hub-requests-reviewed-label
+                  "decknix-hub-attention-filter")
 (declare-function decknix--hub-pr-status-from-hub "decknix-hub-pr-lookup")
 (declare-function decknix--hub-pr-cache-get "decknix-hub-pr-lookup")
 (declare-function decknix--hub-worktree-canonical-repo "decknix-hub-worktree-parse")
@@ -512,13 +516,14 @@ picker's dynamic binding unwinds.")
   (lambda ()
     (format "reviewed      %s"
             (propertize
-             (if decknix--hub-requests-hide-reviewed "[hide]" "[show]")
-             'face (if decknix--hub-requests-hide-reviewed
-                       'font-lock-constant-face
-                     'font-lock-comment-face))))
+             (format "[%s]" (decknix--hub-requests-reviewed-label))
+             'face (pcase decknix--hub-requests-hide-reviewed
+                     ('nil       'font-lock-comment-face)
+                     ('hide-mine 'font-lock-constant-face)
+                     (_          'font-lock-keyword-face)))))
   :transient t
   (interactive)
-  (call-interactively #'decknix--hub-toggle-requests-hide-reviewed))
+  (call-interactively #'decknix--hub-cycle-requests-hide-reviewed))
 
 (transient-define-suffix decknix-sidebar-transient--hub-display-mode ()
   :key "D"
