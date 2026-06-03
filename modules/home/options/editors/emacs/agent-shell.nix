@@ -1650,18 +1650,36 @@ let
 
   # PR B-Bulk.3a: bulk extraction of the always-loaded core (always-1
   # + always-tail sub-heredocs).  Verbatim move of 254 declarations
-  # (~4,800 lines) packaged via plain trivialBuild, isolated in its
-  # own `main-bulk/' src dir to keep co-resident byte-compilation off
-  # other in-tree modules.  Always loaded — there is no feature gate
-  # for the agent-shell core.  Tests deferred (FIXME(arch-debt)).
-  decknix-agent-shell-main-el = pkgs.emacsPackages.trivialBuild {
+  # (~4,800 lines), isolated in its own `main-bulk/' src dir to keep
+  # co-resident byte-compilation off other in-tree modules.  Always
+  # loaded — there is no feature gate for the agent-shell core.
+  #
+  # Wired through `mkEmacsTestedPackage' so the bot-aware review flow
+  # in `decknix-agent-shell-main-link.el' gets ERT coverage at build
+  # time (the rest of main-bulk remains test-deferred, FIXME(arch-debt)).
+  # `extraSiteFiles' lists the seven non-pname siblings so the narrowed
+  # installPhase still ships every main-bulk file into the daemon's
+  # load-path (matching plain trivialBuild's default *.el install).
+  decknix-agent-shell-main-el = mkEmacsTestedPackage {
     pname = "decknix-agent-shell-main";
-    version = "0.1";
     src = ./agent-shell/main-bulk;
     # `decknix-picker-selections' is required at runtime by
     # `decknix-agent-shell-main-session.el' for the multi-select
-    # post-processing in `decknix-agent-session-picker'.
+    # post-processing in `decknix-agent-session-picker'; it is also
+    # needed on `load-path' while byte-compiling the bulk siblings.
     packageRequires = [ decknix-picker-selections-el ];
+    extraSiteFiles = [
+      "decknix-agent-shell-main-batch.el"
+      "decknix-agent-shell-main-compose.el"
+      "decknix-agent-shell-main-link.el"
+      "decknix-agent-shell-main-misc.el"
+      "decknix-agent-shell-main-review.el"
+      "decknix-agent-shell-main-session.el"
+      "decknix-agent-shell-main-tags.el"
+    ];
+    testFiles = [
+      "decknix-agent-review-bot-test.el"
+    ];
   };
 
   # PR B-Bulk.3b: bulk extraction of the cfg.workspace.enable
