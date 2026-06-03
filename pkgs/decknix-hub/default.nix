@@ -10,7 +10,13 @@ rustPlatform.buildRustPackage {
 
   src = ./.;
 
-  cargoHash = "sha256-loixXl17H0/99CCBFPSsBWeg5Xxze6bEZOlnOkG/zGU=";
+  # Use per-crate fetchurl FODs (importCargoLock) rather than the single
+  # parallel fetchCargoVendor staging derivation. The latter downloads every
+  # crate in one multiprocessing pool, which trips crates.io rate-limiting and
+  # yields intermittent HTTP 403s on the /api/v1/.../download endpoint. With a
+  # lockFile, each crate is its own cached fixed-output derivation that nix
+  # fetches (and retries) independently, so partial progress is never lost.
+  cargoLock.lockFile = ./Cargo.lock;
 
   meta = with lib; {
     description = "Background work-item aggregator — polls GitHub, Jira, CI/CD";
