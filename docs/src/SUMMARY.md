@@ -42,6 +42,11 @@
     - [Integration](./modules/ai/agent-shell/integration.md)
     - [Context Awareness](./modules/ai/agent-shell/context.md)
     - [Keybindings](./modules/ai/agent-shell/keybindings.md)
+    - [Sidebar Layouts](./modules/ai/agent-shell/layouts/index.md)
+      - [Global](./modules/ai/agent-shell/layouts/global.md)
+      - [Requests](./modules/ai/agent-shell/layouts/requests.md)
+      - [WIP](./modules/ai/agent-shell/layouts/wip.md)
+      - [Live](./modules/ai/agent-shell/layouts/live.md)
   - [Vision](./modules/ai/vision.md)
 
 # CLI Reference

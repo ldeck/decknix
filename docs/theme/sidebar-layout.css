@@ -1,0 +1,36 @@
+/* Sidebar Layout Mock-up Colors */
+.sb-markup, .sb-legend {
+    line-height: 1.55;
+    font-family: var(--mono-font, monospace);
+}
+
+.sb-markup, .sb-rtf {
+    background: var(--bg);
+    padding: 1em;
+    border: 1px solid var(--sidebar-separator);
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.85em;
+    line-height: 1.55;
+}
+
+/* Base Palette */
+.sb-markup .g, .sb-legend .g  { color: #98c379; } /* Green */
+.sb-markup .r, .sb-legend .r  { color: #e06c75; } /* Red */
+.sb-markup .y, .sb-legend .y  { color: #e5c07b; } /* Yellow */
+.sb-markup .c, .sb-legend .c  { color: #61afef; } /* Cyan/Blue */
+.sb-markup .sg, .sb-legend .sg { color: #87d7af; } /* Soft Green */
+.sb-markup .ac, .sb-legend .ac { color: #87d7ff; } /* Accent Cyan */
+.sb-markup .gd, .sb-legend .gd { color: #d7af5f; } /* Gold */
+.sb-markup .bo, .sb-legend .bo { color: #af5f87; } /* Bot Pink */
+.sb-markup .dm, .sb-legend .dm { color: #5c6370; } /* Dim/Shadow */
+.sb-markup .br, .sb-legend .br { color: #61afef; } /* Branch Blue */
+.sb-markup .rp, .sb-legend .rp { color: #56b6c2; } /* Repo Teal */
+
+/* Highlights */
+.sb-markup .hd, .sb-legend .hd { color: #c678dd; font-weight: 700; } /* Heading Purple */
+
+/* Modifiers */
+.sb-markup .bd, .sb-legend .bd { font-weight: 700; }
+
+table.sb-legend td:first-child { font-family: monospace; white-space: nowrap; }

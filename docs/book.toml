@@ -14,7 +14,8 @@ preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/ldeck/decknix"
 edit-url-template = "https://github.com/ldeck/decknix/edit/main/docs/{path}"
 
-additional-js = ["theme/hub.js"]
+additional-js = ["theme/hub.js", "theme/sidebar-layout.js"]
+additional-css = ["theme/sidebar-layout.css"]
 
 [output.html.search]
 enable = true
