@@ -168,7 +168,7 @@ in
               ;; decknix-* features are live at the new store path.
               ;; Hooks added to this variable survive the unload step because
               ;; the variable is defined here in deckmacs (not in any feature).
-              (run-hooks 'deckmacs-post-reload-hook)))))))
+              (run-hooks 'deckmacs-post-reload-hook))))))
 
       ;; == Status ==
 
