@@ -1100,7 +1100,9 @@ let
     packageRequires = [
       decknix-agent-context-history-el
     ];
-    testFiles = [ ];
+    testFiles = [
+      "decknix-agent-context-viewer-test.el"
+    ];
   };
 
   # PR B.69: Compose-buffer internal helpers carved out of
