@@ -37,7 +37,8 @@ Toggle with `T' in the transient (Planned) or via other means.")
 (defvar decknix--sidebar-live-view-mode 'flat
   "View mode for live sessions in the sidebar.
 Valid values: `flat' (as-is), `workspace' (grouped by workspace),
-`path' (grouped by workspace last path, excluding matching tags).")
+`path' (grouped by workspace last path, excluding matching tags).
+Toggle with `z' in the sidebar Toggles transient (Live section).")
 
 (defvar decknix--sidebar-wip-group-mode 'repo
   "Grouping mode for the WIP section.

@@ -1693,11 +1693,22 @@ let
   # deferred (FIXME(arch-debt)).  The 14 cross-feature `fboundp'
   # guards on hub symbols stay correct because the hub bulk module
   # is gated independently by cfg.hub.enable.
-  decknix-agent-shell-workspace-el = pkgs.emacsPackages.trivialBuild {
+  decknix-agent-shell-workspace-el = mkEmacsTestedPackage {
     pname = "decknix-agent-shell-workspace";
-    version = "0.1";
     src = ./agent-shell/workspace-bulk;
-    packageRequires = [ ];
+    # Depends on hub and toggles to build the flat sidebar Toggles
+    # transient; depends on progress and attention-filter to resolve
+    # the corresponding suffixes.
+    packageRequires = [
+      decknix-agent-shell-hub-el
+      decknix-sidebar-toggles-el
+      decknix-progress-el
+      decknix-hub-attention-filter-el
+    ];
+    extraSiteFiles = [ "decknix-worktree-picker.el" ];
+    testFiles = [
+      "decknix-sidebar-toggles-key-uniqueness-test.el"
+    ];
   };
 
   # == Custom auggie commands ==
