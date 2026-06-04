@@ -21,6 +21,11 @@
 ;;     alive RIGHT NOW; survives launchd kickstarts because the last
 ;;     successful eager write is on disk.
 ;;
+;;   - Previous file (`~/.config/decknix/agent-previous-sessions.el')
+;;     Snapshotted at startup from the live file.  Stored durably so
+;;     the list survives hot-reloads (`deckmacs-reload') which reset
+;;     the in-memory variable.
+;;
 ;;   - Dismissed file (`~/.config/decknix/agent-dismissed-sessions.el')
 ;;     Set of session keys the user explicitly hid from the Previous
 ;;     Sessions section.  Persists across restarts so dismissals

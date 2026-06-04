@@ -39,6 +39,13 @@
   "List of sessions that were live when Emacs last exited.
 Each entry is an alist with keys: session-id, name, workspace, conv-key, tags.")
 
+(defvar decknix--sidebar-previous-sessions-file
+  (expand-file-name "~/.config/decknix/agent-previous-sessions.el")
+  "Path to the file storing the snapshotted Previous Sessions list.
+This file is written once at startup by the snapshot logic and
+restored across hot-reloads to prevent data loss when the in-memory
+list is reset.")
+
 (defun decknix--sidebar-previous-dedupe (entries)
   "Return ENTRIES with at most one entry per conv-key.
 auggie writes a fresh session file on every interrupt/compose, so a

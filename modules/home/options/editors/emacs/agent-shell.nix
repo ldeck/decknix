@@ -4346,6 +4346,7 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
         ;; are defined later in the config.  Using emacs-startup-hook
         ;; ensures everything is bound before we try to set values.
         (add-hook 'kill-emacs-hook #'decknix--sidebar-state-save)
+        (add-hook 'kill-emacs-hook #'decknix--sidebar-previous-sessions-save)
         (add-hook 'emacs-startup-hook #'decknix--sidebar-state-restore)
         ;; Also restore after a hot-reload (`decknix switch').
         ;; `deckmacs-reload' force-unloads then reloads every decknix-*
@@ -4355,7 +4356,8 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
         ;; on a hot-reload so we use deckmacs-post-reload-hook instead.
         ;; Symbol-form ensures the hook is deduplicated across reloads.
         (when (boundp 'deckmacs-post-reload-hook)
-          (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-state-restore))
+          (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-state-restore)
+          (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-previous-sessions-restore))
         ;; Freeze the prior run's live set as this run's Previous
         ;; Sessions list and reset the live file to empty so eager
         ;; lifecycle hooks rebuild it from zero.  Runs after restore
@@ -4383,13 +4385,10 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
         ;; silently revert on next start.  The 30 s idle threshold keeps
         ;; this out of the hot path during active use; repeat=t fires once
         ;; per idle period, not every 30 s of idleness.
-        ;;
-        ;; Note: the live-sessions list is NO longer routed through
-        ;; this saver — it has its own eager hook-driven file
-        ;; (`decknix--live-sessions-file').  See PR (this commit) for
-        ;; the rationale: the idle save kept clobbering Previous with
-        ;; the empty current-run live set on fresh daemons.
-        (run-with-idle-timer 30 t #'decknix--sidebar-state-save)
+        (run-with-idle-timer 30 t
+          (lambda ()
+            (decknix--sidebar-state-save)
+            (decknix--sidebar-previous-sessions-save)))
 
         ;; Bind 'P' to restore all previous sessions
         (define-key agent-shell-workspace-sidebar-mode-map
