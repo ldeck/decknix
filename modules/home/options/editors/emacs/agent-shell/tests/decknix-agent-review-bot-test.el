@@ -3,25 +3,49 @@
 (require 'ert)
 (require 'decknix-agent-shell-main-link)
 
-;; Mock variables from hub
+;; Mock variables from hub.  These mirror the on-disk JSON shapes that
+;; `decknix--hub-read-json' parses with `:object-type 'alist':
+;;   github-reviews.json -> ((updated . S) (viewer . S) (items . (ITEM...)))
+;;   github-wip.json     -> ((updated . S) (repos . (((repo . S) (prs . (PR...)))...)))
+;; A ReviewRequest carries a combined `repo' field ("owner/repo") and an
+;; `author'; a WipPr carries neither owner/repo nor author.  The lookup
+;; under test must descend into `items'/`repos' rather than walking the
+;; wrapper's own top-level metadata cons cells.
 (defvar decknix--hub-reviews nil)
 (defvar decknix--hub-wip nil)
 
 (ert-deftest decknix-agent-review-bot--hub-pr-author-finds-in-reviews ()
-  "Finds author in `decknix--hub-reviews'."
-  (let ((decknix--hub-reviews '(((owner . "o") (repo . "r") (number . 1) (author . "bot1"))))
+  "Finds author in the `items' wrapper of `decknix--hub-reviews'."
+  (let ((decknix--hub-reviews
+         '((updated . "2026-06-04T03:15:14.391062Z")
+           (viewer . "me")
+           (items . (((repo . "o/r") (number . 1) (author . "bot1"))))))
         (decknix--hub-wip nil))
     (should (equal "bot1" (decknix--agent-hub-pr-author "o" "r" 1)))))
 
-(ert-deftest decknix-agent-review-bot--hub-pr-author-finds-in-wip ()
-  "Finds author in `decknix--hub-wip'."
-  (let ((decknix--hub-reviews nil)
-        (decknix--hub-wip '(((owner . "o") (repo . "r") (number . 1) (author . "bot1")))))
-    (should (equal "bot1" (decknix--agent-hub-pr-author "o" "r" 1)))))
+(ert-deftest decknix-agent-review-bot--hub-pr-author-skips-wrapper-metadata ()
+  "Wrapper metadata entries must not crash the lookup.
+Regression for `Wrong type argument: listp, (updated . \"...\")':
+the function used to iterate the wrapper alists' own top-level cons
+cells (e.g. `(updated . S)') instead of descending into `items' /
+`repos', so `alist-get' walked an improper cons and signalled."
+  (let ((decknix--hub-reviews
+         '((updated . "2026-06-04T03:15:14.391062Z")
+           (viewer . "me")
+           (items . (((repo . "o/r") (number . 2) (author . "human"))))))
+        (decknix--hub-wip
+         '((updated . "2026-06-04T03:15:14.391062Z")
+           (repos . (((repo . "o/r")
+                      (prs . (((number . 7) (title . "x"))))))))))
+    ;; Must not signal; resolves the review author and ignores the
+    ;; author-less WIP record.
+    (should (equal "human" (decknix--agent-hub-pr-author "o" "r" 2)))
+    (should (null (decknix--agent-hub-pr-author "o" "r" 7)))))
 
 (ert-deftest decknix-agent-review-bot--hub-pr-author-string-number ()
   "Handles string PR numbers in hub data."
-  (let ((decknix--hub-reviews '(((owner . "o") (repo . "r") (number . "1") (author . "bot1")))))
+  (let ((decknix--hub-reviews
+         '((items . (((repo . "o/r") (number . "1") (author . "bot1")))))))
     (should (equal "bot1" (decknix--agent-hub-pr-author "o" "r" 1)))))
 
 (ert-deftest decknix-agent-review-bot--get-params-chooses-bot-vars ()

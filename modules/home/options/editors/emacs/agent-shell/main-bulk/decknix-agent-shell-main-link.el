@@ -326,20 +326,42 @@ Split below per pane); the default selection lands on
 
 ;; -- PR review quick action --
 
+(defun decknix--agent-hub-pr-items ()
+  "Flatten hub reviews + WIP into a single list of PR alists.
+Both hub files are wrapper alists, not flat item lists (see the
+Rust `ReviewsFile' / `WipFile' structs):
+  `decknix--hub-reviews' nests review records under `items'; each
+  carries a combined `repo' field (\"owner/repo\") and an `author'.
+  `decknix--hub-wip' nests PRs under `repos'->`prs'; WIP PRs carry
+  neither `repo' nor `author', so the repo's full name is consed
+  onto each so callers can match on `repo' uniformly.
+Returning a flat list of genuine PR records lets callers walk them
+without tripping over the wrappers' own metadata cons cells
+\(e.g. `(updated . \"...\")')."
+  (let ((reviews (and (boundp 'decknix--hub-reviews)
+                      (alist-get 'items decknix--hub-reviews)))
+        (wip-prs nil))
+    (when (boundp 'decknix--hub-wip)
+      (dolist (repo-entry (alist-get 'repos decknix--hub-wip))
+        (let ((repo-full (alist-get 'repo repo-entry)))
+          (dolist (pr (alist-get 'prs repo-entry))
+            (push (cons (cons 'repo repo-full) pr) wip-prs)))))
+    (append reviews (nreverse wip-prs))))
+
 (defun decknix--agent-hub-pr-author (owner repo number)
   "Find the author of the PR (OWNER/REPO#NUMBER) in the hub cache.
-Returns nil if not found."
-  (let* ((items (append (and (boundp 'decknix--hub-reviews) decknix--hub-reviews)
-                        (and (boundp 'decknix--hub-wip) decknix--hub-wip)))
+Returns nil if not found.  Hub records store the repository as a
+combined \"owner/repo\" string, so OWNER and REPO are joined before
+matching."
+  (let* ((repo-full (format "%s/%s" owner repo))
          (match (cl-find-if
                  (lambda (item)
-                   (and (string= (alist-get 'owner item) owner)
-                        (string= (alist-get 'repo item) repo)
+                   (and (equal (alist-get 'repo item) repo-full)
                         (let ((n (alist-get 'number item)))
-                          (if (stringp n)
-                              (string= n (number-to-string number))
-                            (= n number)))))
-                 items)))
+                          (cond
+                           ((stringp n) (string= n (number-to-string number)))
+                           ((numberp n) (= n number))))))
+                 (decknix--agent-hub-pr-items))))
     (when match
       (alist-get 'author match))))
 
