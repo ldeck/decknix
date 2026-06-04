@@ -94,7 +94,14 @@ Sets `decknix--context-viewer-turn-points' so navigation works."
          (len (if pts (length pts) 0)))
     (when (and pts (> n 0) (<= n len))
       (goto-char (aref pts (1- n)))
-      (recenter 2))))
+      ;; Only recenter when the viewer buffer is actually shown in the
+      ;; selected window.  `decknix-agent-context-viewer-open' positions
+      ;; point inside `with-current-buffer' before `display-buffer', so
+      ;; recentring there would signal "'recenter'ing a window that does
+      ;; not display current-buffer" (surfaced via C-c s c on a restored
+      ;; session).  The open path now recentres after `select-window'.
+      (when (eq (window-buffer (selected-window)) (current-buffer))
+        (recenter 2)))))
 
 (defun decknix-agent-context-viewer-goto-first ()
   "Move point to the first (oldest) turn."
@@ -194,14 +201,16 @@ Opens in a bottom window and positions point at the most recent turn."
       (with-current-buffer viewer
         (setq-local decknix--context-viewer-source src)
         (decknix-agent-context-viewer-mode)
-        (decknix--context-viewer-render cache)
-        (decknix-agent-context-viewer-goto-last))
+        (decknix--context-viewer-render cache))
       (let ((win (display-buffer
                   viewer
                   '((display-buffer-at-bottom)
                     (window-height . 0.4)))))
         (when (window-live-p win)
-          (select-window win))))))
+          (select-window win)
+          ;; Position point only after the window displays VIEWER so
+          ;; `recenter' (inside goto-last) operates on the right window.
+          (decknix-agent-context-viewer-goto-last))))))
 
 ;;;###autoload
 (defun decknix-agent-context-viewer-open-or-toggle (&optional arg)
