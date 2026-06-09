@@ -1700,16 +1700,24 @@ let
     src = ./agent-shell/workspace-bulk;
     # Depends on hub and toggles to build the flat sidebar Toggles
     # transient; depends on progress and attention-filter to resolve
-    # the corresponding suffixes.
+    # the corresponding suffixes.  Also depends on sidebar-previous +
+    # live-sessions: this package owns the Previous-Sessions
+    # snapshot/restore/save entry points, so the reload-persistence
+    # regression test (which spans all three) lives here.  Neither
+    # leaf package depends back on workspace, so the layering stays
+    # acyclic.
     packageRequires = [
       decknix-agent-shell-hub-el
       decknix-sidebar-toggles-el
       decknix-progress-el
       decknix-hub-attention-filter-el
+      decknix-sidebar-previous-el
+      decknix-agent-live-sessions-el
     ];
     extraSiteFiles = [ "decknix-worktree-picker.el" ];
     testFiles = [
       "decknix-sidebar-toggles-key-uniqueness-test.el"
+      "decknix-sidebar-previous-reload-test.el"
     ];
   };
 
