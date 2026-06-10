@@ -1706,6 +1706,13 @@ let
     # regression test (which spans all three) lives here.  Neither
     # leaf package depends back on workspace, so the layering stays
     # acyclic.
+    #
+    # ci-filter + mention-bot are added explicitly (not transitively
+    # reachable via hub-bulk, which only pulls hub-file-event) so the
+    # state round-trip test can `(require ...)` the real special defvars
+    # (`decknix--hub-ci-filter', `-mention-filter', `-show-bots') and the
+    # `-normalize' helpers the restorer calls.  age-presets is already
+    # transitive via decknix-sidebar-toggles-el.
     packageRequires = [
       decknix-agent-shell-hub-el
       decknix-sidebar-toggles-el
@@ -1713,11 +1720,14 @@ let
       decknix-hub-attention-filter-el
       decknix-sidebar-previous-el
       decknix-agent-live-sessions-el
+      decknix-hub-ci-filter-el
+      decknix-hub-mention-bot-el
     ];
     extraSiteFiles = [ "decknix-worktree-picker.el" ];
     testFiles = [
       "decknix-sidebar-toggles-key-uniqueness-test.el"
       "decknix-sidebar-previous-reload-test.el"
+      "decknix-sidebar-state-roundtrip-test.el"
     ];
   };
 
@@ -4383,13 +4393,22 @@ Subsequent toggles only log when verbose tracing is on."
         (add-hook 'kill-emacs-hook #'decknix--sidebar-state-save)
         (add-hook 'kill-emacs-hook #'decknix--sidebar-previous-sessions-save)
         (add-hook 'emacs-startup-hook #'decknix--sidebar-state-restore)
-        ;; Also restore after a hot-reload (`decknix switch').
+        ;; Also save+restore around a hot-reload (`decknix switch').
         ;; `deckmacs-reload' force-unloads then reloads every decknix-*
         ;; feature; unload-feature unbinds defvar'd variables, so the
         ;; defvar forms on reload reset them to defaults (tile-count → 0,
-        ;; display modes → nil, etc.).  emacs-startup-hook does not re-fire
-        ;; on a hot-reload so we use deckmacs-post-reload-hook instead.
-        ;; Symbol-form ensures the hook is deduplicated across reloads.
+        ;; display modes → nil, Requests CI/bot/mention/age filters → their
+        ;; defaults, etc.).  emacs-startup-hook does not re-fire on a
+        ;; hot-reload so we use the deckmacs reload hooks instead.
+        ;; CRITICAL: the *pre*-reload save must run before the unload so the
+        ;; user's current toggle values are on disk for the post-reload
+        ;; restore to recover — without it the restore can only reload
+        ;; whatever the 30 s idle-timer / kill-emacs last wrote, silently
+        ;; reverting any toggle changed since.  Symbol-forms dedupe the
+        ;; hooks across repeated reloads.
+        (when (boundp 'deckmacs-pre-reload-hook)
+          (add-hook 'deckmacs-pre-reload-hook #'decknix--sidebar-state-save)
+          (add-hook 'deckmacs-pre-reload-hook #'decknix--sidebar-previous-sessions-save))
         (when (boundp 'deckmacs-post-reload-hook)
           (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-state-restore)
           (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-previous-sessions-restore))

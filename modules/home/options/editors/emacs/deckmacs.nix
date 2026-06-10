@@ -116,6 +116,19 @@ in
 
       ;; == Reload ==
 
+      (defvar deckmacs-pre-reload-hook nil
+        "Normal hook run at the start of `deckmacs-reload', before any
+      decknix-* feature is unloaded.  At this point the OLD feature set
+      is still live, so use this hook to *persist* runtime state that the
+      unload/reload cycle would otherwise wipe — e.g. sidebar toggle
+      states (`decknix--sidebar-state-save').  Without a pre-reload save,
+      `decknix switch' resets every toggle `defvar' to its default and
+      the post-reload restore can only recover whatever the periodic
+      idle-timer / `kill-emacs' last wrote, silently losing any toggle
+      changed since.  Each hook function is run inside `condition-case'
+      so a failing saver can never abort the reload.  Add only
+      symbol-named functions so they are deduplicated across reloads.")
+
       (defvar deckmacs-post-reload-hook nil
         "Normal hook run after `deckmacs-reload' completes successfully.
       All decknix-* features have been reloaded and the new store path
@@ -148,6 +161,17 @@ in
             (message "Deckmacs: Already up to date (%s)"
                      (deckmacs--short-store-path new-store)))
            (t
+            ;; Persist runtime state BEFORE unloading any feature — the
+            ;; unload re-runs every decknix-* `defvar' and resets toggle
+            ;; state to defaults, so the post-reload restore can only
+            ;; recover what is on disk at this moment.  Run each hook in
+            ;; `condition-case' so a failing saver never aborts the reload.
+            (dolist (fn deckmacs-pre-reload-hook)
+              (condition-case err
+                  (funcall fn)
+                (error
+                 (message "Deckmacs: pre-reload hook %s failed: %s"
+                          fn (error-message-string err)))))
             (let* ((old-store deckmacs--loaded-store-path)
                    (rewritten (deckmacs--swap-store-paths new-store))
                    (unloaded (deckmacs--unload-decknix-features)))
