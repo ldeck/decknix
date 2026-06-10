@@ -3623,6 +3623,13 @@ no editable element is focused / the clipboard is empty."
           "Absolute start time set at the beginning of a traced toggle.
 Let-bound by the outermost :around advice on `agent-shell-workspace-toggle'
 so all callees see it dynamically via the defvar's special binding.")
+        (defvar decknix--first-toggle-logged nil
+          "Non-nil once the very first toggle of this daemon has self-reported.
+Drives the always-on `[toggle-firstrun]' line so the cold-start path is
+captured without `M-x decknix-toggle-trace' warming the daemon first.
+Survives `deckmacs-reload' (defvar no-ops when already bound), so the
+measurement reflects the first toggle since the Emacs *process* started
+— which is exactly the kickstart workflow being diagnosed.")
         (defun decknix--trace-log (label)
           "Log LABEL with elapsed ms since `decknix--trace-t0' to *Messages*.
 No-op when `decknix--trace-toggle' is nil."
@@ -3647,14 +3654,34 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
         ;; wall-clock span including the focus-sidebar step.
         (advice-add 'agent-shell-workspace-toggle :around
           (lambda (orig-fn &rest args)
-            "Optionally wrap toggle with ms-resolution timing trace."
-            (if (not decknix--trace-toggle)
-                (apply orig-fn args)
-              (let ((decknix--trace-t0 (current-time)))
-                (message "[toggle-trace]     0ms  toggle START")
-                (unwind-protect
-                    (apply orig-fn args)
-                  (decknix--trace-log "toggle RETURN"))))))
+            "Wrap toggle with ms-resolution timing trace.
+Always emits ONE `[toggle-firstrun]' line on the very first toggle of
+the daemon, reporting daemon uptime (since `before-init-time') at START
+plus the toggle's own duration.  This captures the cold-start path with
+no manual `M-x decknix-toggle-trace' (which would warm the daemon).  The
+uptime number disambiguates a pre-toggle stall (high uptime, small
+duration = input queued during startup / first-frame creation) from an
+in-toggle stall (low uptime, large duration = slow cold-cache render).
+Subsequent toggles only log when verbose tracing is on."
+            (let ((firstp (not decknix--first-toggle-logged))
+                  (up0 (float-time (time-since before-init-time)))
+                  (t0 (current-time)))
+              (if (and (not decknix--trace-toggle) (not firstp))
+                  (apply orig-fn args)
+                (let ((decknix--trace-t0 t0))
+                  (when decknix--trace-toggle
+                    (message "[toggle-trace]     0ms  toggle START"))
+                  (unwind-protect
+                      (apply orig-fn args)
+                    (when decknix--trace-toggle
+                      (decknix--trace-log "toggle RETURN"))
+                    (when firstp
+                      (setq decknix--first-toggle-logged t)
+                      (message
+                       (concat "[toggle-firstrun] daemon-uptime=%.1fs at START; "
+                               "toggle took %dms")
+                       up0
+                       (round (* 1000 (float-time (time-since t0))))))))))))
         ;; Trace our own decknix-sidebar-refresh wrapper, which fires an
         ;; optimistic sidebar-refresh immediately then spawns the async
         ;; `decknix wt refresh' CLI call.
