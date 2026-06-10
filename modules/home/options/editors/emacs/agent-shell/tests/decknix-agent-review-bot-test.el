@@ -48,6 +48,25 @@ cells (e.g. `(updated . S)') instead of descending into `items' /
          '((items . (((repo . "o/r") (number . "1") (author . "bot1")))))))
     (should (equal "bot1" (decknix--agent-hub-pr-author "o" "r" 1)))))
 
+(ert-deftest decknix-agent-review-bot--hub-pr-author-string-arg ()
+  "Resolves author when NUMBER arg is a string (as parsed from a PR URL).
+Regression for `cl--position: Wrong type argument: number-or-marker-p,
+\"19088\"' when launching a review: `decknix--agent-parse-pr-url'
+returns the PR number as a string, but the lookup predicate assumed an
+integer and called `number-to-string' / `=' on it, signalling inside
+`cl-find-if'.  Must resolve regardless of whether the hub record stores
+the number as an integer or a string."
+  ;; hub record carries an integer number; arg is the string "1"
+  (let ((decknix--hub-reviews
+         '((items . (((repo . "o/r") (number . 1) (author . "bot1"))))))
+        (decknix--hub-wip nil))
+    (should (equal "bot1" (decknix--agent-hub-pr-author "o" "r" "1"))))
+  ;; hub record carries a string number; arg is also a string
+  (let ((decknix--hub-reviews
+         '((items . (((repo . "o/r") (number . "1") (author . "bot2"))))))
+        (decknix--hub-wip nil))
+    (should (equal "bot2" (decknix--agent-hub-pr-author "o" "r" "1")))))
+
 (ert-deftest decknix-agent-review-bot--get-params-chooses-bot-vars ()
   "Chooses bot model and command when author matches bot-p."
   (cl-letf (((symbol-function 'decknix--agent-pr-author) (lambda (_) "dependabot[bot]"))
