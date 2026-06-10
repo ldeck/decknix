@@ -353,14 +353,23 @@ without tripping over the wrappers' own metadata cons cells
 Returns nil if not found.  Hub records store the repository as a
 combined \"owner/repo\" string, so OWNER and REPO are joined before
 matching."
+  ;; NUMBER may arrive as an integer (legacy callers) or a string
+  ;; (`decknix--agent-parse-pr-url' returns it stringified).  Hub
+  ;; records likewise store the number as either type depending on the
+  ;; JSON source.  Normalise both sides to strings so the comparison is
+  ;; type-agnostic — otherwise `number-to-string'/`=' signal
+  ;; `number-or-marker-p' on a string NUMBER inside `cl-find-if'.
   (let* ((repo-full (format "%s/%s" owner repo))
+         (want (if (numberp number) (number-to-string number) number))
          (match (cl-find-if
                  (lambda (item)
                    (and (equal (alist-get 'repo item) repo-full)
                         (let ((n (alist-get 'number item)))
-                          (cond
-                           ((stringp n) (string= n (number-to-string number)))
-                           ((numberp n) (= n number))))))
+                          (and n
+                               (string= want
+                                        (if (numberp n)
+                                            (number-to-string n)
+                                          n))))))
                  (decknix--agent-hub-pr-items))))
     (when match
       (alist-get 'author match))))
