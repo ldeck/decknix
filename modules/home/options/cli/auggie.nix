@@ -154,8 +154,8 @@ in {
 
     home.packages = [ auggieScript ];
 
-    # Reconcile and sync settings.json using the agent-sync helper
-    decknix.cli.agentSync.enable = true;
+    # Reconcile and sync settings.json using the agent-sync helper.
+    # agentSync auto-enables once any module registers files, so we only append.
     decknix.cli.agentSync.files."~/.augment/settings.json" = {
       source = settingsFile;
       repo = "decknix";
