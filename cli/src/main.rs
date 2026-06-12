@@ -124,7 +124,7 @@ enum WtAction {
         #[arg(long)]
         apply: bool,
     },
-    /// Remove old clean merged worktrees
+    /// Clean up old merged worktrees
     Clean {
         #[command(flatten)]
         filter: WtFilter,
@@ -134,6 +134,18 @@ enum WtAction {
         /// Actually perform the deletion
         #[arg(long)]
         apply: bool,
+    },
+    /// Pull local changes to agent skills/commands back into repositories
+    PullLocalChanges {
+        /// Actually perform the copies and commits
+        #[arg(long)]
+        apply: bool,
+        /// Commit message (generated if not provided)
+        #[arg(long)]
+        message: Option<String>,
+        /// Destination for new files (defaults to decknix-config if in nurturecloud, else decknix)
+        #[arg(long)]
+        to: Option<String>,
     },
 }
 
@@ -183,6 +195,64 @@ struct ExtensionConfig {
 }
 
 type ExtensionMap = HashMap<String, ExtensionConfig>;
+
+// 3. Agent Sync Manifest Schema
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AgentSyncManifest {
+    pub version: u32,
+    pub files: HashMap<String, ManifestEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ManifestEntry {
+    /// SHA256 hash of the file when last deployed or pulled
+    pub hash: String,
+    /// The Nix store path it was deployed from (if known)
+    pub nix_store_path: Option<String>,
+    /// The repository name it belongs to (e.g. "decknix", "nc-config")
+    pub source_repo: String,
+    /// The relative path within that repository
+    pub repo_path: String,
+}
+
+impl AgentSyncManifest {
+    pub fn load() -> anyhow::Result<Self> {
+        let path = manifest_path();
+        if !path.exists() {
+            return Ok(AgentSyncManifest {
+                version: 1,
+                files: HashMap::new(),
+            });
+        }
+        let content = fs::read_to_string(path)?;
+        let manifest = serde_json::from_str(&content)?;
+        Ok(manifest)
+    }
+
+    pub fn save(&self) -> anyhow::Result<()> {
+        let path = manifest_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(self)?;
+        fs::write(path, content)?;
+        Ok(())
+    }
+}
+
+fn manifest_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".config/decknix/agent-sync-manifest.json")
+}
+
+fn calculate_hash(path: &Path) -> anyhow::Result<String> {
+    use sha2::{Sha256, Digest};
+    let content = fs::read(path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(content);
+    Ok(hex::encode(hasher.finalize()))
+}
 
 // Merge configs from decknix, and custom system and home extensions
 fn load_merged_extensions() -> ExtensionMap {
@@ -946,6 +1016,147 @@ fn main() -> anyhow::Result<()> {
             if let Some(inp) = input { cmd.arg(inp); }
             let status = cmd.status()?;
             std::process::exit(status.code().unwrap_or(1));
+        }
+        Some(Commands::PullLocalChanges { apply, message, to }) => {
+            let mut manifest = AgentSyncManifest::load()?;
+            let mut repos_to_commit = HashSet::new();
+            let mut changed_files = Vec::new();
+
+            for (live_path_raw, entry) in &mut manifest.files {
+                let live_path = if live_path_raw.starts_with("~/") {
+                    dirs::home_dir().unwrap_or_default().join(&live_path_raw[2..])
+                } else {
+                    PathBuf::from(live_path_raw)
+                };
+
+                if !live_path.exists() { continue; }
+
+                let live_hash = calculate_hash(&live_path)?;
+                if live_hash != entry.hash {
+                    changed_files.push((live_path_raw.clone(), entry.clone(), live_hash.clone()));
+
+                    if apply {
+                        let repo_name = to.as_deref().unwrap_or(&entry.source_repo);
+                        let repo_root = match repo_name {
+                            "decknix" => std::env::var("DECKNIX_DEV").map(PathBuf::from).unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join("tools/decknix")),
+                            "nc-config" | "decknix-config" => dirs::home_dir().unwrap_or_default().join("Code/nurturecloud/decknix-config"),
+                            _ => {
+                                eprintln!("⚠️  Unknown repo '{}' for {}; skipping copy", repo_name, live_path_raw);
+                                continue;
+                            }
+                        };
+
+                        if !repo_root.is_dir() {
+                            eprintln!("⚠️  Repo root '{}' not found; skipping copy for {}", repo_root.display(), live_path_raw);
+                            continue;
+                        }
+
+                        let target_path = repo_root.join(&entry.repo_path);
+                        if let Some(parent) = target_path.parent() {
+                            fs::create_dir_all(parent)?;
+                        }
+
+                        println!("💾 Pulling {} -> {}", live_path_raw, target_path.display());
+                        fs::copy(&live_path, &target_path)?;
+
+                        entry.hash = live_hash;
+                        entry.source_repo = repo_name.to_string();
+                        repos_to_commit.insert(repo_root);
+                    }
+                }
+            }
+
+            // Scan for NEW files in ~/.augment/commands
+            let command_dir = dirs::home_dir().unwrap_or_default().join(".augment/commands");
+            if command_dir.is_dir() {
+                if let Ok(entries) = fs::read_dir(command_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
+                            let live_path_raw = format!("~/.augment/commands/{}", path.file_name().unwrap().to_string_lossy());
+                            if !manifest.files.contains_key(&live_path_raw) {
+                                // Found a NEW file
+                                let live_hash = calculate_hash(&path)?;
+
+                                // Default routing: if path contains nurturecloud -> nc-config, else decknix
+                                // Since we're in ~/.augment/commands, it's likely decknix unless we override.
+                                let repo_name = to.as_deref().unwrap_or("decknix");
+                                let repo_path = format!("modules/home/options/editors/emacs/agent-shell/commands/{}", path.file_name().unwrap().to_string_lossy());
+
+                                let new_entry = ManifestEntry {
+                                    hash: live_hash.clone(),
+                                    nix_store_path: None,
+                                    source_repo: repo_name.to_string(),
+                                    repo_path,
+                                };
+
+                                changed_files.push((live_path_raw.clone(), new_entry.clone(), live_hash.clone()));
+
+                                if apply {
+                                    let repo_root = match repo_name {
+                                        "decknix" => std::env::var("DECKNIX_DEV").map(PathBuf::from).unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join("tools/decknix")),
+                                        "nc-config" | "decknix-config" => dirs::home_dir().unwrap_or_default().join("Code/nurturecloud/decknix-config"),
+                                        _ => continue,
+                                    };
+
+                                    let target_path = repo_root.join(&new_entry.repo_path);
+                                    if let Some(parent) = target_path.parent() {
+                                        fs::create_dir_all(parent)?;
+                                    }
+
+                                    println!("💾 Pulling NEW {} -> {}", live_path_raw, target_path.display());
+                                    fs::copy(&path, &target_path)?;
+
+                                    manifest.files.insert(live_path_raw, new_entry);
+                                    repos_to_commit.insert(repo_root);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if changed_files.is_empty() {
+                println!("✅ No local changes found.");
+                return Ok(());
+            }
+
+            if !apply {
+                println!("{}", styled_str("Local changes detected (dry-run):", &[Style::B, Style::U]));
+                for (path, entry, _) in changed_files {
+                    println!("  - {} (belongs to {}/{})", path, entry.source_repo, entry.repo_path);
+                }
+                println!("\nUse --apply to pull these changes back into your repositories.");
+                return Ok(());
+            }
+
+            // Save updated manifest
+            manifest.save()?;
+
+            // Commit changes
+            for repo in repos_to_commit {
+                println!("📝 Committing changes in {}...", repo.display());
+
+                // git add
+                Command::new("git").arg("add").arg("-A").current_dir(&repo).status()?;
+
+                // git commit
+                let mut commit_cmd = Command::new("git");
+                commit_cmd.arg("commit").arg("-m");
+
+                let default_msg = format!("feat(agent): pull local changes for agent skills/commands\n\nCo-authored by Augment Code");
+                commit_cmd.arg(message.as_deref().unwrap_or(&default_msg));
+                commit_cmd.current_dir(&repo);
+
+                let status = commit_cmd.status()?;
+                if status.success() {
+                    println!("   ✅ Committed");
+                } else {
+                    println!("   ⚠️  Commit failed (possibly no changes staged)");
+                }
+            }
+
+            Ok(())
         }
         // Handle: decknix help [cmd]
         Some(Commands::Help { subcommand }) => {

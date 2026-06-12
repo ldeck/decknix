@@ -1743,296 +1743,12 @@ let
   # are refreshed; runtime-created ones persist.
   commandDir = ".augment/commands";
 
-  commands = {
-    "start.md" = ''
-      ---
-      description: Create a new session and rename it, optionally from a Jira ticket key
-      argument-hint: [session name or JIRA-KEY]
-      ---
-
-      Create a new Augment session and rename it in one step.
-
-      **Instructions:**
-
-      1. **Parse the argument:** The user provides `$ARGUMENTS` which can be:
-         - A **Jira ticket key** (e.g., `ALR-4268`, `ARC-10308`) — detected by matching the pattern `[A-Z]+-\d+`
-         - A **plain session name** (e.g., "proptrack pubsub fix")
-         - **Empty** — prompt the user for a name
-
-      2. **If a Jira ticket key is detected:**
-         - Fetch the ticket summary from Jira using the Jira API tool: `GET /issue/{key}` with fields `summary,status,assignee,parent`
-         - If the ticket has a parent, also fetch the parent summary
-         - Construct the session name as: `{KEY}: {parent summary or ticket summary}`
-         - Display the ticket details briefly:
-           ```
-           📋 {KEY}: {summary}
-           📌 Status: {status} | Assignee: {assignee or "Unassigned"}
-           🏷️ Session: {constructed name}
-           ```
-
-      3. **Inform the user** that `/new` and `/rename` are built-in commands that cannot be invoked programmatically from within a session. Instead, provide the exact commands to run:
-
-         ```
-         To start this session, run these commands:
-
-         /new
-         /rename {session name}
-         ```
-
-         If the session name contains special characters, wrap it in quotes.
-
-      4. **Offer to set up context** for the new session:
-         - Ask if they'd like a brief summary of the current session to carry forward
-         - If yes, generate a 3-5 bullet summary of key decisions, findings, and next steps from the current conversation
-    '';
-
-
-
-    "pivot-conversation.md" = ''
-      ---
-      description: Hard pivot — discard current plan and re-evaluate with new context
-      argument-hint: [new direction or constraint]
-      ---
-
-      **[SYSTEM OVERRIDE: HARD PIVOT INITIATED]**
-
-      Stop your current execution path immediately. I am injecting new information, constraints, or a change in direction that supersedes your previous plan.
-
-      Please execute the following steps strictly in order:
-      1. **Halt and Discard:** Discard the immediate next steps or tool calls you were just about to execute.
-      2. **Ingest New Context:** Carefully review the new information I have provided in my prompt alongside this command.
-      3. **Analyze the Impact:** Briefly explain (in 1-2 sentences) how this new information changes our current approach or invalidates your previous assumptions.
-      4. **State the New Plan:** Provide a concise, bulleted list of the exact next steps you will take based on this pivot.
-      5. **Wait for Approval:** Do NOT write any code, modify any files, or execute any terminal commands until I explicitly approve your new plan.
-    '';
-
-    "step-back.md" = ''
-      ---
-      description: Stop, summarize progress, and wait for direction
-      ---
-
-      Stop your current execution path.
-      1. Summarize exactly what you have modified so far.
-      2. List the specific errors or roadblocks you are encountering.
-      3. Wait for my explicit direction before writing any more code or executing any more terminal commands.
-    '';
-
-    "where-are-we-up-to.md" = ''
-      ---
-      description: Summarise current status and surface pending decisions/next steps.
-      argument-hint: "[TASK_KEY | PROJECT_KEY]"
-      ---
-
-      Where are we up to? $ARGUMENTS
-
-      ## Arguments
-
-      Parse `$ARGUMENTS` for:
-      - **`TASK_KEY`** — Jira ticket key (e.g. `CONN-202`). Optional; inferred from context.
-      - **`PROJECT_KEY`** — Jira project key (e.g. `ARC`, `OPS`, `CONN`, `CORE`). Optional.
-
-      If no arguments, default to **session context**.
-
-      ## Workflow
-
-      ### 1. Determine scope
-
-      | Scope | Condition |
-      |-------|-----------|
-      | **Session** | No args (or unrecognised) |
-      | **Task** | A `TASK_KEY` is present (explicitly or inferred) |
-      | **Project** | Only a `PROJECT_KEY` is present |
-
-      ### 2. Gather context
-
-      **Session scope**
-      - Call `view_tasklist` — this is the primary signal.
-      - Scan recent conversation for last user intent and agent output.
-      - Run `git log --oneline -10` if the session involved code changes.
-
-      **Task scope**
-      - Fetch the Jira ticket (`GET /issue/{TASK_KEY}`).
-      - List subtasks, linked PRs (GitHub), and recent comments.
-
-      **Project scope**
-      - Query active/in-progress tickets (JQL: `project = X AND status != Done ORDER BY updated DESC`).
-      - Summarise sprint health and open blockers.
-
-      ### 3. Produce a concise status report
-
-      Output **four sections** (omit any that are empty):
-
-      ```
-      ## Current State
-      One-sentence summary of where things stand.
-
-      ## Recent Work
-      - Bullet list of what was completed or decided.
-
-      ## Pending Decisions
-      - Anything blocking progress that needs a user choice.
-
-      ## Next Steps
-      - Ordered list of recommended immediate actions.
-      ```
-
-      Keep the whole reply under ~30 lines. This is a status query, not a plan — be terse.
-    '';
-
-  };
+  # Get list of command files for deployment
+  commandFiles = builtins.readDir ./agent-shell/commands;
 
   # == User-level augment guidelines ==
-  # Deployed to ~/.augment-guidelines via home.file (as a symlink).
   # Provides default formatting/response rules for Augment agents.
   guidelinesFile = ".augment-guidelines";
-  guidelinesContent = ''
-    # Augment Agent Guidelines (User-level)
-
-    These rules apply globally across ALL workspaces. Workspace-level
-    AGENTS.md files may add project-specific rules but should not need
-    to repeat these.
-
-    ## Command Execution — Prefer Nix-managed Tools
-
-    This is a Nix-managed macOS system. All tooling is installed via Nix.
-
-    1. **Never hardcode paths** to system binaries. Do not use
-       `/usr/bin/python3`, `/usr/local/bin/node`, or similar. Use bare
-       command names (`python3`, `node`, `ruby`, `java`) and let the
-       user's Nix-first PATH resolve them.
-    2. **The PATH order is**: `~/.nix-profile/bin` →
-       `/run/current-system/sw/bin` → `/nix/var/nix/profiles/default/bin`
-       → `/usr/local/bin` → `/usr/bin` → `/bin` → `/usr/sbin` → `/sbin`.
-       Nix paths come first deliberately.
-    3. To verify which version will run: `which python3` or
-       `command -v node`.
-    4. In generated Nix code (scripts, launchd services), pin to a
-       specific Nix package: `''${pkgs.python3}/bin/python3`.
-    5. **Exception**: `#!/usr/bin/env bash` shebangs are acceptable —
-       this is the standard portable idiom.
-
-    ## Response Formatting in Agent Shell
-
-    You are running inside an Emacs agent-shell — a comint buffer that
-    displays text as-is.  Markdown syntax is NOT rendered.  `**bold**`
-    shows literal asterisks; `| a | b |` table rows show literal pipes;
-    `# heading` shows a literal hash mark.
-
-    ### HARD RULE — MUST NOT emit XML tool-call markup in chat
-
-    Do NOT narrate planned tool calls as XML in conversational responses.
-    Text like `<parallel_tool_calls>`, `<tool_call>`, `<str_replace_editor>`,
-    `<past_tool_call>`, or any other angle-bracket pseudo-invocation must
-    NEVER appear in the chat output.  If you intend to call tools, call
-    them natively — do not describe the calls as text first.
-
-    This failure mode occurs when a model "previews" its plan rather than
-    executing it.  The correct behaviour is to execute tool calls immediately
-    and then summarise what was done in plain prose, with no XML visible.
-
-    ### HARD RULE — MUST NOT emit markdown tables in chat
-
-    Do NOT use pipe-delimited tables (`| col | col |`) or markdown
-    header-separator rows (`| --- | --- |`) in conversational
-    responses.  They render as a wall of pipes and dashes that is
-    actively unreadable inside the comint buffer.
-
-    Wrong (do NOT send this):
-
-        | Key     | Action                   |
-        | ------- | ------------------------ |
-        | C-c A s | Open the session picker  |
-        | C-c A n | Create a new session     |
-        | C-c A q | Quit the current session |
-
-    Right (send this instead — space-aligned columns):
-
-        Key       Action
-        -------   ------------------------
-        C-c A s   Open the session picker
-        C-c A n   Create a new session
-        C-c A q   Quit the current session
-
-    Pad cells with spaces so column starts line up vertically.  The
-    dashed separator row is optional; what matters is that the
-    columns align without pipe characters.
-
-    Markdown remains correct on surfaces that render it:
-
-      - Files you create or edit (`*.md`, `*.mdx`)
-      - Pull request descriptions, issue bodies, commit messages
-      - Any tool input that explicitly accepts markdown
-
-    For conversational responses in the agent-shell, use plain text
-    formatted by alignment, not by syntax.
-
-    1. **No markdown emphasis in chat.**  Do not use `**bold**`,
-       `*italic*`, or `__underline__` — they appear as literal
-       characters.  Use prefix labels (`Note:`, `Warning:`) or sentence
-       structure to carry emphasis instead.
-
-    2. **Tables — space-aligned columns, not pipes.**  See the HARD
-       RULE above.  Never emit `| col | col |` rows in chat.
-
-    3. **Lists — plain dashes or numbers.**  `- item` and `1. item`
-       read naturally as plain text and are fine.  Skip nested
-       `**bold**` markers inside bullets.
-
-    4. **Code and paths — backticks are acceptable.**  Single
-       backticks around `identifiers`, paths, and short commands are
-       fine (font-lock often highlights them, and even un-highlighted
-       they remain readable).  Triple-backtick fenced blocks are
-       acceptable for multi-line code or command output.
-
-    5. **If columns would wrap, switch format.**  When the natural
-       width of a tabular display would exceed the visible window,
-       use a definition-list style — one item per block, indented
-       details:
-
-           #19 — Editor profile tiering
-             Category:  Editors
-             Effort:    Large
-             Status:    Open
-
-       or a sectioned list — one heading per group, items below:
-
-           Open Issues
-             #19  Editor profile tiering  (Editors, Large)
-             #26  Secrets management      (Core, Medium)
-
-    ### Pre-send checklist
-
-    Before sending any conversational response in the agent-shell,
-    scan the draft for:
-
-      - `<parallel_tool_calls>`, `<tool_call>`, or any XML angle-bracket tags
-      - `|` characters used as column separators between cells
-      - `| --- |` or `|---|` header-separator rows
-      - `**bold**`, `*italic*`, or `__underline__` emphasis
-      - `# `, `## `, `### ` heading prefixes at the start of a line
-
-    If XML tags appear, remove them and execute the tool calls natively
-    instead.  If markdown appears, re-render as space-aligned columns (for
-    tables) or plain prose with prefix labels (for emphasis / headings).
-
-    ## Branch and PR Ownership
-
-    Before pushing to any branch or modifying any PR, always check who
-    authored it.  If the author is not the current user, stop and ask
-    before doing anything.  Do not:
-
-      - Push commits to another author's branch
-      - Convert another author's draft PR to ready
-      - Overwrite another author's PR description
-
-    Even if the work looks stalled or incomplete, the right action is to
-    flag it to the user and let them coordinate with the author.
-
-    To check authorship quickly:
-
-        gh pr view <number> --json author --jq '.author.login'
-        git log origin/<branch> -1 --format="%ae"
-  '';
 
   # == Yasnippet prompt templates ==
   # Deployed to ~/.emacs.d/snippets/<mode>/ via home.file
@@ -2220,7 +1936,7 @@ in
   };
 
   config = mkIf cfg.enable {
-    # Deploy yasnippet snippets + auggie commands via home.file
+    # Deploy yasnippet snippets via home.file (symlinks)
     home.file =
       # Yasnippet snippet files → ~/.emacs.d/snippets/agent-shell-mode/
       (optionalAttrs cfg.templates.enable
@@ -2238,16 +1954,30 @@ in
       (optionalAttrs cfg.templates.enable
         (mapAttrs'
           (name: text: nameValuePair "${reviewSnippetDir}/${name}" { inherit text; })
-          reviewSnippets))
-      //
+          reviewSnippets));
+
+    # Reconcile and sync auggie commands + guidelines using agent-sync (copy-not-symlink)
+    decknix.cli.agentSync.enable = true;
+    decknix.cli.agentSync.files =
       # Auggie custom commands → ~/.augment/commands/
       (optionalAttrs cfg.commands.enable
         (mapAttrs'
-          (name: text: nameValuePair "${commandDir}/${name}" { inherit text; })
-          commands))
+          (name: _: nameValuePair "~/${commandDir}/${name}" {
+            source = ./agent-shell/commands/${name};
+            repo = "decknix";
+            repoPath = "modules/home/options/editors/emacs/agent-shell/commands/${name}";
+          })
+          commandFiles))
       //
       # User-level augment guidelines → ~/.augment-guidelines
-      { "${guidelinesFile}".text = guidelinesContent; };
+      {
+        "~/${guidelinesFile}" = {
+          source = ./agent-shell/guidelines.md;
+          repo = "decknix";
+          repoPath = "modules/home/options/editors/emacs/agent-shell/guidelines.md";
+        };
+      };
+
     programs.emacs = {
       extraPackages = _epkgs:
         # Core (from unstable): agent-shell + acp + shell-maker + markdown-mode

@@ -154,17 +154,13 @@ in {
 
     home.packages = [ auggieScript ];
 
-    # Copy (not symlink) settings.json on activation so auggie can modify it
-    # at runtime. Next `decknix switch` will overwrite with the Nix-managed version.
-    home.activation.auggie-settings = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-      AUGMENT_DIR="$HOME/.augment"
-      SETTINGS_FILE="$AUGMENT_DIR/settings.json"
-
-      mkdir -p "$AUGMENT_DIR"
-      cp -f "${settingsFile}" "$SETTINGS_FILE"
-      chmod 644 "$SETTINGS_FILE"
-      echo "  [auggie] Wrote $SETTINGS_FILE ($(wc -c < "$SETTINGS_FILE" | tr -d ' ') bytes)"
-    '';
+    # Reconcile and sync settings.json using the agent-sync helper
+    decknix.cli.agentSync.enable = true;
+    decknix.cli.agentSync.files."~/.augment/settings.json" = {
+      source = settingsFile;
+      repo = "decknix";
+      repoPath = "modules/home/options/cli/auggie.nix";
+    };
   };
 }
 
