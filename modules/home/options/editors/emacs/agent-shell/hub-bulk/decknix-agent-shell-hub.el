@@ -1442,8 +1442,11 @@ See `specs/sidebar-ret.md' §3.6.1 for the on-disk format.")
 
 (defvar decknix--hub-worktree-clone-map (make-hash-table :test 'equal)
   "Memoised: workspace path -> \"owner/repo\" or :unknown.
-Avoids re-running `git config --get remote.origin.url' on every
-sidebar refresh for paths we have already classified.")
+Populated lazily via async git probes; persisted across sessions.")
+
+(defvar decknix--hub-worktree-classify-pending (make-hash-table :test 'equal)
+  "Set of canonical paths currently being classified asynchronously.
+Prevents duplicate git probes for the same directory.")
 
 (defvar decknix--hub-worktree-clone-map-file
   (expand-file-name "~/.config/decknix/hub/worktree-clones.el")
@@ -1484,21 +1487,59 @@ sidebar refresh for paths we have already classified.")
        (message "hub-worktree-clone-map: restore failed: %s"
                 (error-message-string err))))))
 
+(defun decknix--hub-worktree-classify-dir-async (canon)
+  "Start an async git probe to classify CANON into the clone map.
+No-op if CANON is already classified or a probe is already in flight.
+On completion writes the result to `decknix--hub-worktree-clone-map'
+and saves it; does NOT block the main thread."
+  (when (and (file-directory-p canon)
+             (not (gethash canon decknix--hub-worktree-classify-pending)))
+    (puthash canon t decknix--hub-worktree-classify-pending)
+    (let ((proc (make-process
+                 :name "hub-classify-dir"
+                 :buffer (generate-new-buffer " *hub-classify-dir*")
+                 :connection-type 'pipe
+                 :command (list "git" "-C" canon
+                                "config" "--get" "remote.origin.url")
+                 :noquery t)))
+      (set-process-sentinel
+       proc
+       (let ((c canon))
+         (lambda (p _event)
+           (when (memq (process-status p) '(exit signal))
+             (remhash c decknix--hub-worktree-classify-pending)
+             (let* ((exit-code (process-exit-status p))
+                    (raw (when (buffer-live-p (process-buffer p))
+                           (with-current-buffer (process-buffer p)
+                             (string-trim (buffer-string))))))
+               (kill-buffer (process-buffer p))
+               (let* ((url (when (and (= exit-code 0) raw
+                                      (not (string-empty-p raw)))
+                             (let ((u raw))
+                               (when (string-match "^git@github\\.com:\\(.+\\)$" u)
+                                 (setq u (concat "https://github.com/"
+                                                 (match-string 1 u))))
+                               (when (string-suffix-p ".git" u)
+                                 (setq u (substring u 0 -4)))
+                               (when (string-match-p "github\\.com/" u) u))))
+                      (repo (when url
+                              (decknix--hub-worktree-repo-from-url url))))
+                 (puthash c (or repo :unknown)
+                          decknix--hub-worktree-clone-map)
+                 (decknix--hub-worktree-clone-map-save))))))))))
+
 (defun decknix--hub-worktree-classify-dir (dir)
-  "Return canonical \"owner/repo\" for DIR or :unknown.
-Memoised in `decknix--hub-worktree-clone-map'."
+  "Return cached \"owner/repo\" for DIR, or :unknown if not yet classified.
+Never blocks — classification of new directories is done asynchronously
+via `decknix--hub-worktree-classify-dir-async'.  Callers receive :unknown
+on the first call for a new path; re-render once the async probe updates
+`decknix--hub-worktree-clone-map'."
   (let* ((canon (file-name-as-directory (expand-file-name dir)))
          (cached (gethash canon decknix--hub-worktree-clone-map)))
     (or cached
-        (let ((repo (or (and (file-directory-p canon)
-                             (decknix--hub-worktree-repo-from-url
-                              (decknix--git-remote-url canon)))
-                        :unknown)))
-          (puthash canon repo decknix--hub-worktree-clone-map)
-          ;; Save immediately when a new entry is found (usually happens
-          ;; on first use of a new session/worktree).
-          (decknix--hub-worktree-clone-map-save)
-          repo))))
+        (progn
+          (decknix--hub-worktree-classify-dir-async canon)
+          :unknown))))
 
 (defun decknix--hub-worktree-discover-from-sessions ()
   "Walk agent-sessions.json workspaces; return alist (REPO . PATH).
