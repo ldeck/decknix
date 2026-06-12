@@ -3880,6 +3880,9 @@ Subsequent toggles only log when verbose tracing is on."
         ;; rendered or restored.
         (require 'decknix-sidebar-previous)
         (declare-function decknix--sidebar-previous-dedupe "decknix-sidebar-previous")
+        (declare-function decknix--sidebar-previous-history-save    "decknix-sidebar-previous" ())
+        (declare-function decknix--sidebar-previous-history-restore "decknix-sidebar-previous" ())
+        (defvar decknix--sidebar-previous-history)
 
         ;; Eager live-sessions persistence — splits "what is alive
         ;; right now" out of `decknix--sidebar-state-file' so the
@@ -4392,7 +4395,13 @@ Subsequent toggles only log when verbose tracing is on."
         ;; ensures everything is bound before we try to set values.
         (add-hook 'kill-emacs-hook #'decknix--sidebar-state-save)
         (add-hook 'kill-emacs-hook #'decknix--sidebar-previous-sessions-save)
+        (add-hook 'kill-emacs-hook #'decknix--sidebar-previous-history-save)
         (add-hook 'emacs-startup-hook #'decknix--sidebar-state-restore)
+        ;; Restore history before the snapshot (priority 80) so the
+        ;; snapshot at priority 100 can prepend to the existing ring.
+        (add-hook 'emacs-startup-hook
+                  #'decknix--sidebar-previous-history-restore
+                  80)
         ;; Also save+restore around a hot-reload (`decknix switch').
         ;; `deckmacs-reload' force-unloads then reloads every decknix-*
         ;; feature; unload-feature unbinds defvar'd variables, so the
@@ -4408,10 +4417,12 @@ Subsequent toggles only log when verbose tracing is on."
         ;; hooks across repeated reloads.
         (when (boundp 'deckmacs-pre-reload-hook)
           (add-hook 'deckmacs-pre-reload-hook #'decknix--sidebar-state-save)
-          (add-hook 'deckmacs-pre-reload-hook #'decknix--sidebar-previous-sessions-save))
+          (add-hook 'deckmacs-pre-reload-hook #'decknix--sidebar-previous-sessions-save)
+          (add-hook 'deckmacs-pre-reload-hook #'decknix--sidebar-previous-history-save))
         (when (boundp 'deckmacs-post-reload-hook)
           (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-state-restore)
-          (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-previous-sessions-restore))
+          (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-previous-sessions-restore)
+          (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-previous-history-restore))
         ;; Freeze the prior run's live set as this run's Previous
         ;; Sessions list and reset the live file to empty so eager
         ;; lifecycle hooks rebuild it from zero.  Runs after restore
@@ -4425,12 +4436,17 @@ Subsequent toggles only log when verbose tracing is on."
         ;; this, the buffer-kill cascade triggered by `kill-emacs'
         ;; would call `decknix--sidebar-forget-buffer-as-live' for
         ;; every live buffer and erase the file the next start needs
-        ;; to read as Previous.  Append:t puts this BEFORE the
-        ;; ordinary `kill-emacs-hook' entries so the flag is set
-        ;; before any buffer is killed.
+        ;; to read as Previous.  Depth 90 ensures this runs AFTER the
+        ;; depth-0 saves (`sidebar-state-save', `previous-sessions-save')
+        ;; so those saves complete before the flag is set — otherwise
+        ;; suppress-write (added without depth=prepend) would block the
+        ;; saves themselves, leaving the files stale.  Buffer killing
+        ;; happens after ALL kill-emacs-hook entries complete, so the
+        ;; flag is still set before the cascade begins.
         (add-hook 'kill-emacs-hook
                   (lambda ()
-                    (setq decknix--live-sessions-suppress-write t)))
+                    (setq decknix--live-sessions-suppress-write t))
+                  90)
 
         ;; Periodic idle-timer save so toggle state survives
         ;; force-quit / daemon crashes.  `kill-emacs-hook' alone
@@ -4442,7 +4458,8 @@ Subsequent toggles only log when verbose tracing is on."
         (run-with-idle-timer 30 t
           (lambda ()
             (decknix--sidebar-state-save)
-            (decknix--sidebar-previous-sessions-save)))
+            (decknix--sidebar-previous-sessions-save)
+            (decknix--sidebar-previous-history-save)))
 
         ;; Bind 'P' to restore all previous sessions
         (define-key agent-shell-workspace-sidebar-mode-map
