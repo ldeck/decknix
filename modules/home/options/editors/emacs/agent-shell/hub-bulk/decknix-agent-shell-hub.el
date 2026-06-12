@@ -2653,7 +2653,11 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
          (filtered (seq-filter
                     (lambda (item)
                       (and (decknix--hub-item-visible-p (alist-get 'repo item))
-                           (decknix--hub-age-visible-p (alist-get 'created item))
+                           ;; Age filter uses most-recent activity (updated > created)
+                           ;; so a PR re-requested for review isn't hidden by age even
+                           ;; when its original creation date is old.
+                           (decknix--hub-age-visible-p
+                            (or (alist-get 'updated item) (alist-get 'created item)))
                            (decknix--hub-ci-visible-p item)
                            (decknix--hub-mention-visible-p item)
                            (decknix--hub-bot-visible-p item)
@@ -2697,7 +2701,9 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
       (setq line-num (1+ line-num))
       (dolist (item items)
         (let* ((age (decknix--hub-format-age
-                     (alist-get 'created item)))
+                     ;; Display the most-recent activity time so the
+                     ;; visible age matches the sort key (updated > created).
+                     (or (alist-get 'updated item) (alist-get 'created item))))
                (repo-full (or (alist-get 'repo item) ""))
                ;; Show only repo name, not owner/repo
                (repo (car (last (split-string repo-full "/"))))
