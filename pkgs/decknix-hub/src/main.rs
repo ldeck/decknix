@@ -124,6 +124,11 @@ struct ReviewRequest {
     author: String,
     url: String,
     created: DateTime<Utc>,
+    /// GitHub updatedAt — changes on any PR edit, new comment, push, review,
+    /// or re-request.  Used by the Emacs sidebar sort to surface recently-
+    /// active PRs at the top.  Absent only when the raw API field is missing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     draft: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -975,6 +980,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             author: pr.author.as_ref().map(|a| a.login.clone()).unwrap_or_default(),
             url: pr.url.clone(),
             created: pr.created_at.parse().unwrap_or_else(|_| Utc::now()),
+            updated: pr.updated_at.as_deref().and_then(|s| s.parse().ok()),
             draft: pr.is_draft,
             labels: if pr.labels.is_empty() {
                 None
@@ -996,8 +1002,11 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         });
     }
 
-    // Sort oldest first (most urgent at top)
-    items.sort_by_key(|r| r.created);
+    // Sort by most-recently-updated first so the JSON is already in the
+    // same order the Emacs sidebar uses by default (the Emacs sort function
+    // re-sorts using the `updated' field, but shipping JSON pre-sorted means
+    // the initial render before any sidebar re-sort is already useful).
+    items.sort_by_key(|r| std::cmp::Reverse(r.updated.unwrap_or(r.created)));
 
     Ok(ReviewsFile {
         updated: Utc::now(),
