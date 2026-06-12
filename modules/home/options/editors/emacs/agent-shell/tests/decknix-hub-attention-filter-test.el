@@ -87,24 +87,45 @@
 
 ;; -- sort-requests ------------------------------------------------
 
-(ert-deftest decknix-hub-attention-filter--sort-oldest-first-by-default ()
-  "Default sort puts the older `created' first."
+(ert-deftest decknix-hub-attention-filter--sort-newest-first-by-default ()
+  "Default sort (nil) puts the most-recently-updated item first.
+Falls back to `created' when `updated' is absent."
+  ;; Items with only `created' — newer created at top.
+  (let* ((items '(((id . 1) (created . "2025-01-01"))
+                  ((id . 2) (created . "2025-01-02"))))
+         (decknix--hub-requests-sort-reverse nil)
+         (sorted (decknix--hub-sort-requests items)))
+    (should (equal '(2 1) (mapcar (lambda (i) (alist-get 'id i)) sorted)))))
+
+(ert-deftest decknix-hub-attention-filter--sort-reverse-flips ()
+  "`sort-reverse' non-nil sorts oldest-first."
   (let* ((items '(((id . 2) (created . "2025-01-02"))
                   ((id . 1) (created . "2025-01-01"))))
+         (decknix--hub-requests-sort-reverse t)
+         (sorted (decknix--hub-sort-requests items)))
+    (should (equal '(1 2) (mapcar (lambda (i) (alist-get 'id i)) sorted)))))
+
+(ert-deftest decknix-hub-attention-filter--sort-uses-updated-over-created ()
+  "`updated' is preferred over `created' as the sort key.
+Item with older `created' but newer `updated' sorts first by default."
+  (let* (;; id=1: created 2025-01-01, updated 2025-01-10 (most recently active)
+         ;; id=2: created 2025-01-05, no updated
+         (items '(((id . 2) (created . "2025-01-05"))
+                  ((id . 1) (created . "2025-01-01") (updated . "2025-01-10"))))
          (decknix--hub-requests-sort-reverse nil)
          (sorted (decknix--hub-sort-requests items)))
     (should (equal '(1 2) (mapcar (lambda (i) (alist-get 'id i)) sorted)))))
 
-(ert-deftest decknix-hub-attention-filter--sort-reverse-flips ()
-  "`sort-reverse' non-nil sorts newest-first."
+(ert-deftest decknix-hub-attention-filter--sort-falls-back-to-created ()
+  "When `updated' is absent the sort key falls back to `created'."
   (let* ((items '(((id . 1) (created . "2025-01-01"))
-                  ((id . 2) (created . "2025-01-02"))))
-         (decknix--hub-requests-sort-reverse t)
+                  ((id . 2) (created . "2025-01-03"))))
+         (decknix--hub-requests-sort-reverse nil)
          (sorted (decknix--hub-sort-requests items)))
     (should (equal '(2 1) (mapcar (lambda (i) (alist-get 'id i)) sorted)))))
 
-(ert-deftest decknix-hub-attention-filter--sort-nil-created-drifts-last ()
-  "Items missing `created' sort to the end in either direction."
+(ert-deftest decknix-hub-attention-filter--sort-nil-key-drifts-last ()
+  "Items missing both `updated' and `created' sort to the end in either direction."
   (let* ((items '(((id . 1))
                   ((id . 2) (created . "2025-01-01"))))
          (decknix--hub-requests-sort-reverse nil)
