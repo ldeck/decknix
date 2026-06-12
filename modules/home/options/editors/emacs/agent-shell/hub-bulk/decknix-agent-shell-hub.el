@@ -563,10 +563,12 @@ picker's dynamic binding unwinds.")
   (lambda ()
     (format "sort          %s"
             (propertize
-             (if decknix--hub-requests-sort-reverse "[new→old]" "[old→new]")
+             ;; Default (nil) = newest-activity first → "[new→old]".
+             ;; Reverse (t)   = oldest first           → "[old→new]".
+             (if decknix--hub-requests-sort-reverse "[old→new]" "[new→old]")
              'face (if decknix--hub-requests-sort-reverse
-                       'font-lock-constant-face
-                     'font-lock-comment-face))))
+                       'font-lock-comment-face
+                     'font-lock-constant-face))))
   :transient t
   (interactive)
   (call-interactively #'decknix--hub-toggle-requests-sort-reverse))

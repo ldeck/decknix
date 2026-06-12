@@ -118,11 +118,14 @@ review-ready.  Toggle with `X' in the Requests section of the Toggles
 transient.")
 
 (defvar decknix--hub-requests-sort-reverse nil
-  "When nil (default), Requests are sorted oldest-first.
-When non-nil, the order is reversed (newest-first).  The same
-ordering applies to both the sidebar Requests section and the
-`R' review picker so the two stay in sync.  Toggle with `s' in the
-sidebar toggles transient or with M-s live inside the picker
+  "When nil (default), Requests are sorted newest-activity-first.
+The sort key is `updated' (GitHub updatedAt) when present, falling
+back to `created'.  PRs with recent review requests or comments
+bubble to the top automatically.
+When non-nil, the order is reversed (oldest-activity-first).
+The same ordering applies to both the sidebar Requests section and
+the `R' review picker so the two stay in sync.  Toggle with `s' in
+the sidebar toggles transient or with M-s live inside the picker
 (picker toggles are let-scoped and do not persist).")
 
 ;; -- defvars: WIP section state -----------------------------------
@@ -147,24 +150,28 @@ Toggle with `r'.")
 ;; -- engine: sort + visibility predicates -------------------------
 
 (defun decknix--hub-sort-requests (items)
-  "Return ITEMS sorted by `created' ascending (oldest first).
-When `decknix--hub-requests-sort-reverse' is non-nil, sort descending
-(newest first) instead.  Items without a `created' field sort last
-regardless of direction.  Uses a stable sort on a fresh copy so the
-caller's list is never mutated."
+  "Return ITEMS sorted by most-recent activity, newest first by default.
+The sort key is `updated' when present (GitHub updatedAt), falling
+back to `created'.  This surfaces PRs with recent review requests,
+re-requests, or comments at the top of the sidebar.
+When `decknix--hub-requests-sort-reverse' is non-nil, sort ascending
+(oldest-activity-first) instead.  Items without either field sort
+last regardless of direction.  Uses a stable sort on a fresh copy so
+the caller's list is never mutated."
   (let ((reverse (and (boundp 'decknix--hub-requests-sort-reverse)
                       decknix--hub-requests-sort-reverse)))
     (sort (copy-sequence (or items '()))
           (lambda (a b)
-            (let ((ca (alist-get 'created a))
-                  (cb (alist-get 'created b)))
+            (let ((ka (or (alist-get 'updated a) (alist-get 'created a)))
+                  (kb (or (alist-get 'updated b) (alist-get 'created b))))
               (cond
-               ;; Items without a created timestamp drift to the end.
-               ((and (null ca) (null cb)) nil)
-               ((null ca) nil)
-               ((null cb) t)
-               (reverse (string> ca cb))
-               (t       (string< ca cb))))))))
+               ;; Items without any timestamp drift to the end.
+               ((and (null ka) (null kb)) nil)
+               ((null ka) nil)
+               ((null kb) t)
+               ;; Default: newest first (descending); reverse: oldest first (ascending).
+               (reverse (string< ka kb))
+               (t       (string> ka kb))))))))
 
 (defun decknix--hub-attention-visible-p (item hide-reply hide-bot only-my)
   "Return non-nil if ITEM passes the three attention filters.

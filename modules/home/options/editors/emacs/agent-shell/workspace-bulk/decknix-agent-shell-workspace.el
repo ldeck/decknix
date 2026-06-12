@@ -2903,19 +2903,28 @@ Filters out sessions already live; dedupes by conv-key."
 (defun decknix-sidebar-nav-previous-consult ()
   "Pick one or more previous sessions to restore.
 C-SPC marks additional candidates via embark; RET restores all marked
-(or just the highlighted one).  C-g cancels."
+(or just the highlighted one).  M-RET restores ALL sessions listed
+without selecting any individually.  C-g cancels."
   (interactive)
   (let ((entries (decknix--sidebar-previous-build-entries)))
     (if (not entries)
         (message "No previous sessions")
       (let* (captured-selections
+             (all-labels (mapcar #'car entries))
              (setup-fn
               (lambda ()
                 (when (fboundp 'embark-select)
                   (local-set-key (kbd "C-SPC") 'embark-select))
+                ;; M-RET: mark all entries and exit — restores every session.
+                (local-set-key (kbd "M-RET")
+                               (lambda ()
+                                 (interactive)
+                                 (setq captured-selections all-labels)
+                                 (exit-minibuffer)))
                 (add-hook 'minibuffer-exit-hook
                   (lambda ()
-                    (when (fboundp 'embark-selected-candidates)
+                    (when (and (fboundp 'embark-selected-candidates)
+                               (null captured-selections))
                       (setq captured-selections
                             (embark-selected-candidates))))
                   nil t)))
@@ -2923,8 +2932,8 @@ C-SPC marks additional candidates via embark; RET restores all marked
               (condition-case nil
                   (minibuffer-with-setup-hook setup-fn
                     (completing-read
-                     "Restore previous (C-SPC=mark  RET=open  C-g=cancel): "
-                     (mapcar #'car entries) nil t))
+                     "Restore previous (C-SPC=mark  RET=open  M-RET=all  C-g=cancel): "
+                     all-labels nil t))
                 (quit nil)))
              (labels
               (cond
