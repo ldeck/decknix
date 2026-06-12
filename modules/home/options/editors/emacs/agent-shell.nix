@@ -1625,13 +1625,18 @@ let
   # heredoc immediately after the
   # `(require 'decknix-agent-shell-hub)' line so load-order
   # semantics and the 22 cross-feature `fboundp' guards stay correct.
-  decknix-agent-shell-hub-el = pkgs.emacsPackages.trivialBuild {
+  decknix-agent-shell-hub-el = mkEmacsTestedPackage {
     pname = "decknix-agent-shell-hub";
-    version = "0.1";
     src = ./agent-shell/hub-bulk;
     # Bulk module `(require 'decknix-hub-file-event)' at top-level for
     # the atomic-rename-aware file-notify event helper.
-    packageRequires = [ decknix-hub-file-event-el ];
+    packageRequires = [
+      decknix-hub-file-event-el
+      decknix-agent-tags-read-el
+    ];
+    testFiles = [
+      "decknix-hub-worktree-persistence-test.el"
+    ];
   };
 
   # Picker selection coerce: pure helper that unwraps
@@ -4396,12 +4401,18 @@ Subsequent toggles only log when verbose tracing is on."
         (add-hook 'kill-emacs-hook #'decknix--sidebar-state-save)
         (add-hook 'kill-emacs-hook #'decknix--sidebar-previous-sessions-save)
         (add-hook 'kill-emacs-hook #'decknix--sidebar-previous-history-save)
+        (add-hook 'kill-emacs-hook #'decknix--hub-worktree-clone-map-save)
         (add-hook 'emacs-startup-hook #'decknix--sidebar-state-restore)
         ;; Restore history before the snapshot (priority 80) so the
         ;; snapshot at priority 100 can prepend to the existing ring.
         (add-hook 'emacs-startup-hook
                   #'decknix--sidebar-previous-history-restore
                   80)
+        ;; Restore the worktree clone map early (priority 70) to avoid
+        ;; blocking the first sidebar render with git process calls.
+        (add-hook 'emacs-startup-hook
+                  #'decknix--hub-worktree-clone-map-restore
+                  70)
         ;; Also save+restore around a hot-reload (`decknix switch').
         ;; `deckmacs-reload' force-unloads then reloads every decknix-*
         ;; feature; unload-feature unbinds defvar'd variables, so the
@@ -4418,11 +4429,13 @@ Subsequent toggles only log when verbose tracing is on."
         (when (boundp 'deckmacs-pre-reload-hook)
           (add-hook 'deckmacs-pre-reload-hook #'decknix--sidebar-state-save)
           (add-hook 'deckmacs-pre-reload-hook #'decknix--sidebar-previous-sessions-save)
-          (add-hook 'deckmacs-pre-reload-hook #'decknix--sidebar-previous-history-save))
+          (add-hook 'deckmacs-pre-reload-hook #'decknix--sidebar-previous-history-save)
+          (add-hook 'deckmacs-pre-reload-hook #'decknix--hub-worktree-clone-map-save))
         (when (boundp 'deckmacs-post-reload-hook)
           (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-state-restore)
           (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-previous-sessions-restore)
-          (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-previous-history-restore))
+          (add-hook 'deckmacs-post-reload-hook #'decknix--sidebar-previous-history-restore)
+          (add-hook 'deckmacs-post-reload-hook #'decknix--hub-worktree-clone-map-restore))
         ;; Freeze the prior run's live set as this run's Previous
         ;; Sessions list and reset the live file to empty so eager
         ;; lifecycle hooks rebuild it from zero.  Runs after restore
@@ -4486,6 +4499,8 @@ Subsequent toggles only log when verbose tracing is on."
         ;; the bulk require so symbols resolve at byte-compile time and
         ;; the original load-order semantics are preserved.
         (require 'decknix-agent-shell-hub)
+        (declare-function decknix--hub-worktree-clone-map-save "decknix-agent-shell-hub")
+        (declare-function decknix--hub-worktree-clone-map-restore "decknix-agent-shell-hub")
 
 
 
