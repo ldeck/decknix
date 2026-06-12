@@ -225,6 +225,9 @@
 (defvar decknix-hub-eager-clone-probe)
 (defvar decknix--sidebar-previous-sessions)
 (declare-function decknix--sidebar-previous-dedupe "decknix-sidebar-previous")
+(declare-function decknix--sidebar-previous-history-record
+                  "decknix-sidebar-previous" (sessions))
+(defvar decknix--sidebar-previous-history)
 ;; Eager live-sessions persistence layer (own carved package).  The
 ;; bulk wires the lifecycle hooks (record / forget) and the startup
 ;; snapshot; the pure read/write/dedupe lives in the package itself.
@@ -1738,6 +1741,98 @@ the target.  Sessions and tags are moved to the target."
             (agent-shell-workspace-sidebar-refresh)
             (message "Conversation merged")))))))
 
+;; -- Previous-sessions history picker --
+(defun decknix-sidebar-previous-history ()
+  "Pick sessions from all historical Previous snapshots.
+Presents a flat `completing-read-multiple' view of every session in the
+history ring, annotated with the snapshot run time (e.g. \"3h ago\").
+C-SPC marks multiple candidates; RET opens all marked sessions.
+Sessions are deduplicated across snapshots by conv-key so the same
+conversation shows only once (from its most recent appearance).
+Calls `decknix--sidebar-restore-previous-session' for each selection."
+  (interactive)
+  (let* ((history (and (boundp 'decknix--sidebar-previous-history)
+                       decknix--sidebar-previous-history))
+         (now (float-time))
+         ;; Build a flat deduplicated candidate list from the ring.
+         ;; `seen-keys' tracks conv-keys (or session-ids as fallback)
+         ;; so the same conversation only appears once, from its most
+         ;; recent snapshot.
+         (seen-keys (make-hash-table :test 'equal))
+         (flat-entries nil))
+    (unless history
+      (user-error "No previous sessions history available"))
+    (dolist (slot history)
+      (let* ((ts (alist-get 'timestamp slot))
+             (sessions (alist-get 'sessions slot))
+             (age-str (decknix--sidebar-previous-history--age-string ts now)))
+        (dolist (entry sessions)
+          (let* ((ck (alist-get 'conv-key entry))
+                 (sid (alist-get 'session-id entry))
+                 (dedup-key (or ck (cons :sid sid))))
+            (unless (gethash dedup-key seen-keys)
+              (puthash dedup-key t seen-keys)
+              (let* ((name (or (alist-get 'name entry) "unknown"))
+                     (short (if (string-match "\\*Auggie: \\(.*\\)\\*" name)
+                                (match-string 1 name) name))
+                     (ws (alist-get 'workspace entry))
+                     (tags (alist-get 'tags entry))
+                     (ws-str (if ws
+                                 (let ((abbr (abbreviate-file-name ws)))
+                                   (if (string-match "/\\([^/]+\\)/?$" abbr)
+                                       (match-string 1 abbr) abbr))
+                               "?"))
+                     (tag-str (if tags
+                                  (mapconcat (lambda (tg) (concat "#" tg))
+                                             tags " ")
+                                ""))
+                     ;; Annotate with run time so the user knows when
+                     ;; this set is from.  Pad short to align annotations.
+                     (label (format "%s  @%s %s" short ws-str tag-str))
+                     (annotation (format "  [%s]" age-str)))
+                (push (list label annotation entry) flat-entries)))))))
+    (setq flat-entries (nreverse flat-entries))
+    (unless flat-entries
+      (user-error "No sessions in history"))
+    (let* ((labels (mapcar #'car flat-entries))
+           (max-label (apply #'max (mapcar #'length labels)))
+           (annotator
+            (eval
+             `(lambda (cand)
+                (when-let ((row (cl-find cand ',flat-entries
+                                         :key #'car :test #'equal)))
+                  (concat (make-string (- ,(+ max-label 2) (length cand)) ?\s)
+                          (nth 1 row))))
+             t))
+           (choices
+            (let ((completion-extra-properties
+                   (list :annotation-function annotator)))
+              (completing-read-multiple
+               "History (C-SPC=mark  RET=open  C-g=cancel): "
+               labels nil t)))
+           (to-restore
+            (delq nil
+                  (mapcar (lambda (lbl)
+                            (nth 2 (cl-find lbl flat-entries
+                                            :key #'car :test #'equal)))
+                          choices))))
+      (when to-restore
+        (decknix--sidebar-restore-previous-session (car to-restore) t)
+        (dolist (e (cdr to-restore))
+          (decknix--sidebar-restore-previous-session e))
+        (message "Restored %d session%s from history"
+                 (length to-restore)
+                 (if (= 1 (length to-restore)) "" "s"))))))
+
+(defun decknix--sidebar-previous-history--age-string (ts now)
+  "Return a human-readable age string for timestamp TS relative to NOW."
+  (let ((diff (- now ts)))
+    (cond ((< diff 120)    "just now")
+          ((< diff 3600)   (format "%dm ago" (round (/ diff 60))))
+          ((< diff 86400)  (format "%dh ago" (round (/ diff 3600))))
+          ((< diff 604800) (format "%dd ago" (round (/ diff 86400))))
+          (t               (format-time-string "%Y-%m-%d" (seconds-to-time ts))))))
+
 ;; -- Session transient --
 (transient-define-prefix decknix-sidebar-sessions ()
   "Session operations."
@@ -1747,7 +1842,8 @@ the target.  Sessions and tags are moved to the target."
    ("r" "Recent"         decknix-agent-session-recent)]
   ["Previous"
    ("p" "Restore…"        decknix-sidebar-goto-previous)
-   ("P" "Restore all"     decknix--sidebar-restore-all-previous)])
+   ("P" "Restore all"     decknix--sidebar-restore-all-previous)
+   ("H" "History…"        decknix-sidebar-previous-history)])
 
 ;; -- Actions prefix keymap (a …) --
 ;; Displaced commands that gave up their top-level keys to
@@ -2741,21 +2837,13 @@ Interactively: \\[universal-argument] N r limits to N items;
         (when buf
           (decknix--nav-live-item-actions buf))))))
 
-(defvar decknix--sidebar-previous-restore-mode nil
-  "Internal flag: nil = single restore, \\='all = restore all visible.")
-(defvar decknix--sidebar-previous-visible-candidates nil
-  "Captured list of visible candidate strings from vertico at M-RET time.")
-
-(defun decknix-sidebar-nav-previous-consult ()
-  "Pick previous sessions to restore via completing-read.
-RET restores the selected session.  M-RET restores all currently
-visible (filtered) candidates.  C-g cancels."
-  (interactive)
+(defun decknix--sidebar-previous-build-entries ()
+  "Return an alist of (LABEL . ENTRY) for the current previous sessions.
+Filters out sessions already live; dedupes by conv-key."
   (let* ((live-bufs (seq-filter #'buffer-live-p
                                 (when (fboundp 'agent-shell-buffers)
                                   (agent-shell-buffers))))
-         (live-sids (mapcar #'decknix--agent-buffer-session-id
-                             live-bufs))
+         (live-sids (mapcar #'decknix--agent-buffer-session-id live-bufs))
          (live-conv-keys
           (delq nil
                 (mapcar (lambda (b)
@@ -2763,8 +2851,6 @@ visible (filtered) candidates.  C-g cancels."
                             (and (bound-and-true-p decknix--agent-conv-key)
                                  decknix--agent-conv-key)))
                         live-bufs)))
-         ;; Same filter as the sidebar renderer: drop live, dedupe
-         ;; by conv-key so each conversation shows exactly once.
          (prev (decknix--sidebar-previous-dedupe
                 (seq-filter
                  (lambda (e)
@@ -2772,76 +2858,50 @@ visible (filtered) candidates.  C-g cancels."
                          (ck (alist-get 'conv-key e)))
                      (and (not (member sid live-sids))
                           (not (and ck (member ck live-conv-keys))))))
-                 (or decknix--sidebar-previous-sessions '()))))
-         (entries
-          (mapcar
-           (lambda (entry)
-             (let* ((name (or (alist-get 'name entry) "unknown"))
-                    (short (if (string-match "\\*Auggie: \\(.*\\)\\*" name)
-                               (match-string 1 name) name))
-                    (ws (alist-get 'workspace entry))
-                    (tags (alist-get 'tags entry))
-                    (ws-str (if ws
-                                (let ((abbr (abbreviate-file-name ws)))
-                                  (if (string-match "/\\([^/]+\\)/?$" abbr)
-                                      (match-string 1 abbr) abbr))
-                              "?"))
-                    (tag-str (if tags
-                                (mapconcat
-                                 (lambda (tg) (concat "#" tg)) tags " ")
-                              ""))
-                    (label (format "%s  @%s %s" short ws-str tag-str)))
-               (cons label entry)))
-           prev)))
+                 (or decknix--sidebar-previous-sessions '())))))
+    (mapcar
+     (lambda (entry)
+       (let* ((name (or (alist-get 'name entry) "unknown"))
+              (short (if (string-match "\\*Auggie: \\(.*\\)\\*" name)
+                         (match-string 1 name) name))
+              (ws (alist-get 'workspace entry))
+              (tags (alist-get 'tags entry))
+              (ws-str (if ws
+                          (let ((abbr (abbreviate-file-name ws)))
+                            (if (string-match "/\\([^/]+\\)/?$" abbr)
+                                (match-string 1 abbr) abbr))
+                        "?"))
+              (tag-str (if tags
+                           (mapconcat (lambda (tg) (concat "#" tg)) tags " ")
+                         ""))
+              (label (format "%s  @%s %s" short ws-str tag-str)))
+         (cons label entry)))
+     prev)))
+
+(defun decknix-sidebar-nav-previous-consult ()
+  "Pick one or more previous sessions to restore via completing-read-multiple.
+C-SPC marks additional candidates; RET restores all marked (or just the
+typed one).  C-g cancels."
+  (interactive)
+  (let ((entries (decknix--sidebar-previous-build-entries)))
     (if (not entries)
         (message "No previous sessions")
-      (setq decknix--sidebar-previous-restore-mode nil)
-      (setq decknix--sidebar-previous-visible-candidates nil)
-      (let* ((choice
-              (minibuffer-with-setup-hook
-                  (lambda ()
-                    (let ((map (make-sparse-keymap)))
-                      (define-key map (kbd "M-RET")
-                        (lambda () (interactive)
-                          (setq decknix--sidebar-previous-restore-mode 'all)
-                          ;; Capture vertico's filtered candidates while
-                          ;; still inside the minibuffer (they are
-                          ;; buffer-local and vanish on exit).
-                          (setq decknix--sidebar-previous-visible-candidates
-                                (when (boundp 'vertico--candidates)
-                                  (copy-sequence vertico--candidates)))
-                          (exit-minibuffer)))
-                      (use-local-map
-                       (make-composed-keymap map (current-local-map)))))
-                (completing-read
-                 "Restore (RET=one  M-RET=all visible  C-g=cancel): "
-                 (mapcar #'car entries) nil t)))
-             (all-labels (mapcar #'car entries)))
-        (if (eq decknix--sidebar-previous-restore-mode 'all)
-            ;; Restore all candidates that matched the filter at
-            ;; the time M-RET was pressed.
-            (let* ((visible (or decknix--sidebar-previous-visible-candidates
-                               all-labels))
-                   (to-restore (seq-filter
-                                #'identity
-                                (mapcar (lambda (lbl)
-                                          (cdr (assoc lbl entries)))
-                                        visible))))
-              (if (null to-restore)
-                  (message "No matching sessions")
-                ;; Restore first with focus, rest without
-                (decknix--sidebar-restore-previous-session
-                 (car to-restore) t)
-                (dolist (entry (cdr to-restore))
-                  (decknix--sidebar-restore-previous-session entry))
-                (message "Restored %d session%s"
-                         (length to-restore)
-                         (if (= (length to-restore) 1) "" "s"))))
-          ;; Single selection: restore just the chosen one
-          (let ((entry (cdr (assoc choice entries))))
-            (when entry
-              (decknix--sidebar-restore-previous-session
-               entry t))))))))
+      (let* ((choices
+              (completing-read-multiple
+               "Restore previous (C-SPC=mark  RET=open  C-g=cancel): "
+               (mapcar #'car entries) nil t))
+             (to-restore
+              (delq nil
+                    (mapcar (lambda (lbl) (cdr (assoc lbl entries)))
+                            choices))))
+        (when to-restore
+          ;; Focus on the first restored session; the rest open silently
+          (decknix--sidebar-restore-previous-session (car to-restore) t)
+          (dolist (entry (cdr to-restore))
+            (decknix--sidebar-restore-previous-session entry))
+          (message "Restored %d session%s"
+                   (length to-restore)
+                   (if (= 1 (length to-restore)) "" "s")))))))
 
 (transient-define-prefix decknix-sidebar-nav-requests-keys ()
   "Pick a PR review request via shortcut keys."
@@ -4453,6 +4513,16 @@ to lifting the legacy `previous-sessions' field out of
 `decknix--sidebar-state-file' so users do not lose their list during
 the cutover.
 
+IMPORTANT — nil-live fallback: when the live file is empty (the
+previous run recorded no sessions because the user never opened any
+before the daemon was restarted), we do NOT overwrite
+`decknix--sidebar-previous-sessions'.  The restore at
+`emacs-startup-hook' priority 90 already loaded the most recently
+saved list from `decknix--sidebar-previous-sessions-file'; clobbering
+it with nil would make the Previous section go blank even though data
+is available.  We still re-apply the dismissed filter so any dismissals
+that happened after the last file write take effect.
+
 After the snapshot is taken, it is persisted to
 `decknix--sidebar-previous-sessions-file' so it survives hot-reloads."
   (let* ((live (decknix--live-sessions-snapshot-and-truncate))
@@ -4470,10 +4540,26 @@ After the snapshot is taken, it is persisted to
                          (alist-get 'previous-sessions state))
                      (error nil)))))
          (dismissed (decknix--live-sessions-dismissed-read)))
-    (setq decknix--sidebar-previous-sessions
-          (decknix--live-sessions-filter-dismissed
-           (decknix--sidebar-previous-dedupe (or snapshot '()))
-           dismissed))
+    (if snapshot
+        ;; Non-empty live file (or legacy migration): replace Previous
+        ;; with the deduped + dismissed-filtered snapshot.
+        (setq decknix--sidebar-previous-sessions
+              (decknix--live-sessions-filter-dismissed
+               (decknix--sidebar-previous-dedupe snapshot)
+               dismissed))
+      ;; Empty live file: keep whatever the priority-90 restore set.
+      ;; Re-apply dismissed filter so new dismissals take effect even
+      ;; though we are not replacing the list wholesale.
+      (when dismissed
+        (setq decknix--sidebar-previous-sessions
+              (decknix--live-sessions-filter-dismissed
+               (or decknix--sidebar-previous-sessions '())
+               dismissed))))
+    ;; Record snapshot to history ring (only when we have new sessions)
+    (when (and snapshot decknix--sidebar-previous-sessions
+               (fboundp 'decknix--sidebar-previous-history-record))
+      (decknix--sidebar-previous-history-record
+       decknix--sidebar-previous-sessions))
     ;; Persist the frozen list so reloads can recover it
     (decknix--sidebar-previous-sessions-save)))
 
