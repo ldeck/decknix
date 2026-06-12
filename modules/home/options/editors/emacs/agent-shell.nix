@@ -1956,8 +1956,8 @@ in
           (name: text: nameValuePair "${reviewSnippetDir}/${name}" { inherit text; })
           reviewSnippets));
 
-    # Reconcile and sync auggie commands + guidelines using agent-sync (copy-not-symlink)
-    decknix.cli.agentSync.enable = true;
+    # Reconcile and sync auggie commands + guidelines using agent-sync (copy-not-symlink).
+    # agentSync auto-enables once any module registers files, so we only append here.
     decknix.cli.agentSync.files =
       # Auggie custom commands → ~/.augment/commands/
       (optionalAttrs cfg.commands.enable
