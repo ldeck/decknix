@@ -2081,7 +2081,10 @@ conversations (newest first), annotated with workspace and tags."
     (setq candidates (nreverse candidates))
     (unless candidates
       (user-error "No saved sessions found"))
-    ;; Build completion table with annotations (workspace + tags)
+    ;; Build completion table with annotations (workspace + tags).
+    ;; Use `completing-read-multiple' (CRM) so the user can mark
+    ;; several sessions with C-SPC (vertico) and open them all at once
+    ;; with RET — matching the multi-select behaviour of `s s'.
     (let* ((max-name (apply #'max (mapcar (lambda (c) (length (car c))) candidates)))
            (annotator
             (eval
@@ -2096,38 +2099,40 @@ conversations (newest first), annotated with workspace and tags."
              t))
            (table (decknix--agent-unsorted-table
                    (mapcar #'car candidates)))
-           (selection
+           (selections
             (let ((completion-extra-properties
                    (list :annotation-function annotator)))
-              (completing-read "Recent session: " table nil t))))
-      (when-let ((entry (assoc selection candidates)))
-        (let ((conv-key (nth 2 entry))
-              (session (nth 3 entry))
-              (workspace (nth 4 entry))
-              (live-p (nth 5 entry)))
-          (if live-p
-              ;; Already live — find and switch to the buffer
-              (let ((buf (seq-find
-                          (lambda (b)
-                            (when (buffer-live-p b)
-                              (with-current-buffer b
-                                (when (derived-mode-p 'agent-shell-mode)
-                                  (equal conv-key
-                                         (ignore-errors
-                                           (decknix--session-conv-id)))))))
-                          (agent-shell-buffers))))
-                (if buf (switch-to-buffer buf)
-                  (user-error "Live buffer not found")))
-            ;; Saved — resume
-            (let ((session-id (alist-get 'sessionId session))
-                  (name (decknix--agent-session-display-name session)))
-              (unless workspace
-                (setq workspace
-                      (read-directory-name "Workspace: " nil nil t)))
-              (decknix--agent-session-resume
-               session-id
-               decknix-agent-session-history-count
-               name workspace conv-key))))))))
+              (completing-read-multiple
+               "Recent sessions (C-SPC=mark  RET=open): " table nil t))))
+      (dolist (selection selections)
+        (when-let ((entry (assoc selection candidates)))
+          (let ((conv-key (nth 2 entry))
+                (session (nth 3 entry))
+                (workspace (nth 4 entry))
+                (live-p (nth 5 entry)))
+            (if live-p
+                ;; Already live — find and switch to the buffer
+                (let ((buf (seq-find
+                            (lambda (b)
+                              (when (buffer-live-p b)
+                                (with-current-buffer b
+                                  (when (derived-mode-p 'agent-shell-mode)
+                                    (equal conv-key
+                                           (ignore-errors
+                                             (decknix--session-conv-id)))))))
+                            (agent-shell-buffers))))
+                  (if buf (switch-to-buffer buf)
+                    (user-error "Live buffer not found")))
+              ;; Saved — resume
+              (let ((session-id (alist-get 'sessionId session))
+                    (name (decknix--agent-session-display-name session)))
+                (unless workspace
+                  (setq workspace
+                        (read-directory-name "Workspace: " nil nil t)))
+                (decknix--agent-session-resume
+                 session-id
+                 decknix-agent-session-history-count
+                 name workspace conv-key)))))))))
 
 (defun decknix--agent-session-open-share (session-id)
   "Generate a share link for SESSION-ID and open it in Emacs.
