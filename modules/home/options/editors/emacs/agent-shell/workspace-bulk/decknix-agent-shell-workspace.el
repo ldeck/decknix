@@ -1804,18 +1804,40 @@ Calls `decknix--sidebar-restore-previous-session' for each selection."
                   (concat (make-string (- ,(+ max-label 2) (length cand)) ?\s)
                           (nth 1 row))))
              t))
-           (choices
-            (let ((completion-extra-properties
-                   (list :annotation-function annotator)))
-              (completing-read-multiple
-               "History (C-SPC=mark  RET=open  C-g=cancel): "
-               labels nil t)))
+           captured-selections
+           (setup-fn
+            (lambda ()
+              (when (fboundp 'embark-select)
+                (local-set-key (kbd "C-SPC") 'embark-select))
+              (add-hook 'minibuffer-exit-hook
+                (lambda ()
+                  (when (fboundp 'embark-selected-candidates)
+                    (setq captured-selections
+                          (embark-selected-candidates))))
+                nil t)))
+           (choice
+            (condition-case nil
+                (let ((completion-extra-properties
+                       (list :annotation-function annotator)))
+                  (minibuffer-with-setup-hook setup-fn
+                    (completing-read
+                     "History (C-SPC=mark  RET=open  C-g=cancel): "
+                     labels nil t)))
+              (quit nil)))
+           (chosen-labels
+            (cond
+             ((and captured-selections (consp captured-selections)
+                   (> (length captured-selections) 0))
+              captured-selections)
+             ((and choice (not (string-empty-p choice)))
+              (list choice))
+             (t nil)))
            (to-restore
             (delq nil
                   (mapcar (lambda (lbl)
                             (nth 2 (cl-find lbl flat-entries
                                             :key #'car :test #'equal)))
-                          choices))))
+                          chosen-labels))))
       (when to-restore
         (decknix--sidebar-restore-previous-session (car to-restore) t)
         (dolist (e (cdr to-restore))
@@ -2879,23 +2901,44 @@ Filters out sessions already live; dedupes by conv-key."
      prev)))
 
 (defun decknix-sidebar-nav-previous-consult ()
-  "Pick one or more previous sessions to restore via completing-read-multiple.
-C-SPC marks additional candidates; RET restores all marked (or just the
-typed one).  C-g cancels."
+  "Pick one or more previous sessions to restore.
+C-SPC marks additional candidates via embark; RET restores all marked
+(or just the highlighted one).  C-g cancels."
   (interactive)
   (let ((entries (decknix--sidebar-previous-build-entries)))
     (if (not entries)
         (message "No previous sessions")
-      (let* ((choices
-              (completing-read-multiple
-               "Restore previous (C-SPC=mark  RET=open  C-g=cancel): "
-               (mapcar #'car entries) nil t))
+      (let* (captured-selections
+             (setup-fn
+              (lambda ()
+                (when (fboundp 'embark-select)
+                  (local-set-key (kbd "C-SPC") 'embark-select))
+                (add-hook 'minibuffer-exit-hook
+                  (lambda ()
+                    (when (fboundp 'embark-selected-candidates)
+                      (setq captured-selections
+                            (embark-selected-candidates))))
+                  nil t)))
+             (choice
+              (condition-case nil
+                  (minibuffer-with-setup-hook setup-fn
+                    (completing-read
+                     "Restore previous (C-SPC=mark  RET=open  C-g=cancel): "
+                     (mapcar #'car entries) nil t))
+                (quit nil)))
+             (labels
+              (cond
+               ((and captured-selections (consp captured-selections)
+                     (> (length captured-selections) 0))
+                captured-selections)
+               ((and choice (not (string-empty-p choice)))
+                (list choice))
+               (t nil)))
              (to-restore
               (delq nil
                     (mapcar (lambda (lbl) (cdr (assoc lbl entries)))
-                            choices))))
+                            labels))))
         (when to-restore
-          ;; Focus on the first restored session; the rest open silently
           (decknix--sidebar-restore-previous-session (car to-restore) t)
           (dolist (entry (cdr to-restore))
             (decknix--sidebar-restore-previous-session entry))

@@ -2082,9 +2082,8 @@ conversations (newest first), annotated with workspace and tags."
     (unless candidates
       (user-error "No saved sessions found"))
     ;; Build completion table with annotations (workspace + tags).
-    ;; Use `completing-read-multiple' (CRM) so the user can mark
-    ;; several sessions with C-SPC (vertico) and open them all at once
-    ;; with RET — matching the multi-select behaviour of `s s'.
+    ;; Use plain `completing-read' + embark-select (C-SPC) for multi-select,
+    ;; matching the pattern in `decknix--hub-completing-read-with-mention-toggle'.
     (let* ((max-name (apply #'max (mapcar (lambda (c) (length (car c))) candidates)))
            (annotator
             (eval
@@ -2099,11 +2098,33 @@ conversations (newest first), annotated with workspace and tags."
              t))
            (table (decknix--agent-unsorted-table
                    (mapcar #'car candidates)))
+           captured-selections
+           (setup-fn
+            (lambda ()
+              (when (fboundp 'embark-select)
+                (local-set-key (kbd "C-SPC") 'embark-select))
+              (add-hook 'minibuffer-exit-hook
+                (lambda ()
+                  (when (fboundp 'embark-selected-candidates)
+                    (setq captured-selections
+                          (embark-selected-candidates))))
+                nil t)))
+           (choice
+            (condition-case nil
+                (let ((completion-extra-properties
+                       (list :annotation-function annotator)))
+                  (minibuffer-with-setup-hook setup-fn
+                    (completing-read
+                     "Recent sessions (C-SPC=mark  RET=open): " table nil t)))
+              (quit nil)))
            (selections
-            (let ((completion-extra-properties
-                   (list :annotation-function annotator)))
-              (completing-read-multiple
-               "Recent sessions (C-SPC=mark  RET=open): " table nil t))))
+            (cond
+             ((and captured-selections (consp captured-selections)
+                   (> (length captured-selections) 0))
+              captured-selections)
+             ((and choice (not (string-empty-p choice)))
+              (list choice))
+             (t nil))))
       (dolist (selection selections)
         (when-let ((entry (assoc selection candidates)))
           (let ((conv-key (nth 2 entry))
