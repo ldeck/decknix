@@ -4344,7 +4344,21 @@ cannot clobber the Previous Sessions snapshot."
                    decknix--sidebar-wt-hide-placeholders))
            (cons 'wt-hide-merged
                  (when (boundp 'decknix--sidebar-wt-hide-merged)
-                   decknix--sidebar-wt-hide-merged)))))
+                   decknix--sidebar-wt-hide-merged))
+           ;; WIP terminal/linked toggles (added after initial save schema).
+           (cons 'wip-hide-terminal
+                 (when (boundp 'decknix--hub-wip-hide-terminal)
+                   decknix--hub-wip-hide-terminal))
+           (cons 'wip-hide-linked
+                 (when (boundp 'decknix--hub-wip-hide-linked)
+                   decknix--hub-wip-hide-linked))
+           ;; Symbol style and repo-name cap (display preferences).
+           (cons 'symbol-style
+                 (when (boundp 'decknix--hub-symbol-style)
+                   decknix--hub-symbol-style))
+           (cons 'repo-name-cap
+                 (when (boundp 'decknix--hub-repo-name-cap)
+                   decknix--hub-repo-name-cap)))))
     (make-directory (file-name-directory decknix--sidebar-state-file) t)
     (with-temp-file decknix--sidebar-state-file
       (insert ";; Auto-generated — do not edit\n")
@@ -4511,7 +4525,25 @@ cannot clobber the Previous Sessions snapshot."
           (let ((whm (alist-get 'wt-hide-merged state 'missing)))
             (unless (eq whm 'missing)
               (when (boundp 'decknix--sidebar-wt-hide-merged)
-                (setq decknix--sidebar-wt-hide-merged whm)))))
+                (setq decknix--sidebar-wt-hide-merged whm))))
+          ;; WIP terminal/linked toggles.
+          (let ((wht (alist-get 'wip-hide-terminal state 'missing)))
+            (unless (eq wht 'missing)
+              (when (boundp 'decknix--hub-wip-hide-terminal)
+                (setq decknix--hub-wip-hide-terminal wht))))
+          (let ((whl (alist-get 'wip-hide-linked state 'missing)))
+            (unless (eq whl 'missing)
+              (when (boundp 'decknix--hub-wip-hide-linked)
+                (setq decknix--hub-wip-hide-linked whl))))
+          ;; Symbol style and repo-name cap.
+          (let ((ss (alist-get 'symbol-style state 'missing)))
+            (unless (eq ss 'missing)
+              (when (boundp 'decknix--hub-symbol-style)
+                (setq decknix--hub-symbol-style ss))))
+          (let ((rnc (alist-get 'repo-name-cap state 'missing)))
+            (unless (eq rnc 'missing)
+              (when (boundp 'decknix--hub-repo-name-cap)
+                (setq decknix--hub-repo-name-cap rnc)))))
       (error
        (message "sidebar-state: restore failed: %s" (error-message-string err))))))
 
@@ -4736,6 +4768,28 @@ Returns updated LINE-NUM."
                       'font-lock-comment-face))))))))
   line-num)
 
+;; -- Previous sessions: window helper --
+(defun decknix--sidebar-find-main-window ()
+  "Return the first live non-side, non-sidebar leaf window.
+`window-main-window' can return an internal (non-live) node when
+multiple content tiles are open, causing `window-live-p' to return
+nil and the sidebar to remain selected.  Walking every leaf window
+and picking the first that is not a side window and not the sidebar
+buffer is robust to any tiling layout."
+  (let ((target nil)
+        (sidebar-name (or (bound-and-true-p
+                           agent-shell-workspace-sidebar-buffer-name)
+                          "*Agent Sidebar*")))
+    (walk-windows
+     (lambda (win)
+       (when (and (not target)
+                  (not (window-parameter win 'window-side))
+                  (not (string= (buffer-name (window-buffer win))
+                                sidebar-name)))
+         (setq target win)))
+     nil nil)
+    target))
+
 ;; -- Previous sessions: restore action --
 (defun decknix--sidebar-restore-previous-session (entry &optional focus)
   "Resume the previous session described by ENTRY.
@@ -4762,9 +4816,15 @@ or the session list is stale)."
                          name)))
     (if (not sid)
         (message "Cannot restore: no session ID")
-      ;; Select main window so resume captures it as the target
-      (let ((main (window-main-window (selected-frame))))
-        (when (and main (window-live-p main))
+      ;; Select a non-sidebar content window so agent-session-resume
+      ;; captures it as `(selected-window)'.  `window-main-window'
+      ;; returns a non-live internal node when multiple tiles exist,
+      ;; causing `window-live-p' to fail and leaving the sidebar
+      ;; selected — sessions then open inside the sidebar panel.
+      ;; `decknix--sidebar-find-main-window' walks leaf windows and is
+      ;; immune to the internal-node problem.
+      (let ((main (decknix--sidebar-find-main-window)))
+        (when (window-live-p main)
           (select-window main)))
       ;; resume now handles display-action override internally
       (let ((new-buf (decknix--agent-session-resume
@@ -4794,13 +4854,16 @@ or the session list is stale)."
             (eval `(lambda ()
                      (let ((buf ,new-buf))
                        (when (and buf (buffer-live-p buf))
-                         (let ((main (window-main-window (selected-frame))))
-                           (when (and main (window-live-p main))
+                         ;; Use the same leaf-window walker as the
+                         ;; synchronous path so multi-tile frames work.
+                         (let ((main (decknix--sidebar-find-main-window)))
+                           (when (window-live-p main)
                              (set-window-buffer main buf)
                              (select-window main)
                              (with-current-buffer buf
                                (goto-char (point-max)))
                              (set-window-point main (point-max))))))) t)))))))
+
 
 (defun decknix--sidebar-restore-all-previous ()
   "Restore all previous live sessions.
