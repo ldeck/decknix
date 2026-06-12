@@ -41,6 +41,18 @@ enum Commands {
         #[command(subcommand)]
         action: WtAction,
     },
+    /// Pull local changes to agent skills/commands back into repositories
+    PullLocalChanges {
+        /// Actually perform the copies and commits
+        #[arg(long)]
+        apply: bool,
+        /// Commit message (generated if not provided)
+        #[arg(long)]
+        message: Option<String>,
+        /// Destination for new files (defaults to decknix-config if in nurturecloud, else decknix)
+        #[arg(long)]
+        to: Option<String>,
+    },
     Help {
         /// The command to look up
         subcommand: Option<String>,
@@ -134,18 +146,6 @@ enum WtAction {
         /// Actually perform the deletion
         #[arg(long)]
         apply: bool,
-    },
-    /// Pull local changes to agent skills/commands back into repositories
-    PullLocalChanges {
-        /// Actually perform the copies and commits
-        #[arg(long)]
-        apply: bool,
-        /// Commit message (generated if not provided)
-        #[arg(long)]
-        message: Option<String>,
-        /// Destination for new files (defaults to decknix-config if in nurturecloud, else decknix)
-        #[arg(long)]
-        to: Option<String>,
     },
 }
 
@@ -246,12 +246,32 @@ fn manifest_path() -> PathBuf {
         .join(".config/decknix/agent-sync-manifest.json")
 }
 
+/// Compute the lowercase-hex SHA-256 of a file by shelling out to the same
+/// tool the agent-sync activation script uses (`sha256sum`), so the hashes the
+/// CLI compares against are byte-for-byte identical to what Nix wrote into the
+/// manifest. Falls back to `shasum -a 256` (macOS base system) if `sha256sum`
+/// (coreutils) is not on PATH. Avoids pulling crypto crates into the CLI's
+/// dependency tree (and the cargoHash churn that comes with it).
 fn calculate_hash(path: &Path) -> anyhow::Result<String> {
-    use sha2::{Sha256, Digest};
-    let content = fs::read(path)?;
-    let mut hasher = Sha256::new();
-    hasher.update(content);
-    Ok(hex::encode(hasher.finalize()))
+    let run = |program: &str, args: &[&str]| -> Option<String> {
+        let out = Command::new(program)
+            .args(args)
+            .arg(path)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        String::from_utf8(out.stdout)
+            .ok()?
+            .split_whitespace()
+            .next()
+            .map(|s| s.to_string())
+    };
+
+    run("sha256sum", &[])
+        .or_else(|| run("shasum", &["-a", "256"]))
+        .ok_or_else(|| anyhow::anyhow!("failed to compute sha256 for {}", path.display()))
 }
 
 // Merge configs from decknix, and custom system and home extensions
@@ -1144,7 +1164,7 @@ fn main() -> anyhow::Result<()> {
                 let mut commit_cmd = Command::new("git");
                 commit_cmd.arg("commit").arg("-m");
 
-                let default_msg = format!("feat(agent): pull local changes for agent skills/commands\n\nCo-authored by Augment Code");
+                let default_msg = "feat(agent): pull local changes for agent skills/commands".to_string();
                 commit_cmd.arg(message.as_deref().unwrap_or(&default_msg));
                 commit_cmd.current_dir(&repo);
 
@@ -1155,8 +1175,6 @@ fn main() -> anyhow::Result<()> {
                     println!("   ⚠️  Commit failed (possibly no changes staged)");
                 }
             }
-
-            Ok(())
         }
         // Handle: decknix help [cmd]
         Some(Commands::Help { subcommand }) => {
