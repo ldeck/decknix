@@ -47,6 +47,8 @@ let
       SOURCE_PATH="${info.source}"
       REPO_NAME="${info.repo}"
       REPO_PATH="${info.repoPath}"
+      # Scripts (executable = true) deploy 755; everything else stays 644.
+      MODE="${if info.executable then "755" else "644"}"
 
       # Ensure the parent directory exists (skills nest several levels deep).
       mkdir -p "$(dirname "$TARGET_PATH")"
@@ -68,12 +70,12 @@ let
         if [ "$LIVE_HASH" == "$NEW_HASH" ]; then
           # Already identical (incl. untracked-but-identical on first migration).
           # Adopt it: refresh mode + record provenance, no copy needed.
-          chmod 644 "$TARGET_PATH"
+          chmod "$MODE" "$TARGET_PATH"
           record_manifest "${target}" "$NEW_HASH" "$SOURCE_PATH" "$REPO_NAME" "$REPO_PATH"
         elif [ "$LIVE_HASH" == "$LAST_HASH" ]; then
           # Live matches last-deployed (no local edits) → safe to update.
           cp -f "$SOURCE_PATH" "$TARGET_PATH"
-          chmod 644 "$TARGET_PATH"
+          chmod "$MODE" "$TARGET_PATH"
           echo "  [agent-sync] Updated $TARGET_PATH"
           record_manifest "${target}" "$NEW_HASH" "$SOURCE_PATH" "$REPO_NAME" "$REPO_PATH"
         elif [ "$NEW_HASH" == "$LAST_HASH" ]; then
@@ -87,7 +89,7 @@ let
       else
         # Brand new file
         cp -f "$SOURCE_PATH" "$TARGET_PATH"
-        chmod 644 "$TARGET_PATH"
+        chmod "$MODE" "$TARGET_PATH"
         echo "  [agent-sync] Initialised $TARGET_PATH"
         record_manifest "${target}" "$NEW_HASH" "$SOURCE_PATH" "$REPO_NAME" "$REPO_PATH"
       fi
@@ -120,6 +122,16 @@ in {
           repoPath = mkOption {
             type = types.str;
             description = "The relative path within that repository.";
+          };
+          executable = mkOption {
+            type = types.bool;
+            default = false;
+            description = ''
+              Whether to deploy the file with the executable bit (755 instead
+              of 644). Use for skill helper scripts (e.g. files under a
+              `scripts/` directory). `decknix pull-local-changes` preserves the
+              mode on the way back, so the repo source stays executable too.
+            '';
           };
         };
       });
