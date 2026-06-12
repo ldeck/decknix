@@ -1445,6 +1445,45 @@ See `specs/sidebar-ret.md' §3.6.1 for the on-disk format.")
 Avoids re-running `git config --get remote.origin.url' on every
 sidebar refresh for paths we have already classified.")
 
+(defvar decknix--hub-worktree-clone-map-file
+  (expand-file-name "~/.config/decknix/hub/worktree-clones.el")
+  "Persistence file for `decknix--hub-worktree-clone-map'.")
+
+(defun decknix--hub-worktree-clone-map-save ()
+  "Persist the worktree clone map to disk."
+  (when (> (hash-table-count decknix--hub-worktree-clone-map) 0)
+    (condition-case err
+        (let (entries)
+          (maphash (lambda (k v) (push (cons k v) entries))
+                   decknix--hub-worktree-clone-map)
+          (make-directory (file-name-directory
+                           decknix--hub-worktree-clone-map-file) t)
+          (with-temp-file decknix--hub-worktree-clone-map-file
+            (insert ";; Auto-generated worktree clone map — do not edit\n")
+            (prin1 entries (current-buffer))
+            (insert "\n")))
+      (error
+       (message "hub-worktree-clone-map: save failed: %s"
+                (error-message-string err))))))
+
+(defun decknix--hub-worktree-clone-map-restore ()
+  "Restore the worktree clone map from disk."
+  (when (file-exists-p decknix--hub-worktree-clone-map-file)
+    (condition-case err
+        (let ((entries
+               (with-temp-buffer
+                 (insert-file-contents
+                  decknix--hub-worktree-clone-map-file)
+                 (read (current-buffer)))))
+          (when (listp entries)
+            (dolist (entry entries)
+              (when (and (consp entry) (stringp (car entry)))
+                (puthash (car entry) (cdr entry)
+                         decknix--hub-worktree-clone-map)))))
+      (error
+       (message "hub-worktree-clone-map: restore failed: %s"
+                (error-message-string err))))))
+
 (defun decknix--hub-worktree-classify-dir (dir)
   "Return canonical \"owner/repo\" for DIR or :unknown.
 Memoised in `decknix--hub-worktree-clone-map'."
@@ -1456,6 +1495,9 @@ Memoised in `decknix--hub-worktree-clone-map'."
                               (decknix--git-remote-url canon)))
                         :unknown)))
           (puthash canon repo decknix--hub-worktree-clone-map)
+          ;; Save immediately when a new entry is found (usually happens
+          ;; on first use of a new session/worktree).
+          (decknix--hub-worktree-clone-map-save)
           repo))))
 
 (defun decknix--hub-worktree-discover-from-sessions ()
