@@ -7,19 +7,19 @@
 
 ;;; Commentary:
 ;;
-;; ERT characterisation tests for the session list cache extracted
-;; from the agent-shell heredoc.  Covers the pure pieces (jq filter
-;; contents, jq command shape) and the cache-state lifecycle (TTL
-;; staleness, sync fetch wiring) without touching real auggie data.
+;; ERT tests for the mtime-keyed session metadata cache.  Covers:
+;;
+;; - jq filter contents and caching (still used for per-file parsing)
+;; - Bulk jq command shape (kept for grep thorough path compatibility)
+;; - Mtime-keyed metadata cache: hit, miss, missing file, round-trip
+;; - Cache lifecycle: TTL-based sync/async refresh dispatch
 
 ;;; Code:
 
 (require 'ert)
 (require 'cl-lib)
 
-;; Stub the parser before the cache module loads so `declare-function'
-;; resolution at byte-compile time finds a real definition.  Tests
-;; rebind it where they need a specific return value.
+;; Stub the parser before loading so byte-compile resolves declare-function.
 (unless (fboundp 'decknix--agent-session-parse)
   (defun decknix--agent-session-parse (_raw) nil))
 
@@ -40,7 +40,7 @@
             (should (string-match-p "modified" body))
             (should (string-match-p "exchangeCount" body))
             (should (string-match-p "firstUserMessage" body))
-            ;; Tolerant `try//' fallback so mid-write parses still emit.
+            ;; Tolerant try// fallback so mid-write parses still emit.
             (should (string-match-p "try" body))
             (should (string-match-p "// 0" body))
             ;; Trims firstUserMessage to 200 chars.
@@ -68,11 +68,11 @@
               (should-not (equal p1 p2)))
           (when (file-exists-p p2) (delete-file p2)))))))
 
-;; -- jq command shape ---------------------------------------------
+;; -- bulk jq command shape (kept for grep thorough path) ----------
 
 (ert-deftest decknix-agent-session-cache--jq-cmd-shape ()
-  "The shell command lists JSON files newest-first, fans out to jq, then sorts.
-Default path uses `ls -t' + `head' to limit to max-files newest files."
+  "Bulk jq command lists JSON files newest-first and fans out to jq.
+Default path uses ls -t + head to limit to max-files newest files."
   (let ((decknix--agent-session-jq-filter-file nil)
         (decknix--agent-sessions-dir "/tmp/test-sessions-dir")
         (decknix--agent-session-cache-max-files 200))
@@ -91,7 +91,7 @@ Default path uses `ls -t' + `head' to limit to max-files newest files."
           (delete-file decknix--agent-session-jq-filter-file))))))
 
 (ert-deftest decknix-agent-session-cache--jq-cmd-nil-max-uses-find ()
-  "When `decknix--agent-session-cache-max-files' is nil, fall back to find."
+  "When cache-max-files is nil, the bulk command falls back to find."
   (let ((decknix--agent-session-jq-filter-file nil)
         (decknix--agent-sessions-dir "/tmp/test-sessions-dir")
         (decknix--agent-session-cache-max-files nil))
@@ -116,17 +116,105 @@ Default path uses `ls -t' + `head' to limit to max-files newest files."
       (unwind-protect
           (progn
             (should (string-match-p (regexp-quote quoted) cmd))
-            ;; The naked unquoted path with a real space must not appear.
-            (should-not (string-match-p
-                         "ls -t1 /tmp/has space/sessions" cmd)))
+            (should-not (string-match-p "ls -t1 /tmp/has space/sessions" cmd)))
         (when (and decknix--agent-session-jq-filter-file
                    (file-exists-p decknix--agent-session-jq-filter-file))
           (delete-file decknix--agent-session-jq-filter-file))))))
 
-;; -- cache lifecycle ----------------------------------------------
+;; -- mtime-keyed metadata cache -----------------------------------
+
+(ert-deftest decknix-session-meta--cache-hit ()
+  "When file mtime matches cached mtime, returns cached data without parsing."
+  (let ((decknix--session-meta-cache (make-hash-table :test 'equal))
+        (parse-called 0))
+    (puthash "/tmp/test.json"
+             (list :mtime 1000.0 :data '((sessionId . "abc")))
+             decknix--session-meta-cache)
+    (cl-letf (((symbol-function 'decknix--session-file-mtime)
+               (lambda (_p) 1000.0))
+              ((symbol-function 'decknix--session-parse-file)
+               (lambda (_p) (cl-incf parse-called) nil)))
+      (let ((result (decknix--session-meta "/tmp/test.json")))
+        (should (equal result '((sessionId . "abc"))))
+        (should (= parse-called 0))))))
+
+(ert-deftest decknix-session-meta--cache-miss-reparses ()
+  "When mtime differs from cached, re-parses and updates cache."
+  (let ((decknix--session-meta-cache (make-hash-table :test 'equal))
+        (parse-called 0))
+    (puthash "/tmp/test.json"
+             (list :mtime 999.0 :data '((sessionId . "old")))
+             decknix--session-meta-cache)
+    (cl-letf (((symbol-function 'decknix--session-file-mtime)
+               (lambda (_p) 1001.0))
+              ((symbol-function 'decknix--session-parse-file)
+               (lambda (_p)
+                 (cl-incf parse-called)
+                 '((sessionId . "new")))))
+      (let ((result (decknix--session-meta "/tmp/test.json")))
+        (should (equal result '((sessionId . "new"))))
+        (should (= parse-called 1))
+        ;; Cache entry must be updated with new mtime.
+        (let ((entry (gethash "/tmp/test.json" decknix--session-meta-cache)))
+          (should (= (plist-get entry :mtime) 1001.0))
+          (should (equal (plist-get entry :data) '((sessionId . "new")))))))))
+
+(ert-deftest decknix-session-meta--new-file-cached-on-parse ()
+  "File absent from cache is parsed and inserted."
+  (let ((decknix--session-meta-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'decknix--session-file-mtime)
+               (lambda (_p) 2000.0))
+              ((symbol-function 'decknix--session-parse-file)
+               (lambda (_p) '((sessionId . "xyz")))))
+      (let ((result (decknix--session-meta "/tmp/new.json")))
+        (should (equal result '((sessionId . "xyz"))))
+        (should (gethash "/tmp/new.json" decknix--session-meta-cache))))))
+
+(ert-deftest decknix-session-meta--missing-file-returns-nil ()
+  "When file does not exist (mtime returns nil), returns nil without parsing."
+  (let ((decknix--session-meta-cache (make-hash-table :test 'equal))
+        (parse-called 0))
+    (cl-letf (((symbol-function 'decknix--session-file-mtime)
+               (lambda (_p) nil))
+              ((symbol-function 'decknix--session-parse-file)
+               (lambda (_p) (cl-incf parse-called) nil)))
+      (should (null (decknix--session-meta "/tmp/gone.json")))
+      (should (= parse-called 0)))))
+
+(ert-deftest decknix-session-meta-cache--round-trip ()
+  "Save and load round-trips the mtime cache through disk."
+  (let ((decknix--session-meta-cache (make-hash-table :test 'equal))
+        (tmp (make-temp-file "session-meta-test-" nil ".eld")))
+    (unwind-protect
+        (progn
+          (puthash "/tmp/a.json"
+                   (list :mtime 1000.0 :data '((sessionId . "aaa")))
+                   decknix--session-meta-cache)
+          (puthash "/tmp/b.json"
+                   (list :mtime 2000.0 :data '((sessionId . "bbb")))
+                   decknix--session-meta-cache)
+          ;; Save to temp file.
+          (let ((decknix--session-meta-cache-file tmp))
+            (decknix--session-meta-cache-save))
+          ;; Clear in-memory cache and reload.
+          (clrhash decknix--session-meta-cache)
+          (let ((decknix--session-meta-cache-file tmp))
+            (decknix--session-meta-cache-load))
+          ;; Both entries must survive the round-trip.
+          (let ((ea (gethash "/tmp/a.json" decknix--session-meta-cache))
+                (eb (gethash "/tmp/b.json" decknix--session-meta-cache)))
+            (should ea)
+            (should (= (plist-get ea :mtime) 1000.0))
+            (should (equal (plist-get ea :data) '((sessionId . "aaa"))))
+            (should eb)
+            (should (= (plist-get eb :mtime) 2000.0))
+            (should (equal (plist-get eb :data) '((sessionId . "bbb"))))))
+      (when (file-exists-p tmp) (delete-file tmp)))))
+
+;; -- cache lifecycle (TTL-based dispatch) -------------------------
 
 (ert-deftest decknix-agent-session-cache--list-syncs-on-first-call ()
-  "Cache is empty + time=0 => `session-list' triggers sync refresh."
+  "Cache is empty + time=0 => session-list triggers sync refresh."
   (let ((decknix--agent-session-cache nil)
         (decknix--agent-session-cache-time 0)
         (decknix--agent-session-cache-ttl 120)
@@ -146,7 +234,7 @@ Default path uses `ls -t' + `head' to limit to max-files newest files."
         (should (equal result '((stub))))))))
 
 (ert-deftest decknix-agent-session-cache--list-async-when-stale ()
-  "Cache present but older than TTL => async refresh, list still served."
+  "Cache present but older than TTL => async refresh, stale list still served."
   (let ((decknix--agent-session-cache '((cached)))
         (decknix--agent-session-cache-time 1.0)
         (decknix--agent-session-cache-ttl 60)
@@ -160,7 +248,6 @@ Default path uses `ls -t' + `head' to limit to max-files newest files."
       (let ((result (decknix--agent-session-list)))
         (should (= sync-called 0))
         (should (= async-called 1))
-        ;; Returns the still-cached value while async refresh runs.
         (should (equal result '((cached))))))))
 
 (ert-deftest decknix-agent-session-cache--list-fresh-no-refresh ()

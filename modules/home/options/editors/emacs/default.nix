@@ -48,6 +48,7 @@ in
       extraPackages = epkgs: with epkgs; [
         modus-themes           # High-contrast accessible themes
         exec-path-from-shell   # Inherit PATH from shell (critical for tools like rg, git, etc.)
+        gcmh                   # GC Magic Hack: large threshold while active, GC on idle
       ];
 
       extraConfig = ''
@@ -164,14 +165,19 @@ in
               save-interprogram-paste-before-kill t
               mouse-yank-at-point t)
 
-        ;; == Performance ==
-        ;; GC threshold: 32 MB balances pause frequency and RSS.
-        ;; 100 MB causes Emacs to accumulate large live sets between
-        ;; collections, inflating RSS across many concurrent sessions.
-        ;; LSP/agent-shell still benefit from a larger threshold than
-        ;; the Emacs default (800 kB); 32 MB is a good compromise.
-        (setq gc-cons-threshold (* 32 1024 1024)  ; 32MB
-              gc-cons-percentage 0.1)
+        ;; == Performance / GC ==
+        ;; gcmh (GC Magic Hack): keep gc-cons-threshold large during
+        ;; interactive work (no GC stalls during LSP completion, consult
+        ;; searches, Kotlin/Java file analysis), then collect once after
+        ;; `gcmh-idle-delay' seconds of idle time.  This reclaims memory
+        ;; when a session goes quiet — important when multiple Emacs frames
+        ;; share one daemon heap.
+        (use-package gcmh
+          :demand t
+          :config
+          (setq gcmh-high-cons-threshold (* 256 1024 1024)  ; 256 MB during work
+                gcmh-idle-delay 5)                           ; GC after 5s idle
+          (gcmh-mode 1))
 
         ;; Increase process output buffer (important for LSP)
         (setq read-process-output-max (* 1024 1024))  ; 1MB
