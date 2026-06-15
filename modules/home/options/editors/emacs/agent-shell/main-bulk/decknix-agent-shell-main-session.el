@@ -197,6 +197,14 @@
                   "decknix-picker-selections" (raw))
 (declare-function decknix-picker-selections-cand-key
                   "decknix-picker-selections" (cand))
+;; Carved bulk-send planner (agent-shell/session-bulk-send/).
+(declare-function decknix--session-bulk-send-plan
+                  "decknix-agent-session-bulk-send" (bufs busy-fn))
+;; Compose primitives (main-bulk sibling; resolved via heredoc load-order).
+(declare-function decknix--compose-enqueue-prompt
+                  "decknix-agent-shell-main-compose" (target input))
+(declare-function decknix--compose-submit-after-wait
+                  "decknix-agent-shell-main-compose" (target input))
 
 ;; Carved-package state vars consumed by this file.  Their values
 ;; live in the carved modules; the defvar below keeps the byte-
@@ -899,8 +907,8 @@ instead, routing each candidate to the correct restore/resume action.")
 
 (defvar decknix--session-picker-action nil
   "Special action to perform on the selected candidate(s) after the picker exits.
-One of nil (open/resume — normal behaviour), `kill', or `delete'.
-Reset to nil at the start of each picker call.  Set by the C-k / C-d
+One of nil (open/resume — normal behaviour), `kill', `delete', or `send'.
+Reset to nil at the start of each picker call.  Set by the C-k / C-d / C-s
 key bindings wired inside `decknix-agent-session-picker's setup hook.")
 
 (defvar decknix--session-picker-workspace-filter nil
@@ -1312,14 +1320,124 @@ Prompts once before touching anything, then calls
             (agent-shell-workspace-sidebar-refresh))
           (message "Deleted %d session%s" n (if (= 1 n) "" "s")))))))
 
+;; == Bulk-send action: C-s in the session picker ==
+;;
+;; Resolves marked live-session candidates to buffers, then opens a
+;; *Bulk Send* compose buffer.  The user types the prompt there and
+;; confirms with C-c C-c.  Idle sessions receive the prompt immediately
+;; via `decknix--compose-submit-after-wait'; busy sessions are queued
+;; via `decknix--compose-enqueue-prompt' so they fire when ready.
+;; The pure partition logic lives in the carved
+;; `decknix-agent-session-bulk-send' package (session-bulk-send/).
+
+(defvar-local decknix--session-bulk-send-targets nil
+  "List of target agent-shell buffers for this bulk-send compose buffer.")
+
+(defvar decknix-session-bulk-send-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'decknix--session-bulk-send-submit)
+    (define-key map (kbd "C-c C-k") #'decknix--session-bulk-send-cancel)
+    map)
+  "Keymap for `decknix-session-bulk-send-mode'.")
+
+(define-minor-mode decknix-session-bulk-send-mode
+  "Minor mode for the *Bulk Send* compose buffer.
+C-c C-c dispatches the buffer contents to all target sessions.
+C-c C-k cancels without sending."
+  :lighter " [Bulk]"
+  :keymap decknix-session-bulk-send-mode-map)
+
+(defun decknix--session-bulk-send-submit ()
+  "Send the compose buffer content to all target sessions.
+Idle sessions get an immediate submit; busy sessions are queued."
+  (interactive)
+  (let* ((bufs decknix--session-bulk-send-targets)
+         (text (string-trim
+                (buffer-substring-no-properties (point-min) (point-max)))))
+    (if (string-empty-p text)
+        (message "Empty prompt — nothing sent")
+      (decknix--session-bulk-dispatch bufs text)
+      (kill-buffer (current-buffer)))))
+
+(defun decknix--session-bulk-send-cancel ()
+  "Cancel the bulk-send compose buffer without sending."
+  (interactive)
+  (kill-buffer (current-buffer))
+  (message "Bulk send cancelled"))
+
+(defun decknix--session-bulk-dispatch (bufs input)
+  "Dispatch INPUT to each live buffer in BUFS via the bulk-send planner.
+Idle buffers receive an immediate submit; busy buffers are queued via
+the compose-queue polling timer.  Reports the counts after dispatch."
+  (when bufs
+    (let* ((plan (decknix--session-bulk-send-plan
+                  bufs
+                  (lambda (buf)
+                    (with-current-buffer buf
+                      (and (fboundp 'shell-maker--busy)
+                           (shell-maker--busy))))))
+           (send-now (plist-get plan :send-now))
+           (to-queue (plist-get plan :enqueue))
+           (sent 0)
+           (queued 0))
+      (dolist (buf send-now)
+        (decknix--compose-submit-after-wait buf input)
+        (cl-incf sent))
+      (dolist (buf to-queue)
+        (decknix--compose-enqueue-prompt buf input)
+        (cl-incf queued))
+      (message "Bulk send: %d sent immediately, %d queued" sent queued))))
+
+(defun decknix--session-bulk-send-open-compose (bufs)
+  "Open a *Bulk Send* compose buffer for BUFS.
+The buffer activates `decknix-session-bulk-send-mode'; C-c C-c sends,
+C-c C-k cancels."
+  (let* ((n (length bufs))
+         (buf (get-buffer-create "*Bulk Send*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (setq-local decknix--session-bulk-send-targets bufs)
+      (decknix-session-bulk-send-mode 1))
+    (let ((win (display-buffer buf
+                               '(display-buffer-at-bottom
+                                 . ((window-height . 0.3))))))
+      (when (window-live-p win)
+        (select-window win)))
+    (message "Bulk send to %d session%s — C-c C-c to send, C-c C-k to cancel"
+             n (if (= 1 n) "" "s"))))
+
+(defun decknix--session-picker-send-cands (cands)
+  "Resolve CANDS to live buffers and open the bulk-send compose buffer.
+Non-live candidates (saved/previous sessions) are skipped with a note;
+bulk send requires a running agent process to dispatch to."
+  (let* ((live-bufs
+          (delq nil
+                (mapcar
+                 (lambda (cand)
+                   (let ((key (decknix-picker-selections-cand-key cand)))
+                     (and decknix--session-picker-live-map
+                          (let ((buf (gethash key
+                                              decknix--session-picker-live-map)))
+                            (and buf (buffer-live-p buf) buf)))))
+                 cands)))
+         (skipped (- (length cands) (length live-bufs))))
+    (when (> skipped 0)
+      (message "Skipping %d non-live candidate%s (bulk send targets live sessions)"
+               skipped (if (= 1 skipped) "" "s")))
+    (if (null live-bufs)
+        (message "No live sessions selected — C-SPC mark live sessions, then C-s")
+      (decknix--session-bulk-send-open-compose live-bufs))))
+
 (defun decknix--session-picker-do-action (action cands)
   "Perform ACTION on CANDS from the session picker.
-ACTION is one of `kill' (kill live buffers) or `delete' (permanently
-remove saved/previous sessions from disk and metadata).  CANDS is the
+ACTION is one of `kill' (kill live buffers), `delete' (permanently
+remove saved/previous sessions from disk and metadata), or `send'
+(bulk-send a prompt to the selected live sessions).  CANDS is the
 list of candidate strings captured by the picker's minibuffer-exit-hook."
   (pcase action
     ('kill   (decknix--session-picker-kill-cands cands))
     ('delete (decknix--session-picker-delete-cands cands))
+    ('send   (decknix--session-picker-send-cands cands))
     (_ (message "Unknown session-picker action: %s" action))))
 
 (defun decknix-agent-session-picker (arg)
@@ -1342,6 +1460,10 @@ In-picker action keys (work on the highlighted item or all C-SPC marks):
           Non-live candidates are ignored.
   C-d  — Permanently delete saved/previous session(s) from disk and
           metadata.  Live sessions are refused; kill them first with C-k.
+  C-s  — Bulk-send a prompt to the selected live session(s).  Opens a
+          *Bulk Send* compose buffer: type the prompt, then C-c C-c to
+          dispatch (idle sessions submit immediately, busy ones are
+          queued).  C-c C-k cancels.  Only live sessions are targeted.
 
 Saved sessions whose conversation already has a live buffer are hidden
 by default (controlled by `decknix-agent-picker-hide-live-backed').
@@ -1383,8 +1505,8 @@ With \\[universal-argument], shows all individual session snapshots."
                        decknix--session-picker-current-ws))
                (setq decknix--session-picker-reopen t)
                (exit-minibuffer)))
-           ;; Wire C-k → kill-action, C-d → delete-action.
-           ;; Both set multi-mode (suppresses the normal :action lambdas)
+           ;; Wire C-k → kill-action, C-d → delete-action, C-s → send-action.
+           ;; All three set multi-mode (suppresses the normal :action lambdas)
            ;; and exit the minibuffer; the minibuffer-exit-hook below then
            ;; captures the highlighted candidate into captured-selections.
            (local-set-key (kbd "C-k")
@@ -1395,6 +1517,11 @@ With \\[universal-argument], shows all individual session snapshots."
            (local-set-key (kbd "C-d")
              (lambda () (interactive)
                (setq decknix--session-picker-action 'delete)
+               (setq decknix--session-picker-multi-mode t)
+               (exit-minibuffer)))
+           (local-set-key (kbd "C-s")
+             (lambda () (interactive)
+               (setq decknix--session-picker-action 'send)
                (setq decknix--session-picker-multi-mode t)
                (exit-minibuffer)))
            ;; Capture selections BEFORE completing-read unwinds.
@@ -1425,7 +1552,7 @@ With \\[universal-argument], shows all individual session snapshots."
                             decknix--session-source-previous
                             decknix--session-source-saved
                             decknix--session-source-new)
-                      :prompt (format "Agent session%s%s (M-w ws; C-SPC mark; C-k kill, C-d delete): "
+                      :prompt (format "Agent session%s%s (M-w ws; C-SPC mark; C-k kill, C-d delete, C-s send): "
                                       (if arg " (all snapshots)" "")
                                       (if decknix--session-picker-workspace-filter
                                           (format " [%s]"
