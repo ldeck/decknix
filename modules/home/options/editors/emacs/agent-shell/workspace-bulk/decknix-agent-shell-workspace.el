@@ -199,6 +199,7 @@
 (defvar decknix--hub-requests-hide-needs-reply)
 (defvar decknix--hub-requests-hide-bot-pending)
 (defvar decknix--hub-requests-only-my-replies)
+(defvar decknix--hub-requests-hide-reviewed)
 (defvar decknix--hub-requests-hide-conflict)
 (defvar decknix--hub-requests-sort-reverse)
 ;; Picker-scoped toggle state for `decknix-sidebar-nav-requests-consult'.
@@ -2401,12 +2402,15 @@ Shows result in the echo area and triggers a hub refresh on success."
            (items (seq-filter
                    (lambda (item)
                      (and (decknix--hub-item-visible-p (alist-get 'repo item))
-                          (decknix--hub-age-visible-p (alist-get 'created item))
+                          ;; Use most-recent-activity time, matching sidebar render.
+                          (decknix--hub-age-visible-p
+                           (or (alist-get 'updated item) (alist-get 'created item)))
                           (decknix--hub-ci-visible-p item)
                           (decknix--hub-mention-visible-p item)
                           (decknix--hub-bot-visible-p item)
                           (decknix--hub-requests-attention-visible-p item)
-                          (decknix--hub-requests-reviewed-visible-p item)))
+                          (decknix--hub-requests-reviewed-visible-p item)
+                          (decknix--hub-requests-conflict-visible-p item)))
                    (or all-items '())))
            (keys decknix--nav-keys))
       (append
@@ -2635,15 +2639,22 @@ Interactively: \\[universal-argument] N r limits to N items;
                (filtered (seq-filter
                           (lambda (item)
                             (and (decknix--hub-item-visible-p (alist-get 'repo item))
-                                 (decknix--hub-age-visible-p (alist-get 'created item))
+                                 ;; Mirror sidebar: use most-recent-activity time
+                                 ;; (updated takes precedence over created).
+                                 (decknix--hub-age-visible-p
+                                  (or (alist-get 'updated item) (alist-get 'created item)))
                                  (decknix--hub-ci-visible-p item)
                                  (decknix--hub-mention-visible-p item)
                                  (decknix--hub-bot-visible-p item)
                                  (decknix--hub-requests-attention-visible-p item)
-                                 ;; Extra @-mention filter when requested
+                                 ;; Global sidebar filters — must match
+                                 ;; `decknix--hub-render-requests' exactly so the
+                                 ;; picker never shows items the sidebar hides.
+                                 (decknix--hub-requests-reviewed-visible-p item)
+                                 (decknix--hub-requests-conflict-visible-p item)
+                                 ;; Picker-local extra filters (M-m / M-r toggles):
                                  (or (not mo)
                                      (eq (alist-get 'mentioned item) t))
-                                 ;; Extra ready-for-review filter
                                  (or (not ro)
                                      (decknix--hub-request-ready-p item))))
                           (or all-items '())))
