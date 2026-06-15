@@ -8,10 +8,11 @@
 ;;; Commentary:
 ;;
 ;; ERT characterisation tests for the CI filter module extracted
-;; from the hub heredoc.  Covers the default visible-set, the
-;; canonical render-order alist, single-bucket toggling, the
-;; propertised footer summary, the predicate that drives sidebar
-;; row visibility, and the bulk show-all / show-none verbs.
+;; from the hub heredoc.  Covers the default visible-set (now 6
+;; buckets including partial_fail), the canonical render-order alist,
+;; single-bucket toggling, the propertised footer summary, the
+;; predicate that drives sidebar row visibility, and the bulk
+;; show-all / show-none verbs.
 ;;
 ;; The sidebar redraw side-effect inside `decknix--hub-ci-filter-refresh'
 ;; is gated on `(get-buffer agent-shell-workspace-sidebar-buffer-name)'
@@ -36,25 +37,26 @@ filter list when it accesses the global."
 ;; -- defaults ------------------------------------------------------
 
 (ert-deftest decknix-hub-ci-filter--defaults ()
-  "All five status buckets are visible at module load."
-  (should (member "pass"      decknix--hub-ci-filter))
-  (should (member "fail"      decknix--hub-ci-filter))
-  (should (member "soft_fail" decknix--hub-ci-filter))
-  (should (member "running"   decknix--hub-ci-filter))
-  (should (member "unknown"   decknix--hub-ci-filter))
-  (should (= 5 (length decknix--hub-ci-filter))))
+  "All six status buckets are visible at module load."
+  (should (member "pass"         decknix--hub-ci-filter))
+  (should (member "fail"         decknix--hub-ci-filter))
+  (should (member "soft_fail"    decknix--hub-ci-filter))
+  (should (member "partial_fail" decknix--hub-ci-filter))
+  (should (member "running"      decknix--hub-ci-filter))
+  (should (member "unknown"      decknix--hub-ci-filter))
+  (should (= 6 (length decknix--hub-ci-filter))))
 
 (ert-deftest decknix-hub-ci-filter--order-shape ()
-  "Render-order carries five rows, each (STATUS ICON FACE)."
-  (should (= 5 (length decknix--hub-ci-filter-order)))
+  "Render-order carries six rows, each (STATUS ICON FACE)."
+  (should (= 6 (length decknix--hub-ci-filter-order)))
   (dolist (row decknix--hub-ci-filter-order)
     (should (= 3 (length row)))
     (should (stringp (nth 0 row)))
     (should (stringp (nth 1 row)))
     (should (symbolp (nth 2 row))))
   ;; Order matches the documented contract:
-  ;; pass, soft_fail, fail, running, unknown.
-  (should (equal '("pass" "soft_fail" "fail" "running" "unknown")
+  ;; pass, soft_fail, partial_fail, fail, running, unknown.
+  (should (equal '("pass" "soft_fail" "partial_fail" "fail" "running" "unknown")
                  (mapcar #'car decknix--hub-ci-filter-order))))
 
 ;; -- visible-p predicate -------------------------------------------
@@ -107,27 +109,36 @@ alist."
 (ert-deftest decknix-hub-ci-filter--toggle-status-removes-then-adds ()
   "Toggling a present status removes it; toggling again restores."
   (decknix-hub-ci-filter-test--with-state
-      '("pass" "fail" "soft_fail" "running" "unknown")
+      '("pass" "fail" "soft_fail" "partial_fail" "running" "unknown")
     (decknix--hub-ci-toggle-status "fail")
     (should-not (member "fail" decknix--hub-ci-filter))
     (decknix--hub-ci-toggle-status "fail")
     (should (member "fail" decknix--hub-ci-filter))))
+
+(ert-deftest decknix-hub-ci-filter--toggle-partial-removes-and-restores ()
+  "Toggling partial_fail removes it and a second toggle adds it back."
+  (decknix-hub-ci-filter-test--with-state
+      '("pass" "fail" "soft_fail" "partial_fail" "running" "unknown")
+    (decknix--hub-ci-toggle-status "partial_fail")
+    (should-not (member "partial_fail" decknix--hub-ci-filter))
+    (decknix--hub-ci-toggle-status "partial_fail")
+    (should (member "partial_fail" decknix--hub-ci-filter))))
 
 ;; -- show-all / show-none semantics --------------------------------
 
 (ert-deftest decknix-hub-ci-filter--show-none-empties-set ()
   "`show-none' empties the visible set entirely."
   (decknix-hub-ci-filter-test--with-state
-      '("pass" "fail" "soft_fail" "running" "unknown")
+      '("pass" "fail" "soft_fail" "partial_fail" "running" "unknown")
     (decknix--hub-ci-filter-show-none)
     (should (null decknix--hub-ci-filter))))
 
 (ert-deftest decknix-hub-ci-filter--show-all-restores-canonical ()
-  "`show-all' restores the canonical 5-bucket set, even from empty."
+  "`show-all' restores the canonical 6-bucket set, even from empty."
   (decknix-hub-ci-filter-test--with-state nil
     (decknix--hub-ci-filter-show-all)
-    (should (= 5 (length decknix--hub-ci-filter)))
-    (dolist (s '("pass" "fail" "soft_fail" "running" "unknown"))
+    (should (= 6 (length decknix--hub-ci-filter)))
+    (dolist (s '("pass" "fail" "soft_fail" "partial_fail" "running" "unknown"))
       (should (member s decknix--hub-ci-filter)))))
 
 ;; -- transient row description -------------------------------------

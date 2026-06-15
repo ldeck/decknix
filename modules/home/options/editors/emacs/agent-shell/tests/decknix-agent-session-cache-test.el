@@ -71,15 +71,18 @@
 ;; -- jq command shape ---------------------------------------------
 
 (ert-deftest decknix-agent-session-cache--jq-cmd-shape ()
-  "The shell command finds JSON files, fans out to jq, then sorts."
+  "The shell command lists JSON files newest-first, fans out to jq, then sorts.
+Default path uses `ls -t' + `head' to limit to max-files newest files."
   (let ((decknix--agent-session-jq-filter-file nil)
-        (decknix--agent-sessions-dir "/tmp/test-sessions-dir"))
+        (decknix--agent-sessions-dir "/tmp/test-sessions-dir")
+        (decknix--agent-session-cache-max-files 200))
     (let ((cmd (decknix--agent-session-jq-cmd)))
       (unwind-protect
           (progn
-            (should (string-match-p "find " cmd))
+            (should (string-match-p "ls -t1" cmd))
             (should (string-match-p "test-sessions-dir" cmd))
-            (should (string-match-p "-name '\\*\\.json'" cmd))
+            (should (string-match-p "\\.json" cmd))
+            (should (string-match-p "head -200" cmd))
             (should (string-match-p "xargs -0 -P8" cmd))
             (should (string-match-p "jq -Mc -f " cmd))
             (should (string-match-p "sort_by(\\.modified) | reverse" cmd)))
@@ -87,22 +90,35 @@
                    (file-exists-p decknix--agent-session-jq-filter-file))
           (delete-file decknix--agent-session-jq-filter-file))))))
 
-(ert-deftest decknix-agent-session-cache--jq-cmd-quotes-sessions-dir ()
-  "Sessions dir is run through `shell-quote-argument' so a space in
-the path doesn't shatter the find/xargs pipe.  We don't pin the exact
-quoting style (Emacs uses backslash escaping on POSIX, single quotes
-elsewhere) — just that the literal unquoted form never appears."
+(ert-deftest decknix-agent-session-cache--jq-cmd-nil-max-uses-find ()
+  "When `decknix--agent-session-cache-max-files' is nil, fall back to find."
   (let ((decknix--agent-session-jq-filter-file nil)
-        (decknix--agent-sessions-dir "/tmp/has space/sessions"))
+        (decknix--agent-sessions-dir "/tmp/test-sessions-dir")
+        (decknix--agent-session-cache-max-files nil))
+    (let ((cmd (decknix--agent-session-jq-cmd)))
+      (unwind-protect
+          (progn
+            (should (string-match-p "find " cmd))
+            (should (string-match-p "-name '\\*\\.json'" cmd))
+            (should-not (string-match-p "ls -t" cmd))
+            (should-not (string-match-p "head -" cmd)))
+        (when (and decknix--agent-session-jq-filter-file
+                   (file-exists-p decknix--agent-session-jq-filter-file))
+          (delete-file decknix--agent-session-jq-filter-file))))))
+
+(ert-deftest decknix-agent-session-cache--jq-cmd-quotes-sessions-dir ()
+  "Sessions dir is shell-quoted so a space in the path is safe."
+  (let ((decknix--agent-session-jq-filter-file nil)
+        (decknix--agent-sessions-dir "/tmp/has space/sessions")
+        (decknix--agent-session-cache-max-files 200))
     (let ((cmd (decknix--agent-session-jq-cmd))
           (quoted (shell-quote-argument "/tmp/has space/sessions")))
       (unwind-protect
           (progn
             (should (string-match-p (regexp-quote quoted) cmd))
-            ;; The naked path with a real space must not appear
-            ;; unescaped — that would mean the shell will tokenise it.
+            ;; The naked unquoted path with a real space must not appear.
             (should-not (string-match-p
-                         "find /tmp/has space/sessions " cmd)))
+                         "ls -t1 /tmp/has space/sessions" cmd)))
         (when (and decknix--agent-session-jq-filter-file
                    (file-exists-p decknix--agent-session-jq-filter-file))
           (delete-file decknix--agent-session-jq-filter-file))))))

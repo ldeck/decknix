@@ -8,11 +8,13 @@
 ;;; Commentary:
 ;;
 ;; ERT tests pinning the current behaviour of the CI helpers extracted
-;; from the agent-shell heredoc.  Three groups:
+;; from the agent-shell heredoc.  Groups:
 ;;
 ;;   * `decknix--hub-ci-check-soft-p' — substring + case sensitivity.
+;;   * `decknix--hub-ci-check-soft-p-for-repo' — per-repo extensions.
 ;;   * `decknix--hub-ci-classify' — branches over status + check
 ;;     conclusions (no-ci, no-checks, all-soft, all-hard, mixed).
+;;     Includes partial_fail (some soft + some hard) and repo arg.
 ;;   * `decknix--hub-icon' — emoji-vs-text display-height heuristic
 ;;     at codepoint range boundaries.
 ;;   * `decknix--hub-ci-icon' — glyph + face per classification, plus
@@ -120,13 +122,60 @@
                    (decknix-test--make-check "test" "ERROR")))))
     (should (equal "fail" (decknix--hub-ci-classify ci)))))
 
-(ert-deftest decknix-hub-ci/classify-fail-mixed-soft-and-hard-stays-fail ()
-  ;; Even one hard failure forces hard-fail classification.
+(ert-deftest decknix-hub-ci/classify-fail-mixed-soft-and-hard-is-partial-fail ()
+  ;; Mixed soft + hard failures → partial_fail (not "fail").
   (let ((ci (decknix-test--make-ci
              "fail"
              (list (decknix-test--make-check "codacy" "FAILURE")
                    (decknix-test--make-check "build" "FAILURE")))))
-    (should (equal "fail" (decknix--hub-ci-classify ci)))))
+    (should (equal "partial_fail" (decknix--hub-ci-classify ci)))))
+
+(ert-deftest decknix-hub-ci/classify-fail-mixed-multiple-soft-one-hard ()
+  ;; Two soft checks + one hard → partial_fail.
+  (let ((ci (decknix-test--make-ci
+             "fail"
+             (list (decknix-test--make-check "codacy" "FAILURE")
+                   (decknix-test--make-check "lint-frontend" "FAILURE")
+                   (decknix-test--make-check "build" "FAILURE")))))
+    (should (equal "partial_fail" (decknix--hub-ci-classify ci)))))
+
+;; -- Repo-specific soft patterns ----------------------------------
+
+(ert-deftest decknix-hub-ci/check-soft-p-for-repo-global-pattern-without-repo ()
+  ;; Global patterns work even without a repo arg.
+  (should (decknix--hub-ci-check-soft-p-for-repo "codacy" nil))
+  (should-not (decknix--hub-ci-check-soft-p-for-repo "build" nil)))
+
+(ert-deftest decknix-hub-ci/check-soft-p-for-repo-extra-pattern-matched ()
+  ;; Per-repo extra pattern matches when repo is provided.
+  (should (decknix--hub-ci-check-soft-p-for-repo
+           "e2e-suite" "nurturecloud/upside"))
+  (should (decknix--hub-ci-check-soft-p-for-repo
+           "integration-tests" "nurturecloud/upside")))
+
+(ert-deftest decknix-hub-ci/check-soft-p-for-repo-extra-pattern-not-global ()
+  ;; Extra pattern is repo-scoped: no match for a different repo.
+  (should-not (decknix--hub-ci-check-soft-p-for-repo
+               "e2e-suite" "another-org/another-repo")))
+
+(ert-deftest decknix-hub-ci/classify-partial-becomes-soft-with-repo ()
+  ;; With the repo arg, an e2e failure (repo-soft) + codacy (global-soft)
+  ;; = all soft → soft_fail, not partial_fail.
+  (let ((ci (decknix-test--make-ci
+             "fail"
+             (list (decknix-test--make-check "codacy" "FAILURE")
+                   (decknix-test--make-check "e2e-suite" "FAILURE")))))
+    (should (equal "soft_fail"
+                   (decknix--hub-ci-classify ci "nurturecloud/upside")))))
+
+(ert-deftest decknix-hub-ci/classify-partial-repo-soft-plus-hard-still-partial ()
+  ;; Even with repo patterns, a hard build failure keeps partial_fail.
+  (let ((ci (decknix-test--make-ci
+             "fail"
+             (list (decknix-test--make-check "e2e-suite" "FAILURE")
+                   (decknix-test--make-check "build" "FAILURE")))))
+    (should (equal "partial_fail"
+                   (decknix--hub-ci-classify ci "nurturecloud/upside")))))
 
 (ert-deftest decknix-hub-ci/classify-fail-honours-all-failure-conclusions ()
   ;; FAILURE / ERROR / TIMED_OUT / CANCELLED / ACTION_REQUIRED all count.
@@ -197,6 +246,16 @@
     (should (equal "●" (decknix-test--icon-glyph icon)))
     (should (equal '(:foreground "orange" :weight bold) (decknix-test--icon-face icon)))))
 
+(ert-deftest decknix-hub-ci/ci-icon-partial-fail-is-right-half-circle-orange ()
+  ;; Mixed soft+hard → partial_fail → ◑ with orange (no :weight bold).
+  (let* ((ci (decknix-test--make-ci
+              "fail"
+              (list (decknix-test--make-check "codacy" "FAILURE")
+                    (decknix-test--make-check "build" "FAILURE"))))
+         (icon (decknix--hub-ci-icon ci)))
+    (should (equal "◑" (decknix-test--icon-glyph icon)))
+    (should (equal '(:foreground "orange") (decknix-test--icon-face icon)))))
+
 (ert-deftest decknix-hub-ci/ci-icon-fail-is-circle-error ()
   (let* ((ci (decknix-test--make-ci
               "fail"
@@ -204,6 +263,18 @@
          (icon (decknix--hub-ci-icon ci)))
     (should (equal "●" (decknix-test--icon-glyph icon)))
     (should (eq 'error (decknix-test--icon-face icon)))))
+
+(ert-deftest decknix-hub-ci/ci-icon-repo-arg-upgrades-partial-to-soft ()
+  ;; When repo arg makes all failing checks soft, icon should be soft_fail.
+  (let* ((ci (decknix-test--make-ci
+              "fail"
+              (list (decknix-test--make-check "codacy" "FAILURE")
+                    (decknix-test--make-check "e2e-suite" "FAILURE"))))
+         (icon (decknix--hub-ci-icon ci nil "nurturecloud/upside")))
+    ;; All soft (codacy=global-soft, e2e=repo-soft) → soft_fail → ●+orange+bold.
+    (should (equal "●" (decknix-test--icon-glyph icon)))
+    (should (equal '(:foreground "orange" :weight bold)
+                   (decknix-test--icon-face icon)))))
 
 (ert-deftest decknix-hub-ci/ci-icon-running-is-half-circle-warning ()
   (let ((icon (decknix--hub-ci-icon (decknix-test--make-ci "running"))))
