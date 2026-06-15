@@ -287,7 +287,43 @@ fn app_source_label(app_path: &PathBuf) -> &'static str {
     }
 }
 
+/// Create a new Emacs GUI frame on the running daemon via emacsclient.
+///
+/// Uses `~/.nix-profile/bin/emacsclient` (reliable in GUI launcher contexts
+/// where PATH may not include Nix paths) with a PATH fallback.
+///
+/// Flags: `-a ""` (start daemon if not running), `-c` (new frame),
+/// `-n` (return immediately — no shell prompt wait).
+fn handle_emacs_daemon_frame() -> bool {
+    let home = dirs::home_dir().unwrap_or_default();
+    let nix_client = home.join(".nix-profile/bin/emacsclient");
+    let client = if nix_client.exists() {
+        nix_client.to_string_lossy().into_owned()
+    } else {
+        "emacsclient".to_string()
+    };
+    eprintln!("🖥️  Emacs: creating daemon frame via emacsclient");
+    match Command::new(&client).args(["-a", "", "-c", "-n"]).status() {
+        Ok(s) if s.success() => {
+            eprintln!("   ✅ Emacs frame opened");
+            true
+        }
+        _ => {
+            eprintln!("   ❌ emacsclient failed — is the daemon running?");
+            false
+        }
+    }
+}
+
 fn handle_open_app(name: &str, restart: bool, new_instance: bool) -> bool {
+    // Special case: Emacs — connect to the running daemon instead of
+    // spawning a separate standalone Emacs.app process.  This keeps all
+    // buffers, LSP servers, and session caches in one shared heap.
+    // `--restart` still falls through to quit+reopen the app normally.
+    if name.eq_ignore_ascii_case("emacs") && !restart {
+        return handle_emacs_daemon_frame();
+    }
+
     let app_path = match find_app(name) {
         Some(p) => p,
         None => {

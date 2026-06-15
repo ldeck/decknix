@@ -2148,6 +2148,15 @@ in
         (declare-function decknix--agent-session-refresh-async "decknix-agent-session-cache")
         (declare-function decknix--agent-session-jq-cmd "decknix-agent-session-cache")
         (declare-function decknix--agent-session-ensure-jq-filter "decknix-agent-session-cache")
+        (declare-function decknix--session-meta-cache-load "decknix-agent-session-cache")
+        (declare-function decknix--session-meta-cache-save "decknix-agent-session-cache")
+        (declare-function decknix--session-meta "decknix-agent-session-cache")
+        (declare-function decknix--session-parse-file "decknix-agent-session-cache")
+        (declare-function decknix--session-list-files "decknix-agent-session-cache")
+        ;; Load persistent mtime-keyed metadata cache from disk.
+        ;; This makes the first `s s' picker call instant (most files
+        ;; already parsed on previous runs); no async prefetch is needed.
+        (decknix--session-meta-cache-load)
         ;; Local session JSON path + history extractor (PR B.52).
         ;; Pure helpers carved from main-bulk: the path builder feeds
         ;; the resume / grep / restore-input-ring flows, and the
@@ -2869,9 +2878,6 @@ in
         (define-key decknix-agent-help-map (kbd "k") 'decknix-agent-help-keys)            ; Keybindings
         (define-key decknix-agent-help-map (kbd "t") 'decknix-agent-help-tutorial)        ; Tutorial
         (define-key decknix-agent-help-map (kbd "f") 'decknix-agent-help-functions)
-
-        ;; Pre-fetch session list shortly after daemon starts
-        (run-at-time 3 nil #'decknix--agent-session-refresh-async)
 
         ;; Wire C-c A r globally
         (define-key decknix-agent-prefix-map (kbd "r") 'decknix-agent-session-recent)
