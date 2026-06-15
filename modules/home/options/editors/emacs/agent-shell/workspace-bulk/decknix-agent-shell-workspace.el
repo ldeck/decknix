@@ -2420,7 +2420,8 @@ Shows result in the echo area and triggers a hub refresh on success."
                        (number (alist-get 'number item))
                        (title (or (alist-get 'title item) ""))
                        (ci-str (decknix--hub-ci-icon (alist-get 'ci item)
-                                                      (alist-get 'mergeable item)))
+                                                      (alist-get 'mergeable item)
+                                                      repo-full))
                        (rev-str (decknix--hub-review-icon item))
                        (status-str (if (string-empty-p rev-str)
                                        ci-str
@@ -2689,7 +2690,8 @@ Interactively: \\[universal-argument] N r limits to N items;
                               (title (or (alist-get 'title item) ""))
                               (ci-str (decknix--hub-ci-icon
                                        (alist-get 'ci item)
-                                       (alist-get 'mergeable item)))
+                                       (alist-get 'mergeable item)
+                                       repo-full))
                               (rev-str (decknix--hub-review-icon item))
                               (status-str (if (string-empty-p rev-str)
                                               ci-str
@@ -2801,7 +2803,7 @@ Interactively: \\[universal-argument] N r limits to N items;
                      (mergeable (alist-get 'mergeable pr))
                      (ci-str (if merged-p
                                 (decknix--hub-icon "⏣" 'font-lock-constant-face)
-                              (decknix--hub-ci-icon ci mergeable)))
+                              (decknix--hub-ci-icon ci mergeable repo-full)))
                      (rev-str (unless merged-p
                                 (decknix--hub-wip-review-icon pr)))
                      (reply-str (unless merged-p
@@ -2993,7 +2995,8 @@ without selecting any individually.  C-g cancels."
                      (number (alist-get 'number pr))
                      (title (or (alist-get 'title pr) ""))
                      (ci-str (decknix--hub-ci-icon (alist-get 'ci pr)
-                                                   (alist-get 'mergeable pr)))
+                                                   (alist-get 'mergeable pr)
+                                                   repo-full))
                      (rev-str (decknix--hub-wip-review-icon pr))
                      (reply-str (decknix--hub-wip-reply-icon pr))
                      (status-str (concat ci-str rev-str reply-str))
@@ -4402,11 +4405,27 @@ cannot clobber the Previous Sessions snapshot."
                   (when (consp pair)
                     (puthash (car pair) (cdr pair) ht)))
                 (setq decknix--hub-org-visibility ht))))
-          ;; CI filter: restore list of visible statuses
+          ;; CI filter: restore list of visible statuses.
+          ;; Migration: if the saved filter is the old canonical 5-bucket
+          ;; all-visible list, upgrade it to the new 6-bucket canonical so
+          ;; users who had everything visible keep everything visible.
+          ;; Custom filters (with some buckets removed) are restored as-is.
           (let ((cf (alist-get 'ci-filter state)))
             (when (and cf (listp cf)
                        (boundp 'decknix--hub-ci-filter))
-              (setq decknix--hub-ci-filter cf)))
+              (setq decknix--hub-ci-filter
+                    (if (and (= (length cf) 5)
+                             (cl-every (lambda (s) (member s cf))
+                                       '("pass" "fail" "soft_fail"
+                                         "running" "unknown")))
+                        ;; Old all-visible — upgrade to new canonical.
+                        '("pass" "fail" "soft_fail" "partial_fail"
+                          "running" "unknown")
+                      ;; Custom filter — preserve user's choices and add
+                      ;; partial_fail only if it wasn't explicitly removed.
+                      (if (member "partial_fail" cf)
+                          cf
+                        (append cf '("partial_fail")))))))
           ;; Mention filter: restore toggle (4-state cycle).
           ;; Migrates legacy boolean state via normalize helper:
           ;; `t' → `me'; anything unrecognised → `nil'.

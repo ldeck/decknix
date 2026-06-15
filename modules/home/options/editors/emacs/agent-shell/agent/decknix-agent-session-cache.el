@@ -53,6 +53,13 @@
 (defvar decknix--agent-session-refresh-proc nil
   "Process handle for async session list refresh.")
 
+(defvar decknix--agent-session-cache-max-files 200
+  "Maximum number of session JSON files to scan per refresh (newest first).
+With 1000+ session files, scanning all of them in parallel takes 10-20 s.
+Limiting to the most-recently-modified files keeps the cache refresh fast
+while still covering all sessions that could realistically be active.
+Set to nil to disable the limit and scan all files (original behaviour).")
+
 (defvar decknix--agent-sessions-dir
   (expand-file-name "~/.augment/sessions")
   "Directory containing auggie session JSON files.")
@@ -99,12 +106,21 @@ On first call (empty cache), falls back to a synchronous fetch."
 
 (defun decknix--agent-session-jq-cmd ()
   "Shell command to extract session metadata directly from files.
-Extracts only the fields needed for the picker via parallel jq,
-then sorts by modified time (newest first)."
-  (let ((jqf (decknix--agent-session-ensure-jq-filter)))
+Scans at most `decknix--agent-session-cache-max-files' most-recently-
+modified files (via `ls -t'), then sorts results by modified time
+(newest first).  When the limit is nil, all files are scanned."
+  (let* ((jqf (decknix--agent-session-ensure-jq-filter))
+         (dir (shell-quote-argument decknix--agent-sessions-dir))
+         (max decknix--agent-session-cache-max-files)
+         ;; File-listing step: sort by mtime desc, optionally head-limit.
+         (list-cmd (if max
+                       (concat "ls -t1 " dir "/*.json 2>/dev/null"
+                               " | head -" (number-to-string max))
+                     (concat "find " dir
+                             " -maxdepth 1 -name '*.json' -print 2>/dev/null"))))
     (concat
-     "find " (shell-quote-argument decknix--agent-sessions-dir)
-     " -maxdepth 1 -name '*.json' -print0 2>/dev/null"
+     list-cmd
+     " | tr '\\n' '\\0'"
      " | xargs -0 -P8 -I{} jq -Mc -f "
      (shell-quote-argument jqf)
      " {} 2>/dev/null"

@@ -8,9 +8,13 @@
 ;;; Commentary:
 ;;
 ;; Tracks which CI statuses are visible in the sidebar Requests / WIP
-;; sections.  All five buckets (pass / soft_fail / fail / running /
-;; unknown) are visible by default; the `C' transient toggles them
-;; individually, and the `a' / `n' bulk verbs flip the whole set.
+;; sections.  All six buckets (pass / soft_fail / partial_fail / fail /
+;; running / unknown) are visible by default; the `C' transient toggles
+;; them individually, and the `a' / `n' bulk verbs flip the whole set.
+;;
+;; "partial_fail" is the new middle tier: some failing checks are soft
+;; (lint/analysis) and some are hard (build/test).  It sits between
+;; soft_fail and fail in the render order and has its own filter toggle.
 ;;
 ;; This module owns the data + pure helpers that drive the toggle
 ;; UI; the transient suffix / prefix definitions live in hub-bulk
@@ -26,7 +30,7 @@
 ;;   `decknix--hub-ci-filter-summary'         — propertised footer string
 ;;   `decknix--hub-ci-toggle-status'          — single-bucket flip
 ;;   `decknix--hub-ci-filter-refresh'         — trigger sidebar redraw
-;;   `decknix--hub-ci-filter-toggle-{pass,soft,running,unknown,fail}'
+;;   `decknix--hub-ci-filter-toggle-{pass,soft,partial,running,unknown,fail}'
 ;;   `decknix--hub-ci-filter-show-{all,none}' — bulk verbs
 ;;   `decknix--hub-ci-filter-status-desc'     — transient row builder
 
@@ -47,11 +51,13 @@
 ;; All visible by default.  C in the sidebar toggles individual statuses.
 
 (defvar decknix--hub-ci-filter
-  '("pass" "fail" "soft_fail" "running" "unknown")
+  '("pass" "fail" "soft_fail" "partial_fail" "running" "unknown")
   "List of visible CI statuses.
-Valid values: \"pass\", \"fail\", \"soft_fail\", \"running\", \"unknown\".
-\"soft_fail\" = lint/analysis only failures (e.g. Codacy).
-When all five are present, no filtering occurs.")
+Valid values: \"pass\", \"fail\", \"soft_fail\", \"partial_fail\",
+\"running\", \"unknown\".
+\"soft_fail\"    = ALL failing checks are lint/analysis (e.g. Codacy).
+\"partial_fail\" = SOME failing checks are soft, others are hard.
+When all six are present, no filtering occurs.")
 
 (defun decknix--hub-ci-status-of (item)
   "Return the classified CI status string for ITEM.
@@ -63,16 +69,18 @@ Uses individual check details to distinguish soft from hard fails."
   (member (decknix--hub-ci-status-of item) decknix--hub-ci-filter))
 
 (defvar decknix--hub-ci-filter-order
-  '(("pass"      "✓" success)
-    ("soft_fail" "⚠" warning)
-    ("fail"      "✗" error)
-    ("running"   "⟳" warning)
-    ("unknown"   "?" default))
+  '(("pass"         "✓" success)
+    ("soft_fail"    "⚠" warning)
+    ("partial_fail" "◑" warning)
+    ("fail"         "✗" error)
+    ("running"      "⟳" warning)
+    ("unknown"      "?" default))
   "Canonical render order for CI filter summary.
 Each entry is (STATUS ICON ENABLED-FACE).  Used by the sidebar footer
 and the filter transient so both show every possible toggle state —
 enabled icons in their status colour, disabled icons dimmed — rather
-than hiding disabled options.")
+than hiding disabled options.
+\"partial_fail\" = mixed: some soft failures + some hard failures.")
 
 (defun decknix--hub-ci-filter-summary ()
   "Return a propertized summary of the current CI filter.
@@ -118,6 +126,12 @@ to restore all when the list has been emptied."
   (decknix--hub-ci-toggle-status "soft_fail")
   (decknix--hub-ci-filter-refresh))
 
+(defun decknix--hub-ci-filter-toggle-partial ()
+  "Toggle visibility of partial-fail CI (mixed soft + hard failures)."
+  (interactive)
+  (decknix--hub-ci-toggle-status "partial_fail")
+  (decknix--hub-ci-filter-refresh))
+
 (defun decknix--hub-ci-filter-toggle-running ()
   "Toggle visibility of running CI."
   (interactive)
@@ -140,7 +154,7 @@ to restore all when the list has been emptied."
   "Show items with any CI status."
   (interactive)
   (setq decknix--hub-ci-filter
-        '("pass" "fail" "soft_fail" "running" "unknown"))
+        '("pass" "fail" "soft_fail" "partial_fail" "running" "unknown"))
   (decknix--hub-ci-filter-refresh)
   (message "CI filter: all"))
 
