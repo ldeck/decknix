@@ -738,6 +738,7 @@ picker's dynamic binding unwinds.")
 (declare-function decknix--hub-ci-filter-refresh "decknix-hub-ci-filter" ())
 (declare-function decknix--hub-ci-filter-toggle-pass "decknix-hub-ci-filter" ())
 (declare-function decknix--hub-ci-filter-toggle-soft "decknix-hub-ci-filter" ())
+(declare-function decknix--hub-ci-filter-toggle-partial "decknix-hub-ci-filter" ())
 (declare-function decknix--hub-ci-filter-toggle-running "decknix-hub-ci-filter" ())
 (declare-function decknix--hub-ci-filter-toggle-unknown "decknix-hub-ci-filter" ())
 (declare-function decknix--hub-ci-filter-toggle-fail "decknix-hub-ci-filter" ())
@@ -761,6 +762,14 @@ picker's dynamic binding unwinds.")
   :transient t
   (interactive)
   (decknix--hub-ci-filter-toggle-soft))
+
+(transient-define-suffix decknix--hub-ci-filter--partial ()
+  :key "p"
+  :description (lambda () (decknix--hub-ci-filter-status-desc
+                           "partial_fail" "◑" "partial (mixed-fail)"))
+  :transient t
+  (interactive)
+  (decknix--hub-ci-filter-toggle-partial))
 
 (transient-define-suffix decknix--hub-ci-filter--running ()
   :key "y"
@@ -801,6 +810,7 @@ lint-only failures and still-running checks."
              "]"))
    (decknix--hub-ci-filter--pass)
    (decknix--hub-ci-filter--soft)
+   (decknix--hub-ci-filter--partial)
    (decknix--hub-ci-filter--running)
    (decknix--hub-ci-filter--unknown)
    (decknix--hub-ci-filter--fail)]

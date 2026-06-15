@@ -165,12 +165,23 @@ in
               mouse-yank-at-point t)
 
         ;; == Performance ==
-        ;; Increase garbage collection threshold
-        (setq gc-cons-threshold (* 100 1024 1024)  ; 100MB
-              gc-cons-percentage 0.2)
+        ;; GC threshold: 32 MB balances pause frequency and RSS.
+        ;; 100 MB causes Emacs to accumulate large live sets between
+        ;; collections, inflating RSS across many concurrent sessions.
+        ;; LSP/agent-shell still benefit from a larger threshold than
+        ;; the Emacs default (800 kB); 32 MB is a good compromise.
+        (setq gc-cons-threshold (* 32 1024 1024)  ; 32MB
+              gc-cons-percentage 0.1)
 
         ;; Increase process output buffer (important for LSP)
         (setq read-process-output-max (* 1024 1024))  ; 1MB
+
+        ;; Comint buffer size cap — prevents long-running agent-shell
+        ;; sessions from accumulating unbounded output in memory.
+        ;; comint truncates to this line count when the filter hook fires.
+        (setq comint-buffer-maximum-size 20000)
+        (add-hook 'comint-output-filter-functions
+                  #'comint-truncate-buffer)
 
         ;; == Misc ==
         (setq uniquify-buffer-name-style 'forward)  ; Better buffer naming
