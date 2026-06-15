@@ -1655,6 +1655,21 @@ let
     ];
   };
 
+  # Pure planner for multi-session bulk send.  Partitions a list of
+  # live agent-shell buffers into idle (submit immediately) and busy
+  # (enqueue) groups so concurrent large context uploads don't
+  # saturate the uplink and trigger 408 Request Timeout responses.
+  # The interactive orchestration (compose buffer, minor mode,
+  # dispatch) stays in main-bulk per AGENTS.md Rule 2.
+  decknix-agent-session-bulk-send-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-session-bulk-send";
+    src = ./agent-shell/session-bulk-send;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-session-bulk-send-test.el"
+    ];
+  };
+
   # PR B-Bulk.3a: bulk extraction of the always-loaded core (always-1
   # + always-tail sub-heredocs).  Verbatim move of 254 declarations
   # (~4,800 lines), isolated in its own `main-bulk/' src dir to keep
@@ -1674,7 +1689,11 @@ let
     # `decknix-agent-shell-main-session.el' for the multi-select
     # post-processing in `decknix-agent-session-picker'; it is also
     # needed on `load-path' while byte-compiling the bulk siblings.
-    packageRequires = [ decknix-picker-selections-el ];
+    # `decknix-agent-session-bulk-send' provides the pure partition
+    # logic (`decknix--session-bulk-send-plan') consumed by
+    # `decknix--session-bulk-dispatch' in main-session.
+    packageRequires = [ decknix-picker-selections-el
+                        decknix-agent-session-bulk-send-el ];
     extraSiteFiles = [
       "decknix-agent-shell-main-batch.el"
       "decknix-agent-shell-main-compose.el"
@@ -2132,6 +2151,13 @@ in
         (require 'decknix-picker-selections)
         (declare-function decknix-picker-selections-coerce
                           "decknix-picker-selections")
+
+        ;; Bulk-send planner -- consumed by `decknix--session-bulk-dispatch'
+        ;; (main-bulk) to partition live buffers into idle/busy groups so
+        ;; prompts are serialised instead of fired in a concurrent burst.
+        (require 'decknix-agent-session-bulk-send)
+        (declare-function decknix--session-bulk-send-plan
+                          "decknix-agent-session-bulk-send")
         (require 'decknix-agent-format)
         (declare-function decknix--agent-session-time-ago "decknix-agent-format")
         (declare-function decknix--agent-session-time-compact "decknix-agent-format")
@@ -2843,7 +2869,7 @@ in
             "C-c A a" "start/switch"
             "C-c A b" "buffer switch"
             "C-c A n" "new session"
-            "C-c A s" "session picker"
+            "C-c A s" "session picker (C-s=bulk-send)"
             "C-c A g" "grep sessions"
             "C-c A h" "history"
             "C-c A e" "compose"
