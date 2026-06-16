@@ -2869,6 +2869,7 @@ in
             "C-c A a" "start/switch"
             "C-c A b" "buffer switch"
             "C-c A n" "new session"
+            "C-c A f" "fork session (same ws+tags)"
             "C-c A s" "session picker (C-s=bulk-send)"
             "C-c A g" "grep sessions"
             "C-c A h" "history"
@@ -2899,6 +2900,7 @@ in
         ;; Buffer-local bindings (C-c ...) handle in-buffer actions — no duplicates.
         (define-key decknix-agent-prefix-map (kbd "a") 'agent-shell)                      ; Start/switch to agent
         (define-key decknix-agent-prefix-map (kbd "n") 'decknix-agent-session-new)          ; New session (guided)
+        (define-key decknix-agent-prefix-map (kbd "f") 'decknix-agent-session-fork)         ; Fork session (inherit ws+tags)
         (define-key decknix-agent-prefix-map (kbd "q") 'decknix-agent-session-quit)         ; Quit/close session
         (define-key decknix-agent-prefix-map (kbd "?") 'decknix-agent-help-map)           ; Help sub-prefix
         (define-key decknix-agent-help-map (kbd "k") 'decknix-agent-help-keys)            ; Keybindings
@@ -4858,6 +4860,7 @@ Subsequent toggles only log when verbose tracing is on."
                           (tag-map (make-sparse-keymap)))
                       (define-key map (kbd "s") 'decknix-agent-session-picker)
                       (define-key map (kbd "n") 'decknix-agent-session-new)
+                      (define-key map (kbd "f") 'decknix-agent-session-fork)
                       (define-key map (kbd "q") 'decknix-agent-session-quit)
                       (define-key map (kbd "g") 'decknix-agent-session-grep)
                       (define-key map (kbd "h") 'decknix-agent-session-history)
