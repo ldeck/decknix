@@ -25,6 +25,10 @@
 
 ;; -- Forward declarations: defined elsewhere in agent-shell config --
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
+;; Refresh-suspension flag — owned by decknix-agent-shell-workspace/hub-bulk.
+;; Declared with nil initialiser so `decknix--sidebar-refresh-now' can
+;; let-bind it dynamically even in lexical-binding files (AGENTS.md rule).
+(defvar decknix--sidebar-refresh-suspended nil)
 
 (defvar decknix--sidebar-show-keys t
   "When non-nil, show categorised key listing in the sidebar footer.
@@ -36,8 +40,12 @@ Toggle with `T' in the transient (Planned) or via other means.")
 
 (defvar decknix--sidebar-live-view-mode 'flat
   "View mode for live sessions in the sidebar.
-Valid values: `flat' (as-is), `workspace' (grouped by workspace),
-`path' (grouped by workspace last path, excluding matching tags).
+Valid values:
+  `flat'      one row per session, as-is (default).
+  `workspace' grouped by full workspace path.
+  `path'      grouped by workspace basename; matching tag suppressed.
+  `tags'      grouped by the full shared-tag subset of each group.
+  `tree'      grouped by first tag; remaining tags shown per row.
 Toggle with `z' in the sidebar Toggles transient (Live section).")
 
 (defvar decknix--sidebar-wip-group-mode 'repo
@@ -107,6 +115,16 @@ per-workspace groups) is omitted.  Live, Previous, Requests and WIP
 sections remain unaffected.  Toggle with `h' in the Toggles
 transient to show/hide the section.")
 
+(defun decknix--sidebar-refresh-now ()
+  "Force an immediate sidebar refresh, bypassing the suspension flag.
+Toggle commands call this instead of `agent-shell-workspace-sidebar-refresh'
+directly so the sidebar updates instantly even while a transient menu is open.
+The suspension flag exists for timer-tick inhibition during pickers; toggling
+persistent state should always produce immediate visual feedback."
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (let ((decknix--sidebar-refresh-suspended nil))
+      (agent-shell-workspace-sidebar-refresh))))
+
 (defun decknix--sidebar-sessions-age-label ()
   "Return a short label for the current sessions age filter.
 Reuses the shared `decknix--hub-age-presets' alist so the Sessions
@@ -120,21 +138,21 @@ and Requests age toggles share vocabulary."
   "Toggle the visibility of the Toggles state in the sidebar footer."
   (interactive)
   (setq decknix--sidebar-show-toggles (not decknix--sidebar-show-toggles))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "Sidebar toggles: %s"
            (if decknix--sidebar-show-toggles "shown" "hidden")))
 
 (defun decknix-sidebar-cycle-live-view-mode ()
-  "Cycle live-session view mode: flat → workspace → path → flat."
+  "Cycle live-session view mode: flat → workspace → path → tags → tree → flat."
   (interactive)
   (setq decknix--sidebar-live-view-mode
         (pcase decknix--sidebar-live-view-mode
-          ('flat 'workspace)
+          ('flat      'workspace)
           ('workspace 'path)
-          (_ 'flat)))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+          ('path      'tags)
+          ('tags      'tree)
+          (_          'flat)))
+  (decknix--sidebar-refresh-now)
   (message "Live view mode: %s" decknix--sidebar-live-view-mode))
 
 (defun decknix-sidebar-toggle-wip-group-mode ()
@@ -145,8 +163,7 @@ and Requests age toggles share vocabulary."
           ('repo      'workspace)
           ('workspace 'worktree)
           (_          'repo)))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "WIP grouping: %s" decknix--sidebar-wip-group-mode))
 
 (defun decknix-sidebar-cycle-requests-display-mode ()
@@ -159,8 +176,7 @@ and Requests age toggles share vocabulary."
           ('B   'C)
           ('C   'D)
           (_    nil)))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "Requests layout: %s"
            (or decknix--sidebar-requests-display-mode "inherit")))
 
@@ -174,8 +190,7 @@ and Requests age toggles share vocabulary."
           ('B   'C)
           ('C   'D)
           (_    nil)))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "WIP layout: %s"
            (or decknix--sidebar-wip-display-mode "inherit")))
 
@@ -189,8 +204,7 @@ and Requests age toggles share vocabulary."
           ('B   'C)
           ('C   'D)
           (_    nil)))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "Live layout: %s"
            (or decknix--sidebar-live-display-mode "inherit")))
 
@@ -204,22 +218,19 @@ and Requests age toggles share vocabulary."
           ('both 'name)
           (_ 'name)))
   (message "Sessions display: %s" decknix--sidebar-sessions-display-mode)
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh)))
+  (decknix--sidebar-refresh-now))
 
 (defun decknix-sidebar-toggle-keys ()
   "Toggle the inline key listing in the sidebar footer."
   (interactive)
   (setq decknix--sidebar-show-keys (not decknix--sidebar-show-keys))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh)))
+  (decknix--sidebar-refresh-now))
 
 (defun decknix-sidebar-toggle-hidden ()
   "Toggle visibility of hidden/background sessions in the sidebar."
   (interactive)
   (setq decknix--sidebar-show-hidden (not decknix--sidebar-show-hidden))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "Hidden sessions: %s"
            (if decknix--sidebar-show-hidden "shown" "hidden")))
 
@@ -231,8 +242,7 @@ Live section above is then the only place they appear)."
   (interactive)
   (setq decknix--sidebar-sessions-hide-live
         (not decknix--sidebar-sessions-hide-live))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "Sessions: live-backed rows %s"
            (if decknix--sidebar-sessions-hide-live "hidden" "dimmed")))
 
@@ -256,8 +266,7 @@ workspace and dropped from the saved Sessions list."
   (interactive)
   (setq decknix--sidebar-sessions-hide-unknown
         (not decknix--sidebar-sessions-hide-unknown))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "Sessions: unresolved/vanished workspace rows %s"
            (if decknix--sidebar-sessions-hide-unknown "hidden" "shown")))
 
@@ -266,8 +275,7 @@ workspace and dropped from the saved Sessions list."
   (interactive)
   (setq decknix--hub-show-saved-sessions
         (not decknix--hub-show-saved-sessions))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "Saved Sessions: %s"
            (if decknix--hub-show-saved-sessions "shown" "hidden")))
 
@@ -284,8 +292,7 @@ toggles share vocabulary (all/1d/3d/7d/14d/30d)."
                            keys :test #'equal))
          (next-pos (mod (1+ (or pos 0)) (length keys))))
     (setq decknix--sidebar-sessions-age-filter (nth next-pos keys))
-    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-      (agent-shell-workspace-sidebar-refresh))
+    (decknix--sidebar-refresh-now)
     (message "Sessions age filter: %s"
              (decknix--sidebar-sessions-age-label))))
 
@@ -349,8 +356,7 @@ Subset of `decknix--hub-age-presets': all / 7d / 14d / 30d.")
   (interactive)
   (setq decknix--sidebar-wt-live-only
         (not decknix--sidebar-wt-live-only))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "Worktrees: live-only %s"
            (if decknix--sidebar-wt-live-only "on" "off")))
 
@@ -359,8 +365,7 @@ Subset of `decknix--hub-age-presets': all / 7d / 14d / 30d.")
   (interactive)
   (setq decknix--sidebar-wt-group-by-repo
         (not decknix--sidebar-wt-group-by-repo))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "Worktrees: group-by-repo %s"
            (if decknix--sidebar-wt-group-by-repo "on" "off")))
 
@@ -373,8 +378,7 @@ Subset of `decknix--hub-age-presets': all / 7d / 14d / 30d.")
                            keys :test #'equal))
          (next-pos (mod (1+ (or pos 0)) (length keys))))
     (setq decknix--sidebar-wt-age-filter (nth next-pos keys))
-    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-      (agent-shell-workspace-sidebar-refresh))
+    (decknix--sidebar-refresh-now)
     (message "Worktrees age filter: %s"
              (decknix--sidebar-wt-age-label))))
 
@@ -383,8 +387,7 @@ Subset of `decknix--hub-age-presets': all / 7d / 14d / 30d.")
   (interactive)
   (setq decknix--sidebar-wt-hide-clean
         (not decknix--sidebar-wt-hide-clean))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "Worktrees: hide-clean %s"
            (if decknix--sidebar-wt-hide-clean "on (pending §3.6.10)" "off")))
 
@@ -393,8 +396,7 @@ Subset of `decknix--hub-age-presets': all / 7d / 14d / 30d.")
   (interactive)
   (setq decknix--sidebar-wt-hide-placeholders
         (not decknix--sidebar-wt-hide-placeholders))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "Worktrees: placeholders %s"
            (if decknix--sidebar-wt-hide-placeholders "hidden" "shown")))
 
@@ -403,8 +405,7 @@ Subset of `decknix--hub-age-presets': all / 7d / 14d / 30d.")
   (interactive)
   (setq decknix--sidebar-wt-hide-merged
         (not decknix--sidebar-wt-hide-merged))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "Worktrees: hide-merged %s"
            (if decknix--sidebar-wt-hide-merged "on (pending hub support)" "off")))
 
@@ -417,8 +418,7 @@ Subset of `decknix--hub-age-presets': all / 7d / 14d / 30d.")
           ('B 'C)
           ('C 'D)
           (_  'A)))
-  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-    (agent-shell-workspace-sidebar-refresh))
+  (decknix--sidebar-refresh-now)
   (message "Hub layout: %s" decknix--hub-display-mode))
 
 (provide 'decknix-sidebar-toggles)
