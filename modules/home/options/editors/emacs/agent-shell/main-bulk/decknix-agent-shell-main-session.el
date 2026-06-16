@@ -2007,6 +2007,66 @@ workspace = project root, no tags; name is still derived automatically."
      before-buffers name tags workspace)
     (message "Starting agent session \"%s\" in %s…" name workspace)))
 
+(defun decknix-agent-session-fork ()
+  "Start a new session forked from the current one.
+Prompts for workspace (defaulting to the current session's workspace)
+and tags pre-seeded with the current session's tags, so you can delete
+unwanted tags and type new ones in a single step.
+
+When called from outside an agent-shell buffer the defaults fall back
+to `decknix--agent-detect-workspace' with no tags — identical to
+calling `decknix-agent-session-new' interactively."
+  (interactive)
+  (let* ((src-conv-key (and (bound-and-true-p decknix--agent-conv-key)
+                            decknix--agent-conv-key))
+         (src-workspace (or (and (bound-and-true-p decknix--agent-session-workspace)
+                                 (file-exists-p decknix--agent-session-workspace)
+                                 decknix--agent-session-workspace)
+                            (decknix--agent-detect-workspace)))
+         (src-tags (when src-conv-key
+                     (decknix--agent-tags-for-conv-key src-conv-key)))
+         ;; Let the user also change the workspace.
+         (workspace (expand-file-name
+                     (read-directory-name "Workspace: " src-workspace nil t)))
+         (branch (decknix--agent-detect-branch workspace))
+         ;; Pre-seed the prompt with the source tags so the user can
+         ;; delete unwanted ones and add new ones before confirming.
+         (tags (let ((input (completing-read-multiple
+                             "Tags (comma-separated): "
+                             (decknix--agent-tags-all)
+                             nil nil
+                             (when src-tags
+                               (mapconcat #'identity src-tags ",")))))
+                 (mapcar #'string-trim
+                         (seq-remove #'string-empty-p input))))
+         (name (decknix--agent-session-derive-name tags workspace branch nil nil))
+         (before-buffers (buffer-list))
+         (augmented-cmd
+          (append agent-shell-auggie-acp-command
+                  (list "--workspace-root" workspace)))
+         (config
+          (let ((base (agent-shell-auggie-make-agent-config)))
+            (setf (alist-get :client-maker base)
+                  (eval `(lambda (buffer)
+                           (agent-shell--make-acp-client
+                            :command ,(car augmented-cmd)
+                            :command-params ',(cdr augmented-cmd)
+                            :environment-variables
+                            (cond ((map-elt agent-shell-auggie-authentication :none)
+                                   agent-shell-auggie-environment)
+                                  ((map-elt agent-shell-auggie-authentication :login)
+                                   agent-shell-auggie-environment)
+                                  (t
+                                   (error "Invalid Auggie authentication")))
+                            :context-buffer buffer)) t))
+            base)))
+    (let ((default-directory workspace))
+      (agent-shell-start :config config))
+    (setq decknix--agent-session-cache-time 0)
+    (decknix--agent-session-new-post-create
+     before-buffers name tags workspace)
+    (message "Forking session \"%s\" in %s…" name workspace)))
+
 (defun decknix--agent-session-new-post-create
     (before-buffers name tags workspace &optional first-message)
   "Post-creation setup: rename buffer to NAME, apply TAGS, record WORKSPACE.
