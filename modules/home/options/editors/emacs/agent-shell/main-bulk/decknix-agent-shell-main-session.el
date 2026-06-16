@@ -49,20 +49,27 @@
 (declare-function agent-shell-start "ext:agent-shell")
 (declare-function agent-shell-buffers "ext:agent-shell")
 (declare-function agent-shell-subscribe-to "ext:agent-shell")
-(declare-function agent-shell-auggie-make-agent-config "ext:agent-shell")
 (declare-function agent-shell--make-acp-client "ext:agent-shell")
 (declare-function agent-shell--state "ext:agent-shell")
 (declare-function shell-maker-submit "ext:shell-maker")
 (declare-function consult--multi "ext:consult")
 (declare-function consult--read "ext:consult")
 (declare-function consult--dynamic-collection "ext:consult")
-(defvar agent-shell-auggie-acp-command)
-(defvar agent-shell-auggie-authentication)
-(defvar agent-shell-auggie-environment)
 (defvar agent-shell-display-action)
 (defvar shell-maker--buffer-name-override)
 (defvar shell-maker--config)
 (defvar decknix--sidebar-previous-sessions)
+
+(defvar decknix-agent-session-history-count 2
+  "Default number of recent exchanges to show when resuming a session.
+Use C-u prefix with the session picker to override.")
+
+;; Provider abstraction.
+(require 'decknix-agent-provider)
+(declare-function decknix-agent-require-provider "decknix-agent-provider")
+(declare-function decknix--agent-command-build "decknix-agent-provider")
+(declare-function decknix--agent-make-config "decknix-agent-provider")
+(defvar decknix-agent-default-provider)
 
 ;; Forward declarations for sibling decknix carved packages used by
 ;; the session lifecycle.  Mirrors the cluster at the top of
@@ -229,6 +236,11 @@
 ;; (distinct from ACP session ID in agent-shell--state)
 (defvar-local decknix--agent-auggie-session-id nil
   "The auggie CLI session ID for this buffer, if known.")
+
+;; Buffer-local var to track the agent provider ID (symbol)
+(defvar-local decknix--agent-provider-id nil
+  "The provider ID (symbol) for this agent session.")
+
 
 ;; Buffer-local var to track the conversation key for this session.
 ;; Set early in post-create (quickactions) so the header-line can
@@ -534,6 +546,10 @@ since default.el is evaluated under dynamic binding."
 (declare-function decknix--agent-session-refresh-sync "decknix-agent-session-cache")
 (declare-function decknix--agent-session-refresh-async "decknix-agent-session-cache")
 (declare-function decknix--agent-session-jq-cmd "decknix-agent-session-cache")
+;; Phase 1.3: provider lookup by session-id and label accessor
+(declare-function decknix--agent-provider-for-session-id
+                  "decknix-agent-session-cache" (session-id))
+(declare-function decknix-agent-provider-label "decknix-agent-provider" (id))
 (declare-function decknix--agent-session-ensure-jq-filter "decknix-agent-session-cache")
 (defvar decknix--agent-session-cache)
 (defvar decknix--agent-session-cache-time)
@@ -551,10 +567,6 @@ since default.el is evaluated under dynamic binding."
 ;; `decknix--agent-session-preview' lives in
 ;; agent-shell/agent/decknix-agent-session-format.el (PR B.54) --
 ;; required at the top of this heredoc.
-
-(defvar decknix-agent-session-history-count 2
-  "Default number of recent exchanges to show when resuming a session.
-Use C-u prefix with the session picker to override.")
 
 (defvar decknix--agent-grep-last-input nil
   "Most recent input typed into `decknix-agent-session-grep'.
@@ -740,26 +752,15 @@ dedupes against live buffers before calling here."
          ;; default.el is dynamic-bound.  Composition itself is
          ;; carved into `decknix-agent-resume-command' (PR B.76)
          ;; so the argument-order contract is unit-tested.
+         ;; Phase 1.3: look up the backend that created this session
+         ;; from the cache (providerId is stamped at parse time).
+         ;; Falls back to `decknix-agent-default-provider' for old
+         ;; cache entries that pre-date the Phase 1.3 stamp.
+         (provider (decknix--agent-provider-for-session-id session-id))
          (augmented-cmd
-          (decknix--resume-command-build
-           agent-shell-auggie-acp-command
-           validated-ws saved-model session-id))
-         (config
-          (let ((base (agent-shell-auggie-make-agent-config)))
-            (setf (alist-get :client-maker base)
-                  (eval `(lambda (buffer)
-                           (agent-shell--make-acp-client
-                            :command ,(car augmented-cmd)
-                            :command-params ',(cdr augmented-cmd)
-                            :environment-variables
-                            (cond ((map-elt agent-shell-auggie-authentication :none)
-                                   agent-shell-auggie-environment)
-                                  ((map-elt agent-shell-auggie-authentication :login)
-                                   agent-shell-auggie-environment)
-                                  (t
-                                   (error "Invalid Auggie authentication")))
-                            :context-buffer buffer)) t))
-            base))
+          (decknix--agent-command-build
+           provider validated-ws saved-model session-id))
+         (config (decknix--agent-make-config provider augmented-cmd))
          (agent-shell-display-action
           (eval `(cons (lambda (buffer alist)
                          (let ((win ,target-win))
@@ -807,6 +808,7 @@ dedupes against live buffers before calling here."
            (let ((shell-buf ,buf))
              (if (and shell-buf (buffer-live-p shell-buf))
                  (with-current-buffer shell-buf
+                   (setq-local decknix--agent-provider-id ',provider)
                    (setq-local decknix--agent-auggie-session-id ,sid)
                    ;; Store conv-key for fast tag lookup in header-line
                    (when ,ck
@@ -814,13 +816,16 @@ dedupes against live buffers before calling here."
                    ;; Restore workspace for the session picker display
                    (when ,ws
                      (setq-local decknix--agent-session-workspace ,ws))
-                   ;; Rename buffer to match conversation identity
+                   ;; Rename buffer to match conversation identity.
+                   ;; Phase 1.3: use provider label so Claude sessions
+                   ;; show "*Claude: ...*" instead of "*Auggie: ...*".
                    (when ,bname
-                     (rename-buffer
-                      (generate-new-buffer-name
-                       (format "*Auggie: %s*" ,bname)))
-                     (setq-local shell-maker--buffer-name-override
-                                 (buffer-name)))
+                     (let ((lbl (decknix-agent-provider-label ',provider)))
+                       (rename-buffer
+                        (generate-new-buffer-name
+                         (format "*%s: %s*" lbl ,bname)))
+                       (setq-local shell-maker--buffer-name-override
+                                   (buffer-name))))
                    (decknix--agent-session-prepopulate ,sid ,n)
                    ;; Seed `comint-input-ring' from the on-disk
                    ;; session so M-p / M-n in compose (and the
@@ -1660,90 +1665,71 @@ sidebar's Live section."
 ;; across every session JSON file using ripgrep.
 ;; C-c A g — type a search term, results narrow live.
 
-(defun decknix--agent-session-rg-search-fast (term)
+(defun decknix--agent-session-rg-search-fast (term &optional provider-id)
   "Find sessions matching TERM via rg + the in-memory metadata cache.
-Runs `rg -l0' to list files containing TERM (~0.5s for hundreds of
-sessions), extracts the sessionId from each filename
-(`<uuid>.json'), and looks the IDs up in
-`decknix--agent-session-cache'.
+If PROVIDER-ID is nil, searches all registered providers."
+  (if (null provider-id)
+      (let ((all-results nil))
+        (dolist (provider-entry decknix-agent-provider-registry)
+          (setq all-results (append all-results
+                                    (decknix--agent-session-rg-search-fast term (car provider-entry)))))
+        (sort all-results (lambda (a b)
+                            (string> (alist-get 'modified a "") (alist-get 'modified b "")))))
+    (let* ((rg (or (executable-find "rg") "rg"))
+           (dir (decknix-agent-provider-sessions-dir provider-id))
+           (cmd (decknix--rg-fast-command rg term dir))
+           (output "")
+           (proc (make-process
+                  :name (format "agent-grep-%s-rg-fast" provider-id)
+                  :buffer nil
+                  :command (list "sh" "-c" cmd)
+                  :noquery t
+                  :connection-type 'pipe
+                  :filter (lambda (_p o)
+                            (setq output (concat output o))))))
+      (while (process-live-p proc)
+        (accept-process-output proc 0.03))
+      (accept-process-output proc 0)
+      (let* ((paths (split-string output "\0" t))
+             (id-set (decknix--rg-paths-to-id-set paths))
+             (all-cached (decknix--agent-session-list provider-id)))
+        (seq-filter (lambda (s)
+                      (gethash (alist-get 'sessionId s) id-set))
+                    all-cached)))))
 
-This is the default path because parsing the matching JSON files
-with jq is the real bottleneck — some sessions weigh 40MB+ and
-the per-keystroke pipeline used to hit ~35s, well past consult's
-`while-no-input' timeout.
-
-Sessions written *since* the last cache refresh (every 2 minutes)
-are silently skipped here.  Use `\\[universal-argument]
-\\[universal-argument]' on `decknix-agent-session-grep' to fall
-back to the slower but exhaustive `*-thorough' variant when
-hunting for a brand-new session."
-  (let* ((rg (or (executable-find "rg") "rg"))
-         (sessions-dir (expand-file-name "sessions" "~/.augment"))
-         (cmd (decknix--rg-fast-command rg term sessions-dir))
-         (output "")
-         (proc (make-process
-                :name "agent-grep-rg-fast"
-                :buffer nil
-                :command (list "sh" "-c" cmd)
-                :noquery t
-                :connection-type 'pipe
-                :filter (lambda (_p o)
-                          (setq output (concat output o))))))
-    ;; Yield so consult's while-no-input can interrupt on
-    ;; subsequent keystrokes — same pattern as the thorough
-    ;; variant below.
-    (while (process-live-p proc)
-      (accept-process-output proc 0.03))
-    (accept-process-output proc 0)
-    ;; rg -l0 is NUL-delimited; split, derive the sessionId from
-    ;; each path's basename, then filter the cached metadata.
-    (let* ((paths (split-string output "\0" t))
-           (id-set (decknix--rg-paths-to-id-set paths))
-           (cache (or decknix--agent-session-cache
-                      (progn (decknix--agent-session-list)
-                             decknix--agent-session-cache)))
-           (matched (seq-filter
-                     (lambda (s)
-                       (gethash (alist-get 'sessionId s) id-set))
-                     cache)))
-      (sort (copy-sequence matched)
-            (lambda (a b)
-              (string> (or (alist-get 'modified a) "")
-                       (or (alist-get 'modified b) "")))))))
-
-(defun decknix--agent-session-rg-search-thorough (term)
+(defun decknix--agent-session-rg-search-thorough (term &optional provider-id)
   "Search session files for TERM using ripgrep + parallel jq.
-Slower but exhaustive complement to
-`decknix--agent-session-rg-search-fast': re-parses every matching
-file with jq instead of relying on the in-memory cache, so it
-finds sessions written since the last cache refresh.
-
-Uses `xargs -0 -P8' to parallelise the per-file jq calls — even
-across hundreds of large session files this completes in a few
-seconds, where the previous serial pipeline could take 30+s.
-
-Uses `make-process' + `accept-process-output' so Emacs stays
-responsive and consult's `while-no-input' can interrupt mid-flight
-when the user types more characters."
-  (let* ((jqf (decknix--agent-session-ensure-jq-filter))
-         (sessions-dir (shell-quote-argument
-                        (expand-file-name "sessions" "~/.augment")))
-         (cmd (decknix--rg-thorough-command
-               (or (executable-find "rg") "rg")
-               term sessions-dir jqf))
-         (output "")
-         (proc (make-process
-                :name "agent-grep-rg-thorough"
-                :buffer nil
-                :command (list "sh" "-c" cmd)
-                :noquery t
-                :connection-type 'pipe
-                :filter (lambda (_p o)
-                          (setq output (concat output o))))))
-    (while (process-live-p proc)
-      (accept-process-output proc 0.03))
-    (accept-process-output proc 0)
-    (decknix--agent-session-parse output)))
+If PROVIDER-ID is nil, searches all registered providers."
+  (if (null provider-id)
+      (let ((all-results nil))
+        (dolist (provider-entry decknix-agent-provider-registry)
+          (setq all-results (append all-results
+                                    (decknix--agent-session-rg-search-thorough term (car provider-entry)))))
+        (sort all-results (lambda (a b)
+                            (string> (alist-get 'modified a "") (alist-get 'modified b "")))))
+    (let* ((jqf (decknix--agent-session-ensure-jq-filter provider-id))
+           (dir (shell-quote-argument (decknix-agent-provider-sessions-dir provider-id)))
+           (ext (decknix-agent-provider-session-file-extension provider-id))
+           (jq-args (if (string= ext ".jsonl") "-Mcs" "-Mc"))
+           (rg (or (executable-find "rg") "rg"))
+           ;; Thorough path: build a pipeline that feeds rg matches into jq.
+           (cmd (format "%s -l0 %s %s 2>/dev/null | xargs -0 -P8 -I{} jq %s -f %s {} 2>/dev/null | jq -Msc 'sort_by(.modified) | reverse'"
+                        (shell-quote-argument rg)
+                        (shell-quote-argument term)
+                        dir jq-args (shell-quote-argument jqf)))
+           (output "")
+           (proc (make-process
+                  :name (format "agent-grep-%s-rg-thorough" provider-id)
+                  :buffer nil
+                  :command (list "sh" "-c" cmd)
+                  :noquery t
+                  :connection-type 'pipe
+                  :filter (lambda (_p o)
+                            (setq output (concat output o))))))
+      (while (process-live-p proc)
+        (accept-process-output proc 0.03))
+      (accept-process-output proc 0)
+      (decknix--agent-session-parse output))))
 
 ;; `decknix--agent-session-grep-candidate' and
 ;; `decknix--agent-session-grep-build-entries' live in
@@ -1974,27 +1960,9 @@ workspace = project root, no tags; name is still derived automatically."
          ;; lambda is stored in agent-shell--state and called later
          ;; (when the first message is sent) — by which time a dynamic
          ;; let-binding would have expired.
-         (augmented-cmd
-          (append agent-shell-auggie-acp-command
-                  (list "--workspace-root" workspace)))
-         ;; Create config with a client-maker that closes over augmented-cmd.
-         ;; eval+backquote is needed because default.el uses dynamic binding.
-         (config
-          (let ((base (agent-shell-auggie-make-agent-config)))
-            (setf (alist-get :client-maker base)
-                  (eval `(lambda (buffer)
-                           (agent-shell--make-acp-client
-                            :command ,(car augmented-cmd)
-                            :command-params ',(cdr augmented-cmd)
-                            :environment-variables
-                            (cond ((map-elt agent-shell-auggie-authentication :none)
-                                   agent-shell-auggie-environment)
-                                  ((map-elt agent-shell-auggie-authentication :login)
-                                   agent-shell-auggie-environment)
-                                  (t
-                                   (error "Invalid Auggie authentication")))
-                            :context-buffer buffer)) t))
-            base)))
+         (provider decknix-agent-default-provider)
+         (augmented-cmd (decknix--agent-command-build provider workspace))
+         (config (decknix--agent-make-config provider augmented-cmd)))
     ;; Set default-directory so agent-shell-cwd picks up the chosen
     ;; workspace instead of inheriting the calling buffer's directory
     ;; (which may be ~/ when invoked from the welcome screen).
@@ -2041,25 +2009,9 @@ calling `decknix-agent-session-new' interactively."
                          (seq-remove #'string-empty-p input))))
          (name (decknix--agent-session-derive-name tags workspace branch nil nil))
          (before-buffers (buffer-list))
-         (augmented-cmd
-          (append agent-shell-auggie-acp-command
-                  (list "--workspace-root" workspace)))
-         (config
-          (let ((base (agent-shell-auggie-make-agent-config)))
-            (setf (alist-get :client-maker base)
-                  (eval `(lambda (buffer)
-                           (agent-shell--make-acp-client
-                            :command ,(car augmented-cmd)
-                            :command-params ',(cdr augmented-cmd)
-                            :environment-variables
-                            (cond ((map-elt agent-shell-auggie-authentication :none)
-                                   agent-shell-auggie-environment)
-                                  ((map-elt agent-shell-auggie-authentication :login)
-                                   agent-shell-auggie-environment)
-                                  (t
-                                   (error "Invalid Auggie authentication")))
-                            :context-buffer buffer)) t))
-            base)))
+         (provider decknix-agent-default-provider)
+         (augmented-cmd (decknix--agent-command-build provider workspace))
+         (config (decknix--agent-make-config provider augmented-cmd)))
     (let ((default-directory workspace))
       (agent-shell-start :config config))
     (setq decknix--agent-session-cache-time 0)
@@ -2086,6 +2038,7 @@ batch launches."
       ;; format is pinned by `decknix--post-create-buffer-name'
       ;; (PR B.83).
       (with-current-buffer shell-buf
+        (setq-local decknix--agent-provider-id decknix-agent-default-provider)
         (rename-buffer
          (generate-new-buffer-name
           (decknix--post-create-buffer-name name)))
