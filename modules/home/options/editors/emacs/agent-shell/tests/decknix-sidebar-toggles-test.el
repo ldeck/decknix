@@ -270,19 +270,43 @@
       (should (= 3 (decknix-test-stub-call-count
                     'agent-shell-workspace-sidebar-refresh))))))
 
+;; -- decknix--sidebar-refresh-now ------------------------------------
+
+(ert-deftest decknix-sidebar-toggles/refresh-now-bypasses-suspend ()
+  "refresh-now calls through even when suspension flag is set."
+  (let ((decknix--sidebar-refresh-suspended t))
+    (decknix-test-with-stubbed-deps (agent-shell-workspace-sidebar-refresh)
+      ;; refresh-now let-binds the flag to nil, so the stub IS reached.
+      (decknix--sidebar-refresh-now)
+      (should (= 1 (decknix-test-stub-call-count
+                    'agent-shell-workspace-sidebar-refresh))))))
+
+(ert-deftest decknix-sidebar-toggles/refresh-now-calls-when-not-suspended ()
+  "refresh-now calls through when suspension flag is nil."
+  (let ((decknix--sidebar-refresh-suspended nil))
+    (decknix-test-with-stubbed-deps (agent-shell-workspace-sidebar-refresh)
+      (decknix--sidebar-refresh-now)
+      (should (= 1 (decknix-test-stub-call-count
+                    'agent-shell-workspace-sidebar-refresh))))))
+
 ;; -- cycle-live-view-mode -----------------------------------------
 
 (ert-deftest decknix-sidebar-toggles/cycle-live-view-mode-cycles ()
-  "Three-way cycle: flat → workspace → path → flat."
-  (let ((decknix--sidebar-live-view-mode 'flat))
+  "Five-way cycle: flat → workspace → path → tags → tree → flat."
+  (let ((decknix--sidebar-live-view-mode 'flat)
+        (decknix--sidebar-refresh-suspended nil))
     (decknix-test-with-stubbed-deps (agent-shell-workspace-sidebar-refresh)
       (decknix-sidebar-cycle-live-view-mode)
       (should (equal 'workspace decknix--sidebar-live-view-mode))
       (decknix-sidebar-cycle-live-view-mode)
       (should (equal 'path decknix--sidebar-live-view-mode))
       (decknix-sidebar-cycle-live-view-mode)
+      (should (equal 'tags decknix--sidebar-live-view-mode))
+      (decknix-sidebar-cycle-live-view-mode)
+      (should (equal 'tree decknix--sidebar-live-view-mode))
+      (decknix-sidebar-cycle-live-view-mode)
       (should (equal 'flat decknix--sidebar-live-view-mode))
-      (should (= 3 (decknix-test-stub-call-count
+      (should (= 5 (decknix-test-stub-call-count
                     'agent-shell-workspace-sidebar-refresh))))))
 
 (provide 'decknix-sidebar-toggles-test)

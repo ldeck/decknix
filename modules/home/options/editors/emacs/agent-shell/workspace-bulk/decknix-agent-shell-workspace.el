@@ -248,6 +248,14 @@
                   "decknix-agent-live-sessions" (entry))
 (declare-function decknix--live-sessions-write
                   "decknix-agent-live-sessions" (entries))
+
+;; Buffer-locals from main-bulk
+(defvar decknix--agent-provider-id)
+(declare-function decknix--agent-buffer-session-id
+                  "decknix-agent-buffer-lookup" (&optional buf))
+(declare-function decknix--agent-session-subagents
+                  "decknix-agent-session-history" (session-id &optional provider-id))
+
 (defvar decknix--sidebar-show-keys)
 (defvar agent-shell-workspace-sidebar-buffer-name)
 (declare-function decknix--agent-session-resume "ext:decknix-agent-shell-main")
@@ -952,6 +960,77 @@ and again once the registry write completes."
 (defvar decknix--sidebar-max-saved 8
   "Maximum number of recent saved conversations to show in sidebar.")
 
+(defun decknix--live-buf-tags (buf)
+  "Return the tag list for live buffer BUF, or nil."
+  (let ((ck (with-current-buffer buf (decknix--agent-current-conv-key))))
+    (when (and ck (fboundp 'decknix--agent-tags-for-conv-key))
+      (decknix--agent-tags-for-conv-key ck))))
+
+(defun decknix--live-tags-intersection (tag-lists)
+  "Return the intersection of all TAG-LISTS (lists of strings).
+Returns nil if any list is nil/empty or the intersection is empty."
+  (when (and tag-lists (cl-every #'identity tag-lists))
+    (let ((result (car tag-lists)))
+      (dolist (lst (cdr tag-lists) result)
+        (setq result (seq-filter (lambda (tag) (member tag lst)) result))
+        (unless result (cl-return nil))))))
+
+(defun decknix--live-group-by-shared-tags (buffers)
+  "Group BUFFERS by their maximal shared-tag subset.
+Returns an alist of (GROUP-TAGS . BUFS) where GROUP-TAGS is a list of
+strings (the full intersection shared by all BUFS in the group).
+Sessions with no tags are placed under a nil key (rendered as Other)."
+  ;; Greedy: sort by tag-count descending, then assign each buffer to the
+  ;; existing group whose current key intersects most with this buffer's tags.
+  ;; When no group fits, start a new group with this buffer's own tags.
+  (let ((tagged   (seq-filter (lambda (b) (decknix--live-buf-tags b)) buffers))
+        (untagged (seq-remove (lambda (b) (decknix--live-buf-tags b)) buffers))
+        (groups   nil))           ; alist of (current-key-list . buf-list)
+    (setq tagged (sort tagged
+                        (lambda (a b)
+                          (> (length (decknix--live-buf-tags a))
+                             (length (decknix--live-buf-tags b))))))
+    (dolist (buf tagged)
+      (let* ((btags (decknix--live-buf-tags buf))
+             ;; Score each existing group by the length of the intersection
+             ;; that would result if we added this buffer.
+             (best-group nil)
+             (best-len   0))
+        (dolist (grp groups)
+          (let* ((cur-key  (car grp))
+                 (new-key  (seq-filter (lambda (tag) (member tag btags)) cur-key))
+                 (new-len  (length new-key)))
+            (when (and (> new-len 0) (>= new-len best-len))
+              (setq best-group grp
+                    best-len   new-len))))
+        (if best-group
+            (let* ((new-key (seq-filter
+                             (lambda (tag) (member tag btags)) (car best-group))))
+              (setcar best-group new-key)
+              (setcdr best-group (append (cdr best-group) (list buf))))
+          ;; No matching group — start a new one.
+          (push (list btags buf) groups))))
+    ;; Append untagged as final group under nil key.
+    (let ((result (nreverse groups)))
+      (if untagged
+          (append result (list (cons nil untagged)))
+        result))))
+
+(defun decknix--live-group-by-first-tag (buffers)
+  "Group BUFFERS by their first tag (tree mode).
+Returns an alist of (FIRST-TAG . BUFS).
+Sessions with no tags are placed under nil (rendered as Other)."
+  (let ((groups  (make-hash-table :test 'equal))
+        (key-ord '()))
+    (dolist (buf buffers)
+      (let* ((tags  (decknix--live-buf-tags buf))
+             (key   (car tags)))
+        (unless (gethash key groups)
+          (push key key-ord))
+        (puthash key (append (gethash key groups) (list buf)) groups)))
+    (mapcar (lambda (k) (cons k (gethash k groups)))
+            (nreverse key-ord))))
+
 (defun decknix--sidebar-render-live-sessions (line-num buffers selected tiled max-name-width)
   "Render the Live Sessions section. Returns updated LINE-NUM.
 BUFFERS is the list of live agent-shell buffers.
@@ -974,6 +1053,7 @@ MAX-NAME-WIDTH is the cap for repo name display."
            (setq line-num
                  (decknix--sidebar-render-live-buffer
                   line-num buf selected (memq buf tiled) max-name-width))))
+
         ((or 'workspace 'path)
          (let ((groups (make-hash-table :test 'equal))
                (ws-list '()))
@@ -998,22 +1078,93 @@ MAX-NAME-WIDTH is the cap for repo name display."
                  (setq line-num
                        (decknix--sidebar-render-live-buffer
                         line-num buf selected (memq buf tiled)
-                        max-name-width (eq view-mode 'path))))))))))
+                        max-name-width (eq view-mode 'path))))))))
+
+        ('tags
+         ;; Group by full shared-tag subset.  Group header = common tags;
+         ;; each row shows only the session's remaining (unique) tags.
+         (let ((tag-groups (decknix--live-group-by-shared-tags buffers)))
+           (dolist (grp tag-groups)
+             (let* ((grp-tags (car grp))
+                    (grp-bufs (cdr grp))
+                    (header   (if grp-tags
+                                  (mapconcat #'identity grp-tags "/")
+                                "Other")))
+               (insert (propertize (format " %s" header)
+                                   'face 'font-lock-doc-face)
+                       "\n")
+               (setq line-num (1+ line-num))
+               (dolist (buf grp-bufs)
+                 (setq line-num
+                       (decknix--sidebar-render-live-buffer
+                        line-num buf selected (memq buf tiled)
+                        max-name-width
+                        ;; Suppress the group's tags from each row's label.
+                        (or grp-tags t))))))))
+
+        ('tree
+         ;; Group by first tag.  Group header = first tag;
+         ;; each row shows the remaining tags.
+         (let ((first-groups (decknix--live-group-by-first-tag buffers)))
+           (dolist (grp first-groups)
+             (let* ((first-tag (car grp))
+                    (grp-bufs  (cdr grp))
+                    (header    (or first-tag "Other")))
+               (insert (propertize (format " %s" header)
+                                   'face 'font-lock-doc-face)
+                       "\n")
+               (setq line-num (1+ line-num))
+               (dolist (buf grp-bufs)
+                 (setq line-num
+                       (decknix--sidebar-render-live-buffer
+                        line-num buf selected (memq buf tiled)
+                        max-name-width
+                        ;; Suppress the first tag from each row's label.
+                        (when first-tag (list first-tag)))))))))))
     line-num))
 
-(defun decknix--sidebar-render-live-buffer (line-num buf selected is-tiled max-name-width &optional strip-tag)
+(defun decknix--sidebar-render-live-buffer (line-num buf selected is-tiled max-name-width
+                                            &optional strip-tags)
   "Render a single live buffer row. Returns updated LINE-NUM.
-If STRIP-TAG is non-nil, remove the tag matching the workspace name from the title."
+STRIP-TAGS, when non-nil, is either t (strip the tag matching the workspace
+basename) or a list of tag strings to suppress from the displayed name."
   (let* ((agent-icon (agent-shell-workspace--agent-icon buf))
          (status (agent-shell-workspace--track-status
                   buf (agent-shell-workspace--buffer-status buf)))
          (status-face (agent-shell-workspace--status-face status))
-         (short-name (agent-shell-workspace--short-name buf))
-         (name (if strip-tag
-                   (let* ((ws (with-current-buffer buf default-directory))
-                          (ws-name (file-name-nondirectory (directory-file-name ws))))
-                     (replace-regexp-in-string (format "#%s ?" ws-name) "" short-name))
-                 short-name))
+         ;; Compute conv-key first so we can derive the canonical name from tags.
+         (buf-conv-key
+          (with-current-buffer buf
+            (decknix--agent-current-conv-key)))
+         (raw-tags (when (and buf-conv-key (fboundp 'decknix--agent-tags-for-conv-key))
+                     (decknix--agent-tags-for-conv-key buf-conv-key)))
+         (display-tags
+          (cond
+           ((and strip-tags (listp strip-tags))
+            ;; Caller supplied an explicit suppress list (tags mode).
+            (seq-remove (lambda (tg) (member tg strip-tags)) raw-tags))
+           ((and strip-tags raw-tags)
+            ;; Boolean t: strip the tag matching the workspace basename.
+            (let* ((ws (with-current-buffer buf default-directory))
+                   (ws-name (file-name-nondirectory (directory-file-name ws))))
+              (seq-remove (lambda (tg) (equal tg ws-name)) raw-tags)))
+           (t raw-tags)))
+         (name
+          (cond
+           (display-tags
+            ;; Tags available → join with "/" for a compact, consistent label.
+            (mapconcat #'identity display-tags "/"))
+           (raw-tags
+            ;; All tags were stripped (e.g. path mode where ws-name = only tag).
+            (let* ((ws (with-current-buffer buf default-directory)))
+              (file-name-nondirectory (directory-file-name ws))))
+           (t
+            ;; No tags at all → fall back to short-name, stripping provider
+            ;; prefix ("Auggie Agent @ workspace" → "workspace").
+            (let ((sn (agent-shell-workspace--short-name buf)))
+              (if (string-match ".+ @ \\(.+\\)" sn)
+                  (match-string 1 sn)
+                sn)))))
          (tile-indicator (if is-tiled " ▫" ""))
          (display-face (if (string= status "finished") "cyan" status-face))
          (logo-box (agent-shell-workspace--make-logo-box
@@ -1025,9 +1176,6 @@ If STRIP-TAG is non-nil, remove the tag matching the workspace name from the tit
               (propertize name-box 'face '(:background "#3a1515"))
             name-box))
          (selection-indicator (if (eq buf selected) ">" " "))
-         (buf-conv-key
-          (with-current-buffer buf
-            (decknix--agent-current-conv-key)))
          (pr-badge (if buf-conv-key
                        (decknix--hub-pr-badge buf-conv-key)
                      ""))
@@ -1051,6 +1199,11 @@ If STRIP-TAG is non-nil, remove the tag matching the workspace name from the tit
                           'agent-shell-workspace-buffer buf))
     (insert line "\n")
     (setq line-num (1+ line-num))
+    ;; Feature 3: Visual linking for sub-agents
+    (let* ((sid (decknix--agent-buffer-session-id buf))
+           (provider (buffer-local-value 'decknix--agent-provider-id buf)))
+      (when (and sid provider)
+        (setq line-num (decknix--sidebar-render-subagents line-num sid provider))))
     ;; Expanded PR lines
     (when (and (boundp 'decknix--hub-expand-prs)
                decknix--hub-expand-prs
@@ -1063,6 +1216,23 @@ If STRIP-TAG is non-nil, remove the tag matching the workspace name from the tit
     line-num))
 ;; Forward declarations keep the rest of this file's byte-compile
 ;; clean.  All four are pure formatters that `insert' into the
+
+(defun decknix--sidebar-render-subagents (line-num session-id provider-id)
+  "Insert sub-agent rows for SESSION-ID. Returns updated LINE-NUM."
+  (let ((subs (decknix--agent-session-subagents session-id provider-id)))
+    (dolist (s subs)
+      (let* ((name (decknix--agent-session-display-name s))
+             (glyph "↳")
+             ;; Use dim gray for sub-agents
+             (face 'shadow)
+             ;; Indent 4 chars (main row is 2 chars + icon)
+             (line (format "    %s %s"
+                           (propertize glyph 'face face)
+                           (propertize name 'face face))))
+        (insert line "\n")
+        (setq line-num (1+ line-num))))
+    line-num))
+
 ;; current buffer; the heredoc and hub-bulk continue to call them
 ;; via these declares.
 (declare-function decknix--sidebar-render-section-header
@@ -1155,7 +1325,7 @@ All toggle keys are accessed via the T transient prefix."
                              'face (if decknix--hub-requests-sort-reverse
                                        'font-lock-constant-face
                                      'font-lock-comment-face))))
-              (cons "M" (concat "↩ "
+              (cons "M" (concat "📬/👽 "
                             (propertize
                              (if decknix--hub-requests-only-my-replies "[only]" "[all]")
                              'face (if decknix--hub-requests-only-my-replies
@@ -1286,7 +1456,7 @@ All toggle keys are accessed via the T transient prefix."
                            'face (if decknix--hub-show-deploys
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
-            (cons "r" (format "replies %s"
+            (cons "r" (format "replies 📬/👽 %s"
                           (propertize
                            (if decknix--hub-wip-only-my-replies "[only]" "[all]")
                            'face (if decknix--hub-wip-only-my-replies
