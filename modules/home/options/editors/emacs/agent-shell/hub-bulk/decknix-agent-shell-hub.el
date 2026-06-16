@@ -3034,8 +3034,12 @@ primary action is a no-op until a PR materialises."
                            (max-title (max 8 (- (window-width) 14)))
                            (short-title (if (> (length title) max-title)
                                             (concat (substring title 0 (- max-title 1)) "…")
-                                          title)))
-                      (format "%s  %s %s" primary-icon phase-str
+                                          title))
+                           ;; Phase 2.2: show 💬/🤖 between primary icon and phase tag
+                           (reply-slot (if (and reply-str (not (string-empty-p reply-str)))
+                                           (concat " " reply-str " ")
+                                         "  ")))
+                      (format "%s%s%s %s" primary-icon reply-slot phase-str
                               (if title-face (propertize short-title 'face title-face) short-title))))
                    ('C ;; Label
                     (let* ((label (decknix--hub-format-row-label pr tc-build))
@@ -3043,8 +3047,12 @@ primary action is a no-op until a PR materialises."
                            (max-title (max 8 (- (window-width) 20)))
                            (short-title (if (> (length title) max-title)
                                             (concat (substring title 0 (- max-title 1)) "…")
-                                          title)))
-                      (format "%s %-16s %s" primary-icon label-str
+                                          title))
+                           ;; Phase 2.2: show 💬/🤖 between primary icon and label
+                           (reply-slot (if (and reply-str (not (string-empty-p reply-str)))
+                                           (concat " " reply-str " ")
+                                         " ")))
+                      (format "%s%s%-16s %s" primary-icon reply-slot label-str
                               (if title-face (propertize short-title 'face title-face) short-title))))
                    ('B ;; Scoped
                     (format "%s%s %s %s"
