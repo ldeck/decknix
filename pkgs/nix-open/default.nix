@@ -10,7 +10,13 @@ rustPlatform.buildRustPackage {
 
   src = ./.;
 
-  cargoHash = "sha256-D4qUKLz6bhjBmnNOMWLrdhlLvSCC+yPYvP+y4QHf4vo=";
+  # Use cargoLock so each crate is a separate fixed-output derivation keyed on
+  # the checksum in Cargo.lock.  This avoids the single-vendor-staging fetch
+  # that crates.io rate-limits, and lets already-cached crates (clap, syn,
+  # etc.) be reused without re-downloading.
+  cargoLock = {
+    lockFile = ./Cargo.lock;
+  };
 
   meta = with lib; {
     description = "Nix-aware macOS application launcher";
