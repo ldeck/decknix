@@ -139,16 +139,18 @@ reduce sidebar duplication."
              (glyph (if approved "●" "◐")))
         (decknix--hub-icon glyph face))))))
 
+(defvar decknix--hub-symbol-style)
+
 (defun decknix--hub-activity-icons (pr)
   "Return concatenated attention icons for PR.
 
 Indicates two families of signals (Human and Bot).
 Human family (left slot):
-- 📬 (replies-to-me) when a human posted after one of my own comments.
-- 💬 (needs-reply) when the latest activity is a human and not me.
+- 📬 / i[bold] (replies-to-me) when a human posted after one of my comments.
+- 💬 / i[dim]  (needs-reply) when the latest activity is a human and not me.
 Bot family (right slot):
-- 👽 (bot-replies-to-me) when a bot replied after my comment.
-- 🤖 (bot-pending) when the latest activity is a bot.
+- 👽 / β[bold] (bot-replies-to-me) when a bot replied after my comment.
+- 🤖 / β[dim]  (bot-pending) when the latest activity is a bot.
 
 Activity icons are suppressed for APPROVED PRs.
 
@@ -157,7 +159,8 @@ greater than zero, human icons (📬/💬) are suppressed if `unresolved_threads
 equals zero (all threads resolved). Bot icons (👽/🤖) are not suppressed.
 
 Returns a string of length 2 (padded with spaces) if any activity is present,
-else an empty string."
+else an empty string.  Honours `decknix--hub-symbol-style' (\"ascii\" uses
+italic characters and weight)."
   (let* ((needs-reply       (eq (alist-get 'needs_reply pr) t))
          (bot-pending       (eq (alist-get 'bot_pending pr) t))
          (replies-to-me     (eq (alist-get 'replies_to_me pr) t))
@@ -174,16 +177,30 @@ else an empty string."
          (all-resolved      (and total-threads
                                  (> total-threads 0)
                                  unresolved
-                                 (= unresolved 0))))
+                                 (= unresolved 0)))
+         (emoji-layout      (and (boundp 'decknix--hub-symbol-style)
+                                 (eq decknix--hub-symbol-style 'emoji))))
     (if approved
         ""
       (let ((h (if all-resolved
                    ""
-                 (cond (replies-to-me (decknix--hub-icon "📬" '(:foreground "#87d7af" :weight bold)))
-                       ((and needs-reply (not bot-pending)) (decknix--hub-icon "💬" '(:foreground "#d7af5f")))
+                 (cond (replies-to-me
+                        (if emoji-layout
+                            (decknix--hub-icon "📬" '(:foreground "#87d7af" :weight bold))
+                          (propertize "i" 'face '(:foreground "#5fc8d4" :weight bold :slant italic))))
+                       ((and needs-reply (not bot-pending))
+                        (if emoji-layout
+                            (decknix--hub-icon "💬" '(:foreground "#d7af5f"))
+                          (propertize "i" 'face '(:foreground "#5fc8d4" :weight normal :slant italic))))
                        (t ""))))
-            (b (cond (bot-replies-to-me (decknix--hub-icon "👽" '(:foreground "#af5f87" :weight bold)))
-                     (bot-pending (decknix--hub-icon "🤖" '(:foreground "#af5f87")))
+            (b (cond (bot-replies-to-me
+                      (if emoji-layout
+                          (decknix--hub-icon "👽" '(:foreground "#af5f87" :weight bold))
+                        (propertize "β" 'face '(:foreground "#af5f87" :weight bold))))
+                     (bot-pending
+                      (if emoji-layout
+                          (decknix--hub-icon "🤖" '(:foreground "#af5f87"))
+                        (propertize "β" 'face '(:foreground "#af5f87" :weight normal))))
                      (t ""))))
         (if (and (string-empty-p h) (string-empty-p b))
             ""
