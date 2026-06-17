@@ -322,11 +322,15 @@ renders as ^J, not a line break.  All items therefore live on one line."
                                (decknix--header-available-width))))
 
 (defun decknix--header-update ()
-  "Update the header-line-format for the current agent-shell buffer."
-  (when (derived-mode-p 'agent-shell-mode)
-    (setq-local header-line-format
-                (list (decknix--header-build)))
-    (force-mode-line-update)))
+  "Update the header-line-format for the current agent-shell buffer.
+Skips the update when input is pending so the 2-second repeating
+timer (one per live buffer) does not block the user while typing.
+The header catches up on the next tick."
+  (unless (input-pending-p)
+    (when (derived-mode-p 'agent-shell-mode)
+      (setq-local header-line-format
+                  (list (decknix--header-build)))
+      (force-mode-line-update))))
 
 (defun decknix--header-start-timer ()
   "Start a buffer-local 2-second timer to refresh the header-line.

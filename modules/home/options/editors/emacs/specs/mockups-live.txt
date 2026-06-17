@@ -1,0 +1,99 @@
+LIVE SECTION — Icon / Glyph Design Mockup
+═══════════════════════════════════════════════════════════════════════
+
+PURPOSE: Visual reference for proposed Live session icon changes.
+         Specifically: attention icons (replaces 📥/📤) and
+         activity icons (replaces 📬/👽 on linked-PR rows).
+         Edit this file to indicate approvals / modifications.
+
+═══════════════════════════════════════════════════════════════════════
+ATTENTION ICONS — what they represent
+═══════════════════════════════════════════════════════════════════════
+
+  Computed across ALL linked PRs for a session (worst-state-wins).
+  Replaces the current 📥 N / 📤 N inbox/sent pair.
+
+  STATE          TRIGGER                              COLOUR
+  ─────────────  ───────────────────────────────────  ──────────────
+  my move (soft) review-kind: my_review absent        att-yellow
+                 WIP: needs_reply=true
+  blocked        WIP: CHANGES_REQUESTED               att-red
+                 CI failing / merge conflict
+  their move     reviewed / pushed, no pending action att-green
+
+  Priority: red > yellow > green (worst wins)
+
+═══════════════════════════════════════════════════════════════════════
+ATTENTION GLYPH OPTIONS
+═══════════════════════════════════════════════════════════════════════
+
+  GLYPH LAYOUT — compact (proposed default):
+    @ [att-yellow]   your move
+    @ [att-red]      blocked
+    @ [att-green]    their move
+
+  EMOJI LAYOUT (accepted: shrunk to ~0.7 height to match ASCII width):
+    📬   attention needed (yellow or red state)
+    📪   resolved / their move (green state)
+
+  VERBOSE LAYOUT (toggle — optional, Planned):
+    v N [att-yellow]   N PRs where I need to act   (incoming)
+    v N [att-red]      N PRs blocked               (incoming, urgent)
+    ʌ N [att-green]    N PRs waiting on others     (outgoing)
+    Note: v=down (incoming to my inbox), ʌ=up (outgoing / sent)
+    Note: avoids ↓ which is already used for "no local clone" badge
+
+═══════════════════════════════════════════════════════════════════════
+CURRENT LIVE SECTION — for reference
+═══════════════════════════════════════════════════════════════════════
+
+       #473/conn/listing-status/bug/support/reinz/nurturecloud
+       decknix
+       decknix<2>
+       nurturecloud
+       nurturecloud<2>
+
+═══════════════════════════════════════════════════════════════════════
+PROPOSED LIVE SECTION — glyph layout
+═══════════════════════════════════════════════════════════════════════
+
+  Format (per-session row):
+    status  age  attention  activity   conv-name / tags / workspace
+
+  LEGEND:
+    status = ◐ working  ● ready  ● finished  ● killed  ○ initializing
+    attention = @ [yellow/red/green] (compact) or v/ʌ N (verbose)
+    activity = linked PR activity (i/π glyphs, see Requests mockup)
+
+  EXAMPLE ROWS:
+    ●    2m  @[ylw] i[bold]  nurturecloud  #listing-bug  [decknix]
+    ◐   18m  @[grn]          decknix  #hub-icons  [~/tools/decknix]
+    ●   13h  @[red] π[dim]   connect-to-core  #retrospective
+    ●    1d              #473/conn/listing-status/bug/support/reinz
+    ◐    5d  @[ylw]      nurturecloud/arc/conn/ai/retrospective/repo
+
+═══════════════════════════════════════════════════════════════════════
+LINKED PR ROWS (expanded under a session)
+═══════════════════════════════════════════════════════════════════════
+
+  Existing columnar format (UNCHANGED):
+    #N  age  state  CI  b  c  ✓  [⚠]  DTSP
+
+  Activity icons b/c columns:
+    EMOJI: 💬 human comment  📬 human reply  👽 bot reply  🤖 bot comment
+    GLYPH: i[cyan]  π[pink]  with bold=reply / dim=comment
+
+═══════════════════════════════════════════════════════════════════════
+OPEN QUESTIONS
+═══════════════════════════════════════════════════════════════════════
+
+  Q1. Attention glyph approved as @ [yellow/red/green] compact?
+  Q2. Emoji layout attention: 📬/📪 shrunk — acceptable?
+  Q3. Verbose v/ʌ N toggle: implement now or mark as Planned?
+  Q4. Activity color for human: cyan #5fc8d4 OK?
+         (blue #61afef = team-mention badge; need different shade)
+  Q5. Where should attention @ sit relative to existing @-mention badge?
+         Current row already has @ [me-yellow/team-blue] for mentions.
+         Attention @ would be a separate glyph with different color.
+         Could read: ◐ @[me] @[att-ylw] i[dim]  upside#19629  CONN-492
+         Or merge: show attention state ON the mention @?
