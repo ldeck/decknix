@@ -1033,6 +1033,34 @@ unknown conflict."
     (agent-shell-workspace-sidebar-refresh))
   (message "PR symbols: %s" decknix--hub-symbol-style))
 
+;; -- Hub: attention style (compact @ vs verbose v/ʌ N) --
+(defvar decknix--sidebar-attention-style 'compact
+  \"Style for session attention icons in the sidebar.
+`compact' = a single @ glyph tinted by worst state.
+`verbose' = directional arrows v/\u028c with counts.\")
+
+(transient-define-suffix decknix-sidebar-transient--attention-style ()
+  :key \"v\"
+  :description
+  (lambda ()
+    (format \"attention    %s\"
+            (propertize (format \"[%s]\" (or (bound-and-true-p decknix--sidebar-attention-style) 'compact))
+                        'face 'font-lock-constant-face)))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix--sidebar-toggle-attention-style))
+
+(defun decknix--sidebar-toggle-attention-style ()
+  \"Toggle the session attention style between `compact' and `verbose'.\"
+  (interactive)
+  (setq decknix--sidebar-attention-style
+        (if (eq decknix--sidebar-attention-style 'verbose) 'compact 'verbose))
+  (when (fboundp 'decknix--sidebar-state-write)
+    (decknix--sidebar-state-write))
+  (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
+    (agent-shell-workspace-sidebar-refresh))
+  (message \"Attention style: %s\" decknix--sidebar-attention-style))
+
 ;; Hub repo-name cap (PR B.36) — moved out of this file into
 ;; agent-shell/hub/decknix-hub-repo-name.el, packaged as
 ;; `decknix-hub-repo-name-el'.  Owns the cap state defvar
@@ -2575,62 +2603,99 @@ Shows count and summary like [2⬆ 1✓] (2 open, 1 merged)."
 (defun decknix--hub-session-attention-icons (conv-key)
   "Return attention icons for a conversation's linked PRs.
 
-Aggregates across every PR linked to CONV-KEY:
-- 📥 N : N linked PRs awaiting my action (review pending, WIP needs reply
-  or has CHANGES_REQUESTED).
-- 📤 N : N linked PRs where I have acted and am awaiting others (review
-  submitted, WIP pushed with no pending reply).
-- 📬    : shown when any linked PR has a human reply (`replies_to_me').
-- 👽    : shown when any linked PR has a bot reply (`bot_replies_to_me').
+Aggregates across every PR linked to CONV-KEY.
+Style honours `decknix--sidebar-attention-style':
+- compact (default): a single @ glyph tinted by worst state.
+- verbose: v/ʌ N directional arrows with counts.
+
+Worst-state wins: Red (blocked/fail/conflict) > Yellow (soft/your-move) > Green (none).
+Blocked = CHANGES_REQUESTED or CI failing or CONFLICTING.
+Your-move = needs-reply or my-review absent.
 
 Returns a leading-space string suitable for concatenation onto a sidebar
 row, or an empty string when no linked PR is attention-worthy."
   (let ((prs (decknix--agent-linked-prs conv-key))
-        (n-inbox 0)
-        (n-sent 0)
+        (n-inbox 0) ; my move
+        (n-sent 0)  ; their move
+        (n-blocked 0)
+        (any-me-mentions nil)
+        (any-team-mentions nil)
         (any-human-replies nil)
-        (any-bot-replies nil))
+        (any-bot-replies nil)
+        (emoji-layout (and (boundp 'decknix--hub-symbol-style)
+                           (eq decknix--hub-symbol-style 'emoji))))
     (when prs
       (dolist (pr prs)
         (let* ((url (decknix--agent-pr-url-accessor pr "url"))
                (status (and url (decknix--hub-pr-status-from-hub url)))
                (state (or (alist-get 'state status) ""))
-               (kind (alist-get 'kind status)))
+               (kind (alist-get 'kind status))
+               (ci (alist-get 'ci status))
+               (decision (or (alist-get 'review_decision status)
+                             (alist-get 'my_review status)))
+               (mention (alist-get 'mention status)) ; "me" or "team"
+               (mergeable (alist-get 'mergeable status))
+               (classified (decknix--hub-ci-classify ci)))
           ;; Skip terminal and unknown PRs — only active ones count
           (when (and status (member state '("OPEN" "DRAFT")))
-            (when (eq (alist-get 'replies_to_me status) t)
-              (setq any-human-replies t))
-            (when (eq (alist-get 'bot_replies_to_me status) t)
-              (setq any-bot-replies t))
-            (pcase kind
-              ('review
-               (if (alist-get 'my_review status)
-                   (cl-incf n-sent)
-                 (cl-incf n-inbox)))
-              ('wip
-               (let ((needs-reply (eq (alist-get 'needs_reply status) t))
-                     (decision (alist-get 'review_decision status)))
-                 (if (or needs-reply
-                         (equal decision "CHANGES_REQUESTED"))
-                     (cl-incf n-inbox)
-                   (cl-incf n-sent)))))))))
-    (let ((parts nil))
-      (when (> n-inbox 0)
-        (push (concat (decknix--hub-icon "📥" 'warning)
-                      (propertize (format "%d" n-inbox)
-                                  'face 'warning))
-              parts))
-      (when (> n-sent 0)
-        (push (concat (decknix--hub-icon "📤" 'success)
-                      (propertize (format "%d" n-sent)
-                                  'face 'success))
-              parts))
+            (when (equal mention "me") (setq any-me-mentions t))
+            (when (equal mention "team") (setq any-team-mentions t))
+            (when (eq (alist-get 'replies_to_me status) t) (setq any-human-replies t))
+            (when (eq (alist-get 'bot_replies_to_me status) t) (setq any-bot-replies t))
+
+            (let* ((blocked (or (equal decision "CHANGES_REQUESTED")
+                                (equal classified "fail")
+                                (equal mergeable "CONFLICTING")))
+                   (needs-reply (or (eq (alist-get 'needs_reply status) t)
+                                    (and (eq kind 'review) (not (alist-get 'my_review status))))))
+              (cond
+               (blocked (cl-incf n-blocked))
+               (needs-reply (cl-incf n-inbox))
+               (t (cl-incf n-sent))))))))
+
+    (let* ((parts nil)
+           (worst-state (cond ((> n-blocked 0) 'error)
+                              ((> n-inbox 0) 'warning)
+                              ((> n-sent 0) 'success)
+                              (t nil)))
+           (style (or (bound-and-true-p decknix--sidebar-attention-style) 'compact)))
+
+      (when worst-state
+        (if (eq style 'verbose)
+            (progn
+              (when (> (+ n-blocked n-inbox) 0)
+                (push (concat (propertize "v " 'face (if (> n-blocked 0) 'error 'warning))
+                              (propertize (format "%d" (+ n-blocked n-inbox))
+                                          'face (if (> n-blocked 0) 'error 'warning)))
+                      parts))
+              (when (> n-sent 0)
+                (push (concat (propertize "ʌ " 'face 'success)
+                              (propertize (format "%d" n-sent) 'face 'success))
+                      parts)))
+          ;; Compact: merge attention onto mention badge
+          (let* ((mentioned (or any-me-mentions any-team-mentions))
+                 (att-face (pcase worst-state
+                             ('error 'error)
+                             ('warning 'warning)
+                             ('success 'success)))
+                 (fg (face-foreground att-face nil t))
+                 (final-face (list :foreground fg :weight (if mentioned 'bold 'normal))))
+            (if emoji-layout
+                (push (decknix--hub-icon (if (member worst-state '(error warning)) "📬" "📭") att-face) parts)
+              (push (propertize "@" 'face final-face) parts)))))
+
+      ;; Activity icons (Family 1)
       (when any-human-replies
-        (push (decknix--hub-icon "📬" '(:foreground "#87d7af" :weight bold))
+        (push (if emoji-layout
+                  (decknix--hub-icon "📬" '(:foreground "#87d7af" :weight bold))
+                (propertize "i" 'face '(:foreground "#5fc8d4" :weight bold :slant italic)))
               parts))
       (when any-bot-replies
-        (push (decknix--hub-icon "👽" '(:foreground "#af5f87" :weight bold))
+        (push (if emoji-layout
+                  (decknix--hub-icon "👽" '(:foreground "#af5f87" :weight bold))
+                (propertize "β" 'face '(:foreground "#af5f87" :weight bold)))
               parts))
+
       (if parts
           (concat " " (string-join (nreverse parts) " "))
         ""))))
@@ -2731,10 +2796,19 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                (title (or (alist-get 'title item) ""))
                (primary-icon (decknix--hub-primary-status-icon item 'review))
                (status-str primary-icon)
-               ;; @ indicator — yellow when I am directly
-               ;; requested / @-mentioned (`me'); blue when only
-               ;; one of my teams is requested (`team').  When
-               ;; both are true, prefer yellow (me precedence).
+               ;; Activity icons: 🤖 bot-pending, 💬 needs-reply, ↩ replies-to-me
+               (reply-str (decknix--hub-activity-icons item))
+               (status-str (if (string-empty-p reply-str)
+                               status-str
+                             (concat status-str reply-str)))
+               ;; Active review indicator
+               (active-str (if (decknix--hub-request-has-live-session-p item)
+                               (decknix--hub-icon "◉" '(:foreground "#87d7ff"))
+                             ""))
+               (status-str (if (string-empty-p active-str)
+                               status-str
+                             (concat status-str active-str)))
+               ;; @ indicator — now moved to the badge slot (preceding age)
                (mention-me (decknix--hub-item-mentioned-p item))
                (mention-team (decknix--hub-item-team-requested-p item))
                (mention-str
@@ -2746,22 +2820,6 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                   (decknix--hub-icon
                    "@" '(:foreground "#61afef" :weight bold)))
                  (t "")))
-               (status-str (if (string-empty-p mention-str)
-                               status-str
-                             (concat status-str mention-str)))
-               ;; Activity icons: 🤖 bot-pending, 💬 needs-reply, ↩ replies-to-me
-               (reply-str (decknix--hub-activity-icons item))
-               (status-str (if (string-empty-p reply-str)
-                               status-str
-                             (concat status-str reply-str)))
-               ;; Active review indicator — shows when a live
-               ;; agent session is already reviewing this PR
-               (active-str (if (decknix--hub-request-has-live-session-p item)
-                               (decknix--hub-icon "◉" '(:foreground "#87d7ff"))
-                             ""))
-               (status-str (if (string-empty-p active-str)
-                               status-str
-                             (concat status-str active-str)))
                (draft (alist-get 'draft item))
                (url (alist-get 'url item))
                ;; Truncate title to fit sidebar
@@ -2774,11 +2832,12 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                            (if (>= (string-to-number age) 3)
                                'error 'warning))
                           (t 'font-lock-comment-face)))
-               ;; Worktree badge for the repo (no branch context
-               ;; on review items so this surfaces only `↓ ' /
-               ;; `  ' — enough to flag missing local clones).
+               ;; Worktree badge for the repo
                (wt-badge (decknix--hub-worktree-row-badge
                           repo-full nil))
+               (badge-str (if (string-empty-p mention-str)
+                              wt-badge
+                            (concat mention-str " ")))
                (line (pcase (decknix--hub-get-display-mode 'requests)
                          ('D ;; Minimal
                           (let* ((age-str (propertize age 'face age-face))
@@ -2809,10 +2868,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                                   (if draft (propertize short-title 'face 'font-lock-comment-face) short-title)))
                          (_ ;; A (Full)
                           ;; Column order: badge age glyphs repo#num title
-                          ;; Glyphs (status-str) precede the repo identifier
-                          ;; so visual signals are scanned before the name.
                           (format "%s%3s %s%s#%d %s"
-                                  wt-badge
+                                  badge-str
                                   (propertize age 'face age-face)
                                   (if (string-empty-p status-str)
                                       ""
