@@ -1194,11 +1194,13 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
                               ;; don't refresh N times for N concurrent fetches.
                               ;; The timer coalesces: if one is already pending
                               ;; the new one replaces it, so only the last fires.
+                              ;; idle-timer: fires only when the user is not
+                              ;; typing so fetch completions never block input.
                               (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
                                 (when (timerp decknix--hub-pr-refresh-timer)
                                   (cancel-timer decknix--hub-pr-refresh-timer))
                                 (setq decknix--hub-pr-refresh-timer
-                                      (run-at-time 0.3 nil
+                                      (run-with-idle-timer 0.3 nil
                                         (lambda ()
                                           (setq decknix--hub-pr-refresh-timer nil)
                                           (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
@@ -1352,11 +1354,12 @@ large bodies is expensive under dynamic binding."
       (kill-buffer (process-buffer proc)))
     ;; Coalesced refresh — shared with the PR-fetch timer so a
     ;; burst of PR+repo fetches collapses to a single redraw.
+    ;; idle-timer: fires only when the user is not typing.
     (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
       (when (timerp decknix--hub-pr-refresh-timer)
         (cancel-timer decknix--hub-pr-refresh-timer))
       (setq decknix--hub-pr-refresh-timer
-            (run-at-time 0.3 nil
+            (run-with-idle-timer 0.3 nil
               (lambda ()
                 (setq decknix--hub-pr-refresh-timer nil)
                 (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
@@ -1654,11 +1657,12 @@ dynamic binding is expensive for large bodies — same reasoning as
     (when (buffer-live-p (process-buffer proc))
       (kill-buffer (process-buffer proc)))
     ;; Coalesced sidebar refresh (shares the PR-fetch timer).
+    ;; idle-timer: fires only when the user is not typing.
     (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
       (when (timerp decknix--hub-pr-refresh-timer)
         (cancel-timer decknix--hub-pr-refresh-timer))
       (setq decknix--hub-pr-refresh-timer
-            (run-at-time 0.3 nil
+            (run-with-idle-timer 0.3 nil
               (lambda ()
                 (setq decknix--hub-pr-refresh-timer nil)
                 (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
@@ -2804,12 +2808,17 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                                   mention-str reply-str
                                   (if draft (propertize short-title 'face 'font-lock-comment-face) short-title)))
                          (_ ;; A (Full)
-                          (format "%s%3s %s#%d %s %s"
+                          ;; Column order: badge age glyphs repo#num title
+                          ;; Glyphs (status-str) precede the repo identifier
+                          ;; so visual signals are scanned before the name.
+                          (format "%s%3s %s%s#%d %s"
                                   wt-badge
                                   (propertize age 'face age-face)
+                                  (if (string-empty-p status-str)
+                                      ""
+                                    (concat status-str " "))
                                   (propertize (or repo "") 'face 'font-lock-type-face)
                                   number
-                                  status-str
                                   (if draft
                                       (propertize short-title 'face 'font-lock-comment-face)
                                     short-title))))))
@@ -3067,12 +3076,14 @@ primary action is a no-op until a PR materialises."
                             ci-str
                             (if title-face (propertize short-title 'face title-face) short-title)))
                    (_ ;; A (Full)
-                    (format "%s%s%3s #%d %s %s"
+                    ;; Column order: badge age glyphs #num title
+                    ;; Glyphs (primary + ci) precede the PR number.
+                    (format "%s%3s %s%s #%d %s"
                             wt-badge
-                            primary-icon
                             (propertize age 'face 'font-lock-comment-face)
-                            number
+                            primary-icon
                             ci-str
+                            number
                             (if title-face (propertize short-title 'face title-face) short-title))))))
     (insert (propertize line
                        'decknix-hub-url url
