@@ -251,6 +251,8 @@
 
 ;; Buffer-locals from main-bulk
 (defvar decknix--agent-provider-id)
+(declare-function decknix-agent-provider-glyph
+                  "decknix-agent-provider" (id))
 (declare-function decknix--agent-buffer-session-id
                   "decknix-agent-buffer-lookup" (&optional buf))
 (declare-function decknix--agent-session-subagents
@@ -1132,6 +1134,8 @@ basename) or a list of tag strings to suppress from the displayed name."
          (status (agent-shell-workspace--track-status
                   buf (agent-shell-workspace--buffer-status buf)))
          (status-face (agent-shell-workspace--status-face status))
+         ;; Provider glyph (A/C/P/?) identifies the AI backend per row.
+         (provider-id (buffer-local-value 'decknix--agent-provider-id buf))
          ;; Compute conv-key first so we can derive the canonical name from tags.
          (buf-conv-key
           (with-current-buffer buf
@@ -1152,8 +1156,9 @@ basename) or a list of tag strings to suppress from the displayed name."
          (name
           (cond
            (display-tags
-            ;; Tags available → join with "/" for a compact, consistent label.
-            (mapconcat #'identity display-tags "/"))
+            ;; Tags available → join first 3 with "/" for a compact label.
+            ;; Capping at 3 prevents verbose chains when sessions have many tags.
+            (mapconcat #'identity (seq-take display-tags 3) "/"))
            (raw-tags
             ;; All tags were stripped (e.g. path mode where ws-name = only tag).
             (let* ((ws (with-current-buffer buf default-directory)))
@@ -1167,6 +1172,14 @@ basename) or a list of tag strings to suppress from the displayed name."
                 sn)))))
          (tile-indicator (if is-tiled " ▫" ""))
          (display-face (if (string= status "finished") "cyan" status-face))
+         (provider-glyph (if (and provider-id (fboundp 'decknix-agent-provider-glyph))
+                             (or (decknix-agent-provider-glyph provider-id) "?")
+                           "?"))
+         (provider-glyph-str
+          (propertize provider-glyph
+                      'face (if (facep display-face)
+                                display-face
+                              `(:foreground ,display-face))))
          (logo-box (agent-shell-workspace--make-logo-box
                     agent-icon display-face))
          (name-box (agent-shell-workspace--make-name-box
@@ -1191,8 +1204,9 @@ basename) or a list of tag strings to suppress from the displayed name."
               (decknix-progress--sidebar-badge buf-conv-key)
             ""))
          (line (concat selection-indicator " "
-                      logo-box name-box-styled tile-indicator
-                      pr-badge attention-icons progress-badge)))
+                       provider-glyph-str " "
+                       logo-box name-box-styled tile-indicator
+                       pr-badge attention-icons progress-badge)))
     (when (eq buf selected)
       (setq target-line line-num))
     (setq line (propertize line
@@ -1218,16 +1232,20 @@ basename) or a list of tag strings to suppress from the displayed name."
 ;; clean.  All four are pure formatters that `insert' into the
 
 (defun decknix--sidebar-render-subagents (line-num session-id provider-id)
-  "Insert sub-agent rows for SESSION-ID. Returns updated LINE-NUM."
-  (let ((subs (decknix--agent-session-subagents session-id provider-id)))
+  "Insert sub-agent rows for SESSION-ID under PROVIDER-ID. Returns updated LINE-NUM.
+Each sub-agent row shows the parent provider glyph (A/C/P) to identify
+the AI backend, followed by the sub-agent's slug or display name."
+  (let* ((subs (decknix--agent-session-subagents session-id provider-id))
+         (parent-glyph (if (and provider-id (fboundp 'decknix-agent-provider-glyph))
+                           (or (decknix-agent-provider-glyph provider-id) "?")
+                         "?")))
     (dolist (s subs)
       (let* ((name (decknix--agent-session-display-name s))
-             (glyph "↳")
-             ;; Use dim gray for sub-agents
+             ;; Use dim gray for sub-agents; indent 4 chars (sel + space + glyph + space)
              (face 'shadow)
-             ;; Indent 4 chars (main row is 2 chars + icon)
-             (line (format "    %s %s"
-                           (propertize glyph 'face face)
+             (line (format "    %s %s %s"
+                           (propertize "↳" 'face face)
+                           (propertize parent-glyph 'face face)
                            (propertize name 'face face))))
         (insert line "\n")
         (setq line-num (1+ line-num))))
