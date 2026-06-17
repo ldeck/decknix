@@ -4602,11 +4602,13 @@ cannot clobber the Previous Sessions snapshot."
                         ;; Old all-visible — upgrade to new canonical.
                         '("pass" "fail" "soft_fail" "partial_fail"
                           "running" "unknown")
-                      ;; Custom filter — preserve user's choices and add
-                      ;; partial_fail only if it wasn't explicitly removed.
-                      (if (member "partial_fail" cf)
-                          cf
-                        (append cf '("partial_fail")))))))
+                      ;; Custom filter — preserve the user's choices
+                      ;; verbatim.  Restore runs on every `decknix switch'
+                      ;; reload, so re-adding partial_fail here would
+                      ;; silently undo a user who toggled it off; the
+                      ;; one-time all-visible upgrade above covers the
+                      ;; common legacy case.
+                      cf))))
           ;; Mention filter: restore toggle (4-state cycle).
           ;; Migrates legacy boolean state via normalize helper:
           ;; `t' → `me'; anything unrecognised → `nil'.
