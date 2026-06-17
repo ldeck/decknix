@@ -264,6 +264,7 @@
 (declare-function decknix--agent-latest-session-id-for-conv-key "decknix-agent-conv-resolve")
 (declare-function decknix--hub-render-session-prs "ext:decknix-agent-shell-hub")
 (declare-function decknix--hub-session-attention-icons "ext:decknix-agent-shell-hub")
+(declare-function decknix--hub-get-display-mode "ext:decknix-agent-shell-hub" (section))
 (defvar agent-shell-display-action)
 (defvar agent-shell-workspace-sidebar-width)
 (defvar decknix--sidebar-display-mode)
@@ -885,6 +886,7 @@ WIP / Sessions / Worktrees."
     (decknix-sidebar-transient--req-bot-pending)  ;; 🤖 (B)
     (decknix-sidebar-transient--req-conflict)]    ;; ⚠ conflict (X)
    ["Live"
+    (decknix-sidebar-transient--attention-style)  ;; attention (v)
     (decknix-sidebar-transient--live-display-mode) ;; Layout (d)
     (decknix-sidebar-transient--hidden-toggle)    ;; Hidden (H)
     (decknix-sidebar-transient--show-progress)    ;; progress (p)
@@ -1203,10 +1205,31 @@ basename) or a list of tag strings to suppress from the displayed name."
                    (fboundp 'decknix-progress--sidebar-badge))
               (decknix-progress--sidebar-badge buf-conv-key)
             ""))
-         (line (concat selection-indicator " "
-                       provider-glyph-str " "
-                       logo-box name-box-styled tile-indicator
-                       pr-badge attention-icons progress-badge)))
+         ;; Live display mode: A (Full) → B (Scoped) → C (Label) → D (Minimal).
+         ;; Inherits from `decknix--hub-display-mode' when per-section mode is nil.
+         (live-mode (if (fboundp 'decknix--hub-get-display-mode)
+                        (decknix--hub-get-display-mode 'live)
+                      'A))
+         (line (pcase live-mode
+                 ('D  ;; Minimal: selector + name only — highest density
+                  (concat selection-indicator " " name-box-styled))
+                 ('C  ;; Label: status word (coloured) + name — no provider/logo
+                  (let* ((status-label (propertize
+                                        (format "%-10s" status)
+                                        'face (if (facep display-face)
+                                                  display-face
+                                                `(:foreground ,display-face)))))
+                    (concat selection-indicator " " status-label name-box-styled)))
+                 ('B  ;; Scoped: provider + name + pr-badge + attention (no logo/progress)
+                  (concat selection-indicator " "
+                          provider-glyph-str " "
+                          name-box-styled tile-indicator
+                          pr-badge attention-icons))
+                 (_   ;; A (Full): all elements — provider logo name tile badge attention progress
+                  (concat selection-indicator " "
+                          provider-glyph-str " "
+                          logo-box name-box-styled tile-indicator
+                          pr-badge attention-icons progress-badge)))))
     (when (eq buf selected)
       (setq target-line line-num))
     (setq line (propertize line
@@ -1369,7 +1392,11 @@ All toggle keys are accessed via the T transient prefix."
                                      'font-lock-comment-face)))))))
           (live
            (list
-            (cons "H" (format "hidden %s"
+            (cons \"v\" (format \"attention %s\"
+                          (propertize
+                           (format \"[%s]\" (or (bound-and-true-p decknix--sidebar-attention-style) 'compact))
+                           'face 'font-lock-constant-face)))
+            (cons \"H\" (format \"hidden %s\"
                           (propertize
                            (if decknix--sidebar-show-hidden "[shown]" "[hidden]")
                            'face (if decknix--sidebar-show-hidden
@@ -4560,7 +4587,10 @@ cannot clobber the Previous Sessions snapshot."
                    decknix--hub-symbol-style))
            (cons 'repo-name-cap
                  (when (boundp 'decknix--hub-repo-name-cap)
-                   decknix--hub-repo-name-cap)))))
+                   decknix--hub-repo-name-cap))
+           (cons 'attention-style
+                 (when (boundp 'decknix--sidebar-attention-style)
+                   decknix--sidebar-attention-style)))))
     (make-directory (file-name-directory decknix--sidebar-state-file) t)
     (with-temp-file decknix--sidebar-state-file
       (insert ";; Auto-generated — do not edit\n")
@@ -4593,6 +4623,9 @@ cannot clobber the Previous Sessions snapshot."
           (let ((af (alist-get 'age-filter state)))
             (when (and af (boundp 'decknix--hub-age-filter))
               (setq decknix--hub-age-filter af)))
+          (let ((as (alist-get 'attention-style state)))
+            (when (and as (boundp 'decknix--sidebar-attention-style))
+              (setq decknix--sidebar-attention-style as)))
           ;; Org visibility: restore from alist → hash-table
           ;; Also supports legacy 'org-hidden key for backward compat
           (when-let ((ov (or (alist-get 'org-visibility state)
