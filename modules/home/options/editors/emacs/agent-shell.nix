@@ -644,6 +644,13 @@ let
     ];
   };
 
+  decknix-agent-provider-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-provider";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [ ];
+  };
+
   decknix-agent-url-parse-el = mkEmacsTestedPackage {
     pname = "decknix-agent-url-parse";
     src = ./agent-shell/agent;
@@ -678,7 +685,12 @@ let
   decknix-agent-session-cache-el = mkEmacsTestedPackage {
     pname = "decknix-agent-session-cache";
     src = ./agent-shell/agent;
-    packageRequires = [ ];
+    # Top-level `(require 'decknix-agent-provider)`: the cache is keyed
+    # per-provider and iterates `decknix-agent-provider-registry' in
+    # `decknix--agent-session-list-all'.
+    packageRequires = [
+      decknix-agent-provider-el
+    ];
     testFiles = [
       "decknix-agent-session-cache-test.el"
     ];
@@ -696,7 +708,11 @@ let
   decknix-agent-session-history-el = mkEmacsTestedPackage {
     pname = "decknix-agent-session-history";
     src = ./agent-shell/agent;
-    packageRequires = [ ];
+    # Top-level `(require 'decknix-agent-provider)`: the path builder
+    # resolves the per-provider sessions dir + file extension.
+    packageRequires = [
+      decknix-agent-provider-el
+    ];
     testFiles = [
       "decknix-agent-session-history-test.el"
     ];
@@ -1692,8 +1708,13 @@ let
     # `decknix-agent-session-bulk-send' provides the pure partition
     # logic (`decknix--session-bulk-send-plan') consumed by
     # `decknix--session-bulk-dispatch' in main-session.
+    # `decknix-agent-provider' is `(require)'d at top level by both
+    # `-main-session.el' and `-main-link.el' (provider registry +
+    # command/config builders), so it must be on the native-comp
+    # load-path for the post-install pass over those extraSiteFiles.
     packageRequires = [ decknix-picker-selections-el
-                        decknix-agent-session-bulk-send-el ];
+                        decknix-agent-session-bulk-send-el
+                        decknix-agent-provider-el ];
     extraSiteFiles = [
       "decknix-agent-shell-main-batch.el"
       "decknix-agent-shell-main-compose.el"
@@ -2013,6 +2034,7 @@ in
         # URL parsing is foundational (linked PRs, quick actions, repo
         # linking, hub) so it ships whenever agent-shell is enabled at all.
         ++ [
+          decknix-agent-provider-el
           decknix-agent-url-parse-el
           decknix-agent-format-el
           decknix-agent-parse-el
@@ -2127,6 +2149,56 @@ in
         ;; == Core: agent-shell with auggie defaults ==
         (require 'agent-shell)
         (require 'agent-shell-auggie)
+        (require 'agent-shell-anthropic)
+        (require 'agent-shell-pi)
+
+        ;; == Agent backend provider abstraction ==
+        (require 'decknix-agent-provider)
+        (declare-function decknix-agent-register-provider "decknix-agent-provider")
+        (declare-function decknix-agent-get-provider "decknix-agent-provider")
+        (declare-function decknix-agent-require-provider "decknix-agent-provider")
+        (declare-function decknix-agent-provider-make-config-fn "decknix-agent-provider")
+        (declare-function decknix-agent-provider-acp-command "decknix-agent-provider")
+        (declare-function decknix-agent-provider-auth "decknix-agent-provider")
+        (declare-function decknix-agent-provider-env "decknix-agent-provider")
+        (declare-function decknix-agent-provider-sessions-dir "decknix-agent-provider")
+        (declare-function decknix-agent-provider-glyph "decknix-agent-provider")
+        (declare-function decknix-agent-provider-supports-workspace-root "decknix-agent-provider")
+
+        (decknix-agent-register-provider 'auggie
+          '(:make-config-fn agent-shell-auggie-make-agent-config
+            :acp-command-var agent-shell-auggie-acp-command
+            :auth-var agent-shell-auggie-authentication
+            :env-var agent-shell-auggie-environment
+            :sessions-dir "~/.augment/sessions"
+            :session-file-extension ".json"
+            :session-jq-filter "{sessionId, created, modified, exchangeCount: (try (.chatHistory | length) // 0), firstUserMessage: (try (first(.chatHistory[] | .exchange.request_message | select(. != null) | select(startswith(\"\\u26a0\") | not) | select(length > 0))[:200]) // \"\")}"
+            :label "Auggie"
+            :glyph "A"
+            :supports-workspace-root t))
+
+        (decknix-agent-register-provider 'claude-code
+          '(:make-config-fn agent-shell-anthropic-make-claude-code-config
+            :acp-command-var agent-shell-anthropic-claude-acp-command
+            :auth-var agent-shell-anthropic-authentication
+            :env-var agent-shell-anthropic-claude-environment
+            :sessions-dir "~/.claude/projects"
+            :session-file-extension ".jsonl"
+            :session-jq-filter "(map(select(.type == \"user\" or .type == \"assistant\")) | {sessionId: (first | .sessionId), created: (first | .timestamp), modified: (last | .timestamp), exchangeCount: (map(select(.type == \"user\")) | length), firstUserMessage: (map(select(.type == \"user\" and .message.content[0].text != null)) | first | .message.content[0].text // \"\")[:200]})"
+            :history-file "~/.claude/history.jsonl"
+            :label "Claude"
+            :glyph "C"
+            :supports-workspace-root nil))
+
+        (decknix-agent-register-provider 'pi
+          '(:make-config-fn agent-shell-pi-make-agent-config
+            :acp-command-var agent-shell-pi-acp-command
+            :auth-var nil
+            :env-var agent-shell-pi-environment
+            :sessions-dir "~/.pi/sessions"
+            :label "Pi"
+            :glyph "P"
+            :supports-workspace-root nil))
 
         ;; == Foundational URL parsers (extracted module) ==
         ;;
