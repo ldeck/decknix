@@ -121,10 +121,30 @@ cargo test --manifest-path pkgs/decknix-hub/Cargo.toml
 Before committing, always run incremental checks based on what changed:
 
 - **Nix Packages**: If you changed `Cargo.toml`, `Cargo.lock`, or source code for a package in `pkgs/`, verify the `cargoHash`/`vendorHash` by running a build of that specific derivation.
-- **Elisp Syntax**: For changes to standalone `.el` files, verify they parse and byte-compile cleanly:
+- **Elisp Syntax**: For changes to standalone `.el` files, verify they parse and
+  byte-compile with **zero warnings**:
   ```bash
   emacs -Q -batch -f batch-byte-compile <file>.el
   ```
+  A clean run produces no output. Any warning line is a build risk — fix it before
+  committing. Common causes and fixes:
+  - `reference to free variable 'foo'` — add `(defvar foo)` to the forward
+    declarations block at the top of the file.
+  - `the function 'bar' is not known to be defined` — add
+    `(declare-function bar "source-file-without-extension")` to the forward
+    declarations block.
+  - Escaped quotes `\"` inside string literals — standalone `.el` files must use
+    plain `"`. Only Nix heredocs need `\"`. See **Heredoc Escaping** below.
+  - Docstring line exceeds 80 characters — wrap it.
+- **Elisp Declaration Hygiene**: Every cross-module reference must be declared at
+  the top of the calling file:
+  - Functions from other packages: `(declare-function fn-name "source-package")`
+  - Variables defined elsewhere: `(defvar var-name)` (no initial value = compiler hint only)
+  - Variables needed at runtime in tests: `(defvar var-name initial-value)` so
+    `let`-binding works dynamically (see Emacs AGENTS.md §Tests rule 2)
+  - Sidebar buffer name: always `agent-shell-workspace-sidebar-buffer-name` (forward-declared
+    as `(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")`),
+    never the literal string.
 - **Nix Modules**: Verify the full system derivation builds (this catches Nix syntax errors and cross-module Elisp failures):
 
 ```bash
@@ -137,7 +157,9 @@ cd ~/.config/decknix && nix build .#darwinConfigurations.default.system \
 - **Heredoc Escaping Warning**: When moving code between `agent-shell.nix` (which
   requires `\"` escaping for quotes) and standalone `.el` files (which require
   plain `"`), ensure you unescape/escape accordingly. A standalone `.el` file
-  with `\"` will fail to parse with `Interactive form missing` errors.
+  with `\"` causes "Too many arguments" parse errors — not "Interactive form
+  missing" as one might expect. Run `emacs -Q -batch -f batch-byte-compile` on
+  the file immediately after any such move.
 - Test activation with `decknix switch --override decknix=~/tools/decknix` only
   when the user requests it.
 

@@ -115,6 +115,10 @@
                   "decknix-hub-attention-filter")
 (declare-function decknix--hub-requests-reviewed-label
                   "decknix-hub-attention-filter")
+(declare-function decknix--hub-requests-conflict-visible-p
+                  "decknix-hub-attention-filter")
+(declare-function decknix--hub-toggle-requests-hide-conflict
+                  "decknix-hub-attention-filter")
 (declare-function decknix--hub-pr-status-from-hub "decknix-hub-pr-lookup")
 (declare-function decknix--hub-pr-cache-get "decknix-hub-pr-lookup")
 (declare-function decknix--hub-worktree-canonical-repo "decknix-hub-worktree-parse")
@@ -136,8 +140,11 @@
 (declare-function decknix--hub-item-team-requested-p "decknix-hub-mention-bot")
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
 (declare-function agent-shell-workspace-sidebar-mode-map "ext:agent-shell-workspace")
+(declare-function decknix-sidebar-toggle-hub-display-mode "decknix-sidebar-toggles")
+(declare-function decknix--hub-format-row-label "decknix-hub-icons")
 
 ;; Forward defvars for heredoc-resident toggle / cache state.
+(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
 (defvar decknix--sidebar-refresh-suspended)
 (defvar decknix--sidebar-tile-count)
 (defvar decknix-hub-eager-clone-probe)
@@ -148,6 +155,7 @@
 (defvar decknix--hub-mention-filter-cycle)
 (defvar decknix--hub-requests-hide-needs-reply)
 (defvar decknix--hub-requests-hide-bot-pending)
+(defvar decknix--hub-requests-hide-reviewed)
 (defvar decknix--hub-requests-only-my-replies)
 (defvar decknix--hub-requests-hide-conflict)
 (defvar decknix--hub-requests-sort-reverse)
@@ -1035,23 +1043,23 @@ unknown conflict."
 
 ;; -- Hub: attention style (compact @ vs verbose v/ʌ N) --
 (defvar decknix--sidebar-attention-style 'compact
-  \"Style for session attention icons in the sidebar.
+  "Style for session attention icons in the sidebar.
 `compact' = a single @ glyph tinted by worst state.
-`verbose' = directional arrows v/\u028c with counts.\")
+`verbose' = directional arrows v/ʌ with counts.")
 
 (transient-define-suffix decknix-sidebar-transient--attention-style ()
-  :key \"v\"
+  :key "v"
   :description
   (lambda ()
-    (format \"attention    %s\"
-            (propertize (format \"[%s]\" (or (bound-and-true-p decknix--sidebar-attention-style) 'compact))
+    (format "attention    %s"
+            (propertize (format "[%s]" (or (bound-and-true-p decknix--sidebar-attention-style) 'compact))
                         'face 'font-lock-constant-face)))
   :transient t
   (interactive)
   (call-interactively #'decknix--sidebar-toggle-attention-style))
 
 (defun decknix--sidebar-toggle-attention-style ()
-  \"Toggle the session attention style between `compact' and `verbose'.\"
+  "Toggle the session attention style between `compact' and `verbose'."
   (interactive)
   (setq decknix--sidebar-attention-style
         (if (eq decknix--sidebar-attention-style 'verbose) 'compact 'verbose))
@@ -1059,7 +1067,7 @@ unknown conflict."
     (decknix--sidebar-state-write))
   (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
     (agent-shell-workspace-sidebar-refresh))
-  (message \"Attention style: %s\" decknix--sidebar-attention-style))
+  (message "Attention style: %s" decknix--sidebar-attention-style))
 
 ;; Hub repo-name cap (PR B.36) — moved out of this file into
 ;; agent-shell/hub/decknix-hub-repo-name.el, packaged as
@@ -2608,9 +2616,10 @@ Style honours `decknix--sidebar-attention-style':
 - compact (default): a single @ glyph tinted by worst state.
 - verbose: v/ʌ N directional arrows with counts.
 
-Worst-state wins: Red (blocked/fail/conflict) > Yellow (soft/your-move) > Green (none).
-Blocked = CHANGES_REQUESTED or CI failing or CONFLICTING.
-Your-move = needs-reply or my-review absent.
+Worst-state wins: Red > Yellow > Green.
+Red = CHANGES_REQUESTED, CI failing, or CONFLICTING.
+Yellow = needs-reply or my-review absent.
+Green = no action required.
 
 Returns a leading-space string suitable for concatenation onto a sidebar
 row, or an empty string when no linked PR is attention-worthy."
