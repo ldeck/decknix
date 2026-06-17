@@ -156,6 +156,103 @@ never by parsing transcripts or refreshing the cache."
                     'test-claude))
         (should (= refresh-called 0))))))
 
+;; ---------------------------------------------------------------------------
+;; Claude mtime-cache regression tests (NC-XXXX: multi-project sessions
+;; were never written to the persistent mtime cache because
+;; decknix--session-store-parsed skipped them when :history-file was set,
+;; causing every 120s refresh to re-parse all JSONL transcripts).
+;; ---------------------------------------------------------------------------
+
+(ert-deftest decknix-session-parse-file--stamps-file-path ()
+  "decknix--session-parse-file stamps (filePath . PATH) on result."
+  (decknix-agent-session-cache-test--with-provider
+    (cl-letf (((symbol-function 'decknix--agent-session-ensure-jq-filter)
+               (lambda (_) "/tmp/dummy.jq"))
+              ((symbol-function 'shell-command-to-string)
+               (lambda (_) "{\"sessionId\":\"sid-42\"}"))
+              ((symbol-function 'decknix--agent-session-parse)
+               (lambda (raw) (ignore raw) '((sessionId . "sid-42")))))
+      (let ((result (decknix--session-parse-file 'test-auggie "/tmp/sid-42.json")))
+        (should (equal (alist-get 'sessionId result) "sid-42"))
+        (should (equal (alist-get 'filePath result) "/tmp/sid-42.json"))))))
+
+(ert-deftest decknix-session-stamp-file-paths--matches-by-sid ()
+  "decknix--session-stamp-file-paths stamps filePath on each alist
+by matching (file-name-base path) against sessionId."
+  (let ((parsed (list '((sessionId . "abc")) '((sessionId . "def"))))
+        (files  (list "/project/a/abc.jsonl" "/project/b/def.jsonl")))
+    (let ((stamped (decknix--session-stamp-file-paths parsed files)))
+      (should (equal (alist-get 'filePath (nth 0 stamped)) "/project/a/abc.jsonl"))
+      (should (equal (alist-get 'filePath (nth 1 stamped)) "/project/b/def.jsonl")))))
+
+(ert-deftest decknix-session-stamp-file-paths--skips-already-stamped ()
+  "decknix--session-stamp-file-paths does not overwrite an existing filePath."
+  (let ((parsed (list '((sessionId . "abc") (filePath . "/existing/abc.jsonl"))))
+        (files  (list "/other/abc.jsonl")))
+    (let ((stamped (decknix--session-stamp-file-paths parsed files)))
+      (should (equal (alist-get 'filePath (car stamped)) "/existing/abc.jsonl")))))
+
+(defmacro decknix-agent-session-cache-test--with-claude-provider (&rest body)
+  "Register a claude-like provider (has :history-file) for cache tests."
+  `(let ((decknix-agent-provider-registry nil)
+         (decknix-agent-default-provider 'test-claude)
+         (decknix--agent-session-jq-filter-map (make-hash-table :test 'eq))
+         (decknix--agent-session-cache-map (make-hash-table :test 'eq))
+         (decknix--agent-session-cache-time-map (make-hash-table :test 'eq))
+         (decknix--session-meta-cache (make-hash-table :test 'equal)))
+     (decknix-agent-register-provider 'test-claude
+       '(:sessions-dir "/tmp/test-claude/projects"
+         :session-file-extension ".jsonl"
+         :history-file "/tmp/test-claude/history.jsonl"
+         :label "Test Claude"
+         :glyph "C"))
+     ,@body))
+
+(ert-deftest decknix-session-store-parsed--caches-claude-session-with-file-path ()
+  "decknix--session-store-parsed writes Claude sessions to the mtime
+cache when the alist carries a (filePath . PATH) entry.  Without this
+fix the entry was silently dropped (hist set → path nil → skipped),
+causing Claude sessions to be re-parsed on every 120s refresh."
+  (decknix-agent-session-cache-test--with-claude-provider
+    (cl-letf (((symbol-function 'decknix--session-file-mtime)
+               (lambda (p) (when (string= p "/tmp/test-claude/projects/ph/sid-99.jsonl") 2000.0))))
+      (decknix--session-store-parsed
+       'test-claude
+       (list '((sessionId . "sid-99")
+               (filePath . "/tmp/test-claude/projects/ph/sid-99.jsonl"))))
+      (let ((entry (gethash "/tmp/test-claude/projects/ph/sid-99.jsonl"
+                            decknix--session-meta-cache)))
+        (should entry)
+        (should (= (plist-get entry :mtime) 2000.0))
+        (should (equal (alist-get 'sessionId (plist-get entry :data)) "sid-99"))))))
+
+(ert-deftest decknix-session-store-parsed--skips-claude-session-without-file-path ()
+  "Without filePath on a multi-project (claude-code) session alist,
+decknix--session-store-parsed skips the entry (no path can be
+reconstructed from sessionId + dir alone for nested project dirs).
+This is expected behaviour -- callers must stamp filePath first."
+  (decknix-agent-session-cache-test--with-claude-provider
+    (cl-letf (((symbol-function 'decknix--session-file-mtime) (lambda (_) 9999.0)))
+      (decknix--session-store-parsed
+       'test-claude
+       (list '((sessionId . "sid-orphan"))))  ; no filePath
+      (should (= (hash-table-count decknix--session-meta-cache) 0)))))
+
+(ert-deftest decknix-session-store-parsed--still-caches-single-dir-provider ()
+  "For single-directory providers (auggie, no :history-file), the
+fallback path (sessionId + dir + ext) still writes to the mtime cache."
+  (decknix-agent-session-cache-test--with-provider
+    (cl-letf (((symbol-function 'decknix--session-file-mtime)
+               (lambda (p)
+                 (when (string= p "/tmp/test-sessions/sid-01.json") 1234.0))))
+      (decknix--session-store-parsed
+       'test-auggie
+       (list '((sessionId . "sid-01"))))  ; no filePath -- fallback path used
+      (let ((entry (gethash "/tmp/test-sessions/sid-01.json"
+                            decknix--session-meta-cache)))
+        (should entry)
+        (should (= (plist-get entry :mtime) 1234.0))))))
+
 (ert-deftest decknix-agent-session-cache--list-syncs-on-first-call ()
   (decknix-agent-session-cache-test--with-provider
     (let ((sync-called 0))
