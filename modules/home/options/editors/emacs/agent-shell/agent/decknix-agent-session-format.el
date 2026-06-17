@@ -97,13 +97,16 @@ FIRST-MESSAGE and SID but not workspace details."
   "Derive a short buffer display name from SESSION data.
 Thin wrapper around `decknix--agent-session-derive-name' for the resume
 path.  Extracts tags via conv-key lookup, plus first-message and
-session-id from SESSION, then delegates.  Priority: tags > first-message
-preview > session-id prefix."
+session-id from SESSION, then delegates.  Priority: slug (Claude sub-agent)
+> tags > first-message preview > session-id prefix."
   (let* ((sid (alist-get 'sessionId session ""))
+         (slug (alist-get 'slug session))
          (first-msg (alist-get 'firstUserMessage session ""))
          (conv-key (decknix--agent-conversation-key first-msg))
          (tags (when conv-key (decknix--agent-tags-for-conv-key conv-key))))
-    (decknix--agent-session-derive-name tags nil nil first-msg sid)))
+    (if (and (stringp slug) (not (string-empty-p slug)))
+        slug
+      (decknix--agent-session-derive-name tags nil nil first-msg sid))))
 
 (provide 'decknix-agent-session-format)
 ;;; decknix-agent-session-format.el ends here

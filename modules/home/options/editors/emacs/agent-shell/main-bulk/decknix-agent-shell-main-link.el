@@ -138,16 +138,18 @@
 (declare-function agent-shell-start "ext:agent-shell")
 (declare-function agent-shell-subscribe-to "ext:agent-shell")
 (declare-function agent-shell--make-acp-client "ext:agent-shell")
-(declare-function agent-shell-auggie-make-agent-config
-                  "ext:agent-shell-auggie")
 (declare-function agent-shell-workspace-sidebar-refresh
                   "ext:agent-shell-workspace")
 (declare-function shell-maker-submit "ext:shell-maker")
-(defvar agent-shell-auggie-acp-command)
-(defvar agent-shell-auggie-authentication)
-(defvar agent-shell-auggie-environment)
 (defvar agent-shell-display-action)
 (defvar agent-shell-workspace-sidebar-buffer-name)
+
+;; Provider abstraction.
+(require 'decknix-agent-provider)
+(declare-function decknix-agent-require-provider "decknix-agent-provider")
+(declare-function decknix--agent-command-build "decknix-agent-provider")
+(declare-function decknix--agent-make-config "decknix-agent-provider")
+(defvar decknix-agent-default-provider)
 
 
 ;; -- User-tunable quickaction defaults --
@@ -214,29 +216,9 @@ Split below per pane); the default selection lands on
           (decknix--quickaction-target-window
            cur-is-sidebar cur (window-main-window (selected-frame))))
          (before-buffers (buffer-list))
-         (model-args (when (and (stringp model)
-                                 (not (string-empty-p model)))
-                        (list "--model" model)))
-         (augmented-cmd
-          (append agent-shell-auggie-acp-command
-                  model-args
-                  (list "--workspace-root" workspace)))
-         (config
-          (let ((base (agent-shell-auggie-make-agent-config)))
-            (setf (alist-get :client-maker base)
-                  (eval `(lambda (buffer)
-                           (agent-shell--make-acp-client
-                            :command ,(car augmented-cmd)
-                            :command-params ',(cdr augmented-cmd)
-                            :environment-variables
-                            (cond ((map-elt agent-shell-auggie-authentication :none)
-                                   agent-shell-auggie-environment)
-                                  ((map-elt agent-shell-auggie-authentication :login)
-                                   agent-shell-auggie-environment)
-                                  (t
-                                   (error "Invalid Auggie authentication")))
-                            :context-buffer buffer)) t))
-            base)))
+         (provider decknix-agent-default-provider)
+         (augmented-cmd (decknix--agent-command-build provider workspace model))
+         (config (decknix--agent-make-config provider augmented-cmd)))
     ;; Placement prompt: when the caller is not the sidebar AND the
     ;; current frame has 3+ non-sidebar windows, ask which pane the
     ;; new session should land in (or split off).  The carved

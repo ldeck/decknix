@@ -74,84 +74,137 @@
 
 (require 'json)
 (require 'subr-x)
+(require 'decknix-agent-provider)
 
-(defun decknix--agent-session-file (session-id)
-  "Return the path to the local session JSON for SESSION-ID."
-  (expand-file-name (concat session-id ".json")
-                    (expand-file-name "sessions" "~/.augment")))
+(defun decknix--agent-session-file (session-id &optional provider-id)
+  "Return the path to the local session transcript for SESSION-ID.
+PROVIDER-ID defaults to `decknix-agent-default-provider'."
+  (let* ((p-id (or provider-id decknix-agent-default-provider))
+         (dir  (decknix-agent-provider-sessions-dir p-id))
+         (ext  (decknix-agent-provider-session-file-extension p-id))
+         (hist (decknix-agent-provider-history-file p-id)))
+    (if hist
+        ;; Multi-project structure (e.g. Claude): session file is in dir/<slug>/sid.ext
+        ;; Use a quick find if we don't have a better index yet.
+        (let* ((cmd (format "find %s -maxdepth 2 -name '%s%s' -print -quit 2>/dev/null"
+                             (shell-quote-argument dir) session-id ext))
+               (out (shell-command-to-string cmd))
+               (path (string-trim out)))
+          (if (string-empty-p path)
+              ;; Fallback to history.jsonl lookup if find fails?
+              ;; For now just return the trimmed result.
+              path
+            path))
+      ;; Single directory structure (e.g. Auggie).
+      (expand-file-name (concat session-id ext) dir))))
 
-(defun decknix--agent-session-extract-all-turns (session-id)
-  "Extract ALL user-visible exchanges from SESSION-ID's local JSON.
-Returns a list of (USER-MSG . ASSISTANT-RESP) cons cells, oldest
-first.  Returns nil if the file does not exist or fails to parse.
-
-The auggie session JSON's `chatHistory' splits each user->assistant
-turn across many entries: one entry carries the user text in
-`request_message' (with `response_text' typically empty), and the
-assistant's reply is spread across the *following* entries as
-response chunks (their `request_message' is empty -- those entries
-are tool results / streaming fragments attributed to the same
-turn).  A new turn starts when `request_message' becomes non-empty
-again.
-
-Single forward pass: accumulate `response_text' chunks under the
-current user message; close the turn when the next user message
-arrives or the history ends.  This pairs each user message with
-its real assistant response (the most recent interaction included)
-instead of the same entry's almost-always-empty `response_text',
-which the previous backward-walk picked up.
-
-Used by `decknix--agent-session-extract-history' (which then takes
-the last N turns) and by the timeline navigation / jump-to-match
-flow (#136) which needs the full list to index into."
-  (let ((file (decknix--agent-session-file session-id)))
-    (when (file-exists-p file)
-      (condition-case err
-          (let* ((json-array-type 'list)
-                 (json-object-type 'alist)
-                 (json-key-type 'symbol)
-                 (data (json-read-file file))
-                 (history (alist-get 'chatHistory data))
-                 (turns nil)
-                 (cur-user nil)
-                 (cur-resp nil))
-            (dolist (entry history)
-              (let* ((ex (alist-get 'exchange entry))
-                     (req (alist-get 'request_message ex ""))
-                     (resp (alist-get 'response_text ex "")))
-                (when (and (stringp req)
-                           (not (string-empty-p (string-trim req))))
-                  ;; Close out the previous turn (if any).
-                  (when cur-user
-                    (push (cons cur-user
-                                (mapconcat #'identity
-                                           (nreverse cur-resp) "\n"))
-                          turns))
-                  (setq cur-user req
-                        cur-resp nil))
-                (when (and cur-user
-                           (stringp resp)
-                           (not (string-empty-p resp)))
-                  (push resp cur-resp))))
-            ;; Close out the final turn so the most recent interaction
-            ;; is always included.
-            (when cur-user
-              (push (cons cur-user
-                          (mapconcat #'identity (nreverse cur-resp) "\n"))
-                    turns))
-            (nreverse turns))
-        (error
-         (message "Failed to read session history: %s"
-                  (error-message-string err))
-         nil)))))
-
-(defun decknix--agent-session-extract-history (session-id n)
-  "Extract the last N user-visible exchanges from SESSION-ID's local JSON.
+(defun decknix--agent-session-extract-all-turns (session-id &optional provider-id)
+  "Extract ALL user-visible exchanges from SESSION-ID's local transcript.
+PROVIDER-ID defaults to `decknix-agent-default-provider'.
 Returns a list of (USER-MSG . ASSISTANT-RESP) cons cells, oldest first.
+Returns nil if the file does not exist or fails to parse."
+  (let* ((p-id (or provider-id decknix-agent-default-provider))
+         (file (decknix--agent-session-file session-id p-id))
+         (ext  (decknix-agent-provider-session-file-extension p-id)))
+    (when (and file (not (string-empty-p file)) (file-exists-p file))
+      (if (string= ext ".jsonl")
+          (decknix--agent-session-extract-all-turns-jsonl file)
+        (decknix--agent-session-extract-all-turns-json file)))))
 
-Thin wrapper around `decknix--agent-session-extract-all-turns'
-that takes the last N turns -- preserves the pre-#136 contract."
-  (let* ((all (decknix--agent-session-extract-all-turns session-id))
+(defun decknix--agent-session-extract-all-turns-json (file)
+  "Extract turns from a single Auggie-style JSON file."
+  (condition-case err
+      (let* ((json-array-type 'list)
+             (json-object-type 'alist)
+             (json-key-type 'symbol)
+             (data (json-read-file file))
+             (history (alist-get 'chatHistory data))
+             (turns nil)
+             (cur-user nil)
+             (cur-resp nil))
+        (dolist (entry history)
+          (let* ((ex (alist-get 'exchange entry))
+                 (req (alist-get 'request_message ex ""))
+                 (resp (alist-get 'response_text ex "")))
+            (when (and (stringp req)
+                       (not (string-empty-p (string-trim req))))
+              ;; Close out the previous turn (if any).
+              (when cur-user
+                (push (cons cur-user
+                            (mapconcat #'identity
+                                       (nreverse cur-resp) "\n"))
+                      turns))
+              (setq cur-user req
+                    cur-resp nil))
+            (when (and cur-user
+                       (stringp resp)
+                       (not (string-empty-p resp)))
+              (push resp cur-resp))))
+        ;; Close out the final turn.
+        (when cur-user
+          (push (cons cur-user
+                      (mapconcat #'identity (nreverse cur-resp) "\n"))
+                turns))
+        (nreverse turns))
+    (error
+     (message "Failed to read session history (JSON): %s"
+              (error-message-string err))
+     nil)))
+
+(defun decknix--agent-session-extract-all-turns-jsonl (file)
+  "Extract turns from a Claude-style JSONL file."
+  (condition-case err
+      (with-temp-buffer
+        (insert-file-contents file)
+        (let ((turns nil)
+              (cur-user nil)
+              (cur-resp-parts nil))
+          (goto-char (point-min))
+          (while (not (eobp))
+            (let* ((line (buffer-substring-no-properties
+                          (line-beginning-position) (line-end-position)))
+                   (data (ignore-errors
+                           (let ((json-object-type 'alist)
+                                 (json-array-type 'list)
+                                 (json-key-type 'symbol))
+                             (json-read-from-string line))))
+                   (type (alist-get 'type data))
+                   (msg  (alist-get 'message data)))
+              (cond
+               ((string= type "user")
+                ;; Start of a new turn
+                (when cur-user
+                  (push (cons cur-user
+                              (mapconcat #'identity (nreverse cur-resp-parts) "\n"))
+                        turns))
+                (setq cur-user (alist-get 'content msg)
+                      cur-resp-parts nil))
+               ((string= type "assistant")
+                ;; Accumulate assistant response parts
+                (let* ((content (alist-get 'content msg))
+                       (text (if (listp content)
+                                 (mapconcat (lambda (c) (alist-get 'text c ""))
+                                            content "\n")
+                               (or content ""))))
+                  (when (not (string-empty-p text))
+                    (push text cur-resp-parts))))))
+            (forward-line 1))
+          ;; Close final turn
+          (when cur-user
+            (push (cons cur-user
+                        (mapconcat #'identity (nreverse cur-resp-parts) "\n"))
+                  turns))
+          (nreverse turns)))
+    (error
+     (message "Failed to read session history (JSONL): %s"
+              (error-message-string err))
+     nil)))
+
+(defun decknix--agent-session-extract-history (session-id n &optional provider-id)
+  "Extract the last N user-visible exchanges from SESSION-ID transcript.
+PROVIDER-ID defaults to `decknix-agent-default-provider'.
+Returns a list of (USER-MSG . ASSISTANT-RESP) cons cells, oldest first."
+  (let* ((all (decknix--agent-session-extract-all-turns session-id provider-id))
          (len (length all)))
     (if (> len n) (nthcdr (- len n) all) all)))
 
@@ -210,6 +263,43 @@ caller can position the timeline cursor on the matched turn."
             (throw 'found idx))
           (setq idx (1+ idx)))
         nil))))
+
+
+(defun decknix--agent-session-subagents (session-id &optional provider-id)
+  "Return metadata for sub-agents of SESSION-ID.
+PROVIDER-ID defaults to `decknix-agent-default-provider'.
+For Claude, sub-agents are stored in a `subagents/' subdirectory next
+to the main session transcript."
+  (let* ((p-id (or provider-id decknix-agent-default-provider))
+         (hist (decknix-agent-provider-history-file p-id)))
+    (if (not hist)
+        nil ;; Auggie has no known sub-agent structure yet
+      (let* ((s-file (decknix--agent-session-file session-id p-id)))
+        (when (and s-file (not (string-empty-p s-file)) (file-exists-p s-file))
+          ;; For Claude, the session file path might be:
+          ;;   projects/slug/sid.jsonl
+          ;; OR, sid might be a directory containing subagents/.
+          (let* ((base-dir (file-name-directory s-file))
+                 ;; Some versions use projects/slug/sid/subagents/
+                 ;; Others use projects/slug/subagents/ with agent-ID.jsonl
+                 ;; Based on spike: projects/slug/sid/subagents/ exists.
+                 (sid-dir (expand-file-name session-id base-dir))
+                 (sub-dir (expand-file-name "subagents" sid-dir))
+                 (ext (decknix-agent-provider-session-file-extension p-id)))
+            (unless (file-directory-p sub-dir)
+              ;; Try sibling subagents/
+              (setq sub-dir (expand-file-name "subagents" base-dir)))
+            (when (file-directory-p sub-dir)
+              (let* ((files (directory-files sub-dir t (concat ".*" ext "$")))
+                     (subagents nil))
+                (dolist (f files)
+                  ;; Parse metadata (using the mtime-keyed cache)
+                  (let ((data (decknix--session-meta p-id f)))
+                    (when data (push data subagents))))
+                (sort subagents
+                      (lambda (a b)
+                        (string> (or (alist-get 'modified a) "")
+                                 (or (alist-get 'modified b) ""))))))))))))
 
 (provide 'decknix-agent-session-history)
 ;;; decknix-agent-session-history.el ends here
