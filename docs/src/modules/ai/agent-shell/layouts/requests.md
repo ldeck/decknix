@@ -22,8 +22,8 @@ CI+review into one shape (`hub.el:2699`).
 {hd}Requests (4){/} ⇅
 {c}⎇ {/} {y}2d{/} upside{gd}#16570{/} {g}●{/}{gd bd}@{/}{ac}◉{/} {gd}CSE-201: refactor token cache{/}
 {dm bd}↓ {/}{r}15d{/} upside#16568 {bo}π{/}   {dm}bump: dependency update{/}
-{dm bd}↓ {/} {dm}4h{/} reapit#123 {r}◐{/}{c bd}@{/} CSE-204: fix pubsub timeout
-    {y}1d{/} upside#16571 {y}◐{/}{gd}💬{/} CSE-205: retry policy for webhook
+{dm bd}↓ {/} {dm}4h{/} reapit#123 {r}◐{/}{c bd}@{/}  CSE-204: fix pubsub timeout
+    {y}1d{/} upside#16571 {y}◐{/}{gd}💬 {/} CSE-205: retry policy for webhook
 </pre>
 
 The row for PR 1 is **gold-tinted** end to end because a live session is
@@ -39,8 +39,8 @@ phase-aware minimal signal. `◉` is gone but the active row keeps its gold tint
 {hd}Requests (4){/}
 {g}●{/} {gd bd}@{/} {gd}CSE-201: refactor token cache{/}
 {bo}π{/}   {dm}bump: dependency update{/}
-{r}◐{/} {c bd}@{/} CSE-204: fix pubsub timeout
-{y}◐{/} {gd}💬{/} CSE-205: retry policy for webhook
+{r}◐{/} {c bd}@{/}  CSE-204: fix pubsub timeout
+{y}◐{/} {gd}💬 {/} CSE-205: retry policy for webhook
 </pre>
 
 ## Layout C — Label
@@ -66,8 +66,8 @@ compact; the phase is implied by the glyph. This is what the retired
 {hd}Requests (4){/}
 {c}⎇ {/}  {y}2d{/} {gd bd}@{/} {g}●{/} upside{gd}#16570{/} {gd}CSE-201: refactor token cache{/}
 {dm bd}↓ {/} {r}15d{/}   {bo}π{/} upside#16568 {dm}bump: dependency update{/}
-{dm bd}↓ {/}  {dm}4h{/} {c bd}@{/} {r}◐{/} reapit#123 CSE-204: fix pubsub timeout
-     {y}1d{/} {gd}💬{/} {y}◐{/} upside#16571 CSE-205: retry policy for webhook
+{dm bd}↓ {/}  {dm}4h{/} {c bd}@{/}   {r}◐{/} reapit#123 CSE-204: fix pubsub timeout
+     {y}1d{/} {gd} 💬 {/} {y}◐{/} upside#16571 CSE-205: retry policy for webhook
 </pre>
 
 ## Section-header badges
@@ -93,7 +93,7 @@ The `Requests (N)` header grows badges for active filters (`hub.el:2581`):
 | `b` | 🤖 bot-review | hide PRs whose latest activity is a bot (default on) |
 | `B` | bot-authors | hide → show → mentioned |
 | `c` | 💬 comments | hide PRs whose latest non-bot activity is someone else |
-| `M` | ↩ replies-to-me | only PRs where a human replied in my thread |
+| `M` | 📬/👽 replies-to-me | only PRs where a human or bot replied in my thread |
 | `s` | sort ⇅ | flip oldest↔newest (seeds the `r` picker) |
 | `X` | ⚠ conflict | hide `mergeable = CONFLICTING` PRs (default on) |
 

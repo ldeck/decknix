@@ -16,7 +16,7 @@ stage, colour = state.
 
 ## View modes
 
-A session row is `sel · marker · name · tile · [N⬆ N✓] · 📥/📤/↩ · progress`.
+A session row is `sel · marker · name · tile · [N⬆ N✓] · 📥/📤/📬/👽 · progress`.
 `>` marks the selected buffer.
 
 ### Flat
@@ -52,7 +52,7 @@ A session row is `sel · marker · name · tile · [N⬆ N✓] · 📥/📤/↩ 
 
 Attention badges (`hub` enabled): {r bd}📥N{/} linked PRs awaiting
 my action, {g bd}📤N{/} ones I've acted on,
-{sg bd}↩{/} when any linked PR has replies to me. Terminal
+{sg bd}📬/👽{/} when any linked PR has replies to me. Terminal
 (MERGED/CLOSED) PRs are excluded so stale links don't add noise.
 
 ## Linked-PR rows
