@@ -145,6 +145,22 @@ Before committing, always run incremental checks based on what changed:
   - Sidebar buffer name: always `agent-shell-workspace-sidebar-buffer-name` (forward-declared
     as `(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")`),
     never the literal string.
+- **Elisp Tests (MANDATORY when changing tested behaviour)**: A clean
+  byte-compile is **not** sufficient — a glyph / face / data-shape / signature
+  change compiles fine while silently diverging from its ERT suite, so the drift
+  only surfaces in the full Nix build (a wasted ~10 min cycle). Whenever you
+  touch a function that has a test file under `agent-shell/tests/`, run that
+  suite locally **before committing** and confirm `0 unexpected`:
+  ```bash
+  emacs -Q -batch \
+    -L modules/home/options/editors/emacs/agent-shell/hub/ \
+    -L modules/home/options/editors/emacs/agent-shell/tests/ \
+    -l decknix-<feature> -l decknix-<feature>-test \
+    --eval "(ert-run-tests-batch-and-exit t)"
+  ```
+  If the change is a deliberate contract change, the test edit comes **first**
+  (red → green); the local ERT run is what proves the implementation and the
+  spec agree before the Nix build re-confirms it.
 - **Nix Modules**: Verify the full system derivation builds (this catches Nix syntax errors and cross-module Elisp failures):
 
 ```bash
