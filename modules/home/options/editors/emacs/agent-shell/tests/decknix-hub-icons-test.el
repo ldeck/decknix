@@ -25,6 +25,13 @@
 (defvar decknix-test--ref-time
   (encode-time 0 0 12 15 6 2025 t))
 
+;; Test-local default mirrors the production default in
+;; `decknix-agent-shell-hub.el'.  A value-initialised `defvar' marks
+;; the symbol special so emoji-path `let' bindings rebind it
+;; dynamically and the byte-compiled `decknix--hub-activity-icons'
+;; observes the change (a value-less `defvar' would bind lexically).
+(defvar decknix--hub-symbol-style 'ascii)
+
 (defun decknix-test--iso-offset (seconds-ago)
   (format-time-string "%Y-%m-%dT%H:%M:%SZ"
                       (time-subtract decknix-test--ref-time
@@ -169,39 +176,39 @@
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((bot_pending . t))))
-                 " 🤖")))
+                 " β")))
 
 (ert-deftest decknix-hub-activity-icons--needs-reply-only ()
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((needs_reply . t))))
-                 "💬 ")))
+                 "i ")))
 
 (ert-deftest decknix-hub-activity-icons--bot-and-needs-reply ()
   "Bot-pending and needs-reply both set: bot-only shows when it was the bot."
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((bot_pending . t) (needs_reply . t))))
-                 " 🤖")))
+                 " β")))
 
 (ert-deftest decknix-hub-activity-icons--replies-coexists ()
-  "Replies-to-me (📬) and bot signals (👽/🤖) appear in distinct slots."
+  "Replies-to-me (i) and bot signals (β) appear in distinct slots."
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((bot_pending . t) (replies_to_me . t))))
-                 "📬🤖"))
+                 "iβ"))
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((bot_replies_to_me . t) (replies_to_me . t))))
-                 "📬👽"))
+                 "iβ"))
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((needs_reply . t) (replies_to_me . t))))
-                 "📬 "))
+                 "i "))
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((replies_to_me . t))))
-                 "📬 ")))
+                 "i ")))
 
 (ert-deftest decknix-hub-activity-icons--strict-eq-t ()
   "Flags must be eq to t — string \"true\" or 1 do not count."
@@ -237,23 +244,23 @@ all 22 threads were resolved."
     (should (equal (decknix--hub-activity-icons pr) ""))))
 
 (ert-deftest decknix-hub-activity-icons--unresolved-keeps-needs-reply ()
-  "Some unresolved: bubble still rendered."
+  "Some unresolved: human icon still rendered."
   (let ((pr '((total_threads . 22)
               (unresolved_threads . 3)
               (needs_reply . t))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons pr))
-                   "💬 "))))
+                   "i "))))
 
 (ert-deftest decknix-hub-activity-icons--unresolved-keeps-replies ()
-  "Some unresolved: 📬 still rendered."
+  "Some unresolved: human reply icon (i) still rendered."
   (let ((pr '((total_threads . 22)
               (unresolved_threads . 1)
               (needs_reply . t)
               (replies_to_me . t))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons pr))
-                   "📬 "))))
+                   "i "))))
 
 (ert-deftest decknix-hub-activity-icons--bot-pending-survives-resolution ()
   "Bot icon still surfaces even when threads are all resolved.
@@ -264,7 +271,7 @@ that aren't tracked as inline threads."
               (bot_pending . t))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons pr))
-                   " 🤖"))))
+                   " β"))))
 
 (ert-deftest decknix-hub-activity-icons--bot-reply-survives-resolution ()
   "Bot reply icon still surfaces even when threads are all resolved."
@@ -273,14 +280,14 @@ that aren't tracked as inline threads."
               (bot_replies_to_me . t))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons pr))
-                   " 👽"))))
+                   " β"))))
 
 (ert-deftest decknix-hub-activity-icons--no-thread-data-falls-back ()
   "No total_threads field: stream-based behaviour applies."
   (let ((pr '((needs_reply . t) (replies_to_me . t))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons pr))
-                   "📬 "))))
+                   "i "))))
 
 (ert-deftest decknix-hub-activity-icons--zero-total-threads-falls-back ()
   "total_threads = 0 means PR-level comments only, no inline threads.
@@ -290,7 +297,36 @@ Stream-based ladder still applies."
               (needs_reply . t))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons pr))
+                   "i "))))
+
+;; -- activity-icons: emoji symbol style ----------------------------
+;; The ASCII glyph set above is the default (`decknix--hub-symbol-style'
+;; = 'ascii).  These tests pin the alternate emoji branch reachable via
+;; the sidebar `y' toggle so both contracts stay covered.
+
+(ert-deftest decknix-hub-activity-icons--emoji-style-human-replies ()
+  "With symbol style 'emoji, replies-to-me renders 📬."
+  (let ((decknix--hub-symbol-style 'emoji))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-activity-icons '((replies_to_me . t))))
+                   "📬 "))))
+
+(ert-deftest decknix-hub-activity-icons--emoji-style-needs-reply ()
+  "With symbol style 'emoji, needs-reply renders 💬."
+  (let ((decknix--hub-symbol-style 'emoji))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-activity-icons '((needs_reply . t))))
                    "💬 "))))
+
+(ert-deftest decknix-hub-activity-icons--emoji-style-bot ()
+  "With symbol style 'emoji, bot signals render 🤖 (pending) / 👽 (reply)."
+  (let ((decknix--hub-symbol-style 'emoji))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-activity-icons '((bot_pending . t))))
+                   " 🤖"))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-activity-icons '((bot_replies_to_me . t))))
+                   " 👽"))))
 ;; -- wip-reply-icon: legacy alias ----------------------------------
 
 (ert-deftest decknix-hub-wip-reply-icon--delegates ()
