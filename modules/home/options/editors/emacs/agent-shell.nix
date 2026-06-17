@@ -4304,11 +4304,22 @@ Subsequent toggles only log when verbose tracing is on."
         ;; silently revert on next start.  The 30 s idle threshold keeps
         ;; this out of the hot path during active use; repeat=t fires once
         ;; per idle period, not every 30 s of idleness.
-        (run-with-idle-timer 30 t
-          (lambda ()
-            (decknix--sidebar-state-save)
-            (decknix--sidebar-previous-sessions-save)
-            (decknix--sidebar-previous-history-save)))
+        ;; Idempotent across hot-reloads.  `decknix switch' runs
+        ;; `deckmacs-reload', which re-evaluates this heredoc's
+        ;; top-level forms (see AGENTS.md).  Without cancelling the
+        ;; prior timer first, every switch leaks another idle-save
+        ;; timer; they all fire together on the next idle period and
+        ;; peg CPU with N redundant file writes.
+        (defvar decknix--sidebar-state-save-timer nil
+          "Idle timer that periodically persists sidebar + previous-session state.")
+        (when (timerp decknix--sidebar-state-save-timer)
+          (cancel-timer decknix--sidebar-state-save-timer))
+        (setq decknix--sidebar-state-save-timer
+              (run-with-idle-timer 30 t
+                (lambda ()
+                  (decknix--sidebar-state-save)
+                  (decknix--sidebar-previous-sessions-save)
+                  (decknix--sidebar-previous-history-save))))
 
         ;; Bind 'P' to restore all previous sessions
         (define-key agent-shell-workspace-sidebar-mode-map
@@ -4457,8 +4468,15 @@ Subsequent toggles only log when verbose tracing is on."
         (declare-function decknix--hub-pr-cache-save "decknix-hub-pr-cache")
         (declare-function decknix--hub-pr-cache-restore "decknix-hub-pr-cache")
 
-        ;; Save cache periodically (every 2 min) and on kill
-        (run-with-timer 120 120 #'decknix--hub-pr-cache-save)
+        ;; Save cache periodically (every 2 min) and on kill.
+        ;; Guarded so hot-reloads cancel the prior timer rather than
+        ;; accumulating a duplicate on every `decknix switch'.
+        (defvar decknix--hub-pr-cache-save-timer nil
+          "Repeating timer that flushes the PR-status cache to disk.")
+        (when (timerp decknix--hub-pr-cache-save-timer)
+          (cancel-timer decknix--hub-pr-cache-save-timer))
+        (setq decknix--hub-pr-cache-save-timer
+              (run-with-timer 120 120 #'decknix--hub-pr-cache-save))
         (add-hook 'kill-emacs-hook #'decknix--hub-pr-cache-save)
         ;; Restore on startup
         (decknix--hub-pr-cache-restore)
@@ -4488,7 +4506,13 @@ Subsequent toggles only log when verbose tracing is on."
         (declare-function decknix--hub-repo-cache-save "decknix-hub-repo-cache")
         (declare-function decknix--hub-repo-cache-restore "decknix-hub-repo-cache")
 
-        (run-with-timer 120 120 #'decknix--hub-repo-cache-save)
+        ;; Guarded against hot-reload duplication (see PR-cache timer above).
+        (defvar decknix--hub-repo-cache-save-timer nil
+          "Repeating timer that flushes the repo-HEAD status cache to disk.")
+        (when (timerp decknix--hub-repo-cache-save-timer)
+          (cancel-timer decknix--hub-repo-cache-save-timer))
+        (setq decknix--hub-repo-cache-save-timer
+              (run-with-timer 120 120 #'decknix--hub-repo-cache-save))
         (add-hook 'kill-emacs-hook #'decknix--hub-repo-cache-save)
         (decknix--hub-repo-cache-restore)
 
@@ -4507,7 +4531,13 @@ Subsequent toggles only log when verbose tracing is on."
         ;;   `decknix--hub-worktree-parse-porcelain'  (porcelain parser)
         (require 'decknix-hub-worktree-parse)
 
-        (run-with-timer 120 120 #'decknix--hub-worktree-cache-save)
+        ;; Guarded against hot-reload duplication (see PR-cache timer above).
+        (defvar decknix--hub-worktree-cache-save-timer nil
+          "Repeating timer that flushes the worktree registry cache to disk.")
+        (when (timerp decknix--hub-worktree-cache-save-timer)
+          (cancel-timer decknix--hub-worktree-cache-save-timer))
+        (setq decknix--hub-worktree-cache-save-timer
+              (run-with-timer 120 120 #'decknix--hub-worktree-cache-save))
         (add-hook 'kill-emacs-hook #'decknix--hub-worktree-cache-save)
         (decknix--hub-worktree-cache-restore)
 
