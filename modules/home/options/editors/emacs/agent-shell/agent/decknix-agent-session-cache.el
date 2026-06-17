@@ -158,7 +158,12 @@ When MAX is non-nil, limit to at most MAX files via `head'."
 
 (defun decknix--session-parse-file (provider-id path)
   "Extract session metadata from PATH for PROVIDER-ID.
-Returns a parsed alist via `decknix--agent-session-parse', or nil."
+Returns a parsed alist via `decknix--agent-session-parse', stamped
+with (filePath . PATH) so `decknix--session-store-parsed' can write
+the correct mtime-cache entry for multi-project providers (e.g.,
+claude-code) whose session files live under a project-hash sub-directory
+and cannot be reconstructed from sessionId + sessions-dir alone.
+Returns nil on parse failure."
   (let* ((jqf (decknix--agent-session-ensure-jq-filter provider-id))
          (ext (decknix-agent-provider-session-file-extension provider-id))
          ;; Claude uses JSONL; JQ needs -s (slurp) to handle it if the filter
@@ -168,8 +173,14 @@ Returns a parsed alist via `decknix--agent-session-parse', or nil."
                (concat "jq " jq-args " -f "
                        (shell-quote-argument jqf)
                        " " (shell-quote-argument path)
-                       " 2>/dev/null"))))
-    (decknix--agent-session-parse raw)))
+                       " 2>/dev/null")))
+         (data (decknix--agent-session-parse raw)))
+    (when data
+      ;; Stamp filePath so decknix--session-store-parsed can key the mtime
+      ;; cache on the real absolute path regardless of provider layout.
+      ;; decknix--session-meta stamps providerId in the same pattern.
+      (if (alist-get 'filePath data) data
+        (cons (cons 'filePath path) data)))))
 
 (defun decknix--session-meta (provider-id path)
   "Return session metadata alist for PATH using the mtime-keyed cache.
@@ -293,6 +304,9 @@ parallel jq via a temp file list for speed (cold-cache initial fill)."
   (if (< (length files) 20)
       (delq nil (mapcar (lambda (f) (decknix--session-parse-file provider-id f)) files))
     ;; Large set: write paths to a temp file, fan out to parallel jq.
+    ;; After parsing, stamp filePath on each result so decknix--session-store-parsed
+    ;; can cache multi-project providers (claude-code) whose path cannot be
+    ;; reconstructed from sessionId + dir alone.
     (let* ((jqf (decknix--agent-session-ensure-jq-filter provider-id))
            (ext (decknix-agent-provider-session-file-extension provider-id))
            (jq-args (if (string= ext ".jsonl") "-Mcs" "-Mc"))
@@ -301,32 +315,61 @@ parallel jq via a temp file list for speed (cold-cache initial fill)."
           (progn
             (with-temp-file list-file
               (dolist (f files) (insert f "\n")))
-            (decknix--agent-session-parse
-             (shell-command-to-string
-              (concat "cat " (shell-quote-argument list-file)
-                      " | tr '\\n' '\\0'"
-                      " | xargs -0 -P8 -I{} jq " jq-args " -f "
-                      (shell-quote-argument jqf)
-                      " {} 2>/dev/null"
-                      " | jq -Msc 'sort_by(.modified) | reverse'"))))
+            (let ((results
+                   (decknix--agent-session-parse
+                    (shell-command-to-string
+                     (concat "cat " (shell-quote-argument list-file)
+                             " | tr '\\n' '\\0'"
+                             " | xargs -0 -P8 -I{} jq " jq-args " -f "
+                             (shell-quote-argument jqf)
+                             " {} 2>/dev/null"
+                             " | jq -Msc 'sort_by(.modified) | reverse'")))))
+              (decknix--session-stamp-file-paths results files)))
         (when (file-exists-p list-file)
           (delete-file list-file))))))
+
+;; Internal helper: stamp (filePath . PATH) on bulk-parsed results that lack it.
+;; Used after large-set parallel jq parses where per-file path info is not
+;; embedded in the combined JSON output.  Builds a sessionId -> path map from
+;; FILES (absolute paths whose basename == sessionId) and stamps filePath on
+;; each alist in PARSED-LIST that is still missing it.
+(defun decknix--session-stamp-file-paths (parsed-list files)
+  "Return PARSED-LIST with (filePath . PATH) stamped using FILES.
+PARSED-LIST is a list of session alists from a bulk jq parse.
+FILES is the list of absolute file paths that were fed to that parse;
+each basename (sans extension) is taken as the sessionId key."
+  (let ((sid-map (make-hash-table :test 'equal :size (length files))))
+    (dolist (f files)
+      (puthash (file-name-base f) f sid-map))
+    (mapcar (lambda (data)
+              (if (or (not (listp data)) (alist-get 'filePath data))
+                  data
+                (let* ((sid  (alist-get 'sessionId data))
+                       (path (and sid (gethash sid sid-map))))
+                  (if path (cons (cons 'filePath path) data) data))))
+            parsed-list)))
 
 ;; Internal helper: update mtime cache entries for a list of parsed alists.
 (defun decknix--session-store-parsed (provider-id alist-list)
   "Store ALIST-LIST entries in `decknix--session-meta-cache' keyed by path+mtime.
-PROVIDER-ID is the agent backend."
+PROVIDER-ID is the agent backend.
+Each alist should carry a (filePath . PATH) entry — stamped by
+`decknix--session-parse-file' for sequential parses, or by
+`decknix--session-stamp-file-paths' after a bulk jq parse.
+Without filePath, multi-project providers (claude-code, :history-file set)
+are silently skipped; single-directory providers (auggie) fall back to
+reconstructing path from sessionId + dir."
   (let ((dir (decknix-agent-provider-sessions-dir provider-id))
         (ext (decknix-agent-provider-session-file-extension provider-id))
         (hist (decknix-agent-provider-history-file provider-id)))
     (dolist (data alist-list)
       (let* ((sid  (alist-get 'sessionId data))
-             ;; For multi-project (Claude), path might be in alist already?
-             ;; No, the generic parser doesn't put it there.
-             ;; If hist is set, we might need a more sophisticated lookup.
-             ;; For now, assume sid+ext under dir is enough for mtime keying if single dir.
-             (path (unless hist
-                     (expand-file-name (concat sid ext) dir)))
+             ;; Prefer filePath stamped by decknix--session-parse-file or
+             ;; decknix--session-stamp-file-paths.  Fall back to the
+             ;; single-directory layout for providers without :history-file.
+             (path (or (alist-get 'filePath data)
+                       (unless hist
+                         (expand-file-name (concat sid ext) dir))))
              (mtime (and path (decknix--session-file-mtime path))))
         (when (and path mtime)
           (puthash path (list :mtime mtime :data data)
@@ -435,16 +478,23 @@ in a background subprocess."
                   (setq decknix--agent-session-refresh-proc proc))
                 (set-process-sentinel
                  proc
-                 ;; Lexical closure captures provider-id, c-data.
+                 ;; Lexical closure captures provider-id, c-data, n-files.
+                 ;; n-files is the list of new-or-changed paths fed to the
+                 ;; subprocess; it is used to stamp filePath on the parsed
+                 ;; results so decknix--session-store-parsed can cache
+                 ;; multi-project (claude-code) sessions correctly.
                  (let ((p-id provider-id)
-                       (c-data (nreverse cached-data)))
+                       (c-data (nreverse cached-data))
+                       (n-files new-files))
                    (lambda (proc _event)
                      (when (eq (process-status proc) 'exit)
                        (let ((pbuf (process-buffer proc)))
                          (when (buffer-live-p pbuf)
                            (let ((new-parsed
-                                  (decknix--agent-session-parse
-                                   (with-current-buffer pbuf (buffer-string)))))
+                                  (decknix--session-stamp-file-paths
+                                   (decknix--agent-session-parse
+                                    (with-current-buffer pbuf (buffer-string)))
+                                   n-files)))
                              (when new-parsed
                                (decknix--session-store-parsed p-id new-parsed)
                                (decknix--session-meta-cache-save)
