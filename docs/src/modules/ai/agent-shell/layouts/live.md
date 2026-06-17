@@ -1,6 +1,6 @@
 # Live
 
-Live agent sessions. Three **view modes** (cycle with the Live display toggle),
+Live agent sessions. Five **view modes** (cycle with `v` / the Live view toggle),
 plus optional **linked-PR** and **linked-repo** rows expanded beneath each
 session. See the [colour legend](./index.md#colour-legend-source-of-truth).
 
@@ -14,18 +14,36 @@ stage, colour = state.
 {g}●{/} ready          {ac}●{/} finished  {r}●{/} killed
 </pre>
 
+## Provider glyph
+
+Every live-session row is prefixed with a **provider glyph** — a single letter
+that identifies the AI backend running in that buffer:
+
+| Glyph | Provider |
+|-------|---------|
+| `A`   | Auggie (Augment Code) |
+| `C`   | Claude Code (Anthropic) |
+| `P`   | Pi |
+| `?`   | Unknown / unregistered provider |
+
+The glyph is coloured with the same status face as the lifecycle marker so it
+reads as part of the same signal group. Additional providers registered via
+`decknix-agent-register-provider` automatically appear here using their `:glyph`
+field.
+
 ## View modes
 
-A session row is `sel · marker · name · tile · [N⬆ N✓] · 📥/📤/📬/👽 · progress`.
-`>` marks the selected buffer.
+A session row is `sel · glyph · marker · name · tile · [N⬆ N✓] · 📥/📤/📬/👽 · progress`.
+`>` marks the selected buffer. Tags are capped at 3 for readability; full tags
+are always visible in the header-line of the buffer itself.
 
 ### Flat
 
 <pre class="sb-markup">
 {hd}Live (3){/}
- > {y}◐{/} feature/foo  {rp}decknix{/}        [2⬆ 1✓] {r bd}📥1{/}
-   {g}●{/} feature/bar  {rp}decknix-config{/}
-   {r}◐{/} review       {rp}decknix{/}        [1⬆ 0✓] {sg bd}↩{/}
+ > {y}A{/} {y}◐{/} feature/foo  {rp}decknix{/}        [2⬆ 1✓] {r bd}📥1{/}
+   {g}A{/} {g}●{/} feature/bar  {rp}decknix-config{/}
+   {g}C{/} {g}●{/} review/auth  {rp}decknix{/}        [1⬆ 0✓] {sg bd}↩{/}
 </pre>
 
 ### Grouped by workspace
@@ -33,10 +51,10 @@ A session row is `sel · marker · name · tile · [N⬆ N✓] · 📥/📤/📬
 <pre class="sb-markup">
 {hd}Live (3){/}
  {dm}~/tools/decknix{/}
-   > {y}◐{/} feature/foo   [2⬆ 1✓] {r bd}📥1{/}
-     {r}◐{/} review        [1⬆ 0✓] {sg bd}↩{/}
+   > {y}A{/} {y}◐{/} feature/foo   [2⬆ 1✓] {r bd}📥1{/}
+     {g}C{/} {g}●{/} review/auth
  {dm}~/Code/nurturecloud/decknix-config{/}
-     {g}●{/} feature/bar
+     {g}A{/} {g}●{/} feature/bar
 </pre>
 
 ### Grouped by path (last component, tag stripped)
@@ -44,16 +62,57 @@ A session row is `sel · marker · name · tile · [N⬆ N✓] · 📥/📤/📬
 <pre class="sb-markup">
 {hd}Live (3){/}
  {rp}decknix{/}
-   > {y}◐{/} feature/foo   [2⬆ 1✓] {r bd}📥1{/}
-     {r}◐{/} review        [1⬆ 0✓] {sg bd}↩{/}
+   > {y}A{/} {y}◐{/} feature/foo   [2⬆ 1✓] {r bd}📥1{/}
+     {g}C{/} {g}●{/} review/auth
  {rp}decknix-config{/}
-     {g}●{/} feature/bar
+     {g}A{/} {g}●{/} feature/bar
+</pre>
+
+### Grouped by shared tags
+
+<pre class="sb-markup">
+{hd}Live (5){/}
+ {dm}nurturecloud/CONN{/}
+   > {y}A{/} {y}◐{/} #10861/ARC
+     {g}A{/} {g}●{/} #7/#202
+ {dm}Other{/}
+     {g}C{/} {g}●{/} review/auth
+     {r}A{/} {r}◐{/} nurturecloud
+     {g}A{/} {g}●{/} decknix-config
+</pre>
+
+### Grouped by first tag (tree)
+
+<pre class="sb-markup">
+{hd}Live (5){/}
+ {dm}nurturecloud{/}
+   > {y}A{/} {y}◐{/} CONN/#10861
+     {g}A{/} {g}●{/} CONN/#7
+ {dm}review{/}
+     {g}C{/} {g}●{/} auth
+ {dm}Other{/}
+     {g}A{/} {g}●{/} decknix-config
 </pre>
 
 Attention badges (`hub` enabled): {r bd}📥N{/} linked PRs awaiting
 my action, {g bd}📤N{/} ones I've acted on,
 {sg bd}📬/👽{/} when any linked PR has replies to me. Terminal
 (MERGED/CLOSED) PRs are excluded so stale links don't add noise.
+
+## Sub-agent rows
+
+When a session has spawned sub-agents (Claude Code sub-agents are stored in a
+`subagents/` directory next to the session transcript), they are shown as child
+rows beneath the parent, indented by 4 characters and dimmed:
+
+<pre class="sb-markup">
+   {g}C{/} {g}●{/} review/auth
+     {dm}↳ C claude-3-5-sonnet{/}
+     {dm}↳ C computer-use{/}
+</pre>
+
+The provider glyph on sub-agent rows always matches the parent session's
+backend. The name is the sub-agent's slug (model identifier or tool name).
 
 ## Linked-PR rows
 
@@ -100,7 +159,8 @@ PR to review.
 
 | Key | Toggle | Effect |
 |-----|--------|--------|
-| `d` | display mode | flat / grouped-by-workspace / grouped-by-path |
+| `v` | view mode | flat → workspace → path → tags → tree → flat |
+| `d` | display mode (linked PRs) | off / PR / pipeline / both |
 | `H` | hidden | show/hide hidden sessions |
 | `N` | repo-name cap | short / medium / full |
 | `E` | PRs | off / PR / pipeline / both |
