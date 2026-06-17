@@ -500,7 +500,7 @@ picker's dynamic binding unwinds.")
   :key "M"
   :description
   (lambda ()
-    (format "↩             %s"
+    (format "📬/👽          %s"
             (propertize
              (if decknix--hub-requests-only-my-replies "[only]" "[all]")
              'face (if decknix--hub-requests-only-my-replies
@@ -607,7 +607,7 @@ picker's dynamic binding unwinds.")
   :key "r"
   :description
   (lambda ()
-    (format "replies ↩   %s"
+    (format "replies 📬/👽 %s"
             (propertize
              (if decknix--hub-wip-only-my-replies "[only]" "[all]")
              'face (if decknix--hub-wip-only-my-replies
@@ -2576,14 +2576,16 @@ Aggregates across every PR linked to CONV-KEY:
   or has CHANGES_REQUESTED).
 - 📤 N : N linked PRs where I have acted and am awaiting others (review
   submitted, WIP pushed with no pending reply).
-- ↩    : shown once when any linked PR has replies-to-me (cross-cutting).
+- 📬    : shown when any linked PR has a human reply (`replies_to_me').
+- 👽    : shown when any linked PR has a bot reply (`bot_replies_to_me').
 
 Returns a leading-space string suitable for concatenation onto a sidebar
 row, or an empty string when no linked PR is attention-worthy."
   (let ((prs (decknix--agent-linked-prs conv-key))
         (n-inbox 0)
         (n-sent 0)
-        (any-replies nil))
+        (any-human-replies nil)
+        (any-bot-replies nil))
     (when prs
       (dolist (pr prs)
         (let* ((url (decknix--agent-pr-url-accessor pr "url"))
@@ -2593,7 +2595,9 @@ row, or an empty string when no linked PR is attention-worthy."
           ;; Skip terminal and unknown PRs — only active ones count
           (when (and status (member state '("OPEN" "DRAFT")))
             (when (eq (alist-get 'replies_to_me status) t)
-              (setq any-replies t))
+              (setq any-human-replies t))
+            (when (eq (alist-get 'bot_replies_to_me status) t)
+              (setq any-bot-replies t))
             (pcase kind
               ('review
                (if (alist-get 'my_review status)
@@ -2617,9 +2621,11 @@ row, or an empty string when no linked PR is attention-worthy."
                       (propertize (format "%d" n-sent)
                                   'face 'success))
               parts))
-      (when any-replies
-        (push (decknix--hub-icon
-               "↩" '(:foreground "#87d7af" :weight bold))
+      (when any-human-replies
+        (push (decknix--hub-icon "📬" '(:foreground "#87d7af" :weight bold))
+              parts))
+      (when any-bot-replies
+        (push (decknix--hub-icon "👽" '(:foreground "#af5f87" :weight bold))
               parts))
       (if parts
           (concat " " (string-join (nreverse parts) " "))
@@ -3035,10 +3041,10 @@ primary action is a no-op until a PR materialises."
                            (short-title (if (> (length title) max-title)
                                             (concat (substring title 0 (- max-title 1)) "…")
                                           title))
-                           ;; Phase 2.2: show 💬/🤖 between primary icon and phase tag
+                           ;; Phase 2.2: show activity icons between primary icon and phase tag
                            (reply-slot (if (and reply-str (not (string-empty-p reply-str)))
                                            (concat " " reply-str " ")
-                                         "  ")))
+                                         "    ")))
                       (format "%s%s%s %s" primary-icon reply-slot phase-str
                               (if title-face (propertize short-title 'face title-face) short-title))))
                    ('C ;; Label
@@ -3048,10 +3054,10 @@ primary action is a no-op until a PR materialises."
                            (short-title (if (> (length title) max-title)
                                             (concat (substring title 0 (- max-title 1)) "…")
                                           title))
-                           ;; Phase 2.2: show 💬/🤖 between primary icon and label
+                           ;; Phase 2.2: show activity icons between primary icon and label
                            (reply-slot (if (and reply-str (not (string-empty-p reply-str)))
                                            (concat " " reply-str " ")
-                                         " ")))
+                                         "    ")))
                       (format "%s%s%-16s %s" primary-icon reply-slot label-str
                               (if title-face (propertize short-title 'face title-face) short-title))))
                    ('B ;; Scoped

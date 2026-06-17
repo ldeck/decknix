@@ -135,10 +135,13 @@
                  "◐")))
 
 (ert-deftest decknix-hub-wip-review-icon--review-required ()
-  (should (equal (decknix-test--icon-glyph
-                  (decknix--hub-wip-review-icon
-                   '((review_decision . "REVIEW_REQUIRED"))))
-                 "◐")))
+  (let ((item '((review_decision . "REVIEW_REQUIRED"))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-wip-review-icon item))
+                   "◐"))
+    (should (equal (decknix-test--icon-face
+                    (decknix--hub-wip-review-icon item))
+                   'success))))
 
 (ert-deftest decknix-hub-wip-review-icon--unknown-or-missing ()
   (should (equal (decknix--hub-wip-review-icon
@@ -166,35 +169,39 @@
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((bot_pending . t))))
-                 "🤖")))
+                 " 🤖")))
 
 (ert-deftest decknix-hub-activity-icons--needs-reply-only ()
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((needs_reply . t))))
-                 "💬")))
+                 "💬 ")))
 
-(ert-deftest decknix-hub-activity-icons--bot-supersedes-needs-reply ()
-  "Bot-pending and needs-reply both set: bot wins (cond branch order)."
+(ert-deftest decknix-hub-activity-icons--bot-and-needs-reply ()
+  "Bot-pending and needs-reply both set: bot-only shows when it was the bot."
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((bot_pending . t) (needs_reply . t))))
-                 "🤖")))
+                 " 🤖")))
 
 (ert-deftest decknix-hub-activity-icons--replies-coexists ()
-  "Replies-to-me appends after bot/needs-reply."
+  "Replies-to-me (📬) and bot signals (👽/🤖) appear in distinct slots."
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((bot_pending . t) (replies_to_me . t))))
-                 "🤖↩"))
+                 "📬🤖"))
+  (should (equal (decknix-test--icon-glyph
+                  (decknix--hub-activity-icons
+                   '((bot_replies_to_me . t) (replies_to_me . t))))
+                 "📬👽"))
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((needs_reply . t) (replies_to_me . t))))
-                 "💬↩"))
+                 "📬 "))
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((replies_to_me . t))))
-                 "↩")))
+                 "📬 ")))
 
 (ert-deftest decknix-hub-activity-icons--strict-eq-t ()
   "Flags must be eq to t — string \"true\" or 1 do not count."
@@ -236,17 +243,17 @@ all 22 threads were resolved."
               (needs_reply . t))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons pr))
-                   "💬"))))
+                   "💬 "))))
 
 (ert-deftest decknix-hub-activity-icons--unresolved-keeps-replies ()
-  "Some unresolved: return-arrow still rendered alongside bubble."
+  "Some unresolved: 📬 still rendered."
   (let ((pr '((total_threads . 22)
               (unresolved_threads . 1)
               (needs_reply . t)
               (replies_to_me . t))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons pr))
-                   "💬↩"))))
+                   "📬 "))))
 
 (ert-deftest decknix-hub-activity-icons--bot-pending-survives-resolution ()
   "Bot icon still surfaces even when threads are all resolved.
@@ -257,14 +264,23 @@ that aren't tracked as inline threads."
               (bot_pending . t))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons pr))
-                   "🤖"))))
+                   " 🤖"))))
+
+(ert-deftest decknix-hub-activity-icons--bot-reply-survives-resolution ()
+  "Bot reply icon still surfaces even when threads are all resolved."
+  (let ((pr '((total_threads . 22)
+              (unresolved_threads . 0)
+              (bot_replies_to_me . t))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-activity-icons pr))
+                   " 👽"))))
 
 (ert-deftest decknix-hub-activity-icons--no-thread-data-falls-back ()
-  "No total_threads field: legacy stream-based behaviour applies."
+  "No total_threads field: stream-based behaviour applies."
   (let ((pr '((needs_reply . t) (replies_to_me . t))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons pr))
-                   "💬↩"))))
+                   "📬 "))))
 
 (ert-deftest decknix-hub-activity-icons--zero-total-threads-falls-back ()
   "total_threads = 0 means PR-level comments only, no inline threads.
@@ -274,7 +290,7 @@ Stream-based ladder still applies."
               (needs_reply . t))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons pr))
-                   "💬"))))
+                   "💬 "))))
 ;; -- wip-reply-icon: legacy alias ----------------------------------
 
 (ert-deftest decknix-hub-wip-reply-icon--delegates ()
@@ -317,6 +333,18 @@ Stream-based ladder still applies."
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-primary-status-icon item 'wip))
                    "◐"))))
+
+
+(ert-deftest decknix-hub-icons--primary-status-open-needs-review-ci-pass-is-green ()
+  (let ((item '((state . "OPEN")
+                (review_decision . "REVIEW_REQUIRED")
+                (ci . ((status . "pass"))))))
+    (should (equal (decknix-test--icon-glyph
+                    (decknix--hub-primary-status-icon item 'wip))
+                   "◐"))
+    (should (equal (decknix-test--icon-face
+                    (decknix--hub-primary-status-icon item 'wip))
+                   'success))))
 
 (ert-deftest decknix-hub-icons--primary-status-open-approved-ci-fail ()
   "Approved but failing CI should be red."

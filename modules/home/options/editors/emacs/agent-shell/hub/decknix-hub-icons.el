@@ -72,12 +72,12 @@ Shows whether the current user has already responded to this PR.
   "Return a review decision icon for a WIP PR, or empty string.
 Shows the overall review status of the user's own PR:
   ● = approved (green), ◐ = changes requested (red),
-  ◐ = review required (yellow), (none) = no review policy."
+  ◐ = review required (green), (none) = no review policy."
   (let ((decision (alist-get 'review_decision pr)))
     (pcase decision
       ("APPROVED"          (decknix--hub-icon "●" 'success))
       ("CHANGES_REQUESTED" (decknix--hub-icon "◐" 'error))
-      ("REVIEW_REQUIRED"   (decknix--hub-icon "◐" 'warning))
+      ("REVIEW_REQUIRED"   (decknix--hub-icon "◐" 'success))
       (_ ""))))
 
 (defun decknix--hub-primary-status-icon (item kind &optional tc-status)
@@ -125,72 +125,70 @@ reduce sidebar duplication."
              (blocked (or (equal decision "CHANGES_REQUESTED")
                           (equal classified "fail")
                           tc-fail))
-             (running (or (equal decision "REVIEW_REQUIRED")
-                          (equal classified "running")
-                          tc-running))
-             (face (cond (blocked   'error)
-                         (running   'warning)
-                         (approved  'success)
+             (ci-running (or (equal classified "running")
+                             tc-running))
+             ;; Phase 2.1: REVIEW_REQUIRED is green if everything else is green
+             ;; (i.e. not blocked and not running CI).
+             (awaiting (equal decision "REVIEW_REQUIRED"))
+             (face (cond (blocked    'error)
+                         (ci-running 'warning)
+                         (approved   'success)
+                         (awaiting   'success)
                          ((equal decision "COMMENTED") '(:foreground "cyan" :weight bold))
-                         (t         'shadow)))
+                         (t          'shadow)))
              (glyph (if approved "●" "◐")))
         (decknix--hub-icon glyph face))))))
 
 (defun decknix--hub-activity-icons (pr)
   "Return concatenated attention icons for PR.
 
-Shows, in order:
-- 🤖 (bot-pending) when the latest comment/review is from a bot —
-  supersedes 💬 so the two aren't shown together for the same event.
-- 💬 (needs-reply) when the latest non-bot activity is from someone
-  else and no bot posted after them.
-- ↩ (replies-to-me) when a human posted after one of my own comments
-  or reviews; co-exists with 🤖/💬 because it is a distinct signal
-  about a thread I participated in.
+Indicates two families of signals (Human and Bot).
+Human family (left slot):
+- 📬 (replies-to-me) when a human posted after one of my own comments.
+- 💬 (needs-reply) when the latest activity is a human and not me.
+Bot family (right slot):
+- 👽 (bot-replies-to-me) when a bot replied after my comment.
+- 🤖 (bot-pending) when the latest activity is a bot.
 
 Activity icons are suppressed for APPROVED PRs.
 
 Thread-aware Tier 1 suppression: when `total_threads' is present and
-greater than zero, 💬 and ↩ are suppressed if `unresolved_threads'
-equals zero (all threads resolved).  🤖 is not suppressed because
-bots post top-level review comments that are not tracked as inline
-threads.  When `total_threads' is absent or zero (PR-level comments
-only), the legacy stream-based ladder applies unchanged."
-  (let* ((needs-reply    (eq (alist-get 'needs_reply pr) t))
-         (bot-pending    (eq (alist-get 'bot_pending pr) t))
-         (replies-to-me  (eq (alist-get 'replies_to_me pr) t))
+greater than zero, human icons (📬/💬) are suppressed if `unresolved_threads'
+equals zero (all threads resolved). Bot icons (👽/🤖) are not suppressed.
+
+Returns a string of length 2 (padded with spaces) if any activity is present,
+else an empty string."
+  (let* ((needs-reply       (eq (alist-get 'needs_reply pr) t))
+         (bot-pending       (eq (alist-get 'bot_pending pr) t))
+         (replies-to-me     (eq (alist-get 'replies_to_me pr) t))
+         (bot-replies-to-me (eq (alist-get 'bot_replies_to_me pr) t))
          ;; Use both possible decision fields
-         (decision       (or (alist-get 'review_decision pr)
-                             (alist-get 'my_review pr)))
-         (approved       (equal decision "APPROVED"))
-         ;; Thread-aware suppression: suppress 💬/↩ when all inline
+         (decision          (or (alist-get 'review_decision pr)
+                                (alist-get 'my_review pr)))
+         (approved          (equal decision "APPROVED"))
+         ;; Thread-aware suppression: suppress human 📬/💬 when all inline
          ;; threads are resolved.  Only applies when total_threads > 0
          ;; so PRs with only PR-level comments fall back to stream logic.
-         (total-threads  (alist-get 'total_threads pr))
-         (unresolved     (alist-get 'unresolved_threads pr))
-         (all-resolved   (and total-threads
-                              (> total-threads 0)
-                              unresolved
-                              (= unresolved 0))))
-    (if (or approved all-resolved)
-        ;; APPROVED always suppresses all icons; all-resolved suppresses
-        ;; only the stream-based 💬/↩ (bot still shown — handled below).
-        (if (and all-resolved (not approved))
-            ;; Threads resolved but not APPROVED: bot icon may still surface.
-            (if bot-pending
-                (decknix--hub-icon "🤖" '(:foreground "#af5f87"))
-              "")
-          "")
-      (concat
-       (cond
-        (bot-pending
-         (decknix--hub-icon "🤖" '(:foreground "#af5f87")))
-        (needs-reply
-         (decknix--hub-icon "💬" '(:foreground "#d7af5f")))
-        (t ""))
-       (if replies-to-me
-           (decknix--hub-icon "↩" '(:foreground "#87d7af" :weight bold))
-         "")))))
+         (total-threads     (alist-get 'total_threads pr))
+         (unresolved        (alist-get 'unresolved_threads pr))
+         (all-resolved      (and total-threads
+                                 (> total-threads 0)
+                                 unresolved
+                                 (= unresolved 0))))
+    (if approved
+        ""
+      (let ((h (if all-resolved
+                   ""
+                 (cond (replies-to-me (decknix--hub-icon "📬" '(:foreground "#87d7af" :weight bold)))
+                       ((and needs-reply (not bot-pending)) (decknix--hub-icon "💬" '(:foreground "#d7af5f")))
+                       (t ""))))
+            (b (cond (bot-replies-to-me (decknix--hub-icon "👽" '(:foreground "#af5f87" :weight bold)))
+                     (bot-pending (decknix--hub-icon "🤖" '(:foreground "#af5f87")))
+                     (t ""))))
+        (if (and (string-empty-p h) (string-empty-p b))
+            ""
+          (concat (if (string-empty-p h) " " h)
+                  (if (string-empty-p b) " " b)))))))
 
 (defun decknix--hub-wip-reply-icon (pr)
   "Back-compat shim: return `decknix--hub-activity-icons' for PR."

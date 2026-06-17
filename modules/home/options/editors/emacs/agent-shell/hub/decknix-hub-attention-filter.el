@@ -177,9 +177,11 @@ the caller's list is never mutated."
   "Return non-nil if ITEM passes the three attention filters.
 HIDE-REPLY, HIDE-BOT, and ONLY-MY are the three toggle states for
 the owning section."
-  (let ((needs-reply   (eq (alist-get 'needs_reply item) t))
-        (bot-pending   (eq (alist-get 'bot_pending item) t))
-        (replies-to-me (eq (alist-get 'replies_to_me item) t)))
+  (let* ((needs-reply       (eq (alist-get 'needs_reply item) t))
+         (bot-pending       (eq (alist-get 'bot_pending item) t))
+         (replies-to-me     (eq (alist-get 'replies_to_me item) t))
+         (bot-replies-to-me (eq (alist-get 'bot_replies_to_me item) t))
+         (any-reply-to-me   (or replies-to-me bot-replies-to-me)))
     (and
      ;; Hide needs-reply suppresses only the non-bot case
      ;; (bot-pending is handled by its own toggle so we don't
@@ -189,7 +191,7 @@ the owning section."
      (or (not hide-bot)
          (not bot-pending))
      (or (not only-my)
-         replies-to-me))))
+         any-reply-to-me))))
 
 (defun decknix--hub-requests-attention-visible-p (item)
   "Return non-nil if ITEM passes the Requests attention filters."
@@ -273,11 +275,11 @@ non-conflicting so new PRs are not inadvertently suppressed."
    "Requests 🤖 filter: %s"))
 
 (defun decknix--hub-toggle-requests-only-my-replies ()
-  "Toggle showing only Requests PRs with ↩ (human reply in my thread)."
+  "Toggle showing only Requests PRs with 📬 or 👽 (replies to my comments)."
   (interactive)
   (decknix--hub-toggle-and-refresh
    'decknix--hub-requests-only-my-replies
-   "Requests ↩ only-my-replies: %s"))
+   "Requests 📬/👽 only-my-replies: %s"))
 
 (defun decknix--hub-cycle-requests-hide-reviewed ()
   "Cycle the Requests hide-reviewed filter: nil → hide-mine → hide-any → nil.
@@ -328,11 +330,11 @@ for an ephemeral flip that does not persist."
    "WIP 🤖 filter: %s"))
 
 (defun decknix--hub-toggle-wip-only-my-replies ()
-  "Toggle showing only WIP PRs with ↩."
+  "Toggle showing only WIP PRs with 📬 or 👽 (replies to my comments)."
   (interactive)
   (decknix--hub-toggle-and-refresh
    'decknix--hub-wip-only-my-replies
-   "WIP ↩ only-my-replies: %s"))
+   "WIP 📬/👽 only-my-replies: %s"))
 
 (provide 'decknix-hub-attention-filter)
 ;;; decknix-hub-attention-filter.el ends here

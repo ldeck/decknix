@@ -59,11 +59,13 @@
     (should-not (decknix--hub-attention-visible-p bot nil t nil))))
 
 (ert-deftest decknix-hub-attention-filter--only-my-keeps-only-replies ()
-  "ONLY-MY hides every item except those with replies_to_me."
-  (let ((mine    '((replies_to_me . t)))
-        (other   '((replies_to_me . :json-false))))
-    (should     (decknix--hub-attention-visible-p mine  nil nil t))
-    (should-not (decknix--hub-attention-visible-p other nil nil t))))
+  "ONLY-MY hides every item except those with replies_to_me or bot_replies_to_me."
+  (let ((human-reply '((replies_to_me . t)))
+        (bot-reply   '((bot_replies_to_me . t)))
+        (none        '((replies_to_me . :json-false) (bot_replies_to_me . :json-false))))
+    (should     (decknix--hub-attention-visible-p human-reply nil nil t))
+    (should     (decknix--hub-attention-visible-p bot-reply   nil nil t))
+    (should-not (decknix--hub-attention-visible-p none        nil nil t))))
 
 ;; -- requests-attention-visible-p / wip-attention-visible-p -------
 
