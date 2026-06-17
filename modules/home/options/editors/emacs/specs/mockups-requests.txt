@@ -1,0 +1,104 @@
+REQUESTS SECTION — Icon / Glyph Design Mockup
+═══════════════════════════════════════════════════════════════════════
+
+PURPOSE: Visual reference for the proposed icon changes.
+         Edit this file to indicate approvals / modifications.
+         "?" marks decisions still awaiting confirmation.
+
+═══════════════════════════════════════════════════════════════════════
+COLOR / FACE KEY
+═══════════════════════════════════════════════════════════════════════
+
+  [me-yellow]   = #d7af5f  warm gold      "you specifically"
+  [team-blue]   = #61afef  sky blue       "your team"
+  [bot-pink]    = #af5f87  rose           "bot actor"        (EXISTING)
+  [human-?]     = #5fc8d4  cyan (?)       "human actor"      ? CONFIRM COLOR
+  [att-yellow]  = warning face            "your move (soft)"
+  [att-red]     = error face             "blocked"
+  [att-green]   = success face           "their move"
+  [age-warn]    = warning face (>3d)
+  [age-err]     = error face   (>7d)
+  [age-dim]     = comment face (fresh)
+
+═══════════════════════════════════════════════════════════════════════
+COLUMN ORDER — PROPOSED LAYOUT A (FULL)
+═══════════════════════════════════════════════════════════════════════
+
+  CURRENT:  badge  age  repo#num  glyphs  title
+  PROPOSED: badge  age  glyphs   repo#num  title
+
+Rationale: visual signals (glyphs) before identifier (repo#num) so you
+scan status first, then decide whether to look at the identifier.
+
+═══════════════════════════════════════════════════════════════════════
+GLYPH COLUMN BREAKDOWN
+═══════════════════════════════════════════════════════════════════════
+
+  SLOT 1 — primary status icon (shape-family, EXISTING, unchanged):
+    ○  grey     no local clone / pre-open
+    ★  yellow   draft
+    ◐  amber    open, CI pending
+    ●  green    open, CI pass
+    ●  red      open, CI fail (existing behaviour)
+    ▣  purple   merged
+    ■  dim      closed
+    π  bot-pink bot-authored PR (dependabot / renovate)   (EXISTING)
+
+  SLOT 2 — mention badge (EXISTING, unchanged):
+    @ [me-yellow, bold]   directly @-mentioned / review-requested
+    @ [team-blue, bold]   only team is requested
+    (empty)               not mentioned
+
+  SLOT 3 — activity icons (PROPOSED CHANGE):
+    EMOJI LAYOUT (unchanged glyphs):
+      📬  human reply
+      💬  human comment
+      👽  bot reply
+      🤖  bot comment
+
+    GLYPH LAYOUT (new — replaces emojis):
+      i  [human-?, bold]  human REPLY   (high-signal, replies_to_me)
+      i  [human-?, dim]   human COMMENT (lower-signal, needs_reply)
+      π  [bot-pink, bold] bot REPLY     ? COLLISION: π also = primary icon
+      π  [bot-pink, dim]  bot COMMENT
+
+    ⚠ COLLISION NOTE: π is already used in Slot 1 for bot-authored PRs.
+      A dependabot row would show: π [pink primary] + π [pink dim] = ππ
+      OPTIONS to resolve:
+        A) Use a different character for bot activity (e.g. β, Π, ꟈ)
+        B) Keep π only for Slot 3; change primary icon for bot PRs
+        C) Accept ππ — context makes it readable
+      ? CHOOSE OPTION
+
+═══════════════════════════════════════════════════════════════════════
+EXAMPLE ROWS — GLYPH LAYOUT (proposed)
+═══════════════════════════════════════════════════════════════════════
+
+  badge  age   glyphs                  repo#num              title
+  ────── ───── ─────────────────────── ───────────────────── ─────────────────
+↓   18m  π[dim]@[team]                 trademe-integration#406  chore(deps): bump…
+     25m  π[dim]@[me]                  ops-ai-automations#32    Bump pytest…
+↓    1h  π[dim]@[me]                  upside#19631             Bump org.mockito…
+    11h  ◐@[me] i[bold]               upside#19629             CONN-492: fix…
+↓   18h  ◐@[me] i[dim]                reconz-integration#225   CONN-451 Adopt…
+⎇   11h  ◐@[me]                       upside#19619             NYX-3606: Treat…
+     29d  ●                            connect-to-core#2        Add sprint-gantt…
+
+═══════════════════════════════════════════════════════════════════════
+EXAMPLE ROWS — EMOJI LAYOUT (unchanged from today except order)
+═══════════════════════════════════════════════════════════════════════
+
+↓   18m  π@[team]💬                   trademe-integration#406  chore(deps): bump…
+     25m  π@[me]💬                    ops-ai-automations#32    Bump pytest…
+↓    1h  π@[me]💬                    upside#19631             Bump org.mockito…
+    11h  ◐@[me]📬                    upside#19629             CONN-492: fix…
+↓   18h  ◐@[me]💬                    reconz-integration#225   CONN-451 Adopt…
+⎇   11h  ◐@[me]                      upside#19619             NYX-3606: Treat…
+
+═══════════════════════════════════════════════════════════════════════
+OPEN QUESTIONS
+═══════════════════════════════════════════════════════════════════════
+
+  Q1. Human-activity color: cyan #5fc8d4, or something else?
+  Q2. Slot-1 / Slot-3 π collision: which resolution option (A/B/C)?
+  Q3. Column-order change: Layout A only, or all layouts (B/C/D) too?
