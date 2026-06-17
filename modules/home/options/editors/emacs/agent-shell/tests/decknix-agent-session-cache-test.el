@@ -85,6 +85,77 @@
         (should (equal (alist-get 'sessionId result) "sid-001"))
         (should (eq (alist-get 'providerId result) 'claude-code))))))
 
+(defmacro decknix-agent-session-cache-test--with-multi-provider (&rest body)
+  "Register auggie + a claude-like provider so the all-providers path runs."
+  `(let ((decknix-agent-provider-registry nil)
+         (decknix-agent-default-provider 'test-auggie)
+         (decknix--agent-session-jq-filter-map (make-hash-table :test 'eq))
+         (decknix--agent-session-cache-map (make-hash-table :test 'eq))
+         (decknix--agent-session-cache-time-map (make-hash-table :test 'eq)))
+     (decknix-agent-register-provider 'test-auggie
+       '(:sessions-dir "/tmp/test-sessions"
+         :session-file-extension ".json"
+         :label "Test Auggie"
+         :glyph "A"
+         :supports-workspace-root t))
+     (decknix-agent-register-provider 'test-claude
+       '(:sessions-dir "/tmp/test-claude"
+         :session-file-extension ".jsonl"
+         :history-file "/tmp/test-claude/history.jsonl"
+         :label "Test Claude"
+         :glyph "C"))
+     ,@body))
+
+(ert-deftest decknix-agent-provider-for-session--uses-cache-no-refresh ()
+  "Resolving a cached session must not trigger any metadata refresh.
+This pins the resume-path stall regression: the lookup used to call
+`decknix--agent-session-list' (all providers), forcing a synchronous
+jq re-parse of every other backend's transcripts on a cold cache."
+  (decknix-agent-session-cache-test--with-multi-provider
+    (let ((refresh-called 0))
+      (puthash 'test-auggie '(((sessionId . "sid-A")))
+               decknix--agent-session-cache-map)
+      (cl-letf (((symbol-function 'decknix--agent-session-refresh-sync)
+                 (lambda (&rest _) (cl-incf refresh-called) nil))
+                ((symbol-function 'decknix--agent-session-refresh-async)
+                 (lambda (&rest _) (cl-incf refresh-called) nil)))
+        (should (eq (decknix--agent-provider-for-session-id "sid-A")
+                    'test-auggie))
+        (should (= refresh-called 0))))))
+
+(ert-deftest decknix-agent-provider-for-session--falls-back-without-refresh ()
+  "An unknown session falls back to the default provider, no refresh,
+no transcript parsing (empty disk probe)."
+  (decknix-agent-session-cache-test--with-multi-provider
+    (let ((refresh-called 0))
+      (cl-letf (((symbol-function 'decknix--agent-session-refresh-sync)
+                 (lambda (&rest _) (cl-incf refresh-called) nil))
+                ((symbol-function 'decknix--agent-session-refresh-async)
+                 (lambda (&rest _) (cl-incf refresh-called) nil))
+                ((symbol-function 'decknix--agent-session-file)
+                 (lambda (&rest _) "")))
+        (should (eq (decknix--agent-provider-for-session-id "missing")
+                    'test-auggie))
+        (should (= refresh-called 0))))))
+
+(ert-deftest decknix-agent-provider-for-session--probes-disk-no-parse ()
+  "Cold cache: resolve a non-default session by cheap file existence,
+never by parsing transcripts or refreshing the cache."
+  (decknix-agent-session-cache-test--with-multi-provider
+    (let ((refresh-called 0))
+      (cl-letf (((symbol-function 'decknix--agent-session-refresh-sync)
+                 (lambda (&rest _) (cl-incf refresh-called) nil))
+                ((symbol-function 'decknix--agent-session-refresh-async)
+                 (lambda (&rest _) (cl-incf refresh-called) nil))
+                ((symbol-function 'decknix--agent-session-file)
+                 (lambda (_sid p-id)
+                   (if (eq p-id 'test-claude) "/tmp/exists.jsonl" "")))
+                ((symbol-function 'file-exists-p)
+                 (lambda (f) (string= f "/tmp/exists.jsonl"))))
+        (should (eq (decknix--agent-provider-for-session-id "sid-X")
+                    'test-claude))
+        (should (= refresh-called 0))))))
+
 (ert-deftest decknix-agent-session-cache--list-syncs-on-first-call ()
   (decknix-agent-session-cache-test--with-provider
     (let ((sync-called 0))

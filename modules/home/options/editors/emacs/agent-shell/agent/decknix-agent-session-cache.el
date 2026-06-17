@@ -55,6 +55,14 @@
 ;; loaded by the heredoc immediately before this module.
 (declare-function decknix--agent-session-parse "decknix-agent-parse" (raw))
 
+;; Forward declaration: the path builder lives in sibling
+;; `decknix-agent-session-history' (which itself requires this module
+;; for `decknix--session-meta', so we must not `require' it back --
+;; both are loaded at daemon start).  Used by the cheap disk-probe
+;; branch of `decknix--agent-provider-for-session-id'.
+(declare-function decknix--agent-session-file
+                  "decknix-agent-session-history" (session-id &optional provider-id))
+
 ;; ---------------------------------------------------------------------------
 ;; Public state — read/invalidated by sidebar, picker, batch flows
 ;; ---------------------------------------------------------------------------
@@ -489,17 +497,51 @@ Triggers an async mtime-keyed refresh when the cache is stale."
 
 (defun decknix--agent-provider-for-session-id (session-id)
   "Return the provider-id that owns SESSION-ID, or the default provider.
-Searches the combined session cache for a session whose `sessionId'
-field matches SESSION-ID and reads its `providerId' stamp (set by
-`decknix--session-meta' at parse time).  Falls back to
-`decknix-agent-default-provider' for sessions in old cache entries
-that pre-date Phase 1.3 (before `providerId' was stamped)."
-  (let* ((sessions (decknix--agent-session-list))
-         (match (seq-find (lambda (s)
-                            (string= (alist-get 'sessionId s) session-id))
-                          sessions)))
-    (or (and match (alist-get 'providerId match))
-        decknix-agent-default-provider)))
+
+Resolution is intentionally cheap so the resume path stays fast:
+
+  1. Scan the already-loaded in-memory session caches
+     (`decknix--agent-session-cache-map').  Zero I/O; covers the
+     warm/common case where the picker or a prior resume has already
+     populated the cache for a provider.
+  2. Probe each registered provider's on-disk session *file* by path
+     existence only -- a `file-exists-p' for single-directory
+     providers, a bounded `find ... -print -quit' (via
+     `decknix--agent-session-file') for multi-project providers.  No
+     transcript parsing happens here.  Providers are probed in
+     registry order, so the default (auggie) -- registered first and
+     by far the most common -- short-circuits before any expensive
+     multi-project `find'.
+  3. Fall back to `decknix-agent-default-provider'.
+
+This deliberately does NOT call `decknix--agent-session-list', which
+would trigger a synchronous metadata refresh (jq-parsing every
+session transcript) for EVERY registered provider.  That all-provider
+parse on a cold in-memory cache was the cause of the multi-second
+stall observed when resuming sessions after a daemon reload (the
+reload re-evaluates the cache defvars, emptying the maps)."
+  (or
+   ;; 1. In-memory cache scan -- zero I/O.
+   (catch 'found
+     (dolist (entry decknix-agent-provider-registry)
+       (let ((p-id (car entry)))
+         (dolist (s (gethash p-id decknix--agent-session-cache-map))
+           (when (string= (alist-get 'sessionId s) session-id)
+             (throw 'found p-id)))))
+     nil)
+   ;; 2. On-disk path probe -- no transcript parsing.
+   (when (fboundp 'decknix--agent-session-file)
+     (catch 'found
+       (dolist (entry decknix-agent-provider-registry)
+         (let* ((p-id (car entry))
+                (file (decknix--agent-session-file session-id p-id)))
+           (when (and (stringp file)
+                      (not (string-empty-p file))
+                      (file-exists-p file))
+             (throw 'found p-id))))
+       nil))
+   ;; 3. Fallback.
+   decknix-agent-default-provider))
 
 (provide 'decknix-agent-session-cache)
 ;;; decknix-agent-session-cache.el ends here
