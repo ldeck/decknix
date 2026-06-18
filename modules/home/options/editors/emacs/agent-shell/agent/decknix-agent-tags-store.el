@@ -107,23 +107,36 @@ or walking the store for orphaned v1 entries."
       decknix--agent-tags-cache
     (setq decknix--agent-tags-cache-checked-at (float-time))
     ;; Check if cache is valid (file hasn't changed)
-    (let ((current-mtime (and (file-exists-p decknix--agent-tags-file)
-                              (file-attribute-modification-time
-                               (file-attributes decknix--agent-tags-file)))))
+    (let* ((file decknix--agent-tags-file)
+           (current-mtime (and (file-exists-p file)
+                               (file-attribute-modification-time
+                                (file-attributes file)))))
       (when (or (null decknix--agent-tags-cache)
                 (not (equal current-mtime decknix--agent-tags-cache-mtime)))
         ;; Cache miss — read from disk
         (setq decknix--agent-tags-cache
-              (if (file-exists-p decknix--agent-tags-file)
+              (if (file-exists-p file)
                   (condition-case err
                       (let* ((json-object-type 'hash-table)
                              (json-array-type 'list)
                              (json-key-type 'string))
-                        (json-read-file decknix--agent-tags-file))
+                        (json-read-file file))
                     (error
-                     (message "Warning: could not read tag store: %s"
-                              (error-message-string err))
-                     (make-hash-table :test 'equal)))
+                     (let ((corrupt-file (concat file ".corrupt-"
+                                                 (format-time-string "%Y%m%d-%H%M%S")))
+                           (bak-file (concat file ".bak")))
+                       (message "ERROR: Tag store corrupted! Moving to %s" corrupt-file)
+                       (rename-file file corrupt-file t)
+                       (if (file-exists-p bak-file)
+                           (progn
+                             (message "Restoring tag store from backup...")
+                             (copy-file bak-file file t t)
+                             (let* ((json-object-type 'hash-table)
+                                    (json-array-type 'list)
+                                    (json-key-type 'string))
+                               (json-read-file file)))
+                         (message "Warning: No backup available. Starting with empty store.")
+                         (make-hash-table :test 'equal)))))
                 (make-hash-table :test 'equal)))
         (setq decknix--agent-tags-cache-mtime current-mtime)))
     (let ((store decknix--agent-tags-cache))
@@ -293,18 +306,44 @@ Mutates STORE in place; returns the number of entries re-keyed."
     rekeyed))
 
 (defun decknix--agent-tags-write (store)
-  "Write STORE (hash-table) to the tag file and update in-memory cache."
-  (let ((dir (file-name-directory decknix--agent-tags-file)))
+  "Write STORE (hash-table) to the tag file and update in-memory cache.
+Writes atomically using a temporary file and `rename-file`.
+Maintains a rolling backup at `agent-sessions.json.bak'."
+  (let* ((file decknix--agent-tags-file)
+         (dir (file-name-directory file))
+         (bak-file (concat file ".bak")))
     (unless (file-directory-p dir)
       (make-directory dir t))
-    (with-temp-file decknix--agent-tags-file
-      (let ((json-encoding-pretty-print t))
-        (insert (json-encode store))))
-    ;; Update cache so subsequent reads don't hit disk
-    (setq decknix--agent-tags-cache store
-          decknix--agent-tags-cache-mtime
-          (file-attribute-modification-time
-           (file-attributes decknix--agent-tags-file)))))
+    (let ((tmp-file (make-temp-file (concat file ".tmp-"))))
+      ;; 1. Guard against empty-store clobbering.
+    ;; If the store is empty but the disk file has content (> 30 bytes
+    ;; means at least one conversation is stored), refuse to overwrite.
+    (let ((convs (gethash "conversations" store)))
+      (when (and (or (null convs) (zerop (hash-table-count convs)))
+                 (file-exists-p file)
+                 (> (file-attribute-size (file-attributes file)) 30))
+        (delete-file tmp-file)
+        (error "Refusing to overwrite non-empty tag store with empty data")))
+
+    (condition-case err
+        (progn
+          ;; 2. Write to temp file
+          (with-temp-file tmp-file
+            (let ((json-encoding-pretty-print t))
+              (insert (json-encode store))))
+          ;; 3. Rotate backup
+          (when (file-exists-p file)
+            (copy-file file bak-file t t))
+          ;; 4. Atomic rename
+          (rename-file tmp-file file t)
+          ;; Update cache
+          (setq decknix--agent-tags-cache store
+                decknix--agent-tags-cache-mtime
+                (file-attribute-modification-time
+                 (file-attributes file))))
+      (error
+       (when (file-exists-p tmp-file) (delete-file tmp-file))
+       (signal (car err) (cdr err)))))))
 
 (defun decknix--agent-tags-conversations (store)
   "Get the conversations hash-table from STORE."
