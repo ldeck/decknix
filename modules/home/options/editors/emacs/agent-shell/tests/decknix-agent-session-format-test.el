@@ -188,5 +188,31 @@
       (should (equal (decknix--agent-session-display-name s)
                      "api/v2")))))
 
+;; -- canonical-buffer-name ---------------------------------------
+
+(ert-deftest decknix-agent-session-format/canonical-name-wraps-label-and-tags ()
+  "Canonical buffer name is `*<label>: <derived>*' from tags."
+  (should (equal (decknix--agent-session-canonical-buffer-name
+                  "Auggie" '("nurturecloud" "retro") nil nil nil nil)
+                 "*Auggie: nurturecloud/retro*")))
+
+(ert-deftest decknix-agent-session-format/canonical-name-honours-provider-label ()
+  "A non-Auggie LABEL flows through to the wrapper verbatim."
+  (should (equal (decknix--agent-session-canonical-buffer-name
+                  "Claude" '("feat") nil nil nil nil)
+                 "*Claude: feat*")))
+
+(ert-deftest decknix-agent-session-format/canonical-name-falls-back-to-workspace ()
+  "No tags: the derived name falls back to <dir>/<branch> from workspace."
+  (should (equal (decknix--agent-session-canonical-buffer-name
+                  "Auggie" nil "/Users/me/tools/decknix" "main" nil nil)
+                 "*Auggie: decknix/main*")))
+
+(ert-deftest decknix-agent-session-format/canonical-name-falls-back-to-sid ()
+  "No tags/workspace/message: the 8-char session-id prefix is used."
+  (should (equal (decknix--agent-session-canonical-buffer-name
+                  "Auggie" nil nil nil "" "deadbeef-1234")
+                 "*Auggie: deadbeef*")))
+
 (provide 'decknix-agent-session-format-test)
 ;;; decknix-agent-session-format-test.el ends here

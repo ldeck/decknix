@@ -33,6 +33,13 @@
 ;;       around `decknix--agent-session-derive-name' for the resume path:
 ;;       extracts tags, first-message, and session-id from SESSION and
 ;;       delegates.  Drives the `*Auggie: <name>*' rename on resume.
+;;
+;;   `decknix--agent-session-canonical-buffer-name'
+;;       (label tags &optional workspace branch first-message sid) --
+;;       wrap `decknix--agent-session-derive-name' in the provider's
+;;       `*<label>: <name>*' buffer-name shell.  Single source of truth
+;;       for the full buffer name shared by new-session creation,
+;;       resume, and the rename-from-tags re-canonicalisation command.
 
 ;;; Code:
 
@@ -107,6 +114,23 @@ session-id from SESSION, then delegates.  Priority: slug (Claude sub-agent)
     (if (and (stringp slug) (not (string-empty-p slug)))
         slug
       (decknix--agent-session-derive-name tags nil nil first-msg sid))))
+
+(defun decknix--agent-session-canonical-buffer-name
+    (label tags &optional workspace branch first-message sid)
+  "Return the canonical `*LABEL: NAME*' buffer name.
+LABEL is the provider's human-readable label (e.g. \"Auggie\").  NAME
+is derived by `decknix--agent-session-derive-name' from TAGS with the
+optional WORKSPACE / BRANCH / FIRST-MESSAGE / SID fallbacks.
+
+This wraps the inner name in the provider buffer-name shell so the
+full buffer name has one source of truth shared by new-session
+creation, resume, and the rename-from-tags re-canonicalisation
+command.  Kept provider-agnostic (LABEL is a plain string) so the
+pure formatter carries no dependency on the provider registry."
+  (format "*%s: %s*"
+          label
+          (decknix--agent-session-derive-name
+           tags workspace branch first-message sid)))
 
 (provide 'decknix-agent-session-format)
 ;;; decknix-agent-session-format.el ends here

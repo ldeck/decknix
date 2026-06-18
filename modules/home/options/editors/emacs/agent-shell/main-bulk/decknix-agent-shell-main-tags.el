@@ -472,6 +472,23 @@ Prompts for a tag, then shows the latest session per matching conversation."
                   "ext:agent-shell-workspace")
 (defvar shell-maker--buffer-name-override)
 
+;; Canonical buffer-name builder (PR B.84) -- carved pure formatter in
+;; agent-shell/agent/decknix-agent-session-format.el.  Used by the
+;; rename-from-tags re-canonicalisation commands below.
+(declare-function decknix--agent-session-canonical-buffer-name
+                  "decknix-agent-session-format"
+                  (label tags &optional workspace branch first-message sid))
+;; Provider registry: `decknix-agent-provider-label' resolves the
+;; `*<label>: ...*' prefix; `decknix-agent-default-provider' is the
+;; fallback when a buffer has no recorded provider id.
+(declare-function decknix-agent-provider-label
+                  "decknix-agent-provider" (id))
+(defvar decknix-agent-default-provider)
+;; Buffer-local session state owned by `decknix-agent-shell-main-session'
+;; (the provider id) and the workspace-persist layer (the workspace).
+(defvar decknix--agent-provider-id)
+(defvar decknix--agent-session-workspace)
+
 (defun decknix-agent-session-rename (new-name)
   "Rename the current conversation to NEW-NAME.
 Updates the tags in agent-sessions.json (replacing all existing tags
@@ -519,6 +536,74 @@ agent-shell buffer."
       (when (fboundp 'agent-shell-workspace-sidebar-refresh)
         (ignore-errors (agent-shell-workspace-sidebar-refresh)))
       (message "Renamed conversation → %s" display))))
+
+;; == Re-canonicalise a live buffer name from its tags ==
+;; Unlike `decknix-agent-session-rename' (which PROMPTS and rewrites the
+;; stored tags), these commands leave the tag store untouched and only
+;; re-align the live buffer name with the latest naming conventions --
+;; useful after tags were edited out-of-band (restore, merge, manual
+;; JSON edit) so the buffer still carries a stale label.
+
+(defun decknix--agent-rename-current-buffer-from-tags ()
+  "Rename the current agent-shell buffer to its canonical tag-derived name.
+Resolves the conversation key for the current buffer, reads its tags
+from the live tag store, and renames the buffer to the canonical
+`*<provider>: <name>*' form (tags > workspace > session-id fallbacks
+via `decknix--agent-session-canonical-buffer-name').  Updates
+`shell-maker--buffer-name-override' and returns the new buffer name.
+Does NOT refresh the sidebar -- callers batch that.  Signals via the
+underlying `decknix--agent-require-*' helpers when the buffer has no
+resolvable conversation."
+  (let* ((conv-key (decknix--agent-require-conv-key))
+         (tags (decknix--agent-tags-for-conv-key conv-key))
+         (workspace (and (boundp 'decknix--agent-session-workspace)
+                         decknix--agent-session-workspace))
+         (sid (ignore-errors (decknix--agent-require-session-id)))
+         (provider (or (and (boundp 'decknix--agent-provider-id)
+                            decknix--agent-provider-id)
+                       decknix-agent-default-provider))
+         (label (decknix-agent-provider-label provider))
+         (new-name (decknix--agent-session-canonical-buffer-name
+                    label tags workspace nil nil sid)))
+    (rename-buffer new-name t)
+    (when (boundp 'shell-maker--buffer-name-override)
+      (setq shell-maker--buffer-name-override (buffer-name)))
+    (buffer-name)))
+
+(defun decknix-agent-session-rename-from-tags ()
+  "Re-derive the current buffer's name from its live tag-store tags.
+Renames the current agent-shell buffer to the canonical
+`*<provider>: <tags>*' form without prompting and without changing
+the stored tags.  Refreshes the sidebar when visible."
+  (interactive)
+  (let ((new-name (decknix--agent-rename-current-buffer-from-tags)))
+    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+      (ignore-errors (agent-shell-workspace-sidebar-refresh)))
+    (message "Renamed buffer → %s" new-name)))
+
+(defun decknix-agent-session-rename-all-live ()
+  "Re-derive every live agent-shell buffer's name from its tags.
+Iterates all `agent-shell-mode' buffers and re-canonicalises each
+name from the live tag store (see
+`decknix-agent-session-rename-from-tags').  Buffers whose
+conversation key or session id can't be resolved are skipped.
+Refreshes the sidebar once at the end and reports the counts."
+  (interactive)
+  (let ((renamed 0)
+        (skipped 0))
+    (dolist (buf (buffer-list))
+      (with-current-buffer buf
+        (when (derived-mode-p 'agent-shell-mode)
+          (condition-case nil
+              (progn (decknix--agent-rename-current-buffer-from-tags)
+                     (setq renamed (1+ renamed)))
+            (error (setq skipped (1+ skipped)))))))
+    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+      (ignore-errors (agent-shell-workspace-sidebar-refresh)))
+    (message "Re-canonicalised %d live session%s%s"
+             renamed (if (= renamed 1) "" "s")
+             (if (> skipped 0) (format " (%d skipped)" skipped) ""))
+    renamed))
 
 ;; == Session ID: shortened display, copy, toggle ==
 
