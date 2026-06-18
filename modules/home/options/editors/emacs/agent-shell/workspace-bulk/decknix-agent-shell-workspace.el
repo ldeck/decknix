@@ -1392,11 +1392,11 @@ All toggle keys are accessed via the T transient prefix."
                                      'font-lock-comment-face)))))))
           (live
            (list
-            (cons \"v\" (format \"attention %s\"
+            (cons "v" (format "attention %s"
                           (propertize
-                           (format \"[%s]\" (or (bound-and-true-p decknix--sidebar-attention-style) 'compact))
+                           (format "[%s]" (or (bound-and-true-p decknix--sidebar-attention-style) 'compact))
                            'face 'font-lock-constant-face)))
-            (cons \"H\" (format \"hidden %s\"
+            (cons "H" (format "hidden %s"
                           (propertize
                            (if decknix--sidebar-show-hidden "[shown]" "[hidden]")
                            'face (if decknix--sidebar-show-hidden
@@ -5079,9 +5079,21 @@ or the session list is stale)."
       (let ((main (decknix--sidebar-find-main-window)))
         (when (window-live-p main)
           (select-window main)))
-      ;; resume now handles display-action override internally
-      (let ((new-buf (decknix--agent-session-resume
-                      sid 20 display-name workspace conv-key)))
+      ;; resume now handles display-action override internally.
+      ;; When restoring in background (focus=nil), wrap the resume call
+      ;; in `save-window-excursion' so the window configuration is
+      ;; restored after the buffer is created.  This prevents each
+      ;; background restore from replacing the main window's buffer,
+      ;; which would otherwise make all-but-the-last session appear
+      ;; invisible (the 2s focus timer would then show the first session,
+      ;; giving the impression that only 1 was restored).  The buffer IS
+      ;; created and appears in the Live section of the sidebar.
+      (let ((new-buf (if focus
+                         (decknix--agent-session-resume
+                          sid 20 display-name workspace conv-key)
+                       (save-window-excursion
+                         (decknix--agent-session-resume
+                          sid 20 display-name workspace conv-key)))))
         ;; Remove from previous list since it's now live.  When
         ;; the entry has a conv-key, clear ALL entries sharing
         ;; that key — auggie writes multiple on-disk snapshots
