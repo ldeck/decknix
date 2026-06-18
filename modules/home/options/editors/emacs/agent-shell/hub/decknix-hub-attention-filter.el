@@ -284,11 +284,11 @@ non-conflicting so new PRs are not inadvertently suppressed."
    "Requests 🤖 filter: %s"))
 
 (defun decknix--hub-toggle-requests-only-my-replies ()
-  "Toggle showing only Requests PRs with 📬 or 👽 (replies to my comments)."
+  "Toggle showing only Requests PRs with ↩ or 👽 (replies to my comments)."
   (interactive)
   (decknix--hub-toggle-and-refresh
    'decknix--hub-requests-only-my-replies
-   "Requests 📬/👽 only-my-replies: %s"))
+   "Requests ↩/👽 only-my-replies: %s"))
 
 (defun decknix--hub-cycle-requests-hide-reviewed ()
   "Cycle the Requests hide-reviewed filter: nil → hide-mine → hide-any → nil.
@@ -339,11 +339,11 @@ for an ephemeral flip that does not persist."
    "WIP 🤖 filter: %s"))
 
 (defun decknix--hub-toggle-wip-only-my-replies ()
-  "Toggle showing only WIP PRs with 📬 or 👽 (replies to my comments)."
+  "Toggle showing only WIP PRs with ↩ or 👽 (replies to my comments)."
   (interactive)
   (decknix--hub-toggle-and-refresh
    'decknix--hub-wip-only-my-replies
-   "WIP 📬/👽 only-my-replies: %s"))
+   "WIP ↩/👽 only-my-replies: %s"))
 
 (provide 'decknix-hub-attention-filter)
 ;;; decknix-hub-attention-filter.el ends here

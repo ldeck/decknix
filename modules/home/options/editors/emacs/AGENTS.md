@@ -525,7 +525,7 @@ The `decknix--context-update-header` function delegates to the unified header
     or my team is requested without other individuals tagged —
     filters out team-noise where someone else is already handling it),
     `C` ci, `c` 💬 comments (hide PRs whose latest non-bot activity is
-    someone else), `M` 📬/👽 replies-to-me (show only PRs where a human or
+    someone else), `M` ↩/👽 replies-to-me (show only PRs where a human or
     bot replied in a thread I participated in), `s` sort ⇅ (flip
     oldest→newest; picker honours the same flag, `M-s` inside a picker
     flips it ephemerally), `X` ⚠ conflict (hide PRs with a merge
@@ -548,7 +548,7 @@ The `decknix--context-update-header` function delegates to the unified header
     clean up on disk, #137 — terminal rows surfaced by the toggle-off
     path carry a `⊘` stale badge prefixed to the title and dimmed
     title face so they read as reference-only at a glance, #138),
-    `P` pipeline/deploy indicators, `r` 📬/👽 replies-to-me (parallel
+    `P` pipeline/deploy indicators, `r` ↩/👽 replies-to-me (parallel
     to the Requests triad, independent state because WIP is about
     my own PRs — I usually want to see 🤖/👽 so I can push a fix),
     `n` 💬 comments, `u` 🤖 bot-review

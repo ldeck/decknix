@@ -36,7 +36,7 @@ the contract.
 <tr><td><span class="r bd">██</span></td><td>#e06c75</td><td>error / red</td><td>changes-requested <span class="r">◐</span>/<span class="r">✗</span>, CI fail, conflict <span class="r">▣</span>/<span class="r">⚠</span>, age ≥3d</td></tr>
 <tr><td><span class="y bd">██</span></td><td>#e5c07b</td><td>warning / yellow</td><td>draft <span class="y">★</span>, CI running, review-required, bot-pending <span class="y bd">b</span>, needs-reply, age &lt;3d, <span class="y">?</span></td></tr>
 <tr><td><span class="c bd">██</span></td><td>#61afef</td><td>info / blue</td><td>open state word, team <span class="c bd">@</span>, idle worktree <span class="c">⎇</span>, branch names</td></tr>
-<tr><td><span class="sg bd">██</span></td><td>#87d7af</td><td>soft green</td><td>human reply <span class="sg bd">📬</span>, bot reply <span class="sg bd">👽</span>, reply-state comments column</td></tr>
+<tr><td><span class="sg bd">██</span></td><td>#87d7af</td><td>soft green</td><td>human reply <span class="sg bd">↩</span>, bot reply <span class="sg bd">👽</span>, reply-state comments column</td></tr>
 <tr><td><span class="ac bd">██</span></td><td>#87d7ff</td><td>bright cyan</td><td>active-review indicator <span class="ac">◉</span></td></tr>
 <tr><td><span class="gd bd">██</span></td><td>#d7af5f</td><td>gold</td><td>me <span class="gd bd">@</span>, active-review row tint, needs-reply <span class="gd">💬</span></td></tr>
 <tr><td><span class="bo bd">██</span></td><td>#af5f87</td><td>pink / mauve</td><td>bot author <span class="bo">π</span>, bot-pending <span class="bo">🤖</span></td></tr>
@@ -75,8 +75,9 @@ A fixed 2-column slot at the start of hub rows
 
 ## Symbol style (`y` toggle)
 
-`y` swaps the **emoji activity icons** (<span class="bo">🤖</span> <span class="bo">👽</span>
-<span class="gd">💬</span> <span class="sg">📬</span> 📥 📤) between emoji and an
-ASCII fallback. The shape-family glyphs and the columnar `⟳ ✓ ✗` always stay
-ASCII — Emacs faces cannot tint colour-emoji, so the colour contract above
-depends on them being plain glyphs.
+`y` swaps the **row-level activity icons** (<span class="bo">🤖</span> <span class="bo">👽</span>
+<span class="gd">💬</span> <span class="sg">↩</span>) between emoji and an
+ASCII fallback (`β`/`β`/`i`/`i`). The Live section count badges (📥 📤) are
+always emoji and are not affected by the toggle. The shape-family glyphs and
+the columnar `⟳ ✓ ✗` always stay ASCII — Emacs faces cannot tint colour-emoji,
+so the colour contract above depends on them being plain glyphs.
