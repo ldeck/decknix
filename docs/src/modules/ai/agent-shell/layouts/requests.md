@@ -93,7 +93,7 @@ The `Requests (N)` header grows badges for active filters (`hub.el:2581`):
 | `b` | 🤖 bot-review | hide PRs whose latest activity is a bot (default on) |
 | `B` | bot-authors | hide → show → mentioned |
 | `c` | 💬 comments | hide PRs whose latest non-bot activity is someone else |
-| `M` | 📬/👽 replies-to-me | only PRs where a human or bot replied in my thread |
+| `M` | ↩/👽 replies-to-me | only PRs where a human or bot replied in my thread |
 | `s` | sort ⇅ | flip oldest↔newest (seeds the `r` picker) |
 | `X` | ⚠ conflict | hide `mergeable = CONFLICTING` PRs (default on) |
 

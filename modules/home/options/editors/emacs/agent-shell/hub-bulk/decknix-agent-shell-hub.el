@@ -508,7 +508,7 @@ picker's dynamic binding unwinds.")
   :key "M"
   :description
   (lambda ()
-    (format "📬/👽          %s"
+    (format "↩/👽           %s"
             (propertize
              (if decknix--hub-requests-only-my-replies "[only]" "[all]")
              'face (if decknix--hub-requests-only-my-replies
@@ -615,7 +615,7 @@ picker's dynamic binding unwinds.")
   :key "r"
   :description
   (lambda ()
-    (format "replies 📬/👽 %s"
+    (format "replies ↩/👽  %s"
             (propertize
              (if decknix--hub-wip-only-my-replies "[only]" "[all]")
              'face (if decknix--hub-wip-only-my-replies
@@ -2690,14 +2690,12 @@ row, or an empty string when no linked PR is attention-worthy."
                              ('success 'success)))
                  (fg (face-foreground att-face nil t))
                  (final-face (list :foreground fg :weight (if mentioned 'bold 'normal))))
-            (if emoji-layout
-                (push (decknix--hub-icon (if (member worst-state '(error warning)) "📬" "📭") att-face) parts)
-              (push (propertize "@" 'face final-face) parts)))))
+            (push (propertize "@" 'face final-face) parts)))))
 
       ;; Activity icons (Family 1)
       (when any-human-replies
         (push (if emoji-layout
-                  (decknix--hub-icon "📬" '(:foreground "#87d7af" :weight bold))
+                  (decknix--hub-icon "↩" '(:foreground "#87d7af" :weight bold))
                 (propertize "i" 'face '(:foreground "#5fc8d4" :weight bold :slant italic)))
               parts))
       (when any-bot-replies

@@ -1368,7 +1368,7 @@ All toggle keys are accessed via the T transient prefix."
                              'face (if decknix--hub-requests-sort-reverse
                                        'font-lock-constant-face
                                      'font-lock-comment-face))))
-              (cons "M" (concat "📬/👽 "
+              (cons "M" (concat "↩/👽  "
                             (propertize
                              (if decknix--hub-requests-only-my-replies "[only]" "[all]")
                              'face (if decknix--hub-requests-only-my-replies
@@ -1503,7 +1503,7 @@ All toggle keys are accessed via the T transient prefix."
                            'face (if decknix--hub-show-deploys
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
-            (cons "r" (format "replies 📬/👽 %s"
+            (cons "r" (format "replies ↩/👽  %s"
                           (propertize
                            (if decknix--hub-wip-only-my-replies "[only]" "[all]")
                            'face (if decknix--hub-wip-only-my-replies
