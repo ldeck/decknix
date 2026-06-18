@@ -226,6 +226,7 @@
 (defvar decknix-hub-eager-clone-probe)
 (defvar decknix--sidebar-previous-sessions)
 (declare-function decknix--sidebar-previous-dedupe "decknix-sidebar-previous")
+(declare-function decknix--sidebar-previous-display-name "decknix-sidebar-previous")
 (declare-function decknix--sidebar-previous-history-record
                   "decknix-sidebar-previous" (sessions))
 (defvar decknix--sidebar-previous-history)
@@ -4984,11 +4985,12 @@ Returns updated LINE-NUM."
        'previous)
       (setq line-num (1+ line-num))
       (dolist (entry prev)
-        (let* ((name (or (alist-get 'name entry) "unknown"))
-               ;; Strip *Auggie: ... * wrapper if present
-               (short (if (string-match "\\*Auggie: \\(.*\\)\\*" name)
-                          (match-string 1 name)
-                        name))
+        (let* (;; Re-derive the label from the *current* tag store
+               ;; (keyed by conv-key) so tags added or changed after
+               ;; the snapshot was recorded show immediately, matching
+               ;; the Saved-Sessions section.  Falls back to the baked
+               ;; `name' (sans `*Auggie: ...*' wrapper) then "unknown".
+               (short (decknix--sidebar-previous-display-name entry))
                (prev-conv-key (alist-get 'conv-key entry))
                (pr-badge (if prev-conv-key
                              (decknix--hub-pr-badge prev-conv-key)
@@ -5058,15 +5060,14 @@ session-id and pass that to `--resume'.  The stored sid is used only
 as a fallback when no newer snapshot is found (e.g. conv-key missing
 or the session list is stale)."
   (let* ((stored-sid (alist-get 'session-id entry))
-         (name (alist-get 'name entry))
          (workspace (alist-get 'workspace entry))
          (conv-key (alist-get 'conv-key entry))
          (sid (or (decknix--agent-latest-session-id-for-conv-key conv-key)
                   stored-sid))
-         ;; Strip *Auggie: ... * wrapper
-         (display-name (if (and name (string-match "\\*Auggie: \\(.*\\)\\*" name))
-                           (match-string 1 name)
-                         name)))
+         ;; Re-derive from the current tag store (same helper as the
+         ;; render path) so the resumed buffer's name hint reflects
+         ;; live tags rather than the stale baked-in `name'.
+         (display-name (decknix--sidebar-previous-display-name entry)))
     (if (not sid)
         (message "Cannot restore: no session ID")
       ;; Select a non-sidebar content window so agent-session-resume
