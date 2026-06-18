@@ -34,6 +34,17 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
+
+;; Forward declarations -- these symbols live in sibling agent/
+;; packages (`decknix-agent-tags-read', `decknix-agent-session-format')
+;; loaded before this module by the heredoc, so they always resolve at
+;; call time.  Declared here to keep the byte-compile warning-clean.
+(declare-function decknix--agent-tags-for-conv-key
+                  "decknix-agent-tags-read" (conv-key))
+(declare-function decknix--agent-session-derive-name
+                  "decknix-agent-session-format"
+                  (tags &optional workspace branch first-message sid))
 
 (defvar decknix--sidebar-previous-sessions nil
   "List of sessions that were live when Emacs last exited.
@@ -151,6 +162,33 @@ session-id-based uniqueness so they are never accidentally merged."
           (puthash key t seen)
           (push e out))))
     (nreverse out)))
+
+(defun decknix--sidebar-previous-display-name (entry)
+  "Return the row label for Previous-Sessions ENTRY.
+Re-derives the name from the *current* tag store keyed by the entry's
+`conv-key', so tags added or changed after the snapshot was recorded are
+reflected immediately -- matching the Saved-Sessions section, which
+already derives names live.  Resolution order:
+
+  1. Tags from the live tag store (`decknix--agent-tags-for-conv-key'),
+     falling back to the entry's baked-in `tags' when the store has none
+     -- joined into a name via `decknix--agent-session-derive-name'.
+  2. The baked-in `name', stripped of its `*Auggie: ...*' wrapper.
+  3. The literal \"unknown\" when nothing is available.
+
+A nil `conv-key' skips the store lookup entirely (best-effort rows that
+were never addressable on disk still render from their baked fields)."
+  (let* ((conv-key (alist-get 'conv-key entry))
+         (tags (or (and conv-key
+                        (decknix--agent-tags-for-conv-key conv-key))
+                   (alist-get 'tags entry)))
+         (name (alist-get 'name entry)))
+    (cond
+     (tags (decknix--agent-session-derive-name tags))
+     ((and name (string-match "\\*Auggie: \\(.*\\)\\*" name))
+      (match-string 1 name))
+     (name name)
+     (t "unknown"))))
 
 (provide 'decknix-sidebar-previous)
 ;;; decknix-sidebar-previous.el ends here
