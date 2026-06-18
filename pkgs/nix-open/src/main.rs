@@ -305,6 +305,12 @@ fn handle_emacs_daemon_frame() -> bool {
     eprintln!("🖥️  Emacs: creating daemon frame via emacsclient");
     match Command::new(&client).args(["-a", "", "-c", "-n"]).status() {
         Ok(s) if s.success() => {
+            // Bring the Emacs frame to the foreground.  The daemon runs with
+            // ProcessType=Background so macOS does not automatically raise its
+            // windows; an explicit AppleScript activate call is required.
+            let _ = Command::new("osascript")
+                .args(["-e", "tell application \"Emacs\" to activate"])
+                .status();
             eprintln!("   ✅ Emacs frame opened");
             true
         }
