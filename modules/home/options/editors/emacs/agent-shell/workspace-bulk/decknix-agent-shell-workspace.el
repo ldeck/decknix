@@ -121,6 +121,7 @@
 (declare-function decknix--hub-ci-visible-p "decknix-hub-ci-filter")
 (declare-function decknix--hub-ci-filter-summary "decknix-hub-ci-filter")
 (declare-function decknix--hub-sort-requests "decknix-hub-attention-filter")
+(declare-function decknix--hub-request-activity-time "decknix-hub-attention-filter")
 (declare-function decknix--hub-requests-attention-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-requests-reviewed-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-requests-conflict-visible-p "decknix-hub-attention-filter")
@@ -2615,12 +2616,12 @@ Shows result in the echo area and triggers a hub refresh on success."
       (list (transient-parse-suffix transient--prefix
               '("q" "No requests" ignore)))
     (let* ((all-items (alist-get 'items decknix--hub-reviews))
-           (items (seq-filter
+           (filtered (seq-filter
                    (lambda (item)
                      (and (decknix--hub-item-visible-p (alist-get 'repo item))
                           ;; Use most-recent-activity time, matching sidebar render.
                           (decknix--hub-age-visible-p
-                           (or (alist-get 'updated item) (alist-get 'created item)))
+                           (decknix--hub-request-activity-time item))
                           (decknix--hub-ci-visible-p item)
                           (decknix--hub-mention-visible-p item)
                           (decknix--hub-bot-visible-p item)
@@ -2628,13 +2629,16 @@ Shows result in the echo area and triggers a hub refresh on success."
                           (decknix--hub-requests-reviewed-visible-p item)
                           (decknix--hub-requests-conflict-visible-p item)))
                    (or all-items '())))
+           ;; Apply the shared sort so this transient picker matches the
+           ;; sidebar's row order (newest-activity first by default).
+           (items (decknix--hub-sort-requests filtered))
            (keys decknix--nav-keys))
       (append
        (cl-loop for item in items
                 for key in keys
                 collect
                 (let* ((age (decknix--hub-format-age
-                             (alist-get 'created item)))
+                             (decknix--hub-request-activity-time item)))
                        (repo-full (or (alist-get 'repo item) ""))
                        (repo (car (last (split-string repo-full "/"))))
                        (number (alist-get 'number item))
@@ -2858,7 +2862,7 @@ Interactively: \\[universal-argument] N r limits to N items;
                                  ;; Mirror sidebar: use most-recent-activity time
                                  ;; (updated takes precedence over created).
                                  (decknix--hub-age-visible-p
-                                  (or (alist-get 'updated item) (alist-get 'created item)))
+                                  (decknix--hub-request-activity-time item))
                                  (decknix--hub-ci-visible-p item)
                                  (decknix--hub-mention-visible-p item)
                                  (decknix--hub-bot-visible-p item)
@@ -2910,7 +2914,7 @@ Interactively: \\[universal-argument] N r limits to N items;
                     (mapcar
                      (lambda (item)
                        (let* ((age (decknix--hub-format-age
-                                    (alist-get 'created item)))
+                                    (decknix--hub-request-activity-time item)))
                               (repo-full (or (alist-get 'repo item) ""))
                               (repo (car (last (split-string repo-full "/"))))
                               (number (alist-get 'number item))

@@ -888,6 +888,7 @@ Order: `hide' → `show' → `mentioned' → `hide'.  See
 (defvar decknix--hub-wip-hide-bot-pending)
 (defvar decknix--hub-wip-only-my-replies)
 (declare-function decknix--hub-sort-requests "decknix-hub-attention-filter" (items))
+(declare-function decknix--hub-request-activity-time "decknix-hub-attention-filter" (item))
 (declare-function decknix--hub-attention-visible-p
                   "decknix-hub-attention-filter"
                   (item hide-reply hide-bot only-my))
@@ -2751,7 +2752,7 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                            ;; so a PR re-requested for review isn't hidden by age even
                            ;; when its original creation date is old.
                            (decknix--hub-age-visible-p
-                            (or (alist-get 'updated item) (alist-get 'created item)))
+                            (decknix--hub-request-activity-time item))
                            (decknix--hub-ci-visible-p item)
                            (decknix--hub-mention-visible-p item)
                            (decknix--hub-bot-visible-p item)
@@ -2797,7 +2798,7 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
         (let* ((age (decknix--hub-format-age
                      ;; Display the most-recent activity time so the
                      ;; visible age matches the sort key (updated > created).
-                     (or (alist-get 'updated item) (alist-get 'created item))))
+                     (decknix--hub-request-activity-time item)))
                (repo-full (or (alist-get 'repo item) ""))
                ;; Show only repo name, not owner/repo
                (repo (car (last (split-string repo-full "/"))))
