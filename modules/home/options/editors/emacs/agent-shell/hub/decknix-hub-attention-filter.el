@@ -149,6 +149,15 @@ Toggle with `r'.")
 
 ;; -- engine: sort + visibility predicates -------------------------
 
+(defun decknix--hub-request-activity-time (item)
+  "Return ITEM's most-recent-activity timestamp string, or nil.
+Prefers `updated' (GitHub updatedAt) and falls back to `created'.
+This is the single source of truth for the Requests activity key:
+the sort, the age filter, and the displayed age column all consult
+it so the sidebar and pickers can never drift out of agreement on
+which time a row is ordered and labelled by."
+  (or (alist-get 'updated item) (alist-get 'created item)))
+
 (defun decknix--hub-sort-requests (items)
   "Return ITEMS sorted by most-recent activity, newest first by default.
 The sort key is `updated' when present (GitHub updatedAt), falling
@@ -162,8 +171,8 @@ the caller's list is never mutated."
                       decknix--hub-requests-sort-reverse)))
     (sort (copy-sequence (or items '()))
           (lambda (a b)
-            (let ((ka (or (alist-get 'updated a) (alist-get 'created a)))
-                  (kb (or (alist-get 'updated b) (alist-get 'created b))))
+            (let ((ka (decknix--hub-request-activity-time a))
+                  (kb (decknix--hub-request-activity-time b)))
               (cond
                ;; Items without any timestamp drift to the end.
                ((and (null ka) (null kb)) nil)

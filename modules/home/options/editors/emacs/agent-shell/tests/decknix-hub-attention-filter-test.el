@@ -87,6 +87,30 @@
         (item '((bot_pending . t))))
     (should (decknix--hub-wip-attention-visible-p item))))
 
+;; -- request-activity-time ----------------------------------------
+
+(ert-deftest decknix-hub-attention-filter--activity-time-prefers-updated ()
+  "Activity time returns `updated' when present (even if older than created)."
+  (should (equal "2025-01-10"
+                 (decknix--hub-request-activity-time
+                  '((created . "2025-01-05") (updated . "2025-01-10")))))
+  ;; `updated' wins unconditionally — it is not a max, it is a preference.
+  (should (equal "2025-01-01"
+                 (decknix--hub-request-activity-time
+                  '((created . "2025-01-05") (updated . "2025-01-01"))))))
+
+(ert-deftest decknix-hub-attention-filter--activity-time-falls-back-to-created ()
+  "Activity time falls back to `created' when `updated' is absent or nil."
+  (should (equal "2025-01-05"
+                 (decknix--hub-request-activity-time '((created . "2025-01-05")))))
+  (should (equal "2025-01-05"
+                 (decknix--hub-request-activity-time
+                  '((created . "2025-01-05") (updated . nil))))))
+
+(ert-deftest decknix-hub-attention-filter--activity-time-nil-when-neither ()
+  "Activity time is nil when neither `updated' nor `created' is present."
+  (should-not (decknix--hub-request-activity-time '((id . 1)))))
+
 ;; -- sort-requests ------------------------------------------------
 
 (ert-deftest decknix-hub-attention-filter--sort-newest-first-by-default ()
