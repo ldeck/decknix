@@ -33,7 +33,7 @@ field.
 
 ## View modes
 
-A session row is `sel · glyph · marker · name · tile · [N⬆ N✓] · 📥/📤/📬/👽 · progress`.
+A session row is `sel · glyph · marker · name · tile · [N⬆ N✓] · 📥/📤/↩/👽 · progress`.
 `>` marks the selected buffer. Tags are capped at 3 for readability; full tags
 are always visible in the header-line of the buffer itself.
 
@@ -96,7 +96,7 @@ are always visible in the header-line of the buffer itself.
 
 Attention badges (`hub` enabled): {r bd}📥N{/} linked PRs awaiting
 my action, {g bd}📤N{/} ones I've acted on,
-{sg bd}📬/👽{/} when any linked PR has replies to me. Terminal
+{sg bd}↩/👽{/} when any linked PR has replies to me. Terminal
 (MERGED/CLOSED) PRs are excluded so stale links don't add noise.
 
 ## Sub-agent rows

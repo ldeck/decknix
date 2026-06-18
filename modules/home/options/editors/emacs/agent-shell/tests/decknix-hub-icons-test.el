@@ -305,11 +305,11 @@ Stream-based ladder still applies."
 ;; the sidebar `y' toggle so both contracts stay covered.
 
 (ert-deftest decknix-hub-activity-icons--emoji-style-human-replies ()
-  "With symbol style 'emoji, replies-to-me renders 📬."
+  "With symbol style 'emoji, replies-to-me renders ↩."
   (let ((decknix--hub-symbol-style 'emoji))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons '((replies_to_me . t))))
-                   "📬 "))))
+                   "↩ "))))
 
 (ert-deftest decknix-hub-activity-icons--emoji-style-needs-reply ()
   "With symbol style 'emoji, needs-reply renders 💬."

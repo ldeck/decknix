@@ -146,7 +146,7 @@ reduce sidebar duplication."
 
 Indicates two families of signals (Human and Bot).
 Human family (left slot):
-- 📬 / i[bold] (replies-to-me) when a human posted after one of my comments.
+- ↩ / i[bold] (replies-to-me) when a human posted after one of my comments.
 - 💬 / i[dim]  (needs-reply) when the latest activity is a human and not me.
 Bot family (right slot):
 - 👽 / β[bold] (bot-replies-to-me) when a bot replied after my comment.
@@ -155,7 +155,7 @@ Bot family (right slot):
 Activity icons are suppressed for APPROVED PRs.
 
 Thread-aware Tier 1 suppression: when `total_threads' is present and
-greater than zero, human icons (📬/💬) are suppressed if `unresolved_threads'
+greater than zero, human icons (↩/💬) are suppressed if `unresolved_threads'
 equals zero (all threads resolved). Bot icons (👽/🤖) are not suppressed.
 
 Returns a string of length 2 (padded with spaces) if any activity is present,
@@ -169,7 +169,7 @@ italic characters and weight)."
          (decision          (or (alist-get 'review_decision pr)
                                 (alist-get 'my_review pr)))
          (approved          (equal decision "APPROVED"))
-         ;; Thread-aware suppression: suppress human 📬/💬 when all inline
+         ;; Thread-aware suppression: suppress human ↩/💬 when all inline
          ;; threads are resolved.  Only applies when total_threads > 0
          ;; so PRs with only PR-level comments fall back to stream logic.
          (total-threads     (alist-get 'total_threads pr))
@@ -186,7 +186,7 @@ italic characters and weight)."
                    ""
                  (cond (replies-to-me
                         (if emoji-layout
-                            (decknix--hub-icon "📬" '(:foreground "#87d7af" :weight bold))
+                            (decknix--hub-icon "↩" '(:foreground "#87d7af" :weight bold))
                           (propertize "i" 'face '(:foreground "#5fc8d4" :weight bold :slant italic))))
                        ((and needs-reply (not bot-pending))
                         (if emoji-layout
