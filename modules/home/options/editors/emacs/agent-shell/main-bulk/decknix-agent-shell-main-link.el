@@ -154,16 +154,17 @@
 
 ;; -- User-tunable quickaction defaults --
 
-(defvar decknix-agent-review-pr-model "haiku4.5"
+(defvar decknix-agent-review-pr-model "prism-a"
   "Auggie model id to pin for `/review-service-pr' sessions.
-When non-nil (e.g. \"haiku4.5\", \"prism-a\", \"opus4.7\"), every
+When non-nil (e.g. \"prism-a\", \"opus4.7\", \"haiku4.5\"), every
 PR-review quickaction passes `--model <id>' to auggie and persists
 the choice against the new conversation key so resumes continue on
 the same model.  When nil, the framework default from
 `~/.augment/settings.json' (see `decknix.cli.auggie.settings.model')
 is used and no per-conversation override is recorded.
-Defaults to \"haiku4.5\" so human-authored PR reviews use a fast,
-cost-effective model rather than inheriting the team flagship.")
+Defaults to \"prism-a\" so human-authored PR reviews use Augment's
+hybrid router (Opus on hard diffs, cheaper models on skim) — the
+best $/quality tradeoff for review-shaped work.")
 
 (defvar decknix-agent-review-bot-pr-model "haiku4.5"
   "Auggie model id to pin for bot-authored PR reviews.
