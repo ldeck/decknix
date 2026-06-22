@@ -117,12 +117,13 @@ Three layers, narrowest wins:
    adjustments.
 2. **Per-quickaction** — `decknix-agent-review-pr-model` pins the
    model for every `/review-service-pr` launch (PR-review entry
-   point, sidebar Requests row, batch processor).  Default `nil` =
-   inherit framework default.  Set in personal Emacs config:
+   point, sidebar Requests row, batch processor).  Defaults to
+   `prism-a`; pin a cheaper model for skim reviews, or `nil` to
+   inherit the framework default.  Set in personal Emacs config:
 
    ```elisp
    (with-eval-after-load 'decknix-agent-shell-main-link
-     (setq decknix-agent-review-pr-model "prism-a"))
+     (setq decknix-agent-review-pr-model "haiku4.5"))
    ```
 3. **Framework default** — `decknix.cli.auggie.settings.model` is
    written to `~/.augment/settings.json` and used when no `--model`
