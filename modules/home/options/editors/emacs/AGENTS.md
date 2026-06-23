@@ -531,7 +531,10 @@ The `decknix--context-update-header` function delegates to the unified header
     flips it ephemerally), `X` ⚠ conflict (hide PRs with a merge
     conflict — `mergeable = CONFLICTING` — default on; conflicting PRs
     need a rebase before reviewing makes sense, so they're hidden until
-    the conflict is resolved)
+    the conflict is resolved), `x` 📝 draft (hide PRs still in draft —
+    GitHub `isDraft = t` — default on; a draft is explicitly marked
+    not-ready by its author, so reviewing one wastes a dispatch; it
+    reappears automatically once the author flips it out of draft)
   - **Live**: `d` display mode, `H` hidden, `S` quick-switch,
     `N` repo-name cap (short/medium/full),
     `E` PRs (4-way cycle: off/PR/pipeline/both),
