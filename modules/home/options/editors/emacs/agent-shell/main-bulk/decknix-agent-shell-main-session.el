@@ -67,6 +67,7 @@ Use C-u prefix with the session picker to override.")
 ;; Provider abstraction.
 (require 'decknix-agent-provider)
 (declare-function decknix-agent-require-provider "decknix-agent-provider")
+(declare-function decknix-agent-provider-select "decknix-agent-provider")
 (declare-function decknix--agent-command-build "decknix-agent-provider")
 (declare-function decknix--agent-make-config "decknix-agent-provider")
 (defvar decknix-agent-default-provider)
@@ -1941,6 +1942,8 @@ With prefix argument QUICK, skip prompts and use defaults:
 workspace = project root, no tags; name is still derived automatically."
   (interactive "P")
   (let* ((default-ws (decknix--agent-detect-workspace))
+         (provider (if quick decknix-agent-default-provider
+                     (decknix-agent-provider-select)))
          (workspace (if quick default-ws
                       (read-directory-name "Workspace: " default-ws nil t)))
          (workspace (expand-file-name workspace))
@@ -1960,7 +1963,6 @@ workspace = project root, no tags; name is still derived automatically."
          ;; lambda is stored in agent-shell--state and called later
          ;; (when the first message is sent) — by which time a dynamic
          ;; let-binding would have expired.
-         (provider decknix-agent-default-provider)
          (augmented-cmd (decknix--agent-command-build provider workspace))
          (config (decknix--agent-make-config provider augmented-cmd)))
     ;; Set default-directory so agent-shell-cwd picks up the chosen
@@ -1972,7 +1974,7 @@ workspace = project root, no tags; name is still derived automatically."
     (setq decknix--agent-session-cache-time 0)
     ;; Post-creation: rename buffer immediately, subscribe to prompt-ready for metadata
     (decknix--agent-session-new-post-create
-     before-buffers name tags workspace)
+     before-buffers name tags workspace nil provider)
     (message "Starting agent session \"%s\" in %s…" name workspace)))
 
 (defun decknix-agent-session-fork ()
@@ -1993,6 +1995,7 @@ calling `decknix-agent-session-new' interactively."
                             (decknix--agent-detect-workspace)))
          (src-tags (when src-conv-key
                      (decknix--agent-tags-for-conv-key src-conv-key)))
+         (provider (decknix-agent-provider-select))
          ;; Let the user also change the workspace.
          (workspace (expand-file-name
                      (read-directory-name "Workspace: " src-workspace nil t)))
@@ -2009,18 +2012,17 @@ calling `decknix-agent-session-new' interactively."
                          (seq-remove #'string-empty-p input))))
          (name (decknix--agent-session-derive-name tags workspace branch nil nil))
          (before-buffers (buffer-list))
-         (provider decknix-agent-default-provider)
          (augmented-cmd (decknix--agent-command-build provider workspace))
          (config (decknix--agent-make-config provider augmented-cmd)))
     (let ((default-directory workspace))
       (agent-shell-start :config config))
     (setq decknix--agent-session-cache-time 0)
     (decknix--agent-session-new-post-create
-     before-buffers name tags workspace)
+     before-buffers name tags workspace nil provider)
     (message "Forking session \"%s\" in %s…" name workspace)))
 
 (defun decknix--agent-session-new-post-create
-    (before-buffers name tags workspace &optional first-message)
+    (before-buffers name tags workspace &optional first-message provider-id)
   "Post-creation setup: rename buffer to NAME, apply TAGS, record WORKSPACE.
 BEFORE-BUFFERS is the buffer snapshot taken before agent-shell-start.
 Finds the new buffer immediately (agent-shell-start creates it synchronously),
@@ -2038,7 +2040,7 @@ batch launches."
       ;; format is pinned by `decknix--post-create-buffer-name'
       ;; (PR B.83).
       (with-current-buffer shell-buf
-        (setq-local decknix--agent-provider-id decknix-agent-default-provider)
+        (setq-local decknix--agent-provider-id (or provider-id decknix-agent-default-provider))
         (rename-buffer
          (generate-new-buffer-name
           (decknix--post-create-buffer-name name)))

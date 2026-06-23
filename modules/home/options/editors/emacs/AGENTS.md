@@ -239,16 +239,19 @@ The largest module (~4400 lines). Key subsystems:
 - **Conversation identity**: Derived by hashing `firstUserMessage` (SHA-256,
   truncated to 16 chars). Provides stable identity across resumed sessions (#78).
 - **Session creation** (`C-c A n`): Guided flow — workspace dir, name, tags.
-  Passes `--workspace-root` to auggie CLI via closure (survives deferred
-  `:client-maker` invocation).
+  If multiple agent providers (Auggie, Claude, Pi) are registered, prompts for
+  provider selection.  Passes `--workspace-root` to the chosen agent CLI via
+  closure (survives deferred `:client-maker` invocation).
 - **Session close** (`C-c A q` / `C-c s q`): Kills the buffer. If other live
   sessions exist, switches to the next one (or opens the picker if multiple).
   If last session, returns to the welcome screen or `*scratch*`.
 - **Session resume**: Restores history into comint buffer. Buffer is renamed
-  to `*Auggie: <name>*` using tags (if any) or first-message preview, matching
-  the naming convention of new sessions. **Workspace is restored** from
-  `agent-sessions.json` — passes `--workspace-root` to auggie CLI and sets
-  `default-directory` so the agent operates in the original project directory.
+  to `*Auggie: <name>*` (or `*Claude: <name>*`, etc.) using tags (if any) or
+  first-message preview, matching the naming convention of new sessions.
+  **Workspace is restored** from `agent-sessions.json` — passes
+  `--workspace-root` to the agent CLI and sets `default-directory` so the
+  agent operates in the original project directory.  The correct provider is
+  detected and used automatically based on the session ID.
 - **Workspace persistence**: Workspace directory is stored per conversation in
   `~/.config/decknix/agent-sessions.json` alongside tags. Saved on session
   creation, restored on resume.
@@ -258,6 +261,25 @@ The largest module (~4400 lines). Key subsystems:
   with `C-c C-v`, the choice is persisted against the conversation in
   `agent-sessions.json`. On resume, that override is passed to auggie as
   `--model <id>` so the session continues on the same model.
+
+## Agent Providers
+
+The `agent-shell` subsystem supports multiple AI backends via a generic provider
+registry (`decknix-agent-provider.el`).
+
+### Supported Providers
+- **Auggie** (`auggie`): Default flagship agent. Glyphed as `A`.
+- **Claude** (`claude-code`): Anthropic's Claude Code agent. Glyphed as `C`.
+- **Pi** (`pi`): Pi agent backend. Glyphed as `P`.
+
+### Provider Selection
+- **New sessions** (`C-c A n`): Prompts for provider if more than one is
+  registered. `C-u C-c A n` (QUICK) skips provider selection and uses the
+  default provider.
+- **Forking** (`C-c A f`): Prompts for provider for the new session.
+- **Resuming**: Automatically restores the correct provider based on session
+  metadata.
+- **Sidebar**: Displays the provider glyph (A/C/P) for each live session.
 
 ### Quick Actions
 - **PR review** (`C-c A c r`): DWIM workflow — prompts for GitHub PR URL

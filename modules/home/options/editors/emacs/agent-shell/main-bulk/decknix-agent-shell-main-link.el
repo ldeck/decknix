@@ -128,7 +128,7 @@
 (declare-function decknix--agent-session-new-post-create
                   "decknix-agent-shell-main-session"
                   (before-buffers name tags workspace
-                                  &optional first-message))
+                                  &optional first-message provider-id))
 
 ;; Session cache state (carved into `decknix-agent-session-cache';
 ;; mutated here to force the picker to pick up the new session).
@@ -180,7 +180,7 @@ Defaults to the specialized `/review-bot-pr' command.")
 ;; -- Quickaction primitive --
 
 (defun decknix--agent-quickaction-start (name tags workspace command
-                                              &optional model)
+                                              &optional model provider-id)
   "Start a quick-action session with NAME, TAGS, WORKSPACE, and auto-send COMMAND.
 Creates a new agent session, applies metadata, then subscribes to the
 `prompt-ready' event to send COMMAND as soon as the ACP session is
@@ -192,6 +192,8 @@ against the freshly-derived conversation key so resumes via
 `decknix--resume-command-build' continue on the same model.  When
 nil (default), no `--model' flag is added and auggie falls back to
 the framework default in `~/.augment/settings.json'.
+Optional PROVIDER-ID specifies the agent provider (defaults to
+`decknix-agent-default-provider').
 When invoked from a dedicated or side window (e.g., the sidebar), the
 new session is displayed in the frame's main window instead of
 replacing the caller, preserving the sidebar.
@@ -219,7 +221,7 @@ Split below per pane); the default selection lands on
           (decknix--quickaction-target-window
            cur-is-sidebar cur (window-main-window (selected-frame))))
          (before-buffers (buffer-list))
-         (provider decknix-agent-default-provider)
+         (provider (or provider-id decknix-agent-default-provider))
          (augmented-cmd (decknix--agent-command-build provider workspace model))
          (config (decknix--agent-make-config provider augmented-cmd)))
     ;; Placement prompt: when the caller is not the sidebar AND the
@@ -271,7 +273,7 @@ Split below per pane); the default selection lands on
       (agent-shell-start :config config))
     (setq decknix--agent-session-cache-time 0)
     (decknix--agent-session-new-post-create
-     before-buffers name tags workspace command)
+     before-buffers name tags workspace command provider)
     ;; Pin the per-conversation model override so subsequent resumes
     ;; pass `--model MODEL' via `decknix--resume-command-build'.  The
     ;; conv-key is derived deterministically from COMMAND (the first
