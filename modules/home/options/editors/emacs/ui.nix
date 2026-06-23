@@ -100,6 +100,67 @@ in
             (setq ns-option-modifier 'meta)
             (setq ns-control-modifier 'control)))
 
+        ;; == macOS toolbar ==
+        ;; Emacs.app shows the toolbar by default; keyboard-driven workflows
+        ;; don't use it, so disable it on darwin.
+        (when (and (eq system-type 'darwin) (fboundp 'tool-bar-mode))
+          (tool-bar-mode -1))
+
+        ;; == macOS Window menu ==
+        ;; Emacs.app has no built-in Window menu (unlike Safari, Xcode,
+        ;; Terminal, etc.).  This adds one listing every open frame with a
+        ;; radio-button checkmark on the active frame — the standard macOS
+        ;; Window-menu pattern.
+        ;;
+        ;; The per-frame command uses `eval ... t' (lexical closure) so the
+        ;; index captured by each lambda is stable even though default.el
+        ;; runs under dynamic binding.  The :button form is re-evaluated on
+        ;; every menu-open so the checkmark is always current.
+        ;;
+        ;; decknix--update-window-menu uses define-key-after on first call
+        ;; to place "Window" after "Buffers" (matching macOS menu-bar order),
+        ;; then plain define-key on subsequent calls so the position stays put.
+
+        (defun decknix--build-window-menu ()
+          "Return a fresh keymap listing all current Emacs frames."
+          (let ((menu (make-sparse-keymap "Window")))
+            (define-key menu [wm-new-frame]
+              '(menu-item "New Window" make-frame-command))
+            (define-key menu [wm-minimize]
+              '(menu-item "Minimize"   iconify-frame))
+            (define-key menu [wm-zoom]
+              '(menu-item "Zoom"       toggle-frame-maximized))
+            (define-key menu [wm-sep1] menu-bar-separator)
+            (let ((frames (reverse (frame-list))))
+              (dotimes (i (length frames))
+                (let* ((frame (nth i frames))
+                       (name  (frame-parameter frame 'name))
+                       (key   (intern (format "decknix-wm-%d" i))))
+                  (define-key menu (vector key)
+                    `(menu-item
+                      ,name
+                      ,(eval `(lambda ()
+                                (interactive)
+                                (let ((f (nth ,i (reverse (frame-list)))))
+                                  (when f
+                                    (select-frame-set-input-focus f)))) t)
+                      :button (:radio . (eq (selected-frame)
+                                            (nth ,i (reverse (frame-list))))))))))
+            menu))
+
+        (defun decknix--update-window-menu ()
+          "Rebuild the Window menu entry in the global menu bar."
+          (let ((entry (cons "Window" (decknix--build-window-menu))))
+            (if (lookup-key global-map [menu-bar window])
+                ;; Already placed: update in place (preserves position).
+                (define-key global-map [menu-bar window] entry)
+              ;; First call: insert after Buffers to match macOS menu order.
+              (define-key-after global-map [menu-bar window] entry 'buffers))))
+
+        (when (eq system-type 'darwin)
+          (add-hook 'menu-bar-update-hook #'decknix--update-window-menu)
+          (decknix--update-window-menu))
+
         ${optionalString cfg.frame.centerOnStartup ''
         ;; == Frame sizing and centering ==
         (defun decknix-center-frame ()
