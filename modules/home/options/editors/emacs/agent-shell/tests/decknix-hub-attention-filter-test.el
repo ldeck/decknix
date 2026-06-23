@@ -30,6 +30,7 @@
   "Documented default values match the constants at module load."
   (should     decknix--hub-requests-hide-bot-pending)   ; default ON
   (should     decknix--hub-requests-hide-conflict)      ; default ON
+  (should     decknix--hub-requests-hide-draft)         ; default ON
   (should (eq decknix--hub-requests-hide-reviewed 'hide-any)) ; default hide-any
   (should-not decknix--hub-requests-hide-needs-reply)
   (should-not decknix--hub-requests-only-my-replies)
@@ -228,6 +229,45 @@ Item with older `created' but newer `updated' sorts first by default."
   (let ((decknix--hub-requests-hide-conflict t))
     (call-interactively #'decknix--hub-toggle-requests-hide-conflict)
     (should-not decknix--hub-requests-hide-conflict)))
+
+;; -- draft filter -------------------------------------------------
+
+(ert-deftest decknix-hub-attention-filter--draft-default-is-on ()
+  "decknix--hub-requests-hide-draft defaults to t (hide drafts)."
+  (should decknix--hub-requests-hide-draft))
+
+(ert-deftest decknix-hub-attention-filter--draft-hides-drafts ()
+  "Draft filter hides items with draft = t when on."
+  (let ((item '((draft . t)))
+        (decknix--hub-requests-hide-draft t))
+    (should-not (decknix--hub-requests-draft-visible-p item))))
+
+(ert-deftest decknix-hub-attention-filter--draft-shows-non-drafts ()
+  "Draft filter passes items that are not drafts.
+A nil, :json-false, or absent draft field is treated as non-draft so
+ready PRs are never inadvertently suppressed."
+  (let ((false-item '((draft . :json-false)))
+        (nil-item    '((draft . nil)))
+        (absent-item '())
+        (decknix--hub-requests-hide-draft t))
+    (should (decknix--hub-requests-draft-visible-p false-item))
+    (should (decknix--hub-requests-draft-visible-p nil-item))
+    (should (decknix--hub-requests-draft-visible-p absent-item))))
+
+(ert-deftest decknix-hub-attention-filter--draft-filter-off-shows-all ()
+  "When the draft filter is off, draft items are visible."
+  (let ((item '((draft . t)))
+        (decknix--hub-requests-hide-draft nil))
+    (should (decknix--hub-requests-draft-visible-p item))))
+
+(ert-deftest decknix-hub-attention-filter--draft-toggle-flips-state ()
+  "Interactive toggle flips decknix--hub-requests-hide-draft."
+  (let ((decknix--hub-requests-hide-draft nil))
+    (call-interactively #'decknix--hub-toggle-requests-hide-draft)
+    (should decknix--hub-requests-hide-draft))
+  (let ((decknix--hub-requests-hide-draft t))
+    (call-interactively #'decknix--hub-toggle-requests-hide-draft)
+    (should-not decknix--hub-requests-hide-draft)))
 
 ;; -- hide-reviewed filter (3-state cycle) ------------------------
 

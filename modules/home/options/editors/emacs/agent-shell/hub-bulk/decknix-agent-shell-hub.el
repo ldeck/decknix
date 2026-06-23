@@ -119,6 +119,10 @@
                   "decknix-hub-attention-filter")
 (declare-function decknix--hub-toggle-requests-hide-conflict
                   "decknix-hub-attention-filter")
+(declare-function decknix--hub-requests-draft-visible-p
+                  "decknix-hub-attention-filter")
+(declare-function decknix--hub-toggle-requests-hide-draft
+                  "decknix-hub-attention-filter")
 (declare-function decknix--hub-pr-status-from-hub "decknix-hub-pr-lookup")
 (declare-function decknix--hub-pr-cache-get "decknix-hub-pr-lookup")
 (declare-function decknix--hub-worktree-canonical-repo "decknix-hub-worktree-parse")
@@ -158,6 +162,7 @@
 (defvar decknix--hub-requests-hide-reviewed)
 (defvar decknix--hub-requests-only-my-replies)
 (defvar decknix--hub-requests-hide-conflict)
+(defvar decknix--hub-requests-hide-draft)
 (defvar decknix--hub-requests-sort-reverse)
 (defvar decknix--hub-wip-hide-needs-reply)
 (defvar decknix--hub-wip-hide-bot-pending)
@@ -564,6 +569,20 @@ picker's dynamic binding unwinds.")
   :transient t
   (interactive)
   (call-interactively #'decknix--hub-toggle-requests-hide-conflict))
+
+(transient-define-suffix decknix-sidebar-transient--req-draft ()
+  :key "x"
+  :description
+  (lambda ()
+    (format "📝 draft      %s"
+            (propertize
+             (if decknix--hub-requests-hide-draft "[hide]" "[show]")
+             'face (if decknix--hub-requests-hide-draft
+                       'font-lock-constant-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix--hub-toggle-requests-hide-draft))
 
 (transient-define-suffix decknix-sidebar-transient--req-sort ()
   :key "s"
@@ -2690,7 +2709,7 @@ row, or an empty string when no linked PR is attention-worthy."
                              ('success 'success)))
                  (fg (face-foreground att-face nil t))
                  (final-face (list :foreground fg :weight (if mentioned 'bold 'normal))))
-            (push (propertize "@" 'face final-face) parts)))))
+            (push (propertize "@" 'face final-face) parts))))
 
       ;; Activity icons (Family 1)
       (when any-human-replies
@@ -2756,7 +2775,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                            (decknix--hub-bot-visible-p item)
                            (decknix--hub-requests-attention-visible-p item)
                            (decknix--hub-requests-reviewed-visible-p item)
-                           (decknix--hub-requests-conflict-visible-p item)))
+                           (decknix--hub-requests-conflict-visible-p item)
+                           (decknix--hub-requests-draft-visible-p item)))
                     (or all-items '())))
          (items (decknix--hub-sort-requests filtered)))
     (when items
