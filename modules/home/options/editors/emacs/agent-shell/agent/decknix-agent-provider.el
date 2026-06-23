@@ -23,20 +23,22 @@ Attributes include:
   :acp-command-var           Variable symbol holding the command list.
   :auth-var                  Variable symbol holding authentication settings.
   :env-var                   Variable symbol holding environment variables.
-  :sessions-dir              Directory for session persistence (default ~/.augment/sessions).
-  :session-file-extension    File extension for session transcripts (e.g. \".json\").
+  :sessions-dir              Directory for session persistence.
+                             Default is ~/.augment/sessions.
+  :session-file-extension    File extension for transcripts (e.g. \".json\").
   :session-jq-filter          JQ filter string for metadata extraction.
   :history-file              Global history log path (optional).
   :label                     Human-readable label for the provider.
   :glyph                     Single-character glyph for the header-line.
-  :supports-workspace-root   Boolean; true if the ACP command supports --workspace-root.")
+  :supports-workspace-root   Boolean; true if the ACP command supports
+                             --workspace-root.")
 
 (defvar decknix-agent-default-provider 'auggie
   "The default AI agent provider to use for new sessions.")
 
 (defun decknix-agent-register-provider (id props)
   "Register a provider ID with PROPS.
-ID is a symbol (e.g. 'auggie).  PROPS is a property list."
+ID is a symbol (e.g. `auggie').  PROPS is a property list."
   (setf (alist-get id decknix-agent-provider-registry) props))
 
 (defun decknix-agent-get-provider (id)
@@ -47,6 +49,21 @@ ID is a symbol (e.g. 'auggie).  PROPS is a property list."
   "Return the property list for provider ID, or signal an error."
   (or (decknix-agent-get-provider id)
       (error "Unknown agent provider: %s" id)))
+
+(defun decknix-agent-provider-all-ids ()
+  "Return a list of all registered provider IDs."
+  (mapcar #'car decknix-agent-provider-registry))
+
+(defun decknix-agent-provider-select ()
+  "Prompt the user to select an agent provider and return its ID."
+  (let* ((ids (decknix-agent-provider-all-ids))
+         (choices (mapcar (lambda (id)
+                            (cons (decknix-agent-provider-label id) id))
+                          ids)))
+    (if (= (length ids) 1)
+        (car ids)
+      (let ((choice (completing-read "Agent provider: " choices nil t)))
+        (cdr (assoc choice choices))))))
 
 ;; -- Provider attribute accessors --------------------------------
 
