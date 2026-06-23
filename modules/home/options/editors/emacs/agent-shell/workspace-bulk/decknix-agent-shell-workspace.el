@@ -126,6 +126,8 @@
 (declare-function decknix--hub-requests-reviewed-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-requests-conflict-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-toggle-requests-hide-conflict "decknix-hub-attention-filter")
+(declare-function decknix--hub-requests-draft-visible-p "decknix-hub-attention-filter")
+(declare-function decknix--hub-toggle-requests-hide-draft "decknix-hub-attention-filter")
 (declare-function decknix--hub-wip-attention-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-request-has-live-session-p "ext:decknix-agent-shell-hub")
 (declare-function decknix--hub-request-tint-active "ext:decknix-agent-shell-hub")
@@ -202,6 +204,7 @@
 (defvar decknix--hub-requests-only-my-replies)
 (defvar decknix--hub-requests-hide-reviewed)
 (defvar decknix--hub-requests-hide-conflict)
+(defvar decknix--hub-requests-hide-draft)
 (defvar decknix--hub-requests-sort-reverse)
 ;; Picker-scoped toggle state for `decknix-sidebar-nav-requests-consult'.
 ;; These variables are only ever `let'-bound by the picker entry point
@@ -886,7 +889,8 @@ WIP / Sessions / Worktrees."
     (decknix-sidebar-transient--req-my-replies)   ;; ↩ (M)
     (decknix-sidebar-transient--req-needs-reply)  ;; 💬 (c)
     (decknix-sidebar-transient--req-bot-pending)  ;; 🤖 (B)
-    (decknix-sidebar-transient--req-conflict)]    ;; ⚠ conflict (X)
+    (decknix-sidebar-transient--req-conflict)     ;; ⚠ conflict (X)
+    (decknix-sidebar-transient--req-draft)]       ;; 📝 draft (x)
    ["Live"
     (decknix-sidebar-transient--attention-style)  ;; attention (v)
     (decknix-sidebar-transient--live-display-mode) ;; Layout (d)
@@ -1390,6 +1394,12 @@ All toggle keys are accessed via the T transient prefix."
                             (propertize
                              (if decknix--hub-requests-hide-conflict "[hide]" "[show]")
                              'face (if decknix--hub-requests-hide-conflict
+                                       'font-lock-constant-face
+                                     'font-lock-comment-face))))
+              (cons "x" (concat (decknix--hub-icon "📝" 'default) " draft "
+                            (propertize
+                             (if decknix--hub-requests-hide-draft "[hide]" "[show]")
+                             'face (if decknix--hub-requests-hide-draft
                                        'font-lock-constant-face
                                      'font-lock-comment-face)))))))
           (live
@@ -2627,7 +2637,8 @@ Shows result in the echo area and triggers a hub refresh on success."
                           (decknix--hub-bot-visible-p item)
                           (decknix--hub-requests-attention-visible-p item)
                           (decknix--hub-requests-reviewed-visible-p item)
-                          (decknix--hub-requests-conflict-visible-p item)))
+                          (decknix--hub-requests-conflict-visible-p item)
+                          (decknix--hub-requests-draft-visible-p item)))
                    (or all-items '())))
            ;; Apply the shared sort so this transient picker matches the
            ;; sidebar's row order (newest-activity first by default).
@@ -2872,6 +2883,7 @@ Interactively: \\[universal-argument] N r limits to N items;
                                  ;; picker never shows items the sidebar hides.
                                  (decknix--hub-requests-reviewed-visible-p item)
                                  (decknix--hub-requests-conflict-visible-p item)
+                                 (decknix--hub-requests-draft-visible-p item)
                                  ;; Picker-local extra filters (M-m / M-r toggles):
                                  (or (not mo)
                                      (eq (alist-get 'mentioned item) t))
@@ -4523,6 +4535,9 @@ cannot clobber the Previous Sessions snapshot."
            (cons 'requests-hide-conflict
                  (when (boundp 'decknix--hub-requests-hide-conflict)
                    decknix--hub-requests-hide-conflict))
+           (cons 'requests-hide-draft
+                 (when (boundp 'decknix--hub-requests-hide-draft)
+                   decknix--hub-requests-hide-draft))
            ;; WIP attention filters (parallel set for WIP section).
            (cons 'wip-hide-needs-reply
                  (when (boundp 'decknix--hub-wip-hide-needs-reply)
@@ -4705,6 +4720,10 @@ cannot clobber the Previous Sessions snapshot."
             (unless (eq rhc 'missing)
               (when (boundp 'decknix--hub-requests-hide-conflict)
                 (setq decknix--hub-requests-hide-conflict rhc))))
+          (let ((rhd (alist-get 'requests-hide-draft state 'missing)))
+            (unless (eq rhd 'missing)
+              (when (boundp 'decknix--hub-requests-hide-draft)
+                (setq decknix--hub-requests-hide-draft rhd))))
           ;; WIP attention filters: same pattern.
           (let ((whn (alist-get 'wip-hide-needs-reply state 'missing)))
             (unless (eq whn 'missing)

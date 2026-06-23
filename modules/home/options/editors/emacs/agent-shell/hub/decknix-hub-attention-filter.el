@@ -32,6 +32,7 @@
 ;;   `decknix--hub-requests-only-my-replies'    bound nil  (toggle `M')
 ;;   `decknix--hub-requests-hide-reviewed'      bound hide-any  (cycle `v')
 ;;   `decknix--hub-requests-hide-conflict'      bound t    (toggle `X')
+;;   `decknix--hub-requests-hide-draft'         bound t    (toggle `x')
 ;;   `decknix--hub-requests-sort-reverse'       bound nil  (toggle `s')
 ;;   `decknix--hub-wip-hide-needs-reply'        bound nil  (toggle `n')
 ;;   `decknix--hub-wip-hide-bot-pending'        bound nil  (toggle `u')
@@ -54,6 +55,7 @@
 ;;   `decknix--hub-toggle-requests-only-my-replies'    (`M')
 ;;   `decknix--hub-cycle-requests-hide-reviewed'        (`v')
 ;;   `decknix--hub-toggle-requests-hide-conflict'      (`X')
+;;   `decknix--hub-toggle-requests-hide-draft'         (`x')
 ;;   `decknix--hub-toggle-requests-sort-reverse'       (`s')
 ;;   `decknix--hub-toggle-wip-hide-needs-reply'        (`n')
 ;;   `decknix--hub-toggle-wip-hide-bot-pending'        (`u')
@@ -116,6 +118,15 @@ because the code will change after the conflict is resolved.  Hiding
 them by default keeps the list focused on PRs that are actually
 review-ready.  Toggle with `X' in the Requests section of the Toggles
 transient.")
+
+(defvar decknix--hub-requests-hide-draft t
+  "When non-nil (default), hide Requests PRs that are still in draft.
+Draft PRs (GitHub `isDraft' = t, surfaced as the `draft' field) are
+explicitly marked by their author as not ready for review; opening one
+to review only to find it incomplete wastes a dispatch.  Hiding them by
+default keeps the Requests list to PRs whose author has marked them
+ready.  A PR that flips out of draft reappears automatically.  Toggle
+with `x' in the Requests section of the Toggles transient.")
 
 (defvar decknix--hub-requests-sort-reverse nil
   "When nil (default), Requests are sorted newest-activity-first.
@@ -251,6 +262,15 @@ non-conflicting so new PRs are not inadvertently suppressed."
   (or (not decknix--hub-requests-hide-conflict)
       (not (equal (alist-get 'mergeable item) "CONFLICTING"))))
 
+(defun decknix--hub-requests-draft-visible-p (item)
+  "Return non-nil if ITEM passes the draft filter.
+When `decknix--hub-requests-hide-draft' is non-nil (default), hides
+PRs whose `draft' field is t (GitHub's `isDraft' marker).  A nil,
+:json-false, or absent draft field is treated as non-draft so
+ready PRs are never inadvertently suppressed."
+  (or (not decknix--hub-requests-hide-draft)
+      (not (eq (alist-get 'draft item) t))))
+
 (defun decknix--hub-wip-attention-visible-p (pr)
   "Return non-nil if PR passes the WIP attention filters."
   (decknix--hub-attention-visible-p
@@ -313,6 +333,13 @@ non-conflicting so new PRs are not inadvertently suppressed."
   (decknix--hub-toggle-and-refresh
    'decknix--hub-requests-hide-conflict
    "Requests ⚠ conflict filter: %s"))
+
+(defun decknix--hub-toggle-requests-hide-draft ()
+  "Toggle hiding Requests PRs that are still in draft (📝 glyph)."
+  (interactive)
+  (decknix--hub-toggle-and-refresh
+   'decknix--hub-requests-hide-draft
+   "Requests 📝 draft filter: %s"))
 
 (defun decknix--hub-toggle-requests-sort-reverse ()
   "Toggle Requests sort direction (oldest↔newest) in the sidebar.
