@@ -186,6 +186,16 @@ Use C-u prefix with the session picker to override.")
 (declare-function decknix--post-create-flush-mode
                   "decknix-agent-post-create"
                   (conv-key tags workspace))
+(declare-function decknix--agent-fork-source-data-path
+                  "decknix-agent-fork"
+                  (sessions-dir extension session-id))
+(declare-function decknix--agent-fork-handoff-message
+                  "decknix-agent-fork"
+                  (provider-label session-id data-path tags))
+(declare-function decknix-agent-provider-sessions-dir
+                  "decknix-agent-provider" (id))
+(declare-function decknix-agent-provider-session-file-extension
+                  "decknix-agent-provider" (id))
 (declare-function decknix--header-status-icon
                   "decknix-agent-header" (status))
 (declare-function decknix--header-status-face
@@ -1987,7 +1997,15 @@ When called from outside an agent-shell buffer the defaults fall back
 to `decknix--agent-detect-workspace' with no tags — identical to
 calling `decknix-agent-session-new' interactively."
   (interactive)
-  (let* ((src-conv-key (and (bound-and-true-p decknix--agent-conv-key)
+  ;; Capture the SOURCE session's buffer-locals first, while
+  ;; `current-buffer' is still the buffer fork was invoked from (the
+  ;; later minibuffer reads restore the buffer, but agent-shell-start
+  ;; below does not).
+  (let* ((src-session-id (and (bound-and-true-p decknix--agent-auggie-session-id)
+                              decknix--agent-auggie-session-id))
+         (src-provider-id (and (bound-and-true-p decknix--agent-provider-id)
+                               decknix--agent-provider-id))
+         (src-conv-key (and (bound-and-true-p decknix--agent-conv-key)
                             decknix--agent-conv-key))
          (src-workspace (or (and (bound-and-true-p decknix--agent-session-workspace)
                                  (file-exists-p decknix--agent-session-workspace)
@@ -2011,14 +2029,54 @@ calling `decknix-agent-session-new' interactively."
                  (mapcar #'string-trim
                          (seq-remove #'string-empty-p input))))
          (name (decknix--agent-session-derive-name tags workspace branch nil nil))
+         ;; Context hand-off: when forking from a real source session,
+         ;; prime the new session's first message with the source
+         ;; provenance (provider, session id, transcript path, tags) so
+         ;; the new agent — which may be a different provider than the
+         ;; source — can pick up the prior context.  Skipped when fork is
+         ;; invoked outside an agent-shell buffer (no source to hand off),
+         ;; where it degrades to a plain `decknix-agent-session-new'.
+         ;; Pure builders live in `decknix-agent-fork'.
+         (handoff
+          (when (or src-conv-key src-session-id)
+            (let* ((label (and src-provider-id
+                               (decknix-agent-provider-label src-provider-id)))
+                   (data-path
+                    (and src-provider-id src-session-id
+                         (decknix--agent-fork-source-data-path
+                          (decknix-agent-provider-sessions-dir src-provider-id)
+                          (decknix-agent-provider-session-file-extension
+                           src-provider-id)
+                          src-session-id))))
+              (decknix--agent-fork-handoff-message
+               label src-session-id data-path src-tags))))
          (before-buffers (buffer-list))
          (augmented-cmd (decknix--agent-command-build provider workspace))
          (config (decknix--agent-make-config provider augmented-cmd)))
     (let ((default-directory workspace))
       (agent-shell-start :config config))
     (setq decknix--agent-session-cache-time 0)
+    ;; Pass HANDOFF as first-message so metadata is keyed under the
+    ;; hand-off's conv-key immediately (immediate-flush branch); the
+    ;; source session-id embedded in HANDOFF keeps forks of distinct
+    ;; sources from colliding on the same conversation key.
     (decknix--agent-session-new-post-create
-     before-buffers name tags workspace nil provider)
+     before-buffers name tags workspace handoff provider)
+    ;; Auto-send the hand-off as the first user message once the ACP
+    ;; session is ready (mirrors `decknix--agent-quickaction-start').
+    (when handoff
+      (let ((shell-buf (decknix--agent-find-new-shell-buffer before-buffers)))
+        (when shell-buf
+          (agent-shell-subscribe-to
+           :shell-buffer shell-buf
+           :event 'prompt-ready
+           :on-event
+           (eval `(lambda (_event)
+                    (when (buffer-live-p ,shell-buf)
+                      (with-current-buffer ,shell-buf
+                        (goto-char (point-max))
+                        (shell-maker-submit :input ,handoff))))
+                 t)))))
     (message "Forking session \"%s\" in %s…" name workspace)))
 
 (defun decknix--agent-session-new-post-create
