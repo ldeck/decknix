@@ -268,18 +268,81 @@ The `agent-shell` subsystem supports multiple AI backends via a generic provider
 registry (`decknix-agent-provider.el`).
 
 ### Supported Providers
-- **Auggie** (`auggie`): Default flagship agent. Glyphed as `A`.
-- **Claude** (`claude-code`): Anthropic's Claude Code agent. Glyphed as `C`.
-- **Pi** (`pi`): Pi agent backend. Glyphed as `P`.
+
+| Provider | ID | Glyph | Status | ACP bridge |
+|----------|----|-------|--------|------------|
+| Auggie | `auggie` | `A` | ✅ Fully working | built into `auggie` CLI |
+| Claude Code | `claude-code` | `C` | ⚠️ Needs ACP bridge | `claude-agent-acp` (see below) |
+| Pi | `pi` | `P` | ⚠️ Needs ACP bridge | `pi-acp` (see below) |
+
+**Default provider**: `claude-code` — `C-u C-c A n` (QUICK) creates a Claude
+session without prompting. Regular `C-c A n` prompts for provider selection.
+
+#### Claude Code — First-class Setup
+
+The `claude-code` CLI is installed via `home.packages`. The ACP bridge is a
+separate npm package **not yet in nixpkgs** — install it manually:
+
+```bash
+npm install -g @agentclientprotocol/claude-agent-acp
+```
+
+Authentication defaults to login-based (`agent-shell-anthropic-authentication`
+`:login t`). Run `claude` once standalone to complete the OAuth flow, then
+agent-shell picks up the token automatically.
+
+Session files live in `~/.claude/projects/` (`.jsonl` format). The jq filter
+in the registry extracts metadata for the session picker.
+
+#### Pi — First-class Setup
+
+The `decknix.ai.pi` module is enabled. The ACP bridge is **not yet in nixpkgs**
+— install it manually:
+
+```bash
+npm install -g pi-acp
+```
+
+Sessions live in `~/.pi/sessions/`. Session file format will be discovered on
+first use; the `:session-jq-filter` in the registry is pending (sessions won't
+appear in `C-c A s` until the field is populated).
 
 ### Provider Selection
 - **New sessions** (`C-c A n`): Prompts for provider if more than one is
   registered. `C-u C-c A n` (QUICK) skips provider selection and uses the
-  default provider.
+  default provider (`claude-code`).
 - **Forking** (`C-c A f`): Prompts for provider for the new session.
 - **Resuming**: Automatically restores the correct provider based on session
   metadata.
 - **Sidebar**: Displays the provider glyph (A/C/P) for each live session.
+
+### Future Providers — Assessment
+
+Providers that could be added via the same registry pattern.
+All require both a CLI tool AND an ACP bridge (either built-in or separate).
+
+| Provider | CLI tool | ACP bridge | Nixpkgs? | Notes |
+|----------|----------|-----------|----------|-------|
+| **OpenCode** | `opencode` (✅ in `home.packages`) | built-in (`opencode --acp`?) | CLI is in nixpkgs | Already installed; register once ACP mode confirmed |
+| **Gemini CLI** | `gemini` | built-in `--experimental-acp` flag | Not in nixpkgs | `npm install -g @google/gemini-cli`; uses login auth |
+| **Goose** | `goose` | built-in | Not in nixpkgs | `curl install`; open-source by Block Inc |
+| **Mistral Vibe** | `mistral-vibe` | built-in | Not in nixpkgs | `uv tool install mistral-vibe`; needs `MISTRAL_API_KEY` |
+| **Cursor** | Cursor IDE | `cursor-agent-acp` npm pkg | Neither | `npm install -g @blowmage/cursor-agent-acp`; IDE-dependent |
+| **Kimi Code** | `kimi` CLI | built-in | Not in nixpkgs | `curl` install; China-based provider |
+| **Kiro** | `kiro` CLI | built-in | Not in nixpkgs | `curl` install; AWS-backed |
+| **Qwen Code** | `qwen-code` | built-in | Not in nixpkgs | `npm install -g @qwen-code/qwen-code` |
+| **CodeBuddy** | `codebuddy` | built-in `--acp` | Not in nixpkgs | Install via CodeBuddy docs |
+
+**Priority order** (based on ecosystem relevance and auth simplicity):
+1. **OpenCode** — already installed, confirm ACP mode and register
+2. **Gemini CLI** — broad availability, login auth (no API key needed)
+3. **Goose** — open-source, OpenAI-compatible
+4. Others as needed
+
+To register a new provider, add an entry in `agent-shell.nix` matching the
+`decknix-agent-register-provider` pattern at lines 2168–2201, then add
+`:make-config-fn`, `:acp-command-var`, `:sessions-dir`, `:label`, `:glyph`,
+and `:supports-workspace-root`.
 
 ### Quick Actions
 - **PR review** (`C-c A c r`): DWIM workflow — prompts for GitHub PR URL

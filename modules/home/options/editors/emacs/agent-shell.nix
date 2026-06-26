@@ -2897,8 +2897,11 @@ in
                           "decknix-agent-review-submit" (content))
         (defvar decknix-agent-review-jira-drafts-dir)
 
-        ;; Use auggie as the default agent (skip agent selection prompt)
-        (setq agent-shell-preferred-agent-config 'auggie)
+        ;; Use claude-code as the default agent (skip agent selection prompt
+        ;; on C-u C-c A n QUICK path).  Regular C-c A n still prompts when
+        ;; multiple providers are registered.  Auggie remains available and
+        ;; is still shown in the provider picker.
+        (setq agent-shell-preferred-agent-config 'claude-code)
 
         ;; Session strategy: always start new (no built-in session prompt).
         ;; All session management (new/resume/switch) goes through our
