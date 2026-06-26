@@ -109,9 +109,14 @@ in
     # restarted by launchd (binary change), this is a harmless no-op since
     # the daemon already loaded the fresh config.  If the daemon is still
     # running (config-only change), this picks up the new default.el.
+    #
+    # We run this as the primary user via `launchctl asuser` to ensure
+    # emacsclient finds the user's session-specific socket (usually under
+    # /var/folders/.../T/emacs501/server).
     system.activationScripts.postActivation.text = lib.mkAfter ''
-      if ${emacsPackage}/bin/emacsclient -e '(fboundp (quote deckmacs-reload))' 2>/dev/null | grep -q t; then
-        ${emacsPackage}/bin/emacsclient -e '(deckmacs-reload)' 2>/dev/null && \
+      USER_ID=$(id -u ${username})
+      if launchctl asuser "$USER_ID" sudo -u ${username} ${emacsPackage}/bin/emacsclient -e '(fboundp (quote deckmacs-reload))' 2>/dev/null | grep -q t; then
+        launchctl asuser "$USER_ID" sudo -u ${username} ${emacsPackage}/bin/emacsclient -e '(deckmacs-reload)' 2>/dev/null && \
           echo "emacs: config hot-reloaded (deckmacs-reload)" || true
       fi
     '';

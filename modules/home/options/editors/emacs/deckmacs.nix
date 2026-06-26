@@ -156,7 +156,11 @@ in
                (timestamp (format-time-string "%Y-%m-%d %H:%M:%S")))
           (cond
            ((not new-el)
-            (message "Deckmacs: Could not resolve default.el from ~/.nix-profile"))
+            (let ((profile-emacs (expand-file-name "~/.nix-profile/bin/emacs")))
+              (message "Deckmacs Error: Could not resolve current default.el (tried tracing from %s)"
+                       (if (file-exists-p profile-emacs)
+                           (file-truename profile-emacs)
+                         profile-emacs))))
            ((and (equal new-store deckmacs--loaded-store-path) (not force))
             (message "Deckmacs: Already up to date (%s)"
                      (deckmacs--short-store-path new-store)))
