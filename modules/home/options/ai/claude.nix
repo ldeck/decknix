@@ -25,6 +25,10 @@ in {
   };
 
   config = mkIf cfg.enable {
+    # ACP bridge — allows agent-shell (Emacs) to launch Claude Code sessions
+    # via the Agent Client Protocol.  Managed by Nix; no manual npm install needed.
+    home.packages = [ pkgs.claude-agent-acp ];
+
     # If we have settings, generate the file and sync it
     decknix.cli.agentSync.enable = true;
     decknix.cli.agentSync.files = mkIf (cfg.settings != {}) {
