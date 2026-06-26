@@ -1404,6 +1404,21 @@ let
     ];
   };
 
+  # Fork context hand-off (C-c s f / C-c A f).  Two pure helpers build
+  # the first-message that primes a forked session with the source
+  # session's provenance (provider label, session id, transcript path,
+  # tags).  Bulk owns the provider lookups, `agent-shell-subscribe-to'
+  # auto-send, and `shell-maker-submit' side-effects per AGENTS.md
+  # Rule 2; this module only formats strings (no deps).
+  decknix-agent-fork-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-fork";
+    src = ./agent-shell/fork;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-fork-test.el"
+    ];
+  };
+
   # PR B.84: Pure rg/jq shell-command builders carved from
   # `decknix--agent-session-rg-search-fast' /
   # `decknix--agent-session-rg-search-thorough'.  The bulk callers
@@ -1789,12 +1804,15 @@ let
     ];
   };
 
-  # == Custom auggie commands ==
-  # Deployed to ~/.augment/commands/ via home.file (as symlinks).
-  # User-created commands (regular files) coexist in the same directory
-  # and are not affected by Nix. On `decknix switch`, Nix-managed ones
-  # are refreshed; runtime-created ones persist.
-  commandDir = ".augment/commands";
+  # == Custom slash commands ==
+  # Deployed to ~/.claude/commands/ via agent-sync.  This is the shared
+  # slash-command location read natively by BOTH Claude Code and Auggie,
+  # so a single deployment covers both agents (consolidated from the old
+  # ~/.augment/commands/ location).  User-created commands (regular files)
+  # coexist in the same directory and are not affected by Nix.  On
+  # `decknix switch`, Nix-managed ones are refreshed; runtime-created ones
+  # persist.
+  commandDir = ".claude/commands";
 
   # Get list of command files for deployment
   commandFiles = builtins.readDir ./agent-shell/commands;
@@ -1961,7 +1979,7 @@ in
     commands.enable = mkOption {
       type = types.bool;
       default = true;
-      description = "Enable Nix-managed auggie custom commands (deployed to ~/.augment/commands/).";
+      description = "Enable Nix-managed custom slash commands (deployed to ~/.claude/commands/, read by both Claude Code and Auggie).";
     };
 
     context.enable = mkOption {
@@ -2012,7 +2030,7 @@ in
     # Reconcile and sync auggie commands + guidelines using agent-sync (copy-not-symlink).
     # agentSync auto-enables once any module registers files, so we only append here.
     decknix.cli.agentSync.files =
-      # Auggie custom commands → ~/.augment/commands/
+      # Custom slash commands → ~/.claude/commands/ (read by Claude + Auggie)
       (optionalAttrs cfg.commands.enable
         (mapAttrs'
           (name: _: nameValuePair "~/${commandDir}/${name}" {
@@ -2094,6 +2112,7 @@ in
           decknix-agent-workspace-persist-el
           decknix-agent-batch-build-el
           decknix-agent-post-create-el
+          decknix-agent-fork-el
           decknix-agent-rg-search-command-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
@@ -2727,6 +2746,18 @@ in
                           (conv-key tags workspace))
         (declare-function decknix--post-create-buffer-name
                           "decknix-agent-post-create" (name))
+
+        ;; Fork context hand-off -- pure message builders for
+        ;; `decknix-agent-session-fork'.  Source-data-path locates the
+        ;; source transcript; handoff-message primes the forked session's
+        ;; first user message with the source provenance.
+        (require 'decknix-agent-fork)
+        (declare-function decknix--agent-fork-source-data-path
+                          "decknix-agent-fork"
+                          (sessions-dir extension session-id))
+        (declare-function decknix--agent-fork-handoff-message
+                          "decknix-agent-fork"
+                          (provider-label session-id data-path tags))
 
         ;; rg search command builders (PR B.84) -- pure shell-command
         ;; builders for the fast / thorough session-grep pipelines,

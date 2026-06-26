@@ -1086,49 +1086,54 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // Scan for NEW files in ~/.augment/commands
-            let command_dir = dirs::home_dir().unwrap_or_default().join(".augment/commands");
-            if command_dir.is_dir() {
-                if let Ok(entries) = fs::read_dir(command_dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
-                            let live_path_raw = format!("~/.augment/commands/{}", path.file_name().unwrap().to_string_lossy());
-                            if !manifest.files.contains_key(&live_path_raw) {
-                                // Found a NEW file
-                                let live_hash = calculate_hash(&path)?;
+            // Scan for NEW files in the slash-command directories.  Both the
+            // canonical ~/.claude/commands (read by Claude Code AND Auggie) and
+            // the legacy ~/.augment/commands are scanned during the transition,
+            // so a command dropped into either location flows back into the repo.
+            for cmd_rel in [".claude/commands", ".augment/commands"] {
+                let command_dir = dirs::home_dir().unwrap_or_default().join(cmd_rel);
+                if command_dir.is_dir() {
+                    if let Ok(entries) = fs::read_dir(command_dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
+                                let live_path_raw = format!("~/{}/{}", cmd_rel, path.file_name().unwrap().to_string_lossy());
+                                if !manifest.files.contains_key(&live_path_raw) {
+                                    // Found a NEW file
+                                    let live_hash = calculate_hash(&path)?;
 
-                                // Default routing: if path contains nurturecloud -> nc-config, else decknix
-                                // Since we're in ~/.augment/commands, it's likely decknix unless we override.
-                                let repo_name = to.as_deref().unwrap_or("decknix");
-                                let repo_path = format!("modules/home/options/editors/emacs/agent-shell/commands/{}", path.file_name().unwrap().to_string_lossy());
+                                    // Default routing: if path contains nurturecloud -> nc-config, else decknix
+                                    // Since these live under $HOME command dirs, it's likely decknix unless we override.
+                                    let repo_name = to.as_deref().unwrap_or("decknix");
+                                    let repo_path = format!("modules/home/options/editors/emacs/agent-shell/commands/{}", path.file_name().unwrap().to_string_lossy());
 
-                                let new_entry = ManifestEntry {
-                                    hash: live_hash.clone(),
-                                    nix_store_path: None,
-                                    source_repo: repo_name.to_string(),
-                                    repo_path,
-                                };
-
-                                changed_files.push((live_path_raw.clone(), new_entry.clone(), live_hash.clone()));
-
-                                if apply {
-                                    let repo_root = match repo_name {
-                                        "decknix" => std::env::var("DECKNIX_DEV").map(PathBuf::from).unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join("tools/decknix")),
-                                        "nc-config" | "decknix-config" => dirs::home_dir().unwrap_or_default().join("Code/nurturecloud/decknix-config"),
-                                        _ => continue,
+                                    let new_entry = ManifestEntry {
+                                        hash: live_hash.clone(),
+                                        nix_store_path: None,
+                                        source_repo: repo_name.to_string(),
+                                        repo_path,
                                     };
 
-                                    let target_path = repo_root.join(&new_entry.repo_path);
-                                    if let Some(parent) = target_path.parent() {
-                                        fs::create_dir_all(parent)?;
+                                    changed_files.push((live_path_raw.clone(), new_entry.clone(), live_hash.clone()));
+
+                                    if apply {
+                                        let repo_root = match repo_name {
+                                            "decknix" => std::env::var("DECKNIX_DEV").map(PathBuf::from).unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join("tools/decknix")),
+                                            "nc-config" | "decknix-config" => dirs::home_dir().unwrap_or_default().join("Code/nurturecloud/decknix-config"),
+                                            _ => continue,
+                                        };
+
+                                        let target_path = repo_root.join(&new_entry.repo_path);
+                                        if let Some(parent) = target_path.parent() {
+                                            fs::create_dir_all(parent)?;
+                                        }
+
+                                        println!("💾 Pulling NEW {} -> {}", live_path_raw, target_path.display());
+                                        fs::copy(&path, &target_path)?;
+
+                                        manifest.files.insert(live_path_raw, new_entry);
+                                        repos_to_commit.insert(repo_root);
                                     }
-
-                                    println!("💾 Pulling NEW {} -> {}", live_path_raw, target_path.display());
-                                    fs::copy(&path, &target_path)?;
-
-                                    manifest.files.insert(live_path_raw, new_entry);
-                                    repos_to_commit.insert(repo_root);
                                 }
                             }
                         }
