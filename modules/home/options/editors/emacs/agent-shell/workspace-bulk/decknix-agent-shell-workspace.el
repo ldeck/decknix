@@ -4082,6 +4082,33 @@ Uses `magit-status' when available; falls back to `vc-dir' otherwise."
      ((fboundp 'magit-status) (magit-status (expand-file-name path)))
      (t (vc-dir (expand-file-name path))))))
 
+(transient-define-suffix decknix--sb-act-wt-status ()
+  "Show uncommitted changes for the worktree (or primary clone if none).
+Uses `magit-diff-working-tree' when magit is available, falling back to
+a `git status --short' read-only buffer.  Complements `r' which opens
+the full `magit-status' interface."
+  :description "Diff working tree"
+  :inapt-if #'decknix--sb-act-wt-no-clone-p
+  (interactive)
+  (let* ((path (or (decknix--sb-act-wt-path)
+                   (decknix--sb-act-wt-primary))))
+    (cond
+     ((not path) (message "No clone for this repo"))
+     ((fboundp 'magit-diff-working-tree)
+      (let ((default-directory (expand-file-name path)))
+        (magit-diff-working-tree)))
+     (t
+      (let ((buf (get-buffer-create "*decknix-wt-status*")))
+        (with-current-buffer buf
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (call-process "git" nil buf nil
+                          "-C" (expand-file-name path)
+                          "status" "--short")
+            (read-only-mode 1)
+            (goto-char (point-min))))
+        (display-buffer buf))))))
+
 (transient-define-suffix decknix--sb-act-wt-copy ()
   "Copy the worktree path to the kill-ring."
   :description "Copy worktree path"
