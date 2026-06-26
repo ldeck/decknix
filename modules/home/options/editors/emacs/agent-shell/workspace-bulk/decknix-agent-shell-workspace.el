@@ -965,7 +965,7 @@ and again once the registry write completes."
    ;; Sorted alphabetically by description (case-insensitive).
    ("c"   "New session"   agent-shell-workspace-sidebar-new)
    ("RET" "Open / goto"   agent-shell-workspace-sidebar-goto)
-   decknix-sidebar-transient--pin-keys
+   (decknix-sidebar-transient--pin-keys)
    ("q"   "Quit sidebar"  quit-window)
    ("g"   "Refresh"       decknix-sidebar-refresh)]
   ["Actions (a …)"

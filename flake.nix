@@ -94,9 +94,13 @@
             # Priority: stable nixpkgs > unstable nixpkgs > nix-casks > custom derivations
             config.nixpkgs.overlays = [ unstableOverlay ];
 
-            # Propagate pkgs.unstable into home-manager's pkgs as well
+            # Propagate pkgs.unstable AND the decknix custom-package overlay
+            # (decknix-cli/hub, nix-open, claude-agent-acp, pi-acp) into
+            # home-manager's own pkgs.  home-manager does not use useGlobalPkgs,
+            # so it does not inherit the system's nixpkgs.overlays — modules
+            # that reference e.g. pkgs.pi-acp need the overlay applied here too.
             config.home-manager.sharedModules = [{
-              nixpkgs.overlays = [ unstableOverlay ];
+              nixpkgs.overlays = [ unstableOverlay self.overlays.default ];
             }];
           };
         };

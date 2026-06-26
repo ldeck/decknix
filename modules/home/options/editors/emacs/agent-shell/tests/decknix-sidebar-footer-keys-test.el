@@ -29,9 +29,12 @@
 ;; -- Quick keys (constant) ---------------------------------------
 
 (ert-deftest decknix-sidebar-footer-keys--quick-keys-shape ()
-  "Quick alist returns the canonical six entries in order."
+  "Quick alist returns the canonical entries in label-sorted order.
+The `H' / hygiene… entry sits between `actions…' and `new', matching
+the alphabetical-by-label ordering the footer advertises."
   (should (equal
            '(("a"   . "actions…")
+             ("H"   . "hygiene…")
              ("c"   . "new")
              ("RET" . "open")
              ("q"   . "quit")
