@@ -70,7 +70,7 @@ Templates are stored in `~/.emacs.d/snippets/agent-shell-mode/`.
 
 ## Custom Slash Commands (`C-c c c`)
 
-Slash commands are markdown files with YAML frontmatter, deployed to `~/.claude/commands/` (the shared location read by both Claude Code and Auggie):
+Slash commands are markdown files with YAML frontmatter, deployed to `~/.claude/commands/` (the shared location read by both Claude Code and Auggie) and fanned out to `~/.pi/agent/prompts/` so Pi picks them up as `/name` prompt templates too:
 
 ```markdown
 ---
