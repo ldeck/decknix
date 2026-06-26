@@ -800,6 +800,19 @@ let
     ];
   };
 
+  # `C-c s R' restart command + its pure name-recovery helper, carved
+  # out per AGENTS.md Rule 2.  The interactive command's cross-package
+  # callees (resume, buffer-lookup, tags-read) are forward-declared in
+  # the source and resolve at runtime; only the pure parser is tested.
+  decknix-agent-session-restart-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-session-restart";
+    src = ./agent-shell/agent;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-session-restart-test.el"
+    ];
+  };
+
   # PR B.57: pure formatters for the session-grep picker carved out
   # of `decknix-agent-shell-main' (main-bulk).
   #   * `decknix--agent-session-grep-candidate' -- one row of the
@@ -2044,6 +2057,7 @@ in
           decknix-agent-prompt-search-el
           decknix-agent-session-format-el
           decknix-agent-session-group-el
+          decknix-agent-session-restart-el
           decknix-agent-grep-format-el
           decknix-agent-conv-format-el
           decknix-agent-compose-busy-el
@@ -2428,6 +2442,14 @@ in
                           (sessions &optional include-hidden))
         (declare-function decknix--agent-session-live-label
                           "decknix-agent-session-group" (buf))
+
+        ;; `C-c s R' — resilient in-place session restart.  Re-resumes
+        ;; the current conversation (reviving even a `killed' buffer)
+        ;; instead of starting a blank session like the upstream sidebar
+        ;; restart.  Bound in the `C-c s' block below.
+        (require 'decknix-agent-session-restart)
+        (declare-function decknix-agent-session-restart
+                          "decknix-agent-session-restart" ())
 
         ;; Pure formatters for the session-grep picker (PR B.57) --
         ;; carved from main-bulk.  `grep-candidate' renders one row
@@ -4984,6 +5006,7 @@ Subsequent toggles only log when verbose tracing is on."
                       (define-key map (kbd "L") 'decknix-agent-link-repo)
                       (define-key map (kbd "u") 'decknix-agent-unlink-pr)
                       (define-key map (kbd "i") 'decknix-agent-session-info)
+                      (define-key map (kbd "R") 'decknix-agent-session-restart)
                       ;; C-c s t — session-scoped tags sub-prefix
                       (define-key tag-map (kbd "l") 'decknix-agent-tag-show)
                       (define-key tag-map (kbd "a") 'decknix-agent-tag-add)
@@ -5008,6 +5031,7 @@ Subsequent toggles only log when verbose tracing is on."
                         "C-c s L" "link repo+branch"
                         "C-c s u" "unlink PR / repo"
                         "C-c s i" "session info"
+                        "C-c s R" "restart session"
                         "C-c s t"   "tags…"
                         "C-c s t l" "list / filter by tag"
                         "C-c s t a" "add tag"
