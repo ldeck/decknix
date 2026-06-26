@@ -58,6 +58,7 @@
 Sorted alphabetically by label; review launching is merged into
 the `r' (requests) picker via its `M-r' toggle."
   '(("a"   . "actions…")
+    ("H"   . "hygiene…")
     ("c"   . "new")
     ("RET" . "open")
     ("q"   . "quit")
