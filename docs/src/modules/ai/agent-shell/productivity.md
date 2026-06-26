@@ -93,7 +93,7 @@ Create a new Augment session and rename it in one step.
 
 ### Command Discovery
 
-The picker (`C-c c c`) scans both global (`~/.claude/commands/`) and project-level (`.claude/commands/`) directories — plus the legacy `~/.augment/commands/` and `.augment/commands/` locations during the transition, so commands deployed to either are discoverable (duplicates collapse, preferring the Claude copy). Each command shows its scope and description:
+The picker (`C-c c c`) **scopes discovery to the agent the current session is running as**: a Claude/Auggie session lists `~/.claude/commands/` (plus project-level `.claude/commands/` and the legacy `~/.augment/commands/` during the transition), while a Pi session lists `~/.pi/agent/prompts/`. Invoked outside an agent session, it falls back to scanning the union so everything is still discoverable. Duplicates collapse (preferring the canonical global copy), and each command shows its scope and description:
 
 ```
 Command:

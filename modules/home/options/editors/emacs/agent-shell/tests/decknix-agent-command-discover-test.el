@@ -172,6 +172,65 @@ remain discoverable during the transition."
           (should (cl-some (lambda (n) (string-match-p "/p  (project)" n)) names))
           (should (cl-some (lambda (n) (string-match-p "/g" n)) names)))))))
 
+;; -- provider-aware discovery ------------------------------------
+
+(ert-deftest decknix-agent-command-discover--dirs-for-pi ()
+  "Pi resolves to its home-global prompt-template dir."
+  (should (equal (list (expand-file-name "~/.pi/agent/prompts"))
+                 (decknix--agent-command-dirs-for-provider 'pi))))
+
+(ert-deftest decknix-agent-command-discover--dirs-for-claude ()
+  "Claude Code resolves to the canonical Claude commands dir only."
+  (should (equal (list (expand-file-name "~/.claude/commands"))
+                 (decknix--agent-command-dirs-for-provider 'claude-code))))
+
+(ert-deftest decknix-agent-command-discover--dirs-for-auggie ()
+  "Auggie resolves to the Claude dir plus the legacy augment dir."
+  (should (equal (list (expand-file-name "~/.claude/commands")
+                       (expand-file-name "~/.augment/commands"))
+                 (decknix--agent-command-dirs-for-provider 'auggie))))
+
+(ert-deftest decknix-agent-command-discover--dirs-for-nil-is-union ()
+  "No active provider falls back to the configured union dirs."
+  (let ((decknix--agent-command-dirs '("/a" "/b")))
+    (should (equal '("/a" "/b")
+                   (decknix--agent-command-dirs-for-provider nil)))))
+
+(ert-deftest decknix-agent-command-discover--project-rels-pi-empty ()
+  "Pi has no project-level prompt convention (prompts are home-global)."
+  (should (null (decknix--agent-command-project-rels-for-provider 'pi))))
+
+(ert-deftest decknix-agent-command-discover--project-rels-claude-family ()
+  "Claude-family agents scan workspace .claude/commands (Auggie also legacy)."
+  (should (equal '(".claude/commands")
+                 (decknix--agent-command-project-rels-for-provider 'claude-code)))
+  (should (equal '(".claude/commands" ".augment/commands")
+                 (decknix--agent-command-project-rels-for-provider 'auggie))))
+
+(ert-deftest decknix-agent-command-discover--files-honour-buffer-provider ()
+  "A Pi buffer lists Pi prompts only, not the Claude commands dir.
+`decknix--agent-command-files' must scope discovery to the active
+provider declared by the buffer-local `decknix--agent-provider-id'."
+  (decknix-test-cmd-disc-with-tmp
+    (let* ((process-environment
+            (cons (concat "HOME=" decknix-test-cmd-disc--root)
+                  (cl-remove-if (lambda (s) (string-prefix-p "HOME=" s))
+                                process-environment)))
+           (pi-dir (expand-file-name "~/.pi/agent/prompts"))
+           (claude-dir (expand-file-name "~/.claude/commands"))
+           (decknix--agent-provider-id 'pi))
+      (cl-letf (((symbol-function 'project-current) (lambda (&optional _ _d) nil)))
+        (make-directory pi-dir t)
+        (make-directory claude-dir t)
+        (with-temp-file (expand-file-name "pi-only.md" pi-dir) (insert "x"))
+        (with-temp-file (expand-file-name "claude-only.md" claude-dir) (insert "y"))
+        (let* ((result (decknix--agent-command-files))
+               (names (mapcar #'car result)))
+          (should (= 1 (length result)))
+          (should (string-match-p "/pi-only  (global)" (car names)))
+          (should-not (cl-some (lambda (n) (string-match-p "claude-only" n))
+                               names)))))))
+
 ;; -- command-description -----------------------------------------
 
 (ert-deftest decknix-agent-command-discover--desc-extracts-from-frontmatter ()
