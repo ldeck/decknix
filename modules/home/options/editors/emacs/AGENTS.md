@@ -280,12 +280,9 @@ session without prompting. Regular `C-c A n` prompts for provider selection.
 
 #### Claude Code — First-class Setup
 
-The `claude-code` CLI is installed via `home.packages`. The ACP bridge is a
-separate npm package **not yet in nixpkgs** — install it manually:
-
-```bash
-npm install -g @agentclientprotocol/claude-agent-acp
-```
+The `claude-code` CLI and the ACP bridge (`claude-agent-acp`) are both installed
+via `decknix.ai.claude.enable = true` — no manual npm steps required after
+`decknix switch`.
 
 Authentication defaults to login-based (`agent-shell-anthropic-authentication`
 `:login t`). Run `claude` once standalone to complete the OAuth flow, then
@@ -296,12 +293,8 @@ in the registry extracts metadata for the session picker.
 
 #### Pi — First-class Setup
 
-The `decknix.ai.pi` module is enabled. The ACP bridge is **not yet in nixpkgs**
-— install it manually:
-
-```bash
-npm install -g pi-acp
-```
+The `decknix.ai.pi` module (`decknix.ai.pi.enable = true`) installs the `pi-acp`
+ACP bridge via Nix — no manual npm steps required after `decknix switch`.
 
 Sessions live in `~/.pi/sessions/`. Session file format will be discovered on
 first use; the `:session-jq-filter` in the registry is pending (sessions won't

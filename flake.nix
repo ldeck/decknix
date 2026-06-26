@@ -33,6 +33,9 @@
         decknix-cli = final.callPackage ./pkgs/decknix-cli/default.nix { };
         decknix-hub = final.callPackage ./pkgs/decknix-hub/default.nix { };
         nix-open = final.callPackage ./pkgs/nix-open/default.nix { };
+        # ACP bridges for agent-shell providers (not yet in nixpkgs)
+        claude-agent-acp = final.callPackage ./pkgs/claude-agent-acp/default.nix { };
+        pi-acp = final.callPackage ./pkgs/pi-acp/default.nix { };
       };
 
       perSystem = { config, self', inputs', pkgs, system, ... }: {
@@ -41,6 +44,8 @@
         packages.decknix-cli = pkgs.callPackage ./pkgs/decknix-cli/default.nix { };
         packages.decknix-hub = pkgs.callPackage ./pkgs/decknix-hub/default.nix { };
         packages.nix-open = pkgs.callPackage ./pkgs/nix-open/default.nix { };
+        packages.claude-agent-acp = pkgs.callPackage ./pkgs/claude-agent-acp/default.nix { };
+        packages.pi-acp = pkgs.callPackage ./pkgs/pi-acp/default.nix { };
 
         # Set it as the default so 'nix run' works without arguments
         packages.default = config.packages.decknix-cli;
