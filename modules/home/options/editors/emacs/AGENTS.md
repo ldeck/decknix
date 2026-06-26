@@ -312,7 +312,19 @@ appear in `C-c A s` until the field is populated).
 - **New sessions** (`C-c A n`): Prompts for provider if more than one is
   registered. `C-u C-c A n` (QUICK) skips provider selection and uses the
   default provider (`claude-code`).
-- **Forking** (`C-c A f`): Prompts for provider for the new session.
+- **Forking** (`C-c A f` / `C-c s f`): Prompts for the new session's
+  provider (which may differ from the source), pre-seeds the source
+  session's workspace and tags, then **hands off context** — the new
+  session's first user message is auto-sent (mirroring the quickaction
+  send path) describing the source provenance: provider label, source
+  session id, best-effort transcript path, and source tags. This lets a
+  fork into a *different* agent pick up the prior context (the new agent
+  may read the named transcript if accessible). The hand-off embeds the
+  source session id so forks of distinct sources derive distinct
+  conversation keys. When invoked outside an agent-shell buffer there is
+  no source, so fork degrades to a plain `decknix-agent-session-new`
+  (no hand-off message). Pure message builders are carved + tested in
+  `agent-shell/fork/decknix-agent-fork.el`.
 - **Resuming**: Automatically restores the correct provider based on session
   metadata.
 - **Sidebar**: Displays the provider glyph (A/C/P) for each live session.
