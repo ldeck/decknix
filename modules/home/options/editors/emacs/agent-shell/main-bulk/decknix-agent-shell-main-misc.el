@@ -55,8 +55,11 @@
 
 (defun decknix-agent-command-run ()
   "Pick a custom command and insert it as a slash command in the prompt.
-Shows commands from ~/.claude/commands/ and project .claude/commands/,
-plus the legacy ~/.augment/commands/ during the transition."
+Discovery is scoped to the agent the current buffer is running as: a
+Claude/Auggie session lists ~/.claude/commands/ (plus project
+.claude/commands/ and the legacy ~/.augment/commands/), a Pi session
+lists ~/.pi/agent/prompts/.  Outside an agent session the union of all
+of these is shown."
   (interactive)
   (let* ((cmds (decknix--agent-command-files))
          (annotator (lambda (cand)
