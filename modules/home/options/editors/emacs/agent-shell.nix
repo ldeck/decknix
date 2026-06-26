@@ -1808,11 +1808,17 @@ let
   # Deployed to ~/.claude/commands/ via agent-sync.  This is the shared
   # slash-command location read natively by BOTH Claude Code and Auggie,
   # so a single deployment covers both agents (consolidated from the old
-  # ~/.augment/commands/ location).  User-created commands (regular files)
-  # coexist in the same directory and are not affected by Nix.  On
+  # ~/.augment/commands/ location).  The same files also fan out to Pi's
+  # prompt-template dir (~/.pi/agent/prompts/) so each slash command is
+  # available as a /name prompt under Pi too -- keeping commands portable
+  # across every supported agent.  User-created commands (regular files)
+  # coexist in each directory and are not affected by Nix.  On
   # `decknix switch`, Nix-managed ones are refreshed; runtime-created ones
   # persist.
   commandDir = ".claude/commands";
+  # Pi reads prompt templates from this home-global dir; commands fan out
+  # here in addition to .claude/commands (Pi does not read .claude/commands).
+  piPromptDir = ".pi/agent/prompts";
 
   # Get list of command files for deployment
   commandFiles = builtins.readDir ./agent-shell/commands;
@@ -1979,7 +1985,7 @@ in
     commands.enable = mkOption {
       type = types.bool;
       default = true;
-      description = "Enable Nix-managed custom slash commands (deployed to ~/.claude/commands/, read by both Claude Code and Auggie).";
+      description = "Enable Nix-managed custom slash commands (deployed to ~/.claude/commands/ for Claude Code + Auggie, and ~/.pi/agent/prompts/ for Pi).";
     };
 
     context.enable = mkOption {
@@ -2034,6 +2040,16 @@ in
       (optionalAttrs cfg.commands.enable
         (mapAttrs'
           (name: _: nameValuePair "~/${commandDir}/${name}" {
+            source = ./agent-shell/commands/${name};
+            repo = "decknix";
+            repoPath = "modules/home/options/editors/emacs/agent-shell/commands/${name}";
+          })
+          commandFiles))
+      //
+      # Same commands → ~/.pi/agent/prompts/ (read by Pi as /name templates)
+      (optionalAttrs cfg.commands.enable
+        (mapAttrs'
+          (name: _: nameValuePair "~/${piPromptDir}/${name}" {
             source = ./agent-shell/commands/${name};
             repo = "decknix";
             repoPath = "modules/home/options/editors/emacs/agent-shell/commands/${name}";
