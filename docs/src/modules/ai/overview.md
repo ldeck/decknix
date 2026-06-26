@@ -27,7 +27,7 @@ Decknix provides a declarative, Nix-managed AI development environment — from 
 │  └─────┬─────┘  └─────┬────┘  └───────┬────────┘│
 └────────┼──────────────┼───────────────┼──────────┘
          ▼              ▼               ▼
-  ~/.augment/     ~/.augment/    ~/.augment/commands/
+  ~/.augment/     ~/.augment/    ~/.claude/commands/
   settings.json   settings.json  ~/.emacs.d/snippets/
          │              │               │
          ▼              ▼               ▼

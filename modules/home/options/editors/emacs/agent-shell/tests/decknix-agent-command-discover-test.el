@@ -38,6 +38,18 @@
     (with-temp-file path (insert content))
     path))
 
+;; -- default search path -----------------------------------------
+
+(ert-deftest decknix-agent-command-discover--default-dirs-include-both ()
+  "Default search path scans BOTH the Claude and legacy auggie dirs.
+During the transition commands deployed to either location must be
+discoverable; ~/.claude/commands is canonical, ~/.augment/commands is
+kept for backward compatibility."
+  (should (member (expand-file-name "~/.claude/commands")
+                  decknix--agent-command-dirs))
+  (should (member (expand-file-name "~/.augment/commands")
+                  decknix--agent-command-dirs)))
+
 ;; -- command-files -----------------------------------------------
 
 (ert-deftest decknix-agent-command-discover--files-empty-when-no-dirs ()
@@ -50,7 +62,7 @@
 
 (ert-deftest decknix-agent-command-discover--files-scans-global-dir ()
   "Picks up *.md files from a configured global directory and labels them.
-Rebinds HOME via `process-environment' so `expand-file-name \"~/.augment\"'
+Rebinds HOME via `process-environment' so `expand-file-name \"~/.claude\"'
 resolves under the test tmp root -- this exercises the real scope-prefix
 check (global vs project) without monkey-patching `expand-file-name'."
   (decknix-test-cmd-disc-with-tmp
@@ -58,7 +70,7 @@ check (global vs project) without monkey-patching `expand-file-name'."
             (cons (concat "HOME=" decknix-test-cmd-disc--root)
                   (cl-remove-if (lambda (s) (string-prefix-p "HOME=" s))
                                 process-environment)))
-           (global (expand-file-name "~/.augment/commands"))
+           (global (expand-file-name "~/.claude/commands"))
            (decknix--agent-command-dirs (list global)))
       (cl-letf (((symbol-function 'project-current) (lambda (&optional _ _d) nil)))
         (make-directory global t)
@@ -68,6 +80,64 @@ check (global vs project) without monkey-patching `expand-file-name'."
           (should (= 2 (length result)))
           (should (cl-some (lambda (e) (string-match-p "/foo  (global)" (car e))) result))
           (should (cl-some (lambda (e) (string-match-p "/bar  (global)" (car e))) result)))))))
+
+(ert-deftest decknix-agent-command-discover--files-scans-augment-global-dir ()
+  "Picks up *.md files from the legacy ~/.augment/commands dir as global.
+Auggie reads ~/.augment/commands natively; commands deployed there must
+still be discoverable and labelled `global' during the transition."
+  (decknix-test-cmd-disc-with-tmp
+    (let* ((process-environment
+            (cons (concat "HOME=" decknix-test-cmd-disc--root)
+                  (cl-remove-if (lambda (s) (string-prefix-p "HOME=" s))
+                                process-environment)))
+           (global (expand-file-name "~/.augment/commands"))
+           (decknix--agent-command-dirs (list global)))
+      (cl-letf (((symbol-function 'project-current) (lambda (&optional _ _d) nil)))
+        (make-directory global t)
+        (with-temp-file (expand-file-name "legacy.md" global) (insert "x"))
+        (let ((result (decknix--agent-command-files)))
+          (should (= 1 (length result)))
+          (should (string-match-p "/legacy  (global)" (caar result))))))))
+
+(ert-deftest decknix-agent-command-discover--files-dedups-claude-over-augment ()
+  "Same-named global command in both dirs collapses to one, claude wins.
+A command present in both ~/.claude/commands and ~/.augment/commands must
+appear once; the canonical Claude copy is preferred."
+  (decknix-test-cmd-disc-with-tmp
+    (let* ((process-environment
+            (cons (concat "HOME=" decknix-test-cmd-disc--root)
+                  (cl-remove-if (lambda (s) (string-prefix-p "HOME=" s))
+                                process-environment)))
+           (claude (expand-file-name "~/.claude/commands"))
+           (augment (expand-file-name "~/.augment/commands"))
+           (decknix--agent-command-dirs (list claude augment)))
+      (cl-letf (((symbol-function 'project-current) (lambda (&optional _ _d) nil)))
+        (make-directory claude t)
+        (make-directory augment t)
+        (with-temp-file (expand-file-name "dup.md" claude) (insert "claude"))
+        (with-temp-file (expand-file-name "dup.md" augment) (insert "augment"))
+        (let ((result (decknix--agent-command-files)))
+          (should (= 1 (length result)))
+          (should (string-prefix-p claude (cdar result))))))))
+
+(ert-deftest decknix-agent-command-discover--files-includes-augment-project-dir ()
+  "Adds project-level .augment/commands when project-current resolves.
+Mirrors the .claude/commands project branch so legacy project commands
+remain discoverable during the transition."
+  (decknix-test-cmd-disc-with-tmp
+    (let* ((global (expand-file-name "global" decknix-test-cmd-disc--root))
+           (proj-root (expand-file-name "proj/" decknix-test-cmd-disc--root))
+           (proj-cmd-dir (expand-file-name ".augment/commands" proj-root))
+           (decknix--agent-command-dirs (list global)))
+      (cl-letf (((symbol-function 'project-current)
+                 (lambda (&optional _ _d) (cons 'transient proj-root)))
+                ((symbol-function 'project-root) (lambda (_p) proj-root)))
+        (make-directory global t)
+        (make-directory proj-cmd-dir t)
+        (with-temp-file (expand-file-name "p2.md" proj-cmd-dir) (insert "y"))
+        (let* ((result (decknix--agent-command-files))
+               (names (mapcar #'car result)))
+          (should (cl-some (lambda (n) (string-match-p "/p2  (project)" n)) names)))))))
 
 (ert-deftest decknix-agent-command-discover--files-skips-non-md ()
   "Ignores non-.md files in the configured directory."
@@ -83,11 +153,11 @@ check (global vs project) without monkey-patching `expand-file-name'."
           (should (string-match-p "/ok" (caar result))))))))
 
 (ert-deftest decknix-agent-command-discover--files-includes-project-dir ()
-  "Adds project-level .augment/commands when project-current resolves."
+  "Adds project-level .claude/commands when project-current resolves."
   (decknix-test-cmd-disc-with-tmp
     (let* ((global (expand-file-name "global" decknix-test-cmd-disc--root))
            (proj-root (expand-file-name "proj/" decknix-test-cmd-disc--root))
-           (proj-cmd-dir (expand-file-name ".augment/commands" proj-root))
+           (proj-cmd-dir (expand-file-name ".claude/commands" proj-root))
            (decknix--agent-command-dirs (list global)))
       (cl-letf (((symbol-function 'project-current)
                  (lambda (&optional _ _d) (cons 'transient proj-root)))

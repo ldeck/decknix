@@ -55,7 +55,8 @@
 
 (defun decknix-agent-command-run ()
   "Pick a custom command and insert it as a slash command in the prompt.
-Shows commands from ~/.augment/commands/ and project .augment/commands/."
+Shows commands from ~/.claude/commands/ and project .claude/commands/,
+plus the legacy ~/.augment/commands/ during the transition."
   (interactive)
   (let* ((cmds (decknix--agent-command-files))
          (annotator (lambda (cand)
@@ -74,13 +75,13 @@ Shows commands from ~/.augment/commands/ and project .augment/commands/."
       (message "Copied: /%s (use in an agent-shell buffer)" name))))
 
 (defun decknix-agent-command-new ()
-  "Create a new auggie custom command.
-Prompts for a name and opens a template in ~/.augment/commands/."
+  "Create a new custom slash command.
+Prompts for a name and opens a template in ~/.claude/commands/."
   (interactive)
   (let* ((name (read-string "Command name (no extension): "))
          (name (string-trim name))
          (file (expand-file-name
-                (format "~/.augment/commands/%s.md" name))))
+                (format "~/.claude/commands/%s.md" name))))
     (when (string-empty-p name)
       (user-error "Name cannot be empty"))
     (when (file-exists-p file)
@@ -90,7 +91,7 @@ Prompts for a name and opens a template in ~/.augment/commands/."
     (message "New command: %s — write instructions, then save." name)))
 
 (defun decknix-agent-command-edit ()
-  "Edit an existing auggie custom command."
+  "Edit an existing custom slash command."
   (interactive)
   (let* ((cmds (decknix--agent-command-files))
          (selection (completing-read "Edit command: "

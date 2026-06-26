@@ -70,7 +70,7 @@ Templates are stored in `~/.emacs.d/snippets/agent-shell-mode/`.
 
 ## Custom Slash Commands (`C-c c c`)
 
-Slash commands are markdown files with YAML frontmatter, deployed to `~/.augment/commands/`:
+Slash commands are markdown files with YAML frontmatter, deployed to `~/.claude/commands/` (the shared location read by both Claude Code and Auggie):
 
 ```markdown
 ---
@@ -93,7 +93,7 @@ Create a new Augment session and rename it in one step.
 
 ### Command Discovery
 
-The picker (`C-c c c`) scans both global (`~/.augment/commands/`) and project-level (`.augment/commands/`) directories. Each command shows its scope and description:
+The picker (`C-c c c`) scans both global (`~/.claude/commands/`) and project-level (`.claude/commands/`) directories — plus the legacy `~/.augment/commands/` and `.augment/commands/` locations during the transition, so commands deployed to either are discoverable (duplicates collapse, preferring the Claude copy). Each command shows its scope and description:
 
 ```
 Command:

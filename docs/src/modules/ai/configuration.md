@@ -114,12 +114,12 @@ Each sub-module can be independently disabled. See [Agent Shell Overview](./agen
 
 ## Custom Commands
 
-Nix-managed commands are deployed to `~/.augment/commands/` as symlinks. User-created commands (regular files) coexist in the same directory and are not affected by `decknix switch`.
+Nix-managed commands are deployed to `~/.claude/commands/` (the shared slash-command location read natively by both Claude Code and Auggie, so a single deployment covers both agents). User-created commands (regular files) coexist in the same directory and are not affected by `decknix switch`.
 
 ```nix
 # Commands are defined in agent-shell.nix and deployed automatically.
 # To add your own at runtime:
-# C-c c n  → Create new command (opens template in ~/.augment/commands/)
+# C-c c n  → Create new command (opens template in ~/.claude/commands/)
 ```
 
 See [Productivity](./agent-shell/productivity.md) for the full command framework.
