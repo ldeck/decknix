@@ -245,6 +245,14 @@ The largest module (~4400 lines). Key subsystems:
 - **Session close** (`C-c A q` / `C-c s q`): Kills the buffer. If other live
   sessions exist, switches to the next one (or opens the picker if multiple).
   If last session, returns to the welcome screen or `*scratch*`.
+- **Session restart** (`C-c s R`): Restarts the current session in place by
+  killing the buffer (which saves the session) and re-resuming the same
+  conversation — restoring workspace, provider, model, and history. Unlike the
+  upstream sidebar restart (which starts a *blank* session and only works on a
+  *live* buffer), this resumes from the latest on-disk snapshot, so it revives
+  even a `killed` buffer whose agent process has already exited. The pure
+  name-recovery helper is carved + tested in
+  `agent-shell/agent/decknix-agent-session-restart.el`.
 - **Session resume**: Restores history into comint buffer. Buffer is renamed
   to `*Auggie: <name>*` (or `*Claude: <name>*`, etc.) using tags (if any) or
   first-message preview, matching the naming convention of new sessions.
@@ -768,6 +776,7 @@ workspace sidebar surface which sessions need attention.
 | `C-c D l` | Show reload history log |
 | `C-c b` | Switch agent buffer — live buffers only (#96) |
 | `C-c s g` | Grep all session content (in-buffer shortcut for `C-c A g`) |
+| `C-c s R` | Restart current session in place — re-resumes the conversation (revives `killed` buffers, preserves history); in-buffer only |
 | `C-c s c` | Toggle inline Context history section (▶/▼) — in-buffer only |
 | `C-c s [` / `C-c s ]` | Page restored Context window to older / newer turns (#136). Also bound on the Context header itself as `[` / `]`. Header line shows `Context (a–b / N)` so the cursor position is discoverable. Cross-window jump-to-match: `C-c s g` selecting a hit outside the loaded window now seeds the cursor so the matched turn lands at the bottom and `point` lands on the match |
 | `C-c i` | Context panel (in agent-shell buffers) |
