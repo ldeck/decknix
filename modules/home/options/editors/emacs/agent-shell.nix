@@ -4185,9 +4185,6 @@ Subsequent toggles only log when verbose tracing is on."
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "h") (lambda () (interactive)
                       (decknix--sidebar-call-transient #'decknix-sidebar-transient)))
-        (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "K") #'decknix-sidebar-toggle-keys)
-
         ;; D = cycle hub display layout (A full → B scoped → C label → D minimal)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "D") #'decknix-sidebar-toggle-hub-display-mode)

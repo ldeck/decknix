@@ -155,6 +155,7 @@
 (declare-function decknix-hub-worktree-find "ext:decknix-agent-shell-main")
 (declare-function decknix-hub-worktree-primary "ext:decknix-agent-shell-main")
 ;; Sidebar-toggles symbols (in decknix-sidebar-toggles).
+(declare-function decknix-sidebar-toggle-keys "decknix-sidebar-toggles")
 (declare-function decknix-sidebar-toggle-saved-sessions "decknix-sidebar-toggles")
 (declare-function decknix-sidebar-toggle-sessions-hide-unknown "decknix-sidebar-toggles")
 (declare-function decknix--sidebar-session-workspace-visible-p
@@ -600,6 +601,22 @@ candidate movement uses the line text as the search needle."
   (interactive)
   (decknix-sidebar-toggle-wip-group-mode))
 
+(transient-define-suffix decknix-sidebar-transient--pin-keys ()
+  "Toggle pinning of keyboard shortcuts in the sidebar footer.
+When on, the Navigate/Quick key listing is always shown at the bottom
+of the sidebar.  When off, it is hidden to give content more height.
+Accessible only via the `?' transient; no standalone key binding."
+  :key "k"
+  :transient t
+  :description
+  (lambda ()
+    (format "pin shortcuts  %s"
+            (propertize
+             (format "[%s]" (if decknix--sidebar-show-keys "on" "off"))
+             'face 'font-lock-constant-face)))
+  (interactive)
+  (decknix-sidebar-toggle-keys))
+
 (transient-define-suffix decknix-sidebar-transient--show-toggles ()
   "Toggle Toggles visibility in footer."
   :key "f"
@@ -948,6 +965,7 @@ and again once the registry write completes."
    ;; Sorted alphabetically by description (case-insensitive).
    ("c"   "New session"   agent-shell-workspace-sidebar-new)
    ("RET" "Open / goto"   agent-shell-workspace-sidebar-goto)
+   decknix-sidebar-transient--pin-keys
    ("q"   "Quit sidebar"  quit-window)
    ("g"   "Refresh"       decknix-sidebar-refresh)]
   ["Actions (a …)"
@@ -1706,7 +1724,8 @@ column's height.  When nil, sections stack vertically (compact)."
   "Insert responsive key listing or compact hint depending on toggle.
 When the sidebar is wide enough (>=48 cols), Navigate and Quick render
 side-by-side with Toggles below.  When narrow, all groups render with
-items inline (horizontal).  Press K to toggle, ? for full transient."
+items inline (horizontal).  Press ? to open the shortcuts transient,
+where `k' toggles pinning this footer."
   (insert "\n")
   (if decknix--sidebar-show-keys
       (let* ((win (get-buffer-window (current-buffer)))
