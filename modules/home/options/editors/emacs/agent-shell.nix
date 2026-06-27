@@ -1812,6 +1812,10 @@ let
       decknix-agent-live-sessions-el
       decknix-hub-ci-filter-el
       decknix-hub-mention-bot-el
+      # auto-review mode is persisted by the sidebar state save/restore
+      # below; on the load-path so the state round-trip test can
+      # `(require 'decknix-auto-review)` for the real special defvar.
+      decknix-auto-review-el
     ];
     extraSiteFiles = [ "decknix-worktree-picker.el" ];
     testFiles = [

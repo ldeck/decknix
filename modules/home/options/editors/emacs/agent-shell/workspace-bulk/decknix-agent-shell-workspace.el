@@ -73,6 +73,7 @@
 (declare-function decknix--hub-age-filter-cycle "decknix-hub-age-presets")
 (declare-function decknix--hub-age-filter-label "decknix-hub-age-presets")
 (declare-function decknix-auto-review-footer-label "decknix-auto-review")
+(defvar decknix-auto-review-mode)
 ;; Bulk hub module symbols (gated by cfg.hub.enable).
 (declare-function decknix--hub-render-requests "ext:decknix-agent-shell-hub")
 (declare-function decknix--hub-render-wip "ext:decknix-agent-shell-hub")
@@ -4547,6 +4548,9 @@ cannot clobber the Previous Sessions snapshot."
            (cons 'age-filter
                  (when (boundp 'decknix--hub-age-filter)
                    decknix--hub-age-filter))
+           (cons 'auto-review-mode
+                 (when (boundp 'decknix-auto-review-mode)
+                   decknix-auto-review-mode))
            (cons 'org-visibility
                  (when (and (boundp 'decknix--hub-org-visibility)
                             decknix--hub-org-visibility)
@@ -4693,6 +4697,13 @@ cannot clobber the Previous Sessions snapshot."
           (let ((af (alist-get 'age-filter state)))
             (when (and af (boundp 'decknix--hub-age-filter))
               (setq decknix--hub-age-filter af)))
+          ;; Auto-review mode: restore the 4-state cycle.  Uses a
+          ;; 'missing sentinel so older state files (pre-auto-review)
+          ;; don't clobber the `off' default with nil.
+          (let ((arm (alist-get 'auto-review-mode state 'missing)))
+            (unless (eq arm 'missing)
+              (when (and arm (boundp 'decknix-auto-review-mode))
+                (setq decknix-auto-review-mode arm))))
           (let ((as (alist-get 'attention-style state)))
             (when (and as (boundp 'decknix--sidebar-attention-style))
               (setq decknix--sidebar-attention-style as)))
