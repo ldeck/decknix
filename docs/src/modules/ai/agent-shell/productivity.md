@@ -170,6 +170,37 @@ Org-specific snippets (e.g., pre-filled workspace paths) can be added via downst
 
 `C-c C-c` parses the buffer and launches all sessions. A summary buffer shows success/failure for each.
 
+## Auto-Review (`T` → Requests → `A`)
+
+Automatically dispatch a review session when a PR review request that
+**@-mentions you** arrives in the hub Requests section — so a verdict is
+waiting by the time you switch to it.
+
+Cycle the mode from the sidebar Toggles transient (`T` → Requests → `A`):
+
+| State | Behaviour |
+|-------|-----------|
+| `off` | Disabled (default). |
+| `bot+@` | Auto-review bot-authored PRs that @-mention you, via `/review-and-ship-bot-pr`. |
+| `human+@` | Auto-review human-authored PRs that @-mention you, via the background `/review-service-pr-factory`. |
+| `any+@` | Both — bots ship, humans get the background review. |
+
+Every active state requires the @-mention: this is a deliberate safety
+guard so team-noise PRs (where you are not directly addressed) never spawn
+a session. Human reviews run as a background factory session whose verdict
+surfaces through the attention indicator (`AS:n/m`, jump with `C-c j`).
+
+**Incoming-only:** turning the toggle on seeds the current backlog as
+already-handled, so only genuinely *new* mentioned PRs dispatch — enabling
+it never floods you with sessions for the existing queue. A live-session
+guard plus a per-PR dedup set prevent double-dispatch.
+
+**Per-workspace commands:** override the slash command per repository
+workspace via `decknix-auto-review-commands` (an alist of
+`(workspace . (:review CMD :ship CMD))`); the global defaults are
+`decknix-auto-review-default-review-command` and
+`decknix-auto-review-default-ship-command`.
+
 ## Nix Options
 
 ```nix
