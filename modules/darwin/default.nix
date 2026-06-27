@@ -16,16 +16,12 @@ in
     ./iap-proxy.nix
   ];
 
-  nixpkgs.overlays = [
-    # Assuming we are inside the decknix repo, we can import the overlay directly
-    # OR rely on the user's flake to pass it.
-    # Safe fallback:
-    (final: prev: {
-      decknix-cli = prev.callPackage ../../pkgs/decknix-cli/default.nix { };
-      decknix-hub = prev.callPackage ../../pkgs/decknix-hub/default.nix { };
-      nix-open = prev.callPackage ../../pkgs/nix-open/default.nix { };
-    })
-  ];
+  # The decknix custom packages (decknix-cli/hub, nix-open) are provided by
+  # self.overlays.default, applied to the system nixpkgs in
+  # flake.nix:darwinModules.default. That overlay builds them with a pinned
+  # rustPlatform (nixpkgs-rust) to dodge the crates.io vendoring 403s — a
+  # fallback overlay here would clobber it with the stable, 403-prone build,
+  # so it is deliberately not redefined.
 
   programs.decknix-cli.enable = lib.mkDefault true;
 

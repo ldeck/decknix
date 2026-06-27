@@ -6,6 +6,16 @@
 
     nixpkgs-unstable.url = "github:nixos/nixpkgs/nixpkgs-unstable";
 
+    # Newer nixpkgs sourced *solely* for rustPlatform. The pinned stable
+    # (nixos-25.11) and the current nixpkgs-unstable pin both predate the
+    # crates.io vendoring fixes — #512735 (sets a non-generic User-Agent on
+    # fetchCargoVendor) and #524985 (switches importCargoLock to the
+    # static.crates.io CDN). Without them crates.io returns HTTP 403 to the
+    # generic library User-Agent during the Rust vendor phase. Scoped to the
+    # three Rust derivations (decknix-cli/hub, nix-open) so the rest of the
+    # package set is unaffected; resolved to a concrete rev by nix flake lock.
+    nixpkgs-rust.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+
     nix-darwin = {
       url = "github:LnL7/nix-darwin/nix-darwin-25.11";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -29,21 +39,42 @@
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
 
       # make 'pkgs.decknix' available to any module that uses this overlay.
-      flake.overlays.default = final: prev: {
-        decknix-cli = final.callPackage ./pkgs/decknix-cli/default.nix { };
-        decknix-hub = final.callPackage ./pkgs/decknix-hub/default.nix { };
-        nix-open = final.callPackage ./pkgs/nix-open/default.nix { };
-        # ACP bridges for agent-shell providers (not yet in nixpkgs)
-        claude-agent-acp = final.callPackage ./pkgs/claude-agent-acp/default.nix { };
-        pi-acp = final.callPackage ./pkgs/pi-acp/default.nix { };
-      };
+      flake.overlays.default = final: prev:
+        let
+          # rustPlatform pinned to nixpkgs-rust (see input comment) so the
+          # crates.io 403s during vendoring are fixed without moving the rest
+          # of the package set. Threaded into the three Rust derivations only.
+          rustPkgs = import inputs.nixpkgs-rust {
+            inherit (final.stdenv.hostPlatform) system;
+            inherit (final) config;
+          };
+          rustArgs = { inherit (rustPkgs) rustPlatform; };
+        in
+        {
+          decknix-cli = final.callPackage ./pkgs/decknix-cli/default.nix rustArgs;
+          decknix-hub = final.callPackage ./pkgs/decknix-hub/default.nix rustArgs;
+          nix-open = final.callPackage ./pkgs/nix-open/default.nix rustArgs;
+          # ACP bridges for agent-shell providers (not yet in nixpkgs)
+          claude-agent-acp = final.callPackage ./pkgs/claude-agent-acp/default.nix { };
+          pi-acp = final.callPackage ./pkgs/pi-acp/default.nix { };
+        };
 
-      perSystem = { config, self', inputs', pkgs, system, ... }: {
+      perSystem = { config, self', inputs', pkgs, system, ... }:
+        let
+          # Same pinned rustPlatform as the overlay, for the flake's own
+          # 'nix build .#decknix-cli' / CI package outputs.
+          rustPkgs = import inputs.nixpkgs-rust {
+            inherit system;
+            inherit (pkgs) config;
+          };
+          rustArgs = { inherit (rustPkgs) rustPlatform; };
+        in
+        {
         # --- Expose the Decknix CLI Package ---
         # This allows you to run 'nix run .#decknix' or 'nix build'
-        packages.decknix-cli = pkgs.callPackage ./pkgs/decknix-cli/default.nix { };
-        packages.decknix-hub = pkgs.callPackage ./pkgs/decknix-hub/default.nix { };
-        packages.nix-open = pkgs.callPackage ./pkgs/nix-open/default.nix { };
+        packages.decknix-cli = pkgs.callPackage ./pkgs/decknix-cli/default.nix rustArgs;
+        packages.decknix-hub = pkgs.callPackage ./pkgs/decknix-hub/default.nix rustArgs;
+        packages.nix-open = pkgs.callPackage ./pkgs/nix-open/default.nix rustArgs;
         packages.claude-agent-acp = pkgs.callPackage ./pkgs/claude-agent-acp/default.nix { };
         packages.pi-acp = pkgs.callPackage ./pkgs/pi-acp/default.nix { };
 
@@ -92,7 +123,12 @@
 
             # Tiered package sourcing: make pkgs.unstable available to all modules
             # Priority: stable nixpkgs > unstable nixpkgs > nix-casks > custom derivations
-            config.nixpkgs.overlays = [ unstableOverlay ];
+            # self.overlays.default provides the decknix custom packages
+            # (decknix-cli/hub, nix-open, claude-agent-acp, pi-acp) built with a
+            # pinned rustPlatform; it must be applied here (not in
+            # modules/darwin) because only this flake closes over the private
+            # nixpkgs-rust input.
+            config.nixpkgs.overlays = [ unstableOverlay self.overlays.default ];
 
             # Propagate pkgs.unstable AND the decknix custom-package overlay
             # (decknix-cli/hub, nix-open, claude-agent-acp, pi-acp) into
