@@ -105,6 +105,8 @@
                   "decknix-hub-attention-filter")
 (declare-function decknix--hub-toggle-requests-sort-reverse
                   "decknix-hub-attention-filter")
+(declare-function decknix-auto-review-cycle-mode "decknix-auto-review")
+(declare-function decknix-auto-review-footer-label "decknix-auto-review")
 (declare-function decknix--hub-toggle-wip-hide-needs-reply
                   "decknix-hub-attention-filter")
 (declare-function decknix--hub-toggle-wip-hide-bot-pending
@@ -460,6 +462,15 @@ picker's dynamic binding unwinds.")
   :transient t
   (interactive)
   (call-interactively #'decknix--hub-cycle-mention-filter))
+
+(transient-define-suffix decknix-sidebar-transient--auto-review ()
+  :key "A"
+  :description
+  (lambda ()
+    (format "auto-review   %s" (decknix-auto-review-footer-label)))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-auto-review-cycle-mode))
 
 (transient-define-suffix decknix-sidebar-transient--bot-filter ()
   :key "B"

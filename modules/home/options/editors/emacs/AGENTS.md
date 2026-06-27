@@ -616,7 +616,20 @@ The `decknix--context-update-header` function delegates to the unified header
   their display label (case-insensitive) to match the sidebar footer,
   which advertises the same toggles by label only (no keys shown).
   - **Global**: `O` org filter, `W` width
-  - **Requests**: `@` mention, `F` age, `b` 🤖 bot-review (hide PRs where
+  - **Requests**: `@` mention, `F` age, `A` auto-review (cycles
+    `off → bot+@ → human+@ → any+@`; auto-dispatches a review session
+    for newly-arrived PRs that @-mention me — bot authors via
+    `/review-and-ship-bot-pr`, humans via the background
+    `/review-service-pr-factory` whose verdict surfaces through the
+    attention indicator.  Every active state requires the @-mention as
+    a safety guard so team-noise never spawns a paid session.
+    Per-workspace command overrides live in `decknix-auto-review-commands`;
+    the slash-command defaults are `decknix-auto-review-default-{review,ship}-command`.
+    Default `off`, and `"incoming-only"`: enabling seeds the existing
+    backlog as handled so it never floods, dispatching only genuinely
+    new mentions.  A live-session guard plus a per-PR dedup set prevent
+    double-dispatch.  Pure decision layer carved + tested in
+    `agent-shell/auto-review/decknix-auto-review.el`), `b` 🤖 bot-review (hide PRs where
     a bot posted last — default on, since a fix is likely needed before
     approving sticks), `B` bot-authors (cycles hide → show → mention,
     where `mention` keeps bot PRs only when I am directly @-mentioned
@@ -815,7 +828,9 @@ workspace sidebar surface which sessions need attention.
   default `--workspace-root` to the worktree path, still pending.
 - **Session board** — magit-style multi-session dashboard (#70) (Planned)
 - **Session templates** — engineering, review, support workflows (#71) (Planned)
-- **Automation** — push notifications, auto-created sessions (#72) (Planned)
+- **Automation** — push notifications, auto-created sessions (#72):
+  auto-review (auto-dispatch review sessions for incoming @-mentioned
+  PRs, `T → Requests → A`) shipped; push notifications still (Planned)
 - **Full I/O decoupling** — hide comint prompt, read-only output (#67) (Planned)
 
 ## Keybinding Conventions
