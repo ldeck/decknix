@@ -103,8 +103,21 @@ in
         ;; == macOS toolbar ==
         ;; Emacs.app shows the toolbar by default; keyboard-driven workflows
         ;; don't use it, so disable it on darwin.
-        (when (and (eq system-type 'darwin) (fboundp 'tool-bar-mode))
-          (tool-bar-mode -1))
+        ;;
+        ;; Two layers are required under the daemon (bin/emacs --fg-daemon):
+        ;;   1. `tool-bar-mode -1' switches off the toolbar for any frame that
+        ;;      exists when default.el runs.  Under the daemon NO GUI frame
+        ;;      exists at startup, so this only covers the non-daemon /
+        ;;      Emacs.app case.
+        ;;   2. GUI frames created later by `emacsclient -c' are built from
+        ;;      `default-frame-alist', which still carries the platform default
+        ;;      toolbar.  Pushing `(tool-bar-lines . 0)' there makes every
+        ;;      client frame inherit the hidden toolbar.  Setting both keeps
+        ;;      the daemon and standalone paths consistent.
+        (when (eq system-type 'darwin)
+          (when (fboundp 'tool-bar-mode)
+            (tool-bar-mode -1))
+          (add-to-list 'default-frame-alist '(tool-bar-lines . 0)))
 
         ;; == macOS Window menu ==
         ;; Emacs.app has no built-in Window menu (unlike Safari, Xcode,
