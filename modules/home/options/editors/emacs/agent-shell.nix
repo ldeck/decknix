@@ -4443,86 +4443,17 @@ Subsequent toggles only log when verbose tracing is on."
         (decknix--hub-start-watcher)
 
         ;; == Auto-review: optionally auto-dispatch review sessions ==
-        ;; The pure decision layer (4-state cycle, action classifier,
-        ;; per-workspace command resolver, dedup keys) lives in the
-        ;; carved `decknix-auto-review-el'.  The dispatch glue below is
-        ;; a heredoc side-effect because it reads runtime hub state
-        ;; (`decknix--hub-reviews') and calls hub/main-link helpers
-        ;; (`decknix--hub-bot-author-p', `decknix--hub-item-mentioned-p',
-        ;; `decknix--hub-request-has-live-session-p',
-        ;; `decknix--agent-pr-detect-workspace',
-        ;; `decknix--agent-quickaction-start').  Default state is `off',
-        ;; so nothing dispatches until the user opts in via the toggle.
+        ;; The whole feature (4-state cycle, action classifier,
+        ;; per-workspace command resolver, dedup, dispatch glue, cycle
+        ;; command + footer label) lives in the carved
+        ;; `decknix-auto-review-el'; its orchestration defuns
+        ;; forward-declare the hub / main-link helpers they call.  Only
+        ;; the advice wiring stays here (a side-effect, per AGENTS.md
+        ;; Rule 2): scan hub reviews on every reviews refresh so newly
+        ;; arrived mentioned PRs auto-dispatch.  Default state is `off',
+        ;; so nothing fires until the user opts in via the `T' toggles
+        ;; transient (Requests -> auto-review, key `A').
         (require 'decknix-auto-review)
-        (declare-function decknix-auto-review-item-action "decknix-auto-review")
-        (declare-function decknix-auto-review-resolve-command "decknix-auto-review")
-        (declare-function decknix-auto-review-dispatch-key "decknix-auto-review")
-        (declare-function decknix-auto-review-dispatched-p "decknix-auto-review")
-        (declare-function decknix-auto-review-mark-dispatched "decknix-auto-review")
-        (defvar decknix-auto-review-mode)
-
-        (defun decknix-auto-review--dispatch-item (item)
-          "Auto-dispatch a review session for hub review ITEM when eligible.
-Returns the action used (`ship'/`review') or nil when skipped.
-Skips when: no action applies under the current state, a live review
-session already exists for the PR, or it was already dispatched this
-Emacs session (dedup guards the file-notify→buffer-appears window)."
-          (let* ((bot-p (decknix--hub-bot-author-p (alist-get 'author item)))
-                 (mentioned-p (decknix--hub-item-mentioned-p item))
-                 (action (decknix-auto-review-item-action
-                          decknix-auto-review-mode bot-p mentioned-p)))
-            (when action
-              (let* ((repo-full (or (alist-get 'repo item) ""))
-                     (parts (split-string repo-full "/"))
-                     (owner (car parts))
-                     (repo (car (last parts)))
-                     (number (alist-get 'number item))
-                     (url (alist-get 'url item))
-                     (key (decknix-auto-review-dispatch-key repo-full number)))
-                (when (and url (not (string-empty-p owner)) repo number
-                           (not (decknix-auto-review-dispatched-p key))
-                           (not (decknix--hub-request-has-live-session-p item)))
-                  (let* ((name (format "pr-%s-%s" repo number))
-                         (tags (list "review" repo (format "#%s" number) "auto"))
-                         (workspace (decknix--agent-pr-detect-workspace owner repo))
-                         (command-base (decknix-auto-review-resolve-command
-                                        action workspace))
-                         (model (if (eq action 'ship)
-                                    (or decknix-agent-review-bot-pr-model
-                                        decknix-agent-review-pr-model)
-                                  decknix-agent-review-pr-model))
-                         (command (format "%s %s" command-base url)))
-                    ;; Mark before launching so a second file-notify tick
-                    ;; during session startup can't double-dispatch.
-                    (decknix-auto-review-mark-dispatched key)
-                    (decknix--agent-quickaction-start
-                     name tags workspace command model)
-                    (message "[auto-review] %s %s/%s#%s via %s"
-                             action owner repo number command-base)
-                    action))))))
-
-        (defun decknix-auto-review--maybe-dispatch (&rest _)
-          "Scan hub reviews and auto-dispatch eligible sessions.
-No-op when `decknix-auto-review-mode' is `off'.  Attached as :after
-advice on `decknix--hub-refresh-reviews' so it fires whenever the
-reviews data is (re)loaded — i.e. on every file-notify refresh."
-          (when (and (not (eq decknix-auto-review-mode 'off))
-                     (boundp 'decknix--hub-reviews)
-                     decknix--hub-reviews)
-            (dolist (item (alist-get 'items decknix--hub-reviews))
-              (ignore-errors (decknix-auto-review--dispatch-item item)))))
-
-        (defun decknix-auto-review-seed-current ()
-          "Mark every currently-known review PR as already dispatched.
-Called when auto-review transitions from `off' to an active state so
-the existing backlog is treated as handled — only genuinely new
-incoming mentioned PRs dispatch a session (\"incoming\" semantics)."
-          (when (and (boundp 'decknix--hub-reviews) decknix--hub-reviews)
-            (dolist (item (alist-get 'items decknix--hub-reviews))
-              (decknix-auto-review-mark-dispatched
-               (decknix-auto-review-dispatch-key
-                (or (alist-get 'repo item) "") (alist-get 'number item))))))
-
         (advice-add 'decknix--hub-refresh-reviews :after
                     #'decknix-auto-review--maybe-dispatch)
 

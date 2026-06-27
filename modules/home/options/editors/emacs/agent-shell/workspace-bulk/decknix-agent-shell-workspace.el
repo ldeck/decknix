@@ -72,6 +72,7 @@
 (declare-function decknix--hub-age-presets "decknix-hub-age-presets")
 (declare-function decknix--hub-age-filter-cycle "decknix-hub-age-presets")
 (declare-function decknix--hub-age-filter-label "decknix-hub-age-presets")
+(declare-function decknix-auto-review-footer-label "decknix-auto-review")
 ;; Bulk hub module symbols (gated by cfg.hub.enable).
 (declare-function decknix--hub-render-requests "ext:decknix-agent-shell-hub")
 (declare-function decknix--hub-render-wip "ext:decknix-agent-shell-hub")
@@ -897,6 +898,7 @@ WIP / Sessions / Worktrees."
     ;; (age, bots, ci, layout, mention, reviewed, sort) then emoji-led
     ;; labels by code-point (↩, 💬, 🤖).
     (decknix-sidebar-transient--age-filter)       ;; age (F)
+    (decknix-sidebar-transient--auto-review)      ;; auto-review (A)
     (decknix-sidebar-transient--bot-filter)       ;; bots (b)
     (decknix-sidebar-transient--ci-filter)        ;; ci (C)
     (decknix-sidebar-transient--requests-display-mode) ;; Layout (d)
@@ -1360,6 +1362,8 @@ All toggle keys are accessed via the T transient prefix."
                                'face (if (string= label "all")
                                          'font-lock-comment-face
                                        'font-lock-constant-face)))))
+              (cons "A" (concat "auto-review "
+                            (decknix-auto-review-footer-label)))
               (cons "B" (concat "bots "
                             (let ((label (decknix--hub-show-bots-label)))
                               (propertize
