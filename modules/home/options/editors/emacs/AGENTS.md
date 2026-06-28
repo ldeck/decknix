@@ -783,6 +783,18 @@ workspace sidebar surface which sessions need attention.
   reflows to bullets when the aligned table would be wider than the
   window.  It honours `inhibit-read-only` since the user invokes it
   explicitly.
+- **Auto overlay** (`agent-shell/table/decknix-agent-table-overlay.el`,
+  shipped as an `extraSiteFiles` sibling of the table core): lays a
+  `display` property over each table block carrying the aligned/reflowed
+  rendering, leaving buffer text raw (so copy stays raw).  Two drivers,
+  both wired in the heredoc: `:after` advice on `markdown-overlays-put`
+  re-paints agent-shell output, and `decknix-agent-table-overlay-mode`
+  (jit-lock-driven) paints review/markdown buffers incrementally
+  (added to `decknix-agent-review-mode-hook`).  Gated by
+  `programs.emacs.decknix.agentShell.tableOverlay.enable` (default on);
+  the runtime flag is `decknix-agent-table-overlay-enable`.  Pure
+  block→offset mapping (`decknix-agent-table-block-offsets`) keeps the
+  overlay placement testable.
 
 ### Inline Review (`decknix-agent-review-mode`)
 - Derived from `markdown-mode`. Captures the last exchange (prompt +
