@@ -31,7 +31,14 @@ Attributes include:
   :label                     Human-readable label for the provider.
   :glyph                     Single-character glyph for the header-line.
   :supports-workspace-root   Boolean; true if the ACP command supports
-                             --workspace-root.")
+                             --workspace-root.
+  :model-launch-flag         CLI flag string used to pin a model at
+                             launch (e.g. \"--model\" for auggie).
+                             When absent/nil the provider cannot pin a
+                             model on the command line; the saved
+                             per-conversation model is instead replayed
+                             over ACP (session/set_model) after a
+                             resumed session reports ready.")
 
 (defvar decknix-agent-default-provider 'auggie
   "The default AI agent provider to use for new sessions.")
@@ -121,6 +128,27 @@ Falls back to the symbol name when :label is absent."
   "Return whether provider ID supports the --workspace-root flag."
   (plist-get (decknix-agent-require-provider id) :supports-workspace-root))
 
+(defun decknix-agent-provider-model-launch-flag (id)
+  "Return the CLI flag provider ID uses to pin a model at launch, or nil.
+When nil, the provider does not accept a model flag on the command
+line; the saved per-conversation model is instead replayed over ACP
+\(`session/set_model') after a resumed session reports ready."
+  (plist-get (decknix-agent-require-provider id) :model-launch-flag))
+
+;; -- Model persistence strategy ----------------------------------
+
+(defun decknix--agent-model-replay-needed-p (provider-id model)
+  "Return non-nil when MODEL must be replayed over ACP for PROVIDER-ID.
+Replay (an ACP `session/set_model' after the resumed session
+reports ready) is the fallback for providers that cannot pin a
+model at launch -- i.e. those WITHOUT a `:model-launch-flag' (Claude,
+Pi).  Auggie and any other provider that declares a launch flag pin
+the model on the command line instead, so they never replay.  MODEL
+must be a non-empty string for replay to apply."
+  (and (stringp model)
+       (not (string-empty-p model))
+       (not (decknix-agent-provider-model-launch-flag provider-id))))
+
 ;; -- High-level builders -----------------------------------------
 
 (declare-function agent-shell--make-acp-client "agent-shell")
@@ -128,15 +156,24 @@ Falls back to the symbol name when :label is absent."
 (defun decknix--agent-command-build (provider-id workspace &optional model session-id)
   "Build the ACP command line for PROVIDER-ID.
 WORKSPACE is the directory.  MODEL is optional override.
-SESSION-ID is optional for resume."
+SESSION-ID is optional for resume.
+
+MODEL is placed on the command line only when PROVIDER-ID declares a
+`:model-launch-flag' (e.g. auggie's \"--model\"); the flag string is
+used verbatim so a provider can use an equivalent switch.  Providers
+without a launch flag (Claude, Pi) omit MODEL here -- it is replayed
+over ACP after resume instead (see
+`decknix--agent-model-replay-needed-p')."
   (let* ((base-cmd (decknix-agent-provider-acp-command provider-id))
          (ws-args  (when (and (stringp workspace)
                               (not (string-empty-p workspace))
                               (decknix-agent-provider-supports-workspace-root provider-id))
                      (list "--workspace-root" workspace)))
-         (model-args (when (and (stringp model)
+         (model-flag (decknix-agent-provider-model-launch-flag provider-id))
+         (model-args (when (and model-flag
+                                (stringp model)
                                 (not (string-empty-p model)))
-                       (list "--model" model)))
+                       (list model-flag model)))
          (resume-args (when session-id
                         (list "--resume" session-id))))
     (append base-cmd ws-args model-args resume-args)))

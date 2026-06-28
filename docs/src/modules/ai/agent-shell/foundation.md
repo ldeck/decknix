@@ -117,12 +117,13 @@ Three layers, narrowest wins:
 
 1. **Per-session** — `C-c C-v` inside any agent-shell buffer picks a
    model for the running conversation; persisted in
-   `~/.config/decknix/agent-sessions.json` and re-applied on resume
-   via `--model <id>`.  This is the right lever for one-off task
-   adjustments.  (The persist-on-resume part is Auggie-only — for
-   Claude/Pi the same key switches the live session but the choice
-   isn't restored on the next resume; see [Model selection by
-   agent](productivity.md#model-selection-by-agent).)
+   `~/.config/decknix/agent-sessions.json` and re-applied on resume.
+   This is the right lever for one-off task adjustments.  The
+   persistence works for **every** provider; only the resume mechanism
+   differs — Auggie pins it at launch via `--model <id>`, while
+   Claude/Pi (which take no model launch flag) replay it over ACP
+   (`session/set_model`) once the resumed session reports ready.  See
+   [Model selection by agent](productivity.md#model-selection-by-agent).
 2. **Per-quickaction** — `decknix-agent-review-pr-model` pins the
    model for every `/review-service-pr` launch (PR-review entry
    point, sidebar Requests row, batch processor).  Defaults to
@@ -139,7 +140,10 @@ Three layers, narrowest wins:
    `lib.mkDefault` or plain assignment.
 
 Per-conversation overrides set via `C-c C-v` always win over the
-quickaction and framework defaults — on resume, the persisted model
-flows through `decknix--resume-command-build` and is appended to the
-auggie ACP command as `--model <id>`.
+quickaction and framework defaults.  On resume the persisted model is
+re-applied automatically: for Auggie it flows through
+`decknix--resume-command-build` and is appended to the ACP command as
+`--model <id>`; for Claude/Pi it is replayed over ACP
+(`session/set_model`) by `decknix--agent-model-replay-on-ready` after
+the session reports ready.
 

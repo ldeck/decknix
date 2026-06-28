@@ -49,6 +49,8 @@
 (declare-function agent-shell-start "ext:agent-shell")
 (declare-function agent-shell-buffers "ext:agent-shell")
 (declare-function agent-shell-subscribe-to "ext:agent-shell")
+(declare-function agent-shell-unsubscribe "ext:agent-shell")
+(declare-function agent-shell--set-default-model "ext:agent-shell")
 (declare-function agent-shell--make-acp-client "ext:agent-shell")
 (declare-function agent-shell--state "ext:agent-shell")
 (declare-function shell-maker-submit "ext:shell-maker")
@@ -70,6 +72,7 @@ Use C-u prefix with the session picker to override.")
 (declare-function decknix-agent-provider-select "decknix-agent-provider")
 (declare-function decknix--agent-command-build "decknix-agent-provider")
 (declare-function decknix--agent-make-config "decknix-agent-provider")
+(declare-function decknix--agent-model-replay-needed-p "decknix-agent-provider")
 (defvar decknix-agent-default-provider)
 
 ;; Forward declarations for sibling decknix carved packages used by
@@ -719,6 +722,41 @@ was found (in either pass), nil otherwise."
                         term
                         decknix-agent-session-history-count))))))))))
 
+(defun decknix--agent-model-replay-on-ready (shell-buf model-id)
+  "Replay MODEL-ID over ACP in SHELL-BUF once the session reports ready.
+The fallback model-persistence path for providers that cannot pin a
+model at launch (no `:model-launch-flag' -- Claude, Pi).  Subscribes
+to the one-shot `prompt-ready' event and then issues an ACP
+`session/set_model' request (via `agent-shell--set-default-model'),
+so the resumed conversation continues on the saved per-conversation
+model just like auggie's `--model' launch flag.
+
+Auggie and any other provider with a launch flag never reach here --
+their model is already on the command line (see
+`decknix--agent-model-replay-needed-p')."
+  (let ((done nil)
+        (token nil))
+    (setq token
+          (agent-shell-subscribe-to
+           :shell-buffer shell-buf
+           :event 'prompt-ready
+           :on-event
+           (lambda (_event)
+             ;; One-shot: `prompt-ready' fires on every prompt, so
+             ;; guard + unsubscribe to replay the model exactly once.
+             (unless done
+               (setq done t)
+               (when token
+                 (agent-shell-unsubscribe :subscription token))
+               (when (buffer-live-p shell-buf)
+                 (with-current-buffer shell-buf
+                   ;; `agent-shell--set-default-model' no-ops safely
+                   ;; if the ACP session-id isn't established yet.
+                   (agent-shell--set-default-model
+                    :shell-buffer shell-buf
+                    :model-id model-id)))))))
+    token))
+
 (defun decknix--agent-session-resume--new (session-id history-count
                                            &optional display-name
                                            workspace conv-key
@@ -789,6 +827,14 @@ dedupes against live buffers before calling here."
          (shell-buf
           (let ((default-directory (or validated-ws default-directory)))
             (agent-shell-start :config config))))
+    ;; Model persistence for providers that can't pin the model at
+    ;; launch (no `:model-launch-flag' -- Claude, Pi).  Auggie already
+    ;; carries `--model' in `augmented-cmd' above; for the rest we
+    ;; replay the saved model over ACP once the resumed session is
+    ;; ready, so the conversation continues on the pinned model.
+    (when (and (buffer-live-p shell-buf)
+               (decknix--agent-model-replay-needed-p provider saved-model))
+      (decknix--agent-model-replay-on-ready shell-buf saved-model))
     ;; Use a timer to rename and prepopulate once the process is ready.
     (let ((sid session-id)
           (n history-count)

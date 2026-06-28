@@ -367,24 +367,34 @@ plain new session.
 
 ### Model selection by agent
 
-`C-c C-v` (set session model) isn't strictly Auggie-only. It's the
-upstream agent-shell verb that lists whatever models the **running
-agent's ACP bridge advertises** and switches the live session to your
-choice via an ACP `session/set_model` request. What *is* Auggie-specific
-is the decknix layer on top: it persists the choice against the
-conversation and re-applies it on resume by passing `--model <id>` to
-the Auggie CLI. Only Auggie takes `--model`, so for the other agents the
-switch is **live-session only** — it isn't restored on the next resume.
+`C-c C-v` (set session model) isn't Auggie-only. It's the upstream
+agent-shell verb that lists whatever models the **running agent's ACP
+bridge advertises** and switches the live session to your choice via an
+ACP `session/set_model` request. decknix persists that choice against
+the conversation for **every** provider, and **restores it on resume**
+— the only difference is the mechanism:
+
+- **Auggie** pins the model at launch via its `--model <id>` flag, so the
+  resumed conversation comes up on the right model immediately.
+- **Claude / Pi** don't accept a model launch flag, so decknix instead
+  **replays** the saved model over ACP (`session/set_model`) the moment
+  the resumed session reports ready — the same lever `C-c C-v` uses
+  live. The result is the same: your per-conversation model survives the
+  resume.
 
 | Agent | Switch mid-session | Restored on resume? | Set the default |
 |-------|--------------------|---------------------|-----------------|
-| Auggie | `C-c C-v` | ✅ yes (decknix → `--model`) | `decknix.cli.auggie.settings.model` |
-| Claude | `C-c C-v` (live) | ❌ no — set the default instead | `agent-shell-anthropic-default-model-id`, or `ANTHROPIC_MODEL` env |
-| Pi | `C-c C-v` *if Pi's bridge advertises models* | ❌ no | Pi's own config (`~/.pi.json`) |
+| Auggie | `C-c C-v` | ✅ yes — `--model` at launch | `decknix.cli.auggie.settings.model` |
+| Claude | `C-c C-v` | ✅ yes — ACP `set_model` replay | `agent-shell-anthropic-default-model-id`, or `ANTHROPIC_MODEL` env |
+| Pi | `C-c C-v` *if Pi's bridge advertises models* | ✅ yes — ACP `set_model` replay | Pi's own config (`~/.pi.json`) |
+
+The **default** still matters for the *first* turn of a brand-new
+conversation, before you've made any `C-c C-v` choice to persist — set
+it so fresh sessions start on the right model.
 
 **Claude** — set the per-Emacs default in your personal config so every
-new Claude session starts on the right model (this is what `C-c C-v`
-would otherwise change only for the live session):
+new Claude session starts on the right model (after that, `C-c C-v`
+choices persist and are replayed on resume):
 
 ```elisp
 (with-eval-after-load 'agent-shell-anthropic
@@ -400,11 +410,13 @@ environment:
        "ANTHROPIC_MODEL" "..."))
 ```
 
-**Pi** — model choice is governed by Pi itself (its own config /
-in-session controls); decknix doesn't drive it, and there's no
-`default-model-id` wired for Pi. If `C-c C-v` reports *"No session models
-available"*, the Pi ACP bridge isn't advertising a model list — select
-the model through Pi's own configuration.
+**Pi** — the *default* model is governed by Pi itself (its own config /
+in-session controls); decknix wires no `default-model-id` for Pi. But
+once you pick a model with `C-c C-v` it's persisted and replayed on
+resume like Claude. If `C-c C-v` reports *"No session models
+available"*, the Pi ACP bridge isn't advertising a model list — there's
+nothing to switch or persist, so select the model through Pi's own
+configuration instead.
 
 ### Notes
 
