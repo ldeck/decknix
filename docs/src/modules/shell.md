@@ -66,6 +66,33 @@ to upstream defaults.
 
 [Delta](https://github.com/dandavison/delta) is configured as the default git pager, providing syntax-highlighted diffs.
 
+## direnv
+
+[direnv](https://direnv.net/) is enabled by default, so `cd`-ing into a
+directory with an authorised `.envrc` automatically loads its environment
+(and unloads it on the way out). The zsh hook is wired automatically — no
+manual `eval "$(direnv hook zsh)"` needed.
+
+[nix-direnv](https://github.com/nix-community/nix-direnv) is included for
+fast, cached `use nix` / `use flake` support, keeping the dev-shell alive
+as a GC root so it reloads instantly instead of re-evaluating on every
+`cd`. A minimal flake-based `.envrc`:
+
+```bash
+# .envrc — run `direnv allow` once to authorise it
+use flake
+```
+
+Disable it (or drop nix-direnv) via your personal config:
+
+```nix
+{ ... }: {
+  programs.direnv.enable = false;            # disable entirely
+  # or keep direnv but skip nix-direnv:
+  # programs.direnv.nix-direnv.enable = false;
+}
+```
+
 ## Default Shell Aliases
 
 Decknix doesn't impose shell aliases — add your own:
