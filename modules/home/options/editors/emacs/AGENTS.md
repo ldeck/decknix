@@ -268,20 +268,31 @@ The largest module (~4400 lines). Key subsystems:
   whatever models the running session's ACP bridge advertised (the
   `models.availableModels` from the `session/new` response) and switches the
   live session via an ACP `session/set_model` request — so it works for any
-  provider whose bridge reports models, not just auggie. What's auggie-specific
-  is the decknix wrapper's **persistence**: the chosen model is recorded against
-  the conversation in `agent-sessions.json` and re-applied on resume by passing
-  `--model <id>` to the auggie CLI (only auggie takes `--model`). The global
-  default model for new auggie sessions is configured via
-  `decknix.cli.auggie.settings.model` (written to `~/.augment/settings.json`).
-  - **Claude**: live `C-c C-v` works; the per-conversation choice is *not*
-    persisted by decknix across resume. Set the default via
-    `agent-shell-anthropic-default-model-id` (or `ANTHROPIC_MODEL` in
-    `agent-shell-anthropic-claude-environment`) instead.
-  - **Pi**: `agent-shell-pi-make-agent-config` wires no `:default-model-id`;
-    model choice defers entirely to Pi's own config. `C-c C-v` only populates
-    if `pi-acp` advertises a model list (otherwise it reports "No session
-    models available").
+  provider whose bridge reports models. The decknix wrapper **persists** the
+  chosen model against the conversation in `agent-sessions.json` for *every*
+  provider, and **restores it on resume** — only the mechanism differs,
+  decided by the provider's `:model-launch-flag`:
+  - **Launch-flag providers (auggie, `:model-launch-flag "--model"`)** pin the
+    model on the command line. `decknix--agent-command-build` appends the flag;
+    `decknix--agent-model-replay-needed-p` returns nil so no replay runs. The
+    global default for new auggie sessions is `decknix.cli.auggie.settings.model`
+    (written to `~/.augment/settings.json`).
+  - **Flagless providers (Claude, Pi — no `:model-launch-flag`)** can't pin the
+    model at launch, so `decknix--agent-model-replay-on-ready` (in
+    `decknix-agent-shell-main-session.el`) subscribes to the one-shot
+    `prompt-ready` event on resume and calls upstream
+    `agent-shell--set-default-model` to replay the saved model over ACP
+    (`session/set_model`). The decision lives in the pure, ERT-tested
+    `decknix--agent-model-replay-needed-p` (flagless provider + non-empty
+    model). The command builder never places `--model` for these providers
+    (their CLIs would reject it).
+  - **Claude default**: for the *first* turn of a new conversation (before any
+    `C-c C-v` choice exists to replay), set `agent-shell-anthropic-default-model-id`
+    (or `ANTHROPIC_MODEL` in `agent-shell-anthropic-claude-environment`).
+  - **Pi default**: `agent-shell-pi-make-agent-config` wires no
+    `:default-model-id`; the default defers to Pi's own config. `C-c C-v` only
+    populates (and thus only persists/replays) if `pi-acp` advertises a model
+    list (otherwise it reports "No session models available").
 
 ## Agent Providers
 
