@@ -730,6 +730,28 @@ workspace sidebar surface which sessions need attention.
   session needing input. Pure decision layer + ERT tests live in
   `agent-shell/focus/decknix-focus.el`.
 
+### Priority View (`decknix-priority`, opt-in)
+- A ranked, lane-based "what to do next?" view over the hub's existing
+  data, opened in a standalone read-only `*Agent Priority*` buffer. Off
+  by default; enable with
+  `programs.emacs.decknix.agentShell.hub.priority.enable = true`, which
+  binds `C-c A p`. (Issue #142, phase 1.)
+- Four ordered lanes, highest-leverage first: **Discussions** (a human
+  awaits my reply on a PR) → **Reviews** (PRs awaiting my verdict) →
+  **Tasks** (my non-done Jira issues) → **Queue** (my open WIP PRs).
+  Within a lane, directly-mentioned items rank first, then oldest first.
+- Derived from existing hub sources only (`decknix--hub-reviews`,
+  `decknix--hub-wip`, `decknix--hub-jira-tasks`): a PR with
+  `replies_to_me` moves to Discussions; terminal (merged/closed) WIP PRs
+  and done tasks are excluded.
+- In the buffer: `RET` opens the item URL, `g` refreshes, `q` quits.
+- The decision layer (lane classification, ranking, `collect`) is pure
+  and ERT-tested in `agent-shell/priority/decknix-priority.el`; the
+  renderer reads the live hub defvars via `bound-and-true-p`, so the view
+  is additive — no change to the main sidebar render path. Later phases
+  (sidebar live-view mode, pins, generic GitHub Actions Queue enrichment)
+  are tracked in #142 / #141.
+
 ### Inline Review (`decknix-agent-review-mode`)
 - Derived from `markdown-mode`. Captures the last exchange (prompt +
   response) from an agent session into a `*agent-review: <name>*` buffer
@@ -819,6 +841,7 @@ workspace sidebar surface which sessions need attention.
 | `C-c A w` | Toggle Agents workspace tab (tab-bar with sidebar) |
 | `C-c A j` | Jump to next session needing attention; `C-u` to pick, `C-u C-u` dashboard |
 | `C-c A o` | Jump to the agent sidebar window (opens the Agents workspace if hidden) |
+| `C-c A p` | Priority view (opt-in via `hub.priority.enable`): ranked lanes in `*Agent Priority*` |
 | `C-c A v` | Review last exchange (inline review buffer); `C-u` for full history |
 | `C-c A T` | Tags — global (list/filter conversations, rename, delete, cleanup) |
 | `C-c s t` | Tags — conversation-scoped (show, add, remove) — in-buffer only (#78) |
@@ -862,6 +885,10 @@ workspace sidebar surface which sessions need attention.
   PRs, `T → Requests → A`) and focus-steal (raise the frame on
   attention / new session, `T → Global → focus`) shipped; push
   notifications still (Planned)
+- **Priority view** — ranked lane-based "what to do next?" (#142):
+  phase 1 (standalone `*Agent Priority*` buffer over existing sources,
+  `C-c A p`) shipped; sidebar live-view mode, pins, and generic GitHub
+  Actions Queue enrichment (#141) still (Planned)
 - **Full I/O decoupling** — hide comint prompt, read-only output (#67) (Planned)
 
 ## Keybinding Conventions
