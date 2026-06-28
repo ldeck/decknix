@@ -90,6 +90,11 @@ Disabling this single option removes all agent-shell packages and configuration.
 
 ## Model Selection
 
+This section covers **Auggie**, whose model is fully driven by decknix
+(default, per-quickaction, and per-conversation override re-applied on
+resume). Claude and Pi select models differently — see
+[Model selection by agent](productivity.md#model-selection-by-agent).
+
 Auggie exposes several model families.  The framework default is
 `prism-a` — Augment's hybrid router that mixes Opus 4.7, Sonnet 4.6,
 and Gemini Flash per turn (around 28 % cheaper than uniform Opus 4.7
@@ -114,7 +119,10 @@ Three layers, narrowest wins:
    model for the running conversation; persisted in
    `~/.config/decknix/agent-sessions.json` and re-applied on resume
    via `--model <id>`.  This is the right lever for one-off task
-   adjustments.
+   adjustments.  (The persist-on-resume part is Auggie-only — for
+   Claude/Pi the same key switches the live session but the choice
+   isn't restored on the next resume; see [Model selection by
+   agent](productivity.md#model-selection-by-agent).)
 2. **Per-quickaction** — `decknix-agent-review-pr-model` pins the
    model for every `/review-service-pr` launch (PR-review entry
    point, sidebar Requests row, batch processor).  Defaults to
