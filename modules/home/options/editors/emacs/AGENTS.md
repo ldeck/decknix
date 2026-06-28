@@ -263,12 +263,25 @@ The largest module (~4400 lines). Key subsystems:
 - **Workspace persistence**: Workspace directory is stored per conversation in
   `~/.config/decknix/agent-sessions.json` alongside tags. Saved on session
   creation, restored on resume.
-- **Model persistence** (`C-c C-v`): The global default model for new sessions
-  is configured via `decknix.cli.auggie.settings.model` (written to
-  `~/.augment/settings.json`). When the user picks a different model mid-session
-  with `C-c C-v`, the choice is persisted against the conversation in
-  `agent-sessions.json`. On resume, that override is passed to auggie as
-  `--model <id>` so the session continues on the same model.
+- **Model persistence** (`C-c C-v`): The `C-c C-v` binding wraps the
+  upstream **ACP-generic** `agent-shell-set-session-model` verb, which lists
+  whatever models the running session's ACP bridge advertised (the
+  `models.availableModels` from the `session/new` response) and switches the
+  live session via an ACP `session/set_model` request — so it works for any
+  provider whose bridge reports models, not just auggie. What's auggie-specific
+  is the decknix wrapper's **persistence**: the chosen model is recorded against
+  the conversation in `agent-sessions.json` and re-applied on resume by passing
+  `--model <id>` to the auggie CLI (only auggie takes `--model`). The global
+  default model for new auggie sessions is configured via
+  `decknix.cli.auggie.settings.model` (written to `~/.augment/settings.json`).
+  - **Claude**: live `C-c C-v` works; the per-conversation choice is *not*
+    persisted by decknix across resume. Set the default via
+    `agent-shell-anthropic-default-model-id` (or `ANTHROPIC_MODEL` in
+    `agent-shell-anthropic-claude-environment`) instead.
+  - **Pi**: `agent-shell-pi-make-agent-config` wires no `:default-model-id`;
+    model choice defers entirely to Pi's own config. `C-c C-v` only populates
+    if `pi-acp` advertises a model list (otherwise it reports "No session
+    models available").
 
 ## Agent Providers
 

@@ -365,11 +365,49 @@ file* to reload context rather than a true session port), but for
 outside an agent-shell buffer there's no source, so fork degrades to a
 plain new session.
 
+### Model selection by agent
+
+`C-c C-v` (set session model) isn't strictly Auggie-only. It's the
+upstream agent-shell verb that lists whatever models the **running
+agent's ACP bridge advertises** and switches the live session to your
+choice via an ACP `session/set_model` request. What *is* Auggie-specific
+is the decknix layer on top: it persists the choice against the
+conversation and re-applies it on resume by passing `--model <id>` to
+the Auggie CLI. Only Auggie takes `--model`, so for the other agents the
+switch is **live-session only** — it isn't restored on the next resume.
+
+| Agent | Switch mid-session | Restored on resume? | Set the default |
+|-------|--------------------|---------------------|-----------------|
+| Auggie | `C-c C-v` | ✅ yes (decknix → `--model`) | `decknix.cli.auggie.settings.model` |
+| Claude | `C-c C-v` (live) | ❌ no — set the default instead | `agent-shell-anthropic-default-model-id`, or `ANTHROPIC_MODEL` env |
+| Pi | `C-c C-v` *if Pi's bridge advertises models* | ❌ no | Pi's own config (`~/.pi.json`) |
+
+**Claude** — set the per-Emacs default in your personal config so every
+new Claude session starts on the right model (this is what `C-c C-v`
+would otherwise change only for the live session):
+
+```elisp
+(with-eval-after-load 'agent-shell-anthropic
+  (setq agent-shell-anthropic-default-model-id "claude-sonnet-4-5"))
+```
+
+To point at a custom or proxy endpoint/model instead, use the
+environment:
+
+```elisp
+(setq agent-shell-anthropic-claude-environment
+      (agent-shell-make-environment-variables
+       "ANTHROPIC_MODEL" "..."))
+```
+
+**Pi** — model choice is governed by Pi itself (its own config /
+in-session controls); decknix doesn't drive it, and there's no
+`default-model-id` wired for Pi. If `C-c C-v` reports *"No session models
+available"*, the Pi ACP bridge isn't advertising a model list — select
+the model through Pi's own configuration.
+
 ### Notes
 
-- **`C-c C-v` model-switching is Auggie-specific** — it injects `--model`
-  and persists the choice per-conversation (re-applied on resume). Claude
-  and Pi select their model through their own config/auth, not this lever.
 - **Start fresh on Claude** with plain `C-c A n` (it prompts for provider;
   `C-u C-c A n` skips the prompt and uses the default, Claude).
 
