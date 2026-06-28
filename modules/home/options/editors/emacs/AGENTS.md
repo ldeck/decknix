@@ -764,11 +764,14 @@ workspace sidebar surface which sessions need attention.
     `-aligned-width`, `-format`, `-transform-blocks`, `-block-bounds`).
   - `agent-shell/copy-region/decknix-agent-copy-region.el` — pure
     converters markdown → Slack mrkdwn / plain / table-normalised
-    markdown, plus a pandoc-backed HTML path.  Also hosts the
+    markdown, plus a pandoc-backed HTML path.  PDF export (`P`) is a
+    file artefact: pure `pdf-engine`/`pdf-command`/`default-name` helpers
+    (engine auto-detected from a preference list, ERT-tested) feed a thin
+    `md->pdf` that shells out to pandoc + the engine.  Also hosts the
     interactive commands and the `C-c x` transient (copy-as `m`/`s`/`h`/
-    `p`, reformat-table `t`).  Per Rule 2 the commands live in the
-    package (side effects only when invoked); only the key binding is in
-    the heredoc.
+    `p`, export-to-file `P` PDF, reformat-table `t`).  Per Rule 2 the
+    commands live in the package (side effects only when invoked); only
+    the key binding is in the heredoc.
 - **Slack mapping** follows docs.slack.dev: `*bold*` (single star),
   `_italic_`, `~strike~` (single tilde), `<url|text>` links, headings →
   a bold line (Slack has no headings), `&`/`<`/`>` HTML-escaped, and
@@ -904,7 +907,7 @@ workspace sidebar surface which sessions need attention.
 | `C-c w` | Toggle Agents workspace (in-buffer shortcut) |
 | `C-c j` | Jump to pending session (in-buffer shortcut) |
 | `C-c v` | Review last exchange (in-buffer shortcut for `C-c A v`) |
-| `C-c x` | Copy region as… / reformat table — transient (`m` markdown, `s` Slack mrkdwn, `h` HTML, `p` plain, `t` reformat table). Bound in agent-shell + markdown/review buffers |
+| `C-c x` | Copy region as… / export / reformat table — transient (`m` markdown, `s` Slack mrkdwn, `h` HTML, `p` plain, `P` PDF file, `t` reformat table). Bound in agent-shell + markdown/review buffers |
 | `C-c C-c` | Route review (review-mode only) |
 | `C-c C-f` | Flag paragraph as follow-up (review-mode only) |
 | `C-c C-l` | List stashed follow-ups (review-mode only) |

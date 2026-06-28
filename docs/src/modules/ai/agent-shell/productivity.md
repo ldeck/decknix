@@ -300,6 +300,18 @@ the result on the kill-ring in the chosen syntax:
 | `h` | HTML | via `pandoc` (GFM → HTML) |
 | `p` | Plain text | emphasis stripped, links → `text (url)`, tables aligned |
 
+It also has an **Export region to file** entry that writes a file rather
+than copying to the kill-ring:
+
+| Key | Format | Notes |
+|-----|--------|-------|
+| `P` | PDF | via `pandoc`; prompts for a path, then offers to open it |
+
+The PDF path needs `pandoc` plus a PDF engine on `PATH` — the first of
+`typst`, `tectonic`, `weasyprint`, `wkhtmltopdf`, `xelatex`, `pdflatex`
+found is used. If none is installed the command reports which to install
+rather than failing silently.
+
 `C-c x` is bound in agent-shell buffers and in markdown / review buffers
 (`C-c y` is reserved for yasnippet). The Slack mapping follows
 [Slack's mrkdwn spec](https://docs.slack.dev/messaging/formatting-message-text/).

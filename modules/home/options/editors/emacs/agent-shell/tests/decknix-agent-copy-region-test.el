@@ -125,5 +125,27 @@
   (should (equal '("pandoc" "-f" "gfm" "-t" "html")
                  (decknix-agent-copy-html-command))))
 
+;; -- PDF (pandoc + PDF engine) --------------------------------------
+
+(ert-deftest decknix-agent-copy/pdf-command-shape ()
+  "With an explicit engine the pandoc PDF argv is deterministic."
+  (should (equal '("pandoc" "-f" "gfm" "-o" "/tmp/x.pdf"
+                   "--pdf-engine=weasyprint")
+                 (decknix-agent-copy-pdf-command "/tmp/x.pdf" "weasyprint"))))
+
+(ert-deftest decknix-agent-copy/pdf-engine-picks-first-available ()
+  "Engine detection returns the first candidate present on PATH."
+  (cl-letf (((symbol-function 'executable-find)
+             (lambda (p) (and (string= p "wkhtmltopdf") "/bin/wkhtmltopdf"))))
+    (let ((decknix-agent-copy-pdf-engines '("typst" "wkhtmltopdf" "pdflatex")))
+      (should (string= "wkhtmltopdf" (decknix-agent-copy-pdf-engine))))))
+
+(ert-deftest decknix-agent-copy/pdf-engine-nil-when-none ()
+  (cl-letf (((symbol-function 'executable-find) (lambda (_p) nil)))
+    (should (null (decknix-agent-copy-pdf-engine)))))
+
+(ert-deftest decknix-agent-copy/pdf-default-name-is-pdf ()
+  (should (string-suffix-p ".pdf" (decknix-agent-copy--pdf-default-name))))
+
 (provide 'decknix-agent-copy-region-test)
 ;;; decknix-agent-copy-region-test.el ends here
