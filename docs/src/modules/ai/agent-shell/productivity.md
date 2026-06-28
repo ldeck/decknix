@@ -307,10 +307,13 @@ than copying to the kill-ring:
 |-----|--------|-------|
 | `P` | PDF | via `pandoc`; prompts for a path, then offers to open it |
 
-The PDF path needs `pandoc` plus a PDF engine on `PATH` — the first of
-`typst`, `tectonic`, `weasyprint`, `wkhtmltopdf`, `xelatex`, `pdflatex`
-found is used. If none is installed the command reports which to install
-rather than failing silently.
+Both the HTML and PDF paths need `pandoc`, and PDF additionally needs a
+PDF engine on `PATH`. decknix installs both by default — `pandoc` plus
+`typst` (small, fast, no TeX) — so `C-c x h` / `C-c x P` work out of the
+box after `decknix switch`. See the Nix options below to change the
+engine or opt out. If no engine is found the command reports which to
+install (the auto-detect order is `typst`, `tectonic`, `weasyprint`,
+`wkhtmltopdf`, `xelatex`, `pdflatex`) rather than failing silently.
 
 `C-c x` is bound in agent-shell buffers and in markdown / review buffers
 (`C-c y` is reserved for yasnippet). The Slack mapping follows
@@ -324,6 +327,10 @@ programs.emacs.decknix.agentShell = {
   commands.enable = true;   # Nix-managed slash commands
   hub.priority.enable = false;  # opt-in Priority view (C-c A p)
   tableOverlay.enable = true;   # auto-align GFM tables via display overlays
+
+  # Copy-as-format / export runtime deps (C-c x h / C-c x P)
+  copyRegion.pandoc.enable = true;  # install pandoc (HTML + PDF)
+  copyRegion.pdfEngine = "typst";   # "typst"|"tectonic"|"weasyprint"|"wkhtmltopdf"|null
 };
 
 programs.emacs.decknix.ui.focus.steal = "off";  # "off" | "attention" | "both"
