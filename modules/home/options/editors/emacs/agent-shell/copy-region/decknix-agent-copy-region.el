@@ -21,8 +21,11 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 (require 'decknix-agent-table)
+
+(declare-function browse-url-of-file "browse-url")
 
 ;; -- Shared line walker (fence + table aware) -----------------------
 
@@ -159,6 +162,53 @@ links are formed so the link's own angle brackets survive."
           (user-error "pandoc failed (exit %s)" status))
         (string-trim-right (buffer-string))))))
 
+;; -- PDF (pandoc + PDF engine) --------------------------------------
+;;
+;; Unlike the kill-ring converters above, PDF is a binary artefact, so
+;; it is written to a file via pandoc + a PDF engine.  The engine is
+;; auto-detected from a preference list (lightweight HTML/typst engines
+;; before the heavier LaTeX ones); the argv builder + detection stay
+;; pure so they are ERT-tested without a subprocess.
+
+(defvar decknix-agent-copy-pdf-engines
+  '("typst" "tectonic" "weasyprint" "wkhtmltopdf" "xelatex" "pdflatex")
+  "Preference-ordered pandoc `--pdf-engine' candidates.
+The first one found on PATH is used.")
+
+(defun decknix-agent-copy-pdf-engine ()
+  "Return the first `decknix-agent-copy-pdf-engines' entry on PATH, or nil."
+  (seq-find #'executable-find decknix-agent-copy-pdf-engines))
+
+(defun decknix-agent-copy-pdf-command (outfile &optional engine)
+  "Return the pandoc argv that renders GFM markdown to OUTFILE as PDF.
+ENGINE defaults to `decknix-agent-copy-pdf-engine'; when non-nil it is
+passed as `--pdf-engine=ENGINE'."
+  (let ((eng (or engine (decknix-agent-copy-pdf-engine))))
+    (append (list "pandoc" "-f" "gfm" "-o" outfile)
+            (and eng (list (concat "--pdf-engine=" eng))))))
+
+(defun decknix-agent-copy--pdf-default-name ()
+  "Default output filename for a PDF region export."
+  (format "agent-export-%s.pdf" (format-time-string "%Y%m%d-%H%M%S")))
+
+(defun decknix-agent-copy-md->pdf (md outfile)
+  "Render MD (GFM markdown) to OUTFILE as PDF via pandoc.
+Signals a `user-error' when pandoc or a PDF engine is missing, or when
+pandoc exits non-zero.  Returns OUTFILE on success."
+  (unless (executable-find "pandoc")
+    (user-error "pandoc not found on PATH; cannot export PDF"))
+  (unless (decknix-agent-copy-pdf-engine)
+    (user-error "No PDF engine found (install one of: %s)"
+                (string-join decknix-agent-copy-pdf-engines ", ")))
+  (let ((cmd (decknix-agent-copy-pdf-command outfile)))
+    (with-temp-buffer
+      (insert md)
+      (let ((status (apply #'call-process-region (point-min) (point-max)
+                           (car cmd) nil nil nil (cdr cmd))))
+        (unless (eq status 0)
+          (user-error "pandoc failed (exit %s)" status))
+        outfile))))
+
 ;; -- Interactive commands + transient ------------------------------
 ;;
 ;; These have side effects only when invoked (region read + `kill-new'),
@@ -193,6 +243,21 @@ LABEL names the format for the echo-area confirmation."
   "Copy region BEG..END converted to plain text."
   (interactive "r")
   (decknix-agent-copy--do beg end #'decknix-agent-copy-md->plain "plain text"))
+
+(defun decknix-agent-copy-region-as-pdf (beg end outfile)
+  "Export region BEG..END (markdown) to OUTFILE as PDF via pandoc.
+Prompts for OUTFILE and offers to open the result once written."
+  (interactive
+   (if (use-region-p)
+       (list (region-beginning) (region-end)
+             (expand-file-name
+              (read-file-name "Export PDF to: " nil nil nil
+                              (decknix-agent-copy--pdf-default-name))))
+     (user-error "Select a region to export as PDF")))
+  (decknix-agent-copy-md->pdf (buffer-substring-no-properties beg end) outfile)
+  (message "Exported region to %s" outfile)
+  (when (y-or-n-p (format "Open %s? " (file-name-nondirectory outfile)))
+    (browse-url-of-file outfile)))
 
 ;; -- On-demand table reformat (in place) ---------------------------
 
@@ -234,6 +299,8 @@ be wider than the window it is reflowed into a per-row bullet list."
    ("s" "Slack mrkdwn" decknix-agent-copy-region-as-slack)
    ("h" "HTML (pandoc)" decknix-agent-copy-region-as-html)
    ("p" "Plain text" decknix-agent-copy-region-as-plain)]
+  ["Export region to file"
+   ("P" "PDF (pandoc)" decknix-agent-copy-region-as-pdf)]
   ["Reformat in place"
    ("t" "Table at point / in region" decknix-agent-table-reformat)])
 
