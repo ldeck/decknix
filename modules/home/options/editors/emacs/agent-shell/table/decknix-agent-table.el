@@ -199,6 +199,35 @@ IDX; nil unless that run holds a separator (i.e. is a real table)."
                      (number-sequence start (1- end)))
         (cons start end)))))
 
+(defun decknix-agent-table-block-offsets (text)
+  "Return a list of (START . END) character offsets of table blocks in TEXT.
+START is the offset of the block's first character; END is exclusive and
+stops at the end of the last table row (excluding its trailing newline).
+Offsets are 0-based into TEXT, so a consumer can map them to buffer
+positions with (+ region-start OFFSET)."
+  (let* ((lines (split-string text "\n"))
+         (n (length lines)) (i 0) (pos 0) (starts (make-vector n 0))
+         (out '()))
+    (dotimes (k n)
+      (aset starts k pos)
+      (setq pos (+ pos (length (nth k lines)) 1)))
+    (while (< i n)
+      (let ((next (and (< (1+ i) n) (nth (1+ i) lines))))
+        (if (and (decknix-agent-table-row-p (nth i lines))
+                 (not (decknix-agent-table-separator-p (nth i lines)))
+                 next (decknix-agent-table-separator-p next))
+            (let ((j (+ i 2)))
+              (while (and (< j n)
+                          (decknix-agent-table-row-p (nth j lines))
+                          (not (decknix-agent-table-separator-p (nth j lines))))
+                (setq j (1+ j)))
+              (push (cons (aref starts i)
+                          (+ (aref starts (1- j)) (length (nth (1- j) lines))))
+                    out)
+              (setq i j))
+          (setq i (1+ i)))))
+    (nreverse out)))
+
 (defun decknix-agent-table-transform-blocks (text fn)
   "Replace every GFM table block in TEXT with (funcall FN block-text).
 Non-table lines are preserved verbatim.  A block is a header row, a

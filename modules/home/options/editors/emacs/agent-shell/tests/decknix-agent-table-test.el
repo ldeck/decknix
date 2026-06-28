@@ -194,5 +194,20 @@
     (should-not (decknix-agent-table-block-bounds lines 0))
     (should-not (decknix-agent-table-block-bounds lines 1))))
 
+;; -- block-offsets -------------------------------------------------
+
+(ert-deftest decknix-agent-table/block-offsets-locate-table ()
+  "Offsets map the table block to its char span (newline-trailing excluded)."
+  (let* ((text (concat "Intro\n\n" decknix-agent-table-test--input "\n\nOutro"))
+         (offs (decknix-agent-table-block-offsets text)))
+    (should (= 1 (length offs)))
+    (let ((b (car offs)))
+      ;; substring at the offsets equals the original table block
+      (should (string= decknix-agent-table-test--input
+                       (substring text (car b) (cdr b)))))))
+
+(ert-deftest decknix-agent-table/block-offsets-none-for-prose ()
+  (should (null (decknix-agent-table-block-offsets "no tables here\njust prose"))))
+
 (provide 'decknix-agent-table-test)
 ;;; decknix-agent-table-test.el ends here
