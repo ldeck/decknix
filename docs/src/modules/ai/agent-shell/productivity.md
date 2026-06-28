@@ -225,12 +225,38 @@ the app forward.
 `C-c A j` jumps the other way, to the next session needing input. These
 cover session↔sidebar movement whether or not focus-steal is enabled.
 
+## Priority View (`C-c A p`, opt-in)
+
+A ranked, lane-based "what should I do next?" view over the hub's existing
+data, shown in a standalone read-only `*Agent Priority*` buffer. Off by
+default; enable it with
+`programs.emacs.decknix.agentShell.hub.priority.enable = true` to bind
+`C-c A p`.
+
+Four ordered lanes, highest-leverage first:
+
+| Lane | What it surfaces |
+|------|------------------|
+| **Discussions** | PRs where a human is awaiting *your reply* (highest priority). |
+| **Reviews** | PRs awaiting *your review verdict*. |
+| **Tasks** | Your non-done Jira issues. |
+| **Queue** | Your open WIP PRs flowing through the pipeline. |
+
+Within each lane, items you were directly @-mentioned on rank first, then
+oldest first. In the buffer: `RET` opens the item, `g` refreshes, `q`
+quits.
+
+This is phase 1 (existing sources only). A sidebar live-view mode, pin /
+exclude support, and generic GitHub Actions pipeline enrichment of the
+Queue lane are tracked in issues #142 and #141.
+
 ## Nix Options
 
 ```nix
 programs.emacs.decknix.agentShell = {
   templates.enable = true;  # Yasnippet prompt templates
   commands.enable = true;   # Nix-managed slash commands
+  hub.priority.enable = false;  # opt-in Priority view (C-c A p)
 };
 
 programs.emacs.decknix.ui.focus.steal = "off";  # "off" | "attention" | "both"
