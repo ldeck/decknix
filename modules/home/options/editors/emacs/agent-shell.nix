@@ -598,6 +598,35 @@ let
     ];
   };
 
+  # Pure GFM-table formatting core: parse a collapsed pipe-table, then
+  # re-render it aligned (columns padded so pipes line up) or, when the
+  # aligned width would overflow the view, reflowed into a per-row bullet
+  # block.  Side-effect free, so it is shared by the on-demand reformat
+  # command, the copy-as-format converters, and the auto-overlay hook
+  # (all wired in the heredoc per AGENTS.md Rule 2).
+  decknix-agent-table-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-table";
+    src = ./agent-shell/table;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-table-test.el"
+    ];
+  };
+
+  # Copy-as-format: convert a region from markdown into Slack mrkdwn /
+  # plain / HTML (pandoc) / table-normalised markdown before `kill-new',
+  # plus an on-demand table reformat-at-point command.  The pure
+  # converters are ERT-tested; the interactive commands + transient live
+  # in the package, only their key binding is wired in the heredoc.
+  decknix-agent-copy-region-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-copy-region";
+    src = ./agent-shell/copy-region;
+    packageRequires = [ decknix-agent-table-el ];
+    testFiles = [
+      "decknix-agent-copy-region-test.el"
+    ];
+  };
+
   # Ranked lane-based Priority view (#142, phase 1).  Pure decision layer
   # (lane classification + ranking + collect) is fully ERT-tested; the
   # standalone *Agent Priority* renderer reads the live hub defvars via
@@ -2178,6 +2207,8 @@ in
           decknix-agent-help-el
           decknix-agent-header-el
           decknix-focus-el
+          decknix-agent-table-el
+          decknix-agent-copy-region-el
           decknix-agent-buffer-lookup-el
           decknix-agent-conv-hidden-el
           decknix-agent-context-history-el
@@ -2652,6 +2683,37 @@ in
                     (lambda (&rest _)
                       "Raise the Emacs frame on new session (focus steal)."
                       (decknix-focus-maybe-raise-on-new-session)))
+
+        ;; == Table formatting core (pure) ==
+        ;; Parse + re-render GFM tables (aligned, or narrow bullet
+        ;; reflow).  No top-level side effects; the on-demand command,
+        ;; the copy-as-format converters and the auto-overlay hook all
+        ;; build on these pure helpers (wired further below).
+        (require 'decknix-agent-table)
+        (declare-function decknix-agent-table-format "decknix-agent-table")
+        (declare-function decknix-agent-table-parse "decknix-agent-table")
+        (declare-function decknix-agent-table-render-aligned "decknix-agent-table")
+        (declare-function decknix-agent-table-aligned-width "decknix-agent-table")
+        (declare-function decknix-agent-table-transform-blocks "decknix-agent-table")
+
+        ;; == Copy region as format (Slack / plain / HTML / markdown) ==
+        ;; Pure converters + interactive commands + transient live in the
+        ;; package; here we just load it and bind the `C-c x' prefix in
+        ;; agent-shell and review/markdown buffers (D-C: both).  `C-c y'
+        ;; is taken by yasnippet, hence `C-c x'.
+        (require 'decknix-agent-copy-region)
+        (declare-function decknix-agent-copy-transient "decknix-agent-copy-region")
+        (declare-function decknix-agent-table-reformat "decknix-agent-copy-region")
+        ;; review/markdown buffers (D-C: both) — decknix-agent-review-mode
+        ;; derives from markdown-mode, so one binding covers both.  `C-c x'
+        ;; is free in markdown-mode (its prefix is `C-c C-x').
+        (with-eval-after-load 'markdown-mode
+          (when (boundp 'markdown-mode-map)
+            (define-key markdown-mode-map (kbd "C-c x")
+                        'decknix-agent-copy-transient)))
+        (with-eval-after-load 'which-key
+          (which-key-add-key-based-replacements
+            "C-c x" "copy-as / reformat"))
 
         ;; Buffer / conv-key lookups (PR B.66) -- four small
         ;; read-only helpers carved from main-bulk.  Used by the
@@ -5153,6 +5215,10 @@ ${optionalString cfg.hub.priority.enable ''
                     (local-set-key (kbd "C-c E") 'decknix-agent-compose-interrupt)
                     (local-set-key (kbd "C-c ?") decknix-agent-help-map)
                     (local-set-key (kbd "C-c r") 'agent-shell-rename-buffer)
+                    ;; C-c x — copy region as format / reformat table.
+                    ;; (C-c y is yasnippet's; C-c x is free here.)
+                    (when (fboundp 'decknix-agent-copy-transient)
+                      (local-set-key (kbd "C-c x") 'decknix-agent-copy-transient))
                     ;; C-c s — session sub-prefix (includes C-c s t — session-scoped tags)
                     (let ((map (make-sparse-keymap))
                           (tag-map (make-sparse-keymap)))

@@ -250,6 +250,49 @@ This is phase 1 (existing sources only). A sidebar live-view mode, pin /
 exclude support, and generic GitHub Actions pipeline enrichment of the
 Queue lane are tracked in issues #142 and #141.
 
+## Formatting Output
+
+The agent emits raw markdown, which the comint buffer shows literally —
+collapsed tables and `**bold**` / `### head` / `[t](u)` syntax that pastes
+badly into Slack and other tools. Two complementary tools address this.
+
+### Reformat Table (`C-c x` → `t`)
+
+Re-aligns the GFM table at point (or in the active region) so the pipes
+line up:
+
+```
+| Name  | Age | City |
+| ----- | --- | ---- |
+| Alice | 30  | NYC  |
+```
+
+When the aligned table would be wider than the window, it reflows into a
+per-row bullet list with key/value sub-items instead — readable even in a
+narrow sidebar:
+
+```
+• Alice
+    - Age: 30
+    - City: NYC
+```
+
+### Copy Region As… (`C-c x`)
+
+Select a region, then `C-c x` opens a transient that converts it and puts
+the result on the kill-ring in the chosen syntax:
+
+| Key | Format | Notes |
+|-----|--------|-------|
+| `m` | Markdown | tables re-aligned, prose untouched |
+| `s` | Slack mrkdwn | `*bold*`, `_italic_`, `~strike~`, `<url\|text>`, headings → bold line, `&`/`<`/`>` escaped, tables → aligned code block |
+| `h` | HTML | via `pandoc` (GFM → HTML) |
+| `p` | Plain text | emphasis stripped, links → `text (url)`, tables aligned |
+
+`C-c x` is bound in agent-shell buffers and in markdown / review buffers
+(`C-c y` is reserved for yasnippet). The Slack mapping follows
+[Slack's mrkdwn spec](https://docs.slack.dev/messaging/formatting-message-text/).
+
 ## Nix Options
 
 ```nix
