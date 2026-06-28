@@ -76,6 +76,10 @@
 (declare-function decknix--context-header-string
                   "decknix-agent-shell-context")
 
+;; Focus-steal detector (optional; fboundp-guarded at the call site so
+;; the header still works in isolation when `decknix-focus' is absent).
+(declare-function decknix-focus-note-status "decknix-focus")
+
 ;; == Header-line state ===========================================
 
 (defvar-local decknix--header-timer nil
@@ -294,6 +298,15 @@ renders as ^J, not a line break.  All items therefore live on one line."
       (setq decknix--header-prev-status raw-status))
     (when (not (member raw-status '("working" "waiting")))
       (setq decknix--header-prev-status nil))
+    ;; Focus steal: when enabled, a backgrounded session entering a
+    ;; needs-attention state raises the Emacs frame.  Decoupled from the
+    ;; header's own prev-status tracking — `decknix-focus' keeps its own
+    ;; per-buffer edge state; fboundp-guarded so the header still works
+    ;; when the focus feature is absent (e.g. in isolation under test).
+    (when (fboundp 'decknix-focus-note-status)
+      (decknix-focus-note-status
+       raw-status
+       (eq (current-buffer) (window-buffer (selected-window)))))
     ;; Item 1: Status icon + label (stable, always first)
     (push (propertize (format " %s %s" icon status)
                       'face face)
