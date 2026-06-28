@@ -767,7 +767,11 @@ workspace sidebar surface which sessions need attention.
     markdown, plus a pandoc-backed HTML path.  PDF export (`P`) is a
     file artefact: pure `pdf-engine`/`pdf-command`/`default-name` helpers
     (engine auto-detected from a preference list, ERT-tested) feed a thin
-    `md->pdf` that shells out to pandoc + the engine.  Also hosts the
+    `md->pdf` that shells out to pandoc + the engine.  `pandoc` and a PDF
+    engine (`typst` by default) are installed via `home.packages` so this
+    works after `decknix switch` with no manual install — gated by
+    `agentShell.copyRegion.pandoc.enable` / `.pdfEngine` (set the engine
+    to `null` for bring-your-own).  Also hosts the
     interactive commands and the `C-c x` transient (copy-as `m`/`s`/`h`/
     `p`, export-to-file `P` PDF, reformat-table `t`).  Per Rule 2 the
     commands live in the package (side effects only when invoked); only

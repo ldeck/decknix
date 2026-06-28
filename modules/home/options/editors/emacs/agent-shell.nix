@@ -2037,6 +2037,21 @@ let
       > 💬 **agent:** ''${0}'';
   };
 
+  # == PDF engines for the C-c x P export ==
+  # Maps the `agentShell.copyRegion.pdfEngine' enum to its nixpkgs
+  # package.  Kept in sync with the elisp preference list in
+  # `decknix-agent-copy-pdf-engines' (typst first: small, fast, no TeX).
+  # Heavyweight TeX engines (xelatex/pdflatex) are intentionally not
+  # offered here -- they pull in a full texlive; users who want them can
+  # add texlive to home.packages themselves and the runtime auto-detect
+  # will pick them up.
+  pdfEnginePackages = {
+    typst = pkgs.typst;
+    tectonic = pkgs.tectonic;
+    weasyprint = pkgs.weasyprint;
+    wkhtmltopdf = pkgs.wkhtmltopdf;
+  };
+
 in
 {
   options.programs.emacs.decknix.agentShell = {
@@ -2134,9 +2149,52 @@ in
         `C-c x t' reformat command only.
       '';
     };
+
+    copyRegion = {
+      pandoc.enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Install `pandoc' on PATH so the `C-c x' copy-as-format feature
+          works out of the box: the HTML copy (`C-c x h') and the PDF
+          export (`C-c x P') both shell out to pandoc to convert the
+          region's GFM markdown.  On by default; disable if you provide
+          pandoc by other means.
+        '';
+      };
+
+      pdfEngine = mkOption {
+        type = types.nullOr
+          (types.enum [ "typst" "tectonic" "weasyprint" "wkhtmltopdf" ]);
+        default = "typst";
+        description = ''
+          PDF engine installed for `C-c x P' (export region to PDF via
+          pandoc).  `typst' is the default -- small, fast, and needs no
+          TeX distribution.
+
+          Set to null to install no engine (bring-your-own): the command
+          then auto-detects any engine already on PATH (typst, tectonic,
+          weasyprint, wkhtmltopdf, xelatex, pdflatex) and reports which to
+          install if none is found.  Heavyweight TeX engines are not
+          offered here to avoid pulling in a full texlive; add `texlive'
+          to home.packages yourself if you prefer xelatex/pdflatex.
+        '';
+      };
+    };
   };
 
   config = mkIf cfg.enable {
+    # Runtime CLI deps for the C-c x copy-as-format / export feature.
+    # pandoc backs both the HTML copy and the PDF export; a PDF engine
+    # (typst by default) backs `C-c x P'.  Shipping them here means the
+    # feature just works after `decknix switch' with no manual install,
+    # while staying user-overridable (set copyRegion.pandoc.enable = false
+    # or copyRegion.pdfEngine = null to opt out).
+    home.packages = with pkgs;
+      (optional cfg.copyRegion.pandoc.enable pandoc)
+      ++ (optional (cfg.copyRegion.pdfEngine != null)
+            pdfEnginePackages.${cfg.copyRegion.pdfEngine});
+
     # Deploy yasnippet snippets via home.file (symlinks)
     home.file =
       # Yasnippet snippet files → ~/.emacs.d/snippets/agent-shell-mode/
