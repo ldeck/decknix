@@ -61,6 +61,26 @@ in
         description = "Maximum frame height as percentage of screen height.";
       };
     };
+
+    focus = {
+      steal = mkOption {
+        type = types.enum [ "off" "attention" "both" ];
+        default = "off";
+        description = ''
+          Focus-stealing behaviour for backgrounded agent sessions.
+
+          - "off": never raise the Emacs frame (default).
+          - "attention": raise the frame when a backgrounded agent
+            session enters a waiting / needs-input state.
+          - "both": "attention" plus raise the frame when a new session
+            is created (e.g. an auto-review dispatch).
+
+          Cycle at runtime via the sidebar Toggles transient
+          (T -> Global -> focus). Runtime changes persist across reloads
+          and override this default.
+        '';
+      };
+    };
   };
 
   config = mkIf cfg.enable {
