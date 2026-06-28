@@ -598,6 +598,19 @@ let
     ];
   };
 
+  # Ranked lane-based Priority view (#142, phase 1).  Pure decision layer
+  # (lane classification + ranking + collect) is fully ERT-tested; the
+  # standalone *Agent Priority* renderer reads the live hub defvars via
+  # `bound-and-true-p', so the package carries no hard hub dependency.
+  decknix-priority-el = mkEmacsTestedPackage {
+    pname = "decknix-priority";
+    src = ./agent-shell/priority;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-priority-test.el"
+    ];
+  };
+
   decknix-hub-worktree-parse-el = mkEmacsTestedPackage {
     pname = "decknix-hub-worktree-parse";
     src = ./agent-shell/hub;
@@ -2048,6 +2061,23 @@ in
         running (decknix.services.hub.enable = true).
       '';
     };
+
+    hub.priority.enable = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Surface the ranked lane-based Priority view (issue #142).
+
+        When enabled, binds `C-c A p' to `decknix-priority', which opens
+        a standalone read-only *Agent Priority* buffer aggregating the
+        hub's existing data (reviews, WIP, Jira tasks) into ordered
+        lanes: Discussions -> Reviews -> Tasks -> Queue.
+
+        Off by default. The package and its tests are always built (when
+        hub integration is enabled); this flag only controls whether the
+        command is surfaced via a keybinding. Requires hub.enable.
+      '';
+    };
   };
 
   config = mkIf cfg.enable {
@@ -2191,6 +2221,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-wip-terminal-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-mention-bot-el)
         ++ (optional cfg.hub.enable decknix-auto-review-el)
+        ++ (optional cfg.hub.enable decknix-priority-el)
         ++ (optional cfg.hub.enable decknix-hub-worktree-parse-el)
         ++ (optional cfg.hub.enable decknix-hub-icons-el)
         ++ (optional cfg.hub.enable decknix-hub-pr-cache-el)
@@ -3103,7 +3134,8 @@ in
             "C-c A q" "quit session"
             "C-c A R" "rename session"
             "C-c A r" "recent sessions"
-            "C-c A P" "Progress (conv-key)"))
+            "C-c A P" "Progress (conv-key)"
+            "C-c A p" "priority view"))
 
         ;; Global keybindings under C-c A prefix
         ;; Only actions that make sense from OUTSIDE an agent-shell buffer.
@@ -4505,6 +4537,19 @@ Subsequent toggles only log when verbose tracing is on."
         (require 'decknix-auto-review)
         (advice-add 'decknix--hub-refresh-reviews :after
                     #'decknix-auto-review--maybe-dispatch)
+        ;; == Priority lane-based view (#142, phase 1) ==
+        ;; Always load the pure package (small, no load-time side effects)
+        ;; so the `decknix-priority' command is M-x-available and gets full
+        ;; byte/native-compile coverage in the default build.  Only the
+        ;; keybinding that *surfaces* it (C-c A p) is gated by the
+        ;; default-off `hub.priority.enable' toggle.  The standalone
+        ;; *Agent Priority* buffer aggregates the hub's existing data into
+        ;; ranked lanes — additive, no change to the sidebar render path.
+        (require 'decknix-priority)
+        (declare-function decknix-priority "decknix-priority")
+${optionalString cfg.hub.priority.enable ''
+        (define-key decknix-agent-prefix-map (kbd "p") 'decknix-priority)
+''}
 
         (with-eval-after-load 'agent-shell-workspace
           (advice-add 'agent-shell-workspace-sidebar-refresh :around
