@@ -319,6 +319,60 @@ install (the auto-detect order is `typst`, `tectonic`, `weasyprint`,
 (`C-c y` is reserved for yasnippet). The Slack mapping follows
 [Slack's mrkdwn spec](https://docs.slack.dev/messaging/formatting-message-text/).
 
+## Switching Agents / Migrating off Auggie
+
+decknix supports three agent providers — Auggie (`A`), Claude (`C`), and
+Pi (`P`) — and new sessions default to **Claude**. There are three
+distinct operations, and it's worth knowing which one to reach for:
+
+| Goal | Command | Crosses agents? |
+|------|---------|-----------------|
+| Continue the **same** conversation on the **same** agent | **Resume** — picker `C-c A s` (Previous / Saved), or restart `C-c s R` | No |
+| Continue a discussion on a **different** agent (Auggie → Claude / Pi) | **Fork** — `C-c A f` / `C-c s f` | **Yes** |
+| Change **model** mid-conversation (same agent) | `C-c C-v` | No |
+
+There is no "clone" command — **fork is the cross-agent path**.
+
+### Why resume can't switch agents
+
+Resume is provider-native: each agent stores its transcripts in its own
+directory and format, and resume relaunches *that* agent with `--resume
+<id>`:
+
+- Auggie → `~/.augment/sessions/*.json`
+- Claude → `~/.claude/projects/*.jsonl`
+- Pi → `~/.pi/sessions/`
+
+The picker reads the session metadata and always restores the **original**
+provider, so an Auggie transcript can't be replayed *as* Claude.
+
+### Fork hands off context to the new agent
+
+`C-c A f` (`decknix-agent-session-fork`) is the tool for "I'm moving this
+work off Auggie":
+
+1. **Prompts for the new provider** — pick Claude or Pi.
+2. Pre-seeds the source session's **workspace and tags** (editable before
+   you confirm).
+3. Auto-sends a **context hand-off** as the new session's first message,
+   naming the source provider, session id, and best-effort **transcript
+   path** — so the new agent can read the prior conversation and pick up
+   where you left off.
+
+This is best-effort continuity (the new agent *reads the named transcript
+file* to reload context rather than a true session port), but for
+"continue this discussion in Claude" it's the intended button. Invoked
+outside an agent-shell buffer there's no source, so fork degrades to a
+plain new session.
+
+### Notes
+
+- **`C-c C-v` model-switching is Auggie-specific** — it injects `--model`
+  and persists the choice per-conversation (re-applied on resume). Claude
+  and Pi select their model through their own config/auth, not this lever.
+- **Start fresh on Claude** with plain `C-c A n` (it prompts for provider;
+  `C-u C-c A n` skips the prompt and uses the default, Claude).
+
 ## Nix Options
 
 ```nix
