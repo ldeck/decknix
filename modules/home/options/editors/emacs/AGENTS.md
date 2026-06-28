@@ -752,6 +752,38 @@ workspace sidebar surface which sessions need attention.
   (sidebar live-view mode, pins, generic GitHub Actions Queue enrichment)
   are tracked in #142 / #141.
 
+### Output Formatting (`decknix-agent-table`, `decknix-agent-copy-region`)
+- The agent emits raw markdown; the comint buffer renders it literally
+  (collapsed tables, `**bold**`, `### head`).  Two pure, ERT-tested
+  carved cores plus a thin command layer address this:
+  - `agent-shell/table/decknix-agent-table.el` — parse a GFM table and
+    re-render it **aligned** (columns padded so pipes line up) or, when
+    the aligned width would exceed a target width, **reflowed** into a
+    per-row bullet block with `- Header: value` sub-items.  All pure
+    string transforms (`-parse`, `-render-aligned`, `-render-reflow`,
+    `-aligned-width`, `-format`, `-transform-blocks`, `-block-bounds`).
+  - `agent-shell/copy-region/decknix-agent-copy-region.el` — pure
+    converters markdown → Slack mrkdwn / plain / table-normalised
+    markdown, plus a pandoc-backed HTML path.  Also hosts the
+    interactive commands and the `C-c x` transient (copy-as `m`/`s`/`h`/
+    `p`, reformat-table `t`).  Per Rule 2 the commands live in the
+    package (side effects only when invoked); only the key binding is in
+    the heredoc.
+- **Slack mapping** follows docs.slack.dev: `*bold*` (single star),
+  `_italic_`, `~strike~` (single tilde), `<url|text>` links, headings →
+  a bold line (Slack has no headings), `&`/`<`/`>` HTML-escaped, and
+  tables wrapped as an aligned code block.  Bold is collapsed via
+  sentinel chars *before* the italic pass so `**x**` → `*x*` is not
+  re-eaten by the single-star italic rule.
+- **Bindings** (D-C: both): `C-c x` is bound buffer-locally in
+  agent-shell buffers and on `markdown-mode-map` (so it also covers the
+  derived `decknix-agent-review-mode`).  `C-c y` is reserved for
+  yasnippet, hence `C-c x`.
+- The on-demand reformat (`C-c x t`) is width-aware: it aligns, or
+  reflows to bullets when the aligned table would be wider than the
+  window.  It honours `inhibit-read-only` since the user invokes it
+  explicitly.
+
 ### Inline Review (`decknix-agent-review-mode`)
 - Derived from `markdown-mode`. Captures the last exchange (prompt +
   response) from an agent session into a `*agent-review: <name>*` buffer
@@ -860,6 +892,7 @@ workspace sidebar surface which sessions need attention.
 | `C-c w` | Toggle Agents workspace (in-buffer shortcut) |
 | `C-c j` | Jump to pending session (in-buffer shortcut) |
 | `C-c v` | Review last exchange (in-buffer shortcut for `C-c A v`) |
+| `C-c x` | Copy region as… / reformat table — transient (`m` markdown, `s` Slack mrkdwn, `h` HTML, `p` plain, `t` reformat table). Bound in agent-shell + markdown/review buffers |
 | `C-c C-c` | Route review (review-mode only) |
 | `C-c C-f` | Flag paragraph as follow-up (review-mode only) |
 | `C-c C-l` | List stashed follow-ups (review-mode only) |
