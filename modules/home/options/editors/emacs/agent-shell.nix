@@ -608,8 +608,16 @@ let
     pname = "decknix-agent-table";
     src = ./agent-shell/table;
     packageRequires = [ ];
+    # Display-overlay layer ships alongside the pure core.  It re-renders
+    # tables aligned/reflowed via a `display' property (text untouched),
+    # driven by markdown-overlays advice (agent-shell) and a jit-lock
+    # minor mode (review/markdown), both wired in the heredoc (Rule 2).
+    extraSiteFiles = [
+      "decknix-agent-table-overlay.el"
+    ];
     testFiles = [
       "decknix-agent-table-test.el"
+      "decknix-agent-table-overlay-test.el"
     ];
   };
 
@@ -2107,6 +2115,25 @@ in
         command is surfaced via a keybinding. Requires hub.enable.
       '';
     };
+
+    tableOverlay.enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Auto-align GFM tables in agent-shell output (and review/markdown
+        buffers) using display overlays, so collapsed tables the agent
+        emits render with aligned columns.
+
+        The underlying buffer text is left untouched (overlays only carry
+        a `display' property), so `M-w' still copies the raw markdown and
+        the `C-c x' copy-as-format converters reparse it correctly.  When
+        an aligned table would be wider than the window it is reflowed
+        into a per-row bullet list.
+
+        On by default; set to false to fall back to the on-demand
+        `C-c x t' reformat command only.
+      '';
+    };
   };
 
   config = mkIf cfg.enable {
@@ -2714,6 +2741,32 @@ in
         (with-eval-after-load 'which-key
           (which-key-add-key-based-replacements
             "C-c x" "copy-as / reformat"))
+
+        ;; == Auto table overlay (display alignment) ==
+        ;; Re-render GFM tables aligned (or reflowed when narrow) via a
+        ;; `display' overlay so collapsed tables read well — without
+        ;; touching buffer text, so `M-w' / copy-as-format stay raw.
+        ;; Gated by `tableOverlay.enable'.
+        (require 'decknix-agent-table-overlay)
+        (declare-function decknix-agent-table-overlay-buffer
+                          "decknix-agent-table-overlay")
+        (declare-function decknix-agent-table-overlay-mode
+                          "decknix-agent-table-overlay")
+        (defvar decknix-agent-table-overlay-enable)
+        (setq decknix-agent-table-overlay-enable ${
+          if cfg.tableOverlay.enable then "t" else "nil"})
+${optionalString cfg.tableOverlay.enable ''
+        ;; agent-shell output: re-paint after each markdown render pass.
+        (with-eval-after-load 'markdown-overlays
+          (advice-add 'markdown-overlays-put :after
+                      (lambda (&rest _)
+                        "Align GFM tables in agent-shell output."
+                        (ignore-errors (decknix-agent-table-overlay-buffer)))))
+        ;; review / markdown buffers (D-C: both): jit-lock minor mode.
+        ;; decknix-agent-review-mode derives from markdown-mode.
+        (add-hook 'decknix-agent-review-mode-hook
+                  #'decknix-agent-table-overlay-mode)
+''}
 
         ;; Buffer / conv-key lookups (PR B.66) -- four small
         ;; read-only helpers carved from main-bulk.  Used by the

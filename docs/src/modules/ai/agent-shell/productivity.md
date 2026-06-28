@@ -254,7 +254,18 @@ Queue lane are tracked in issues #142 and #141.
 
 The agent emits raw markdown, which the comint buffer shows literally —
 collapsed tables and `**bold**` / `### head` / `[t](u)` syntax that pastes
-badly into Slack and other tools. Two complementary tools address this.
+badly into Slack and other tools. Three complementary tools address this.
+
+### Auto-aligned Tables (default on)
+
+Tables in agent-shell output are automatically aligned via **display
+overlays** — the columns line up visually while the underlying buffer
+text stays raw markdown, so `M-w` and **Copy Region As…** still see the
+original. When an aligned table would be wider than the window it reflows
+into the bullet list shown below instead. The same overlay is enabled in
+inline-review buffers. Disable with
+`programs.emacs.decknix.agentShell.tableOverlay.enable = false;` to fall
+back to the on-demand command only.
 
 ### Reformat Table (`C-c x` → `t`)
 
@@ -300,6 +311,7 @@ programs.emacs.decknix.agentShell = {
   templates.enable = true;  # Yasnippet prompt templates
   commands.enable = true;   # Nix-managed slash commands
   hub.priority.enable = false;  # opt-in Priority view (C-c A p)
+  tableOverlay.enable = true;   # auto-align GFM tables via display overlays
 };
 
 programs.emacs.decknix.ui.focus.steal = "off";  # "off" | "attention" | "both"
