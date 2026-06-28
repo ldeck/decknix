@@ -728,7 +728,9 @@ let
     pname = "decknix-agent-provider";
     src = ./agent-shell/agent;
     packageRequires = [ ];
-    testFiles = [ ];
+    testFiles = [
+      "decknix-agent-provider-test.el"
+    ];
   };
 
   decknix-agent-url-parse-el = mkEmacsTestedPackage {
@@ -2411,7 +2413,12 @@ in
             :session-jq-filter "{sessionId, created, modified, exchangeCount: (try (.chatHistory | length) // 0), firstUserMessage: (try (first(.chatHistory[] | .exchange.request_message | select(. != null) | select(startswith(\"\\u26a0\") | not) | select(length > 0))[:200]) // \"\")}"
             :label "Auggie"
             :glyph "A"
-            :supports-workspace-root t))
+            :supports-workspace-root t
+            ;; Auggie pins the model at launch via `--model'; on resume
+            ;; the saved per-conversation model rides the command line.
+            ;; Providers WITHOUT this flag (Claude, Pi) replay the model
+            ;; over ACP (session/set_model) once the session is ready.
+            :model-launch-flag "--model"))
 
         (decknix-agent-register-provider 'claude-code
           '(:make-config-fn agent-shell-anthropic-make-claude-code-config
