@@ -585,6 +585,19 @@ let
     ];
   };
 
+  # Optional focus-stealing for backgrounded sessions.  Pure decision
+  # layer (3-state cycle + attention-edge / new-session detectors); the
+  # frame raise is the only side effect, invoked from the header status
+  # hook and the new-session advice (both wired in the heredoc, Rule 2).
+  decknix-focus-el = mkEmacsTestedPackage {
+    pname = "decknix-focus";
+    src = ./agent-shell/focus;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-focus-test.el"
+    ];
+  };
+
   decknix-hub-worktree-parse-el = mkEmacsTestedPackage {
     pname = "decknix-hub-worktree-parse";
     src = ./agent-shell/hub;
@@ -1816,6 +1829,10 @@ let
       # below; on the load-path so the state round-trip test can
       # `(require 'decknix-auto-review)` for the real special defvar.
       decknix-auto-review-el
+      # focus-steal mode is persisted by the same save/restore and the
+      # Global Toggles transient suffix lives in this module; on the
+      # load-path so the round-trip test can `(require 'decknix-focus)`.
+      decknix-focus-el
     ];
     extraSiteFiles = [ "decknix-worktree-picker.el" ];
     testFiles = [
@@ -2130,6 +2147,7 @@ in
           decknix-agent-clipboard-el
           decknix-agent-help-el
           decknix-agent-header-el
+          decknix-focus-el
           decknix-agent-buffer-lookup-el
           decknix-agent-conv-hidden-el
           decknix-agent-context-history-el
@@ -2578,6 +2596,31 @@ in
                           "decknix-agent-header")
         (defvar decknix--header-timer)
         (defvar decknix--header-prev-status)
+
+        ;; == Focus: optional focus-stealing (attention / new session) ==
+        ;; Pure decision layer + per-buffer detector live in the carved
+        ;; `decknix-focus-el'.  The attention raise is driven from the
+        ;; header status hook (decknix--header-build -> note-status); the
+        ;; new-session raise is :after advice on the quick-action launcher
+        ;; (covers auto-review dispatch + manual quick actions, both of
+        ;; which go through `decknix--agent-quickaction-start', defined by
+        ;; the main aggregator required above).  Seed the runtime state
+        ;; from the Nix option; the persisted sidebar state overrides it
+        ;; on reload.  Default `off' (see ui.nix) so nothing steals focus
+        ;; unless the user opts in.
+        (require 'decknix-focus)
+        (declare-function decknix-focus-note-status "decknix-focus")
+        (declare-function decknix-focus-maybe-raise-on-new-session
+                          "decknix-focus")
+        (declare-function decknix-focus-cycle "decknix-focus")
+        (declare-function decknix-focus-footer-label "decknix-focus")
+        (declare-function decknix-focus-sidebar "decknix-focus")
+        (defvar decknix-focus-steal)
+        (setq decknix-focus-steal '${config.programs.emacs.decknix.ui.focus.steal})
+        (advice-add 'decknix--agent-quickaction-start :after
+                    (lambda (&rest _)
+                      "Raise the Emacs frame on new session (focus steal)."
+                      (decknix-focus-maybe-raise-on-new-session)))
 
         ;; Buffer / conv-key lookups (PR B.66) -- four small
         ;; read-only helpers carved from main-bulk.  Used by the
@@ -3056,6 +3099,7 @@ in
             "C-c A m" "manager"
             "C-c A w" "workspace"
             "C-c A j" "attention jump"
+            "C-c A o" "sidebar focus"
             "C-c A q" "quit session"
             "C-c A R" "rename session"
             "C-c A r" "recent sessions"
@@ -3067,6 +3111,7 @@ in
         (define-key decknix-agent-prefix-map (kbd "a") 'agent-shell)                      ; Start/switch to agent
         (define-key decknix-agent-prefix-map (kbd "n") 'decknix-agent-session-new)          ; New session (guided)
         (define-key decknix-agent-prefix-map (kbd "f") 'decknix-agent-session-fork)         ; Fork session (inherit ws+tags)
+        (define-key decknix-agent-prefix-map (kbd "o") 'decknix-focus-sidebar)               ; Jump to the sidebar window
         (define-key decknix-agent-prefix-map (kbd "q") 'decknix-agent-session-quit)         ; Quit/close session
         (define-key decknix-agent-prefix-map (kbd "?") 'decknix-agent-help-map)           ; Help sub-prefix
         (define-key decknix-agent-help-map (kbd "k") 'decknix-agent-help-keys)            ; Keybindings

@@ -2,7 +2,7 @@
 
 ;; Author: decknix
 ;; Maintainer: decknix
-;; Package-Requires: ((emacs "29.1") (decknix-agent-shell-workspace "0.1") (decknix-hub-ci-filter "0.1") (decknix-hub-mention-bot "0.1") (decknix-hub-age-presets "0.1") (decknix-auto-review "0.1"))
+;; Package-Requires: ((emacs "29.1") (decknix-agent-shell-workspace "0.1") (decknix-hub-ci-filter "0.1") (decknix-hub-mention-bot "0.1") (decknix-hub-age-presets "0.1") (decknix-auto-review "0.1") (decknix-focus "0.1"))
 ;; Keywords: decknix, tests
 
 ;;; Commentary:
@@ -32,6 +32,7 @@
 (require 'decknix-hub-mention-bot)
 (require 'decknix-hub-age-presets)
 (require 'decknix-auto-review)
+(require 'decknix-focus)
 
 ;; `decknix--sidebar-state-save' reads the width-state var unconditionally
 ;; (no `boundp' guard).  Its defining package (`decknix-sidebar-width') is
@@ -57,7 +58,8 @@ persisted states rather than leaving the defaults in place."
          (orig-mention decknix--hub-mention-filter)
          (orig-bots decknix--hub-show-bots)
          (orig-age decknix--hub-age-filter)
-         (orig-auto-review decknix-auto-review-mode))
+         (orig-auto-review decknix-auto-review-mode)
+         (orig-focus decknix-focus-steal))
     (unwind-protect
         (progn
           ;; 1. User sets non-default toggle states.
@@ -65,7 +67,8 @@ persisted states rather than leaving the defaults in place."
                 decknix--hub-mention-filter 'me
                 decknix--hub-show-bots 'show
                 decknix--hub-age-filter 259200
-                decknix-auto-review-mode 'any)
+                decknix-auto-review-mode 'any
+                decknix-focus-steal 'both)
           ;; 2. Pre-reload save captures the current values.
           (decknix--sidebar-state-save)
           (should (file-exists-p decknix--sidebar-state-file))
@@ -75,7 +78,8 @@ persisted states rather than leaving the defaults in place."
                 decknix--hub-mention-filter nil
                 decknix--hub-show-bots nil
                 decknix--hub-age-filter nil
-                decknix-auto-review-mode 'off)
+                decknix-auto-review-mode 'off
+                decknix-focus-steal 'off)
           ;; 4. Post-reload restore recovers the persisted values.
           (decknix--sidebar-state-restore)
           ;; 5. Each toggle must match what the user had, not the default.
@@ -83,12 +87,14 @@ persisted states rather than leaving the defaults in place."
           (should (eq decknix--hub-mention-filter 'me))
           (should (eq decknix--hub-show-bots 'show))
           (should (equal decknix--hub-age-filter 259200))
-          (should (eq decknix-auto-review-mode 'any)))
+          (should (eq decknix-auto-review-mode 'any))
+          (should (eq decknix-focus-steal 'both)))
       (setq decknix--hub-ci-filter orig-ci
             decknix--hub-mention-filter orig-mention
             decknix--hub-show-bots orig-bots
             decknix--hub-age-filter orig-age
-            decknix-auto-review-mode orig-auto-review)
+            decknix-auto-review-mode orig-auto-review
+            decknix-focus-steal orig-focus)
       (delete-directory tmp-dir t))))
 
 (provide 'decknix-sidebar-state-roundtrip-test)

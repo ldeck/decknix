@@ -74,6 +74,9 @@
 (declare-function decknix--hub-age-filter-label "decknix-hub-age-presets")
 (declare-function decknix-auto-review-footer-label "decknix-auto-review")
 (defvar decknix-auto-review-mode)
+(declare-function decknix-focus-footer-label "decknix-focus")
+(declare-function decknix-focus-cycle "decknix-focus")
+(defvar decknix-focus-steal)
 ;; Bulk hub module symbols (gated by cfg.hub.enable).
 (declare-function decknix--hub-render-requests "ext:decknix-agent-shell-hub")
 (declare-function decknix--hub-render-wip "ext:decknix-agent-shell-hub")
@@ -760,6 +763,27 @@ Accessible only via the `?' transient; no standalone key binding."
   (interactive)
   (call-interactively #'decknix-sidebar-cycle-width))
 
+;; -- Focus toggle suffix (Global section) --
+;; Cycles the focus-steal state (off -> attention -> both).  Lives in
+;; the Global column because focus-stealing is a frame-level behaviour,
+;; not scoped to any one sidebar section.
+
+(transient-define-suffix decknix-sidebar-transient--focus ()
+  :key "g"
+  :description
+  (lambda ()
+    (format "focus         %s"
+            (propertize
+             (if (fboundp 'decknix-focus-footer-label)
+                 (decknix-focus-footer-label) "[off]")
+             'face (if (and (boundp 'decknix-focus-steal)
+                            (not (eq decknix-focus-steal 'off)))
+                       'font-lock-constant-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-focus-cycle))
+
 ;; -- Worktrees toggle suffixes (§3.6.12) --
 ;; Ordered alphabetically by display label to match the sidebar footer.
 
@@ -890,6 +914,7 @@ single tall column.  Row 1: Global / Requests / Live.  Row 2:
 WIP / Sessions / Worktrees."
   :transient-suffix 'transient--do-stay
   [["Global"
+    (decknix-sidebar-transient--focus)            ;; focus (g)
     (decknix-sidebar-transient--show-toggles)     ;; footer toggles (f)
     (decknix-sidebar-transient--hub-display-mode) ;; Layout (D)
     (decknix-sidebar-transient--org-filter)       ;; Org filter (O)
@@ -1340,6 +1365,15 @@ All toggle keys are accessed via the T transient prefix."
     ;; Emoji-only labels sort after text labels by code-point.
     (let ((global
            (list
+            (cons "g" (concat "focus "
+                          (if (fboundp 'decknix-focus-footer-label)
+                              (propertize
+                               (decknix-focus-footer-label)
+                               'face (if (and (boundp 'decknix-focus-steal)
+                                              (not (eq decknix-focus-steal 'off)))
+                                         'font-lock-constant-face
+                                       'font-lock-comment-face))
+                            (propertize "[off]" 'face 'font-lock-comment-face))))
             (cons "O" (format "org %s"
                           (if (fboundp 'decknix--hub-org-filter-summary)
                               (let ((summary (decknix--hub-org-filter-summary)))
@@ -4551,6 +4585,9 @@ cannot clobber the Previous Sessions snapshot."
            (cons 'auto-review-mode
                  (when (boundp 'decknix-auto-review-mode)
                    decknix-auto-review-mode))
+           (cons 'focus-steal
+                 (when (boundp 'decknix-focus-steal)
+                   decknix-focus-steal))
            (cons 'org-visibility
                  (when (and (boundp 'decknix--hub-org-visibility)
                             decknix--hub-org-visibility)
@@ -4704,6 +4741,13 @@ cannot clobber the Previous Sessions snapshot."
             (unless (eq arm 'missing)
               (when (and arm (boundp 'decknix-auto-review-mode))
                 (setq decknix-auto-review-mode arm))))
+          ;; Focus-steal: restore the 3-state cycle.  Uses a 'missing
+          ;; sentinel so older state files (pre-focus) keep the Nix-seeded
+          ;; default instead of clobbering it with nil.
+          (let ((fs (alist-get 'focus-steal state 'missing)))
+            (unless (eq fs 'missing)
+              (when (and fs (boundp 'decknix-focus-steal))
+                (setq decknix-focus-steal fs))))
           (let ((as (alist-get 'attention-style state)))
             (when (and as (boundp 'decknix--sidebar-attention-style))
               (setq decknix--sidebar-attention-style as)))

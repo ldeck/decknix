@@ -615,7 +615,8 @@ The `decknix--context-update-header` function delegates to the unified header
   section. Suffixes within each section are ordered alphabetically by
   their display label (case-insensitive) to match the sidebar footer,
   which advertises the same toggles by label only (no keys shown).
-  - **Global**: `O` org filter, `W` width
+  - **Global**: `g` focus (cycles `off → attention → both`; see Focus
+    Steal), `O` org filter, `W` width
   - **Requests**: `@` mention, `F` age, `A` auto-review (cycles
     `off → bot+@ → human+@ → any+@`; auto-dispatches a review session
     for newly-arrived PRs that @-mention me — bot authors via
@@ -701,6 +702,33 @@ Multiple agent-shell sessions run **independently and concurrently**. Each
 buffer has its own process. Switching away from a session does NOT pause it —
 the agent continues working in the background. The attention indicator and
 workspace sidebar surface which sessions need attention.
+
+### Focus Steal (`decknix-focus`, default off)
+- Optional: when enabled, Emacs raises its frame to the foreground when
+  work needs your attention — complementing the passive attention
+  indicator (`AS:n/m`). Off by default so attention never steals focus
+  unless you opt in.
+- 3-state cycle (`T` → Global → focus, key `g`; or the footer `focus`
+  label): `off` → `attention` → `both`.
+  - `attention`: raise the frame when a backgrounded session enters a
+    `waiting` / needs-input state. Edge-triggered (once per transition)
+    and skipped when you are already looking at that session.
+  - `both`: also raise the frame when a new session is created (e.g. an
+    auto-review dispatch). Wired as `:after` advice on
+    `decknix--agent-quickaction-start`.
+- The attention transition is detected in `decknix--header-build` (the
+  per-buffer header timer), which calls `decknix-focus-note-status`
+  under an `fboundp` guard. On the background daemon
+  (`ProcessType=Background`) `raise-frame` alone can't pull the app
+  forward, so an async `osascript … activate` is issued on macOS GUI
+  frames.
+- Seeded from `programs.emacs.decknix.ui.focus.steal`
+  (`"off"` / `"attention"` / `"both"`); runtime cycling persists via
+  `decknix--sidebar-state-file` and overrides the Nix default on reload.
+- Navigation: `C-c A o` jumps to the sidebar window; `C-c A j`
+  (`agent-shell-attention-jump`) jumps the other way, to the next
+  session needing input. Pure decision layer + ERT tests live in
+  `agent-shell/focus/decknix-focus.el`.
 
 ### Inline Review (`decknix-agent-review-mode`)
 - Derived from `markdown-mode`. Captures the last exchange (prompt +
@@ -790,6 +818,7 @@ workspace sidebar surface which sessions need attention.
 | `C-c A c e` | Edit custom command |
 | `C-c A w` | Toggle Agents workspace tab (tab-bar with sidebar) |
 | `C-c A j` | Jump to next session needing attention; `C-u` to pick, `C-u C-u` dashboard |
+| `C-c A o` | Jump to the agent sidebar window (opens the Agents workspace if hidden) |
 | `C-c A v` | Review last exchange (inline review buffer); `C-u` for full history |
 | `C-c A T` | Tags — global (list/filter conversations, rename, delete, cleanup) |
 | `C-c s t` | Tags — conversation-scoped (show, add, remove) — in-buffer only (#78) |
@@ -830,7 +859,9 @@ workspace sidebar surface which sessions need attention.
 - **Session templates** — engineering, review, support workflows (#71) (Planned)
 - **Automation** — push notifications, auto-created sessions (#72):
   auto-review (auto-dispatch review sessions for incoming @-mentioned
-  PRs, `T → Requests → A`) shipped; push notifications still (Planned)
+  PRs, `T → Requests → A`) and focus-steal (raise the frame on
+  attention / new session, `T → Global → focus`) shipped; push
+  notifications still (Planned)
 - **Full I/O decoupling** — hide comint prompt, read-only output (#67) (Planned)
 
 ## Keybinding Conventions

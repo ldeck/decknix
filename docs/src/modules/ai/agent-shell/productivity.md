@@ -201,6 +201,30 @@ workspace via `decknix-auto-review-commands` (an alist of
 `decknix-auto-review-default-review-command` and
 `decknix-auto-review-default-ship-command`.
 
+## Focus Steal (`T` → Global → `g`, default off)
+
+Off by default, Emacs never steals window focus. Opt in to have the frame
+raise itself to the foreground when work needs your attention — handy when
+agent sessions run in the background behind other apps.
+
+Cycle the mode from the sidebar Toggles transient (`T` → Global → `g`, or
+the footer `focus` label):
+
+| State | Behaviour |
+|-------|-----------|
+| `off` | Never raise the frame (default). |
+| `attention` | Raise the frame when a backgrounded session enters a waiting / needs-input state. |
+| `both` | Also raise the frame when a new session is created (e.g. an auto-review dispatch). |
+
+The attention raise is edge-triggered (once per transition into waiting)
+and skipped when you are already viewing that session. On the background
+Emacs daemon an `osascript … activate` is issued so macOS actually brings
+the app forward.
+
+**Navigation:** `C-c A o` jumps to the sidebar window from anywhere;
+`C-c A j` jumps the other way, to the next session needing input. These
+cover session↔sidebar movement whether or not focus-steal is enabled.
+
 ## Nix Options
 
 ```nix
@@ -208,5 +232,7 @@ programs.emacs.decknix.agentShell = {
   templates.enable = true;  # Yasnippet prompt templates
   commands.enable = true;   # Nix-managed slash commands
 };
+
+programs.emacs.decknix.ui.focus.steal = "off";  # "off" | "attention" | "both"
 ```
 
