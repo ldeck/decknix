@@ -1086,11 +1086,11 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // Scan for NEW files in the slash-command directories.  Both the
-            // canonical ~/.claude/commands (read by Claude Code AND Auggie) and
-            // the legacy ~/.augment/commands are scanned during the transition,
-            // so a command dropped into either location flows back into the repo.
-            for cmd_rel in [".claude/commands", ".augment/commands"] {
+            // Scan for NEW files in the slash-command directory.  Only the
+            // canonical ~/.claude/commands is scanned (Claude Code AND Auggie
+            // both read from it); the legacy ~/.augment/commands is no longer
+            // a deployment target.
+            for cmd_rel in [".claude/commands"] {
                 let command_dir = dirs::home_dir().unwrap_or_default().join(cmd_rel);
                 if command_dir.is_dir() {
                     if let Ok(entries) = fs::read_dir(command_dir) {
