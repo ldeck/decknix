@@ -9,9 +9,14 @@
 (defmacro decknix-agent-session-history-test--with-fixture (json-string &rest body)
   "Write JSON-STRING to a temp file and stub `-session-file' to return it."
   (declare (indent 1))
+  ;; Bind the default provider to the one we register so these tests are
+  ;; independent of the shipped `decknix-agent-default-provider' value:
+  ;; `decknix--agent-session-extract-history' falls back to the default when
+  ;; no provider is passed, and an unregistered default would error.
   `(let* ((sid "test-sid-0000")
           (tmp (make-temp-file "decknix-history-" nil ".json"))
-          (decknix-agent-provider-registry nil))
+          (decknix-agent-provider-registry nil)
+          (decknix-agent-default-provider 'auggie))
      (decknix-agent-register-provider 'auggie
        '(:sessions-dir "~/.augment/sessions" :session-file-extension ".json"))
      (unwind-protect
@@ -105,7 +110,8 @@
       (should (equal "trailing-chunk" (cdadr turns))))))
 
 (ert-deftest decknix-agent-session-history/missing-file-returns-nil ()
-  (let ((decknix-agent-provider-registry nil))
+  (let ((decknix-agent-provider-registry nil)
+        (decknix-agent-default-provider 'auggie))
     (decknix-agent-register-provider 'auggie
       '(:sessions-dir "~/.augment/sessions" :session-file-extension ".json"))
     (cl-letf (((symbol-function 'decknix--agent-session-file)
