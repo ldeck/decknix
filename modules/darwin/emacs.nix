@@ -113,11 +113,39 @@ in
     # We run this as the primary user via `launchctl asuser` to ensure
     # emacsclient finds the user's session-specific socket (usually under
     # /var/folders/.../T/emacs501/server).
+    #
+    # Two hard rules so activation can never hang:
+    #
+    #   1. The reload is scheduled via `run-with-idle-timer` so the eval
+    #      returns instantly (it only enqueues the work).  Without the
+    #      defer, `emacsclient -e` blocks until `deckmacs-reload` finishes
+    #      — and if the reload triggers any interactive prompt on a visible
+    #      frame (yes-or-no-p, debugger, etc.), `darwin-rebuild` hangs
+    #      indefinitely waiting for the user to answer that prompt.  The
+    #      deferred reload runs on the daemon's own timeline; any prompt
+    #      it raises is the user's concern, not the activation script's.
+    #
+    #   2. Every `emacsclient` invocation is wrapped in `timeout 5`.  If
+    #      the daemon's main thread is busy or wedged (so it can't even
+    #      accept the schedule request), the activation script moves on
+    #      after 5 s instead of blocking the entire switch.
     system.activationScripts.postActivation.text = lib.mkAfter ''
       USER_ID=$(id -u ${username})
-      if launchctl asuser "$USER_ID" sudo -u ${username} ${emacsPackage}/bin/emacsclient -e '(fboundp (quote deckmacs-reload))' 2>/dev/null | grep -q t; then
-        launchctl asuser "$USER_ID" sudo -u ${username} ${emacsPackage}/bin/emacsclient -e '(deckmacs-reload)' 2>/dev/null && \
-          echo "emacs: config hot-reloaded (deckmacs-reload)" || true
+
+      PROBE=$(${pkgs.coreutils}/bin/timeout 5 \
+        launchctl asuser "$USER_ID" sudo -u ${username} \
+          ${emacsPackage}/bin/emacsclient -e '(fboundp (quote deckmacs-reload))' \
+          2>/dev/null || true)
+
+      if echo "$PROBE" | grep -q t; then
+        if ${pkgs.coreutils}/bin/timeout 5 \
+             launchctl asuser "$USER_ID" sudo -u ${username} \
+               ${emacsPackage}/bin/emacsclient -e '(run-with-idle-timer 0 nil (lambda () (condition-case err (deckmacs-reload) (error (message "deckmacs-reload (deferred): %s" (error-message-string err))))))' \
+               >/dev/null 2>&1; then
+          echo "emacs: scheduled deckmacs-reload on idle timer"
+        else
+          echo "emacs: skipped deckmacs-reload (daemon unresponsive within 5s)"
+        fi
       fi
     '';
   };
