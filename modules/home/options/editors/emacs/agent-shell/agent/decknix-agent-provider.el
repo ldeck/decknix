@@ -40,8 +40,12 @@ Attributes include:
                              over ACP (session/set_model) after a
                              resumed session reports ready.")
 
-(defvar decknix-agent-default-provider 'auggie
-  "The default AI agent provider to use for new sessions.")
+(defvar decknix-agent-default-provider 'claude-code
+  "The default AI agent provider to use for new sessions.
+Used by QUICK new-session (`C-u C-c A n') and the session-resume
+fallback when a session's provider cannot be determined.  Regular
+`C-c A n' still prompts for a provider when more than one is
+registered.")
 
 (defun decknix-agent-register-provider (id props)
   "Register a provider ID with PROPS.
