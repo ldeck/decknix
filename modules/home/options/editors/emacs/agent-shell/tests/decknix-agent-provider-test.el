@@ -37,6 +37,14 @@
       (should (equal (decknix-agent-provider-history-file 'test-agent) (expand-file-name "~/test/history.log")))
       (should (eq (decknix-agent-provider-supports-workspace-root 'test-agent) t)))))
 
+(ert-deftest decknix-agent-default-provider-test ()
+  "The shipped default provider is Claude Code.
+Both QUICK new-session (\\[universal-argument] \\[decknix-agent-session-new])
+and the session-resume fallback consult `decknix-agent-default-provider',
+so its shipped value is the system-wide default agent.  This pins the
+contract documented in the Emacs AGENTS.md provider table."
+  (should (eq decknix-agent-default-provider 'claude-code)))
+
 (ert-deftest decknix-agent-provider-label-test ()
   "Test that :label returns the human-readable provider name."
   (let ((decknix-agent-provider-registry nil))
