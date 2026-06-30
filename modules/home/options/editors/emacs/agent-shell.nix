@@ -3832,30 +3832,49 @@ captured without `M-x decknix-toggle-trace' warming the daemon first.
 Survives `deckmacs-reload' (defvar no-ops when already bound), so the
 measurement reflects the first toggle since the Emacs *process* started
 — which is exactly the kickstart workflow being diagnosed.")
-        ;; -- C-c A w CPU profiler --
-        ;; Wraps the toggle in Emacs's built-in sampling CPU profiler
-        ;; (profiler.el) so the 16s cold-start path produces a hot-function
-        ;; breakdown instead of just a single duration number.  Two arms:
-        ;;   * `decknix--profile-first-toggle' (default t) fires automatically
-        ;;     on the first toggle of the daemon.  Cleared after firing so
-        ;;     normal toggles stay overhead-free.
-        ;;   * `decknix--profile-next-toggle' is a one-shot arm set by
-        ;;     `M-x decknix-profile-next-toggle' to capture a *specific*
-        ;;     toggle (e.g. the second one, after the first-run auto-arm
-        ;;     has already cleared).
-        ;; The report is rendered into `*decknix-toggle-profile*' and
-        ;; displayed in another window so the sidebar that the toggle just
-        ;; arranged keeps focus.
+        ;; -- C-c A w ELP profiler --
+        ;; Wraps the toggle in Emacs's built-in Lisp Profiler (elp.el),
+        ;; which instruments matching functions with wall-clock entry/exit
+        ;; timing.  This captures time spent in `accept-process-output',
+        ;; child-process waits, and file I/O -- exactly the I/O-wait that
+        ;; the signal-driven CPU sampler (`profiler-cpu-start') was blind
+        ;; to (and which yielded "No profiler run recorded" on the very
+        ;; first cold-start capture because no Lisp-execution samples
+        ;; landed during the wait).  Two arms:
+        ;;   * `decknix--profile-first-toggle' (default t) fires on the
+        ;;     first toggle of the daemon, cleared after firing.
+        ;;   * `decknix--profile-next-toggle' is a one-shot arm via
+        ;;     `M-x decknix-profile-next-toggle'.
+        ;; The report is rendered into `*decknix-toggle-profile*' sorted
+        ;; by total elapsed time, descending, and displayed without focus
+        ;; steal so the sidebar the toggle just arranged keeps focus.
         (defvar decknix--profile-first-toggle t
-          "When non-nil, CPU-profile the very first toggle of this daemon.
+          "When non-nil, ELP-profile the very first toggle of this daemon.
 Cleared after the profile fires so subsequent toggles run unwrapped.
 Survives `deckmacs-reload' (defvar no-ops when already bound), and is
 gated by `decknix--first-toggle-logged' so a reload mid-session does
 not re-arm an already-warmed daemon.")
         (defvar decknix--profile-next-toggle nil
-          "When non-nil, CPU-profile the next `agent-shell-workspace-toggle'.
-One-shot — cleared the moment the wrapped toggle returns.  Set via
+          "When non-nil, ELP-profile the next `agent-shell-workspace-toggle'.
+One-shot -- cleared the moment the wrapped toggle returns.  Set via
 `M-x decknix-profile-next-toggle'.")
+        (defvar decknix--profile-elp-packages
+          '("agent-shell-workspace-"
+            "agent-shell-sidebar-"
+            "decknix--hub-"
+            "decknix-hub-"
+            "decknix--sidebar-"
+            "decknix-sidebar-"
+            "decknix-progress-"
+            "decknix--header-"
+            "file-notify-")
+          "Prefixes ELP instruments on a profiled toggle.
+ELP wraps each matching function with wall-clock entry/exit timing,
+so any time spent inside (including in uninstrumented callees and C
+primitives like `accept-process-output') is attributed to the nearest
+instrumented caller.  Add or remove prefixes here to widen or narrow
+the lens; un-instrumentation runs in the toggle's cleanup so per-call
+overhead never persists beyond the one-shot capture.")
         (defun decknix--trace-log (label)
           "Log LABEL with elapsed ms since `decknix--trace-t0' to *Messages*.
 No-op when `decknix--trace-toggle' is nil."
@@ -3875,26 +3894,56 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
           (message "decknix toggle-trace %s"
                    (if decknix--trace-toggle "ON" "OFF")))
         (defun decknix-profile-next-toggle ()
-          "Arm Emacs's CPU profiler to wrap the next C-c A w toggle.
-After the toggle returns, the profiler report is rendered into
-`*decknix-toggle-profile*' and displayed in another window so the
-sidebar keeps focus.  The arm is one-shot."
+          "Arm Emacs's ELP profiler to wrap the next C-c A w toggle.
+After the toggle returns, an elapsed-time-per-function report is
+rendered into `*decknix-toggle-profile*' (sorted by total elapsed
+time, descending) and displayed without focus steal.  The arm is
+one-shot."
           (interactive)
           (setq decknix--profile-next-toggle t)
-          (message "decknix: CPU profiler ARMED for next C-c A w"))
-        (defun decknix--profile-show-report ()
-          "Render the CPU profile to `*decknix-toggle-profile*' non-disruptively.
-`profiler-report' insists on `switch-to-buffer-other-window', so it is
-called inside `save-window-excursion' and its result buffer is copied
-into our own and displayed with `display-buffer' (no focus steal)."
-          (require 'profiler)
-          (save-window-excursion (profiler-report))
-          (let ((src (get-buffer "*CPU-Profiler-Report*"))
+          (message "decknix: ELP profiler ARMED for next C-c A w"))
+        (defun decknix--profile-elp-instrument (prefixes)
+          "Instrument every function whose name starts with one of PREFIXES.
+Pre-requires likely packages so their symbols exist when ELP scans
+them.  Returns the count of functions instrumented across all
+prefixes.  Uses the return value of `elp-instrument-package' (which
+is the list of attempted instrumentations from `elp-instrument-list')
+because Emacs 30 ELP does not maintain a public central list of
+instrumented symbols -- each instrumented function carries the advice
+named by `elp--advice-name' instead."
+          (require 'elp)
+          (require 'agent-shell-workspace nil t)
+          (require 'agent-shell-workspace-sidebar nil t)
+          (require 'file-notify nil t)
+          (let ((count 0))
+            (dolist (prefix prefixes)
+              (condition-case _err
+                  (let ((result (elp-instrument-package prefix)))
+                    (when (listp result)
+                      (setq count (+ count (length result)))))
+                (error nil)))
+            count))
+        (defun decknix--profile-elp-show-report ()
+          "Render the ELP results into `*decknix-toggle-profile*' non-disruptively.
+`elp-results' pops its own buffer (`elp-results-buffer', defaults to
+`*ELP Profiling Results*'); capture it under a no-window display
+action, then mirror its contents into our buffer and display without
+focus steal."
+          (require 'elp)
+          (let ((display-buffer-overriding-action
+                 '(display-buffer-no-window (allow-no-window . t))))
+            (save-window-excursion (elp-results)))
+          (let ((src (get-buffer (or (bound-and-true-p elp-results-buffer)
+                                     "*ELP Profiling Results*")))
                 (dst (get-buffer-create "*decknix-toggle-profile*")))
             (when src
               (with-current-buffer dst
                 (let ((inhibit-read-only t))
                   (erase-buffer)
+                  (insert (format ";; ELP results -- %s\n"
+                                  (format-time-string "%Y-%m-%d %H:%M:%S")))
+                  (insert ";; Sorted by total elapsed time (descending).\n")
+                  (insert ";; Columns: Function | Call Count | Elapsed Time | Avg Time\n\n")
                   (insert-buffer-substring src)
                   (goto-char (point-min))
                   (special-mode)))
@@ -3909,7 +3958,7 @@ into our own and displayed with `display-buffer' (no focus steal)."
         ;; wall-clock span including the focus-sidebar step.
         (advice-add 'agent-shell-workspace-toggle :around
           (lambda (orig-fn &rest args)
-            "Wrap toggle with ms-resolution timing trace and optional CPU profile.
+            "Wrap toggle with ms-resolution timing trace and optional ELP profile.
 Always emits ONE `[toggle-firstrun]' line on the very first toggle of
 the daemon, reporting daemon uptime (since `before-init-time') at START
 plus the toggle's own duration.  This captures the cold-start path with
@@ -3921,47 +3970,61 @@ Subsequent toggles only log when verbose tracing is on.
 
 When `decknix--profile-next-toggle' is set (one-shot, via
 `M-x decknix-profile-next-toggle') or when this is the first toggle
-and `decknix--profile-first-toggle' is non-nil, the toggle is also
-wrapped in `profiler-cpu-start' / `profiler-cpu-stop' and the report
-is shown in `*decknix-toggle-profile*'."
-            (require 'profiler)
+and `decknix--profile-first-toggle' is non-nil, every function whose
+name matches a prefix in `decknix--profile-elp-packages' is wrapped
+in ELP wall-clock instrumentation and the report is rendered into
+`*decknix-toggle-profile*'.  The firstrun message fires BEFORE the
+report stage so a rendering error can never swallow the cold-start
+duration -- the most important number on this branch."
+            (require 'elp)
             (let* ((firstp (not decknix--first-toggle-logged))
                    (up0 (float-time (time-since before-init-time)))
                    (t0 (current-time))
-                   (profile-p (and (or decknix--profile-next-toggle
-                                       (and firstp decknix--profile-first-toggle))
-                                   (fboundp 'profiler-cpu-running-p)
-                                   (not (profiler-cpu-running-p))))
-                   (profiler-started nil))
+                   (profile-p (or decknix--profile-next-toggle
+                                  (and firstp decknix--profile-first-toggle)))
+                   (instrumented 0))
               (if (and (not decknix--trace-toggle) (not firstp) (not profile-p))
                   (apply orig-fn args)
                 (let ((decknix--trace-t0 t0))
                   (when decknix--trace-toggle
                     (message "[toggle-trace]     0ms  toggle START"))
                   (when profile-p
-                    (profiler-cpu-start (or (bound-and-true-p profiler-sampling-interval)
-                                            1000000))
-                    (setq profiler-started t)
-                    (message "[toggle-profile] CPU profiler ON"))
+                    (setq instrumented
+                          (decknix--profile-elp-instrument
+                           decknix--profile-elp-packages))
+                    (message
+                     "[toggle-profile] ELP ON -- instrumented %d function(s) across %d prefix(es)"
+                     instrumented
+                     (length decknix--profile-elp-packages)))
                   (unwind-protect
                       (apply orig-fn args)
                     (when decknix--trace-toggle
                       (decknix--trace-log "toggle RETURN"))
-                    (when profiler-started
-                      (profiler-cpu-stop)
-                      (setq decknix--profile-next-toggle nil)
-                      (when firstp
-                        (setq decknix--profile-first-toggle nil))
-                      (decknix--profile-show-report)
-                      (message
-                       "[toggle-profile] report ready in *decknix-toggle-profile*"))
+                    ;; Firstrun line FIRST so a report-render error can
+                    ;; never swallow the cold-start duration -- the
+                    ;; single most important number on this branch.
                     (when firstp
                       (setq decknix--first-toggle-logged t)
                       (message
                        (concat "[toggle-firstrun] daemon-uptime=%.1fs at START; "
                                "toggle took %dms")
                        up0
-                       (round (* 1000 (float-time (time-since t0))))))))))))
+                       (round (* 1000 (float-time (time-since t0))))))
+                    (when profile-p
+                      (setq decknix--profile-next-toggle nil)
+                      (when firstp
+                        (setq decknix--profile-first-toggle nil))
+                      (condition-case err
+                          (progn
+                            (decknix--profile-elp-show-report)
+                            (message
+                             "[toggle-profile] ELP report ready in *decknix-toggle-profile*"))
+                        (error
+                         (message "[toggle-profile] report ERROR: %S" err)))
+                      ;; Always un-instrument so the daemon does not
+                      ;; carry per-call overhead after the one-shot.
+                      (ignore-errors (elp-restore-all))
+                      (ignore-errors (elp-reset-all)))))))))
         ;; Trace our own decknix-sidebar-refresh wrapper, which fires an
         ;; optimistic sidebar-refresh immediately then spawns the async
         ;; `decknix wt refresh' CLI call.
