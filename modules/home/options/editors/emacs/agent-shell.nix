@@ -3832,6 +3832,30 @@ captured without `M-x decknix-toggle-trace' warming the daemon first.
 Survives `deckmacs-reload' (defvar no-ops when already bound), so the
 measurement reflects the first toggle since the Emacs *process* started
 — which is exactly the kickstart workflow being diagnosed.")
+        ;; -- C-c A w CPU profiler --
+        ;; Wraps the toggle in Emacs's built-in sampling CPU profiler
+        ;; (profiler.el) so the 16s cold-start path produces a hot-function
+        ;; breakdown instead of just a single duration number.  Two arms:
+        ;;   * `decknix--profile-first-toggle' (default t) fires automatically
+        ;;     on the first toggle of the daemon.  Cleared after firing so
+        ;;     normal toggles stay overhead-free.
+        ;;   * `decknix--profile-next-toggle' is a one-shot arm set by
+        ;;     `M-x decknix-profile-next-toggle' to capture a *specific*
+        ;;     toggle (e.g. the second one, after the first-run auto-arm
+        ;;     has already cleared).
+        ;; The report is rendered into `*decknix-toggle-profile*' and
+        ;; displayed in another window so the sidebar that the toggle just
+        ;; arranged keeps focus.
+        (defvar decknix--profile-first-toggle t
+          "When non-nil, CPU-profile the very first toggle of this daemon.
+Cleared after the profile fires so subsequent toggles run unwrapped.
+Survives `deckmacs-reload' (defvar no-ops when already bound), and is
+gated by `decknix--first-toggle-logged' so a reload mid-session does
+not re-arm an already-warmed daemon.")
+        (defvar decknix--profile-next-toggle nil
+          "When non-nil, CPU-profile the next `agent-shell-workspace-toggle'.
+One-shot — cleared the moment the wrapped toggle returns.  Set via
+`M-x decknix-profile-next-toggle'.")
         (defun decknix--trace-log (label)
           "Log LABEL with elapsed ms since `decknix--trace-t0' to *Messages*.
 No-op when `decknix--trace-toggle' is nil."
@@ -3850,13 +3874,42 @@ C-h e or M-x view-echo-area-messages after the toggle completes."
           (setq decknix--trace-toggle (not decknix--trace-toggle))
           (message "decknix toggle-trace %s"
                    (if decknix--trace-toggle "ON" "OFF")))
+        (defun decknix-profile-next-toggle ()
+          "Arm Emacs's CPU profiler to wrap the next C-c A w toggle.
+After the toggle returns, the profiler report is rendered into
+`*decknix-toggle-profile*' and displayed in another window so the
+sidebar keeps focus.  The arm is one-shot."
+          (interactive)
+          (setq decknix--profile-next-toggle t)
+          (message "decknix: CPU profiler ARMED for next C-c A w"))
+        (defun decknix--profile-show-report ()
+          "Render the CPU profile to `*decknix-toggle-profile*' non-disruptively.
+`profiler-report' insists on `switch-to-buffer-other-window', so it is
+called inside `save-window-excursion' and its result buffer is copied
+into our own and displayed with `display-buffer' (no focus steal)."
+          (require 'profiler)
+          (save-window-excursion (profiler-report))
+          (let ((src (get-buffer "*CPU-Profiler-Report*"))
+                (dst (get-buffer-create "*decknix-toggle-profile*")))
+            (when src
+              (with-current-buffer dst
+                (let ((inhibit-read-only t))
+                  (erase-buffer)
+                  (insert-buffer-substring src)
+                  (goto-char (point-min))
+                  (special-mode)))
+              (display-buffer
+               dst
+               '((display-buffer-pop-up-window
+                  display-buffer-use-some-window)
+                 (inhibit-same-window . t))))))
         ;; Outermost timing wrapper for agent-shell-workspace-toggle.
         ;; Added AFTER the :after focus-sidebar advice above so this :around
         ;; ends up outermost in the advice chain and measures the full
         ;; wall-clock span including the focus-sidebar step.
         (advice-add 'agent-shell-workspace-toggle :around
           (lambda (orig-fn &rest args)
-            "Wrap toggle with ms-resolution timing trace.
+            "Wrap toggle with ms-resolution timing trace and optional CPU profile.
 Always emits ONE `[toggle-firstrun]' line on the very first toggle of
 the daemon, reporting daemon uptime (since `before-init-time') at START
 plus the toggle's own duration.  This captures the cold-start path with
@@ -3864,19 +3917,44 @@ no manual `M-x decknix-toggle-trace' (which would warm the daemon).  The
 uptime number disambiguates a pre-toggle stall (high uptime, small
 duration = input queued during startup / first-frame creation) from an
 in-toggle stall (low uptime, large duration = slow cold-cache render).
-Subsequent toggles only log when verbose tracing is on."
-            (let ((firstp (not decknix--first-toggle-logged))
-                  (up0 (float-time (time-since before-init-time)))
-                  (t0 (current-time)))
-              (if (and (not decknix--trace-toggle) (not firstp))
+Subsequent toggles only log when verbose tracing is on.
+
+When `decknix--profile-next-toggle' is set (one-shot, via
+`M-x decknix-profile-next-toggle') or when this is the first toggle
+and `decknix--profile-first-toggle' is non-nil, the toggle is also
+wrapped in `profiler-cpu-start' / `profiler-cpu-stop' and the report
+is shown in `*decknix-toggle-profile*'."
+            (require 'profiler)
+            (let* ((firstp (not decknix--first-toggle-logged))
+                   (up0 (float-time (time-since before-init-time)))
+                   (t0 (current-time))
+                   (profile-p (and (or decknix--profile-next-toggle
+                                       (and firstp decknix--profile-first-toggle))
+                                   (fboundp 'profiler-cpu-running-p)
+                                   (not (profiler-cpu-running-p))))
+                   (profiler-started nil))
+              (if (and (not decknix--trace-toggle) (not firstp) (not profile-p))
                   (apply orig-fn args)
                 (let ((decknix--trace-t0 t0))
                   (when decknix--trace-toggle
                     (message "[toggle-trace]     0ms  toggle START"))
+                  (when profile-p
+                    (profiler-cpu-start (or (bound-and-true-p profiler-sampling-interval)
+                                            1000000))
+                    (setq profiler-started t)
+                    (message "[toggle-profile] CPU profiler ON"))
                   (unwind-protect
                       (apply orig-fn args)
                     (when decknix--trace-toggle
                       (decknix--trace-log "toggle RETURN"))
+                    (when profiler-started
+                      (profiler-cpu-stop)
+                      (setq decknix--profile-next-toggle nil)
+                      (when firstp
+                        (setq decknix--profile-first-toggle nil))
+                      (decknix--profile-show-report)
+                      (message
+                       "[toggle-profile] report ready in *decknix-toggle-profile*"))
                     (when firstp
                       (setq decknix--first-toggle-logged t)
                       (message
