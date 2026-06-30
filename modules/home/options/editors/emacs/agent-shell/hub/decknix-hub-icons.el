@@ -155,8 +155,9 @@ Bot family (right slot):
 Activity icons are suppressed for APPROVED PRs.
 
 Thread-aware Tier 1 suppression: when `total_threads' is present and
-greater than zero, human icons (↩/💬) are suppressed if `unresolved_threads'
-equals zero (all threads resolved). Bot icons (👽/🤖) are not suppressed.
+greater than zero, ALL activity icons (↩/💬 and 👽/🤖) are suppressed if
+`unresolved_threads' equals zero (all threads resolved). A bot trailing
+\"no suggestions\" leaves nothing actionable, so the rail clears.
 
 Returns a string of length 2 (padded with spaces) if any activity is present,
 else an empty string.  Honours `decknix--hub-symbol-style' (\"ascii\" uses
@@ -193,7 +194,9 @@ italic characters and weight)."
                             (decknix--hub-icon "💬" '(:foreground "#d7af5f"))
                           (propertize "i" 'face '(:foreground "#5fc8d4" :weight normal :slant italic))))
                        (t ""))))
-            (b (cond (bot-replies-to-me
+            (b (if all-resolved
+                    ""
+                  (cond (bot-replies-to-me
                       (if emoji-layout
                           (decknix--hub-icon "👽" '(:foreground "#af5f87" :weight bold))
                         (propertize "β" 'face '(:foreground "#af5f87" :weight bold))))
@@ -201,7 +204,7 @@ italic characters and weight)."
                       (if emoji-layout
                           (decknix--hub-icon "🤖" '(:foreground "#af5f87"))
                         (propertize "β" 'face '(:foreground "#af5f87" :weight normal))))
-                     (t ""))))
+                     (t "")))))  
         (if (and (string-empty-p h) (string-empty-p b))
             ""
           (concat (if (string-empty-p h) " " h)

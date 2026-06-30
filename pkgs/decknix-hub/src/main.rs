@@ -850,10 +850,13 @@ async fn fetch_pr_ci(
                     .unwrap_or(false);
                 // Bot activity at the head of the stream signals the author
                 // likely needs to push a fix (Codacy/CI/etc.) before further
-                // review makes sense.
+                // review makes sense.  However, if all inline threads are already
+                // resolved (or there are none), the bot's last comment is just a
+                // summary ("no suggestions") — nothing actionable, so clear the flag.
                 let bot_pending = activities.last()
                     .map(|(_, a)| *a == Actor::Bot)
-                    .unwrap_or(false);
+                    .unwrap_or(false)
+                    && threads.as_ref().map(|t| t.unresolved_to_me > 0).unwrap_or(true);
                 // A human replied *after* one of my comments — worth a look
                 // because they engaged with something I said specifically.
                 let replies_to_me = activities.iter()
@@ -1157,7 +1160,8 @@ async fn fetch_pr_details(
                     .unwrap_or(false);
                 let bot_pending = activities.last()
                     .map(|(_, a)| *a == Actor::Bot)
-                    .unwrap_or(false);
+                    .unwrap_or(false)
+                    && threads.as_ref().map(|t| t.unresolved_to_me > 0).unwrap_or(true);
                 let replies_to_me = activities.iter()
                     .rposition(|(_, a)| *a == Actor::Me)
                     .map(|i| activities.iter().skip(i + 1)

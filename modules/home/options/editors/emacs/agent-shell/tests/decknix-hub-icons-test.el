@@ -262,22 +262,26 @@ all 22 threads were resolved."
                     (decknix--hub-activity-icons pr))
                    "i "))))
 
-(ert-deftest decknix-hub-activity-icons--bot-pending-survives-resolution ()
-  "Bot icon still surfaces even when threads are all resolved.
-Bots commonly post top-level review comments (Codacy / CI / Copilot)
-that aren't tracked as inline threads."
+(ert-deftest decknix-hub-activity-icons--bot-pending-cleared-on-resolution ()
+  "Bot icon is suppressed when all threads are resolved.
+A bot trailing \"no suggestions\" leaves nothing actionable, so the rail clears."
   (let ((pr '((total_threads . 22)
               (unresolved_threads . 0)
               (bot_pending . t))))
-    (should (equal (decknix-test--icon-glyph
-                    (decknix--hub-activity-icons pr))
-                   " β"))))
+    (should (equal (decknix--hub-activity-icons pr) ""))))
 
-(ert-deftest decknix-hub-activity-icons--bot-reply-survives-resolution ()
-  "Bot reply icon still surfaces even when threads are all resolved."
+(ert-deftest decknix-hub-activity-icons--bot-reply-cleared-on-resolution ()
+  "Bot reply icon is suppressed when all threads are resolved."
   (let ((pr '((total_threads . 22)
               (unresolved_threads . 0)
               (bot_replies_to_me . t))))
+    (should (equal (decknix--hub-activity-icons pr) ""))))
+
+(ert-deftest decknix-hub-activity-icons--bot-pending-shows-when-unresolved ()
+  "Bot icon renders when unresolved_threads > 0 (actionable bot feedback)."
+  (let ((pr '((total_threads . 22)
+              (unresolved_threads . 3)
+              (bot_pending . t))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons pr))
                    " β"))))
