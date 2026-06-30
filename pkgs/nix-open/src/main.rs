@@ -333,32 +333,71 @@ fn try_emacs_frame(client: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// AppleScript that raises an already-running Emacs GUI process.
-///
-/// It MUST NOT use the `tell application "Emacs" to activate` form: that
-/// resolves "Emacs" via LaunchServices to the `Emacs.app` *bundle* and
-/// LAUNCHES a standalone app whenever the only running Emacs is the launchd
-/// daemon — a bare `bin/emacs --fg-daemon`, which is a different Mach-O from
-/// the bundle and so is not the registered "Emacs" application.  That spawned
-/// a slow, independent second Emacs alongside the daemon (the cold, mis-sorted
-/// sidebar window users actually ended up interacting with).
-///
-/// Instead this targets a System Events *process* (so it only ever manipulates
-/// already-running processes, never LaunchServices) and guards on `exists`, so
-/// it is a no-op when no Emacs GUI process is present.  Name matching is
-/// case-insensitive in AppleScript, so it raises the daemon whether its process
-/// registers as "Emacs" or "emacs".
-fn activate_applescript() -> &'static str {
-    "tell application \"System Events\" to if exists process \"Emacs\" \
-     then set frontmost of process \"Emacs\" to true"
+/// Parse the `pid = N` line out of `launchctl print` output.  Factored out so
+/// `daemon_pid` is unit-testable against a captured fixture without shelling
+/// out to launchd.
+fn parse_pid_from_launchctl_print(text: &str) -> Option<u32> {
+    for line in text.lines() {
+        if let Some(rest) = line.trim().strip_prefix("pid = ") {
+            return rest.trim().parse().ok();
+        }
+    }
+    None
 }
 
-/// Bring the running Emacs frame to the foreground.  The daemon runs with
-/// ProcessType=Background so macOS does not automatically raise its windows.
-/// Uses `activate_applescript`, which never launches the `Emacs.app` bundle.
-fn activate_emacs_app() {
+/// Look up the PID of the launchd-managed Emacs daemon.  Returns `None` if the
+/// service is not loaded or its `launchctl print` output cannot be parsed.
+///
+/// This is the only reliable way to target the daemon for AppleScript
+/// activation without going through LaunchServices: the daemon runs from a
+/// bare `bin/emacs --fg-daemon` (a different Mach-O from `Emacs.app`), so
+/// name-based queries are either wrong (`tell application "Emacs"` launches
+/// the bundle — see `handle_emacs_daemon_frame`) or catastrophically slow
+/// (`process "Emacs"` via System Events enumerates every running process by
+/// name and was observed to take >40 s on a populated session).  A
+/// PID-targeted activation is O(1) and bypasses both footguns.
+fn daemon_pid(uid: u32) -> Option<u32> {
+    let out = Command::new("launchctl")
+        .args(["print", &format!("gui/{}/org.nixos.emacs-server", uid)])
+        .output()
+        .ok()?;
+    parse_pid_from_launchctl_print(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// AppleScript that raises an already-running process by Unix PID.
+///
+/// Targeting `whose unix id is N` matters for two reasons:
+///   1. Speed — it is an O(1) lookup.  The previous name-based form
+///      (`process "Emacs"` via System Events) enumerated every running
+///      process and took ~46 s on a populated session, manifesting as
+///      `nix-open emacs` apparently hanging after `emacsclient` had already
+///      created the frame.
+///   2. Correctness — the launchd daemon is bare `bin/emacs --fg-daemon`,
+///      not the `Emacs.app` bundle, so any `tell application "Emacs"` form
+///      resolves via LaunchServices and launches a *second* standalone Emacs
+///      alongside the daemon.  A PID can only refer to a running process,
+///      so it can never trigger a bundle launch.
+///
+/// The `exists` guard makes the script a silent no-op if the PID has died
+/// between lookup and activation.
+fn activate_applescript_for_pid(pid: u32) -> String {
+    format!(
+        "tell application \"System Events\" to \
+         if exists (first process whose unix id is {pid}) \
+         then set frontmost of (first process whose unix id is {pid}) to true"
+    )
+}
+
+/// Bring the running launchd-managed Emacs daemon's frame to the foreground.
+/// The daemon runs with `ProcessType=Background` so macOS does not raise its
+/// windows automatically.  Activates by PID, never by name — see
+/// `activate_applescript_for_pid` for rationale.  Silently no-ops when the
+/// daemon PID cannot be resolved: there is nothing useful to activate, and we
+/// must not fall back to a name-based form that could launch the bundle.
+fn activate_emacs_app(uid: u32) {
+    let Some(pid) = daemon_pid(uid) else { return };
     let _ = Command::new("osascript")
-        .args(["-e", activate_applescript()])
+        .args(["-e", &activate_applescript_for_pid(pid)])
         .status();
 }
 
@@ -393,11 +432,12 @@ fn wait_for_emacs_daemon(client: &str, timeout_secs: u64) -> bool {
 /// and retries once the socket is ready.
 fn handle_emacs_daemon_frame() -> bool {
     let client = emacsclient_path();
+    let uid = unsafe { libc::getuid() };
     eprintln!("🖥️  Emacs: creating daemon frame via emacsclient");
 
     // First attempt: connect to the launchd-managed daemon (no `-a ""`).
     if try_emacs_frame(&client) {
-        activate_emacs_app();
+        activate_emacs_app(uid);
         eprintln!("   ✅ Emacs frame opened");
         return true;
     }
@@ -405,13 +445,12 @@ fn handle_emacs_daemon_frame() -> bool {
     // Daemon not answering — kickstart the launchd service and retry once
     // its socket is ready, rather than letting emacsclient orphan-spawn one.
     eprintln!("   ⏳ daemon not responding — kickstarting org.nixos.emacs-server");
-    let uid = unsafe { libc::getuid() };
     let _ = Command::new("launchctl")
         .args(launchctl_ensure_args(uid))
         .status();
 
     if wait_for_emacs_daemon(&client, 20) && try_emacs_frame(&client) {
-        activate_emacs_app();
+        activate_emacs_app(uid);
         eprintln!("   ✅ Emacs frame opened");
         return true;
     }
@@ -562,7 +601,7 @@ mod tests {
 
     #[test]
     fn activate_script_never_launches_the_app_bundle() {
-        let script = activate_applescript();
+        let script = activate_applescript_for_pid(99329);
         // Must NOT use the LaunchServices `tell application "Emacs"` form: with
         // only the daemon running, that launches a standalone Emacs.app bundle
         // (the orphan-app footgun), not the daemon frame.
@@ -570,13 +609,47 @@ mod tests {
             !script.contains("tell application \"Emacs\""),
             "activate must not target the Emacs.app bundle — it would launch it"
         );
-        // Must activate an already-running System Events process, guarded by an
-        // existence check so it is a no-op when no Emacs GUI process exists.
+        // Must target the daemon by PID, not by name.  Name-based
+        // (`process \"Emacs\"`) AppleScript enumerates every running process
+        // and was observed to take ~46 s on a populated session — the
+        // regression that made `nix-open emacs` appear to hang.  PID lookup
+        // is O(1) and can only refer to a running process, so it can never
+        // launch the bundle.
         assert!(script.contains("System Events"), "must use System Events");
         assert!(
-            script.contains("exists process \"Emacs\""),
-            "must guard on an existing process so it never launches the bundle"
+            !script.contains("process \"Emacs\""),
+            "must not enumerate processes by name — that path is O(n) and \
+             observed at 46s on populated sessions"
         );
+        assert!(
+            script.contains("unix id is 99329"),
+            "must target the daemon by Unix PID"
+        );
+        assert!(script.contains("exists"), "must guard on existence");
         assert!(script.contains("frontmost"), "must raise via frontmost");
+    }
+
+    #[test]
+    fn parses_pid_from_launchctl_print() {
+        // Captured shape of `launchctl print gui/$UID/org.nixos.emacs-server`
+        // — tab-indented `pid = N` line buried among many other fields.
+        let fixture = "gui/501/org.nixos.emacs-server = {\n\
+                       \tactive count = 5\n\
+                       \tstate = running\n\
+                       \tpid = 99329\n\
+                       \tlast exit code = 15\n\
+                       }\n";
+        assert_eq!(parse_pid_from_launchctl_print(fixture), Some(99329));
+    }
+
+    #[test]
+    fn pid_parser_returns_none_when_service_is_not_loaded() {
+        // launchctl print on an unloaded service prints to stderr and emits
+        // no `pid = ` line on stdout — parser must surface that as None.
+        assert_eq!(parse_pid_from_launchctl_print(""), None);
+        assert_eq!(
+            parse_pid_from_launchctl_print("Could not find service\n"),
+            None,
+        );
     }
 }
