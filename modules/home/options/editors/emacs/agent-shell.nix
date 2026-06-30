@@ -1762,6 +1762,7 @@ let
     ];
     testFiles = [
       "decknix-hub-worktree-persistence-test.el"
+      "decknix-hub-worktree-cache-test.el"
     ];
   };
 
