@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[derive(Parser)]
 #[command(name = "nix-open")]
@@ -287,38 +287,120 @@ fn app_source_label(app_path: &PathBuf) -> &'static str {
     }
 }
 
-/// Create a new Emacs GUI frame on the running daemon via emacsclient.
-///
-/// Uses `~/.nix-profile/bin/emacsclient` (reliable in GUI launcher contexts
-/// where PATH may not include Nix paths) with a PATH fallback.
-///
-/// Flags: `-a ""` (start daemon if not running), `-c` (new frame),
-/// `-n` (return immediately — no shell prompt wait).
-fn handle_emacs_daemon_frame() -> bool {
+/// Resolve the `emacsclient` binary, preferring the Nix profile copy
+/// (reliable in GUI launcher contexts where PATH may not include Nix paths)
+/// with a bare-name PATH fallback.
+fn emacsclient_path() -> String {
     let home = dirs::home_dir().unwrap_or_default();
     let nix_client = home.join(".nix-profile/bin/emacsclient");
-    let client = if nix_client.exists() {
+    if nix_client.exists() {
         nix_client.to_string_lossy().into_owned()
     } else {
         "emacsclient".to_string()
-    };
-    eprintln!("🖥️  Emacs: creating daemon frame via emacsclient");
-    match Command::new(&client).args(["-a", "", "-c", "-n"]).status() {
-        Ok(s) if s.success() => {
-            // Bring the Emacs frame to the foreground.  The daemon runs with
-            // ProcessType=Background so macOS does not automatically raise its
-            // windows; an explicit AppleScript activate call is required.
-            let _ = Command::new("osascript")
-                .args(["-e", "tell application \"Emacs\" to activate"])
-                .status();
-            eprintln!("   ✅ Emacs frame opened");
-            true
-        }
-        _ => {
-            eprintln!("   ❌ emacsclient failed — is the daemon running?");
-            false
-        }
     }
+}
+
+/// `emacsclient` arguments to create a new GUI frame on the running daemon:
+/// `-c` (new frame), `-n` (return immediately — no shell prompt wait).
+///
+/// Deliberately omits the `-a ""` alternate-editor fallback.  `-a ""` makes
+/// emacsclient spawn an *unmanaged* `emacs --daemon` whenever the launchd
+/// server is momentarily down — leaking orphan daemons that launchd never
+/// reaps (the historical source of runaway Emacs processes).  We connect to
+/// the launchd-managed daemon only, and kickstart that service explicitly
+/// when it is not answering (see `handle_emacs_daemon_frame`).
+fn emacsclient_frame_args() -> &'static [&'static str] {
+    &["-c", "-n"]
+}
+
+/// `launchctl` arguments that ensure the launchd-managed Emacs daemon is
+/// running.  `kickstart` (without `-k`) starts the service if it is not
+/// running and is a no-op if it already is — so it never kills a healthy
+/// daemon, unlike `kickstart -k`.
+fn launchctl_ensure_args(uid: u32) -> Vec<String> {
+    vec![
+        "kickstart".to_string(),
+        format!("gui/{}/org.nixos.emacs-server", uid),
+    ]
+}
+
+/// Attempt to create the GUI frame.  Returns true on success.
+fn try_emacs_frame(client: &str) -> bool {
+    Command::new(client)
+        .args(emacsclient_frame_args())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Bring the Emacs frame to the foreground.  The daemon runs with
+/// ProcessType=Background so macOS does not automatically raise its windows;
+/// an explicit AppleScript activate call is required.
+fn activate_emacs_app() {
+    let _ = Command::new("osascript")
+        .args(["-e", "tell application \"Emacs\" to activate"])
+        .status();
+}
+
+/// Return true once the launchd Emacs daemon answers an `emacsclient` eval.
+/// Polls up to `timeout_secs`.  Uses a no-op eval (`-e t`) WITHOUT `-a ""`,
+/// so it never spawns a daemon — it only detects when the kickstarted server
+/// has finished initialising and opened its socket.
+fn wait_for_emacs_daemon(client: &str, timeout_secs: u64) -> bool {
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(timeout_secs);
+    while std::time::Instant::now() < deadline {
+        let ready = Command::new(client)
+            .args(["-e", "t"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ready {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    false
+}
+
+/// Create a new Emacs GUI frame on the launchd-managed daemon.
+///
+/// Never spawns an unmanaged orphan daemon: it connects to the existing
+/// launchd server, and if that server is not answering it kickstarts
+/// `org.nixos.emacs-server` (launchd-managed, so it is supervised and reaped)
+/// and retries once the socket is ready.
+fn handle_emacs_daemon_frame() -> bool {
+    let client = emacsclient_path();
+    eprintln!("🖥️  Emacs: creating daemon frame via emacsclient");
+
+    // First attempt: connect to the launchd-managed daemon (no `-a ""`).
+    if try_emacs_frame(&client) {
+        activate_emacs_app();
+        eprintln!("   ✅ Emacs frame opened");
+        return true;
+    }
+
+    // Daemon not answering — kickstart the launchd service and retry once
+    // its socket is ready, rather than letting emacsclient orphan-spawn one.
+    eprintln!("   ⏳ daemon not responding — kickstarting org.nixos.emacs-server");
+    let uid = unsafe { libc::getuid() };
+    let _ = Command::new("launchctl")
+        .args(launchctl_ensure_args(uid))
+        .status();
+
+    if wait_for_emacs_daemon(&client, 20) && try_emacs_frame(&client) {
+        activate_emacs_app();
+        eprintln!("   ✅ Emacs frame opened");
+        return true;
+    }
+
+    eprintln!(
+        "   ❌ org.nixos.emacs-server did not come up — try: \
+         launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server"
+    );
+    false
 }
 
 fn handle_open_app(name: &str, restart: bool, new_instance: bool) -> bool {
@@ -424,5 +506,37 @@ fn main() {
         if !all_ok {
             std::process::exit(1);
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_args_never_use_alternate_editor() {
+        // The orphan-daemon footgun is the `-a ""` alternate-editor fallback;
+        // it must never be present, or a down launchd server gets shadowed by
+        // an unmanaged `emacs --daemon`.
+        let args = emacsclient_frame_args();
+        assert!(!args.contains(&"-a"), "frame args must not include -a");
+        assert_eq!(args, &["-c", "-n"]);
+    }
+
+    #[test]
+    fn launchctl_targets_the_launchd_emacs_service() {
+        assert_eq!(
+            launchctl_ensure_args(501),
+            vec![
+                "kickstart".to_string(),
+                "gui/501/org.nixos.emacs-server".to_string(),
+            ]
+        );
+        // `kickstart` (no `-k`) so a healthy daemon is never killed/restarted.
+        assert!(
+            !launchctl_ensure_args(501).contains(&"-k".to_string()),
+            "ensure must not force-restart with -k"
+        );
     }
 }
