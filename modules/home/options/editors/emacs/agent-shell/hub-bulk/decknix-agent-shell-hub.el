@@ -1511,6 +1511,20 @@ first sidebar render after restart needs a warm cache."
   :type 'integer
   :group 'decknix)
 
+(defcustom decknix-hub-worktree-clones-cache-ttl 5
+  "TTL (seconds) for memoised `decknix--hub-worktree-discover-clones'.
+Coalesces the N+1 burst of discovery calls that fires during a
+single sidebar render: every row's worktree badge invokes
+`decknix-hub-worktree-primary' / `-find', which in turn call
+`discover-clones' once each when the registry's `:primary' field
+is missing -- ~50 calls × ~290 ms each, ~15 s of UI freeze on a
+46-row sidebar.  A short TTL is enough to coalesce one render's
+worth of calls into a single compute while still picking up state
+changes (new clone, async probe result) on the next render pass.
+Set to 0 to disable memoisation."
+  :type 'number
+  :group 'decknix)
+
 (defvar decknix--hub-worktree-cache (make-hash-table :test 'equal)
   "Worktree registry: \"owner/repo\" -> plist (:primary :worktrees :ts :stale).
 See `specs/sidebar-ret.md' §3.6.1 for the on-disk format.")
@@ -1533,6 +1547,13 @@ Prevents duplicate git probes for the same directory.")
 (defvar decknix--hub-worktree-clone-map-file
   (expand-file-name "~/.config/decknix/hub/worktree-clones.el")
   "Persistence file for `decknix--hub-worktree-clone-map'.")
+
+(defvar decknix--hub-worktree-clones-cache nil
+  "Cons (TIMESTAMP . ALIST) memoising `decknix--hub-worktree-discover-clones'.
+TIMESTAMP is a `float-time' moment; ALIST is the return value of
+`decknix--hub-worktree-discover-clones--compute' as of that moment.
+See `decknix-hub-worktree-clones-cache-ttl' for the freshness window
+and `decknix-hub-worktree-clones-cache-invalidate' for the bust verb.")
 
 (defun decknix--hub-worktree-clone-map-save ()
   "Persist the worktree clone map to disk."
@@ -1648,8 +1669,9 @@ overrides from `decknix-hub-clones' can override later in the merge."
       (error nil))
     out))
 
-(defun decknix--hub-worktree-discover-clones ()
-  "Return alist (REPO . PRIMARY-PATH) by merging discovery sources.
+(defun decknix--hub-worktree-discover-clones--compute ()
+  "Uncached body of `decknix--hub-worktree-discover-clones'.
+Return alist (REPO . PRIMARY-PATH) by merging discovery sources.
 Priority: explicit `decknix-hub-clones' > cached `:primary' >
 `agent-sessions.json' workspaces > `project.el' known projects.
 All paths are normalised via `expand-file-name' so downstream
@@ -1689,6 +1711,30 @@ All paths are normalised via `expand-file-name' so downstream
               (push (cons repo path) out))))))
     (nreverse out)))
 
+(defun decknix-hub-worktree-clones-cache-invalidate ()
+  "Drop the memoised `decknix--hub-worktree-discover-clones' result.
+Called by mutators (`decknix-hub-worktree-registry-refresh' and any
+future verb that adds/removes a clone) so the next render observes
+fresh state immediately rather than waiting for TTL expiry."
+  (setq decknix--hub-worktree-clones-cache nil))
+
+(defun decknix--hub-worktree-discover-clones ()
+  "Return alist (REPO . PRIMARY-PATH), short-TTL memoised.
+Thin cached wrapper around
+`decknix--hub-worktree-discover-clones--compute'.  See
+`decknix-hub-worktree-clones-cache-ttl' for the freshness window
+and the rationale for memoising at all."
+  (let* ((ttl decknix-hub-worktree-clones-cache-ttl)
+         (cache decknix--hub-worktree-clones-cache)
+         (ts (car-safe cache))
+         (now (float-time)))
+    (if (and (numberp ttl) (> ttl 0)
+             (numberp ts) (< (- now ts) ttl))
+        (cdr cache)
+      (let ((fresh (decknix--hub-worktree-discover-clones--compute)))
+        (setq decknix--hub-worktree-clones-cache (cons now fresh))
+        fresh))))
+
 (defun decknix--hub-worktree--handle-probe-result (proc repo primary)
   "Sentinel target: parse PROC output, update cache for REPO @ PRIMARY.
 Split out so the sentinel closure stays small (backquote capture under
@@ -1719,7 +1765,12 @@ dynamic binding is expensive for large bodies — same reasoning as
                            :worktrees wts
                            :ts (float-time)
                            :stale nil)
-                     decknix--hub-worktree-cache)))))
+                     decknix--hub-worktree-cache))))
+        ;; Fresh `:primary' / `:worktrees' just landed in the underlying
+        ;; cache that `discover-clones--compute' reads via `maphash';
+        ;; drop the memo so the next render observes it immediately
+        ;; instead of waiting for TTL expiry.
+        (decknix-hub-worktree-clones-cache-invalidate))
     (remhash repo decknix--hub-worktree-pending)
     (when (buffer-live-p (process-buffer proc))
       (kill-buffer (process-buffer proc)))
