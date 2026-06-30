@@ -333,12 +333,32 @@ fn try_emacs_frame(client: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Bring the Emacs frame to the foreground.  The daemon runs with
-/// ProcessType=Background so macOS does not automatically raise its windows;
-/// an explicit AppleScript activate call is required.
+/// AppleScript that raises an already-running Emacs GUI process.
+///
+/// It MUST NOT use the `tell application "Emacs" to activate` form: that
+/// resolves "Emacs" via LaunchServices to the `Emacs.app` *bundle* and
+/// LAUNCHES a standalone app whenever the only running Emacs is the launchd
+/// daemon — a bare `bin/emacs --fg-daemon`, which is a different Mach-O from
+/// the bundle and so is not the registered "Emacs" application.  That spawned
+/// a slow, independent second Emacs alongside the daemon (the cold, mis-sorted
+/// sidebar window users actually ended up interacting with).
+///
+/// Instead this targets a System Events *process* (so it only ever manipulates
+/// already-running processes, never LaunchServices) and guards on `exists`, so
+/// it is a no-op when no Emacs GUI process is present.  Name matching is
+/// case-insensitive in AppleScript, so it raises the daemon whether its process
+/// registers as "Emacs" or "emacs".
+fn activate_applescript() -> &'static str {
+    "tell application \"System Events\" to if exists process \"Emacs\" \
+     then set frontmost of process \"Emacs\" to true"
+}
+
+/// Bring the running Emacs frame to the foreground.  The daemon runs with
+/// ProcessType=Background so macOS does not automatically raise its windows.
+/// Uses `activate_applescript`, which never launches the `Emacs.app` bundle.
 fn activate_emacs_app() {
     let _ = Command::new("osascript")
-        .args(["-e", "tell application \"Emacs\" to activate"])
+        .args(["-e", activate_applescript()])
         .status();
 }
 
@@ -538,5 +558,25 @@ mod tests {
             !launchctl_ensure_args(501).contains(&"-k".to_string()),
             "ensure must not force-restart with -k"
         );
+    }
+
+    #[test]
+    fn activate_script_never_launches_the_app_bundle() {
+        let script = activate_applescript();
+        // Must NOT use the LaunchServices `tell application "Emacs"` form: with
+        // only the daemon running, that launches a standalone Emacs.app bundle
+        // (the orphan-app footgun), not the daemon frame.
+        assert!(
+            !script.contains("tell application \"Emacs\""),
+            "activate must not target the Emacs.app bundle — it would launch it"
+        );
+        // Must activate an already-running System Events process, guarded by an
+        // existence check so it is a no-op when no Emacs GUI process exists.
+        assert!(script.contains("System Events"), "must use System Events");
+        assert!(
+            script.contains("exists process \"Emacs\""),
+            "must guard on an existing process so it never launches the bundle"
+        );
+        assert!(script.contains("frontmost"), "must raise via frontmost");
     }
 }
