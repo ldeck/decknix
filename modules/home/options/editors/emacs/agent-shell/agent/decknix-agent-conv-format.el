@@ -47,11 +47,14 @@
                   "decknix-agent-session-workspace" (conv-key))
 (declare-function decknix--agent-session-time-ago
                   "decknix-agent-format" (iso-time))
+(declare-function decknix-agent-provider-glyph-for-session
+                  "decknix-agent-provider" (session))
 
 (defun decknix--agent-conversation-preview (conv-group)
   "Format a one-line preview for a conversation CONV-GROUP.
 CONV-GROUP is (CONV-KEY LATEST-SESSION ALL-SESSIONS).
-Shows: id  age  exchanges  preview [tags] (N sessions) @workspace"
+Prefixed with the latest session's provider glyph (A/C/P).
+Shows: glyph id  age  exchanges  preview [tags] (N sessions) @workspace"
   (let* ((conv-key (car conv-group))
          (latest (cadr conv-group))
          (all (caddr conv-group))
@@ -76,7 +79,8 @@ Shows: id  age  exchanges  preview [tags] (N sessions) @workspace"
                                  abbr)))
                    ""))
          (truncated (truncate-string-to-width (or preview "") 50 nil nil "...")))
-    (format "%-8s  %-8s  %4dx  %s%s%s%s"
+    (format "%s %-8s  %-8s  %4dx  %s%s%s%s"
+            (decknix-agent-provider-glyph-for-session latest)
             (substring id 0 (min 8 (length id)))
             (if modified (decknix--agent-session-time-ago modified) "?")
             exchanges

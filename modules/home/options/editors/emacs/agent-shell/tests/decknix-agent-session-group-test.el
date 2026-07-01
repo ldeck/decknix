@@ -36,6 +36,10 @@
   (defun decknix--agent-conv-last-accessed (_key) nil))
 (unless (fboundp 'decknix--agent-tags-for-session)
   (defun decknix--agent-tags-for-session (_id) nil))
+;; live-label now prefixes a provider glyph resolved from the buffer's
+;; provider id; the real helper lives in `decknix-agent-provider'.
+(unless (fboundp 'decknix-agent-provider-glyph-for-buffer)
+  (defun decknix-agent-provider-glyph-for-buffer (_buf) "A"))
 
 ;; Buffer-local defvars owned by main-bulk; given a default value here
 ;; (per AGENTS.md note on hub-data vars) so that `buffer-local-value'
@@ -131,7 +135,16 @@
   (with-temp-buffer
     (rename-buffer "*Auggie: alone*" t)
     (let ((label (decknix--agent-session-live-label (current-buffer))))
-      (should (string= "*Auggie: alone*" label)))))
+      (should (string= "A *Auggie: alone*" label)))))
+
+(ert-deftest decknix-agent-session-group/live-label-prefixes-provider-glyph ()
+  "The label starts with the buffer's provider glyph + a space."
+  (with-temp-buffer
+    (rename-buffer "*Claude: x*" t)
+    (cl-letf (((symbol-function 'decknix-agent-provider-glyph-for-buffer)
+               (lambda (_) "C")))
+      (should (string-prefix-p
+               "C " (decknix--agent-session-live-label (current-buffer)))))))
 
 (ert-deftest decknix-agent-session-group/live-label-with-workspace ()
   "Workspace short-name is appended after the em-dash."

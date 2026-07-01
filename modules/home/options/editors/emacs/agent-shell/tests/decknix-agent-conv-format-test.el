@@ -30,6 +30,10 @@
   (defun decknix--agent-workspace-for-conv-key (_key) nil))
 (unless (fboundp 'decknix--agent-session-time-ago)
   (defun decknix--agent-session-time-ago (_iso) "5m ago"))
+;; conversation-preview now prefixes a provider glyph resolved from the
+;; latest session's providerId; real helper lives in decknix-agent-provider.
+(unless (fboundp 'decknix-agent-provider-glyph-for-session)
+  (defun decknix-agent-provider-glyph-for-session (_s) "A"))
 
 (defun decknix-agent-conv-format-test--session
     (&optional sid first-msg exchanges modified)
@@ -51,7 +55,7 @@ suffixes when tags / workspace are absent."
   (let* ((g (decknix-agent-conv-format-test--group
              (decknix-agent-conv-format-test--session)))
          (line (decknix--agent-conversation-preview g)))
-    (should (string-prefix-p "abcd1234" line))
+    (should (string-prefix-p "A abcd1234" line))
     (should (string-match-p "5m ago" line))
     (should (string-match-p "  7x" line))
     (should (string-match-p "Refactor the login flow" line))
@@ -102,7 +106,16 @@ conversation re-tags every snapshot in the row."
   (let* ((g (decknix-agent-conv-format-test--group
              (decknix-agent-conv-format-test--session "abc")))
          (line (decknix--agent-conversation-preview g)))
-    (should (string-prefix-p "abc " line))))
+    (should (string-prefix-p "A abc " line))))
+
+(ert-deftest decknix-agent-conv-format/preview-prefixes-provider-glyph ()
+  "Conversation preview starts with the latest session's provider glyph."
+  (cl-letf (((symbol-function 'decknix-agent-provider-glyph-for-session)
+             (lambda (_) "C")))
+    (let* ((g (decknix-agent-conv-format-test--group
+               (decknix-agent-conv-format-test--session))))
+      (should (string-prefix-p
+               "C " (decknix--agent-conversation-preview g))))))
 
 (ert-deftest decknix-agent-conv-format/preview-counts-multi-session ()
   "Group with N>1 sessions renders ` (N sessions)' suffix."
