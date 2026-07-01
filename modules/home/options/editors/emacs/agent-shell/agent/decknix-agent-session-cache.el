@@ -513,6 +513,20 @@ in a background subprocess."
 ;; Public cache read
 ;; ---------------------------------------------------------------------------
 
+(defun decknix--session-stamp-provider-id (provider-id sessions)
+  "Return SESSIONS with (providerId . PROVIDER-ID) ensured on each alist.
+The list-refresh parse paths stamp `filePath' but not `providerId'
+(only `decknix--session-meta', used by compose-history, does).  Stamping
+here — where the provider is known — lets the picker, grep and sidebar
+resolve a session's backend (glyph, provider filter) with no per-session
+disk probe.  Entries already carrying `providerId' are returned as-is;
+others get a fresh cons head, so callers must use the returned list."
+  (mapcar (lambda (s)
+            (if (or (not (listp s)) (alist-get 'providerId s))
+                s
+              (cons (cons 'providerId provider-id) s)))
+          sessions))
+
 (defun decknix--agent-session-list (&optional provider-id)
   "Return cached sessions.
 If PROVIDER-ID is non-nil, return sessions for that provider.
@@ -520,7 +534,11 @@ If PROVIDER-ID is nil, return sessions for ALL registered providers,
 merged and sorted newest-first.
 On first call (empty cache) or after cache invalidation, blocks briefly
 for a synchronous mtime-keyed refresh (fast on a warm cache).
-Triggers an async mtime-keyed refresh when the cache is stale."
+Triggers an async mtime-keyed refresh when the cache is stale.
+
+Every returned session carries `providerId' (stamped once via
+`decknix--session-stamp-provider-id' and written back) so downstream
+callers can render a provider glyph and filter by provider."
   (if provider-id
       (let ((cache (gethash provider-id decknix--agent-session-cache-map))
             (time (or (gethash provider-id decknix--agent-session-cache-time-map) 0)))
@@ -529,7 +547,14 @@ Triggers an async mtime-keyed refresh when the cache is stale."
                 time (gethash provider-id decknix--agent-session-cache-time-map)))
         (when (> (- (float-time) time) decknix--agent-session-cache-ttl)
           (decknix--agent-session-refresh-async provider-id))
-        (or cache (gethash provider-id decknix--agent-session-cache-map)))
+        (let ((result (or cache (gethash provider-id decknix--agent-session-cache-map))))
+          ;; Ensure providerId is present.  Cheap O(1) check on the head
+          ;; (entries are stamped as a batch); stamp + write back once so
+          ;; subsequent reads (e.g. per-keystroke grep) are no-ops.
+          (when (and result (not (alist-get 'providerId (car result))))
+            (setq result (decknix--session-stamp-provider-id provider-id result))
+            (puthash provider-id result decknix--agent-session-cache-map))
+          result))
     (decknix--agent-session-list-all)))
 
 (defun decknix--agent-session-list-all ()

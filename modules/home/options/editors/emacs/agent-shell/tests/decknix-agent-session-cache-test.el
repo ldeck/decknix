@@ -271,6 +271,42 @@ fallback path (sessionId + dir + ext) still writes to the mtime cache."
                 ((symbol-function 'decknix--agent-session-refresh-async) (lambda (&rest _args) nil)))
         (let ((result (decknix--agent-session-list 'test-auggie)))
           (should (= sync-called 1))
-          (should (equal result '((stub)))))))))
+          ;; The reader stamps providerId on every returned session so
+          ;; the picker/grep/sidebar can render a glyph + filter.
+          (should (eq (alist-get 'providerId (car result)) 'test-auggie)))))))
+
+;; ---------------------------------------------------------------------------
+;; providerId stamping — the list-refresh parse paths stamp filePath but
+;; NOT providerId (only decknix--session-meta does, and only compose-history
+;; uses that).  decknix--agent-session-list must guarantee providerId so
+;; glyph rendering + provider filtering work in the pickers.
+;; ---------------------------------------------------------------------------
+
+(ert-deftest decknix-session-stamp-provider-id--stamps-missing ()
+  "Sessions lacking providerId get it; those with it are untouched."
+  (let* ((a '((sessionId . "a")))
+         (b '((sessionId . "b") (providerId . claude-code)))
+         (out (decknix--session-stamp-provider-id 'auggie (list a b))))
+    (should (eq (alist-get 'providerId (nth 0 out)) 'auggie))
+    ;; Pre-existing providerId is preserved, not overwritten.
+    (should (eq (alist-get 'providerId (nth 1 out)) 'claude-code))))
+
+(ert-deftest decknix-agent-session-list--stamps-provider-id-and-writes-back ()
+  "A warm cache of unstamped sessions is stamped on read + written back."
+  (decknix-agent-session-cache-test--with-provider
+    ;; Warm cache: entries lack providerId, cache-time is fresh so no
+    ;; refresh runs.
+    (puthash 'test-auggie
+             (list '((sessionId . "s1")) '((sessionId . "s2")))
+             decknix--agent-session-cache-map)
+    (puthash 'test-auggie (float-time) decknix--agent-session-cache-time-map)
+    (let ((result (decknix--agent-session-list 'test-auggie)))
+      (should (eq (alist-get 'providerId (nth 0 result)) 'test-auggie))
+      (should (eq (alist-get 'providerId (nth 1 result)) 'test-auggie))
+      ;; Written back: the cache map now holds the stamped list too.
+      (should (eq (alist-get 'providerId
+                             (car (gethash 'test-auggie
+                                           decknix--agent-session-cache-map)))
+                  'test-auggie)))))
 
 (provide 'decknix-agent-session-cache-test)
