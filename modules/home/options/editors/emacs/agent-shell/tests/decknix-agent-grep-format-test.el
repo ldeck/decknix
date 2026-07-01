@@ -31,6 +31,10 @@
   (defun decknix--agent-tags-for-conv-key (_key) nil))
 (unless (fboundp 'decknix--agent-session-time-ago)
   (defun decknix--agent-session-time-ago (_iso) "5m ago"))
+;; grep candidates now prefix a provider glyph resolved from the
+;; session's providerId; real helper lives in decknix-agent-provider.
+(unless (fboundp 'decknix-agent-provider-glyph-for-session)
+  (defun decknix-agent-provider-glyph-for-session (_s) "A"))
 (unless (fboundp 'decknix--agent-session-group-by-conversation)
   ;; Default: each session in its own one-element group, conv-key is
   ;; the first word of the firstUserMessage.
@@ -55,7 +59,7 @@
   "Candidate is `<sid8>  <ago>  <Nx>  <msg>' with no tags."
   (let* ((s (decknix-agent-grep-format-test--session))
          (line (decknix--agent-session-grep-candidate s)))
-    (should (string-prefix-p "abcd1234" line))
+    (should (string-prefix-p "A abcd1234" line))
     (should (string-match-p "5m ago" line))
     (should (string-match-p "  7x" line))
     (should (string-match-p "Refactor the login flow" line))
@@ -96,7 +100,15 @@
   "Session id shorter than 8 chars uses only the available chars."
   (let* ((s (decknix-agent-grep-format-test--session "abc"))
          (line (decknix--agent-session-grep-candidate s)))
-    (should (string-prefix-p "abc " line))))
+    (should (string-prefix-p "A abc " line))))
+
+(ert-deftest decknix-agent-grep-format/candidate-prefixes-provider-glyph ()
+  "Grep candidate starts with the session's provider glyph + a space."
+  (cl-letf (((symbol-function 'decknix-agent-provider-glyph-for-session)
+             (lambda (_) "C")))
+    (should (string-prefix-p
+             "C " (decknix--agent-session-grep-candidate
+                   (decknix-agent-grep-format-test--session))))))
 
 ;; -- grep-build-entries -------------------------------------------
 
@@ -131,7 +143,7 @@
                        (list latest older) nil))
              (cand (caar entries)))
         (should (string-match-p "(2 sessions)" cand))
-        (should (string-prefix-p "newer" cand))))))
+        (should (string-prefix-p "A newer" cand))))))
 
 (ert-deftest decknix-agent-grep-format/entries-collapsed-uses-conv-tags ()
   "Collapsed entries use `tags-for-conv-key', not `tags-for-session'."

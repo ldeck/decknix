@@ -49,6 +49,8 @@
                   "decknix-agent-conv-recency" (conv-key))
 (declare-function decknix--agent-tags-for-session
                   "decknix-agent-tags-read" (session-id))
+(declare-function decknix-agent-provider-glyph-for-buffer
+                  "decknix-agent-provider" (buf))
 
 ;; Buffer-local defvars owned by `decknix-agent-shell-main'; declared
 ;; here so the byte-compiler knows they are special variables that we
@@ -115,7 +117,10 @@ not just augment writing to the session file."
                     (mapconcat (lambda (tg) (format "#%s" tg))
                                tags " ")))
          (detail (string-join (delq nil (list ws-short tag-str)) "  ")))
-    (format "%s%s"
+    ;; Prefix the provider glyph (A/C/P) so the agent type is visible in
+    ;; the switcher / picker Live section, mirroring the sidebar rows.
+    (format "%s %s%s"
+            (decknix-agent-provider-glyph-for-buffer buf)
             (buffer-name buf)
             (if (string-empty-p detail) ""
               (format "  — %s" detail)))))

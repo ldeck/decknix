@@ -53,9 +53,12 @@
 (declare-function decknix--agent-session-group-by-conversation
                   "decknix-agent-session-group"
                   (sessions &optional include-hidden))
+(declare-function decknix-agent-provider-glyph-for-session
+                  "decknix-agent-provider" (session))
 
 (defun decknix--agent-session-grep-candidate (session)
-  "Build a candidate string for SESSION in grep results."
+  "Build a candidate string for SESSION in grep results.
+Prefixed with the session's provider glyph (A/C/P)."
   (let* ((id (alist-get 'sessionId session))
          (modified (alist-get 'modified session))
          (exchanges (alist-get 'exchangeCount session 0))
@@ -68,7 +71,8 @@
                      "?"))
          (msg-preview (truncate-string-to-width
                        (or preview "") 80 nil nil "...")))
-    (format "%-8s  %-8s  %4dx%s  %s"
+    (format "%s %-8s  %-8s  %4dx%s  %s"
+            (decknix-agent-provider-glyph-for-session session)
             (substring id 0 (min 8 (length id)))
             time-ago exchanges tag-str msg-preview)))
 
@@ -103,7 +107,8 @@ Otherwise collapse by conversation."
                                    "?"))
                        (msg-preview (truncate-string-to-width
                                      (or preview "") 80 nil nil "...")))
-                  (cons (format "%-8s  %-8s  %4dx%s%s  %s"
+                  (cons (format "%s %-8s  %-8s  %4dx%s%s  %s"
+                                (decknix-agent-provider-glyph-for-session latest)
                                 (substring id 0 (min 8 (length id)))
                                 time-ago exchanges tag-str count-str
                                 msg-preview)
