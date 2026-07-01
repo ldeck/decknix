@@ -12,6 +12,7 @@ The `C-c A` prefix is labelled "Agent" in which-key.
 | In-buffer | Global | Action |
 |-----------|--------|--------|
 | `C-c s` | `C-c A s` | Session picker (live + saved + new) |
+| — | `C-c A g` | Grep sessions (full-text search across all history) |
 | `C-c q` | `C-c A q` | Quit session (saves automatically) |
 | `C-c h` | `C-c A h` | View history (current session or pick) |
 | `C-c H` | `C-c A H` | View history (always pick) |
@@ -20,6 +21,21 @@ The `C-c A` prefix is labelled "Agent" in which-key.
 | — | `C-c A n` | Force new session |
 | — | `C-c A k` | Interrupt agent |
 | `C-c b` | `C-c A b` | Switch agent buffer (live only) — MRU order, status-coloured |
+
+### In-Picker Keys
+
+Every session-facing picker (`C-c A s`, `C-c A b`, `C-c A g`) prefixes
+each row with a **provider glyph** — `A` Auggie, `C` Claude, `P` Pi —
+and shares a set of picker-local action keys:
+
+| Key | Action |
+|-----|--------|
+| `M-a` / `M-c` / `M-p` | Toggle visibility of Auggie / Claude / Pi rows (filter is shared across all three pickers; not persisted) |
+| `M-w` | Toggle workspace filter (all workspaces ↔ the calling buffer's workspace); active filter shows in the prompt as `[~/path/to/ws]` |
+| `C-SPC` | Mark row for batch action |
+| `C-k` | Kill highlighted live session buffer(s) |
+| `C-d` | Delete saved / previous session from disk and metadata |
+| `C-u` | Expand (per-picker; e.g. `C-u C-c A s` shows every saved snapshot instead of one-per-conversation) |
 
 
 ## Input & Editing
