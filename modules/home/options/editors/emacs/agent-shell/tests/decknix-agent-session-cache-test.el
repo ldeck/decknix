@@ -6,6 +6,12 @@
 (unless (fboundp 'decknix--agent-session-parse)
   (defun decknix--agent-session-parse (_raw) nil))
 
+;; `decknix--session-parse-file' parses the bare single-object jq output
+;; via `decknix--agent-session-parse-object' (the array parser above only
+;; accepts `[...]').  The parse module isn't loaded here, so stub it.
+(unless (fboundp 'decknix--agent-session-parse-object)
+  (defun decknix--agent-session-parse-object (_raw) nil))
+
 (require 'decknix-agent-session-cache)
 (require 'decknix-agent-provider)
 
@@ -170,7 +176,7 @@ never by parsing transcripts or refreshing the cache."
                (lambda (_) "/tmp/dummy.jq"))
               ((symbol-function 'shell-command-to-string)
                (lambda (_) "{\"sessionId\":\"sid-42\"}"))
-              ((symbol-function 'decknix--agent-session-parse)
+              ((symbol-function 'decknix--agent-session-parse-object)
                (lambda (raw) (ignore raw) '((sessionId . "sid-42")))))
       (let ((result (decknix--session-parse-file 'test-auggie "/tmp/sid-42.json")))
         (should (equal (alist-get 'sessionId result) "sid-42"))

@@ -54,6 +54,7 @@
 ;; Forward declaration: parser lives in sibling `decknix-agent-parse',
 ;; loaded by the heredoc immediately before this module.
 (declare-function decknix--agent-session-parse "decknix-agent-parse" (raw))
+(declare-function decknix--agent-session-parse-object "decknix-agent-parse" (raw))
 
 ;; Forward declaration: the path builder lives in sibling
 ;; `decknix-agent-session-history' (which itself requires this module
@@ -158,11 +159,13 @@ When MAX is non-nil, limit to at most MAX files via `head'."
 
 (defun decknix--session-parse-file (provider-id path)
   "Extract session metadata from PATH for PROVIDER-ID.
-Returns a parsed alist via `decknix--agent-session-parse', stamped
-with (filePath . PATH) so `decknix--session-store-parsed' can write
-the correct mtime-cache entry for multi-project providers (e.g.,
-claude-code) whose session files live under a project-hash sub-directory
-and cannot be reconstructed from sessionId + sessions-dir alone.
+Returns a parsed alist via `decknix--agent-session-parse-object' (the
+per-file jq path emits one bare `{...}' object, which the array parser
+`decknix--agent-session-parse' rejects), stamped with (filePath . PATH)
+so `decknix--session-store-parsed' can write the correct mtime-cache
+entry for multi-project providers (e.g., claude-code) whose session
+files live under a project-hash sub-directory and cannot be
+reconstructed from sessionId + sessions-dir alone.
 Returns nil on parse failure."
   (let* ((jqf (decknix--agent-session-ensure-jq-filter provider-id))
          (ext (decknix-agent-provider-session-file-extension provider-id))
@@ -174,7 +177,7 @@ Returns nil on parse failure."
                        (shell-quote-argument jqf)
                        " " (shell-quote-argument path)
                        " 2>/dev/null")))
-         (data (decknix--agent-session-parse raw)))
+         (data (decknix--agent-session-parse-object raw)))
     (when data
       ;; Stamp filePath so decknix--session-store-parsed can key the mtime
       ;; cache on the real absolute path regardless of provider layout.
