@@ -8,10 +8,12 @@ Build and activate your configuration.
 Usage: decknix switch [OPTIONS]
 
 Options:
-    --dry-run          Build only — don't activate
-    --force            Bypass the preflight equality check and always activate
-    --dev              Use local framework checkout instead of pinned remote
-    --dev-path <PATH>  Explicit path to local decknix checkout (implies --dev)
+    --dry-run                    Build only — don't activate
+    --force                      Bypass the preflight equality check and always activate
+    --override <INPUT=PATH>      Override a flake input with a local path (repeatable)
+    --no-overrides               Ignore [switch.overrides] in settings.toml
+    --dev                        Use local framework checkout instead of pinned remote
+    --dev-path <PATH>            Explicit path to local decknix checkout (implies --dev)
 ```
 
 ### Examples
@@ -56,6 +58,51 @@ the work (typically 1–3s) instead of paying for a full `sudo darwin-rebuild
 switch` (30–90s of activation scripts). The `--force` flag is there for when
 you deliberately want to re-run activation — for example, after manually
 editing a launchd plist or when debugging an activation script.
+
+### Persistent overrides via `settings.toml`
+
+If you routinely run `decknix switch` with the same `--override` flags (e.g.
+you keep local checkouts of the framework and your org config), you can pin
+them once in `~/.config/decknix/settings.toml`:
+
+```toml
+[switch.overrides]
+decknix = "~/tools/decknix"
+nc-config = "~/Code/my-org/decknix-config"
+```
+
+Every `decknix switch` then applies those overrides by default. Precedence,
+from highest to lowest:
+
+1. `--override INPUT=PATH` on the command line (per-input; wins over config)
+2. `[switch.overrides]` in `settings.toml`
+3. The published flake inputs (from `flake.lock`)
+
+The status line annotates each override with `[config]` when it came from
+`settings.toml`, so it's always clear where a given path was sourced from:
+
+```
+🔄 Switching (decknix=/Users/you/tools/decknix [config], nc-config=/Users/you/Code/foo/decknix-config [config])...
+```
+
+To force a switch against the published inputs (ignoring `settings.toml`
+entirely), pass `--no-overrides`:
+
+```bash
+# Ignore settings.toml — use whatever is pinned in flake.lock
+decknix switch --no-overrides
+
+# Ignore settings.toml but apply one one-off override
+decknix switch --no-overrides --override decknix=~/experiments/decknix
+```
+
+`settings.toml` lives alongside your user config; it is a personal file and
+should not be checked into a shared `decknix-config` repo. If your
+`decknix-config` doesn't already ignore it, add it:
+
+```gitignore
+settings.toml
+```
 
 ### Dev Path Resolution
 
