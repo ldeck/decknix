@@ -108,10 +108,9 @@
 (declare-function decknix-agent-unlink-pr "ext:decknix-agent-shell-main")
 (declare-function decknix-agent-review "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-quickaction-start "ext:decknix-agent-shell-main"
-                  (name tags workspace command &optional model))
+                  (name tags workspace command &optional model provider-id))
 (declare-function decknix--agent-review-get-params
                   "decknix-agent-shell-main-link" (url))
-(defvar decknix-agent-review-pr-model)
 (declare-function decknix--agent-conversation-set-hidden "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-conversation-key-for-session "decknix-agent-conv-resolve")
 (declare-function decknix--agent-tags-for-conv-key "ext:decknix-agent-shell-main")
@@ -2220,13 +2219,15 @@ preventing extra splits when called from the sidebar."
                              (format "Workspace for %s/%s: " owner repo)
                              nil nil t)))
              (params (decknix--agent-review-get-params url))
-             (model (car params))
-             (command (format "%s %s" (cadr params) url))
+             (model (nth 0 params))
+             (command (format "%s %s" (nth 1 params) url))
+             (provider (nth 2 params))
              ;; Target main window to avoid sidebar splits
              (main (window-main-window (selected-frame))))
         (when (and main (window-live-p main))
           (select-window main))
-        (decknix--agent-quickaction-start name tags workspace command model)
+        (decknix--agent-quickaction-start
+         name tags workspace command model provider)
         (message "Starting review: %s/%s#%s" owner repo number)))))
 
 ;; PR B.51: `decknix--hub-review-ready-requests' and
@@ -2388,8 +2389,9 @@ the review appears side-by-side with the current buffer."
                              (format "Workspace for %s/%s: " owner repo)
                              nil nil t)))
              (params (decknix--agent-review-get-params url))
-             (model (car params))
-             (command (format "%s %s" (cadr params) url))
+             (model (nth 0 params))
+             (command (format "%s %s" (nth 1 params) url))
+             (provider (nth 2 params))
              ;; Split the main window horizontally (side-by-side)
              (main (window-main-window (selected-frame)))
              (new-win (when (and main (window-live-p main))
@@ -2406,7 +2408,8 @@ the review appears side-by-side with the current buffer."
                 agent-shell-display-action)))
         (when (and new-win (window-live-p new-win))
           (select-window new-win))
-        (decknix--agent-quickaction-start name tags workspace command model)
+        (decknix--agent-quickaction-start
+         name tags workspace command model provider)
         (message "Starting review (split): %s/%s#%s"
                  owner repo number)))))
 

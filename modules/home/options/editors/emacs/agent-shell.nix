@@ -1842,9 +1842,13 @@ let
     # `-main-session.el' and `-main-link.el' (provider registry +
     # command/config builders), so it must be on the native-comp
     # load-path for the post-install pass over those extraSiteFiles.
+    # `decknix-agent-purposes' is `(require)'d by `-main-link.el' for
+    # the per-purpose (provider, model) resolver consulted by
+    # `decknix--agent-review-get-params'.
     packageRequires = [ decknix-picker-selections-el
                         decknix-agent-session-bulk-send-el
-                        decknix-agent-provider-el ];
+                        decknix-agent-provider-el
+                        decknix-agent-purposes-el ];
     extraSiteFiles = [
       "decknix-agent-shell-main-batch.el"
       "decknix-agent-shell-main-compose.el"
