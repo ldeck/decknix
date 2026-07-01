@@ -35,6 +35,10 @@
   (defun decknix--agent-conversation-key (_first-message) "ck-fixture"))
 (unless (fboundp 'decknix--agent-session-time-ago)
   (defun decknix--agent-session-time-ago (_iso) "5m ago"))
+;; preview now prefixes a provider glyph resolved from the session's
+;; stamped providerId; the real helper lives in `decknix-agent-provider'.
+(unless (fboundp 'decknix-agent-provider-glyph-for-session)
+  (defun decknix-agent-provider-glyph-for-session (_s) "A"))
 
 (defun decknix-agent-session-format-test--session
     (&optional sid first-msg exchanges modified)
@@ -52,7 +56,7 @@
     (cl-letf (((symbol-function 'decknix--agent-tags-for-session)
                (lambda (_) nil)))
       (let ((line (decknix--agent-session-preview s)))
-        (should (string-prefix-p "abcd1234" line))
+        (should (string-prefix-p "A abcd1234" line))
         (should (string-match-p "5m ago" line))
         (should (string-match-p "  7x  " line))
         (should (string-match-p "Refactor the login flow" line))
@@ -94,7 +98,15 @@
   "Short session IDs use only the available chars (no out-of-range)."
   (let ((s (decknix-agent-session-format-test--session "abc")))
     (let ((line (decknix--agent-session-preview s)))
-      (should (string-prefix-p "abc " line)))))
+      (should (string-prefix-p "A abc " line)))))
+
+(ert-deftest decknix-agent-session-format/preview-prefixes-provider-glyph ()
+  "Preview starts with the session's provider glyph + a space."
+  (cl-letf (((symbol-function 'decknix-agent-provider-glyph-for-session)
+             (lambda (_) "C")))
+    (should (string-prefix-p
+             "C " (decknix--agent-session-preview
+                   (decknix-agent-session-format-test--session))))))
 
 ;; -- display-name -------------------------------------------------
 

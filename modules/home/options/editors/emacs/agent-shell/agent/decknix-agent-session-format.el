@@ -53,9 +53,12 @@
 (declare-function decknix--agent-tags-for-conv-key "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--agent-conversation-key "decknix-agent-conv-resolve" (first-message))
 (declare-function decknix--agent-session-time-ago "decknix-agent-format" (iso-time))
+(declare-function decknix-agent-provider-glyph-for-session
+                  "decknix-agent-provider" (session))
 
 (defun decknix--agent-session-preview (session)
-  "Format a one-line preview for a saved SESSION, including tags."
+  "Format a one-line preview for a saved SESSION, including tags.
+Prefixed with the session's provider glyph (A/C/P)."
   (let* ((id (alist-get 'sessionId session))
          (modified (alist-get 'modified session))
          (exchanges (alist-get 'exchangeCount session 0))
@@ -64,7 +67,8 @@
          (tags (decknix--agent-tags-for-session id))
          (tag-str (if tags (format " [%s]" (string-join tags ", ")) ""))
          (truncated (truncate-string-to-width (or preview "") 50 nil nil "...")))
-    (format "%-8s  %-8s  %3dx  %s%s"
+    (format "%s %-8s  %-8s  %3dx  %s%s"
+            (decknix-agent-provider-glyph-for-session session)
             (substring id 0 (min 8 (length id)))
             (if modified (decknix--agent-session-time-ago modified) "?")
             exchanges
