@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand, Args, CommandFactory};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::process::Command;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -41,6 +41,12 @@ enum Commands {
         /// Example: --override decknix=~/tools/decknix --override nc-config=~/Code/my-org/decknix-config
         #[arg(long, value_name = "INPUT=PATH")]
         r#override: Vec<String>,
+
+        /// Ignore the [switch.overrides] table in ~/.config/decknix/settings.toml.
+        /// Only overrides supplied on the CLI (if any) will be applied, so the switch
+        /// resolves against the published flake inputs.
+        #[arg(long)]
+        no_overrides: bool,
     },
     /// Manage git worktrees
     Wt {
@@ -182,15 +188,90 @@ fn resolve_path(raw: &str, context: &str) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-/// Parse an INPUT=PATH override string into (input_name, resolved_path).
-fn parse_override(s: &str) -> anyhow::Result<(String, PathBuf)> {
-    let (input_name, raw_path) = s.split_once('=')
-        .ok_or_else(|| anyhow::anyhow!(
-            "--override '{}': expected INPUT=PATH format (e.g. nc-config=~/Code/my-org/decknix-config)",
-            s
+/// Where an override value came from — used to annotate status output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OverrideSource {
+    Config,
+    Cli,
+}
+
+/// Parse the `[switch.overrides]` table out of a settings.toml string.
+///
+/// Returns an empty map when the section (or the file) is missing so callers
+/// can treat "no config" and "config with no overrides" identically.
+fn parse_switch_overrides(toml_str: &str) -> anyhow::Result<BTreeMap<String, String>> {
+    if toml_str.trim().is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let value: toml::Value = toml::from_str(toml_str)
+        .map_err(|e| anyhow::anyhow!("failed to parse settings.toml: {}", e))?;
+    let Some(overrides) = value
+        .get("switch")
+        .and_then(|s| s.get("overrides"))
+        .and_then(|o| o.as_table())
+    else {
+        return Ok(BTreeMap::new());
+    };
+    let mut out = BTreeMap::new();
+    for (k, v) in overrides {
+        let s = v.as_str().ok_or_else(|| anyhow::anyhow!(
+            "settings.toml: [switch.overrides] '{}' must be a string path, got {}",
+            k, v.type_str()
         ))?;
-    let path = resolve_path(raw_path, &format!("--override {}", input_name))?;
-    Ok((input_name.to_string(), path))
+        out.insert(k.clone(), s.to_string());
+    }
+    Ok(out)
+}
+
+/// Merge config-file overrides with CLI overrides, tagging each with its source.
+///
+/// - `no_overrides = true` drops the config layer entirely; only CLI wins.
+/// - Otherwise, config entries are kept in their original order; any input that
+///   also appears on the CLI flips to the CLI value and is tagged `Cli`.
+/// - CLI-only inputs are appended after the config ones.
+fn merge_override_sources(
+    config: &[(String, String)],
+    cli: &[(String, String)],
+    no_overrides: bool,
+) -> Vec<(String, String, OverrideSource)> {
+    if no_overrides {
+        return cli.iter()
+            .map(|(k, v)| (k.clone(), v.clone(), OverrideSource::Cli))
+            .collect();
+    }
+    let cli_map: BTreeMap<&str, &str> = cli.iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<(String, String, OverrideSource)> = Vec::new();
+    for (k, v) in config {
+        if let Some(cli_v) = cli_map.get(k.as_str()) {
+            out.push((k.clone(), cli_v.to_string(), OverrideSource::Cli));
+        } else {
+            out.push((k.clone(), v.clone(), OverrideSource::Config));
+        }
+        seen.insert(k.clone());
+    }
+    for (k, v) in cli {
+        if !seen.contains(k) {
+            out.push((k.clone(), v.clone(), OverrideSource::Cli));
+        }
+    }
+    out
+}
+
+/// Read `~/.config/decknix/settings.toml` and return its `[switch.overrides]`.
+/// Missing file returns an empty vec; malformed file surfaces an error.
+/// Ordering is preserved by insertion; the underlying BTreeMap gives us a
+/// stable alphabetical order across runs.
+fn load_switch_overrides_from_settings(settings_path: &Path) -> anyhow::Result<Vec<(String, String)>> {
+    if !settings_path.exists() {
+        return Ok(Vec::new());
+    }
+    let contents = fs::read_to_string(settings_path)
+        .map_err(|e| anyhow::anyhow!("reading {}: {}", settings_path.display(), e))?;
+    let map = parse_switch_overrides(&contents)?;
+    Ok(map.into_iter().collect())
 }
 
 // 2. Dynamic Configuration Schema
@@ -1064,7 +1145,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Switch { dry_run, force, r#override }) => {
+        Some(Commands::Switch { dry_run, force, r#override, no_overrides }) => {
             // darwin-rebuild switch --dry-run still activates; use 'build' for true dry run
             let action = if dry_run { "build" } else { "switch" };
 
@@ -1079,10 +1160,34 @@ fn main() -> anyhow::Result<()> {
                 );
             }
 
-            // Parse and resolve all --override INPUT=PATH pairs
-            let mut overrides: Vec<(String, PathBuf)> = Vec::new();
-            for s in &r#override {
-                overrides.push(parse_override(s)?);
+            // Load persistent overrides from settings.toml (silently empty if absent).
+            let settings_path = config_dir.join("settings.toml");
+            let config_overrides = load_switch_overrides_from_settings(&settings_path)?;
+
+            // Collect raw CLI overrides as (name, raw_path) pairs before resolving,
+            // so merge_override_sources can decide which layer wins per-input.
+            let cli_raw: Vec<(String, String)> = r#override.iter()
+                .map(|s| s.split_once('=')
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "--override '{}': expected INPUT=PATH format (e.g. nc-config=~/Code/my-org/decknix-config)",
+                        s
+                    )))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+
+            // Merge, then resolve each raw path. Resolution errors are attributed
+            // to their source so users know which layer produced a bad path.
+            let merged = merge_override_sources(&config_overrides, &cli_raw, no_overrides);
+            let mut overrides: Vec<(String, PathBuf)> = Vec::with_capacity(merged.len());
+            let mut sources: Vec<OverrideSource> = Vec::with_capacity(merged.len());
+            for (name, raw_path, src) in &merged {
+                let context = match src {
+                    OverrideSource::Cli => format!("--override {}", name),
+                    OverrideSource::Config => format!("settings.toml [switch.overrides].{}", name),
+                };
+                let path = resolve_path(raw_path, &context)?;
+                overrides.push((name.clone(), path));
+                sources.push(*src);
             }
 
             // Preflight: build the derivation and compare with /run/current-system.
@@ -1128,12 +1233,21 @@ fn main() -> anyhow::Result<()> {
                     .arg(format!("path:{}", path.display()));
             }
 
-            // Status message
+            // Status message — annotate each override with its source so users
+            // can see at a glance whether an override came from settings.toml or
+            // the CLI (helpful when debugging an unexpected switch target).
             if overrides.is_empty() {
                 println!("{}", if dry_run { "🔍 Dry run..." } else { "🔄 Switching..." });
             } else {
                 let labels: Vec<String> = overrides.iter()
-                    .map(|(name, path)| format!("{}={}", name, path.display()))
+                    .zip(sources.iter())
+                    .map(|((name, path), src)| {
+                        let tag = match src {
+                            OverrideSource::Config => " [config]",
+                            OverrideSource::Cli => "",
+                        };
+                        format!("{}={}{}", name, path.display(), tag)
+                    })
                     .collect();
                 let icon = if dry_run { "🔍 Dry run" } else { "🔄 Switching" };
                 println!("{} ({})...", icon, labels.join(", "));
@@ -1785,5 +1899,82 @@ PID\tStatus\tLabel
         let output = "PID\tStatus\tLabel\n1234\t0\torg.nixos.foo\n";
         let down = find_down_agents(output, &[]);
         assert!(down.is_empty());
+    }
+
+    // ---- settings.toml loader + override merge --------------------------------
+
+    #[test]
+    fn parse_switch_overrides_reads_flat_table() {
+        let toml = r#"
+[switch.overrides]
+decknix = "~/tools/decknix"
+nc-config = "~/Code/my-org/decknix-config"
+"#;
+        let map = parse_switch_overrides(toml).unwrap();
+        assert_eq!(map.get("decknix").map(String::as_str), Some("~/tools/decknix"));
+        assert_eq!(map.get("nc-config").map(String::as_str), Some("~/Code/my-org/decknix-config"));
+        assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn parse_switch_overrides_missing_section_is_empty() {
+        // A settings.toml that exists but has no [switch.overrides] section
+        // must parse cleanly to an empty map, not error.
+        let toml = "[other]\nfoo = 1\n";
+        let map = parse_switch_overrides(toml).unwrap();
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn parse_switch_overrides_empty_file_is_empty() {
+        let map = parse_switch_overrides("").unwrap();
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn parse_switch_overrides_rejects_invalid_toml() {
+        assert!(parse_switch_overrides("this is not = = valid toml").is_err());
+    }
+
+    #[test]
+    fn merge_override_sources_no_overrides_flag_drops_config() {
+        let config = vec![("decknix".to_string(), "cfg".to_string())];
+        let cli = vec![("nc-config".to_string(), "cli".to_string())];
+        let merged = merge_override_sources(&config, &cli, /* no_overrides = */ true);
+        assert_eq!(merged, vec![
+            ("nc-config".to_string(), "cli".to_string(), OverrideSource::Cli),
+        ]);
+    }
+
+    #[test]
+    fn merge_override_sources_cli_wins_per_input() {
+        let config = vec![
+            ("decknix".to_string(), "cfg-decknix".to_string()),
+            ("nc-config".to_string(), "cfg-nc".to_string()),
+        ];
+        let cli = vec![("decknix".to_string(), "cli-decknix".to_string())];
+        let merged = merge_override_sources(&config, &cli, false);
+        // Config entries retain their order; CLI-overridden ones flip to Cli source and CLI value.
+        assert_eq!(merged, vec![
+            ("decknix".to_string(), "cli-decknix".to_string(), OverrideSource::Cli),
+            ("nc-config".to_string(), "cfg-nc".to_string(), OverrideSource::Config),
+        ]);
+    }
+
+    #[test]
+    fn merge_override_sources_cli_only_input_is_appended() {
+        let config = vec![("decknix".to_string(), "cfg".to_string())];
+        let cli = vec![("brand-new".to_string(), "cli-only".to_string())];
+        let merged = merge_override_sources(&config, &cli, false);
+        assert_eq!(merged, vec![
+            ("decknix".to_string(), "cfg".to_string(), OverrideSource::Config),
+            ("brand-new".to_string(), "cli-only".to_string(), OverrideSource::Cli),
+        ]);
+    }
+
+    #[test]
+    fn merge_override_sources_empty_inputs_gives_empty() {
+        let merged = merge_override_sources(&[], &[], false);
+        assert!(merged.is_empty());
     }
 }
