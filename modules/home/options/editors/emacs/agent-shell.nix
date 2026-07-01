@@ -733,6 +733,25 @@ let
     ];
   };
 
+  # Per-purpose (provider, model) resolver + boot-time validator.
+  # Consulted by the review quickaction path
+  # (`decknix--agent-review-get-params') so PR-review and bot-PR-review
+  # sessions can pin a specific (provider, model) pair via
+  # `programs.emacs.decknix.agentShell.purposes.<name>.{provider,model}'.
+  # Runtime is a thin `alist-get' over `decknix-agent-purpose-alist';
+  # the validator (called in the heredoc after Nix populates the alist)
+  # coerces unknown providers to `decknix-agent-default-provider' and
+  # drops unknown models to nil so mis-configuration surfaces once at
+  # daemon start.
+  decknix-agent-purposes-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-purposes";
+    src = ./agent-shell/purposes;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-purposes-test.el"
+    ];
+  };
+
   decknix-agent-url-parse-el = mkEmacsTestedPackage {
     pname = "decknix-agent-url-parse";
     src = ./agent-shell/agent;
@@ -2184,6 +2203,71 @@ in
         '';
       };
     };
+
+    # Per-purpose (provider, model) settings for launched agents.
+    # Consulted by the review quickaction path so PR-review and
+    # bot-PR-review sessions can pin a specific (provider, model)
+    # pair.  Everything else (worktree `w s', interactive `C-c A n',
+    # fork) keeps `decknix-agent-default-provider' with no model pin.
+    #
+    # Provider is `types.str' (validated at runtime by
+    # `decknix-agent-purpose-validate') to keep the option
+    # forward-compatible with new provider registrations.  Model
+    # `null' means "defer to the provider default".
+    purposes = {
+      pr-review = {
+        provider = mkOption {
+          type = types.str;
+          default = "auggie";
+          example = "claude-code";
+          description = ''
+            Agent provider (registered id) used when launching a
+            human-authored PR review via `C-c A c r' or the sidebar
+            Requests picker.  Must match a provider registered via
+            `decknix-agent-register-provider' (built-ins: `auggie',
+            `claude-code', `pi').  An unregistered value is coerced to
+            `decknix-agent-default-provider' at boot with a warning.
+          '';
+        };
+        model = mkOption {
+          type = types.nullOr types.str;
+          default = "prism-a";
+          example = "opus4.7";
+          description = ''
+            Model id pinned for the PR-review purpose.  For
+            launch-flag providers (auggie) this rides
+            `--model <id>' on the CLI; for flagless providers
+            (Claude, Pi) it is replayed over ACP on resume.  Must
+            appear in `decknix-agent-known-models' for the chosen
+            provider, otherwise it is dropped to nil at boot with a
+            warning and the provider default is used.  Set to null
+            to always defer to the provider default.
+          '';
+        };
+      };
+      bot-pr-review = {
+        provider = mkOption {
+          type = types.str;
+          default = "auggie";
+          example = "claude-code";
+          description = ''
+            Agent provider used when the PR author is a bot.  See
+            `purposes.pr-review.provider' for validation semantics.
+          '';
+        };
+        model = mkOption {
+          type = types.nullOr types.str;
+          default = "haiku4.5";
+          example = "sonnet";
+          description = ''
+            Model id pinned for bot-authored PR reviews.  Defaults to
+            the cheapest capable model on the default provider since
+            bot diffs are typically small.  See
+            `purposes.pr-review.model' for validation semantics.
+          '';
+        };
+      };
+    };
   };
 
   config = mkIf cfg.enable {
@@ -2267,6 +2351,7 @@ in
         # linking, hub) so it ships whenever agent-shell is enabled at all.
         ++ [
           decknix-agent-provider-el
+          decknix-agent-purposes-el
           decknix-agent-url-parse-el
           decknix-agent-format-el
           decknix-agent-parse-el
@@ -2443,6 +2528,33 @@ in
             :label "Pi"
             :glyph "P"
             :supports-workspace-root nil))
+
+        ;; == Per-purpose (provider, model) settings ==
+        ;; Populated from
+        ;; `programs.emacs.decknix.agentShell.purposes.<name>.{provider,model}'
+        ;; and validated once at daemon start so a mis-configured
+        ;; provider/model pair surfaces immediately (unknown provider
+        ;; coerces to `decknix-agent-default-provider'; unknown model
+        ;; drops to nil per `decknix-agent-known-models').  Consulted
+        ;; by the review quickaction path via
+        ;; `decknix-agent-purpose-resolve'; every other launcher keeps
+        ;; the provider default with no model pin.  Providers appear
+        ;; unquoted so the reader interns them as symbols; model uses a
+        ;; string literal or bare `nil'.
+        (require 'decknix-agent-purposes)
+        (declare-function decknix-agent-purpose-resolve "decknix-agent-purposes")
+        (declare-function decknix-agent-purpose-validate "decknix-agent-purposes")
+        (defvar decknix-agent-purpose-alist)
+        (setq decknix-agent-purpose-alist
+              '((pr-review     . (:provider ${cfg.purposes.pr-review.provider}
+                                  :model    ${if cfg.purposes.pr-review.model == null
+                                             then "nil"
+                                             else ''"${cfg.purposes.pr-review.model}"''}))
+                (bot-pr-review . (:provider ${cfg.purposes.bot-pr-review.provider}
+                                  :model    ${if cfg.purposes.bot-pr-review.model == null
+                                             then "nil"
+                                             else ''"${cfg.purposes.bot-pr-review.model}"''}))))
+        (decknix-agent-purpose-validate)
 
         ;; == Foundational URL parsers (extracted module) ==
         ;;
