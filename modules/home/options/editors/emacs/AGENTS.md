@@ -236,6 +236,17 @@ The largest module (~4400 lines). Key subsystems:
   as `[~/path/to/ws]`. `C-k` kills the highlighted live session buffer(s);
   `C-d` permanently deletes saved/previous sessions from disk and metadata.
   `C-SPC` marks multiple candidates for batch `C-k`/`C-d`/`RET`.
+- **Provider glyph + visibility toggles**: every row (Live / Previous / Saved,
+  the `C-c b` buffer switcher, and `C-c A g` grep) is prefixed with the
+  provider glyph (`A` Auggie / `C` Claude / `P` Pi), resolved from the buffer's
+  provider or the session's stamped `providerId` — mirroring the sidebar Live
+  rows. Each picker binds **`M-<glyph>`** keys (`M-a` / `M-c` / `M-p`) that
+  toggle whether that provider's rows are shown; the hidden set is shared across
+  all three pickers (`decknix--agent-picker-hidden-providers`, not persisted),
+  and the active filter shows in the prompt as `[only: C]`. The picker
+  closes-and-reopens on toggle (grep re-seeds the typed term via `:initial`), the
+  same mechanism as `M-w`. `providerId` is stamped once by
+  `decknix--agent-session-list` (the parse path only stamps `filePath`).
 - **Conversation identity**: Derived by hashing `firstUserMessage` (SHA-256,
   truncated to 16 chars). Provides stable identity across resumed sessions (#78).
 - **Session creation** (`C-c A n`): Guided flow — workspace dir, name, tags.
@@ -708,7 +719,8 @@ The `decknix--context-update-header` function delegates to the unified header
   When the sidebar is wide (≥48 cols), Global+Requests and Live+WIP
   sections render side-by-side so the footer does not push content
   off-screen.
-- Session ops prefix (`s`): `s s` picker, `s g` grep, `s r` recent.
+- Session ops prefix (`s`): `s s` picker, `s g` grep, `s r` recent. Picker/grep
+  rows carry the provider glyph (A/C/P); `M-<glyph>` toggles provider visibility.
 - Auto-refreshes every 2 seconds (live sessions) plus instant refresh on hub
   file changes.
 
@@ -902,9 +914,9 @@ workspace sidebar surface which sessions need attention.
 | Prefix | Purpose |
 |--------|---------|
 | `C-c A` | Agent commands (global) |
-| `C-c A b` | Switch agent buffer — live buffers only, MRU ordered (#96) |
-| `C-c A s` | Session picker (sectioned: Live / Saved / New); `C-u` for all snapshots (#77) |
-| `C-c A g` | Grep sessions — consult + ripgrep full-text search across all session content. Default fast path uses ripgrep + the in-memory session metadata cache (sub-second). Two-stage flow: pick a session, then the buffer opens **and jumps to the first match** of the typed term (case-insensitive); if the match is outside the loaded `decknix-agent-session-history-count` exchanges the buffer falls back to the prompt and the minibuffer reports it. `C-u` expands snapshots; `C-u C-u` runs the **thorough** path (parallel jq re-parse, ~5s) which finds sessions written since the last cache refresh; `C-u C-u C-u` combines expanded + thorough |
+| `C-c A b` | Switch agent buffer — live buffers only, MRU ordered, provider glyph prefixed; `M-<glyph>` toggles provider visibility (#96) |
+| `C-c A s` | Session picker (sectioned: Live / Saved / New); provider glyph prefixed; `M-<glyph>` (M-a/M-c/M-p) toggle provider visibility; `C-u` for all snapshots (#77) |
+| `C-c A g` | Grep sessions — consult + ripgrep full-text search across all session content. Default fast path uses ripgrep + the in-memory session metadata cache (sub-second). Two-stage flow: pick a session, then the buffer opens **and jumps to the first match** of the typed term (case-insensitive); if the match is outside the loaded `decknix-agent-session-history-count` exchanges the buffer falls back to the prompt and the minibuffer reports it. `C-u` expands snapshots; `C-u C-u` runs the **thorough** path (parallel jq re-parse, ~5s) which finds sessions written since the last cache refresh; `C-u C-u C-u` combines expanded + thorough. Rows are provider-glyph prefixed; `M-<glyph>` (M-a/M-c/M-p) toggle provider visibility (reopens preserving the typed term) |
 | `C-c A n` | New session |
 | `C-c A q` | Quit/close session (switch to next or welcome) |
 | `C-c A c` | Commands — quick actions and custom commands |
@@ -926,7 +938,7 @@ workspace sidebar surface which sessions need attention.
 | `C-c D s` | Show framework status (loaded/current store paths, staleness) |
 | `C-c D d` | Show diff between loaded and current store paths |
 | `C-c D l` | Show reload history log |
-| `C-c b` | Switch agent buffer — live buffers only (#96) |
+| `C-c b` | Switch agent buffer — live buffers only; provider glyph prefixed; `M-<glyph>` (M-a/M-c/M-p) toggle provider visibility (#96) |
 | `C-c s g` | Grep all session content (in-buffer shortcut for `C-c A g`) |
 | `C-c s R` | Restart current session in place — re-resumes the conversation (revives `killed` buffers, preserves history); in-buffer only |
 | `C-c s c` | Toggle inline Context history section (▶/▼) — in-buffer only |

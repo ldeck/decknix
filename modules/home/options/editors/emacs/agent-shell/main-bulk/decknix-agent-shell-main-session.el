@@ -991,6 +991,77 @@ M-w cycle target so the filter snaps to the caller's context.")
 Set by the M-w workspace-filter toggle; cleared immediately before the
 recursive call so only one level of re-entry occurs.")
 
+;; -- Provider-visibility filter (shared by the three pickers) ------
+;;
+;; The session picker (C-c A s), buffer switcher (C-c b) and session
+;; grep (C-c A g) all render a provider glyph (A/C/P) and let the user
+;; hide/show providers with M-<glyph> keys.  State + key-installer live
+;; here; the pure predicates/glyph helpers live in decknix-agent-provider.
+(declare-function decknix-agent-provider-all-ids "decknix-agent-provider" ())
+(declare-function decknix-agent-provider-glyph "decknix-agent-provider" (provider-id))
+(declare-function decknix-agent-provider-glyph-safe "decknix-agent-provider" (id))
+(declare-function decknix-agent-session-visible-p
+                  "decknix-agent-provider" (session hidden-ids))
+(declare-function decknix-agent-buffer-visible-p
+                  "decknix-agent-provider" (buf hidden-ids))
+(declare-function decknix--agent-provider-for-session-id
+                  "decknix-agent-session-cache" (session-id))
+(defvar decknix-agent-default-provider)
+
+(defvar decknix--agent-picker-hidden-providers nil
+  "List of provider-id symbols to HIDE across the agent pickers.
+Shared by the session picker (C-c A s / sidebar s s), the buffer
+switcher (C-c b / C-c A b) and session grep (C-c A g / s g).  Toggled
+in-picker by the M-<glyph> keys (M-a auggie, M-c claude, M-p pi); nil
+\(the default) shows every provider.  Not persisted — resets on daemon
+restart.")
+
+(defun decknix--agent-previous-entry-provider (entry)
+  "Resolve the provider id for a Previous-section ENTRY.
+Derives from the entry's session-id (best effort), else the default."
+  (or (and (fboundp 'decknix--agent-provider-for-session-id)
+           (ignore-errors
+             (decknix--agent-provider-for-session-id
+              (alist-get 'session-id entry))))
+      decknix-agent-default-provider))
+
+(defun decknix--agent-picker-provider-key (provider-id)
+  "Return the M-<glyph> keystring for PROVIDER-ID, or nil.
+Only single-char glyphs get a key so the binding stays predictable."
+  (let ((glyph (decknix-agent-provider-glyph provider-id)))
+    (when (and glyph (= (length glyph) 1))
+      (concat "M-" (downcase glyph)))))
+
+(defun decknix--agent-picker-provider-filter-suffix ()
+  "Return a \" [only: A C]\" prompt suffix, or \"\" when all are shown."
+  (if (null decknix--agent-picker-hidden-providers) ""
+    (let ((shown (seq-remove
+                  (lambda (id)
+                    (memq id decknix--agent-picker-hidden-providers))
+                  (decknix-agent-provider-all-ids))))
+      (format " [only:%s]"
+              (mapconcat (lambda (id)
+                           (concat " " (decknix-agent-provider-glyph id)))
+                         shown "")))))
+
+(defun decknix--agent-picker-install-provider-keys (on-toggle)
+  "Bind M-<glyph> in the current minibuffer to toggle provider visibility.
+For each registered provider, binds its M-<glyph> key to flip its
+membership in `decknix--agent-picker-hidden-providers' then call
+ON-TOGGLE (which reopens/refreshes the picker with the new filter)."
+  (dolist (id (decknix-agent-provider-all-ids))
+    (let* ((pid id)
+           (key (decknix--agent-picker-provider-key pid)))
+      (when key
+        (local-set-key (kbd key)
+          (lambda ()
+            (interactive)
+            (setq decknix--agent-picker-hidden-providers
+                  (if (memq pid decknix--agent-picker-hidden-providers)
+                      (delq pid decknix--agent-picker-hidden-providers)
+                    (cons pid decknix--agent-picker-hidden-providers)))
+            (funcall on-toggle)))))))
+
 (defvar decknix--session-source-live
   (list :name     "Live Sessions"
         :narrow   ?l
@@ -1004,7 +1075,11 @@ recursive call so only one level of re-entry occurs.")
                  ;; Most-recently-used ordering is preserved from
                  ;; agent-shell-buffers (which follows buffer-list order).
                  (cur (current-buffer))
-                 (others (remq cur bufs))
+                 (others (seq-filter
+                          (lambda (b)
+                            (decknix-agent-buffer-visible-p
+                             b decknix--agent-picker-hidden-providers))
+                          (remq cur bufs)))
                  (ht (make-hash-table :test 'equal))
                  (ordered nil))
             (dolist (buf others)
@@ -1081,6 +1156,13 @@ recursive call so only one level of re-entry occurs.")
                          (and ws-true
                               (string-prefix-p ws-filter-true ws-true))))
                      sessions)))
+                 ;; Provider-visibility filter (M-<glyph> toggles).
+                 (sessions
+                  (seq-filter
+                   (lambda (s)
+                     (decknix-agent-session-visible-p
+                      s decknix--agent-picker-hidden-providers))
+                   sessions))
                  (ht (make-hash-table :test 'equal))
                  (ordered nil))
             (if decknix--session-picker-expand
@@ -1198,7 +1280,10 @@ recursive call so only one level of re-entry occurs.")
                            (let ((sid (alist-get 'session-id e))
                                  (ck (alist-get 'conv-key e)))
                              (and (not (member sid live-sids))
-                                  (not (and ck (member ck live-conv-keys))))))
+                                  (not (and ck (member ck live-conv-keys)))
+                                  (not (memq
+                                        (decknix--agent-previous-entry-provider e)
+                                        decknix--agent-picker-hidden-providers)))))
                          (or decknix--sidebar-previous-sessions '()))))
                  (ht (make-hash-table :test 'equal))
                  (ordered nil))
@@ -1217,7 +1302,10 @@ recursive call so only one level of re-entry occurs.")
                                  (mapconcat
                                   (lambda (tg) (concat "#" tg)) tags " ")
                                ""))
-                     (label (format "%s  @%s %s" short ws-str tag-str)))
+                     (glyph (decknix-agent-provider-glyph-safe
+                             (decknix--agent-previous-entry-provider entry)))
+                     (label (format "%s %s  @%s %s"
+                                    glyph short ws-str tag-str)))
                 (puthash label entry ht)
                 (push label ordered)))
             (setq decknix--session-picker-previous-map ht)
@@ -1567,6 +1655,13 @@ With \\[universal-argument], shows all individual session snapshots."
                        decknix--session-picker-current-ws))
                (setq decknix--session-picker-reopen t)
                (exit-minibuffer)))
+           ;; M-<glyph>: toggle a provider's visibility (A/C/P).  Same
+           ;; close-and-reopen mechanism as M-w — the hidden set persists
+           ;; in its defvar so re-entry applies the new filter.
+           (decknix--agent-picker-install-provider-keys
+            (lambda ()
+              (setq decknix--session-picker-reopen t)
+              (exit-minibuffer)))
            ;; Wire C-k → kill-action, C-d → delete-action, C-s → send-action.
            ;; All three set multi-mode (suppresses the normal :action lambdas)
            ;; and exit the minibuffer; the minibuffer-exit-hook below then
@@ -1614,13 +1709,14 @@ With \\[universal-argument], shows all individual session snapshots."
                             decknix--session-source-previous
                             decknix--session-source-saved
                             decknix--session-source-new)
-                      :prompt (format "Agent session%s%s (M-w ws; C-SPC mark; C-k kill, C-d delete, C-s send): "
+                      :prompt (format "Agent session%s%s%s (M-w ws; M-<glyph> type; C-SPC mark; C-k kill, C-d del, C-s send): "
                                       (if arg " (all snapshots)" "")
                                       (if decknix--session-picker-workspace-filter
                                           (format " [%s]"
                                                   (abbreviate-file-name
                                                    decknix--session-picker-workspace-filter))
-                                        ""))
+                                        "")
+                                      (decknix--agent-picker-provider-filter-suffix))
                       :sort nil)))
   ;; Reopen after M-w workspace filter toggle: loop back into the picker
   ;; with the new filter already set.  Capture the flag first, then clear
@@ -1677,6 +1773,16 @@ early daemon start) so the column stays aligned regardless."
   (concat (decknix--agent-switch-buffer--status-prefix buf)
           (decknix--agent-session-live-label buf)))
 
+(defvar decknix--agent-switch-buffer-reopen nil
+  "Non-nil when `decknix-agent-switch-buffer' should reopen after a
+provider-visibility toggle (M-<glyph>); cleared on each iteration.")
+
+(defvar decknix--agent-switch-buffer-empty-label
+  "(all agent buffers hidden — M-<glyph> to show)"
+  "Placeholder candidate shown when the provider filter hides every buffer.
+Selecting it is a no-op; it keeps the picker open so the M-<glyph>
+toggle keys remain available to un-hide a provider.")
+
 (defun decknix-agent-switch-buffer ()
   "Switch to another live agent-shell buffer.
 Like \\[switch-to-buffer] but showing only agent-shell buffers.
@@ -1684,38 +1790,72 @@ Excludes the current buffer.  Most-recently-used ordering is
 preserved from `agent-shell-buffers' and forced through the
 completion UI via `display-sort-function = identity', so vertico /
 consult don't re-sort the candidates alphabetically.  Each entry is
-prefixed with the same status icon shown in the header-line and the
-sidebar's Live section."
+prefixed with the provider glyph (A/C/P) and the same status icon
+shown in the header-line and the sidebar's Live section.
+
+In-picker keys: M-<glyph> (M-a/M-c/M-p) toggle whether that provider's
+buffers are shown; the picker reopens with the new filter."
   (interactive)
-  (let* ((bufs (when (fboundp 'agent-shell-buffers)
-                 (agent-shell-buffers)))
-         (cur (current-buffer))
-         (others (remq cur bufs)))
-    (cond
-     ((null others)
-      (message "No other agent buffers"))
-     ((= (length others) 1)
-      (switch-to-buffer (car others)))
-     (t
-      (let ((ht (make-hash-table :test 'equal))
-            (candidates nil))
-        (dolist (buf others)
-          (let ((label (decknix--agent-switch-buffer--decorated-label buf)))
-            (puthash label buf ht)
-            (push label candidates)))
-        (setq candidates (nreverse candidates))
-        (let* ((table
-                (lambda (string pred action)
-                  (if (eq action 'metadata)
-                      '(metadata
-                        (category . agent-shell-buffer)
-                        (display-sort-function . identity)
-                        (cycle-sort-function . identity))
-                    (complete-with-action action candidates string pred))))
-               (chosen (completing-read "Agent buffer: " table nil t))
-               (buf (gethash chosen ht)))
-          (when (and buf (buffer-live-p buf))
-            (switch-to-buffer buf))))))))
+  (setq decknix--agent-switch-buffer-reopen nil)
+  (catch 'decknix--switch-done
+    (while t
+      (let* ((bufs (when (fboundp 'agent-shell-buffers)
+                     (agent-shell-buffers)))
+             (cur (current-buffer))
+             (all-others (remq cur bufs))
+             (others (seq-filter
+                      (lambda (b)
+                        (decknix-agent-buffer-visible-p
+                         b decknix--agent-picker-hidden-providers))
+                      all-others)))
+        (cond
+         ((null all-others)
+          (message "No other agent buffers")
+          (throw 'decknix--switch-done nil))
+         ;; Exactly one buffer and no filter active: jump straight in.
+         ((and (= (length all-others) 1)
+               (null decknix--agent-picker-hidden-providers))
+          (switch-to-buffer (car all-others))
+          (throw 'decknix--switch-done nil))
+         (t
+          (let ((ht (make-hash-table :test 'equal))
+                (candidates nil))
+            (dolist (buf others)
+              (let ((label (decknix--agent-switch-buffer--decorated-label buf)))
+                (puthash label buf ht)
+                (push label candidates)))
+            (setq candidates (nreverse candidates))
+            ;; Filter hid everything: keep the picker open with a
+            ;; placeholder so M-<glyph> can un-hide a provider.
+            (unless candidates
+              (setq candidates (list decknix--agent-switch-buffer-empty-label)))
+            (setq decknix--agent-switch-buffer-reopen nil)
+            (let* ((table
+                    (lambda (string pred action)
+                      (if (eq action 'metadata)
+                          '(metadata
+                            (category . agent-shell-buffer)
+                            (display-sort-function . identity)
+                            (cycle-sort-function . identity))
+                        (complete-with-action action candidates string pred))))
+                   (chosen
+                    (minibuffer-with-setup-hook
+                        (lambda ()
+                          (decknix--agent-picker-install-provider-keys
+                           (lambda ()
+                             (setq decknix--agent-switch-buffer-reopen t)
+                             (exit-minibuffer))))
+                      (completing-read
+                       (format "Agent buffer%s (M-<glyph> filter): "
+                               (decknix--agent-picker-provider-filter-suffix))
+                       table nil t))))
+              (if decknix--agent-switch-buffer-reopen
+                  ;; Loop: reopen with the updated filter.
+                  (setq decknix--agent-switch-buffer-reopen nil)
+                (let ((buf (gethash chosen ht)))
+                  (when (and buf (buffer-live-p buf))
+                    (switch-to-buffer buf)))
+                (throw 'decknix--switch-done nil))))))))))
 
 ;; == Session grep: consult + ripgrep full-text search ==
 ;; Searches ALL content (user messages, agent responses, code blocks)
@@ -1793,6 +1933,15 @@ If PROVIDER-ID is nil, searches all registered providers."
 ;; agent-shell/agent/decknix-agent-grep-format.el (PR B.57) --
 ;; required at the top of this heredoc.
 
+(defvar decknix--agent-grep-reopen nil
+  "Non-nil when `decknix-agent-session-grep' should reopen after a
+provider-visibility toggle (M-<glyph>); cleared on each iteration.")
+
+(defvar decknix--agent-grep-reopen-initial nil
+  "Search term to pre-seed when `decknix-agent-session-grep' reopens
+after a provider toggle, so the typed query survives the close-and-
+reopen cycle via `consult--read's :initial.")
+
 (defun decknix-agent-session-grep (arg)
   "Full-text grep across all session content using consult + ripgrep.
 Type a search term and ripgrep searches ALL user messages, agent
@@ -1811,83 +1960,107 @@ Prefix arguments:
              (re-parses every match with parallel jq —
              finds sessions written since the last cache
              refresh ~2 minutes ago).
-- \\[universal-argument] \\[universal-argument] \\[universal-argument]:       expanded snapshots, thorough."
+- \\[universal-argument] \\[universal-argument] \\[universal-argument]:       expanded snapshots, thorough.
+
+In-picker keys: M-<glyph> (M-a/M-c/M-p) toggle whether that provider's
+sessions appear in the results; the picker reopens preserving your
+typed search term."
   (interactive "P")
   (require 'consult)
-  (setq decknix--agent-grep-last-input nil)
-  (let* ((arg-num (prefix-numeric-value arg))
-         (thorough (>= arg-num 16))
-         ;; Expand on `C-u' (4) or `C-u C-u C-u' (64); collapse
-         ;; on no prefix (1) or `C-u C-u' (16).
-         (expand (or (= arg-num 4) (>= arg-num 64)))
-         (search-fn (if thorough
-                        'decknix--agent-session-rg-search-thorough
-                      'decknix--agent-session-rg-search-fast))
-         ;; entries-cache: alist mapping candidate-string → (session . session-data)
-         ;; Rebuilt on each rg invocation; used for lookup after selection.
-         ;; Plain lambda below under `lexical-binding: t' is a real
-         ;; closure over `entries-cache', `search-fn' and `expand'.
-         ;; Do NOT wrap in `(eval `(lambda ...) t)' — that evaluates
-         ;; the form under an empty lexical environment, so
-         ;; `(setq entries-cache ...)' would mutate a stray global
-         ;; instead of this binding.  After `consult--read' returns,
-         ;; `entries-cache' would still be nil and the
-         ;; `(cdr (assoc selected entries-cache))' lookup below would
-         ;; silently yield nil → RET on a candidate would do nothing.
-         ;; Same regression class as commit 7e67928 (picker toggles).
-         (entries-cache nil)
-         (selected
-          (consult--read
-           (consult--dynamic-collection
-             (lambda (input)
-               ;; Capture the typed input so the post-selection
-               ;; handler can pass it as a search term to the
-               ;; resume function (two-stage flow: pick session,
-               ;; then jump to the match inside it).
-               (setq decknix--agent-grep-last-input
-                     (and input (string-trim input)))
-               (cond
-                ((or (null input) (< (length (string-trim input)) 2))
-                 nil)
-                (t
-                 (condition-case nil
-                     (let* ((matches (funcall search-fn input))
-                            (entries (when matches
-                                       (decknix--agent-session-grep-build-entries
-                                        matches expand))))
-                       (setq entries-cache entries)
-                       (mapcar #'car entries))
-                   (error nil)))))
-             :min-input 2)
-           :prompt (if thorough
-                       "Grep sessions (thorough): "
-                     "Grep sessions: ")
-           :sort nil
-           :require-match t))
-         (chosen (cdr (assoc selected entries-cache)))
-         (term (and decknix--agent-grep-last-input
-                    (not (string-empty-p
-                          decknix--agent-grep-last-input))
-                    decknix--agent-grep-last-input)))
-    (when chosen
-      (let* ((s (cdr chosen))
-             (first-msg (alist-get 'firstUserMessage s ""))
-             (conv-key (decknix--agent-conversation-key first-msg))
-             (workspace (when conv-key
-                          (decknix--agent-workspace-for-conv-key
-                           conv-key))))
-        (unless workspace
-          (setq workspace
-                (read-directory-name
-                 "Workspace for this session: " nil nil t))
-          (when (and conv-key workspace)
-            (decknix--agent-session-save-workspace-for-conv-key
-             conv-key workspace)))
-        (decknix--agent-session-resume
-         (alist-get 'sessionId s)
-         decknix-agent-session-history-count
-         (decknix--agent-session-display-name s)
-         workspace conv-key term)))))
+  (let ((initial nil)
+        (keep-going t))
+    (while keep-going
+      (setq keep-going nil)
+      (setq decknix--agent-grep-last-input nil)
+      (setq decknix--agent-grep-reopen nil)
+      (let* ((arg-num (prefix-numeric-value arg))
+             (thorough (>= arg-num 16))
+             ;; Expand on `C-u' (4) or `C-u C-u C-u' (64); collapse
+             ;; on no prefix (1) or `C-u C-u' (16).
+             (expand (or (= arg-num 4) (>= arg-num 64)))
+             (search-fn (if thorough
+                            'decknix--agent-session-rg-search-thorough
+                          'decknix--agent-session-rg-search-fast))
+             ;; entries-cache: candidate-string → (session . data).  Plain
+             ;; lambda under `lexical-binding: t' is a real closure over it;
+             ;; do NOT wrap in `(eval `(lambda ...) t)' (empty lexenv would
+             ;; make `(setq entries-cache ...)' mutate a stray global, so
+             ;; the post-select lookup would silently yield nil — same
+             ;; regression class as commit 7e67928, picker toggles).
+             (entries-cache nil)
+             (selected
+              (minibuffer-with-setup-hook
+                  (lambda ()
+                    (decknix--agent-picker-install-provider-keys
+                     (lambda ()
+                       (setq decknix--agent-grep-reopen t
+                             decknix--agent-grep-reopen-initial
+                             decknix--agent-grep-last-input)
+                       (exit-minibuffer))))
+                (consult--read
+                 (consult--dynamic-collection
+                   (lambda (input)
+                     ;; Capture the typed input so the post-selection
+                     ;; handler can pass it as a search term to the
+                     ;; resume function (two-stage flow: pick session,
+                     ;; then jump to the match inside it).
+                     (setq decknix--agent-grep-last-input
+                           (and input (string-trim input)))
+                     (cond
+                      ((or (null input) (< (length (string-trim input)) 2))
+                       nil)
+                      (t
+                       (condition-case nil
+                           (let* ((matches (funcall search-fn input))
+                                  ;; Provider-visibility filter (M-<glyph>).
+                                  (matches
+                                   (seq-filter
+                                    (lambda (s)
+                                      (decknix-agent-session-visible-p
+                                       s decknix--agent-picker-hidden-providers))
+                                    matches))
+                                  (entries (when matches
+                                             (decknix--agent-session-grep-build-entries
+                                              matches expand))))
+                             (setq entries-cache entries)
+                             (mapcar #'car entries))
+                         (error nil)))))
+                   :min-input 2)
+                 :prompt (format "Grep sessions%s%s (M-<glyph> filter): "
+                                 (if thorough " (thorough)" "")
+                                 (decknix--agent-picker-provider-filter-suffix))
+                 :initial initial
+                 :sort nil
+                 :require-match t)))
+             (chosen (cdr (assoc selected entries-cache)))
+             (term (and decknix--agent-grep-last-input
+                        (not (string-empty-p
+                              decknix--agent-grep-last-input))
+                        decknix--agent-grep-last-input)))
+        (if decknix--agent-grep-reopen
+            ;; Provider toggle: loop, re-seeding the typed term.
+            (setq keep-going t
+                  initial decknix--agent-grep-reopen-initial
+                  decknix--agent-grep-reopen nil)
+          (when chosen
+            (let* ((s (cdr chosen))
+                   (first-msg (alist-get 'firstUserMessage s ""))
+                   (conv-key (decknix--agent-conversation-key first-msg))
+                   (workspace (when conv-key
+                                (decknix--agent-workspace-for-conv-key
+                                 conv-key))))
+              (unless workspace
+                (setq workspace
+                      (read-directory-name
+                       "Workspace for this session: " nil nil t))
+                (when (and conv-key workspace)
+                  (decknix--agent-session-save-workspace-for-conv-key
+                   conv-key workspace)))
+              (decknix--agent-session-resume
+               (alist-get 'sessionId s)
+               decknix-agent-session-history-count
+               (decknix--agent-session-display-name s)
+               workspace conv-key term))))))))
 
 ;; -- Workspace + branch detection (PR B.45) --
 ;; Moved out of this file into
