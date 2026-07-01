@@ -136,4 +136,79 @@ instead (see `decknix--agent-model-replay-needed-p')."
           (should (equal (plist-get result :command-params) '("arg1")))
           (should (equal (plist-get result :environment-variables) '(("FOO" . "BAR")))))))))
 
+;; -- Provider identity + glyph for pickers/filters ----------------
+
+(ert-deftest decknix-agent-provider-glyph-safe-test ()
+  "Glyph-safe returns the glyph, or \"?\" for unknown/glyphless ids."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-auggie '(:glyph "A"))
+    (decknix-agent-register-provider 'test-nolyph '(:label "x"))
+    (should (equal (decknix-agent-provider-glyph-safe 'test-auggie) "A"))
+    ;; Registered but no :glyph -> "?"
+    (should (equal (decknix-agent-provider-glyph-safe 'test-nolyph) "?"))
+    ;; Unregistered id must NOT signal -> "?"
+    (should (equal (decknix-agent-provider-glyph-safe 'test-missing) "?"))
+    (should (equal (decknix-agent-provider-glyph-safe nil) "?"))))
+
+(ert-deftest decknix-agent-session-provider-test ()
+  "Session provider comes from `providerId', else the default."
+  (let ((decknix-agent-default-provider 'claude-code))
+    (should (eq (decknix-agent-session-provider
+                 '((sessionId . "s1") (providerId . auggie)))
+                'auggie))
+    ;; No providerId stamped -> default provider.
+    (should (eq (decknix-agent-session-provider '((sessionId . "s2")))
+                'claude-code))))
+
+(ert-deftest decknix-agent-provider-glyph-for-session-test ()
+  "Glyph-for-session maps the resolved provider to its glyph."
+  (let ((decknix-agent-provider-registry nil)
+        (decknix-agent-default-provider 'test-claude))
+    (decknix-agent-register-provider 'test-auggie '(:glyph "A"))
+    (decknix-agent-register-provider 'test-claude '(:glyph "C"))
+    (should (equal (decknix-agent-provider-glyph-for-session
+                    '((providerId . test-auggie))) "A"))
+    ;; Missing providerId -> default provider's glyph.
+    (should (equal (decknix-agent-provider-glyph-for-session
+                    '((sessionId . "s"))) "C"))))
+
+(ert-deftest decknix-agent-buffer-provider-and-glyph-test ()
+  "Buffer provider reads the buffer-local id, else the default."
+  (let ((decknix-agent-provider-registry nil)
+        (decknix-agent-default-provider 'test-claude))
+    (decknix-agent-register-provider 'test-auggie '(:glyph "A"))
+    (decknix-agent-register-provider 'test-claude '(:glyph "C"))
+    (with-temp-buffer
+      (setq-local decknix--agent-provider-id 'test-auggie)
+      (should (eq (decknix-agent-buffer-provider (current-buffer)) 'test-auggie))
+      (should (equal (decknix-agent-provider-glyph-for-buffer (current-buffer))
+                     "A")))
+    (with-temp-buffer
+      ;; No buffer-local provider set -> default.
+      (should (eq (decknix-agent-buffer-provider (current-buffer)) 'test-claude))
+      (should (equal (decknix-agent-provider-glyph-for-buffer (current-buffer))
+                     "C")))))
+
+(ert-deftest decknix-agent-session-visible-p-test ()
+  "A session is hidden only when its provider is in HIDDEN-IDS."
+  (let ((decknix-agent-default-provider 'claude-code))
+    (should (decknix-agent-session-visible-p
+             '((providerId . auggie)) '(claude-code)))
+    (should-not (decknix-agent-session-visible-p
+                 '((providerId . auggie)) '(auggie claude-code)))
+    ;; nil hidden set -> everything visible.
+    (should (decknix-agent-session-visible-p '((providerId . pi)) nil))
+    ;; Unstamped session uses the default provider for the test.
+    (should-not (decknix-agent-session-visible-p
+                 '((sessionId . "s")) '(claude-code)))))
+
+(ert-deftest decknix-agent-buffer-visible-p-test ()
+  "A live buffer is hidden only when its provider is in HIDDEN-IDS."
+  (let ((decknix-agent-default-provider 'claude-code))
+    (with-temp-buffer
+      (setq-local decknix--agent-provider-id 'auggie)
+      (should (decknix-agent-buffer-visible-p (current-buffer) '(pi)))
+      (should-not (decknix-agent-buffer-visible-p
+                   (current-buffer) '(auggie))))))
+
 (provide 'decknix-agent-provider-test)
