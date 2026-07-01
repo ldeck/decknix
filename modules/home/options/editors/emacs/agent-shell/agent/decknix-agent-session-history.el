@@ -12,9 +12,13 @@
 ;; `agent-shell/agent/' cluster as the rest of the per-conversation
 ;; persistence helpers.  Two entry points:
 ;;
-;;   `decknix--agent-session-file' -- pure path builder that maps a
-;;       SESSION-ID to the full local JSON path under
-;;       `~/.augment/sessions/'.  Used by the in-buffer resume flow
+;;   `decknix--agent-session-file' -- path builder that maps a
+;;       SESSION-ID to the full local transcript path.  For
+;;       single-directory providers (Auggie) it is a pure
+;;       `expand-file-name' under `~/.augment/sessions/'; for
+;;       multi-project providers (Claude) it runs a `find' scan and
+;;       memoises the result (see
+;;       `decknix--agent-session-file-cache').  Used by the resume flow
 ;;       (`decknix--agent-session-prepopulate' /
 ;;       `--restore-input-ring' in main-bulk), the grep
 ;;       jump-to-match flow, the compose history streamer, and the
@@ -60,11 +64,13 @@
 ;;       seeds its `decknix--agent-history-cursor' so the matched
 ;;       turn lands at the bottom of the rendered window.
 ;;
-;; All functions are pure: the path builder is `expand-file-name'
-;; over a hardcoded base, the extractors only read JSON and
-;; allocate cons cells, and the window helpers do arithmetic on
-;; integers and lists -- no global state, no buffer or shell
-;; side-effects.  The companion writer / mutation paths
+;; The extractors only read JSON and allocate cons cells, and the
+;; window helpers do arithmetic on integers and lists -- no global
+;; state, no buffer side-effects.  The path builder is pure for
+;; single-directory providers; for multi-project providers it scans
+;; with `find' and memoises into `decknix--agent-session-file-cache'
+;; (semantically transparent -- same input, same output, just
+;; faster).  The companion writer / mutation paths
 ;; (`decknix--agent-session-restore-input-ring',
 ;; `decknix--agent-session-prepopulate') stay in main-bulk per
 ;; AGENTS.md Rule 2 because they touch `comint-input-ring' and
@@ -76,25 +82,50 @@
 (require 'subr-x)
 (require 'decknix-agent-provider)
 
+;; Cross-module: the mtime-keyed session metadata reader lives in
+;; `decknix-agent-session-cache' (not required here to avoid a load
+;; cycle -- it is present at runtime in the daemon).
+(declare-function decknix--session-meta "decknix-agent-session-cache")
+
+(defvar decknix--agent-session-file-cache (make-hash-table :test 'equal)
+  "Memo of resolved multi-project session-transcript paths.
+Keyed on (PROVIDER-ID . SESSION-ID); value is the absolute path found by
+the `find' scan in `decknix--agent-session-file'.  Transcript files are
+stable once written, so a cached path is revalidated cheaply with
+`file-exists-p' rather than re-running the (subprocess) scan.  This keeps
+the 2-second workspace-sidebar refresh from spawning one `find' per live
+Claude session -- previously ~48 ms per session per render, which stalled
+cursor motion once several sessions were open.  Reset on module reload.")
+
 (defun decknix--agent-session-file (session-id &optional provider-id)
   "Return the path to the local session transcript for SESSION-ID.
-PROVIDER-ID defaults to `decknix-agent-default-provider'."
+PROVIDER-ID defaults to `decknix-agent-default-provider'.
+
+For single-directory providers (e.g. Auggie) this is a pure
+`expand-file-name'.  For multi-project providers (e.g. Claude, whose
+transcripts live under dir/<slug>/sid.ext) the first lookup runs a
+`find' scan and the resolved path is memoised in
+`decknix--agent-session-file-cache' -- see that variable for why."
   (let* ((p-id (or provider-id decknix-agent-default-provider))
          (dir  (decknix-agent-provider-sessions-dir p-id))
          (ext  (decknix-agent-provider-session-file-extension p-id))
          (hist (decknix-agent-provider-history-file p-id)))
     (if hist
-        ;; Multi-project structure (e.g. Claude): session file is in dir/<slug>/sid.ext
-        ;; Use a quick find if we don't have a better index yet.
-        (let* ((cmd (format "find %s -maxdepth 2 -name '%s%s' -print -quit 2>/dev/null"
-                             (shell-quote-argument dir) session-id ext))
-               (out (shell-command-to-string cmd))
-               (path (string-trim out)))
-          (if (string-empty-p path)
-              ;; Fallback to history.jsonl lookup if find fails?
-              ;; For now just return the trimmed result.
-              path
-            path))
+        ;; Multi-project structure (e.g. Claude): session file is in
+        ;; dir/<slug>/sid.ext.  Memoise the scan result; a still-present
+        ;; cached path skips the subprocess entirely.
+        (let* ((key (cons p-id session-id))
+               (cached (gethash key decknix--agent-session-file-cache)))
+          (if (and cached (file-exists-p cached))
+              cached
+            (let* ((cmd (format "find %s -maxdepth 2 -name '%s%s' -print -quit 2>/dev/null"
+                                 (shell-quote-argument dir) session-id ext))
+                   (path (string-trim (shell-command-to-string cmd))))
+              ;; Only cache real hits; a miss (empty) may resolve later
+              ;; once the transcript is flushed to disk.
+              (unless (string-empty-p path)
+                (puthash key path decknix--agent-session-file-cache))
+              path)))
       ;; Single directory structure (e.g. Auggie).
       (expand-file-name (concat session-id ext) dir))))
 
