@@ -62,6 +62,52 @@
   (should (null (decknix--agent-session-parse
                  "{\"sessionId\": \"z\"}"))))
 
+;; -- session-parse-object ------------------------------------------
+;;
+;; The sequential per-file jq path (`decknix--session-parse-file')
+;; emits ONE bare `{...}' object per file, whereas the bulk path wraps
+;; results in an array.  `decknix--agent-session-parse' only accepts
+;; the array form, so a dedicated single-object parser feeds the
+;; per-file path.  Regression guard for the bug where Claude sessions
+;; (always <20 files -> sequential path) never surfaced because the
+;; bare object was rejected by the array parser.
+
+(ert-deftest decknix-agent-session-parse-object--empty ()
+  "Empty / whitespace input returns nil."
+  (should (null (decknix--agent-session-parse-object "")))
+  (should (null (decknix--agent-session-parse-object "   "))))
+
+(ert-deftest decknix-agent-session-parse-object--malformed ()
+  "Malformed JSON returns nil instead of throwing."
+  (should (null (decknix--agent-session-parse-object "not json")))
+  (should (null (decknix--agent-session-parse-object "{not closed"))))
+
+(ert-deftest decknix-agent-session-parse-object--basic ()
+  "A bare JSON object parses to a single alist with symbol keys."
+  (let ((result (decknix--agent-session-parse-object
+                 "{\"sessionId\": \"abc\", \"firstUserMessage\": \"hi\"}")))
+    (should (consp result))
+    ;; A single alist, not a list-of-alists: keys are read directly.
+    (should (equal (alist-get 'sessionId result) "abc"))
+    (should (equal (alist-get 'firstUserMessage result) "hi"))))
+
+(ert-deftest decknix-agent-session-parse-object--trailing-process-noise ()
+  "Trailing text after the closing `}' is tolerated."
+  (let ((result (decknix--agent-session-parse-object
+                 "{\"sessionId\": \"x\"}\nProcess agent-session finished")))
+    (should (equal (alist-get 'sessionId result) "x"))))
+
+(ert-deftest decknix-agent-session-parse-object--leading-whitespace ()
+  "Leading whitespace before the object is stripped via string-trim."
+  (let ((result (decknix--agent-session-parse-object
+                 "   {\"sessionId\": \"y\"}   ")))
+    (should (equal (alist-get 'sessionId result) "y"))))
+
+(ert-deftest decknix-agent-session-parse-object--array-rejected ()
+  "Array input (handled by `decknix--agent-session-parse') is rejected here."
+  (should (null (decknix--agent-session-parse-object
+                 "[{\"sessionId\": \"z\"}]"))))
+
 ;; -- prompt-search-parse -------------------------------------------
 
 (ert-deftest decknix-prompt-search-parse--empty ()
