@@ -151,30 +151,23 @@
 (declare-function decknix--agent-make-config "decknix-agent-provider")
 (defvar decknix-agent-default-provider)
 
+;; Per-purpose (provider, model) settings -- source of truth is the
+;; `decknix-agent-purpose-alist' populated in the heredoc from Nix.
+;; The review quickaction path consults it via
+;; `decknix-agent-purpose-resolve' (see
+;; `decknix--agent-review-get-params' below).
+(require 'decknix-agent-purposes)
+(declare-function decknix-agent-purpose-resolve "decknix-agent-purposes")
+
 
 ;; -- User-tunable quickaction defaults --
 
-(defvar decknix-agent-review-pr-model "prism-a"
-  "Auggie model id to pin for `/review-service-pr' sessions.
-When non-nil (e.g. \"prism-a\", \"opus4.7\", \"haiku4.5\"), every
-PR-review quickaction passes `--model <id>' to auggie and persists
-the choice against the new conversation key so resumes continue on
-the same model.  When nil, the framework default from
-`~/.augment/settings.json' (see `decknix.cli.auggie.settings.model')
-is used and no per-conversation override is recorded.
-Defaults to \"prism-a\" so human-authored PR reviews use Augment's
-hybrid router (Opus on hard diffs, cheaper models on skim) — the
-best $/quality tradeoff for review-shaped work.")
-
-(defvar decknix-agent-review-bot-pr-model "haiku4.5"
-  "Auggie model id to pin for bot-authored PR reviews.
-See `decknix-agent-review-pr-model' for behaviour.  This model is
-selected automatically when the PR author matches
-`decknix--hub-bot-author-p'.")
-
 (defvar decknix-agent-review-bot-pr-command "/review-bot-pr"
   "Slash command to send for bot-authored PR reviews.
-Defaults to the specialized `/review-bot-pr' command.")
+Defaults to the specialized `/review-bot-pr' command.  Model and
+provider selection are handled by `decknix-agent-purpose-alist'
+(`bot-pr-review' purpose) -- see
+`programs.emacs.decknix.agentShell.purposes.bot-pr-review.*'.")
 
 
 ;; -- Quickaction primitive --
@@ -380,14 +373,24 @@ Tries the hub cache first, falls back to `gh pr view'."
                 (string-trim output))))))))
 
 (defun decknix--agent-review-get-params (url)
-  "Get (MODEL COMMAND) for the PR at URL, aware of bot authors."
+  "Get (MODEL COMMAND PROVIDER) for the PR at URL, aware of bot authors.
+MODEL and PROVIDER come from `decknix-agent-purpose-alist' (see
+`decknix-agent-purpose-resolve' / the Nix option block
+`programs.emacs.decknix.agentShell.purposes.*'): the
+`bot-pr-review' purpose is used when the PR author matches
+`decknix--hub-bot-author-p', otherwise `pr-review'.  COMMAND is
+`decknix-agent-review-bot-pr-command' for bots and
+`/review-service-pr' for humans."
   (let* ((author (decknix--agent-pr-author url))
          (is-bot (and author (fboundp 'decknix--hub-bot-author-p)
-                      (decknix--hub-bot-author-p author))))
-    (if is-bot
-        (list (or decknix-agent-review-bot-pr-model decknix-agent-review-pr-model)
-              decknix-agent-review-bot-pr-command)
-      (list decknix-agent-review-pr-model "/review-service-pr"))))
+                      (decknix--hub-bot-author-p author)))
+         (purpose (if is-bot 'bot-pr-review 'pr-review))
+         (cfg (decknix-agent-purpose-resolve purpose))
+         (command (if is-bot decknix-agent-review-bot-pr-command
+                    "/review-service-pr")))
+    (list (plist-get cfg :model)
+          command
+          (plist-get cfg :provider))))
 
 (defun decknix-agent-review-pr (url)
   "Start a PR review session for URL.
@@ -427,12 +430,16 @@ looks like a PR URL) and workspace (defaulting to current project)."
            ;; Confirm name
            (name (read-string (format "Session name [%s]: " name)
                               nil nil name))
-           ;; Bot-aware model and command selection
+           ;; Bot-aware provider/model/command selection.  Provider
+           ;; comes from the resolved purpose so bot / human reviews
+           ;; can each pin their own (provider, model) pair via Nix.
            (params (decknix--agent-review-get-params url))
-           (model (car params))
-           (command-base (cadr params))
+           (model (nth 0 params))
+           (command-base (nth 1 params))
+           (provider (nth 2 params))
            (command (format "%s %s" command-base url)))
-      (decknix--agent-quickaction-start name tags workspace command model)
+      (decknix--agent-quickaction-start
+       name tags workspace command model provider)
       (message "Starting review: %s/%s#%s" owner repo number))))
 
 

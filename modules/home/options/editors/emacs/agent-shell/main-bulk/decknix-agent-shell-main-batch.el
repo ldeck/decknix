@@ -53,10 +53,9 @@
                   "decknix-agent-shell-main")
 (declare-function decknix--agent-quickaction-start
                   "decknix-agent-shell-main-link"
-                  (name tags workspace command &optional model))
+                  (name tags workspace command &optional model provider-id))
 (declare-function decknix--agent-review-get-params
                   "decknix-agent-shell-main-link" (url))
-(defvar decknix-agent-review-pr-model)
 (declare-function decknix--batch-parse-buffer
                   "decknix-agent-batch-parse")
 (declare-function decknix--batch-build-command
@@ -98,8 +97,12 @@ and accumulates results."
            (items (alist-get 'items spec))
            (grouped (alist-get 'grouped spec))
            (command (decknix--batch-build-command grouped items))
-           ;; Use the model from the first item if it's a bot-review
-           (model (car (decknix--agent-review-get-params (car items))))
+           ;; Use the model AND provider from the first item so a
+           ;; bot-authored batch launches on the `bot-pr-review'
+           ;; purpose's (provider, model) pair.
+           (first-params (decknix--agent-review-get-params (car items)))
+           (model (nth 0 first-params))
+           (provider (nth 2 first-params))
            (tags (decknix--batch-build-tags
                   items #'decknix--agent-parse-pr-url))
            (workspace (decknix--batch-resolve-workspace
@@ -108,7 +111,8 @@ and accumulates results."
                        #'decknix--agent-pr-detect-workspace)))
       (condition-case err
           (progn
-            (decknix--agent-quickaction-start name tags workspace command model)
+            (decknix--agent-quickaction-start
+             name tags workspace command model provider)
             (push (list name "launched" nil) decknix--batch-launch-results))
         (error
          (push (list name "failed" (error-message-string err))
