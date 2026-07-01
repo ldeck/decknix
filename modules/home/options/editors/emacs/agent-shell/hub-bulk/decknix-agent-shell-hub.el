@@ -1644,14 +1644,26 @@ on the first call for a new path; re-render once the async probe updates
           (decknix--hub-worktree-classify-dir-async canon)
           :unknown))))
 
-(defun decknix--hub-worktree-discover-from-sessions ()
-  "Walk agent-sessions.json workspaces; return alist (REPO . PATH).
-First match per repo wins; subsequent matches are dropped so explicit
-overrides from `decknix-hub-clones' can override later in the merge."
+(defvar decknix--hub-worktree-from-sessions-cache nil
+  "Cons (MTIME . ALIST) memoising `decknix--hub-worktree-discover-from-sessions'.
+MTIME is the `decknix--agent-tags-cache-mtime' the last successful
+compute observed; ALIST is that compute's return value.  The result
+is a pure function of the tag store's content, so we only recompute
+when the store file's mtime actually changes.  The compute itself is
+a `file-directory-p' storm across every stored session workspace --
+~7 s on a 70-session store with iCloud-backed paths -- so re-running
+it on every sidebar render (once the enclosing 5 s
+`discover-clones' TTL elapses) is what made the second and later
+cold-toggle bursts pay the same ~7 s cost.")
+
+(defun decknix--hub-worktree-discover-from-sessions--compute (&optional store)
+  "Uncached body of `decknix--hub-worktree-discover-from-sessions'.
+STORE, when non-nil, is a pre-read tag store hash-table (spares the
+wrapper an extra `decknix--agent-tags-read' round-trip)."
   (let ((seen (make-hash-table :test 'equal))
         (out nil))
     (condition-case nil
-        (let* ((store (decknix--agent-tags-read))
+        (let* ((store (or store (decknix--agent-tags-read)))
                (convs (and store
                            (decknix--agent-tags-conversations store))))
           (when convs
@@ -1668,6 +1680,30 @@ overrides from `decknix-hub-clones' can override later in the merge."
              convs)))
       (error nil))
     out))
+
+(defun decknix--hub-worktree-discover-from-sessions ()
+  "Walk agent-sessions.json workspaces; return alist (REPO . PATH).
+First match per repo wins; subsequent matches are dropped so explicit
+overrides from `decknix-hub-clones' can override later in the merge.
+Memoised on the tag-store mtime -- see
+`decknix--hub-worktree-from-sessions-cache' for why."
+  ;; Read the store first so its cached mtime is fresh, then key the
+  ;; memo on it.  `agent-tags-read' is itself mtime-cached with a 1 s
+  ;; TTL, so this is cheap when the store hasn't changed.
+  (let* ((store (decknix--agent-tags-read))
+         (mtime (bound-and-true-p decknix--agent-tags-cache-mtime))
+         (cache decknix--hub-worktree-from-sessions-cache))
+    (if (and cache mtime (equal mtime (car cache)))
+        (cdr cache)
+      (let ((fresh (decknix--hub-worktree-discover-from-sessions--compute
+                    store)))
+        ;; Only stamp when we have a real mtime -- a nil mtime (tag
+        ;; store missing at startup) must not poison the memo for the
+        ;; rest of the session.
+        (when mtime
+          (setq decknix--hub-worktree-from-sessions-cache
+                (cons mtime fresh)))
+        fresh))))
 
 (defun decknix--hub-worktree-discover-clones--compute ()
   "Uncached body of `decknix--hub-worktree-discover-clones'.
