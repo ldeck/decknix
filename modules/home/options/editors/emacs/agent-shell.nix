@@ -212,6 +212,21 @@ let
     ];
   };
 
+  # Coalesced idle repaint for the workspace sidebar.  Defers + collapses
+  # every `agent-shell-workspace-sidebar-refresh' request (upstream 2 s
+  # tick, hub file-notify, user actions) onto ONE short-idle paint so a
+  # full erase+rebuild never runs mid-keystroke -- the residual typing
+  # hitch left after `decknix-hub-path-facts' made the render disk-free.
+  # Required by the heredoc's sidebar-refresh debounce advice.
+  decknix-hub-sidebar-paint-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-sidebar-paint";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-sidebar-paint-test.el"
+    ];
+  };
+
   decknix-sidebar-toggles-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-toggles";
     src = ./agent-shell/sidebar;
@@ -2439,6 +2454,7 @@ in
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
         ++ (optional cfg.hub.enable decknix-hub-file-event-el)
+        ++ (optional cfg.hub.enable decknix-hub-sidebar-paint-el)
         ++ (optional cfg.hub.enable decknix-hub-teamcity-el)
         ++ (optional cfg.hub.enable decknix-hub-org-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-jira-tasks-el)
@@ -5011,6 +5027,15 @@ ${optionalString cfg.hub.priority.enable ''
         (define-key decknix-agent-prefix-map (kbd "p") 'decknix-priority)
 ''}
 
+        ;; Load the coalesced idle-paint scheduler before the sidebar
+        ;; advice below references its named debounce function (so the
+        ;; byte-compiler resolves it at build time).  Pure timer plumbing
+        ;; with no load-time side effects; the advice wiring itself stays
+        ;; in the `with-eval-after-load' block below (AGENTS.md Rule 2).
+        (require 'decknix-hub-sidebar-paint)
+        (declare-function decknix--sidebar-refresh-debounce-advice
+                          "decknix-hub-sidebar-paint")
+
         (with-eval-after-load 'agent-shell-workspace
           (advice-add 'agent-shell-workspace-sidebar-refresh :around
             (lambda (orig-fn &rest args)
@@ -5045,7 +5070,21 @@ ${optionalString cfg.hub.priority.enable ''
                                   0))
                         (call-ms (round (* 1000 (float-time (time-since t1))))))
                     (message "[toggle-trace] %5dms  sidebar-refresh DONE (+%dms)"
-                             abs-ms call-ms)))))))
+                             abs-ms call-ms))))))
+
+          ;; Coalesce + idle-defer every repaint request so a full
+          ;; erase+rebuild NEVER runs mid-keystroke (the residual typing
+          ;; hitch after the render was made disk-free).  Added LAST so
+          ;; this :around is the OUTERMOST sidebar-refresh advice: the
+          ;; 2 s tick / hub file-notify / user actions all just (re)arm
+          ;; one short-idle paint here and return immediately; the real
+          ;; render -- wrapped by the suspend/tile/trace advices above --
+          ;; runs only once the user pauses, driven by
+          ;; `decknix--sidebar-paint-tick' with the paint-through guard
+          ;; set so it passes through instead of re-deferring.  A named
+          ;; function keeps this idempotent across hot-reloads.
+          (advice-add 'agent-shell-workspace-sidebar-refresh :around
+                      #'decknix--sidebar-refresh-debounce-advice))
 
         ;; Add Hub group to the sidebar transient
         ;; -- Hub: org filter (multi-select transient) --
