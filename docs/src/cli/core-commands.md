@@ -12,8 +12,6 @@ Options:
     --force                      Bypass the preflight equality check and always activate
     --override <INPUT=PATH>      Override a flake input with a local path (repeatable)
     --no-overrides               Ignore [switch.overrides] in settings.toml
-    --dev                        Use local framework checkout instead of pinned remote
-    --dev-path <PATH>            Explicit path to local decknix checkout (implies --dev)
 ```
 
 ### Examples
@@ -28,11 +26,11 @@ decknix switch --dry-run
 # Force re-activation even when the built system matches the current one
 decknix switch --force
 
-# Test local framework changes
-decknix switch --dev
+# Test a local framework checkout
+decknix switch --override decknix=~/tools/decknix
 
-# Specify framework path explicitly
-decknix switch --dev-path ~/projects/decknix
+# Override multiple inputs (repeat the flag)
+decknix switch --override decknix=~/tools/decknix --override nc-config=~/Code/my-org/decknix-config
 ```
 
 ### How It Works
@@ -47,7 +45,8 @@ decknix switch --dev-path ~/projects/decknix
    - **Differ** → prints old/new store paths and proceeds with activation.
 3. Runs `sudo darwin-rebuild switch --flake .#default --impure` (reusing the
    cached preflight build).
-4. With `--dev`, adds `--override-input decknix path:<dev-path>`.
+4. For each active override (CLI or `settings.toml`), adds
+   `--override-input <INPUT> path:<PATH>`.
 5. With `--dry-run`, uses `build` instead of `switch` and skips the preflight.
 
 ### Why the preflight
@@ -103,14 +102,6 @@ should not be checked into a shared `decknix-config` repo. If your
 ```gitignore
 settings.toml
 ```
-
-### Dev Path Resolution
-
-When `--dev` is used, the framework path is resolved in order:
-
-1. `--dev-path` flag (highest priority)
-2. `DECKNIX_DEV` environment variable
-3. `~/tools/decknix` (default fallback)
 
 ## `decknix update`
 

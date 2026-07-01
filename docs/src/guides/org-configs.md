@@ -81,16 +81,24 @@ outputs = inputs@{ decknix, ... }:
 
 ## Step 5: Test Before Merging
 
+Point `decknix switch` at your local org-config checkout with
+`--override <input>=<path>` — the input name is whatever you gave it in
+`flake.nix` (e.g. `my-org`):
+
 ```bash
-decknix switch --dev-path ~/Code/my-org/decknix-config
+decknix switch --override my-org=~/Code/my-org/decknix-config
 ```
 
-Or manually:
+Or manually, bypassing the CLI:
 
 ```bash
 sudo darwin-rebuild switch --flake .#default --impure \
   --override-input my-org path:~/Code/my-org/decknix-config
 ```
+
+If your team members will iterate on the org-config regularly, they can pin
+the local path once in `~/.config/decknix/settings.toml` so plain
+`decknix switch` uses it automatically — see [`decknix switch` → Persistent overrides](../cli/core-commands.md#persistent-overrides-via-settingstoml).
 
 ## Step 6: Automate Updates
 

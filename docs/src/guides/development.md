@@ -12,35 +12,56 @@ git clone git@github.com:ldeck/decknix.git ~/tools/decknix
 
 ## Testing Changes
 
-### Quick Test with --dev
+### Quick Test with `--override`
 
-The fastest way to test framework changes:
+The fastest way to test framework changes is to point `decknix switch` at
+your local checkout:
 
 ```bash
 # Edit framework code
 $EDITOR ~/tools/decknix/modules/home/options/editors/emacs/default.nix
 
 # Build using local checkout
-decknix switch --dev
+decknix switch --override decknix=~/tools/decknix
 ```
 
-This passes `--override-input decknix path:~/tools/decknix` to darwin-rebuild.
+`--override INPUT=PATH` is repeatable — override the framework and an
+org-config at the same time:
+
+```bash
+decknix switch \
+  --override decknix=~/tools/decknix \
+  --override nc-config=~/Code/my-org/decknix-config
+```
+
+Each `--override` becomes `--override-input <INPUT> path:<PATH>` on the
+underlying `darwin-rebuild` call.
+
+### Persist Overrides for Every Switch
+
+If you always run with the same local checkouts, pin them once in
+`~/.config/decknix/settings.toml` so plain `decknix switch` picks them up
+automatically:
+
+```toml
+[switch.overrides]
+decknix   = "~/tools/decknix"
+nc-config = "~/Code/my-org/decknix-config"
+```
+
+CLI `--override` flags win per-input; pass `--no-overrides` to ignore the
+config file for a single run (useful when reproducing an issue against the
+published inputs). See [`decknix switch` → Persistent overrides](../cli/core-commands.md#persistent-overrides-via-settingstoml)
+for the full precedence rules.
 
 ### Manual Override
+
+If you'd rather bypass the CLI entirely:
 
 ```bash
 cd ~/.config/decknix
 sudo darwin-rebuild switch --flake .#default --impure \
   --override-input decknix path:~/tools/decknix
-```
-
-### Using DECKNIX_DEV
-
-Set the environment variable to avoid `--dev-path` every time:
-
-```bash
-export DECKNIX_DEV=~/tools/decknix
-decknix switch --dev
 ```
 
 ## Project Structure
@@ -80,7 +101,7 @@ in {
 
 2. The module is auto-imported — all `.nix` files in `modules/home/options/` are loaded.
 
-3. Test: `decknix switch --dev`
+3. Test: `decknix switch --override decknix=~/tools/decknix`
 
 ## Verifying
 
@@ -89,7 +110,7 @@ in {
 find /nix/store -name "default.el" -path "*/emacs-packages-deps/*" 2>/dev/null | head -1 | xargs cat
 
 # Check loaded modules
-decknix switch --dev 2>&1 | grep "\[Loader\]"
+decknix switch --override decknix=~/tools/decknix 2>&1 | grep "\[Loader\]"
 
 # Evaluate an option
 nix repl

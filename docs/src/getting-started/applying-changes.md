@@ -32,19 +32,27 @@ decknix update decknix
 
 After updating, run `decknix switch` to apply.
 
-### Development Mode
+### Test Local Framework or Org-Config Changes
 
-Test local framework changes before pushing:
+Point `decknix switch` at a local checkout of any flake input using
+`--override INPUT=PATH` (repeatable):
 
 ```bash
-# Use your local decknix checkout
-decknix switch --dev
+# Test a local decknix checkout
+decknix switch --override decknix=~/tools/decknix
 
-# Or specify an explicit path
-decknix switch --dev-path ~/projects/decknix
+# Test decknix and your org-config together
+decknix switch \
+  --override decknix=~/tools/decknix \
+  --override nc-config=~/Code/my-org/decknix-config
 ```
 
-This passes `--override-input decknix path:~/tools/decknix` to darwin-rebuild.
+Each `--override` becomes `--override-input <INPUT> path:<PATH>` on the
+underlying `darwin-rebuild` call.
+
+If you use the same overrides every day, pin them in
+`~/.config/decknix/settings.toml` so plain `decknix switch` picks them up
+automatically — see [`decknix switch` → Persistent overrides](../cli/core-commands.md#persistent-overrides-via-settingstoml).
 
 ## Common Patterns
 
