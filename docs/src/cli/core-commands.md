@@ -9,6 +9,7 @@ Usage: decknix switch [OPTIONS]
 
 Options:
     --dry-run          Build only — don't activate
+    --force            Bypass the preflight equality check and always activate
     --dev              Use local framework checkout instead of pinned remote
     --dev-path <PATH>  Explicit path to local decknix checkout (implies --dev)
 ```
@@ -16,11 +17,14 @@ Options:
 ### Examples
 
 ```bash
-# Normal switch
+# Normal switch (skips sudo activation if nothing changed)
 decknix switch
 
 # Dry run (check for errors without activating)
 decknix switch --dry-run
+
+# Force re-activation even when the built system matches the current one
+decknix switch --force
 
 # Test local framework changes
 decknix switch --dev
@@ -32,9 +36,26 @@ decknix switch --dev-path ~/projects/decknix
 ### How It Works
 
 1. `cd ~/.config/decknix`
-2. Runs `sudo darwin-rebuild switch --flake .#default --impure`
-3. With `--dev`, adds `--override-input decknix path:<dev-path>`
-4. With `--dry-run`, uses `build` instead of `switch`
+2. **Preflight** (unless `--dry-run` or `--force`): evaluates the system
+   derivation via `nix build --no-link --print-out-paths` and compares the
+   resulting store path with `readlink /run/current-system`.
+   - **Match** → skips `sudo darwin-rebuild switch` entirely, verifies user
+     LaunchAgents (`org.nixos.*`) are running, kickstarts any that are down,
+     and exits.
+   - **Differ** → prints old/new store paths and proceeds with activation.
+3. Runs `sudo darwin-rebuild switch --flake .#default --impure` (reusing the
+   cached preflight build).
+4. With `--dev`, adds `--override-input decknix path:<dev-path>`.
+5. With `--dry-run`, uses `build` instead of `switch` and skips the preflight.
+
+### Why the preflight
+
+Once you've applied a configuration, re-running `decknix switch` with no code
+changes should be a fast no-op. The preflight lets Nix's evaluation cache do
+the work (typically 1–3s) instead of paying for a full `sudo darwin-rebuild
+switch` (30–90s of activation scripts). The `--force` flag is there for when
+you deliberately want to re-run activation — for example, after manually
+editing a launchd plist or when debugging an activation script.
 
 ### Dev Path Resolution
 
