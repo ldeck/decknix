@@ -124,26 +124,51 @@ Three layers, narrowest wins:
    Claude/Pi (which take no model launch flag) replay it over ACP
    (`session/set_model`) once the resumed session reports ready.  See
    [Model selection by agent](productivity.md#model-selection-by-agent).
-2. **Per-quickaction** — `decknix-agent-review-pr-model` pins the
-   model for every `/review-service-pr` launch (PR-review entry
-   point, sidebar Requests row, batch processor).  Defaults to
-   `prism-a`; pin a cheaper model for skim reviews, or `nil` to
-   inherit the framework default.  Set in personal Emacs config:
+2. **Per-purpose (Nix)** —
+   `programs.emacs.decknix.agentShell.purposes.<name>.{provider,model}`
+   pins both the **provider** and the **model** for every launch of a
+   given purpose.  Two purposes ship today:
+   - `pr-review` — human-authored PR review (`C-c A c r`, sidebar
+     Requests row, batch processor).  Default: `provider = "auggie"`,
+     `model = "prism-a"`.
+   - `bot-pr-review` — PR whose author is a bot (auto-dispatched via
+     the `A` auto-review toggle, or matched by author heuristic).
+     Default: `provider = "auggie"`, `model = "haiku4.5"` — the
+     cheapest capable model, since bot diffs are typically small.
 
-   ```elisp
-   (with-eval-after-load 'decknix-agent-shell-main-link
-     (setq decknix-agent-review-pr-model "haiku4.5"))
+   Example — pin PR reviews to Claude with opus for depth, and route
+   bot diffs to the cheaper haiku on the same provider:
+
+   ```nix
+   programs.emacs.decknix.agentShell.purposes = {
+     pr-review     = { provider = "claude-code"; model = "opus"; };
+     bot-pr-review = { provider = "claude-code"; model = "haiku"; };
+   };
    ```
+
+   Set `model = null` to defer to the provider's own default (no
+   `--model` flag is added and no ACP replay runs).  Values are
+   validated at daemon start: an unknown provider coerces to
+   `decknix-agent-default-provider`, and an unknown model drops to
+   `nil`; both cases log a warning to `*Warnings*`.
+
 3. **Framework default** — `decknix.cli.auggie.settings.model` is
    written to `~/.augment/settings.json` and used when no `--model`
    flag is supplied.  Org and personal layers can override with
-   `lib.mkDefault` or plain assignment.
+   `lib.mkDefault` or plain assignment.  Framework defaults for
+   Claude / Pi are provider-native — see [Model selection by
+   agent](productivity.md#model-selection-by-agent).
 
 Per-conversation overrides set via `C-c C-v` always win over the
-quickaction and framework defaults.  On resume the persisted model is
+purpose and framework defaults.  On resume the persisted model is
 re-applied automatically: for Auggie it flows through
 `decknix--resume-command-build` and is appended to the ACP command as
 `--model <id>`; for Claude/Pi it is replayed over ACP
 (`session/set_model`) by `decknix--agent-model-replay-on-ready` after
 the session reports ready.
+
+Purposes that are **not** pinned via Nix (interactive `C-c A n`, fork,
+worktree `w s`) keep `decknix-agent-default-provider` with no model
+pin — they use the provider's own default until you make a
+per-session choice with `C-c C-v`.
 
