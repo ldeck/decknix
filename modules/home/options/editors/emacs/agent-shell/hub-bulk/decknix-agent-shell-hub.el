@@ -1726,13 +1726,16 @@ Thin cached wrapper around
 and the rationale for memoising at all."
   (let* ((ttl decknix-hub-worktree-clones-cache-ttl)
          (cache decknix--hub-worktree-clones-cache)
-         (ts (car-safe cache))
-         (now (float-time)))
+         (ts (car-safe cache)))
     (if (and (numberp ttl) (> ttl 0)
-             (numberp ts) (< (- now ts) ttl))
+             (numberp ts) (< (- (float-time) ts) ttl))
         (cdr cache)
       (let ((fresh (decknix--hub-worktree-discover-clones--compute)))
-        (setq decknix--hub-worktree-clones-cache (cons now fresh))
+        ;; Stamp AFTER the compute so a slow compute (e.g. cold-start
+        ;; file-directory-p across N stored sessions) can't leave the
+        ;; memo already-stale on entry to the very next caller.
+        (setq decknix--hub-worktree-clones-cache
+              (cons (float-time) fresh))
         fresh))))
 
 (defun decknix--hub-worktree--handle-probe-result (proc repo primary)
