@@ -202,5 +202,58 @@ command, parameters, and environment variables."
                     :context-buffer buffer)) t))
     base))
 
+;; -- Provider identity + glyph for pickers/filters ----------------
+;;
+;; The session/buffer switchers, saved-session picker and grep all
+;; prefix a single-char provider glyph (A/C/P) and support hiding
+;; providers.  These pure helpers resolve a provider id from a session
+;; alist or a live buffer and map it to a glyph or a visibility test,
+;; so the interactive pickers carry no provider-registry logic.
+
+;; Buffer-local in every agent-shell buffer (owned by the session
+;; layer / command-discover); declared here with a nil default so the
+;; byte-compiler treats it as a special variable we read via
+;; `buffer-local-value'.  Identical initialiser to the owning defvar
+;; so the two can't drift.
+(defvar decknix--agent-provider-id nil)
+
+(defun decknix-agent-provider-glyph-safe (id)
+  "Return the glyph string for provider ID, or \"?\" when unknown.
+Unlike `decknix-agent-provider-glyph' this never signals on an
+unregistered ID, so picker columns stay aligned for a session whose
+recorded provider is no longer registered."
+  (let ((props (and id (decknix-agent-get-provider id))))
+    (or (and props (plist-get props :glyph)) "?")))
+
+(defun decknix-agent-session-provider (session)
+  "Return the provider id (symbol) that owns SESSION alist.
+Uses the stamped `providerId', falling back to
+`decknix-agent-default-provider' when absent."
+  (or (alist-get 'providerId session) decknix-agent-default-provider))
+
+(defun decknix-agent-buffer-provider (buf)
+  "Return the provider id (symbol) for live agent-shell BUF.
+Reads the buffer-local `decknix--agent-provider-id', falling back to
+`decknix-agent-default-provider'."
+  (or (and (buffer-live-p buf)
+           (buffer-local-value 'decknix--agent-provider-id buf))
+      decknix-agent-default-provider))
+
+(defun decknix-agent-provider-glyph-for-session (session)
+  "Return the provider glyph string for SESSION alist."
+  (decknix-agent-provider-glyph-safe (decknix-agent-session-provider session)))
+
+(defun decknix-agent-provider-glyph-for-buffer (buf)
+  "Return the provider glyph string for live agent-shell BUF."
+  (decknix-agent-provider-glyph-safe (decknix-agent-buffer-provider buf)))
+
+(defun decknix-agent-session-visible-p (session hidden-ids)
+  "Non-nil when SESSION's provider is not a member of HIDDEN-IDS."
+  (not (memq (decknix-agent-session-provider session) hidden-ids)))
+
+(defun decknix-agent-buffer-visible-p (buf hidden-ids)
+  "Non-nil when live BUF's provider is not a member of HIDDEN-IDS."
+  (not (memq (decknix-agent-buffer-provider buf) hidden-ids)))
+
 (provide 'decknix-agent-provider)
 ;;; decknix-agent-provider.el ends here
