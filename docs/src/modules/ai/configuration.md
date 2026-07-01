@@ -112,6 +112,51 @@ The Emacs agent-shell module is enabled by default in the `full` profile:
 
 Each sub-module can be independently disabled. See [Agent Shell Overview](./agent-shell/overview.md) for details on each component.
 
+## Per-Purpose Provider & Model
+
+Automated agent launches (PR reviews, bot-authored PR reviews, and any
+future auto-dispatched workflow) can pin a specific `(provider,
+model)` pair via Nix, independent of the interactive
+`decknix-agent-default-provider`.  Two purposes ship today:
+
+| Purpose | Trigger | Default provider | Default model |
+|---------|---------|------------------|---------------|
+| `pr-review` | `C-c A c r`, sidebar Requests row, batch processor | `auggie` | `prism-a` |
+| `bot-pr-review` | Auto-review dispatch on bot-authored PRs, or matched by author heuristic | `auggie` | `haiku4.5` |
+
+```nix
+{ ... }: {
+  programs.emacs.decknix.agentShell.purposes = {
+    # Human PR reviews go through Claude with opus for depth.
+    pr-review     = { provider = "claude-code"; model = "opus"; };
+    # Bot diffs are shallow — pin the cheapest capable model.
+    bot-pr-review = { provider = "claude-code"; model = "haiku"; };
+  };
+}
+```
+
+**Validation.** Both fields are validated at daemon start:
+
+- `provider` must be a registered provider id (built-ins: `auggie`,
+  `claude-code`, `pi`).  Unknown values coerce to
+  `decknix-agent-default-provider` with a warning to `*Warnings*`.
+- `model` must appear in `decknix-agent-known-models` for the chosen
+  provider (or be `null` to defer to the provider default).  Unknown
+  values drop to `nil` with a warning.
+
+**Resume semantics.** For launch-flag providers (Auggie) the model is
+appended as `--model <id>`; for flagless providers (Claude, Pi) it is
+replayed over ACP once the session reports ready.  Either way, once
+you switch mid-session with `C-c C-v`, that per-conversation choice
+persists and wins over the purpose default on resume.
+
+**Scope.** Only automated launchers consult purposes.  Interactive
+`C-c A n`, `C-c A f` (fork), and the sidebar worktree `w s` action
+keep `decknix-agent-default-provider` with no model pin — they use
+the provider's own default until you pick a model with `C-c C-v`.
+See [Model Selection](./agent-shell/foundation.md#model-selection)
+for the full override-lever hierarchy.
+
 ## Custom Commands
 
 Nix-managed commands are deployed to `~/.claude/commands/` (the shared slash-command location read natively by both Claude Code and Auggie) and also to `~/.pi/agent/prompts/` (where Pi reads them as `/name` prompt templates), so a single source covers every supported agent. User-created commands (regular files) coexist in each directory and are not affected by `decknix switch`.

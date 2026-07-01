@@ -392,6 +392,16 @@ The **default** still matters for the *first* turn of a brand-new
 conversation, before you've made any `C-c C-v` choice to persist — set
 it so fresh sessions start on the right model.
 
+**Automated purposes** — for PR reviews (`C-c A c r`, sidebar Requests
+row, auto-review dispatch), pin both the *provider* and *model* per
+purpose via
+`programs.emacs.decknix.agentShell.purposes.<name>.{provider,model}`
+in your Nix config.  See [Per-Purpose Provider &
+Model](../configuration.md#per-purpose-provider--model) for the full
+list of purposes, defaults, and validation semantics.  Purpose pins
+survive across all three providers — the model rides `--model` on
+launch for Auggie and is replayed over ACP for Claude / Pi.
+
 **Claude** — set the per-Emacs default in your personal config so every
 new Claude session starts on the right model (after that, `C-c C-v`
 choices persist and are replayed on resume):
