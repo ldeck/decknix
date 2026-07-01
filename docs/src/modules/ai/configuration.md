@@ -124,3 +124,37 @@ Nix-managed commands are deployed to `~/.claude/commands/` (the shared slash-com
 
 See [Productivity](./agent-shell/productivity.md) for the full command framework.
 
+## Claude Permissions
+
+Claude Code prompts before running any Bash command unless it matches a rule in
+`~/.claude/settings.json` (`permissions.allow`). Skills ship executable helper
+scripts (deployed `755` via `decknix.cli.agentSync` with `executable = true`),
+so without an allow rule Claude asks for permission every session before running
+them.
+
+By default decknix auto-allowlists every Nix-installed executable tool it
+manages — each executable agent-sync file becomes a narrow
+`Bash(<abs-path>:*)` prefix rule (framework- and org-registered scripts alike):
+
+```nix
+{ ... }: {
+  decknix.ai.claude = {
+    enable = true;
+
+    # Auto-allow decknix/Nix-installed executable skill scripts (default: true).
+    permissions.allowManagedTools = true;
+
+    # Extra rules merged in alongside the managed-tool rules.
+    permissions.allow = [
+      "Bash(gh pr view:*)"
+    ];
+  };
+}
+```
+
+The rules are **deep-merged** into `~/.claude/settings.json` — decknix updates
+only `.permissions.allow` (union + de-duplicated) and leaves every other key
+untouched, because Claude mutates this file at runtime (e.g. it writes
+`skipDangerousModePermissionPrompt`). Set `allowManagedTools = false` to manage
+the allowlist entirely by hand.
+
