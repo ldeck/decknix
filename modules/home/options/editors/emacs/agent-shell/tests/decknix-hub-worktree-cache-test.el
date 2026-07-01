@@ -22,6 +22,18 @@
 (require 'cl-lib)
 (require 'decknix-agent-shell-hub)
 
+;; Forward declarations for cross-module symbols the tests `let`-bind
+;; or `cl-letf` at runtime.  `defvar' with an initial value ensures the
+;; binding is dynamic (per Emacs AGENTS.md §Tests rule 2).
+(defvar decknix--agent-tags-cache-mtime nil)
+(defvar decknix--hub-worktree-from-sessions-cache nil)
+(declare-function decknix--hub-worktree-discover-from-sessions
+                  "decknix-agent-shell-hub")
+(declare-function decknix--hub-worktree-discover-from-sessions--compute
+                  "decknix-agent-shell-hub" (&optional store))
+(declare-function decknix--agent-tags-read
+                  "ext:decknix-agent-tags-store")
+
 (defmacro decknix-hub-cache-test--with-stub (counter-var result &rest body)
   "Stub the compute helper to return RESULT and increment COUNTER-VAR."
   (declare (indent 2))
@@ -99,6 +111,48 @@ finished, not when it started."
         ;; Correct: (107-107)=0 < 5 -> hit.
         (decknix--hub-worktree-discover-clones)
         (should (= 1 calls))))))
+
+(defmacro decknix-hub-cache-test--with-from-sessions-stub
+    (counter-var result &rest body)
+  "Stub `discover-from-sessions--compute' to return RESULT and count calls.
+Also resets the mtime-keyed memo and neutralises `agent-tags-read'
+so the wrapper touches only the memo state."
+  (declare (indent 2))
+  `(let ((,counter-var 0)
+         (decknix--hub-worktree-from-sessions-cache nil))
+     (cl-letf (((symbol-function 'decknix--hub-worktree-discover-from-sessions--compute)
+                (lambda (&optional _store) (cl-incf ,counter-var) ,result))
+               ((symbol-function 'decknix--agent-tags-read)
+                (lambda () nil)))
+       ,@body)))
+
+(ert-deftest decknix-hub-worktree-from-sessions-cache--reuses-when-mtime-unchanged ()
+  "Repeat calls skip the compute when the tag-store mtime hasn't moved."
+  (decknix-hub-cache-test--with-from-sessions-stub calls '(("o/r" . "/tmp/r"))
+    (let ((decknix--agent-tags-cache-mtime '(1000 0 0 0)))
+      (dotimes (_ 20)
+        (should (equal '(("o/r" . "/tmp/r"))
+                       (decknix--hub-worktree-discover-from-sessions))))
+      (should (= 1 calls)))))
+
+(ert-deftest decknix-hub-worktree-from-sessions-cache--recomputes-on-mtime-change ()
+  "A tag-store mtime change forces the next call to recompute."
+  (decknix-hub-cache-test--with-from-sessions-stub calls '(("o/r" . "/tmp/r"))
+    (let ((decknix--agent-tags-cache-mtime '(1000 0 0 0)))
+      (decknix--hub-worktree-discover-from-sessions)
+      (setq decknix--agent-tags-cache-mtime '(1000 5 0 0))
+      (decknix--hub-worktree-discover-from-sessions)
+      (should (= 2 calls)))))
+
+(ert-deftest decknix-hub-worktree-from-sessions-cache--nil-mtime-never-caches ()
+  "When mtime is nil (e.g. tag store missing) the wrapper never caches.
+Otherwise a first nil-mtime compute would poison the memo for the
+rest of the session."
+  (decknix-hub-cache-test--with-from-sessions-stub calls nil
+    (let ((decknix--agent-tags-cache-mtime nil))
+      (dotimes (_ 3)
+        (decknix--hub-worktree-discover-from-sessions))
+      (should (= 3 calls)))))
 
 (provide 'decknix-hub-worktree-cache-test)
 ;;; decknix-hub-worktree-cache-test.el ends here
