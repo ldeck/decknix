@@ -109,6 +109,49 @@
       (should (equal "newer" (caadr turns)))
       (should (equal "trailing-chunk" (cdadr turns))))))
 
+(ert-deftest decknix-agent-session-history/multi-project-path-memoised ()
+  "Multi-project (Claude) resolution runs the `find' shell-out once.
+The session transcript path is stable, so once resolved it is cached
+keyed on (provider . sid) and revalidated by `file-exists-p'.  A second
+lookup must NOT re-invoke the (expensive) shell-out — this is what keeps
+the 2-second sidebar refresh from spawning a `find' per live Claude
+session.  Deleting the file forces a re-scan."
+  (let* ((decknix-agent-provider-registry nil)
+         (decknix--agent-session-file-cache (make-hash-table :test 'equal))
+         (tmp (make-temp-file "decknix-claude-" nil ".jsonl"))
+         (find-calls 0))
+    (decknix-agent-register-provider 'claude-code
+      '(:sessions-dir "~/.claude/projects"
+        :session-file-extension ".jsonl"
+        :history-file "~/.claude/history.jsonl"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'shell-command-to-string)
+                   (lambda (&rest _)
+                     (setq find-calls (1+ find-calls))
+                     (concat tmp "\n"))))
+          ;; First lookup: cold cache → one shell-out.
+          (should (equal tmp (decknix--agent-session-file "sid-1" 'claude-code)))
+          (should (= 1 find-calls))
+          ;; Second lookup: warm cache, file still present → no shell-out.
+          (should (equal tmp (decknix--agent-session-file "sid-1" 'claude-code)))
+          (should (= 1 find-calls))
+          ;; File disappears → cache invalidated → re-scan.
+          (delete-file tmp)
+          (decknix--agent-session-file "sid-1" 'claude-code)
+          (should (= 2 find-calls)))
+      (when (file-exists-p tmp) (delete-file tmp)))))
+
+(ert-deftest decknix-agent-session-history/single-dir-not-cached ()
+  "Auggie single-dir resolution stays a pure `expand-file-name' (no cache).
+It must never touch the shell-out path nor the memo table."
+  (let* ((decknix-agent-provider-registry nil)
+         (decknix--agent-session-file-cache (make-hash-table :test 'equal)))
+    (decknix-agent-register-provider 'auggie
+      '(:sessions-dir "~/.augment/sessions" :session-file-extension ".json"))
+    (let ((path (decknix--agent-session-file "abc-def-123" 'auggie)))
+      (should (string-suffix-p "/.augment/sessions/abc-def-123.json" path))
+      (should (= 0 (hash-table-count decknix--agent-session-file-cache))))))
+
 (ert-deftest decknix-agent-session-history/missing-file-returns-nil ()
   (let ((decknix-agent-provider-registry nil)
         (decknix-agent-default-provider 'auggie))
