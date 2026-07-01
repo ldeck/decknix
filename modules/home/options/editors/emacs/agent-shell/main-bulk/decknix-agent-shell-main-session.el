@@ -185,7 +185,7 @@ Use C-u prefix with the session picker to override.")
 (declare-function decknix--rg-thorough-command
                   "decknix-agent-rg-search-command" (rg term dir jqf))
 (declare-function decknix--post-create-buffer-name
-                  "decknix-agent-post-create" (name))
+                  "decknix-agent-post-create" (name &optional label))
 (declare-function decknix--post-create-flush-mode
                   "decknix-agent-post-create"
                   (conv-key tags workspace))
@@ -2145,9 +2145,14 @@ batch launches."
       ;; (PR B.83).
       (with-current-buffer shell-buf
         (setq-local decknix--agent-provider-id (or provider-id decknix-agent-default-provider))
+        ;; Provider-aware name so a Claude/Pi session is "*Claude: …*" /
+        ;; "*Pi: …*" rather than a misleading "*Auggie: …*" (the label
+        ;; is what `C-c b' / the switcher surface as the agent type).
         (rename-buffer
          (generate-new-buffer-name
-          (decknix--post-create-buffer-name name)))
+          (decknix--post-create-buffer-name
+           name
+           (decknix-agent-provider-label decknix--agent-provider-id))))
         (setq-local shell-maker--buffer-name-override
                     (buffer-name))
         (when workspace
