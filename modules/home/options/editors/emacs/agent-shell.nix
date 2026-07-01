@@ -195,6 +195,23 @@ let
     ];
   };
 
+  # Render-path filesystem-fact cache.  Supplies the disk-free
+  # `decknix--hub-path-equal-p' / `decknix--hub-path-mtime' accessors
+  # that the 2 s workspace-sidebar render uses in place of synchronous
+  # `file-equal-p' / `file-attributes' (which blocked input for seconds
+  # on cold iCloud-backed / removed-worktree paths).  The cache is
+  # warmed OFF the main thread by an idle worker that yields on pending
+  # input.  Required by `decknix-agent-shell-hub-el' at byte-compile
+  # time.
+  decknix-hub-path-facts-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-path-facts";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-path-facts-test.el"
+    ];
+  };
+
   decknix-sidebar-toggles-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-toggles";
     src = ./agent-shell/sidebar;
@@ -1774,14 +1791,19 @@ let
     pname = "decknix-agent-shell-hub";
     src = ./agent-shell/hub-bulk;
     # Bulk module `(require 'decknix-hub-file-event)' at top-level for
-    # the atomic-rename-aware file-notify event helper.
+    # the atomic-rename-aware file-notify event helper, and
+    # `(require 'decknix-hub-path-facts)' for the disk-free render-path
+    # path accessors (row badge + WIP placeholder rows read the cache
+    # instead of stat-ing per row every 2 s).
     packageRequires = [
       decknix-hub-file-event-el
+      decknix-hub-path-facts-el
       decknix-agent-tags-read-el
     ];
     testFiles = [
       "decknix-hub-worktree-persistence-test.el"
       "decknix-hub-worktree-cache-test.el"
+      "decknix-hub-worktree-badge-test.el"
     ];
   };
 
@@ -5177,6 +5199,22 @@ ${optionalString cfg.hub.priority.enable ''
 
         (when decknix-hub-eager-clone-probe
           (run-with-idle-timer 5 nil #'decknix--hub-worktree-eager-pass))
+
+        ;; Keep the render-path filesystem-fact cache warm OFF the main
+        ;; thread.  A repeating idle timer probes worktree + live-session
+        ;; paths into `decknix--hub-path-facts' so the 2 s sidebar render
+        ;; reads canonical/mtime facts without any synchronous stat --
+        ;; the fix for multi-second typing freezes when a worktree path
+        ;; is on a cold iCloud-backed volume.  The refresh is cooperative
+        ;; (yields on pending input), and idle-scheduled, so it never
+        ;; delays typing.  Idempotent across hot-reloads: cancel the
+        ;; prior timer first (see the PR-cache save timer above).
+        (defvar decknix--hub-path-facts-refresh-timer nil
+          "Idle timer warming `decknix--hub-path-facts' off the render tick.")
+        (when (timerp decknix--hub-path-facts-refresh-timer)
+          (cancel-timer decknix--hub-path-facts-refresh-timer))
+        (setq decknix--hub-path-facts-refresh-timer
+              (run-with-idle-timer 2 t #'decknix--hub-path-facts-refresh-all))
 
         ;; -- Hub: age formatter + sidebar icon helpers --
         ;;
