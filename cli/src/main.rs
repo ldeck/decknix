@@ -31,6 +31,12 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
 
+        /// Bypass the preflight equality check and always run darwin-rebuild switch.
+        /// Useful when you want to re-run activation scripts even though the built
+        /// system derivation is already the currently-active one.
+        #[arg(long)]
+        force: bool,
+
         /// Override flake input(s) with local paths (repeatable, INPUT=PATH).
         /// Example: --override decknix=~/tools/decknix --override nc-config=~/Code/my-org/decknix-config
         #[arg(long, value_name = "INPUT=PATH")]
@@ -611,6 +617,93 @@ fn print_extended_help(extensions: &ExtensionMap) {
     }
 }
 
+/// Build the system derivation for the current flake and return its /nix/store path.
+/// Uses `nix build --no-link --print-out-paths` so nothing is symlinked into $PWD.
+/// The subsequent `darwin-rebuild switch` reuses the cached build.
+fn build_system_path(config_dir: &Path, overrides: &[(String, PathBuf)]) -> anyhow::Result<PathBuf> {
+    let mut cmd = Command::new("nix");
+    cmd.current_dir(config_dir)
+        .arg("build")
+        .arg(".#darwinConfigurations.default.system")
+        .arg("--no-link")
+        .arg("--print-out-paths")
+        .arg("--impure");
+    for (input_name, path) in overrides {
+        cmd.arg("--override-input").arg(input_name)
+            .arg(format!("path:{}", path.display()));
+    }
+    let output = cmd.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("nix build failed:\n{}", stderr);
+    }
+    let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path_str.is_empty() {
+        anyhow::bail!("nix build produced no output path");
+    }
+    Ok(PathBuf::from(path_str))
+}
+
+/// Currently-active system store path (`readlink /run/current-system`).
+/// Returns None if the symlink doesn't exist (fresh install / unusual state).
+fn current_system_path() -> Option<PathBuf> {
+    fs::read_link("/run/current-system").ok()
+}
+
+/// Given `launchctl list` stdout and a set of labels, return labels that are
+/// either absent from the list or present with PID == "-" (loaded but not running).
+///
+/// `launchctl list` output columns are tab-separated: PID<TAB>Status<TAB>Label.
+fn find_down_agents(launchctl_list_output: &str, labels: &[String]) -> Vec<String> {
+    let mut down = Vec::new();
+    for label in labels {
+        let line = launchctl_list_output
+            .lines()
+            .find(|l| l.split('\t').nth(2).map(|s| s.trim()) == Some(label.as_str()));
+        match line {
+            Some(l) => {
+                let pid = l.split('\t').next().unwrap_or("-").trim();
+                if pid == "-" {
+                    down.push(label.clone());
+                }
+            }
+            None => down.push(label.clone()),
+        }
+    }
+    down
+}
+
+/// Kickstart any user LaunchAgents that are loaded (plist present) but not currently running.
+/// Called on no-op switches to keep long-running daemons healthy without re-activating the system.
+fn verify_launch_agents() {
+    let agents = snapshot_launch_agents();
+    if agents.is_empty() {
+        return;
+    }
+    let list_output = match Command::new("launchctl").arg("list").output() {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).into_owned(),
+        Err(_) => return,
+    };
+    let labels: Vec<String> = agents.keys().cloned().collect();
+    let down = find_down_agents(&list_output, &labels);
+    if down.is_empty() {
+        eprintln!("✅ All LaunchAgents running.");
+        return;
+    }
+    let uid = unsafe { libc::getuid() };
+    for label in &down {
+        let target = format!("gui/{}/{}", uid, label);
+        eprintln!("🔄 Kickstarting {} (was down)...", label);
+        let status = Command::new("launchctl")
+            .args(["kickstart", &target])
+            .status();
+        match status {
+            Ok(s) if s.success() => eprintln!("   ✅ {}", label),
+            _ => eprintln!("   ⚠️  Failed to kickstart {}", label),
+        }
+    }
+}
+
 /// Snapshot org.nixos.* LaunchAgent plists: returns map of label -> file content hash.
 fn snapshot_launch_agents() -> HashMap<String, u64> {
     let agents_dir = dirs::home_dir()
@@ -971,7 +1064,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Switch { dry_run, r#override }) => {
+        Some(Commands::Switch { dry_run, force, r#override }) => {
             // darwin-rebuild switch --dry-run still activates; use 'build' for true dry run
             let action = if dry_run { "build" } else { "switch" };
 
@@ -990,6 +1083,34 @@ fn main() -> anyhow::Result<()> {
             let mut overrides: Vec<(String, PathBuf)> = Vec::new();
             for s in &r#override {
                 overrides.push(parse_override(s)?);
+            }
+
+            // Preflight: build the derivation and compare with /run/current-system.
+            // When identical (and not forced or dry-run), skip sudo activation entirely
+            // and just verify LaunchAgents are still running. The nix build is cached,
+            // so if we do end up calling darwin-rebuild, it reuses this evaluation.
+            if !dry_run && !force {
+                println!("🔍 Preflight: evaluating system derivation...");
+                match build_system_path(&config_dir, &overrides) {
+                    Ok(new_path) => {
+                        if let Some(current_path) = current_system_path() {
+                            if new_path == current_path {
+                                println!("✅ Already up to date");
+                                println!("   {}", new_path.display());
+                                verify_launch_agents();
+                                return Ok(());
+                            }
+                            eprintln!("📦 System will change:");
+                            eprintln!("   old: {}", current_path.display());
+                            eprintln!("   new: {}", new_path.display());
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Preflight build failed:");
+                        eprintln!("{}", e);
+                        std::process::exit(1);
+                    }
+                }
             }
 
             // Snapshot LaunchAgents before switch (for restart detection)
@@ -1625,5 +1746,44 @@ mod tests {
         assert!(filter_matches(&f, "owner/foo", Path::new("/x"), day));
         assert!(!filter_matches(&f, "owner/foo", Path::new("/x"), Duration::from_secs(0))); // regex ok, age fails
         assert!(!filter_matches(&f, "owner/bar", Path::new("/x"), day)); // age ok, regex fails
+    }
+
+    #[test]
+    fn find_down_agents_identifies_dead_and_missing() {
+        // `launchctl list` output: PID<TAB>Status<TAB>Label. PID == "-" means loaded but not running.
+        let output = "\
+PID\tStatus\tLabel
+1234\t0\torg.nixos.emacs-server
+-\t0\torg.nixos.decknix-hub
+";
+        let labels = vec![
+            "org.nixos.emacs-server".to_string(),
+            "org.nixos.decknix-hub".to_string(),
+            "org.nixos.not-loaded".to_string(),
+        ];
+        let down = find_down_agents(output, &labels);
+        assert_eq!(down, vec!["org.nixos.decknix-hub", "org.nixos.not-loaded"]);
+    }
+
+    #[test]
+    fn find_down_agents_empty_when_all_running() {
+        let output = "\
+PID\tStatus\tLabel
+1234\t0\torg.nixos.emacs-server
+5678\t0\torg.nixos.decknix-hub
+";
+        let labels = vec![
+            "org.nixos.emacs-server".to_string(),
+            "org.nixos.decknix-hub".to_string(),
+        ];
+        let down = find_down_agents(output, &labels);
+        assert!(down.is_empty());
+    }
+
+    #[test]
+    fn find_down_agents_empty_labels_returns_empty() {
+        let output = "PID\tStatus\tLabel\n1234\t0\torg.nixos.foo\n";
+        let down = find_down_agents(output, &[]);
+        assert!(down.is_empty());
     }
 }
