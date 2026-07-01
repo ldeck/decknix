@@ -68,23 +68,35 @@ the number as an integer or a string."
     (should (equal "bot2" (decknix--agent-hub-pr-author "o" "r" "1")))))
 
 (ert-deftest decknix-agent-review-bot--get-params-chooses-bot-vars ()
-  "Chooses bot model and command when author matches bot-p."
-  (cl-letf (((symbol-function 'decknix--agent-pr-author) (lambda (_) "dependabot[bot]"))
+  "Chooses bot model, command, and provider when author matches bot-p.
+The (provider, model) pair is sourced from the `bot-pr-review'
+purpose in `decknix-agent-purpose-alist' -- so both slots move
+together and a bot batch can be pinned to a different provider
+than a human batch."
+  (cl-letf (((symbol-function 'decknix--agent-pr-author)
+             (lambda (_) "dependabot[bot]"))
             ((symbol-function 'decknix--hub-bot-author-p) (lambda (_) t))
-            (decknix-agent-review-bot-pr-model "bot-model")
+            (decknix-agent-purpose-alist
+             '((pr-review     . (:provider auggie      :model "reg-model"))
+               (bot-pr-review . (:provider claude-code :model "bot-model"))))
             (decknix-agent-review-bot-pr-command "/bot-cmd"))
     (let ((params (decknix--agent-review-get-params "url")))
-      (should (equal "bot-model" (car params)))
-      (should (equal "/bot-cmd" (cadr params))))))
+      (should (equal "bot-model"    (nth 0 params)))
+      (should (equal "/bot-cmd"     (nth 1 params)))
+      (should (eq    'claude-code   (nth 2 params))))))
 
 (ert-deftest decknix-agent-review-bot--get-params-falls-back-to-regular ()
-  "Falls back to regular review vars for non-bot authors."
+  "Falls back to the `pr-review' purpose for non-bot authors.
+Provider must come from `pr-review', not `bot-pr-review'."
   (cl-letf (((symbol-function 'decknix--agent-pr-author) (lambda (_) "human"))
             ((symbol-function 'decknix--hub-bot-author-p) (lambda (_) nil))
-            (decknix-agent-review-pr-model "reg-model"))
+            (decknix-agent-purpose-alist
+             '((pr-review     . (:provider auggie      :model "reg-model"))
+               (bot-pr-review . (:provider claude-code :model "bot-model")))))
     (let ((params (decknix--agent-review-get-params "url")))
-      (should (equal "reg-model" (car params)))
-      (should (equal "/review-service-pr" (cadr params))))))
+      (should (equal "reg-model"          (nth 0 params)))
+      (should (equal "/review-service-pr" (nth 1 params)))
+      (should (eq    'auggie              (nth 2 params))))))
 
 (provide 'decknix-agent-review-bot-test)
 ;;; decknix-agent-review-bot-test.el ends here

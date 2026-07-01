@@ -74,9 +74,8 @@ guard takes over once the buffer exists).")
 (declare-function decknix--agent-pr-detect-workspace "decknix-agent-shell-main-link")
 (declare-function decknix--agent-quickaction-start "decknix-agent-shell-main-link")
 (declare-function agent-shell-workspace-sidebar-refresh "agent-shell-workspace")
+(declare-function decknix-agent-purpose-resolve "decknix-agent-purposes")
 (defvar decknix--hub-reviews)
-(defvar decknix-agent-review-pr-model)
-(defvar decknix-agent-review-bot-pr-model)
 (defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
 
 ;; -- State cycle ----------------------------------------------------
@@ -185,15 +184,19 @@ Emacs session (dedup guards the file-notify->buffer-appears window)."
                  (workspace (decknix--agent-pr-detect-workspace owner repo))
                  (command-base (decknix-auto-review-resolve-command
                                 action workspace))
-                 (model (if (eq action 'ship)
-                            (or decknix-agent-review-bot-pr-model
-                                decknix-agent-review-pr-model)
-                          decknix-agent-review-pr-model))
+                 ;; `ship' targets the bot-pr-review purpose (cheap
+                 ;; model on the bot provider); `review' targets
+                 ;; pr-review (human-authored PRs).
+                 (purpose (if (eq action 'ship) 'bot-pr-review 'pr-review))
+                 (cfg (decknix-agent-purpose-resolve purpose))
+                 (model (plist-get cfg :model))
+                 (provider (plist-get cfg :provider))
                  (command (format "%s %s" command-base url)))
             ;; Mark before launching so a second file-notify tick during
             ;; session startup can't double-dispatch.
             (decknix-auto-review-mark-dispatched key)
-            (decknix--agent-quickaction-start name tags workspace command model)
+            (decknix--agent-quickaction-start
+             name tags workspace command model provider)
             (message "[auto-review] %s %s/%s#%s via %s"
                      action owner repo number command-base)
             action))))))
