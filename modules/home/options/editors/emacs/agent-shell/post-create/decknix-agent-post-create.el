@@ -25,10 +25,12 @@
 ;;                                 install comint input-filter hook
 ;;       deferred-no-metadata   -> only the prompt-ready subscription
 ;;
-;;   (decknix--post-create-buffer-name NAME)
-;;     -> "*Auggie: NAME*"
+;;   (decknix--post-create-buffer-name NAME &optional LABEL)
+;;     -> "*LABEL: NAME*"  (LABEL defaults to "Auggie")
 ;;     The single source of truth for the rename target.  Used by
-;;     bulk's `generate-new-buffer-name' wrapper.
+;;     bulk's `generate-new-buffer-name' wrapper.  LABEL is the
+;;     provider's human-readable label so Claude / Pi sessions are
+;;     named "*Claude: ...*" / "*Pi: ...*" instead of "*Auggie: ...*".
 ;;
 ;; Per AGENTS.md Rule 2 the `rename-buffer', `setq-local',
 ;; `decknix--agent-store-metadata-by-conv-key',
@@ -41,10 +43,11 @@
 
 ;;; Code:
 
-(defconst decknix--post-create-buffer-name-prefix "*Auggie: "
-  "Prefix used for the post-create buffer-name template.
-Pinned here so the formatter and bulk-caller `rename-buffer'
-target read from one source.")
+(defconst decknix--post-create-buffer-name-default-label "Auggie"
+  "Default provider label for the post-create buffer-name template.
+Used when `decknix--post-create-buffer-name' is called without an
+explicit LABEL — back-compat for callers that predate provider-aware
+naming.")
 
 (defconst decknix--post-create-buffer-name-suffix "*"
   "Suffix used for the post-create buffer-name template.")
@@ -80,13 +83,18 @@ subscription."
    ((or tags workspace) 'deferred-with-metadata)
    (t 'deferred-no-metadata)))
 
-(defun decknix--post-create-buffer-name (name)
+(defun decknix--post-create-buffer-name (name &optional label)
   "Return the canonical agent-shell buffer name for NAME.
 
-Returns \"*Auggie: NAME*\".  Bulk wraps the result in
-`generate-new-buffer-name' so concurrent batch launches with the
-same NAME still get unique buffers."
-  (concat decknix--post-create-buffer-name-prefix
+Returns \"*LABEL: NAME*\" where LABEL is the provider's human-readable
+label (e.g. \"Claude\", \"Auggie\").  LABEL defaults to
+`decknix--post-create-buffer-name-default-label' (\"Auggie\") when
+omitted so callers that predate provider-aware naming keep their
+names.  Bulk wraps the result in `generate-new-buffer-name' so
+concurrent batch launches with the same NAME still get unique buffers."
+  (concat "*"
+          (or label decknix--post-create-buffer-name-default-label)
+          ": "
           name
           decknix--post-create-buffer-name-suffix))
 

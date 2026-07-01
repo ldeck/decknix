@@ -60,5 +60,19 @@
   (should (equal "*Auggie: PR Review #42*"
                  (decknix--post-create-buffer-name "PR Review #42"))))
 
+(ert-deftest decknix-post-create--buffer-name-provider-label ()
+  "An explicit LABEL drives the *LABEL: NAME* prefix (provider-aware)."
+  (should (equal "*Claude: my-session*"
+                 (decknix--post-create-buffer-name "my-session" "Claude")))
+  (should (equal "*Pi: task*"
+                 (decknix--post-create-buffer-name "task" "Pi"))))
+
+(ert-deftest decknix-post-create--buffer-name-label-defaults-to-auggie ()
+  "Omitting LABEL falls back to the Auggie default (back-compat)."
+  (should (equal "*Auggie: s*"
+                 (decknix--post-create-buffer-name "s")))
+  (should (equal "*Auggie: s*"
+                 (decknix--post-create-buffer-name "s" nil))))
+
 (provide 'decknix-agent-post-create-test)
 ;;; decknix-agent-post-create-test.el ends here
