@@ -70,5 +70,35 @@
       (decknix--hub-worktree-discover-clones)
       (should (= 2 calls)))))
 
+(ert-deftest decknix-hub-worktree-cache--slow-compute-still-memoises ()
+  "Compute slower than the TTL must not invalidate its own memo.
+Regression: the wrapper used to capture `float-time' BEFORE the
+compute, so a 7 s compute against a 5 s TTL stored a memo stamped 7 s
+in the past.  The very next caller then saw (delta > TTL) and
+recomputed, doubling the render cost (15 s toggle observed against
+a 46-row sidebar).  The timestamp must reflect when the compute
+finished, not when it started."
+  (let ((calls 0)
+        (decknix--hub-worktree-clones-cache nil)
+        (fake-clock 100.0))
+    (cl-letf (((symbol-function 'float-time)
+               (lambda (&rest _) fake-clock))
+              ((symbol-function 'decknix--hub-worktree-discover-clones--compute)
+               (lambda ()
+                 (cl-incf calls)
+                 ;; Advance the fake clock past the TTL window to
+                 ;; simulate a slow compute.
+                 (cl-incf fake-clock 7.0)
+                 '(("o/r" . "/tmp/r")))))
+      (let ((decknix-hub-worktree-clones-cache-ttl 5))
+        ;; First call: cache empty -> compute runs; clock advances to
+        ;; 107.  Naive impl stamps memo with ts=100 (pre-compute).
+        ;; Correct impl stamps memo with ts=107 (post-compute).
+        (decknix--hub-worktree-discover-clones)
+        ;; Second call at t=107.  Naive: (107-100)=7 > 5 -> RECOMPUTE.
+        ;; Correct: (107-107)=0 < 5 -> hit.
+        (decknix--hub-worktree-discover-clones)
+        (should (= 1 calls))))))
+
 (provide 'decknix-hub-worktree-cache-test)
 ;;; decknix-hub-worktree-cache-test.el ends here
