@@ -46,6 +46,12 @@
 ;; targets, `.tmp' siblings) into a canonical JSON filename — see
 ;; `decknix--hub-on-file-change' below.
 (require 'decknix-hub-file-event)
+;; Render-path filesystem-fact cache.  Supplies the disk-free
+;; `decknix--hub-path-equal-p' / `decknix--hub-path-mtime' accessors
+;; the sidebar render uses instead of synchronous `file-equal-p' /
+;; `file-attributes'; the cache is warmed off the main thread by
+;; `decknix--hub-path-facts-refresh-all' on an idle timer.
+(require 'decknix-hub-path-facts)
 
 ;; Forward declarations for symbols defined elsewhere in the heredoc
 ;; or in already-extracted helper modules (most are resolved at runtime
@@ -1949,7 +1955,7 @@ the worktree state differs."
      ((not wt-path)
       (propertize "↓ "
                   'face '(:foreground "#5c6370" :weight bold)))
-     ((file-equal-p wt-path primary) "  ")
+     ((decknix--hub-path-equal-p wt-path primary) "  ")
      (t
       (let* ((live (decknix--hub-worktree-live-workspaces))
              (target (file-name-as-directory
@@ -2013,6 +2019,29 @@ the worktree state differs."
 No-op unless `decknix-hub-eager-clone-probe' is non-nil."
   (when decknix-hub-eager-clone-probe
     (decknix-hub-worktree-registry-refresh)))
+
+(defun decknix--hub-path-facts-refresh-all ()
+  "Idle worker: warm `decknix--hub-path-facts' for render-path paths.
+Walks the in-memory worktree registry (primaries + worktree paths)
+and live-session workspace dirs, refreshing the cache so the 2 s
+sidebar render reads canonical/mtime facts without any synchronous
+stat.  Cooperative via `decknix--hub-path-facts-refresh' (yields on
+pending input) and only ever invoked from an idle timer, so it
+never blocks or delays typing."
+  (let ((paths nil))
+    (maphash
+     (lambda (_repo entry)
+       (let ((primary (plist-get entry :primary)))
+         (when (stringp primary) (push primary paths)))
+       (dolist (wt (plist-get entry :worktrees))
+         (when (stringp (cdr wt)) (push (cdr wt) paths))))
+     decknix--hub-worktree-cache)
+    (when (fboundp 'agent-shell-buffers)
+      (dolist (buf (agent-shell-buffers))
+        (when (buffer-live-p buf)
+          (let ((dir (buffer-local-value 'default-directory buf)))
+            (when (stringp dir) (push dir paths))))))
+    (decknix--hub-path-facts-refresh (delete-dups paths))))
 
 (defun decknix--hub-write-linked-prs ()
   "Write linked-prs.json to the hub directory for the daemon.
@@ -3072,9 +3101,9 @@ than the cutoff (by directory mtime) are filtered out."
           (let* ((branch (car wt))
                  (path (cdr wt))
                  ;; Age check: skip if path mtime exceeds cutoff.
-                 (mtime (and age-cutoff path (file-exists-p path)
-                             (file-attribute-modification-time
-                              (file-attributes path))))
+                 ;; Reads the cached fact (nil when unprobed/missing ->
+                 ;; treated as age-unknown), never a synchronous stat.
+                 (mtime (and age-cutoff path (decknix--hub-path-mtime path)))
                  (age-secs (and mtime
                                 (float-time
                                  (time-subtract (current-time) mtime))))
@@ -3087,10 +3116,10 @@ than the cutoff (by directory mtime) are filtered out."
                                         live-set))))
             (when (and branch path
                        (not (member branch taken))
+                       ;; Drop the primary checkout from placeholders via
+                       ;; the disk-free cached-truename compare.
                        (not (and primary
-                                 (file-exists-p path)
-                                 (file-exists-p primary)
-                                 (file-equal-p path primary)))
+                                 (decknix--hub-path-equal-p path primary)))
                        (not too-old)
                        (or (not live-only) wt-live))
               (push (cons branch path) rows))))
@@ -3114,9 +3143,8 @@ submenu to operate on it, but no `decknix-hub-url' so the row's
 primary action is a no-op until a PR materialises."
   (let* ((branch (car wt))
          (path (cdr wt))
-         (mtime (and path (file-exists-p path)
-                     (file-attribute-modification-time
-                      (file-attributes path))))
+         ;; Cached mtime fact (disk-free); nil -> age renders as `?'.
+         (mtime (and path (decknix--hub-path-mtime path)))
          (age (if mtime
                   (decknix--hub-format-age
                    (format-time-string "%FT%T%z" mtime))
