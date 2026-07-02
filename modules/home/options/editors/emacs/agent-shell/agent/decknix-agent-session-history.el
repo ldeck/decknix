@@ -182,6 +182,33 @@ Returns nil if the file does not exist or fails to parse."
               (error-message-string err))
      nil)))
 
+(defun decknix--agent-session-jsonl-user-text (content)
+  "Extract displayable user text from a Claude JSONL user message CONTENT.
+CONTENT is either a string (a genuine user prompt) or a list of
+Anthropic content blocks.  Returns the concatenated text of any
+`text' blocks, or nil when CONTENT carries no user-authored text --
+e.g. a message whose blocks are all `tool_result' (the delivery of a
+tool call's output, which is part of the assistant's work loop, not a
+user turn).  Never returns the raw block list, so callers can treat
+the result as a string and never hit `wrong-type-argument stringp'."
+  (cond
+   ((stringp content) content)
+   ((listp content)
+    (let ((parts nil))
+      (dolist (block content)
+        ;; A text block is either explicitly typed \"text\" or a bare
+        ;; block carrying a `text' key; tool_result / tool_use blocks
+        ;; have no user-authored text and contribute nothing.
+        (when (consp block)
+          (let ((type (alist-get 'type block))
+                (text (alist-get 'text block)))
+            (when (and (stringp text)
+                       (or (null type) (string= type "text")))
+              (push text parts)))))
+      (when parts
+        (mapconcat #'identity (nreverse parts) "\n"))))
+   (t nil)))
+
 (defun decknix--agent-session-extract-all-turns-jsonl (file)
   "Extract turns from a Claude-style JSONL file."
   (condition-case err
@@ -203,13 +230,24 @@ Returns nil if the file does not exist or fails to parse."
                    (msg  (alist-get 'message data)))
               (cond
                ((string= type "user")
-                ;; Start of a new turn
-                (when cur-user
-                  (push (cons cur-user
-                              (mapconcat #'identity (nreverse cur-resp-parts) "\n"))
-                        turns))
-                (setq cur-user (alist-get 'content msg)
-                      cur-resp-parts nil))
+                ;; Start of a new turn -- but ONLY for a genuine user
+                ;; prompt.  Claude delivers tool-call results as `user'
+                ;; messages whose `content' is a list of `tool_result'
+                ;; blocks (no user-authored text); those are part of the
+                ;; assistant's own work loop, so they must not split the
+                ;; turn nor be stored as `cur-user' (a non-string there
+                ;; caused `wrong-type-argument stringp' on restore).
+                (let ((text (decknix--agent-session-jsonl-user-text
+                             (alist-get 'content msg))))
+                  (when (and text
+                             (not (string-empty-p (string-trim text))))
+                    (when cur-user
+                      (push (cons cur-user
+                                  (mapconcat #'identity
+                                             (nreverse cur-resp-parts) "\n"))
+                            turns))
+                    (setq cur-user text
+                          cur-resp-parts nil))))
                ((string= type "assistant")
                 ;; Accumulate assistant response parts
                 (let* ((content (alist-get 'content msg))
