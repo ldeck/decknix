@@ -118,6 +118,18 @@ includes `me'."
 True when one of the viewer's teams was requested as a reviewer."
   (eq (alist-get 'team_requested item) t))
 
+(defun decknix--hub-item-reviewed-by-me-p (item)
+  "Return non-nil if the viewer has personally submitted a review on ITEM.
+Uses the `my_review' field, which carries the viewer's latest review
+state (\"APPROVED\", \"CHANGES_REQUESTED\", \"COMMENTED\", \"DISMISSED\",
+\"PENDING\").  Once I have engaged as a reviewer I am personally on the
+PR — GitHub lists me individually in the Reviewers box — even if the
+underlying review *request* only names one of my teams.  This lets the
+sidebar treat such a PR as mine rather than pure team-noise."
+  (let ((state (alist-get 'my_review item)))
+    (and (stringp state)
+         (not (string-empty-p state)))))
+
 (defun decknix--hub-mention-visible-p (item)
   "Return non-nil if ITEM passes the current mention filter.
 Always returns t when filter is `nil'.  When filtering, PRs I
