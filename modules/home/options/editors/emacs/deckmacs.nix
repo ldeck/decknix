@@ -114,6 +114,45 @@ in
                 (push feat unloaded))))
           (nreverse unloaded)))
 
+      (defun deckmacs--strip-stale-decknix-advice ()
+        "Remove any advice whose function symbol starts with \"decknix-\"
+      and is currently fmakunbound.  Returns the count of advice-remove
+      calls.
+
+      `unload-feature' fmakunbounds a package's defuns but does NOT
+      remove advice that OTHER function symbols have attached to
+      those defuns (the advice registration lives on the advised
+      symbol, not the advice function's package).  Any such surviving
+      advice raises `(void-function ...)' the next time the advised
+      function runs -- and because `deckmacs-reload' invokes
+      `load-file' on the new default.el directly after unloading, an
+      early call from that new file that triggers stale advice will
+      abort the load mid-way, leaving the daemon with a half-loaded
+      feature set (concretely: any `(require ...)' beyond the abort
+      point never runs, and the timers / advice already registered
+      from the previous daemon lifetime keep firing into voidness).
+
+      Calling this between the unload and load-file steps guarantees
+      the next load starts from a clean advice slate regardless of
+      which decknix-* module owned which advice."
+        (let ((stripped 0))
+          (mapatoms
+           (lambda (sym)
+             (when (fboundp sym)
+               (let ((to-remove nil))
+                 (advice-mapc
+                  (lambda (adv-fn _props)
+                    (when (and (symbolp adv-fn)
+                               (string-prefix-p "decknix-"
+                                                (symbol-name adv-fn))
+                               (not (fboundp adv-fn)))
+                      (push adv-fn to-remove)))
+                  sym)
+                 (dolist (adv to-remove)
+                   (advice-remove sym adv)
+                   (setq stripped (1+ stripped)))))))
+          stripped))
+
       ;; == Reload ==
 
       (defvar deckmacs-pre-reload-hook nil
@@ -178,20 +217,22 @@ in
                           fn (error-message-string err)))))
             (let* ((old-store deckmacs--loaded-store-path)
                    (rewritten (deckmacs--swap-store-paths new-store))
-                   (unloaded (deckmacs--unload-decknix-features)))
+                   (unloaded (deckmacs--unload-decknix-features))
+                   (stripped (deckmacs--strip-stale-decknix-advice)))
               (load-file new-el)
               (setq deckmacs--loaded-store-path new-store)
               (setq deckmacs--reload-count (1+ deckmacs--reload-count))
               (push (list timestamp new-store
                          (if old-store "reload" "initial"))
                     deckmacs--reload-history)
-              (message "Deckmacs: Reloaded default.el%s (%s); rewrote %d load-path entries, unloaded %d decknix-* features"
+              (message "Deckmacs: Reloaded default.el%s (%s); rewrote %d load-path entries, unloaded %d decknix-* features, stripped %d stale advice"
                        (if old-store
                            (format " (store path changed)")
                          " (initial load tracked)")
                        (deckmacs--short-store-path new-store)
                        rewritten
-                       (length unloaded))
+                       (length unloaded)
+                       stripped)
               ;; Notify listeners that the reload cycle is complete and all
               ;; decknix-* features are live at the new store path.
               ;; Hooks added to this variable survive the unload step because
