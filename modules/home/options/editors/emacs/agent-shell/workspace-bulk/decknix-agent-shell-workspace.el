@@ -1915,10 +1915,22 @@ the visible count matches the heading."
 ;; refreshes every 2s and on hub file-notify events, so a 2s TTL
 ;; matches the user-visible refresh cadence while capping the
 ;; redisplay-driven recomputes at 0.5 Hz.
+;;
+;; CRITICAL: the recompute must NEVER run inside the header-line
+;; `:eval' (i.e. on the redisplay path).  The grouping chain fires
+;; O(N) `file-attributes' stat syscalls; doing that synchronously
+;; during redisplay stalls the very first frame after the sidebar
+;; window is selected (cold/expired cache) and manifests as the
+;; arrow key "locking up" for a beat when you switch to the sidebar.
+;; So `decknix--sidebar-saved-count' only ever *reads* the cached
+;; scalar; when the cache is stale it schedules the recompute on an
+;; idle timer (off the redisplay path) and repaints the header-line
+;; once the fresh value lands.
 (defvar decknix--sidebar-saved-count-cache nil
   "Cached length of `decknix--agent-session-group-by-conversation'.
-Refreshed lazily by `decknix--sidebar-saved-count'; see the header-line
-comment for why this is cached.")
+Refreshed off the redisplay path by
+`decknix--sidebar-saved-count-recompute'; see the header-line comment
+for why this is never computed inside the header-line `:eval'.")
 
 (defvar decknix--sidebar-saved-count-cache-time 0.0
   "`float-time' when `decknix--sidebar-saved-count-cache' was last set.")
@@ -1926,18 +1938,41 @@ comment for why this is cached.")
 (defconst decknix--sidebar-saved-count-ttl 2.0
   "Seconds to trust the cached saved-count before recomputing.")
 
+(defvar decknix--sidebar-saved-count-refresh-timer nil
+  "Idle timer coalescing off-redisplay saved-count recomputes, or nil.")
+
+(defun decknix--sidebar-saved-count-recompute ()
+  "Recompute the saved-count cache, then repaint the header-line.
+Runs off the redisplay path (idle timer) so the O(N) stat-syscall
+grouping work never blocks cursor motion.  After refreshing the
+scalar it marks all mode-lines/header-lines for update so the
+sidebar reflects the new value on the next redisplay — which then
+just reads the now-fresh cache without recomputing."
+  (setq decknix--sidebar-saved-count-refresh-timer nil)
+  (setq decknix--sidebar-saved-count-cache-time (float-time))
+  (setq decknix--sidebar-saved-count-cache
+        (condition-case nil
+            (length (decknix--agent-session-group-by-conversation
+                     (decknix--agent-session-list)))
+          (error 0)))
+  ;; Cheap: just flags buffers for redisplay, does not itself redraw.
+  (force-mode-line-update t))
+
 (defun decknix--sidebar-saved-count ()
-  "Return the number of saved conversations, cached with a short TTL."
-  (if (and decknix--sidebar-saved-count-cache
-           (< (- (float-time) decknix--sidebar-saved-count-cache-time)
-              decknix--sidebar-saved-count-ttl))
-      decknix--sidebar-saved-count-cache
-    (setq decknix--sidebar-saved-count-cache-time (float-time))
-    (setq decknix--sidebar-saved-count-cache
-          (condition-case nil
-              (length (decknix--agent-session-group-by-conversation
-                       (decknix--agent-session-list)))
-            (error 0)))))
+  "Return the cached saved-conversation count without blocking redisplay.
+Returns the last-computed scalar immediately (0 before the first
+recompute lands).  When the cache is missing or older than
+`decknix--sidebar-saved-count-ttl', schedule an idle recompute — but
+never compute inline, so the header-line `:eval' stays O(1) on the
+redisplay path.  See the header-line comment above for the rationale."
+  (when (and (or (null decknix--sidebar-saved-count-cache)
+                 (>= (- (float-time) decknix--sidebar-saved-count-cache-time)
+                     decknix--sidebar-saved-count-ttl))
+             (not decknix--sidebar-saved-count-refresh-timer))
+    (setq decknix--sidebar-saved-count-refresh-timer
+          (run-with-idle-timer
+           0.2 nil #'decknix--sidebar-saved-count-recompute)))
+  (or decknix--sidebar-saved-count-cache 0))
 
 ;; -- New sidebar commands --
 (defun decknix-sidebar-set-workspace ()
