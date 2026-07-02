@@ -95,6 +95,34 @@
     (should (null decknix--sidebar-paint-timer))
     (should-not decknix--sidebar-paint-in-progress)))
 
+;; -- Paint tick: yields to pending input ----------------------------
+
+(ert-deftest decknix-sidebar-paint--tick-paints-when-no-input ()
+  "With no input pending the tick runs the real paint and does not reschedule."
+  (decknix-sidebar-paint-test--isolated
+    (let ((painted nil) (scheduled nil))
+      (cl-letf (((symbol-function 'input-pending-p) (lambda () nil))
+                ((symbol-function 'decknix--sidebar-paint-now)
+                 (lambda (fn) (setq painted fn)))
+                ((symbol-function 'decknix--sidebar-schedule-paint)
+                 (lambda (fn) (setq scheduled fn))))
+        (decknix--sidebar-paint-tick)
+        (should (eq painted #'agent-shell-workspace-sidebar-refresh))
+        (should-not scheduled)))))
+
+(ert-deftest decknix-sidebar-paint--tick-redefers-on-pending-input ()
+  "When input is pending the tick re-defers and does NOT paint in front of it."
+  (decknix-sidebar-paint-test--isolated
+    (let ((painted nil) (scheduled nil))
+      (cl-letf (((symbol-function 'input-pending-p) (lambda () t))
+                ((symbol-function 'decknix--sidebar-paint-now)
+                 (lambda (fn) (setq painted fn)))
+                ((symbol-function 'decknix--sidebar-schedule-paint)
+                 (lambda (fn) (setq scheduled fn))))
+        (decknix--sidebar-paint-tick)
+        (should (eq scheduled #'decknix--sidebar-paint-tick))
+        (should-not painted)))))
+
 ;; -- Debounce advice: defer vs paint-through ------------------------
 
 (ert-deftest decknix-sidebar-paint--advice-defers-when-idle ()
