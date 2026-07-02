@@ -317,6 +317,10 @@ registry (`decknix-agent-provider.el`).
 | Auggie | `auggie` | `A` | ✅ Fully working | built into `auggie` CLI |
 | Claude Code | `claude-code` | `C` | ⚠️ Needs ACP bridge | `claude-agent-acp` (see below) |
 | Pi | `pi` | `P` | ⚠️ Needs ACP bridge | `pi-acp` (see below) |
+| Gemini CLI | `gemini` | `G` | ✅ Working (new sessions) | built into `gemini --experimental-acp` |
+| OpenCode | `opencode` | `O` | ✅ Working (new sessions) | built into `opencode acp` |
+| Goose | `goose` | `🪿` | ✅ Working (new sessions) | built into `goose acp` |
+| Qwen Code | `qwen-code` | `Q` | ✅ Working (new sessions) | built into `qwen --experimental-acp` |
 
 **Default provider**: `claude-code` — `C-u C-c A n` (QUICK) creates a Claude
 session without prompting. Regular `C-c A n` prompts for provider selection.
@@ -343,6 +347,41 @@ Sessions live in `~/.pi/sessions/`. Session file format will be discovered on
 first use; the `:session-jq-filter` in the registry is pending (sessions won't
 appear in `C-c A s` until the field is populated).
 
+#### OpenCode / Goose / Qwen Code — Setup
+
+Three "built-in ACP" providers: the CLI speaks ACP directly (no adapter),
+and each is a single nixpkgs package enabled via its module:
+
+- `decknix.ai.opencode.enable` → `pkgs.opencode` (`opencode acp`)
+- `decknix.ai.goose.enable` → `pkgs.goose-cli` (`goose acp`; binary `goose`)
+- `decknix.ai.qwen.enable` → `pkgs.qwen-code` (`qwen --experimental-acp`)
+
+Each authenticates via its own login/config (run the CLI once standalone).
+As with Gemini, saved-session resume/picker is best-effort (no shared
+sessions schema); new sessions via `C-c A n` work fully.
+
+**Local Ollama models** are not a separate provider — Ollama has no ACP
+interface.  Run them through **Goose** (or OpenCode): configure a Goose
+provider pointed at Ollama's server (`http://localhost:11434`), then start
+a normal Goose session.
+
+#### Gemini CLI — Setup
+
+The `decknix.ai.gemini` module (`decknix.ai.gemini.enable = true`) installs
+`pkgs.gemini-cli`; the CLI speaks ACP directly via `gemini --experimental-acp`
+(no separate adapter, unlike Claude/Pi). Provided by upstream
+`agent-shell-google.el` (buffer name "Gemini CLI").
+
+Authentication defaults to Google login (`agent-shell-google-authentication`
+`:login t`). Run `gemini` once standalone to complete the OAuth flow; API-key
+(`GEMINI_API_KEY`) and Vertex AI auth are also selectable via that variable.
+
+Like Claude/Pi it is flagless (no `:model-launch-flag`), so a per-conversation
+model set with `C-c C-v` is replayed over ACP rather than pinned on launch.
+Gemini does not expose a flat resumable sessions directory with the shared
+schema, so **saved-session resume/picker (`C-c A s`) is best-effort** — new
+sessions (`C-c A n`) work fully.
+
 ### Provider Selection
 - **New sessions** (`C-c A n`): Prompts for provider if more than one is
   registered. `C-u C-c A n` (QUICK) skips provider selection and uses the
@@ -362,30 +401,34 @@ appear in `C-c A s` until the field is populated).
   `agent-shell/fork/decknix-agent-fork.el`.
 - **Resuming**: Automatically restores the correct provider based on session
   metadata.
-- **Sidebar**: Displays the provider glyph (A/C/P) for each live session.
+- **Sidebar**: Displays the provider glyph (A/C/P/G) for each live session.
 
 ### Future Providers — Assessment
 
 Providers that could be added via the same registry pattern.
 All require both a CLI tool AND an ACP bridge (either built-in or separate).
 
-| Provider | CLI tool | ACP bridge | Nixpkgs? | Notes |
-|----------|----------|-----------|----------|-------|
-| **OpenCode** | `opencode` (✅ in `home.packages`) | built-in (`opencode --acp`?) | CLI is in nixpkgs | Already installed; register once ACP mode confirmed |
-| **Gemini CLI** | `gemini` | built-in `--experimental-acp` flag | Not in nixpkgs | `npm install -g @google/gemini-cli`; uses login auth |
-| **Goose** | `goose` | built-in | Not in nixpkgs | `curl install`; open-source by Block Inc |
-| **Mistral Vibe** | `mistral-vibe` | built-in | Not in nixpkgs | `uv tool install mistral-vibe`; needs `MISTRAL_API_KEY` |
-| **Cursor** | Cursor IDE | `cursor-agent-acp` npm pkg | Neither | `npm install -g @blowmage/cursor-agent-acp`; IDE-dependent |
-| **Kimi Code** | `kimi` CLI | built-in | Not in nixpkgs | `curl` install; China-based provider |
-| **Kiro** | `kiro` CLI | built-in | Not in nixpkgs | `curl` install; AWS-backed |
-| **Qwen Code** | `qwen-code` | built-in | Not in nixpkgs | `npm install -g @qwen-code/qwen-code` |
-| **CodeBuddy** | `codebuddy` | built-in `--acp` | Not in nixpkgs | Install via CodeBuddy docs |
+Upstream `agent-shell` ships modules for all of these; the remaining
+work is the ACP bridge and/or packaging the CLI.
 
-**Priority order** (based on ecosystem relevance and auth simplicity):
-1. **OpenCode** — already installed, confirm ACP mode and register
-2. **Gemini CLI** — broad availability, login auth (no API key needed)
-3. **Goose** — open-source, OpenAI-compatible
-4. Others as needed
+| Provider | Upstream module | ACP entrypoint | CLI in nixpkgs | Bridge work | Tier |
+|----------|-----------------|----------------|----------------|-------------|------|
+| **Codex** | `agent-shell-openai` | separate `codex-acp` (Rust, zed-industries) | ✅ `codex` | package Rust bridge | 2 |
+| **Cursor** | `agent-shell-cursor` | separate `cursor-agent-acp` | ✅ `cursor-cli` | package npm bridge (`@blowmage/cursor-agent-acp`) | 2 |
+| **Factory Droid** | `agent-shell-droid` | separate `droid-acp` | ❌ (curl/npm) | npm bridge (`droid-acp`) + source CLI | 3 |
+| **Mistral Vibe** | `agent-shell-mistral` | separate `vibe-acp` | ❌ (uv) | bridge not on npm + source CLI | 3 |
+| **Kiro** | ❌ none | unverified | `kiro` (not `kiro-cli`) | custom module + verify ACP | 3 |
+| **Kimi Code** | ❌ none | unverified | ❌ | custom module + source CLI + verify ACP | 3 |
+| **Oh My Pi (omp)** | ❌ none | unknown | ❌ | identify + verify ACP (maybe reuse `pi-acp`) | 3 |
+
+**Ollama** is not a provider (no ACP interface) — run local models through
+Goose/OpenCode pointed at `http://localhost:11434` (see the Setup note above).
+
+Glyphs to assign when these land (avoid collisions): Codex `〉`, Cursor `⼕`,
+Kiro `👻` (Claude=`C`, Gemini/Goose=`G`/`🪿`, Kimi=`K` already taken).
+
+(**Auggie, Claude, Pi, Gemini, OpenCode, Goose, Qwen Code** are registered —
+see *Supported Providers* above.)
 
 To register a new provider, add an entry in `agent-shell.nix` matching the
 `decknix-agent-register-provider` pattern at lines 2168–2201, then add

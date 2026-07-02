@@ -49,10 +49,10 @@
                    (decknix-agent-purpose-resolve 'bot-pr-review)))))
 
 (ert-deftest decknix-agent-purpose-resolve-unknown-falls-back-to-default ()
-  "Unknown purposes return the default provider and no model pin."
+  "Unknown purposes return the default provider and no model/mode pin."
   (let ((decknix-agent-purpose-alist nil)
         (decknix-agent-default-provider 'claude-code))
-    (should (equal (list :provider 'claude-code :model nil)
+    (should (equal (list :provider 'claude-code :model nil :mode nil)
                    (decknix-agent-purpose-resolve 'nonsense)))))
 
 (ert-deftest decknix-agent-purpose-validate-coerces-unknown-provider ()
@@ -95,8 +95,8 @@
          (decknix-agent-known-models
           '((auggie . ("prism-a" "opus4.7" "haiku4.5")))))
      (decknix-agent-purpose-validate)
-     (should (equal '((pr-review     . (:provider auggie :model "prism-a"))
-                      (bot-pr-review . (:provider auggie :model "haiku4.5")))
+     (should (equal '((pr-review     . (:provider auggie :model "prism-a" :mode nil))
+                      (bot-pr-review . (:provider auggie :model "haiku4.5" :mode nil)))
                     decknix-agent-purpose-alist)))))
 
 (ert-deftest decknix-agent-purpose-validate-allows-nil-known-list ()
@@ -109,6 +109,47 @@
      (should (equal "some-future-pi-model"
                     (plist-get (decknix-agent-purpose-resolve 'pr-review)
                                :model))))))
+
+;; -- Session/permission mode (:mode) -------------------------------
+
+(ert-deftest decknix-agent-purpose-resolve-includes-mode ()
+  "Resolver surfaces a stored :mode verbatim."
+  (let ((decknix-agent-purpose-alist
+         '((new-session . (:provider claude-code :model nil :mode "auto")))))
+    (should (equal "auto"
+                   (plist-get (decknix-agent-purpose-resolve 'new-session)
+                              :mode)))))
+
+(ert-deftest decknix-agent-purpose-validate-keeps-valid-claude-mode ()
+  "A known Claude mode survives validation."
+  (decknix-purpose-test--with-registry
+   (let ((decknix-agent-purpose-alist
+          '((pr-review . (:provider claude-code :model "sonnet" :mode "auto"))))
+         (decknix-agent-known-models '((claude-code . ("sonnet" "opus" "haiku"))))
+         (decknix-agent-known-modes '((claude-code . ("default" "auto" "acceptEdits")))))
+     (decknix-agent-purpose-validate)
+     (should (equal "auto"
+                    (plist-get (decknix-agent-purpose-resolve 'pr-review) :mode))))))
+
+(ert-deftest decknix-agent-purpose-validate-drops-unknown-mode ()
+  "A mode not on the provider's known-mode list is dropped to nil."
+  (decknix-purpose-test--with-registry
+   (let ((decknix-agent-purpose-alist
+          '((pr-review . (:provider claude-code :model "sonnet" :mode "turbo"))))
+         (decknix-agent-known-models '((claude-code . ("sonnet"))))
+         (decknix-agent-known-modes '((claude-code . ("default" "auto")))))
+     (decknix-agent-purpose-validate)
+     (should (null (plist-get (decknix-agent-purpose-resolve 'pr-review) :mode))))))
+
+(ert-deftest decknix-agent-purpose-validate-drops-mode-for-modeless-provider ()
+  "A provider with no known-mode entry (auggie) drops any mode to nil."
+  (decknix-purpose-test--with-registry
+   (let ((decknix-agent-purpose-alist
+          '((pr-review . (:provider auggie :model "prism-a" :mode "auto"))))
+         (decknix-agent-known-models '((auggie . ("prism-a"))))
+         (decknix-agent-known-modes '((claude-code . ("auto")))))
+     (decknix-agent-purpose-validate)
+     (should (null (plist-get (decknix-agent-purpose-resolve 'pr-review) :mode))))))
 
 (provide 'decknix-agent-purposes-test)
 ;;; decknix-agent-purposes-test.el ends here

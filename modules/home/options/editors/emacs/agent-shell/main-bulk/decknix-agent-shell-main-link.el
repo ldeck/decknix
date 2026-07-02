@@ -173,7 +173,7 @@ provider selection are handled by `decknix-agent-purpose-alist'
 ;; -- Quickaction primitive --
 
 (defun decknix--agent-quickaction-start (name tags workspace command
-                                              &optional model provider-id)
+                                              &optional model provider-id mode)
   "Start a quick-action session with NAME, TAGS, WORKSPACE, and auto-send COMMAND.
 Creates a new agent session, applies metadata, then subscribes to the
 `prompt-ready' event to send COMMAND as soon as the ACP session is
@@ -187,6 +187,9 @@ nil (default), no `--model' flag is added and auggie falls back to
 the framework default in `~/.augment/settings.json'.
 Optional PROVIDER-ID specifies the agent provider (defaults to
 `decknix-agent-default-provider').
+Optional MODE seeds the session/permission mode (e.g. Claude \"auto\")
+so unattended review sessions do not stall on a permission prompt;
+ignored by providers without session modes.
 When invoked from a dedicated or side window (e.g., the sidebar), the
 new session is displayed in the frame's main window instead of
 replacing the caller, preserving the sidebar.
@@ -216,7 +219,7 @@ Split below per pane); the default selection lands on
          (before-buffers (buffer-list))
          (provider (or provider-id decknix-agent-default-provider))
          (augmented-cmd (decknix--agent-command-build provider workspace model))
-         (config (decknix--agent-make-config provider augmented-cmd)))
+         (config (decknix--agent-make-config provider augmented-cmd mode)))
     ;; Placement prompt: when the caller is not the sidebar AND the
     ;; current frame has 3+ non-sidebar windows, ask which pane the
     ;; new session should land in (or split off).  The carved

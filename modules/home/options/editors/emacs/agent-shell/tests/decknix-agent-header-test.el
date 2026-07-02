@@ -161,6 +161,27 @@ grey = initializing/unknown."
     (let ((agent-shell--state '(:agent-config (:buffer-name "Gemini"))))
       (should (equal (decknix--header-agent-glyph) "G")))))
 
+(ert-deftest decknix-header-agent-glyph--opencode ()
+  "OpenCode maps to \"O\"."
+  (cl-letf (((symbol-function 'map-nested-elt)
+             (lambda (_state _keys) "OpenCode")))
+    (let ((agent-shell--state '(:agent-config (:buffer-name "OpenCode"))))
+      (should (equal (decknix--header-agent-glyph) "O")))))
+
+(ert-deftest decknix-header-agent-glyph--goose ()
+  "Goose maps to the goose emoji (explicit, to avoid a \"G\" clash with Gemini)."
+  (cl-letf (((symbol-function 'map-nested-elt)
+             (lambda (_state _keys) "Goose")))
+    (let ((agent-shell--state '(:agent-config (:buffer-name "Goose"))))
+      (should (equal (decknix--header-agent-glyph) "🪿")))))
+
+(ert-deftest decknix-header-agent-glyph--qwen ()
+  "Qwen Code maps to \"Q\"."
+  (cl-letf (((symbol-function 'map-nested-elt)
+             (lambda (_state _keys) "Qwen Code")))
+    (let ((agent-shell--state '(:agent-config (:buffer-name "Qwen Code"))))
+      (should (equal (decknix--header-agent-glyph) "Q")))))
+
 (ert-deftest decknix-header-agent-glyph--unknown-falls-back-to-first-char ()
   "Unknown agent name falls back to first character uppercased."
   (cl-letf (((symbol-function 'map-nested-elt)

@@ -73,6 +73,7 @@ Use C-u prefix with the session picker to override.")
 (declare-function decknix--agent-command-build "decknix-agent-provider")
 (declare-function decknix--agent-make-config "decknix-agent-provider")
 (declare-function decknix--agent-model-replay-needed-p "decknix-agent-provider")
+(declare-function decknix-agent-purpose-resolve "decknix-agent-purposes")
 (defvar decknix-agent-default-provider)
 
 ;; Forward declarations for sibling decknix carved packages used by
@@ -2193,7 +2194,12 @@ workspace = project root, no tags; name is still derived automatically."
          ;; (when the first message is sent) — by which time a dynamic
          ;; let-binding would have expired.
          (augmented-cmd (decknix--agent-command-build provider workspace))
-         (config (decknix--agent-make-config provider augmented-cmd)))
+         ;; Seed the session/permission mode from the `new-session'
+         ;; purpose (e.g. Claude "auto") so user-created sessions no
+         ;; longer need a manual `C-c RET' each time.  Ignored by
+         ;; providers without session modes (see `decknix--agent-make-config').
+         (mode (plist-get (decknix-agent-purpose-resolve 'new-session) :mode))
+         (config (decknix--agent-make-config provider augmented-cmd mode)))
     ;; Set default-directory so agent-shell-cwd picks up the chosen
     ;; workspace instead of inheriting the calling buffer's directory
     ;; (which may be ~/ when invoked from the welcome screen).
