@@ -5046,6 +5046,18 @@ duration -- the most important number on this branch."
         (add-hook 'emacs-startup-hook
                   #'decknix--sidebar-previous-history-restore
                   80)
+        ;; Restore the persisted Previous Sessions list (priority 90)
+        ;; BEFORE the snapshot at 100.  A daemon kickstart (or any cold
+        ;; start where the previous run left no live sessions) yields an
+        ;; empty live file; `decknix--sidebar-snapshot-previous-from-live'
+        ;; deliberately keeps "whatever the priority-90 restore set" in
+        ;; that case (see its docstring).  Without this hook the restore
+        ;; never ran on a fresh daemon start — only on hot-reload — so the
+        ;; Previous section went blank after `launchctl kickstart' even
+        ;; though the cached list was on disk.
+        (add-hook 'emacs-startup-hook
+                  #'decknix--sidebar-previous-sessions-restore
+                  90)
         ;; Restore the worktree clone map early (priority 70) to avoid
         ;; blocking the first sidebar render with git process calls.
         (add-hook 'emacs-startup-hook
