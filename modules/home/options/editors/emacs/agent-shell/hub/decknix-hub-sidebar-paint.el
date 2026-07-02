@@ -36,10 +36,13 @@
 ;; called through the advice, so a forward declaration is enough.
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
 
-(defvar decknix-sidebar-paint-idle-delay 0.3
+(defvar decknix-sidebar-paint-idle-delay 0.6
   "Idle seconds to wait before repainting the sidebar after a request.
-Small enough to feel immediate on a natural typing pause, large enough
-that it never fires between two consecutive keystrokes.")
+Small enough to feel near-immediate on a natural typing pause, large
+enough that it never fires between two consecutive keystrokes.  Raised
+from 0.3 to 0.6 so a brief think-pause mid-typing no longer triggers the
+~100ms repaint in front of the next keystroke; the paint tick also
+re-defers when input is pending (see `decknix--sidebar-paint-tick').")
 
 (defvar decknix--sidebar-paint-timer nil
   "The single pending coalesced repaint timer, or nil when none is armed.")
@@ -80,8 +83,15 @@ cannot leave the guard stuck."
     (ignore-errors (funcall refresh-fn))))
 
 (defun decknix--sidebar-paint-tick ()
-  "Idle-timer entry point: perform the real sidebar repaint."
-  (decknix--sidebar-paint-now #'agent-shell-workspace-sidebar-refresh))
+  "Idle-timer entry point: perform the real sidebar repaint.
+If the user has resumed typing by the moment the idle timer fires
+\(`input-pending-p'), re-defer onto a fresh idle timer rather than run
+the ~100ms synchronous paint ahead of that queued keystroke.  The paint
+then lands on the next genuine pause, so continuous typing yields zero
+paints and never a visible input hitch."
+  (if (input-pending-p)
+      (decknix--sidebar-schedule-paint #'decknix--sidebar-paint-tick)
+    (decknix--sidebar-paint-now #'agent-shell-workspace-sidebar-refresh)))
 
 (defun decknix--sidebar-refresh-debounce-advice (orig-fn &rest args)
   "Around-advice for `agent-shell-workspace-sidebar-refresh'.
