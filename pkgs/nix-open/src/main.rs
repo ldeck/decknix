@@ -324,13 +324,32 @@ fn launchctl_ensure_args(uid: u32) -> Vec<String> {
     ]
 }
 
+/// Quiet wait applied *before* the first frame attempt, to cover the window
+/// between a fresh daemon process appearing in `ps` and it finishing
+/// `init.el` / `(server-start)` and binding its socket.  Empirically 2–3 s
+/// on a populated decknix session; 5 s gives comfortable headroom without
+/// noticeably slowing the healthy-daemon path (a live daemon answers on the
+/// very first probe, ~zero cost).
+const EMACS_PRE_POLL_SECS: u64 = 5;
+
+/// Fallback wait after an explicit `launchctl kickstart`.  Longer than the
+/// pre-poll because a cold spawn from launchd includes process fork plus the
+/// full init cycle.
+const EMACS_FALLBACK_POLL_SECS: u64 = 20;
+
 /// Attempt to create the GUI frame.  Returns true on success.
-fn try_emacs_frame(client: &str) -> bool {
-    Command::new(client)
-        .args(emacsclient_frame_args())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+///
+/// When `quiet` is true, suppresses emacsclient's stderr so the caller can
+/// probe silently during the pre-poll window (where "socket not found" is
+/// expected and handled by retry).  The noisy fallback path leaves stderr
+/// inherited so genuine failures still surface to the user.
+fn try_emacs_frame(client: &str, quiet: bool) -> bool {
+    let mut cmd = Command::new(client);
+    cmd.args(emacsclient_frame_args());
+    if quiet {
+        cmd.stderr(Stdio::null());
+    }
+    cmd.status().map(|s| s.success()).unwrap_or(false)
 }
 
 /// Parse the `pid = N` line out of `launchctl print` output.  Factored out so
@@ -430,13 +449,29 @@ fn wait_for_emacs_daemon(client: &str, timeout_secs: u64) -> bool {
 /// launchd server, and if that server is not answering it kickstarts
 /// `org.nixos.emacs-server` (launchd-managed, so it is supervised and reaped)
 /// and retries once the socket is ready.
+///
+/// The first attempt is preceded by a quiet pre-poll: right after a manual
+/// `launchctl kickstart -k`, the daemon process appears in `ps` within a
+/// second but does not bind its socket until `init.el` and `(server-start)`
+/// have run.  Probing during that window would dump raw emacsclient
+/// "can't find socket" errors and print a misleading "kickstarting" message
+/// even though the daemon is alive and about to answer.  Pre-polling
+/// silently absorbs that init window.
 fn handle_emacs_daemon_frame() -> bool {
     let client = emacsclient_path();
     let uid = unsafe { libc::getuid() };
     eprintln!("🖥️  Emacs: creating daemon frame via emacsclient");
 
+    // Quiet pre-poll: covers the "daemon process exists but socket not yet
+    // bound" window after a fresh spawn.  A healthy daemon answers on the
+    // first probe, so this is ~zero cost in the common case.
+    let _ = wait_for_emacs_daemon(&client, EMACS_PRE_POLL_SECS);
+
     // First attempt: connect to the launchd-managed daemon (no `-a ""`).
-    if try_emacs_frame(&client) {
+    // `quiet=true` suppresses stderr so a still-initialising daemon does not
+    // leak raw emacsclient socket errors; the loud fallback path below keeps
+    // stderr inherited so genuine failures still surface.
+    if try_emacs_frame(&client, /* quiet */ true) {
         activate_emacs_app(uid);
         eprintln!("   ✅ Emacs frame opened");
         return true;
@@ -449,7 +484,9 @@ fn handle_emacs_daemon_frame() -> bool {
         .args(launchctl_ensure_args(uid))
         .status();
 
-    if wait_for_emacs_daemon(&client, 20) && try_emacs_frame(&client) {
+    if wait_for_emacs_daemon(&client, EMACS_FALLBACK_POLL_SECS)
+        && try_emacs_frame(&client, /* quiet */ false)
+    {
         activate_emacs_app(uid);
         eprintln!("   ✅ Emacs frame opened");
         return true;
@@ -650,6 +687,35 @@ mod tests {
         assert_eq!(
             parse_pid_from_launchctl_print("Could not find service\n"),
             None,
+        );
+    }
+
+    #[test]
+    fn pre_poll_is_shorter_than_fallback_poll() {
+        // The pre-poll runs on every `nix-open emacs` — including the
+        // happy path where the daemon is already up.  It must be strictly
+        // shorter than the post-kickstart fallback poll so a genuine "daemon
+        // is down" case still spends the bulk of its budget waiting on the
+        // cold spawn, not on the pre-flight check.
+        assert!(
+            EMACS_PRE_POLL_SECS < EMACS_FALLBACK_POLL_SECS,
+            "pre-poll ({}s) must be shorter than fallback poll ({}s)",
+            EMACS_PRE_POLL_SECS,
+            EMACS_FALLBACK_POLL_SECS,
+        );
+    }
+
+    #[test]
+    fn pre_poll_covers_daemon_init_window() {
+        // A fresh `launchctl kickstart -k` daemon takes ~2–3s on a populated
+        // decknix session to load init.el and call (server-start).  The
+        // pre-poll must comfortably cover that window, or the loud fallback
+        // path fires spuriously and dumps raw emacsclient socket errors —
+        // the exact UX regression this constant exists to prevent.
+        assert!(
+            EMACS_PRE_POLL_SECS >= 3,
+            "pre-poll ({}s) must cover the observed 2–3s daemon init window",
+            EMACS_PRE_POLL_SECS,
         );
     }
 }
