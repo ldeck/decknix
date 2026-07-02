@@ -170,13 +170,14 @@
   (let ((decknix--hub-mention-filter 'team)
         (decknix--hub-reviews
          (decknix-test--make-hub-reviews-with-viewer "alice")))
-    ;; team-only: team yes, mention no
+    ;; team-only: team yes -> shown.
     (should (decknix--hub-mention-visible-p
              (decknix-test--make-hub-item :author "bob" :team-requested t)))
-    ;; team-and-mention: excluded by `(and team (not me))'
-    (should-not (decknix--hub-mention-visible-p
-                 (decknix-test--make-hub-item :author "bob"
-                                              :team-requested t :mentioned t)))
+    ;; team AND directly requested -> STILL shown (must not be excluded).
+    (should (decknix--hub-mention-visible-p
+             (decknix-test--make-hub-item :author "bob"
+                                          :team-requested t :mentioned t)))
+    ;; requested of me alone, no team -> hidden.
     (should-not (decknix--hub-mention-visible-p
                  (decknix-test--make-hub-item :author "bob" :mentioned t)))
     (should-not (decknix--hub-mention-visible-p
@@ -186,13 +187,24 @@
   (let ((decknix--hub-mention-filter 'me+team)
         (decknix--hub-reviews
          (decknix-test--make-hub-reviews-with-viewer "alice")))
+    ;; (1) directly requested -> shown (even alongside team/others).
     (should (decknix--hub-mention-visible-p
              (decknix-test--make-hub-item :author "bob" :mentioned t)))
     (should (decknix--hub-mention-visible-p
-             (decknix-test--make-hub-item :author "bob" :team-requested t)))
-    (should (decknix--hub-mention-visible-p
              (decknix-test--make-hub-item :author "bob"
                                           :mentioned t :team-requested t)))
+    (should (decknix--hub-mention-visible-p
+             (decknix-test--make-hub-item :author "bob"
+                                          :mentioned t :others-requested t)))
+    ;; (2) pure team ask, no individuals tagged -> shown.
+    (should (decknix--hub-mention-visible-p
+             (decknix-test--make-hub-item :author "bob" :team-requested t)))
+    ;; team ask that also tags other individuals -> team-noise, hidden.
+    (should-not (decknix--hub-mention-visible-p
+                 (decknix-test--make-hub-item :author "bob"
+                                              :team-requested t
+                                              :others-requested t)))
+    ;; neither -> hidden.
     (should-not (decknix--hub-mention-visible-p
                  (decknix-test--make-hub-item :author "bob")))))
 
