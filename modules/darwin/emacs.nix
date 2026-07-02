@@ -82,15 +82,21 @@ in
 
       serviceConfig = {
         RunAtLoad = true;
-        KeepAlive = false;
+        # Keep exactly one daemon alive: if it crashes or is killed,
+        # launchd restarts it (throttled ~10s).  This is what makes the
+        # `ec' wrapper safe to run without `-a ""' (which would otherwise
+        # fork an orphaned second daemon outside launchd's control).
+        # `decknix switch' restarts are still driven by launchctl
+        # kickstart -k / plist reload, which take precedence over KeepAlive.
+        KeepAlive = true;
         ProcessType = "Background";
       };
     };
 
     # Add emacsclient wrapper to system packages
     environment.systemPackages = with pkgs; [
-      # Simple wrapper for emacsclient that auto-starts daemon if not running.
-      # All arguments are passed through to emacsclient.
+      # Wrapper for emacsclient that connects to the ONE launchd-managed
+      # Emacs daemon.  All arguments are passed through to emacsclient.
       #
       # Usage: ec [emacsclient args...]
       #   ec -c -n           - Create new GUI frame
@@ -98,9 +104,28 @@ in
       #   ec -t file.txt     - Open in terminal
       #   ec file.txt        - Open file in existing frame
       #
-      # The -a "" flag auto-starts the daemon if not running.
+      # Deliberately NOT `emacsclient -a ""': that flag forks a fresh
+      # `emacs --daemon' (double-forked, outside launchd) whenever no server
+      # is found, producing an orphaned SECOND daemon.  Instead launchd owns
+      # the single daemon (label org.nixos.emacs-server, KeepAlive=true) and
+      # restarts it if it dies.  If the socket is briefly unavailable (e.g. a
+      # restart window), we ask launchd to (re)start ITS daemon and retry --
+      # we never spawn our own.
       (writeShellScriptBin "ec" ''
-        exec ${emacsPackage}/bin/emacsclient -a "" "$@"
+        emacsclient="${emacsPackage}/bin/emacsclient"
+        # Side-effect-free reachability probe (never spawns a daemon).
+        if ! "$emacsclient" -e t >/dev/null 2>&1; then
+          # Daemon not reachable: ask launchd to (re)start ITS daemon, then
+          # wait (up to ~5s for the KeepAlive throttle) for the socket.
+          /bin/launchctl kickstart "gui/$(${pkgs.coreutils}/bin/id -u)/org.nixos.emacs-server" 2>/dev/null || true
+          n=0
+          while [ "$n" -lt 20 ] && ! "$emacsclient" -e t >/dev/null 2>&1; do
+            n=$((n + 1))
+            ${pkgs.coreutils}/bin/sleep 0.25
+          done
+        fi
+        # Run the user's actual command exactly once.
+        exec "$emacsclient" "$@"
       '')
     ];
 
