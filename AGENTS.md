@@ -76,6 +76,17 @@ non-negotiable. Specifically:
 - **Commit incrementally** on the main branch — after each logically complete unit of work
   (e.g. after tests pass, after a bug fix is verified), commit immediately without waiting
   for explicit user instruction. This keeps the history clean and progress visible.
+  - **One logical change per commit.** If the working tree contains multiple
+    unrelated in-flight changes (e.g. a new feature, a bugfix, and a doc tweak),
+    split them into separate commits using `git add -p` (per-hunk) or per-file
+    `git add`. Never sweep unrelated hunks into a bugfix commit just because
+    they happen to touch the same file — the fix message becomes misleading and
+    a future bisect points at the wrong line.
+  - **Never bury the user's fix inside pre-existing unstaged edits from a
+    prior session.** When you start work on a dirty tree, inspect
+    `git diff --stat` first, classify each hunk, and commit the unrelated
+    edits under their own truthful messages before landing your own change on
+    top. Ask the user only if a hunk's intent is unclear.
 - Do NOT **push** (to remote) without explicit user permission.
 
 ### 4. Testing Changes — Follow TDD
