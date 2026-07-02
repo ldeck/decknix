@@ -2,7 +2,7 @@
 
 buildNpmPackage rec {
   pname = "claude-agent-acp";
-  version = "0.52.0";
+  version = "0.54.1";
 
   # Requires Node >= 22 (per package.json engines field)
   nodejs = nodejs_22;
@@ -11,10 +11,10 @@ buildNpmPackage rec {
     owner = "agentclientprotocol";
     repo = "claude-agent-acp";
     rev = "v${version}";
-    hash = "sha256-w8lrc/4cW7QZNDMvq663eas7Dl4tnya4JCM9xkLF8S8=";
+    hash = "sha256-Ykwd1/RH9L/wSEJgc2HdhpDiIiE7wH19v/DQgpFKXFI=";
   };
 
-  npmDepsHash = "sha256-czNQInLxK/DMFViJWa15PGOU61qnqm0wNwFqjTH3Z+k=";
+  npmDepsHash = "sha256-S3bpXFcOW6ZhM7KJ9hVrKIwT4eKg5oqmmloeCx6YnPw=";
 
   meta = with lib; {
     description = "ACP (Agent Client Protocol) adapter for Anthropic Claude Code";
