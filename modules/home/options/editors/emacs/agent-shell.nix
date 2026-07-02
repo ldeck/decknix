@@ -4003,8 +4003,17 @@ measurement reflects the first toggle since the Emacs *process* started
         ;; The report is rendered into `*decknix-toggle-profile*' sorted
         ;; by total elapsed time, descending, and displayed without focus
         ;; steal so the sidebar the toggle just arranged keeps focus.
-        (defvar decknix--profile-first-toggle t
+        (defvar decknix--profile-first-toggle nil
           "When non-nil, ELP-profile the very first toggle of this daemon.
+Default nil: ELP instrumenting the ~545 matching functions wraps each
+with wall-clock entry/exit advice, which both perturbs the very
+cold-start path it is meant to measure (observer effect) and adds
+per-call overhead to the first `C-c A w' the user actually feels.
+That instrumentation was a temporary diagnostic; the lightweight
+always-on `[toggle-firstrun]' line (gated by
+`decknix--first-toggle-logged') still reports the true, un-instrumented
+cold-start duration.  Opt back in per-toggle with
+`M-x decknix-profile-next-toggle', or set this to t for the daemon.
 Cleared after the profile fires so subsequent toggles run unwrapped.
 Survives `deckmacs-reload' (defvar no-ops when already bound), and is
 gated by `decknix--first-toggle-logged' so a reload mid-session does
