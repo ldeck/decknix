@@ -3724,6 +3724,35 @@ ${optionalString cfg.tableOverlay.enable ''
                                      'font-lock-face 'font-lock-constant-face)
                         result)))
 
+        ;; Swallow newer ACP `session_info_update' notifications.
+        ;; The pinned `agent-shell.el' has no `cond' branch for this
+        ;; sessionUpdate kind -- emitted by the bumped claude-agent-acp
+        ;; bridge (>= 0.54.1) to carry the auto-generated session title
+        ;; -- so `agent-shell--on-notification' falls through to its raw
+        ;; "Session Update - fallback" branch and dumps the JSON-RPC
+        ;; s-expression into the shell buffer after the prompt (e.g.
+        ;; `((jsonrpc . 2.0) (method . session/update) ...)').  Intercept
+        ;; it with a `:before-until' advice: return non-nil only for that
+        ;; kind so the real handler is skipped (nothing lands in the
+        ;; buffer); every other notification returns nil and passes
+        ;; straight through untouched.  A named function keeps the advice
+        ;; idempotent across `decknix switch' hot-reloads (re-`advice-add'
+        ;; of the same symbol is a no-op) instead of stacking a new layer
+        ;; on every reload the way an anonymous lambda would.
+        (defun decknix--agent-shell-swallow-session-info (&rest args)
+          "Silently absorb `session_info_update' ACP notifications.
+Return non-nil (skip the upstream handler) only for that sessionUpdate
+kind; nil otherwise so all other notifications flow through.  ARGS is
+the `&key' plist passed to `agent-shell--on-notification'."
+          (let* ((notification (plist-get args :notification))
+                 (method (alist-get 'method notification))
+                 (update (alist-get 'update (alist-get 'params notification)))
+                 (kind (and update (alist-get 'sessionUpdate update))))
+            (and (equal method "session/update")
+                 (equal kind "session_info_update"))))
+        (advice-add 'agent-shell--on-notification :before-until
+                    #'decknix--agent-shell-swallow-session-info)
+
         ;; Pre-fetch prompt search cache on daemon start
         (run-at-time 5 nil #'decknix--prompt-search-refresh-async)
 
