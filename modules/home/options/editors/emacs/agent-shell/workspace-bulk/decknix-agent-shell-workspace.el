@@ -997,6 +997,7 @@ WIP / Sessions / Worktrees."
    ["Worktrees"
     ("w" "Worktrees..." decknix-sidebar-transient--worktrees)]]
   ["" ("?" "describe key" decknix-sidebar-toggles-describe-key)
+      ("!" "Reset to defaults" decknix-sidebar-reset-toggles)
       ("q" "Done" transient-quit-one)])
 
 (defun decknix-sidebar-refresh ()
@@ -4635,14 +4636,15 @@ Bound to `S' at sidebar-global level."
 ;; Forward declarations live at the top of this module so the
 ;; remaining call sites here byte-compile clean.
 
-(defun decknix--sidebar-state-save ()
-  "Save sidebar toggle states to disk.
-Live-session tracking now lives in the dedicated
-`decknix--live-sessions-file' (eagerly updated via lifecycle hooks);
-this saver only writes UI preferences so a fresh-daemon idle save
-cannot clobber the Previous Sessions snapshot."
-  (let* ((state
-          (list
+(defun decknix--sidebar-state-alist ()
+  "Return the persisted sidebar toggle + layout state as an alist.
+Single source of truth shared by `decknix--sidebar-state-save' (which
+writes it) and the debounced eager `decknix--sidebar-state-write'
+\(which diffs it to skip redundant disk writes).  Live-session tracking
+now lives in the dedicated `decknix--live-sessions-file' (eagerly
+updated via lifecycle hooks); this only captures UI preferences so a
+fresh-daemon idle save cannot clobber the Previous Sessions snapshot."
+  (list
            (cons 'sessions-display-mode decknix--sidebar-sessions-display-mode)
            (cons 'width-state decknix--sidebar-width-state)
            (cons 'show-keys decknix--sidebar-show-keys)
@@ -4771,15 +4773,164 @@ cannot clobber the Previous Sessions snapshot."
                    decknix--hub-repo-name-cap))
            (cons 'attention-style
                  (when (boundp 'decknix--sidebar-attention-style)
-                   decknix--sidebar-attention-style)))))
+                   decknix--sidebar-attention-style))
+           ;; -- Toggles that were previously NOT persisted, so they
+           ;; reverted to their `defvar' defaults on every restart. --
+           (cons 'show-toggles
+                 (when (boundp 'decknix--sidebar-show-toggles)
+                   decknix--sidebar-show-toggles))
+           (cons 'live-view-mode
+                 (when (boundp 'decknix--sidebar-live-view-mode)
+                   decknix--sidebar-live-view-mode))
+           (cons 'show-hidden
+                 (when (boundp 'decknix--sidebar-show-hidden)
+                   decknix--sidebar-show-hidden))
+           (cons 'hub-display-mode
+                 (when (boundp 'decknix--hub-display-mode)
+                   decknix--hub-display-mode))))
+
+(defvar decknix--sidebar-state-write-signature nil
+  "prin1 of the state last written to `decknix--sidebar-state-file'.
+Lets the debounced eager save skip a disk write when nothing changed.")
+
+(defvar decknix--sidebar-state-write-timer nil
+  "Pending debounce timer for `decknix--sidebar-state-write', or nil.")
+
+(defun decknix--sidebar-state-save ()
+  "Write the current sidebar toggle state to `decknix--sidebar-state-file'.
+Called from the shutdown/reload hooks and the periodic idle save; the
+per-toggle eager path goes through `decknix--sidebar-state-write'."
+  (let ((state (decknix--sidebar-state-alist)))
     (make-directory (file-name-directory decknix--sidebar-state-file) t)
     (with-temp-file decknix--sidebar-state-file
       (insert ";; Auto-generated — do not edit\n")
       (prin1 state (current-buffer))
-      (insert "\n"))))
+      (insert "\n"))
+    (setq decknix--sidebar-state-write-signature (prin1-to-string state))))
+
+(defun decknix--sidebar-state-write ()
+  "Eagerly persist toggle state after a change, debounced ~1.5s.
+Toggle commands (and the sidebar repaint path) call this so a flipped
+toggle reaches disk within a second or two of the change — surviving a
+hard daemon restart (`launchctl kickstart -k' sends SIGKILL, skipping
+`kill-emacs-hook') without waiting for the 30s *idle* save, which never
+fires while the user is actively working.  Bursts coalesce to one
+write, and the write is skipped when the serialized state is unchanged,
+so it is safe to call from the hot refresh path."
+  (when (timerp decknix--sidebar-state-write-timer)
+    (cancel-timer decknix--sidebar-state-write-timer))
+  (setq decknix--sidebar-state-write-timer
+        (run-with-timer 1.5 nil #'decknix--sidebar-state-write--flush)))
+
+(defun decknix--sidebar-state-write--flush ()
+  "Debounce worker: write eager toggle state only when it changed."
+  (setq decknix--sidebar-state-write-timer nil)
+  (let ((sig (ignore-errors (prin1-to-string (decknix--sidebar-state-alist)))))
+    (when (and sig (not (equal sig decknix--sidebar-state-write-signature)))
+      (ignore-errors (decknix--sidebar-state-save)))))
+
+;; == Reset toggles to defaults ==
+
+(defvar decknix--sidebar-toggle-vars
+  '(decknix--sidebar-sessions-display-mode
+    decknix--sidebar-width-state
+    decknix--sidebar-show-keys
+    decknix--sidebar-show-toggles
+    decknix--sidebar-live-view-mode
+    decknix--sidebar-show-hidden
+    decknix--hub-display-mode
+    agent-shell-workspace-sidebar--quick-switch
+    decknix--hub-age-filter
+    decknix-auto-review-mode
+    decknix-focus-steal
+    decknix--hub-org-visibility
+    decknix--hub-ci-filter
+    decknix--hub-mention-filter
+    decknix--hub-show-bots
+    decknix--hub-requests-sort-reverse
+    decknix--hub-requests-hide-needs-reply
+    decknix--hub-requests-hide-bot-pending
+    decknix--hub-requests-only-my-replies
+    decknix--hub-requests-hide-reviewed
+    decknix--hub-requests-hide-conflict
+    decknix--hub-requests-hide-draft
+    decknix--hub-wip-hide-needs-reply
+    decknix--hub-wip-hide-bot-pending
+    decknix--hub-wip-only-my-replies
+    decknix--sidebar-requests-display-mode
+    decknix--sidebar-wip-display-mode
+    decknix--sidebar-live-display-mode
+    decknix--sidebar-wip-group-mode
+    decknix--hub-expand-prs
+    decknix--hub-show-deploys
+    decknix--sidebar-sessions-hide-live
+    decknix--sidebar-sessions-age-filter
+    decknix--sidebar-sessions-hide-unknown
+    decknix--hub-show-saved-sessions
+    decknix--sidebar-tile-count
+    decknix--sidebar-show-progress
+    decknix--sidebar-wt-live-only
+    decknix--sidebar-wt-group-by-repo
+    decknix--sidebar-wt-age-filter
+    decknix--sidebar-wt-hide-clean
+    decknix--sidebar-wt-hide-placeholders
+    decknix--sidebar-wt-hide-merged
+    decknix--hub-wip-hide-terminal
+    decknix--hub-wip-hide-linked
+    decknix--hub-symbol-style
+    decknix--hub-repo-name-cap
+    decknix--sidebar-attention-style)
+  "Persisted sidebar toggle variables that `decknix-sidebar-reset-toggles'
+restores to their built-in defaults.  Mirrors the keys written by
+`decknix--sidebar-state-alist'.")
+
+(defvar decknix--sidebar-toggle-defaults nil
+  "Alist of (VAR . DEFAULT) captured before any persisted state is applied.
+Populated once by `decknix--sidebar-capture-toggle-defaults', so the
+recorded values are the true `defvar' defaults of the running build
+rather than whatever the user last persisted.")
+
+(defun decknix--sidebar-capture-toggle-defaults ()
+  "Snapshot each toggle var's current (built-in default) value, once.
+Runs at the top of `decknix--sidebar-state-restore', before restore
+overwrites anything — at that point every eagerly-required toggle var
+still holds its `defvar' default.  A var that is not yet bound is
+skipped (its owning package loads later); reset then simply leaves it
+untouched rather than guessing a default."
+  (unless decknix--sidebar-toggle-defaults
+    (setq decknix--sidebar-toggle-defaults
+          (delq nil
+                (mapcar
+                 (lambda (var)
+                   (when (boundp var)
+                     (let ((v (symbol-value var)))
+                       (cons var (if (or (consp v) (stringp v))
+                                     (copy-tree v)
+                                   v)))))
+                 decknix--sidebar-toggle-vars)))))
+
+(defun decknix-sidebar-reset-toggles ()
+  "Reset every persisted sidebar toggle to its built-in default.
+Restores each variable captured in `decknix--sidebar-toggle-defaults',
+persists the reset immediately (bypassing the debounce), and repaints
+the sidebar.  Prompts for confirmation first."
+  (interactive)
+  (when (yes-or-no-p "Reset all sidebar toggles to their defaults? ")
+    (dolist (cell decknix--sidebar-toggle-defaults)
+      (let ((var (car cell)) (default (cdr cell)))
+        (when (boundp var)
+          (set var (if (or (consp default) (stringp default))
+                       (copy-tree default)
+                     default)))))
+    (decknix--sidebar-state-save)
+    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+      (let ((decknix--sidebar-refresh-suspended nil))
+        (agent-shell-workspace-sidebar-refresh)))
+    (message "Sidebar toggles reset to defaults")))
 
 (defun decknix--sidebar-state-restore ()
   "Restore sidebar toggle states and previous sessions from disk."
+  (decknix--sidebar-capture-toggle-defaults)
   (when (file-exists-p decknix--sidebar-state-file)
     (condition-case err
         (let ((state (with-temp-buffer
@@ -4821,6 +4972,29 @@ cannot clobber the Previous Sessions snapshot."
           (let ((as (alist-get 'attention-style state)))
             (when (and as (boundp 'decknix--sidebar-attention-style))
               (setq decknix--sidebar-attention-style as)))
+          ;; Footer/section visibility + view toggles newly added to the
+          ;; persisted schema.  'missing sentinel so older state files
+          ;; (written before these keys existed) keep the defvar defaults
+          ;; rather than clobbering them with nil.
+          (let ((st (alist-get 'show-toggles state 'missing)))
+            (unless (eq st 'missing)
+              (when (boundp 'decknix--sidebar-show-toggles)
+                (setq decknix--sidebar-show-toggles st))))
+          (let ((sh (alist-get 'show-hidden state 'missing)))
+            (unless (eq sh 'missing)
+              (when (boundp 'decknix--sidebar-show-hidden)
+                (setq decknix--sidebar-show-hidden sh))))
+          ;; live-view-mode / hub-display-mode are non-nil symbol toggles;
+          ;; also guard against a stray nil so a corrupt value can't leave
+          ;; the sidebar in an invalid render mode.
+          (let ((lvm (alist-get 'live-view-mode state 'missing)))
+            (unless (eq lvm 'missing)
+              (when (and lvm (boundp 'decknix--sidebar-live-view-mode))
+                (setq decknix--sidebar-live-view-mode lvm))))
+          (let ((hdm (alist-get 'hub-display-mode state 'missing)))
+            (unless (eq hdm 'missing)
+              (when (and hdm (boundp 'decknix--hub-display-mode))
+                (setq decknix--hub-display-mode hdm))))
           ;; Org visibility: restore from alist → hash-table
           ;; Also supports legacy 'org-hidden key for backward compat
           (when-let ((ov (or (alist-get 'org-visibility state)
