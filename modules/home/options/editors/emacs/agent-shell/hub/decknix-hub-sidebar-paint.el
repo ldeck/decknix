@@ -80,7 +80,15 @@ re-deferring.  Errors in REFRESH-FN are swallowed so a single bad paint
 cannot leave the guard stuck."
   (setq decknix--sidebar-paint-timer nil)
   (let ((decknix--sidebar-paint-in-progress t))
-    (ignore-errors (funcall refresh-fn))))
+    (ignore-errors (funcall refresh-fn)))
+  ;; Universal eager-persist net: any state change reaches the sidebar
+  ;; through a repaint, so persist toggle state (debounced + dirty-
+  ;; checked, hence free when nothing changed) after each real paint.
+  ;; This covers hub-filter toggles that refresh but do not call the
+  ;; eager saver themselves, so they survive a hard daemon restart
+  ;; instead of waiting for the 30s idle save / a clean shutdown.
+  (when (fboundp 'decknix--sidebar-state-write)
+    (decknix--sidebar-state-write)))
 
 (defun decknix--sidebar-paint-tick ()
   "Idle-timer entry point: perform the real sidebar repaint.
