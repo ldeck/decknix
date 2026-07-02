@@ -150,6 +150,7 @@
 (declare-function decknix--hub-cycle-age-filter "ext:decknix-agent-shell")
 (declare-function decknix--hub-item-mentioned-p "decknix-hub-mention-bot")
 (declare-function decknix--hub-item-team-requested-p "decknix-hub-mention-bot")
+(declare-function decknix--hub-item-reviewed-by-me-p "decknix-hub-mention-bot")
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
 (declare-function agent-shell-workspace-sidebar-mode-map "ext:agent-shell-workspace")
 (declare-function decknix-sidebar-toggle-hub-display-mode "decknix-sidebar-toggles")
@@ -2968,8 +2969,14 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                (status-str (if (string-empty-p active-str)
                                status-str
                              (concat status-str active-str)))
-               ;; @ indicator — now moved to the badge slot (preceding age)
-               (mention-me (decknix--hub-item-mentioned-p item))
+               ;; @ indicator — now moved to the badge slot (preceding age).
+               ;; Yellow when the PR is personally mine: I am directly
+               ;; requested / @-mentioned, OR I have already submitted a
+               ;; review (GitHub lists me individually in the Reviewers
+               ;; box, so a bare team request understates my involvement).
+               ;; Blue for a pure team ask I have not yet touched.
+               (mention-me (or (decknix--hub-item-mentioned-p item)
+                               (decknix--hub-item-reviewed-by-me-p item)))
                (mention-team (decknix--hub-item-team-requested-p item))
                (mention-str
                 (cond

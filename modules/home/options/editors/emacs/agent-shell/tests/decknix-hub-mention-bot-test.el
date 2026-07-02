@@ -27,11 +27,13 @@
   (let ((author (plist-get props :author))
         (mentioned (plist-get props :mentioned))
         (team (plist-get props :team-requested))
-        (others (plist-get props :others-requested)))
+        (others (plist-get props :others-requested))
+        (my-review (plist-get props :my-review)))
     `((author . ,author)
       (mentioned . ,mentioned)
       (team_requested . ,team)
-      (others_requested . ,others))))
+      (others_requested . ,others)
+      (my_review . ,my-review))))
 
 (defun decknix-test--make-hub-reviews-with-viewer (viewer)
   "Build a `decknix--hub-reviews'-shaped alist exposing VIEWER."
@@ -132,6 +134,26 @@
                (decknix-test--make-hub-item)))
   (should-not (decknix--hub-item-team-requested-p
                (decknix-test--make-hub-item :team-requested "true"))))
+
+;; -- decknix--hub-item-reviewed-by-me-p ----------------------------
+
+(ert-deftest decknix-hub-mention-bot/item-reviewed-by-me-p-true-for-review-states ()
+  (dolist (state '("APPROVED" "CHANGES_REQUESTED" "COMMENTED"
+                   "DISMISSED" "PENDING"))
+    (should (decknix--hub-item-reviewed-by-me-p
+             (decknix-test--make-hub-item :my-review state)))))
+
+(ert-deftest decknix-hub-mention-bot/item-reviewed-by-me-p-nil-when-absent-or-empty ()
+  ;; No review of mine → not personally on the PR (pure team-noise).
+  (should-not (decknix--hub-item-reviewed-by-me-p
+               (decknix-test--make-hub-item :team-requested t)))
+  (should-not (decknix--hub-item-reviewed-by-me-p
+               (decknix-test--make-hub-item :my-review nil)))
+  (should-not (decknix--hub-item-reviewed-by-me-p
+               (decknix-test--make-hub-item :my-review "")))
+  ;; A non-string value (defensive) must not count as a review.
+  (should-not (decknix--hub-item-reviewed-by-me-p
+               (decknix-test--make-hub-item :my-review t))))
 
 ;; -- decknix--hub-mention-visible-p (truth table over state) -------
 
