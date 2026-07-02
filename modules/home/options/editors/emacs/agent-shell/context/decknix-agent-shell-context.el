@@ -179,63 +179,256 @@ Preserves pinned items and previously fetched metadata."
           (json-read-from-string output)))
     (error nil)))
 
+;; -- Pure parse/shape cores (unit-tested) --
+;; These carry all the JSON-shape knowledge so the synchronous helpers
+;; (used by explicit user commands) and the asynchronous helpers (used
+;; by the background poller / on-create refresh) can never disagree.
+
+(defun decknix--context-parse-json (raw)
+  "Parse RAW `gh' stdout into JSON (object or array), or nil.
+Trims whitespace and returns nil for empty or non-JSON output.  Pure --
+the shared core of both the synchronous and asynchronous `gh' helpers."
+  (let ((s (and (stringp raw) (string-trim raw))))
+    (when (and s (not (string-empty-p s))
+               (or (string-prefix-p "{" s) (string-prefix-p "[" s)))
+      (condition-case nil (json-read-from-string s) (error nil)))))
+
+(defun decknix--context-issue-plist-from-data (data)
+  "Build the context item plist from parsed `gh issue view' DATA, or nil.
+Keys: :state (downcased), :title, :url, :type (`pr' when isPullRequest,
+else `issue').  Pure."
+  (when data
+    (let ((is-pr (eq (alist-get 'isPullRequest data) t)))
+      (list :state (downcase (or (alist-get 'state data) "unknown"))
+            :title (alist-get 'title data)
+            :url (alist-get 'url data)
+            :type (if is-pr 'pr 'issue)))))
+
+(defun decknix--context-ci-plist-from-runs (data)
+  "Build the CI plist from parsed `gh run list' DATA, or nil.
+DATA is the parsed JSON array of runs; the first run is used.  Keys:
+:status (normalised pass|fail|running|<raw>), :name, :url.  Pure."
+  (when (and data (> (length data) 0))
+    (let* ((run (if (vectorp data) (aref data 0) (car data)))
+           (status (alist-get 'status run))
+           (conclusion (alist-get 'conclusion run)))
+      (list :status (cond
+                     ((string= status "completed")
+                      (if (string= conclusion "success") "pass" "fail"))
+                     ((string= status "in_progress") "running")
+                     (t status))
+            :name (alist-get 'name run)
+            :url (alist-get 'url run)))))
+
+(defun decknix--context-count-review-threads (threads)
+  "Return (TOTAL . UNRESOLVED) for a parsed reviewThreads THREADS array.
+A thread counts as unresolved unless its `isResolved' is t.  Pure."
+  (let ((vec (cond ((null threads) [])
+                   ((vectorp threads) threads)
+                   (t (vconcat threads))))
+        (unresolved 0))
+    (dotimes (i (length vec))
+      (unless (eq (alist-get 'isResolved (aref vec i)) t)
+        (setq unresolved (1+ unresolved))))
+    (cons (length vec) unresolved)))
+
+;; -- Asynchronous gh runner --
+;; The synchronous `shell-command-to-string' path below blocks the Emacs
+;; main thread for the full duration of every `gh' network call.  On the
+;; background paths (the on-create refresh -- fired once per restored
+;; session buffer -- and the 60 s CI poller) that froze user input for
+;; seconds at a time.  This runner dispatches `gh' as a subprocess with a
+;; sentinel so input is never blocked on network latency.
+
+(defun decknix--context-gh-async (args on-done)
+  "Run `gh ARGS' asynchronously; call ON-DONE with parsed JSON, or nil.
+Dispatches via `start-process-shell-command' with a sentinel so `gh's
+network latency cannot freeze user input.  ON-DONE runs in the dispatch
+buffer when it is still live.  Async counterpart of
+`decknix--context-gh-json'/`-gh-json-array'."
+  (let* ((buf (current-buffer))
+         (out (generate-new-buffer " *decknix-context-gh*"))
+         (proc (ignore-errors
+                 (start-process-shell-command
+                  "decknix-context-gh" out
+                  (format "gh %s 2>/dev/null" args)))))
+    (if (not (processp proc))
+        (progn (when (buffer-live-p out) (kill-buffer out))
+               (funcall on-done nil))
+      (set-process-query-on-exit-flag proc nil)
+      (set-process-sentinel
+       proc
+       (lambda (p _event)
+         (when (memq (process-status p) '(exit signal))
+           (let ((raw (and (buffer-live-p out)
+                           (with-current-buffer out (buffer-string)))))
+             (when (buffer-live-p out) (kill-buffer out))
+             (let ((data (decknix--context-parse-json raw)))
+               (if (buffer-live-p buf)
+                   (with-current-buffer buf (funcall on-done data))
+                 (funcall on-done data))))))))))
+
 (defun decknix--context-fetch-issue (repo number)
-  "Fetch issue/PR metadata from GitHub for REPO #NUMBER."
-  (let ((data (decknix--context-gh-json
-               (format "issue view %d --repo %s --json number,title,state,url,isPullRequest"
-                       number repo))))
-    (when data
-      (let ((is-pr (eq (alist-get 'isPullRequest data) t)))
-        (list :state (downcase (or (alist-get 'state data) "unknown"))
-              :title (alist-get 'title data)
-              :url (alist-get 'url data)
-              :type (if is-pr 'pr 'issue))))))
+  "Fetch issue/PR metadata from GitHub for REPO #NUMBER (synchronous).
+Used by explicit user commands; the background paths use
+`decknix--context-fetch-issue-async'."
+  (decknix--context-issue-plist-from-data
+   (decknix--context-gh-json
+    (format "issue view %d --repo %s --json number,title,state,url,isPullRequest"
+            number repo))))
+
+(defun decknix--context-fetch-issue-async (id repo number)
+  "Asynchronously fetch REPO #NUMBER metadata and store it against ID.
+Updates the matching `decknix--context-items' entry and the header when
+the data arrives; never blocks."
+  (decknix--context-gh-async
+   (format "issue view %d --repo %s --json number,title,state,url,isPullRequest"
+           number repo)
+   (lambda (data)
+     (when-let ((meta (decknix--context-issue-plist-from-data data))
+                (props (cdr (assoc id decknix--context-items))))
+       (plist-put props :state (plist-get meta :state))
+       (plist-put props :title (plist-get meta :title))
+       (plist-put props :url (plist-get meta :url))
+       (plist-put props :type (plist-get meta :type))
+       (decknix--context-update-header)))))
+
+(defun decknix--context-ci-command (branch repo)
+  "The `gh run list' ARGS string for BRANCH and REPO.
+Shared by the synchronous and asynchronous CI fetchers."
+  (format "run list --branch %s --repo %s --limit 1 --json status,conclusion,name,url,updatedAt"
+          (shell-quote-argument branch)
+          (shell-quote-argument (or repo ""))))
 
 (defun decknix--context-fetch-ci ()
-  "Fetch latest CI run status for the current branch."
+  "Fetch latest CI run status for the current branch (synchronous).
+Used by the explicit `decknix-context-show-ci' command; the background
+poller uses `decknix--context-fetch-ci-async'."
   (let* ((branch (or decknix--context-branch
                      (string-trim
                       (shell-command-to-string "git branch --show-current 2>/dev/null"))))
          (repo (or decknix--context-repo (decknix--context-detect-repo)))
-         (data (decknix--context-gh-json
-                (format "run list --branch %s --repo %s --limit 1 --json status,conclusion,name,url,updatedAt"
-                        (shell-quote-argument branch)
-                        (shell-quote-argument (or repo ""))))))
-    (when (and data (> (length data) 0))
-      (let* ((run (if (vectorp data) (aref data 0) (car data)))
-             (status (alist-get 'status run))
-             (conclusion (alist-get 'conclusion run)))
-        (setq decknix--context-ci
-              (list :status (cond
-                             ((string= status "completed")
-                              (if (string= conclusion "success") "pass" "fail"))
-                             ((string= status "in_progress") "running")
-                             (t status))
-                    :name (alist-get 'name run)
-                    :url (alist-get 'url run)))))))
+         (ci (decknix--context-ci-plist-from-runs
+              (decknix--context-gh-json
+               (decknix--context-ci-command branch repo)))))
+    (when ci (setq decknix--context-ci ci))))
+
+(defun decknix--context-fetch-ci-async ()
+  "Asynchronously refresh CI status for the current branch + header.
+Non-blocking replacement for `decknix--context-fetch-ci' used by the
+background poller and the on-create refresh.  Repo/branch detection is a
+fast local git call; only the `gh' network hop runs off-thread."
+  (let* ((branch (or decknix--context-branch
+                     (setq decknix--context-branch
+                           (string-trim
+                            (shell-command-to-string
+                             "git branch --show-current 2>/dev/null")))))
+         (repo (or decknix--context-repo
+                   (setq decknix--context-repo (decknix--context-detect-repo)))))
+    (when (and repo (not (string-empty-p repo)))
+      (decknix--context-gh-async
+       (decknix--context-ci-command branch repo)
+       (lambda (data)
+         (when-let ((ci (decknix--context-ci-plist-from-runs data)))
+           (setq decknix--context-ci ci)
+           (decknix--context-update-header)))))))
+
+(defun decknix--context-reviews-command (repo number)
+  "The `gh pr view' ARGS string for REPO #NUMBER reviewThreads.
+Shared by the synchronous and asynchronous review fetchers."
+  (format "pr view %d --repo %s --json reviewThreads --jq '.reviewThreads'"
+          number (shell-quote-argument (or repo ""))))
+
+(defun decknix--context-open-prs ()
+  "Return the tracked context items that are OPEN pull requests."
+  (cl-remove-if-not
+   (lambda (item)
+     (let ((props (cdr item)))
+       (and (eq (plist-get props :type) 'pr)
+            (equal (plist-get props :state) "open"))))
+   decknix--context-items))
 
 (defun decknix--context-fetch-reviews ()
-  "Fetch unresolved review thread count for open PRs in context."
+  "Fetch unresolved review thread count for open PRs (synchronous).
+Used by the explicit `decknix-context-show-reviews' command; the
+background paths use `decknix--context-fetch-reviews-async'."
   (let ((unresolved 0) (total 0) (pr-url nil))
-    (dolist (item decknix--context-items)
-      (let ((props (cdr item)))
-        (when (and (eq (plist-get props :type) 'pr)
-                   (string= (plist-get props :state) "open"))
-          (let* ((repo (or (plist-get props :repo) decknix--context-repo))
-                 (num (plist-get props :number))
-                 (threads (decknix--context-gh-json-array
-                           (format "pr view %d --repo %s --json reviewThreads --jq '.reviewThreads'"
-                                   num (shell-quote-argument (or repo ""))))))
-            (when threads
-              (setq pr-url (plist-get props :url))
-              (let ((vec (if (vectorp threads) threads (vconcat threads))))
-                (setq total (+ total (length vec)))
-                (dotimes (i (length vec))
-                  (let ((thread (aref vec i)))
-                    (unless (eq (alist-get 'isResolved thread) t)
-                      (setq unresolved (1+ unresolved)))))))))))
+    (dolist (item (decknix--context-open-prs))
+      (let* ((props (cdr item))
+             (repo (or (plist-get props :repo) decknix--context-repo))
+             (num (plist-get props :number))
+             (threads (decknix--context-gh-json-array
+                       (decknix--context-reviews-command repo num))))
+        (when threads
+          (setq pr-url (plist-get props :url))
+          (let ((pair (decknix--context-count-review-threads threads)))
+            (setq total (+ total (car pair))
+                  unresolved (+ unresolved (cdr pair)))))))
     (setq decknix--context-reviews
           (list :total total :unresolved unresolved :url pr-url))))
+
+(defun decknix--context-fetch-reviews-async ()
+  "Asynchronously tally unresolved review threads across open PRs.
+Resets the running tally, dispatches one async `gh pr view' per open PR,
+and folds each result into `decknix--context-reviews' as it arrives, so
+the main thread is never blocked on the network."
+  (setq decknix--context-reviews (list :total 0 :unresolved 0 :url nil))
+  (dolist (item (decknix--context-open-prs))
+    (let* ((props (cdr item))
+           (repo (or (plist-get props :repo) decknix--context-repo))
+           (num (plist-get props :number))
+           (url (plist-get props :url)))
+      (when num
+        (decknix--context-gh-async
+         (decknix--context-reviews-command repo num)
+         (lambda (threads)
+           (when threads
+             (let* ((pair (decknix--context-count-review-threads threads))
+                    (cur (or decknix--context-reviews
+                             (list :total 0 :unresolved 0 :url nil))))
+               (setq decknix--context-reviews
+                     (list :total (+ (plist-get cur :total) (car pair))
+                           :unresolved (+ (plist-get cur :unresolved)
+                                          (cdr pair))
+                           :url (or (plist-get cur :url) url)))
+               (decknix--context-update-header)))))))))
+
+;; -- Non-blocking full refresh (background paths) --
+(defun decknix--context-refresh-async ()
+  "Refresh all context data WITHOUT blocking the main thread.
+Does the cheap in-memory buffer scan and the fast, local git repo/branch
+detection synchronously, then dispatches every GitHub fetch (issue/PR
+metadata, CI, review threads) as an asynchronous `gh' subprocess.  Each
+fetch updates the buffer-local state and header when its result lands,
+so user input is never blocked on network latency.  Non-blocking
+counterpart of `decknix--context-full-refresh'; called by the on-create
+hook and the background poller."
+  (when (derived-mode-p 'agent-shell-mode)
+    (unless decknix--context-repo
+      (setq decknix--context-repo (decknix--context-detect-repo)))
+    (unless decknix--context-branch
+      (setq decknix--context-branch
+            (string-trim
+             (shell-command-to-string "git branch --show-current 2>/dev/null"))))
+    (decknix--context-refresh-detected)
+    (dolist (item decknix--context-items)
+      (let ((props (cdr item)))
+        (when (and (memq (plist-get props :type) '(github issue pr))
+                   (null (plist-get props :state)))
+          (let ((repo (or (plist-get props :repo) decknix--context-repo))
+                (num (plist-get props :number)))
+            (when (and repo num)
+              (decknix--context-fetch-issue-async (car item) repo num))))))
+    (decknix--context-fetch-ci-async)
+    (decknix--context-fetch-reviews-async)))
+
+(defun decknix--context-refresh-async-in-buffer (buffer)
+  "Run `decknix--context-refresh-async' in BUFFER if it is still live.
+Timer entry point so the on-create refresh can be idle-deferred from the
+dynamically-bound heredoc without a closure over the buffer."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (decknix--context-refresh-async))))
 
 ;; -- Header-line rendering --
 ;; Context is collapsed by default.  C-c I toggles inline expansion.
@@ -381,7 +574,10 @@ Delegates to the unified header which incorporates context data."
 
 ;; -- CI polling timer --
 (defun decknix--context-start-ci-polling ()
-  "Start polling CI status every 60 seconds."
+  "Start polling CI + review status every 60 seconds, asynchronously.
+The poll dispatches `gh' via the `*-async' fetchers so it never blocks
+the main thread -- the old synchronous `gh run list' froze user input
+for the duration of the network call once every minute."
   (when decknix--context-ci-timer
     (cancel-timer decknix--context-ci-timer))
   (setq decknix--context-ci-timer
@@ -393,8 +589,8 @@ Delegates to the unified header which incorporates context data."
                                                (derived-mode-p 'agent-shell-mode)))
                                            (buffer-list))))
                             (with-current-buffer buf
-                              (decknix--context-fetch-ci)
-                              (decknix--context-update-header)))))))
+                              (decknix--context-fetch-ci-async)
+                              (decknix--context-fetch-reviews-async)))))))
 
 ;; -- Persistence: save/restore pinned context items --
 ;; Piggybacks on the existing agent-sessions.json tag store.

@@ -1780,11 +1780,20 @@ let
   # `(require ...)' lives back in `cfg.context.enable' so the
   # cross-feature `fboundp' guards in main/workspace stay correct
   # (`fboundp' returns nil iff the module is not loaded).
-  decknix-agent-shell-context-el = pkgs.emacsPackages.trivialBuild {
+  # PR: async context fetch.  The GitHub/CI/review fetches now have
+  # pure parse/shape cores plus non-blocking `-gh-async' siblings so the
+  # on-create refresh (fired per restored session buffer) and the 60s CI
+  # poll never freeze the main thread on `gh' network latency.  Those
+  # cores + the async runner contract are pinned by an ERT suite, so the
+  # module graduates from plain `trivialBuild' to `mkEmacsTestedPackage'
+  # (starting to pay down the arch-debt FIXME in the module header).
+  decknix-agent-shell-context-el = mkEmacsTestedPackage {
     pname = "decknix-agent-shell-context";
-    version = "0.1";
     src = ./agent-shell/context;
     packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-shell-context-test.el"
+    ];
   };
 
   # PR B-Bulk.2: bulk extraction of the two cfg.hub.enable sub-heredocs.
@@ -5765,9 +5774,19 @@ ${optionalString cfg.hub.priority.enable ''
                         (define-key map (kbd "f") 'decknix-context-forge-visit)
                         (local-set-key (kbd "C-c i") map))
                       (local-set-key (kbd "C-c I") 'decknix-context-toggle-or-panel)
-                      ;; Restore pinned items from previous session, then refresh
+                      ;; Restore pinned items from previous session, then
+                      ;; refresh.  The refresh is idle-deferred AND fully
+                      ;; asynchronous (`gh' runs via a subprocess) so
+                      ;; restoring sessions -- each of which creates an
+                      ;; agent-shell buffer and runs this hook -- never
+                      ;; blocks user input on `gh' network latency.  The
+                      ;; buffer is passed as a timer arg (not captured) so
+                      ;; this works under the heredoc's dynamic binding.
                       (decknix--context-restore)
-                      (decknix--context-full-refresh)
+                      (run-with-idle-timer
+                       0.5 nil
+                       #'decknix--context-refresh-async-in-buffer
+                       (current-buffer))
                       (decknix--context-start-ci-polling))
                     ;; In-buffer template prefix retired — `C-c Y' (doom
                     ;; snippet prefix) already covers `yas-insert-snippet',
