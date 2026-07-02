@@ -191,12 +191,16 @@ Emacs session (dedup guards the file-notify->buffer-appears window)."
                  (cfg (decknix-agent-purpose-resolve purpose))
                  (model (plist-get cfg :model))
                  (provider (plist-get cfg :provider))
+                 ;; Seed the permission mode (e.g. Claude "auto") so this
+                 ;; unattended review can run shell commands without
+                 ;; stalling on a permission prompt.
+                 (mode (plist-get cfg :mode))
                  (command (format "%s %s" command-base url)))
             ;; Mark before launching so a second file-notify tick during
             ;; session startup can't double-dispatch.
             (decknix-auto-review-mark-dispatched key)
             (decknix--agent-quickaction-start
-             name tags workspace command model provider)
+             name tags workspace command model provider mode)
             (message "[auto-review] %s %s/%s#%s via %s"
                      action owner repo number command-base)
             action))))))

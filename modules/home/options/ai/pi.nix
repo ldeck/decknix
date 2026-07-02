@@ -21,9 +21,12 @@ in {
   };
 
   config = mkIf cfg.enable {
-    # ACP bridge — allows agent-shell (Emacs) to launch Pi sessions
-    # via the Agent Client Protocol.  Managed by Nix; no manual npm install needed.
-    home.packages = [ pkgs.pi-acp ];
+    # The `pi' coding agent itself (binary `pi'; the pi-acp bridge shells
+    # out to it) plus the ACP bridge that lets agent-shell (Emacs) launch
+    # Pi over the Agent Client Protocol.  Managed by Nix; no manual npm
+    # install needed.  `pi-coding-agent' is currently only in
+    # nixpkgs-unstable, so it comes through the `unstable' overlay.
+    home.packages = [ pkgs.unstable.pi-coding-agent pkgs.pi-acp ];
 
     # If we have settings, generate the file and sync it
     decknix.cli.agentSync.enable = true;

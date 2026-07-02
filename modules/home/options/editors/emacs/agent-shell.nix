@@ -2264,25 +2264,47 @@ in
     # `decknix-agent-purpose-validate') to keep the option
     # forward-compatible with new provider registrations.  Model
     # `null' means "defer to the provider default".
-    purposes = {
+    purposes =
+      let
+        modeOption = default: mkOption {
+          type = types.nullOr types.str;
+          inherit default;
+          example = "acceptEdits";
+          description = ''
+            Session/permission mode preset applied at session start.
+            Only providers whose agent-config declares a session mode
+            honour it -- today `claude-code', whose ids are `default'
+            (prompt each time), `auto' (Claude auto-approves tool use,
+            incl. shell commands, via its own classifier),
+            `acceptEdits' (auto-accept file edits only; still prompts
+            for commands), `bypassPermissions' (no prompts -- unsafe),
+            and `plan' (read-only).  For providers without session
+            modes (auggie, pi, gemini) it is dropped to nil at boot
+            with a warning.  Set to null to leave the provider's own
+            default in place.  NOTE: `auto'/`bypassPermissions' reduce
+            permission prompts -- a deliberate autonomy/safety trade-off.
+          '';
+        };
+      in {
       pr-review = {
         provider = mkOption {
           type = types.str;
-          default = "auggie";
-          example = "claude-code";
+          default = "claude-code";
+          example = "auggie";
           description = ''
             Agent provider (registered id) used when launching a
             human-authored PR review via `C-c A c r' or the sidebar
             Requests picker.  Must match a provider registered via
             `decknix-agent-register-provider' (built-ins: `auggie',
-            `claude-code', `pi').  An unregistered value is coerced to
-            `decknix-agent-default-provider' at boot with a warning.
+            `claude-code', `pi', `gemini').  An unregistered value is
+            coerced to `decknix-agent-default-provider' at boot with a
+            warning.
           '';
         };
         model = mkOption {
           type = types.nullOr types.str;
-          default = "prism-a";
-          example = "opus4.7";
+          default = "sonnet";
+          example = "opus";
           description = ''
             Model id pinned for the PR-review purpose.  For
             launch-flag providers (auggie) this rides
@@ -2294,12 +2316,13 @@ in
             to always defer to the provider default.
           '';
         };
+        mode = modeOption "auto";
       };
       bot-pr-review = {
         provider = mkOption {
           type = types.str;
-          default = "auggie";
-          example = "claude-code";
+          default = "claude-code";
+          example = "auggie";
           description = ''
             Agent provider used when the PR author is a bot.  See
             `purposes.pr-review.provider' for validation semantics.
@@ -2307,15 +2330,44 @@ in
         };
         model = mkOption {
           type = types.nullOr types.str;
-          default = "haiku4.5";
-          example = "sonnet";
+          default = "sonnet";
+          example = "haiku";
           description = ''
-            Model id pinned for bot-authored PR reviews.  Defaults to
-            the cheapest capable model on the default provider since
-            bot diffs are typically small.  See
-            `purposes.pr-review.model' for validation semantics.
+            Model id pinned for bot-authored PR reviews.  Note: the
+            unattended `auto' mode is only honoured by models that
+            expose it (e.g. `sonnet'); the cheapest tier (`haiku') may
+            reject `auto', which would stall an unattended review on a
+            permission prompt -- so this defaults to `sonnet' rather
+            than the cheapest model.  See `purposes.pr-review.model'
+            for validation semantics.
           '';
         };
+        mode = modeOption "auto";
+      };
+      new-session = {
+        provider = mkOption {
+          type = types.str;
+          default = "claude-code";
+          example = "auggie";
+          description = ''
+            Default provider for user-created sessions.  Feeds
+            `decknix-agent-default-provider', used by QUICK
+            `C-u C-c A n' and as the resume/fork fallback.  Regular
+            `C-c A n' still prompts when more than one provider is
+            registered.
+          '';
+        };
+        model = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "sonnet";
+          description = ''
+            Reserved: model pin for user-created sessions.  Currently
+            informational -- new interactive sessions defer to the
+            provider default; set the model mid-session with `C-c C-v'.
+          '';
+        };
+        mode = modeOption "auto";
       };
     };
   };
@@ -2526,6 +2578,10 @@ in
         (require 'agent-shell-auggie)
         (require 'agent-shell-anthropic)
         (require 'agent-shell-pi)
+        (require 'agent-shell-google)
+        (require 'agent-shell-opencode)
+        (require 'agent-shell-goose)
+        (require 'agent-shell-qwen)
 
         ;; == Agent backend provider abstraction ==
         (require 'decknix-agent-provider)
@@ -2580,6 +2636,70 @@ in
             :glyph "P"
             :supports-workspace-root nil))
 
+        ;; Gemini CLI via `gemini --experimental-acp' (upstream
+        ;; agent-shell-google.el).  Requires the `gemini' binary on PATH
+        ;; (enable `decknix.ai.gemini.enable' to install pkgs.gemini-cli)
+        ;; and Google auth via `agent-shell-google-authentication'
+        ;; (defaults to :login).  Like Claude/Pi it is flagless: no
+        ;; `:model-launch-flag', so a per-conversation model is replayed
+        ;; over ACP rather than pinned on the command line.  Gemini does
+        ;; not expose a flat resumable sessions dir with the shared
+        ;; schema, so the saved-session picker/resume is best-effort.
+        (decknix-agent-register-provider 'gemini
+          '(:make-config-fn agent-shell-google-make-gemini-config
+            :acp-command-var agent-shell-google-gemini-acp-command
+            :auth-var agent-shell-google-authentication
+            :env-var agent-shell-google-gemini-environment
+            :sessions-dir "~/.gemini/sessions"
+            :session-file-extension ".json"
+            :label "Gemini"
+            :glyph "G"
+            :supports-workspace-root nil))
+
+        ;; == Phase-1 ACP agents (built-in ACP; no separate bridge) ==
+        ;; Each ships an upstream agent-shell module and a CLI already in
+        ;; nixpkgs; enable the CLI with `decknix.ai.<name>.enable'.  Like
+        ;; Claude/Pi/Gemini they are flagless (model replayed over ACP)
+        ;; and set no `--workspace-root' (cwd comes from
+        ;; `default-directory').  Saved-session picker/resume is
+        ;; best-effort (no shared sessions schema); new sessions work.
+
+        ;; OpenCode -- `opencode acp' (pkgs.opencode).
+        (decknix-agent-register-provider 'opencode
+          '(:make-config-fn agent-shell-opencode-make-agent-config
+            :acp-command-var agent-shell-opencode-acp-command
+            :auth-var agent-shell-opencode-authentication
+            :env-var agent-shell-opencode-environment
+            :sessions-dir "~/.local/share/opencode/sessions"
+            :session-file-extension ".json"
+            :label "OpenCode"
+            :glyph "O"
+            :supports-workspace-root nil))
+
+        ;; Goose -- `goose acp' (pkgs.goose-cli).
+        (decknix-agent-register-provider 'goose
+          '(:make-config-fn agent-shell-goose-make-agent-config
+            :acp-command-var agent-shell-goose-acp-command
+            :auth-var agent-shell-goose-authentication
+            :env-var agent-shell-goose-environment
+            :sessions-dir "~/.local/share/goose/sessions"
+            :session-file-extension ".json"
+            :label "Goose"
+            :glyph "🪿"
+            :supports-workspace-root nil))
+
+        ;; Qwen Code -- `qwen --experimental-acp' (pkgs.qwen-code).
+        (decknix-agent-register-provider 'qwen-code
+          '(:make-config-fn agent-shell-qwen-make-agent-config
+            :acp-command-var agent-shell-qwen-acp-command
+            :auth-var agent-shell-qwen-authentication
+            :env-var agent-shell-qwen-environment
+            :sessions-dir "~/.qwen/sessions"
+            :session-file-extension ".json"
+            :label "Qwen Code"
+            :glyph "Q"
+            :supports-workspace-root nil))
+
         ;; == Per-purpose (provider, model) settings ==
         ;; Populated from
         ;; `programs.emacs.decknix.agentShell.purposes.<name>.{provider,model}'
@@ -2600,12 +2720,32 @@ in
               '((pr-review     . (:provider ${cfg.purposes.pr-review.provider}
                                   :model    ${if cfg.purposes.pr-review.model == null
                                              then "nil"
-                                             else ''"${cfg.purposes.pr-review.model}"''}))
+                                             else ''"${cfg.purposes.pr-review.model}"''}
+                                  :mode     ${if cfg.purposes.pr-review.mode == null
+                                             then "nil"
+                                             else ''"${cfg.purposes.pr-review.mode}"''}))
                 (bot-pr-review . (:provider ${cfg.purposes.bot-pr-review.provider}
                                   :model    ${if cfg.purposes.bot-pr-review.model == null
                                              then "nil"
-                                             else ''"${cfg.purposes.bot-pr-review.model}"''}))))
+                                             else ''"${cfg.purposes.bot-pr-review.model}"''}
+                                  :mode     ${if cfg.purposes.bot-pr-review.mode == null
+                                             then "nil"
+                                             else ''"${cfg.purposes.bot-pr-review.mode}"''}))
+                (new-session   . (:provider ${cfg.purposes.new-session.provider}
+                                  :model    ${if cfg.purposes.new-session.model == null
+                                             then "nil"
+                                             else ''"${cfg.purposes.new-session.model}"''}
+                                  :mode     ${if cfg.purposes.new-session.mode == null
+                                             then "nil"
+                                             else ''"${cfg.purposes.new-session.mode}"''}))))
         (decknix-agent-purpose-validate)
+        ;; The `new-session' purpose's (validated) provider becomes the
+        ;; framework default provider: QUICK `C-u C-c A n' and the
+        ;; resume/fork fallback consult `decknix-agent-default-provider'.
+        (defvar decknix-agent-default-provider)
+        (setq decknix-agent-default-provider
+              (plist-get (alist-get 'new-session decknix-agent-purpose-alist)
+                         :provider))
 
         ;; == Foundational URL parsers (extracted module) ==
         ;;

@@ -182,12 +182,25 @@ over ACP after resume instead (see
                         (list "--resume" session-id))))
     (append base-cmd ws-args model-args resume-args)))
 
-(defun decknix--agent-make-config (provider-id augmented-cmd)
+(defun decknix--agent-make-config (provider-id augmented-cmd &optional mode)
   "Return an agent-shell config for PROVIDER-ID with AUGMENTED-CMD.
 The config includes a `:client-maker' closure that encapsulates the
-command, parameters, and environment variables."
+command, parameters, and environment variables.
+
+Optional MODE is a session/permission mode id (e.g. Claude's \"auto\").
+It is baked into this session's config only -- overriding the
+provider's `:default-session-mode-id' closure -- and only when the base
+config already declares that key (i.e. the provider supports session
+modes; today `claude-code').  For providers without it (auggie, pi,
+gemini) MODE is ignored, so a stray mode can never break a launch.
+The mode is applied by agent-shell after the session reports ready."
   (let* ((make-fn (decknix-agent-provider-make-config-fn provider-id))
          (base (funcall make-fn)))
+    (when (and (stringp mode)
+               (not (string-empty-p mode))
+               (assq :default-session-mode-id base))
+      (setf (alist-get :default-session-mode-id base)
+            (let ((m mode)) (lambda () m))))
     (setf (alist-get :client-maker base)
           (eval `(lambda (buffer)
                    (agent-shell--make-acp-client
