@@ -160,14 +160,19 @@ the session-id-based lookup if conv-key is not set yet."
 ;; -- Essentials block (glyph ▶ model @ workspace) ----------------
 
 (defvar decknix--header-agent-glyph-alist
-  '(("Auggie" . "A")
-    ("Claude" . "C")
-    ("Codex"  . "X")
-    ("Gemini" . "G"))
-  "Map of agent `:buffer-name' to single-character glyph.
+  '(("Auggie"    . "A")
+    ("Claude"    . "C")
+    ("Codex"     . "X")
+    ("Gemini"    . "G")
+    ("OpenCode"  . "O")
+    ("Goose"     . "🪿")
+    ("Qwen Code" . "Q"))
+  "Map of agent `:buffer-name' to a glyph.
 Used by `decknix--header-agent-glyph' to build the abbreviated
 essentials block.  Unknown agents fall back to the uppercase first
-character of the name; no agent at all defaults to \"A\" (Auggie).")
+character of the name; no agent at all defaults to \"A\" (Auggie).
+Goose needs an explicit entry: its name would otherwise fall back to
+\"G\" and collide with Gemini.")
 
 (defun decknix--header-agent-glyph ()
   "Return a single-character glyph for the current buffer's agent.

@@ -136,6 +136,47 @@ instead (see `decknix--agent-model-replay-needed-p')."
           (should (equal (plist-get result :command-params) '("arg1")))
           (should (equal (plist-get result :environment-variables) '(("FOO" . "BAR")))))))))
 
+(defun test-claude-make-config ()
+  "Fake Claude config that declares a `:default-session-mode-id'.
+Builds a FRESH alist each call (like the real provider config-fns) so
+`decknix--agent-make-config' baking cannot mutate a shared constant."
+  (list (cons :buffer-name "TestClaude")
+        (cons :default-session-mode-id (lambda () "default"))))
+
+(ert-deftest decknix-agent-make-config-bakes-mode-when-supported ()
+  "MODE overrides `:default-session-mode-id' for a provider that declares it."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-claude
+      '(:make-config-fn test-claude-make-config))
+    (cl-letf (((symbol-function 'agent-shell--make-acp-client)
+               (lambda (&rest args) args)))
+      (let* ((config (decknix--agent-make-config 'test-claude '("c") "auto"))
+             (mode-fn (alist-get :default-session-mode-id config)))
+        (should (functionp mode-fn))
+        (should (equal "auto" (funcall mode-fn)))))))
+
+(ert-deftest decknix-agent-make-config-ignores-mode-without-key ()
+  "A provider whose config has no `:default-session-mode-id' ignores MODE."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-agent
+      '(:make-config-fn test-auggie-make-config))
+    (cl-letf (((symbol-function 'agent-shell--make-acp-client)
+               (lambda (&rest args) args)))
+      (let ((config (decknix--agent-make-config 'test-agent '("c") "auto")))
+        ;; No key added, so nothing to apply -> mode silently dropped.
+        (should (null (alist-get :default-session-mode-id config)))))))
+
+(ert-deftest decknix-agent-make-config-nil-mode-keeps-base ()
+  "A nil MODE leaves the base `:default-session-mode-id' untouched."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-claude
+      '(:make-config-fn test-claude-make-config))
+    (cl-letf (((symbol-function 'agent-shell--make-acp-client)
+               (lambda (&rest args) args)))
+      (let* ((config (decknix--agent-make-config 'test-claude '("c") nil))
+             (mode-fn (alist-get :default-session-mode-id config)))
+        (should (equal "default" (funcall mode-fn)))))))
+
 ;; -- Provider identity + glyph for pickers/filters ----------------
 
 (ert-deftest decknix-agent-provider-glyph-safe-test ()
