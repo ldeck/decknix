@@ -143,6 +143,76 @@ links are formed so the link's own angle brackets survive."
    md #'identity
    (lambda (block) (decknix-agent-table-format block))))
 
+;; -- Atlassian wiki markup (Jira / Confluence) ----------------------
+;;
+;; Atlassian's wiki markup (used by Jira issue fields and Confluence
+;; "insert markup") is single-`*' bold, `_' italic, `-' strike,
+;; `{{monospace}}', `hN.' headings, `[text|url]' links, `*'/`#' lists,
+;; `bq.' quotes, `{code}' fences and `||h||' / `|c|' tables.  Pure
+;; string transform, same shape as the Slack converter.
+
+(defun decknix-agent-copy--atlassian-spans (line)
+  "Convert inline markdown emphasis/links/code in LINE to Atlassian markup.
+Bold is parked on sentinel control chars before the italic pass so the
+single-star italic rule cannot re-eat it (mirrors the Slack converter)."
+  (let ((s line))
+    ;; Inline code -> {{monospace}}.
+    (setq s (replace-regexp-in-string "`\\([^`]+\\)`" "{{\\1}}" s))
+    ;; Bold (** or __) -> sentinels (restored to single * at the end).
+    (setq s (replace-regexp-in-string "\\*\\*\\([^*]+\\)\\*\\*" "\x01\\1\x02" s))
+    (setq s (replace-regexp-in-string "__\\([^_]+\\)__" "\x01\\1\x02" s))
+    ;; Strike (~~) -> -...-.
+    (setq s (replace-regexp-in-string "~~\\([^~]+\\)~~" "-\\1-" s))
+    ;; Italic (*) -> _ ; underscore italic is already valid Atlassian.
+    (setq s (replace-regexp-in-string "\\*\\([^*]+\\)\\*" "_\\1_" s))
+    ;; Links [text](url) -> [text|url].
+    (setq s (replace-regexp-in-string "\\[\\([^]]+\\)\\](\\([^)]+\\))" "[\\1|\\2]" s))
+    ;; Restore the bold sentinels.
+    (setq s (replace-regexp-in-string "\x01" "*" s t t))
+    (replace-regexp-in-string "\x02" "*" s t t)))
+
+(defun decknix-agent-copy--atlassian-line (line)
+  "Convert one markdown LINE (outside fences/tables) to Atlassian markup."
+  (cond
+   ((string-match "\\`[ \t]*\\(#+\\)[ \t]+\\(.*\\)\\'" line)
+    (format "h%d. %s" (min 6 (length (match-string 1 line)))
+            (decknix-agent-copy--atlassian-spans (match-string 2 line))))
+   ((string-match "\\`\\([ \t]*\\)[-*+][ \t]+\\(.*\\)\\'" line)
+    (concat (make-string (1+ (/ (length (match-string 1 line)) 2)) ?*) " "
+            (decknix-agent-copy--atlassian-spans (match-string 2 line))))
+   ((string-match "\\`\\([ \t]*\\)[0-9]+\\.[ \t]+\\(.*\\)\\'" line)
+    (concat (make-string (1+ (/ (length (match-string 1 line)) 2)) ?#) " "
+            (decknix-agent-copy--atlassian-spans (match-string 2 line))))
+   ((string-match "\\`[ \t]*>[ \t]?\\(.*\\)\\'" line)
+    (concat "bq. " (decknix-agent-copy--atlassian-spans (match-string 1 line))))
+   (t (decknix-agent-copy--atlassian-spans line))))
+
+(defun decknix-agent-copy--atlassian-table (block)
+  "Convert a GFM table BLOCK (header, separator, rows) to Atlassian markup.
+The header row uses `||' delimiters; body rows use `|'.  Empty cells are
+padded with a space so Atlassian does not collapse adjacent pipes."
+  (let ((rows (seq-remove #'decknix-agent-table-separator-p
+                          (split-string block "\n")))
+        (first t) (out '()))
+    (dolist (row rows)
+      (let* ((cells (mapcar (lambda (c)
+                              (let ((v (decknix-agent-copy--atlassian-spans c)))
+                                (if (string-empty-p v) " " v)))
+                            (decknix-agent-table-split-row row)))
+             (sep (if first "||" "|")))
+        (push (concat sep (string-join cells sep) sep) out)
+        (setq first nil)))
+    (string-join (nreverse out) "\n")))
+
+(defun decknix-agent-copy-md->atlassian (md)
+  "Convert MD (GitHub-flavoured markdown) into Atlassian/Confluence markup."
+  (let ((walked (decknix-agent-copy--walk
+                 md #'decknix-agent-copy--atlassian-line
+                 #'decknix-agent-copy--atlassian-table)))
+    ;; The shared walker emits bare ``` fence delimiters (valid for Slack);
+    ;; Atlassian opens and closes code blocks with the same {code} token.
+    (replace-regexp-in-string "^```$" "{code}" walked)))
+
 ;; -- HTML (pandoc) --------------------------------------------------
 
 (defun decknix-agent-copy-html-command ()
@@ -244,6 +314,11 @@ LABEL names the format for the echo-area confirmation."
   (interactive "r")
   (decknix-agent-copy--do beg end #'decknix-agent-copy-md->plain "plain text"))
 
+(defun decknix-agent-copy-region-as-atlassian (beg end)
+  "Copy region BEG..END converted to Atlassian (Jira/Confluence) markup."
+  (interactive "r")
+  (decknix-agent-copy--do beg end #'decknix-agent-copy-md->atlassian "Atlassian markup"))
+
 (defun decknix-agent-copy-region-as-pdf (beg end outfile)
   "Export region BEG..END (markdown) to OUTFILE as PDF via pandoc.
 Prompts for OUTFILE and offers to open the result once written."
@@ -298,6 +373,7 @@ be wider than the window it is reflowed into a per-row bullet list."
    ("m" "Markdown (tables aligned)" decknix-agent-copy-region-as-markdown)
    ("s" "Slack mrkdwn" decknix-agent-copy-region-as-slack)
    ("h" "HTML (pandoc)" decknix-agent-copy-region-as-html)
+   ("a" "Atlassian (Jira/Confluence)" decknix-agent-copy-region-as-atlassian)
    ("p" "Plain text" decknix-agent-copy-region-as-plain)]
   ["Export region to file"
    ("P" "PDF (pandoc)" decknix-agent-copy-region-as-pdf)]

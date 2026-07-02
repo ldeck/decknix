@@ -107,6 +107,59 @@
                  (decknix-agent-copy-md->plain decknix-agent-copy-test--table)
                  decknix-agent-copy-test--aligned))))
 
+;; -- Atlassian (Jira / Confluence) wiki markup ---------------------
+
+(ert-deftest decknix-agent-copy/atlassian-bold ()
+  (should (string= "*x*" (decknix-agent-copy-md->atlassian "**x**")))
+  (should (string= "*x*" (decknix-agent-copy-md->atlassian "__x__"))))
+
+(ert-deftest decknix-agent-copy/atlassian-italic ()
+  (should (string= "_x_" (decknix-agent-copy-md->atlassian "*x*")))
+  (should (string= "_x_" (decknix-agent-copy-md->atlassian "_x_"))))
+
+(ert-deftest decknix-agent-copy/atlassian-bold-not-clobbered-by-italic ()
+  (should (string= "a *b* c" (decknix-agent-copy-md->atlassian "a **b** c"))))
+
+(ert-deftest decknix-agent-copy/atlassian-strike ()
+  (should (string= "-x-" (decknix-agent-copy-md->atlassian "~~x~~"))))
+
+(ert-deftest decknix-agent-copy/atlassian-inline-code-becomes-monospace ()
+  (should (string= "{{code}}" (decknix-agent-copy-md->atlassian "`code`"))))
+
+(ert-deftest decknix-agent-copy/atlassian-heading ()
+  (should (string= "h1. Heading" (decknix-agent-copy-md->atlassian "# Heading")))
+  (should (string= "h3. Sub" (decknix-agent-copy-md->atlassian "### Sub"))))
+
+(ert-deftest decknix-agent-copy/atlassian-link ()
+  (should (string= "[text|https://x.com]"
+                   (decknix-agent-copy-md->atlassian "[text](https://x.com)"))))
+
+(ert-deftest decknix-agent-copy/atlassian-list-bullet ()
+  (should (string= "* item" (decknix-agent-copy-md->atlassian "- item")))
+  (should (string= "* item" (decknix-agent-copy-md->atlassian "* item")))
+  (should (string= "** deep" (decknix-agent-copy-md->atlassian "  - deep"))))
+
+(ert-deftest decknix-agent-copy/atlassian-ordered-list ()
+  (should (string= "# one" (decknix-agent-copy-md->atlassian "1. one"))))
+
+(ert-deftest decknix-agent-copy/atlassian-blockquote ()
+  (should (string= "bq. quote" (decknix-agent-copy-md->atlassian "> quote"))))
+
+(ert-deftest decknix-agent-copy/atlassian-table ()
+  "Header row uses `||' delimiters; body rows use `|'."
+  (should (null (decknix-test-render-snapshot
+                 (decknix-agent-copy-md->atlassian decknix-agent-copy-test--table)
+                 (concat "||Name||Age||City||\n"
+                         "|Alice|30|NYC|\n"
+                         "|Bob|5|LA|")))))
+
+(ert-deftest decknix-agent-copy/atlassian-fence-becomes-code-macro ()
+  "A ``` code fence maps to the {code} macro (open and close identical)."
+  (let ((in "```elisp\n(format \"x\")\n```")
+        (out "{code}\n(format \"x\")\n{code}"))
+    (should (null (decknix-test-render-snapshot
+                   (decknix-agent-copy-md->atlassian in) out)))))
+
 ;; -- Markdown (table-normalising) -----------------------------------
 
 (ert-deftest decknix-agent-copy/markdown-normalises-tables ()
