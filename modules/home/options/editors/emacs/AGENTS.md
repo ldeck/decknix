@@ -48,10 +48,27 @@ edits to **carved first-party packages** (everything matching
    calls actually run instead of no-opping.  FORCE=t bypasses the
    dependent-features check; ordering is irrelevant because every
    `require` re-resolves below.
-3. **Load the new `default.el`.**  The heredoc's
+3. **Strip stale `decknix-*` advice.**  `unload-feature` fmakunbounds
+   a package's defuns but does NOT remove `advice-add` registrations
+   that OTHER function symbols hold on those defuns (the registration
+   lives on the advised symbol, not the advice fn's package).  Any
+   such surviving advice raises `(void-function …)` the first time
+   the advised function runs; because step 4 immediately re-executes
+   `default.el` — whose early calls may trigger just-re-required
+   advised symbols (e.g. `decknix--hub-refresh-all` →
+   `decknix--hub-refresh-reviews` → surviving `:after` advice) — an
+   unstripped stale advice will abort the whole `load-file`, leaving
+   the daemon with a half-loaded feature set and orphaned timers
+   firing into voidness.  `deckmacs--strip-stale-decknix-advice`
+   walks obarray with `advice-mapc` and removes any advice function
+   whose symbol starts with `decknix-` and is currently fmakunbound.
+4. **Load the new `default.el`.**  The heredoc's
    `(require 'decknix-foo)` calls now find new bytecode at the new
    store root.  Top-level side-effects (`define-key`, `add-hook`,
-   `advice-add`) re-run.
+   `advice-add`) re-run.  The single early `(decknix--hub-refresh-all)`
+   call in `agent-shell.nix` is additionally wrapped in
+   `condition-case` as belt-and-braces for any advice pattern the
+   step-3 strip can't catch.
 
 A manual `launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server`
 is still needed when (and only when):
