@@ -179,4 +179,79 @@ It must never touch the shell-out path nor the memo table."
                        ("q3" . "r3") ("q4" . "r4"))
                      turns)))))
 
+;; -- Claude JSONL user `content' as a list of blocks (#stringp-restore) --
+;;
+;; In Claude's JSONL a `user' message's `content' is a string for a real
+;; prompt, but a LIST of Anthropic content blocks when it delivers a tool
+;; result (`{type:"tool_result", content:"...", is_error:...}').  Storing
+;; that raw list as the turn's user field caused a
+;; `wrong-type-argument stringp' the moment the restore path inserted it,
+;; and it also spawned a bogus "turn" for what is really part of the
+;; assistant's own work loop.
+
+(ert-deftest decknix-agent-session-history/jsonl-user-text-helper ()
+  "`-jsonl-user-text' returns a string (or nil), never the raw block list."
+  ;; Plain string content passes through untouched.
+  (should (equal "plain" (decknix--agent-session-jsonl-user-text "plain")))
+  ;; A list of text blocks concatenates their text.
+  (should (equal "a\nb"
+                 (decknix--agent-session-jsonl-user-text
+                  '(((type . "text") (text . "a"))
+                    ((type . "text") (text . "b"))))))
+  ;; A tool_result-only message carries no user-authored text → nil, so the
+  ;; caller skips it instead of starting a spurious (and non-string) turn.
+  (should (null
+           (decknix--agent-session-jsonl-user-text
+            '(((tool_use_id . "toolu_01") (type . "tool_result")
+               (content . "BUILD OK") (is_error . :json-false)))))))
+
+(ert-deftest decknix-agent-session-history/jsonl-tool-result-not-a-turn ()
+  "A user tool_result message does not create a turn and never yields a list.
+The tool_result is the output of the assistant's own tool call, so the
+following assistant text continues the SAME turn; the extracted user
+field must always be a string."
+  (let ((sid "claude-tr-sid")
+        (tmp (make-temp-file "claude-history-" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"do the build\"},\"timestamp\":\"2026-01-19T10:00:00Z\"}\n")
+            (insert "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"running build\"}]},\"timestamp\":\"2026-01-19T10:00:01Z\"}\n")
+            (insert "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"toolu_01\",\"type\":\"tool_result\",\"content\":\"BUILD OK\",\"is_error\":false}]},\"timestamp\":\"2026-01-19T10:00:02Z\"}\n")
+            (insert "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"build passed\"}]},\"timestamp\":\"2026-01-19T10:00:03Z\"}\n"))
+          (let ((decknix-agent-provider-registry nil))
+            (decknix-agent-register-provider 'claude-code
+              '(:session-file-extension ".jsonl"))
+            (cl-letf (((symbol-function 'decknix--agent-session-file)
+                       (lambda (_id &optional _p) tmp)))
+              (let ((turns (decknix--agent-session-extract-all-turns sid 'claude-code)))
+                ;; One turn only — the tool_result did not split it.
+                (should (= 1 (length turns)))
+                ;; User field is a STRING (regression guard for the stringp bug).
+                (should (stringp (caar turns)))
+                (should (equal "do the build" (caar turns)))
+                ;; Assistant text before AND after the tool_result is grouped.
+                (should (equal "running build\nbuild passed" (cdar turns)))))))
+      (when (file-exists-p tmp) (delete-file tmp)))))
+
+(ert-deftest decknix-agent-session-history/jsonl-user-content-text-blocks ()
+  "A genuine user message whose content is a list of text blocks extracts text."
+  (let ((sid "claude-tb-sid")
+        (tmp (make-temp-file "claude-history-" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hello there\"}]},\"timestamp\":\"2026-01-19T10:00:00Z\"}\n")
+            (insert "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]},\"timestamp\":\"2026-01-19T10:00:01Z\"}\n"))
+          (let ((decknix-agent-provider-registry nil))
+            (decknix-agent-register-provider 'claude-code
+              '(:session-file-extension ".jsonl"))
+            (cl-letf (((symbol-function 'decknix--agent-session-file)
+                       (lambda (_id &optional _p) tmp)))
+              (let ((turns (decknix--agent-session-extract-all-turns sid 'claude-code)))
+                (should (= 1 (length turns)))
+                (should (equal "hello there" (caar turns)))
+                (should (equal "hi" (cdar turns)))))))
+      (when (file-exists-p tmp) (delete-file tmp)))))
+
 (provide 'decknix-agent-session-history-test)
