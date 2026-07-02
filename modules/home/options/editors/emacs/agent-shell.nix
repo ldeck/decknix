@@ -5194,9 +5194,24 @@ duration -- the most important number on this branch."
 
 
 
-        ;; Load initial data and start watching
-        (decknix--hub-refresh-all)
-        (decknix--hub-start-watcher)
+        ;; Load initial data and start watching.  Wrapped in
+        ;; `condition-case' so an error here NEVER aborts `default.el'
+        ;; mid-load: on `deckmacs-reload' a surviving stale `:after'
+        ;; advice on `decknix--hub-refresh-reviews' (registered from
+        ;; the previous daemon lifetime, pointing at a now-void
+        ;; `decknix-*' advice fn) would raise `void-function' here and
+        ;; skip every `(require ...)' below, leaving the daemon with
+        ;; a half-loaded feature set.  The strip helper in deckmacs.nix
+        ;; (`deckmacs--strip-stale-decknix-advice') is the primary
+        ;; guard; this is belt-and-braces for any advice pattern the
+        ;; helper's `decknix-' prefix / `fboundp' filter can't catch.
+        (condition-case err
+            (progn
+              (decknix--hub-refresh-all)
+              (decknix--hub-start-watcher))
+          (error
+           (message "decknix: initial hub-refresh failed on load (continuing): %s"
+                    (error-message-string err))))
 
         ;; == Auto-review: optionally auto-dispatch review sessions ==
         ;; The whole feature (4-state cycle, action classifier,
