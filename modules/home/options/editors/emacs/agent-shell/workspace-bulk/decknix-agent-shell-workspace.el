@@ -888,6 +888,36 @@ Accessible only via the `?' transient; no standalone key binding."
   (interactive)
   (call-interactively #'decknix-sidebar-toggle-wt-group-by-repo))
 
+(defvar transient--suffixes)
+(defvar transient-current-suffixes)
+(declare-function transient-format-description "transient" (obj))
+
+(defun decknix-sidebar-toggles-describe-key ()
+  "Describe a toggle in the minibuffer: press this, then a toggle's key.
+Looks the pressed key up among the active transient's suffixes and
+echoes that suffix's description (its label plus current state) to the
+echo area.  Bound to `?' in the sidebar Toggles transient and its
+Worktrees sub-menu, and stays in the transient so you can keep probing
+keys.  Press `C-g' to abort."
+  (interactive)
+  (let* ((k (ignore-errors
+              (key-description
+               (vector (read-key "Describe toggle — press its key: ")))))
+         (obj (and k (cl-find-if
+                      (lambda (o)
+                        (and (cl-typep o 'transient-suffix)
+                             (ignore-errors (equal (oref o key) k))))
+                      (or transient--suffixes transient-current-suffixes))))
+         (desc (and obj (ignore-errors
+                          (string-trim
+                           (substring-no-properties
+                            (transient-format-description obj)))))))
+    (message "%s"
+             (cond ((and desc (not (string-empty-p desc)))
+                    (format "%s  →  %s" k desc))
+                   ((member k '(nil "C-g")) "Describe: cancelled")
+                   (t (format "No toggle bound to %s" k))))))
+
 (transient-define-prefix decknix-sidebar-transient--worktrees ()
   "Worktree toggles (nested sub-menu)."
   [:description "Worktree Toggles"
@@ -899,7 +929,8 @@ Accessible only via the `?' transient; no standalone key binding."
    ["Display"
     (decknix-sidebar-transient--wt-hide-placeholders)  ;; placeholders (p)
     (decknix-sidebar-transient--wt-group-by-repo)]]    ;; repo-grouped (r)
-  ["" ("q" "Back" transient-quit-one)])
+  ["" ("?" "describe key" decknix-sidebar-toggles-describe-key :transient t)
+      ("q" "Back" transient-quit-one)])
 
 (transient-define-prefix decknix-sidebar-toggles-transient ()
   "Sidebar toggles grouped by section.
@@ -928,7 +959,7 @@ WIP / Sessions / Worktrees."
     (decknix-sidebar-transient--ci-filter)        ;; ci (C)
     (decknix-sidebar-transient--requests-display-mode) ;; Layout (d)
     (decknix-sidebar-transient--mention-filter)   ;; mention (@)
-    (decknix-sidebar-transient--req-reviewed)     ;; reviewed (v)
+    (decknix-sidebar-transient--req-reviewed)     ;; reviewed (R)
     (decknix-sidebar-transient--req-sort)         ;; sort (s)
     (decknix-sidebar-transient--req-my-replies)   ;; ↩ (M)
     (decknix-sidebar-transient--req-needs-reply)  ;; 💬 (c)
@@ -965,7 +996,8 @@ WIP / Sessions / Worktrees."
     (decknix-sidebar-transient--sessions-hide-unknown)];; unknown-ws (U)
    ["Worktrees"
     ("w" "Worktrees..." decknix-sidebar-transient--worktrees)]]
-  ["" ("q" "Done" transient-quit-one)])
+  ["" ("?" "describe key" decknix-sidebar-toggles-describe-key)
+      ("q" "Done" transient-quit-one)])
 
 (defun decknix-sidebar-refresh ()
   "Refresh the sidebar, first updating the worktree registry via `decknix wt refresh'.

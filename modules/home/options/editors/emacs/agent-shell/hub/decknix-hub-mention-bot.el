@@ -61,10 +61,15 @@
   "Mention-filter state for the Requests section.
 A symbol with one of these values:
   nil       — no filtering (all visible).
-  me        — only PRs where I am directly requested or @-mentioned.
-  team      — only PRs where one of my teams is requested
-              (and I am not directly requested / mentioned).
-  me+team   — union of `me' and `team'.
+  me        — only PRs where I am directly requested / @-mentioned.
+  team      — only PRs where one of my teams is requested.  This
+              includes PRs where I am *also* directly requested; it
+              only excludes PRs requested of me alone with no team.
+  me+team   — PRs where EITHER (1) I am directly requested, OR (2) a
+              team is requested and NO specific individuals are (i.e.
+              a pure team ask with no `mentioned'/`others_requested').
+              A team PR that also tags other individuals is treated as
+              team-noise someone else is already on, and hidden.
 
 In every non-nil state, PRs I authored are excluded.
 
@@ -116,18 +121,25 @@ True when one of the viewer's teams was requested as a reviewer."
 (defun decknix--hub-mention-visible-p (item)
   "Return non-nil if ITEM passes the current mention filter.
 Always returns t when filter is `nil'.  When filtering, PRs I
-authored are excluded so I never see them under any mention state."
+authored are excluded so I never see them under any mention state.
+See `decknix--hub-mention-filter' for the per-state semantics."
   (let ((state decknix--hub-mention-filter))
     (cond
      ((null state) t)
      ((decknix--hub-item-author-p item) nil)
      (t
-      (let ((me (decknix--hub-item-mentioned-p item))
-            (team (decknix--hub-item-team-requested-p item)))
+      (let ((me     (decknix--hub-item-mentioned-p item))
+            (team   (decknix--hub-item-team-requested-p item))
+            (others (decknix--hub-item-others-requested-p item)))
         (pcase state
+          ;; me: I am directly requested.
           ('me      me)
-          ('team    (and team (not me)))
-          ('me+team (or me team))
+          ;; team: a team is requested -- includes team+me, excludes
+          ;; PRs requested of me alone (no team).
+          ('team    team)
+          ;; me+team: I am requested, OR a pure team ask with no
+          ;; specific individuals tagged (not me, not others).
+          ('me+team (or me (and team (not me) (not others))))
           (_        t)))))))
 
 ;; -- Bot filter --------------------------------------------------------

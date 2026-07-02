@@ -541,7 +541,9 @@ picker's dynamic binding unwinds.")
   (call-interactively #'decknix--hub-toggle-requests-only-my-replies))
 
 (transient-define-suffix decknix-sidebar-transient--req-reviewed ()
-  :key "v"
+  ;; `R' (not `v'): `v' is the Live "attention" toggle in the same
+  ;; toggles transient, so a shared key left this one unreachable.
+  :key "R"
   :description
   (lambda ()
     (format "reviewed      %s"
