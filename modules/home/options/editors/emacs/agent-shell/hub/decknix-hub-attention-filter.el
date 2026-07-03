@@ -30,6 +30,7 @@
 ;;   `decknix--hub-requests-hide-needs-reply'   bound nil  (toggle `c')
 ;;   `decknix--hub-requests-hide-bot-pending'   bound t    (toggle `b')
 ;;   `decknix--hub-requests-only-my-replies'    bound nil  (toggle `M')
+;;   `decknix--hub-requests-hide-i-replied-last' bound t   (toggle `o')
 ;;   `decknix--hub-requests-hide-reviewed'      bound hide-any  (cycle `v')
 ;;   `decknix--hub-requests-hide-conflict'      bound t    (toggle `X')
 ;;   `decknix--hub-requests-hide-draft'         bound t    (toggle `x')
@@ -45,6 +46,8 @@
 ;;                                                predicate
 ;;   `decknix--hub-requests-attention-visible-p' Requests-flavoured
 ;;                                                wrapper
+;;   `decknix--hub-requests-i-replied-visible-p' Requests-only
+;;                                                i-replied-last filter
 ;;   `decknix--hub-wip-attention-visible-p'      WIP-flavoured wrapper
 ;;
 ;; Toggle commands:
@@ -53,6 +56,7 @@
 ;;   `decknix--hub-toggle-requests-hide-needs-reply'   (`c')
 ;;   `decknix--hub-toggle-requests-hide-bot-pending'   (`b')
 ;;   `decknix--hub-toggle-requests-only-my-replies'    (`M')
+;;   `decknix--hub-toggle-requests-hide-i-replied-last' (`o')
 ;;   `decknix--hub-cycle-requests-hide-reviewed'        (`v')
 ;;   `decknix--hub-toggle-requests-hide-conflict'      (`X')
 ;;   `decknix--hub-toggle-requests-hide-draft'         (`x')
@@ -91,6 +95,17 @@ Toggle with `b'.")
   "When non-nil, only show Requests PRs carrying the ↩ icon.
 Filters IN PRs where a human posted a reply after one of my own
 comments or reviews.  Toggle with `M'.")
+
+(defvar decknix--hub-requests-hide-i-replied-last t
+  "When non-nil (default), hide Requests PRs where I commented last.
+Suppresses PRs whose latest comment/review is mine and has drawn no
+response — I have already had my say and the ball is squarely in the
+author's (or another reviewer's) court, so there is nothing waiting on
+me.  This is the complement of the 💬 needs-reply signal: `needs_reply'
+fires when someone *else* spoke last, whereas this fires when *I* did.
+Unlike the reviewed/conflict/draft filters this is Requests-specific;
+WIP has no counterpart because as the author I want to see my own PRs
+regardless.  Toggle with `o' (waiting on others).")
 
 (defvar decknix--hub-requests-hide-reviewed 'hide-any
   "Reviewed-PR filter state for the Requests section.
@@ -213,13 +228,26 @@ the owning section."
      (or (not only-my)
          any-reply-to-me))))
 
+(defun decknix--hub-requests-i-replied-visible-p (item)
+  "Return non-nil if ITEM passes the Requests i-replied-last filter.
+When `decknix--hub-requests-hide-i-replied-last' is non-nil (default),
+hides PRs whose `i_replied_last' field is t — the latest comment/review
+is mine and I am waiting on a response.  An absent or nil field is
+treated as not-mine so nothing is inadvertently suppressed."
+  (or (not decknix--hub-requests-hide-i-replied-last)
+      (not (eq (alist-get 'i_replied_last item) t))))
+
 (defun decknix--hub-requests-attention-visible-p (item)
-  "Return non-nil if ITEM passes the Requests attention filters."
-  (decknix--hub-attention-visible-p
-   item
-   decknix--hub-requests-hide-needs-reply
-   decknix--hub-requests-hide-bot-pending
-   decknix--hub-requests-only-my-replies))
+  "Return non-nil if ITEM passes the Requests attention filters.
+Combines the shared three-signal engine (needs-reply / bot-pending /
+only-my-replies) with the Requests-only i-replied-last filter so every
+call site that renders the Requests list inherits it uniformly."
+  (and (decknix--hub-attention-visible-p
+        item
+        decknix--hub-requests-hide-needs-reply
+        decknix--hub-requests-hide-bot-pending
+        decknix--hub-requests-only-my-replies)
+       (decknix--hub-requests-i-replied-visible-p item)))
 
 (defun decknix--hub-requests-reviewed-label ()
   "Return a short label for the current hide-reviewed filter state."
@@ -309,6 +337,13 @@ ready PRs are never inadvertently suppressed."
   (decknix--hub-toggle-and-refresh
    'decknix--hub-requests-only-my-replies
    "Requests ↩/👽 only-my-replies: %s"))
+
+(defun decknix--hub-toggle-requests-hide-i-replied-last ()
+  "Toggle hiding Requests PRs where I commented last (⏳ waiting on others)."
+  (interactive)
+  (decknix--hub-toggle-and-refresh
+   'decknix--hub-requests-hide-i-replied-last
+   "Requests ⏳ i-replied-last filter: %s"))
 
 (defun decknix--hub-cycle-requests-hide-reviewed ()
   "Cycle the Requests hide-reviewed filter: nil → hide-mine → hide-any → nil.
