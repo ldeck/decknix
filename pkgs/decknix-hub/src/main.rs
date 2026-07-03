@@ -154,6 +154,8 @@ struct ReviewRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     bot_replies_to_me: Option<bool>, // true when a bot posted after one of my comments/reviews
     #[serde(skip_serializing_if = "Option::is_none")]
+    i_replied_last: Option<bool>, // true when the latest comment/review is mine — I'm awaiting a response from others
+    #[serde(skip_serializing_if = "Option::is_none")]
     total_threads: Option<u32>, // total inline review threads on the PR
     #[serde(skip_serializing_if = "Option::is_none")]
     unresolved_threads: Option<u32>, // unresolved threads where last comment author != me
@@ -216,6 +218,8 @@ struct WipPr {
     replies_to_me: Option<bool>, // true when a non-bot human posted after one of my comments/reviews
     #[serde(skip_serializing_if = "Option::is_none")]
     bot_replies_to_me: Option<bool>, // true when a bot posted after one of my comments/reviews
+    #[serde(skip_serializing_if = "Option::is_none")]
+    i_replied_last: Option<bool>, // true when the latest comment/review is mine — I'm awaiting a response from others
     #[serde(skip_serializing_if = "Option::is_none")]
     total_threads: Option<u32>, // total inline review threads on the PR
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -674,6 +678,7 @@ struct ReviewPrDetails {
     bot_pending: Option<bool>,
     replies_to_me: Option<bool>,
     bot_replies_to_me: Option<bool>,
+    i_replied_last: Option<bool>,
     total_threads: Option<u32>,
     unresolved_threads: Option<u32>,
     review_decision: Option<String>,
@@ -684,7 +689,8 @@ impl Default for ReviewPrDetails {
         Self {
             ci: None, mergeable: None, my_review: None, mentioned: None,
             team_requested: None, others_requested: None, needs_reply: None,
-            bot_pending: None, replies_to_me: None, bot_replies_to_me: None, total_threads: None,
+            bot_pending: None, replies_to_me: None, bot_replies_to_me: None,
+            i_replied_last: None, total_threads: None,
             unresolved_threads: None, review_decision: None,
         }
     }
@@ -810,7 +816,7 @@ async fn fetch_pr_ci(
             // Check for @-mentions in comment/review bodies and classify the
             // trailing activity stream into needs_reply / bot_pending /
             // replies_to_me.  All four signals share the same pass.
-            let (comment_mentioned, needs_reply, bot_pending, replies_to_me, bot_replies_to_me) =
+            let (comment_mentioned, needs_reply, bot_pending, replies_to_me, bot_replies_to_me, i_replied_last) =
                 my_login.map(|login| {
                 let mention_pattern = format!("@{}", login);
                 let mention_pattern_lower = mention_pattern.to_lowercase();
@@ -848,6 +854,13 @@ async fn fetch_pr_ci(
                 let reply_needed = activities.last()
                     .map(|(_, a)| *a != Actor::Me)
                     .unwrap_or(false);
+                // I posted the trailing comment/review — my say is on record
+                // and I'm waiting on the author/others; nothing is actionable
+                // on my side.  The complement of `reply_needed`, but false when
+                // there is no activity at all (so a silent PR isn't flagged).
+                let i_replied_last = activities.last()
+                    .map(|(_, a)| *a == Actor::Me)
+                    .unwrap_or(false);
                 // Bot activity at the head of the stream signals the author
                 // likely needs to push a fix (Codacy/CI/etc.) before further
                 // review makes sense.  However, if all inline threads are already
@@ -870,8 +883,8 @@ async fn fetch_pr_ci(
                     .map(|i| activities.iter().skip(i + 1)
                          .any(|(_, a)| *a == Actor::Bot))
                     .unwrap_or(false);
-                (found_mention, reply_needed, bot_pending, replies_to_me, bot_replies_to_me)
-            }).unwrap_or((false, false, false, false, false));
+                (found_mention, reply_needed, bot_pending, replies_to_me, bot_replies_to_me, i_replied_last)
+            }).unwrap_or((false, false, false, false, false, false));
             // mentioned = directly requested OR @-mentioned in a comment
             let mentioned = directly_requested || comment_mentioned;
             ReviewPrDetails {
@@ -885,6 +898,7 @@ async fn fetch_pr_ci(
                 bot_pending: Some(bot_pending),
                 replies_to_me: Some(replies_to_me),
                 bot_replies_to_me: Some(bot_replies_to_me),
+                i_replied_last: Some(i_replied_last),
                 total_threads: threads.as_ref().map(|t| t.total),
                 unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
                 review_decision: view.review_decision,
@@ -1012,6 +1026,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             bot_pending: details.bot_pending,
             replies_to_me: details.replies_to_me,
             bot_replies_to_me: details.bot_replies_to_me,
+            i_replied_last: details.i_replied_last,
             total_threads: details.total_threads,
             unresolved_threads: details.unresolved_threads,
             review_decision: details.review_decision,
@@ -1046,6 +1061,7 @@ struct PrDetails {
     bot_pending: Option<bool>,
     replies_to_me: Option<bool>,
     bot_replies_to_me: Option<bool>,
+    i_replied_last: Option<bool>,
     total_threads: Option<u32>,
     unresolved_threads: Option<u32>,
     merged_at: Option<String>,
@@ -1056,7 +1072,7 @@ impl Default for PrDetails {
         Self {
             branch: None, ci: None, mergeable: None, review_decision: None,
             needs_reply: None, bot_pending: None, replies_to_me: None,
-            bot_replies_to_me: None,
+            bot_replies_to_me: None, i_replied_last: None,
             total_threads: None, unresolved_threads: None,
             merged_at: None,
         }
@@ -1134,7 +1150,7 @@ async fn fetch_pr_details(
             // Classify the trailing activity stream into needs_reply /
             // bot_pending / replies_to_me.  Same logic as fetch_pr_ci so
             // that WIP and Requests share a consistent reading of the PR.
-            let (needs_reply, bot_pending, replies_to_me, bot_replies_to_me) =
+            let (needs_reply, bot_pending, replies_to_me, bot_replies_to_me, i_replied_last) =
                 my_login.map(|login| {
                 let mut activities: Vec<(&str, Actor)> = Vec::new();
                 if let Some(ref comments) = d.comments {
@@ -1158,6 +1174,10 @@ async fn fetch_pr_details(
                 let needs_reply = activities.last()
                     .map(|(_, a)| *a != Actor::Me)
                     .unwrap_or(false);
+                // I posted the trailing comment/review — waiting on others.
+                let i_replied_last = activities.last()
+                    .map(|(_, a)| *a == Actor::Me)
+                    .unwrap_or(false);
                 let bot_pending = activities.last()
                     .map(|(_, a)| *a == Actor::Bot)
                     .unwrap_or(false)
@@ -1172,8 +1192,8 @@ async fn fetch_pr_details(
                     .map(|i| activities.iter().skip(i + 1)
                          .any(|(_, a)| *a == Actor::Bot))
                     .unwrap_or(false);
-                (Some(needs_reply), Some(bot_pending), Some(replies_to_me), Some(bot_replies_to_me))
-            }).unwrap_or((None, None, None, None));
+                (Some(needs_reply), Some(bot_pending), Some(replies_to_me), Some(bot_replies_to_me), Some(i_replied_last))
+            }).unwrap_or((None, None, None, None, None));
             PrDetails {
                 branch: d.head_ref_name,
                 ci: summarise_ci(&d.status_check_rollup),
@@ -1183,6 +1203,7 @@ async fn fetch_pr_details(
                 bot_pending,
                 replies_to_me,
                 bot_replies_to_me,
+                i_replied_last,
                 total_threads: threads.as_ref().map(|t| t.total),
                 unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
                 merged_at: d.merged_at,
@@ -1352,6 +1373,7 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
             bot_pending: details.bot_pending,
             replies_to_me: details.replies_to_me,
             bot_replies_to_me: details.bot_replies_to_me,
+            i_replied_last: details.i_replied_last,
             total_threads: details.total_threads,
             unresolved_threads: details.unresolved_threads,
             merged_at: merged_ts,
