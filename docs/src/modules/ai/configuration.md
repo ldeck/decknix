@@ -203,3 +203,48 @@ untouched, because Claude mutates this file at runtime (e.g. it writes
 `skipDangerousModePermissionPrompt`). Set `allowManagedTools = false` to manage
 the allowlist entirely by hand.
 
+## Claude MCP Servers
+
+Configure MCP servers for Claude Code globally — every workspace inherits them
+without a per-repo `.mcp.json`:
+
+```nix
+{ ... }: {
+  decknix.ai.claude = {
+    enable = true;
+
+    mcpServers = {
+      # Atlassian (Jira + Confluence) via the mcp-remote bridge.  First
+      # invocation opens a browser flow for OAuth; after that Claude has
+      # native Jira/Confluence tools and no longer shells out to
+      # `auggie --print --ask` for issue lookups (the previous workaround
+      # was ~2 min per call).
+      atlassian = {
+        type = "stdio";
+        command = "npx";
+        args = [ "-y" "mcp-remote" "https://mcp.atlassian.com/v1/sse" ];
+      };
+    };
+  };
+}
+```
+
+The shape mirrors [`decknix.cli.auggie.mcpServers`](#mcp-servers) — stdio
+servers use `type` / `command` / `args` / `env`; remote servers use
+`type = "http"` (or `"sse"`) plus `url` and optional `headers`.
+
+Entries are **deep-merged** into `~/.claude.json` (`.mcpServers`) on every
+`decknix switch`. Claude mutates this file heavily at runtime (`skillUsage`,
+`cached*` caches, OAuth tokens, migration flags), so decknix only touches
+`.mcpServers` and leaves the ~40 other runtime-managed keys alone:
+
+- Nix-declared entries **win** against runtime-added entries with the same name.
+- Runtime-added entries with unrelated names are preserved.
+- Removing an entry from Nix does **not** remove it from `~/.claude.json`
+  (Claude may have converged on it independently); purge those with
+  `/mcp remove <name>` inside Claude.
+
+Reach for a workspace-local `.mcp.json` only when a server should be strictly
+project-local (e.g. a repo-scoped test harness). Global config here keeps
+personal + org tooling consistent across every project you open.
+

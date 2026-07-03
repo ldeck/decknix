@@ -79,6 +79,42 @@ in {
         '';
       };
     };
+
+    mcpServers = mkOption {
+      type = types.attrsOf types.attrs;
+      default = {};
+      example = {
+        # Atlassian (Jira + Confluence) via the mcp-remote bridge.  Once
+        # authenticated (first invocation opens a browser flow), Claude gets
+        # native Jira/Confluence tools and no longer has to shell out to
+        # `auggie --print --ask` for issue lookups.
+        atlassian = {
+          type = "stdio";
+          command = "npx";
+          args = [ "-y" "mcp-remote" "https://mcp.atlassian.com/v1/sse" ];
+        };
+      };
+      description = ''
+        MCP (Model Context Protocol) server configurations for Claude Code.
+        Each key is the server name (as shown in Claude's `/mcp` list); the
+        value is the MCP server config object.  Same shape as
+        `decknix.cli.auggie.mcpServers` — stdio servers use `type`,
+        `command`, `args`, `env`; remote servers use `type = "http"` /
+        `"sse"` plus `url` and optional `headers`.
+
+        Deep-merged into the `.mcpServers` object of the runtime-managed
+        `~/.claude.json` on every `decknix switch`.  Nix-declared entries
+        take precedence over Claude-added entries with the same name;
+        Claude-added entries with unrelated names are preserved.  Removing
+        an entry from Nix does NOT remove it from `~/.claude.json` (Claude
+        may have converged on it independently); use `/mcp remove <name>`
+        inside Claude to purge those.
+
+        Global configuration lives here so every workspace inherits the
+        same servers without per-repo `.mcp.json` sprawl.  Add a workspace
+        `.mcp.json` only when a server should be strictly project-local.
+      '';
+    };
   };
 
   config = mkIf cfg.enable {
@@ -122,6 +158,32 @@ in {
         else
           ${pkgs.coreutils}/bin/rm -f "$TMP"
           echo "  [claude-permissions] WARNING: failed to update $CLAUDE_SETTINGS (left unchanged)" >&2
+        fi
+      '');
+
+    # Merge Nix-declared MCP servers into ~/.claude.json.  Like settings.json
+    # above, this file is *mutated by Claude at runtime* (skillUsage, cached*,
+    # OAuth tokens, etc.), so we jq-merge only `.mcpServers` and leave every
+    # other key alone.  Nix-declared entries win against runtime-added
+    # entries of the same name (`* $add` — right side wins on conflict);
+    # runtime-added entries with unrelated names are preserved.  Idempotent
+    # across switches.
+    home.activation.claude-mcp-servers = mkIf (cfg.mcpServers != {})
+      (lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        CLAUDE_JSON="$HOME/.claude.json"
+        if [ ! -f "$CLAUDE_JSON" ]; then
+          echo '{}' > "$CLAUDE_JSON"
+        fi
+        TMP="$(${pkgs.coreutils}/bin/mktemp)"
+        if ${pkgs.jq}/bin/jq \
+             --argjson add '${builtins.toJSON cfg.mcpServers}' \
+             '.mcpServers = ((.mcpServers // {}) * $add)' \
+             "$CLAUDE_JSON" > "$TMP"; then
+          ${pkgs.coreutils}/bin/mv "$TMP" "$CLAUDE_JSON"
+          echo "  [claude-mcp-servers] Merged ${toString (length (builtins.attrNames cfg.mcpServers))} managed MCP server(s) into $CLAUDE_JSON"
+        else
+          ${pkgs.coreutils}/bin/rm -f "$TMP"
+          echo "  [claude-mcp-servers] WARNING: failed to update $CLAUDE_JSON (left unchanged)" >&2
         fi
       '');
   };
