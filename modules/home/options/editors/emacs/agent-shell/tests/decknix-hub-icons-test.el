@@ -184,6 +184,34 @@
                    '((needs_reply . t))))
                  "i ")))
 
+(ert-deftest decknix-hub-activity-icons--i-replied-last-only ()
+  "I-replied-last shows the low-priority waiting glyph in the human slot."
+  (should (equal (decknix-test--icon-glyph
+                  (decknix--hub-activity-icons
+                   '((i_replied_last . t))))
+                 ". ")))
+
+(ert-deftest decknix-hub-activity-icons--needs-reply-outranks-i-replied ()
+  "An actionable needs-reply wins the human slot over i-replied-last."
+  (should (equal (decknix-test--icon-glyph
+                  (decknix--hub-activity-icons
+                   '((needs_reply . t) (i_replied_last . t))))
+                 "i ")))
+
+(ert-deftest decknix-hub-activity-icons--replies-to-me-outranks-i-replied ()
+  "Replies-to-me (top of the human ladder) wins over i-replied-last."
+  (should (equal (decknix-test--icon-glyph
+                  (decknix--hub-activity-icons
+                   '((replies_to_me . t) (i_replied_last . t))))
+                 "i ")))
+
+(ert-deftest decknix-hub-activity-icons--i-replied-with-bot-pending ()
+  "I-replied-last occupies the human slot alongside a bot-pending signal."
+  (should (equal (decknix-test--icon-glyph
+                  (decknix--hub-activity-icons
+                   '((i_replied_last . t) (bot_pending . t))))
+                 ".β")))
+
 (ert-deftest decknix-hub-activity-icons--bot-and-needs-reply ()
   "Bot-pending and needs-reply both set: bot-only shows when it was the bot."
   (should (equal (decknix-test--icon-glyph
