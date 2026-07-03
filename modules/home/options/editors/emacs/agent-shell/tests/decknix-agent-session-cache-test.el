@@ -364,4 +364,126 @@ fallback path (sessionId + dir + ext) still writes to the mtime cache."
                                            decknix--agent-session-cache-map)))
                   'test-auggie)))))
 
+;; ---------------------------------------------------------------------------
+;; decknix--session-list-files — native filesystem walk (D2)
+;;
+;; Pin the observable contract of the file lister so we can swap the
+;; implementation from `ls -t | head' / `find | xargs' shell-outs to
+;; native Emacs traversal (`directory-files' + a depth-bounded walker)
+;; without behaviour drift.  Two shapes are covered:
+;;
+;;   1. Single-directory providers (auggie): scan `sessions-dir' for the
+;;      configured extension, sort newest-first, respect MAX.
+;;   2. Multi-project providers (claude, `:history-file' set): walk two
+;;      levels deep so `<sessions-dir>/<project-hash>/<sid>.jsonl' files
+;;      are picked up; a nested-3 file must be ignored.
+;;
+;; Tests use a per-test tmp dir so nothing touches ~/.augment or ~/.claude.
+;; ---------------------------------------------------------------------------
+
+(defmacro decknix-agent-session-cache-test--with-tmp-dir (var &rest body)
+  "Bind VAR to a fresh temp dir, run BODY, then remove it recursively."
+  (declare (indent 1))
+  `(let ((,var (make-temp-file "decknix-list-files-" t)))
+     (unwind-protect (progn ,@body)
+       (delete-directory ,var t))))
+
+(defun decknix-agent-session-cache-test--touch (path mtime)
+  "Create PATH (making parent dirs) and set its mtime to MTIME (float)."
+  (let ((dir (file-name-directory path)))
+    (unless (file-exists-p dir) (make-directory dir t)))
+  (write-region "" nil path nil 'quiet)
+  (set-file-times path (seconds-to-time mtime)))
+
+(ert-deftest decknix-session-list-files--single-dir-sorted-newest-first ()
+  "Single-dir provider (auggie shape): returns .json files newest-first."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let ((decknix-agent-provider-registry nil))
+      (decknix-agent-register-provider 'test-auggie
+        `(:sessions-dir ,tmp
+          :session-file-extension ".json"
+          :label "T" :glyph "A"))
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "old.json" tmp) 1000.0)
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "mid.json" tmp) 2000.0)
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "new.json" tmp) 3000.0)
+      ;; A non-matching extension is filtered out.
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "skip.txt"  tmp) 4000.0)
+      (let ((paths (decknix--session-list-files 'test-auggie)))
+        (should (equal (mapcar #'file-name-nondirectory paths)
+                       '("new.json" "mid.json" "old.json")))))))
+
+(ert-deftest decknix-session-list-files--single-dir-honours-max ()
+  "MAX caps the returned count (newest-first)."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let ((decknix-agent-provider-registry nil))
+      (decknix-agent-register-provider 'test-auggie
+        `(:sessions-dir ,tmp
+          :session-file-extension ".json"
+          :label "T" :glyph "A"))
+      (dotimes (i 5)
+        (decknix-agent-session-cache-test--touch
+         (expand-file-name (format "s%d.json" i) tmp)
+         (+ 1000.0 (* i 100))))
+      (let ((paths (decknix--session-list-files 'test-auggie 2)))
+        (should (= (length paths) 2))
+        (should (equal (mapcar #'file-name-nondirectory paths)
+                       '("s4.json" "s3.json")))))))
+
+(ert-deftest decknix-session-list-files--missing-dir-returns-empty ()
+  "A missing sessions dir returns an empty list, not an error."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-auggie
+      '(:sessions-dir "/tmp/does-not-exist-decknix-test-XYZ"
+        :session-file-extension ".json"
+        :label "T" :glyph "A"))
+    (should (equal (decknix--session-list-files 'test-auggie) nil))))
+
+(ert-deftest decknix-session-list-files--multi-project-depth-2 ()
+  "Multi-project provider (claude shape, :history-file set): walks 2 deep.
+Depth-2 .jsonl files (`<dir>/<project>/<sid>.jsonl') are returned;
+depth-3 files must not appear."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let ((decknix-agent-provider-registry nil))
+      (decknix-agent-register-provider 'test-claude
+        `(:sessions-dir ,tmp
+          :session-file-extension ".jsonl"
+          :history-file "/tmp/history.jsonl"
+          :label "T" :glyph "C"))
+      ;; Two projects, one session each at depth 2.
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "proj-a/sid-1.jsonl" tmp) 1000.0)
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "proj-b/sid-2.jsonl" tmp) 2000.0)
+      ;; Depth-3 nested session must be ignored.
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "proj-a/nested/sid-3.jsonl" tmp) 3000.0)
+      ;; Extension filter still applies at depth 2.
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "proj-b/skip.txt" tmp) 4000.0)
+      (let ((paths (decknix--session-list-files 'test-claude)))
+        (should (equal (mapcar #'file-name-nondirectory paths)
+                       '("sid-2.jsonl" "sid-1.jsonl")))))))
+
+(ert-deftest decknix-session-list-files--multi-project-honours-max ()
+  "MAX caps the multi-project walk (newest-first)."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let ((decknix-agent-provider-registry nil))
+      (decknix-agent-register-provider 'test-claude
+        `(:sessions-dir ,tmp
+          :session-file-extension ".jsonl"
+          :history-file "/tmp/history.jsonl"
+          :label "T" :glyph "C"))
+      (dotimes (i 4)
+        (decknix-agent-session-cache-test--touch
+         (expand-file-name (format "proj/%d.jsonl" i) tmp)
+         (+ 1000.0 (* i 100))))
+      (let ((paths (decknix--session-list-files 'test-claude 2)))
+        (should (= (length paths) 2))
+        (should (equal (mapcar #'file-name-nondirectory paths)
+                       '("3.jsonl" "2.jsonl")))))))
+
 (provide 'decknix-agent-session-cache-test)
