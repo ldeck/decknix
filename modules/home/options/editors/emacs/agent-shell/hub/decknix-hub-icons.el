@@ -148,6 +148,8 @@ Indicates two families of signals (Human and Bot).
 Human family (left slot):
 - ↩ / i[bold] (replies-to-me) when a human posted after one of my comments.
 - 💬 / i[dim]  (needs-reply) when the latest activity is a human and not me.
+- ⏳ / .[dim]  (i-replied-last) when my own comment is the latest and I am
+              waiting on a response; lowest priority in the human slot.
 Bot family (right slot):
 - 👽 / β[bold] (bot-replies-to-me) when a bot replied after my comment.
 - 🤖 / β[dim]  (bot-pending) when the latest activity is a bot.
@@ -166,6 +168,7 @@ italic characters and weight)."
          (bot-pending       (eq (alist-get 'bot_pending pr) t))
          (replies-to-me     (eq (alist-get 'replies_to_me pr) t))
          (bot-replies-to-me (eq (alist-get 'bot_replies_to_me pr) t))
+         (i-replied-last    (eq (alist-get 'i_replied_last pr) t))
          ;; Use both possible decision fields
          (decision          (or (alist-get 'review_decision pr)
                                 (alist-get 'my_review pr)))
@@ -193,6 +196,10 @@ italic characters and weight)."
                         (if emoji-layout
                             (decknix--hub-icon "💬" '(:foreground "#d7af5f"))
                           (propertize "i" 'face '(:foreground "#5fc8d4" :weight normal :slant italic))))
+                       (i-replied-last
+                        (if emoji-layout
+                            (decknix--hub-icon "⏳" '(:foreground "#6c6c6c"))
+                          (propertize "." 'face '(:foreground "#6c6c6c" :weight normal))))
                        (t ""))))
             (b (if all-resolved
                     ""

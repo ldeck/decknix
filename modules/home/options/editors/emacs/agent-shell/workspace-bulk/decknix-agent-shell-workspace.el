@@ -207,6 +207,7 @@
 (defvar decknix--hub-requests-hide-needs-reply)
 (defvar decknix--hub-requests-hide-bot-pending)
 (defvar decknix--hub-requests-only-my-replies)
+(defvar decknix--hub-requests-hide-i-replied-last)
 (defvar decknix--hub-requests-hide-reviewed)
 (defvar decknix--hub-requests-hide-conflict)
 (defvar decknix--hub-requests-hide-draft)
@@ -963,6 +964,7 @@ WIP / Sessions / Worktrees."
     (decknix-sidebar-transient--req-sort)         ;; sort (s)
     (decknix-sidebar-transient--req-my-replies)   ;; ↩ (M)
     (decknix-sidebar-transient--req-needs-reply)  ;; 💬 (c)
+    (decknix-sidebar-transient--req-i-replied)    ;; ⏳ waiting on others (o)
     (decknix-sidebar-transient--req-bot-pending)  ;; 🤖 (B)
     (decknix-sidebar-transient--req-conflict)     ;; ⚠ conflict (X)
     (decknix-sidebar-transient--req-draft)]       ;; 📝 draft (x)
@@ -1471,6 +1473,12 @@ All toggle keys are accessed via the T transient prefix."
                             (propertize
                              (if decknix--hub-requests-hide-needs-reply "[hide]" "[show]")
                              'face (if decknix--hub-requests-hide-needs-reply
+                                       'font-lock-constant-face
+                                     'font-lock-comment-face))))
+              (cons "o" (concat (decknix--hub-icon "⏳" 'default) " "
+                            (propertize
+                             (if decknix--hub-requests-hide-i-replied-last "[hide]" "[show]")
+                             'face (if decknix--hub-requests-hide-i-replied-last
                                        'font-lock-constant-face
                                      'font-lock-comment-face))))
               (cons "b" (concat (decknix--hub-icon "🤖" 'default) " "
@@ -4692,6 +4700,9 @@ fresh-daemon idle save cannot clobber the Previous Sessions snapshot."
            (cons 'requests-only-my-replies
                  (when (boundp 'decknix--hub-requests-only-my-replies)
                    decknix--hub-requests-only-my-replies))
+           (cons 'requests-hide-i-replied-last
+                 (when (boundp 'decknix--hub-requests-hide-i-replied-last)
+                   decknix--hub-requests-hide-i-replied-last))
            (cons 'requests-hide-reviewed
                  (when (boundp 'decknix--hub-requests-hide-reviewed)
                    decknix--hub-requests-hide-reviewed))
@@ -4851,6 +4862,7 @@ so it is safe to call from the hot refresh path."
     decknix--hub-requests-hide-needs-reply
     decknix--hub-requests-hide-bot-pending
     decknix--hub-requests-only-my-replies
+    decknix--hub-requests-hide-i-replied-last
     decknix--hub-requests-hide-reviewed
     decknix--hub-requests-hide-conflict
     decknix--hub-requests-hide-draft
@@ -5061,6 +5073,10 @@ the sidebar.  Prompts for confirmation first."
             (unless (eq rom 'missing)
               (when (boundp 'decknix--hub-requests-only-my-replies)
                 (setq decknix--hub-requests-only-my-replies rom))))
+          (let ((rir (alist-get 'requests-hide-i-replied-last state 'missing)))
+            (unless (eq rir 'missing)
+              (when (boundp 'decknix--hub-requests-hide-i-replied-last)
+                (setq decknix--hub-requests-hide-i-replied-last rir))))
           (let ((rhr (alist-get 'requests-hide-reviewed state 'missing)))
             (unless (eq rhr 'missing)
               (when (boundp 'decknix--hub-requests-hide-reviewed)
