@@ -161,26 +161,44 @@ but was parsed within `decknix--session-meta-reparse-throttle' seconds
                              decknix--session-meta-reparse-throttle))))
         data))))
 
-(defun decknix--session-collect-files-depth (dir ext maxdepth)
-  "Return absolute paths under DIR ending in EXT, walking up to MAXDEPTH levels.
-MAXDEPTH 1 = files directly in DIR (auggie shape);
-MAXDEPTH 2 = files one subdir deep (claude `<sessions-dir>/<project>/`);
-etc.  Returns nil when DIR does not exist.  Symlinks are not followed.
-Hidden entries (leading dot) are skipped to match the shell glob semantics
-of the previous `ls -t1 %s/*%s' path."
+(defvar decknix--session-list-files-cache (make-hash-table :test 'eq)
+  "Provider-id (symbol) -> plist (:key (COUNT . MAX-MTIME) :paths PATHS).
+Fingerprint cache that lets `decknix--session-list-files' skip the
+sort pass when the sessions dir is unchanged between calls.  Any file
+added, removed, or touched bumps COUNT or MAX-MTIME, so no observable
+staleness slips past.  Not persisted; cheap to rebuild.")
+
+(defun decknix--session-collect-files-and-mtimes-depth (dir ext maxdepth)
+  "Return alist ((MTIME . PATH) ...) for regular files under DIR ending in EXT.
+Walks up to MAXDEPTH levels (1 = files directly in DIR, auggie shape;
+2 = one subdir deep, claude `<sessions-dir>/<project>/`).  Uses
+`directory-files-and-attributes' so the readdir + stat happens in one
+batched pass per directory instead of a follow-up `file-attributes' call
+per entry.  Returns nil when DIR does not exist.  Symlinks are not
+followed.  Hidden entries (leading dot) are skipped to match the shell
+glob semantics of the previous `ls -t1 %s/*%s' path."
   (when (file-directory-p dir)
     (let ((results nil)
           (pattern (concat (regexp-quote ext) "\\'")))
       (cl-labels
           ((walk (d depth)
              (when (>= depth 1)
-               (dolist (entry (directory-files d t "\\`[^.]" t))
-                 (cond
-                  ((file-symlink-p entry) nil)
-                  ((file-directory-p entry)
-                   (walk entry (1- depth)))
-                  ((string-match-p pattern entry)
-                   (push entry results)))))))
+               (dolist (entry (directory-files-and-attributes
+                               d t "\\`[^.]" t))
+                 (let* ((path (car entry))
+                        (attrs (cdr entry))
+                        (type (file-attribute-type attrs)))
+                   (cond
+                    ;; symlink: TYPE is the target string -- skip.
+                    ((stringp type) nil)
+                    ;; directory: TYPE is t -- recurse.
+                    ((eq type t) (walk path (1- depth)))
+                    ;; regular file matching extension.
+                    ((and (null type) (string-match-p pattern path))
+                     (push (cons (float-time
+                                  (file-attribute-modification-time attrs))
+                                 path)
+                           results))))))))
         (walk dir maxdepth))
       results)))
 
@@ -188,10 +206,17 @@ of the previous `ls -t1 %s/*%s' path."
   "Return absolute session JSON paths for PROVIDER-ID sorted newest-first.
 When MAX is non-nil, limit to at most MAX files.
 
+Result is cached per PROVIDER-ID under a `(COUNT . MAX-MTIME)'
+fingerprint of the scan; when the fingerprint is unchanged across
+calls the cached list is returned as-is (same cons identity), skipping
+the sort.  Adding, removing, or touching any file bumps the
+fingerprint, so no observable staleness slips past.
+
 Native replacement for the historical `ls -t1' / `find | xargs ls -t1'
-shell pipeline: walks the provider's sessions dir with `directory-files'
-via `decknix--session-collect-files-depth' and sorts in-process by
-mtime.  Removes a shell fork from every sidebar refresh and fixes a
+shell pipeline: walks the provider's sessions dir with
+`directory-files-and-attributes' (one readdir+stat batch per dir) via
+`decknix--session-collect-files-and-mtimes-depth' and sorts in-process
+by mtime.  Removes a shell fork from every sidebar refresh and fixes a
 latent bug where a missing sessions dir under zsh returned a bogus
 one-element list holding the shell's `no matches found' error text."
   (let* ((dir (decknix-agent-provider-sessions-dir provider-id))
@@ -200,15 +225,25 @@ one-element list holding the shell's `no matches found' error text."
          ;; Multi-project providers (claude, :history-file set) live at
          ;; `<sessions-dir>/<project-hash>/<sid>.jsonl' -- depth 2.
          ;; Single-dir providers (auggie) at `<sessions-dir>/<sid>.json' -- depth 1.
-         (files (decknix--session-collect-files-depth dir ext (if hist 2 1))))
-    (let* ((with-mtime (delq nil
-                             (mapcar (lambda (f)
-                                       (let ((m (decknix--session-file-mtime f)))
-                                         (when m (cons m f))))
-                                     files)))
-           (sorted (sort with-mtime (lambda (a b) (> (car a) (car b)))))
-           (paths  (mapcar #'cdr sorted)))
-      (if max (seq-take paths max) paths))))
+         (pairs (decknix--session-collect-files-and-mtimes-depth
+                 dir ext (if hist 2 1))))
+    (if (null pairs)
+        nil
+      (let* ((count (length pairs))
+             (max-mtime (apply #'max (mapcar #'car pairs)))
+             (key (cons count max-mtime))
+             (cached (gethash provider-id decknix--session-list-files-cache))
+             (paths
+              (if (and cached (equal (plist-get cached :key) key))
+                  (plist-get cached :paths)
+                (let* ((sorted (sort pairs
+                                     (lambda (a b) (> (car a) (car b)))))
+                       (only-paths (mapcar #'cdr sorted)))
+                  (puthash provider-id
+                           (list :key key :paths only-paths)
+                           decknix--session-list-files-cache)
+                  only-paths))))
+        (if max (seq-take paths max) paths)))))
 
 (defun decknix--session-parse-file (provider-id path)
   "Extract session metadata from PATH for PROVIDER-ID.

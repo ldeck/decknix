@@ -382,9 +382,12 @@ fallback path (sessionId + dir + ext) still writes to the mtime cache."
 ;; ---------------------------------------------------------------------------
 
 (defmacro decknix-agent-session-cache-test--with-tmp-dir (var &rest body)
-  "Bind VAR to a fresh temp dir, run BODY, then remove it recursively."
+  "Bind VAR to a fresh temp dir, run BODY, then remove it recursively.
+Shadows `decknix--session-list-files-cache' so caching tests can't leak
+into each other."
   (declare (indent 1))
-  `(let ((,var (make-temp-file "decknix-list-files-" t)))
+  `(let ((,var (make-temp-file "decknix-list-files-" t))
+         (decknix--session-list-files-cache (make-hash-table :test 'eq)))
      (unwind-protect (progn ,@body)
        (delete-directory ,var t))))
 
@@ -485,5 +488,124 @@ depth-3 files must not appear."
         (should (= (length paths) 2))
         (should (equal (mapcar #'file-name-nondirectory paths)
                        '("3.jsonl" "2.jsonl")))))))
+
+;; ---------------------------------------------------------------------------
+;; decknix--session-list-files — fingerprint cache (D re-eval)
+;;
+;; When the sessions dir hasn't changed between calls, `-list-files' must
+;; skip the sort pass and return the exact same list (same cons identity)
+;; from a small per-provider cache keyed on a `(count . max-mtime)'
+;; fingerprint.  The fingerprint invalidates whenever ANY file is added,
+;; removed, or touched — no observable staleness may slip through.
+;;
+;; These tests pin the behavioural contract; the actual perf win
+;; (skipping O(N log N) sort + O(N) `file-attributes' round-trips) is
+;; a side effect of the same code path being taken.
+;; ---------------------------------------------------------------------------
+
+(ert-deftest decknix-session-list-files--cache-eq-when-unchanged ()
+  "Two back-to-back calls with no fs changes return the same cons cell."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let ((decknix-agent-provider-registry nil))
+      (decknix-agent-register-provider 'test-auggie
+        `(:sessions-dir ,tmp
+          :session-file-extension ".json"
+          :label "T" :glyph "A"))
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "a.json" tmp) 1000.0)
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "b.json" tmp) 2000.0)
+      (let ((r1 (decknix--session-list-files 'test-auggie))
+            (r2 (decknix--session-list-files 'test-auggie)))
+        (should (eq r1 r2))))))
+
+(ert-deftest decknix-session-list-files--cache-invalidates-on-new-file ()
+  "Adding a new file after the first call must be reflected in the second."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let ((decknix-agent-provider-registry nil))
+      (decknix-agent-register-provider 'test-auggie
+        `(:sessions-dir ,tmp
+          :session-file-extension ".json"
+          :label "T" :glyph "A"))
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "old.json" tmp) 1000.0)
+      (let ((r1 (decknix--session-list-files 'test-auggie)))
+        (should (equal (mapcar #'file-name-nondirectory r1)
+                       '("old.json"))))
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "new.json" tmp) 3000.0)
+      (let ((r2 (decknix--session-list-files 'test-auggie)))
+        (should (equal (mapcar #'file-name-nondirectory r2)
+                       '("new.json" "old.json")))))))
+
+(ert-deftest decknix-session-list-files--cache-invalidates-on-mtime-bump ()
+  "Touching an existing file (count unchanged, max-mtime bumps) invalidates."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let ((decknix-agent-provider-registry nil))
+      (decknix-agent-register-provider 'test-auggie
+        `(:sessions-dir ,tmp
+          :session-file-extension ".json"
+          :label "T" :glyph "A"))
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "a.json" tmp) 1000.0)
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "b.json" tmp) 2000.0)
+      (let ((r1 (decknix--session-list-files 'test-auggie)))
+        (should (equal (mapcar #'file-name-nondirectory r1)
+                       '("b.json" "a.json"))))
+      ;; Bump a.json past b.json — order must flip.
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "a.json" tmp) 5000.0)
+      (let ((r2 (decknix--session-list-files 'test-auggie)))
+        (should (equal (mapcar #'file-name-nondirectory r2)
+                       '("a.json" "b.json")))))))
+
+(ert-deftest decknix-session-list-files--cache-invalidates-on-deletion ()
+  "Deleting a file (count drops) invalidates the cache."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let ((decknix-agent-provider-registry nil))
+      (decknix-agent-register-provider 'test-auggie
+        `(:sessions-dir ,tmp
+          :session-file-extension ".json"
+          :label "T" :glyph "A"))
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "a.json" tmp) 1000.0)
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "b.json" tmp) 2000.0)
+      (let ((r1 (decknix--session-list-files 'test-auggie)))
+        (should (= (length r1) 2)))
+      (delete-file (expand-file-name "a.json" tmp))
+      (let ((r2 (decknix--session-list-files 'test-auggie)))
+        (should (equal (mapcar #'file-name-nondirectory r2)
+                       '("b.json")))))))
+
+(ert-deftest decknix-session-list-files--cache-per-provider ()
+  "Cache entries are keyed by provider-id — one provider's churn
+does not invalidate the other's cached list."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let* ((decknix-agent-provider-registry nil)
+           (dir-a (expand-file-name "a" tmp))
+           (dir-b (expand-file-name "b" tmp)))
+      (make-directory dir-a t)
+      (make-directory dir-b t)
+      (decknix-agent-register-provider 'test-a
+        `(:sessions-dir ,dir-a
+          :session-file-extension ".json"
+          :label "A" :glyph "A"))
+      (decknix-agent-register-provider 'test-b
+        `(:sessions-dir ,dir-b
+          :session-file-extension ".json"
+          :label "B" :glyph "B"))
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "x.json" dir-a) 1000.0)
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "y.json" dir-b) 2000.0)
+      (let ((a1 (decknix--session-list-files 'test-a))
+            (_b1 (decknix--session-list-files 'test-b)))
+        ;; Mutate provider B; provider A's cached list must still be `eq'.
+        (decknix-agent-session-cache-test--touch
+         (expand-file-name "z.json" dir-b) 3000.0)
+        (let ((a2 (decknix--session-list-files 'test-a)))
+          (should (eq a1 a2)))))))
 
 (provide 'decknix-agent-session-cache-test)
