@@ -334,13 +334,47 @@ caller can position the timeline cursor on the matched turn."
         nil))))
 
 
+(defvar decknix--agent-session-subagents-cache (make-hash-table :test 'equal)
+  "Memo cache for `decknix--agent-session-subagents'.
+KEY is \"PROVIDER/SESSION-ID\"; VALUE is (:at FLOAT :data LIST).")
+
+(defvar decknix--agent-session-subagents-throttle 3.0
+  "Seconds to reuse a memoized `decknix--agent-session-subagents' result.
+The sidebar re-renders the full live-session tree on every paint tick,
+calling this once per live buffer each time.  Walking the subagents
+directory, resolving the session file and sorting on every tick became
+the dominant main-thread stall once the session re-parse storm was
+throttled: an external `sample' of the wedged daemon put ~54% of
+main-thread CPU in this one call.  Within this window the last result is
+reused, bounding the work to once per window per session no matter how
+often the sidebar repaints.  Set to 0 to always recompute (old
+behaviour).")
+
 (defun decknix--agent-session-subagents (session-id &optional provider-id)
-  "Return metadata for sub-agents of SESSION-ID.
-PROVIDER-ID defaults to `decknix-agent-default-provider'.
+  "Return metadata for sub-agents of SESSION-ID, memoized.
+PROVIDER-ID defaults to `decknix-agent-default-provider'.  Results are
+cached per session for `decknix--agent-session-subagents-throttle'
+seconds so repeated sidebar repaints reuse them; see
+`decknix--agent-session-subagents-compute' for the actual walk."
+  (let* ((p-id (or provider-id decknix-agent-default-provider))
+         (key (concat (symbol-name p-id) "/" (or session-id "")))
+         (memo (gethash key decknix--agent-session-subagents-cache)))
+    (if (and memo
+             (> decknix--agent-session-subagents-throttle 0)
+             (< (- (float-time) (plist-get memo :at))
+                decknix--agent-session-subagents-throttle))
+        (plist-get memo :data)
+      (let ((result (decknix--agent-session-subagents-compute session-id p-id)))
+        (puthash key (list :at (float-time) :data result)
+                 decknix--agent-session-subagents-cache)
+        result))))
+
+(defun decknix--agent-session-subagents-compute (session-id p-id)
+  "Walk the sub-agent transcripts for SESSION-ID under provider P-ID.
+Uncached core of `decknix--agent-session-subagents'.
 For Claude, sub-agents are stored in a `subagents/' subdirectory next
 to the main session transcript."
-  (let* ((p-id (or provider-id decknix-agent-default-provider))
-         (hist (decknix-agent-provider-history-file p-id)))
+  (let* ((hist (decknix-agent-provider-history-file p-id)))
     (if (not hist)
         nil ;; Auggie has no known sub-agent structure yet
       (let* ((s-file (decknix--agent-session-file session-id p-id)))

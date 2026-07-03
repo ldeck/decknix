@@ -254,4 +254,44 @@ field must always be a string."
                 (should (equal "hi" (cdar turns)))))))
       (when (file-exists-p tmp) (delete-file tmp)))))
 
+;; -- Sub-agent lookup memoization -------------------------------------------
+;; Guards the fix for the post-throttle sidebar stall: the sidebar repaints
+;; the full live-session tree on every tick and called
+;; `decknix--agent-session-subagents' once per live buffer each time; an
+;; external `sample' put ~54% of main-thread CPU in that walk.  The result is
+;; now memoized per session for a short window.
+
+(ert-deftest decknix-agent-session-subagents/memoizes-within-throttle ()
+  "A second lookup within the throttle window reuses the memoized result."
+  (let ((decknix--agent-session-subagents-cache (make-hash-table :test 'equal))
+        (decknix--agent-session-subagents-throttle 3.0)
+        (calls 0))
+    (cl-letf (((symbol-function 'decknix--agent-session-subagents-compute)
+               (lambda (_sid _pid) (cl-incf calls) '((a . 1)))))
+      (should (equal (decknix--agent-session-subagents "sid-1" 'claude-code) '((a . 1))))
+      (should (equal (decknix--agent-session-subagents "sid-1" 'claude-code) '((a . 1))))
+      (should (= calls 1)))))
+
+(ert-deftest decknix-agent-session-subagents/throttle-zero-recomputes ()
+  "A throttle of 0 recomputes on every call (previous behaviour)."
+  (let ((decknix--agent-session-subagents-cache (make-hash-table :test 'equal))
+        (decknix--agent-session-subagents-throttle 0)
+        (calls 0))
+    (cl-letf (((symbol-function 'decknix--agent-session-subagents-compute)
+               (lambda (_sid _pid) (cl-incf calls) nil)))
+      (decknix--agent-session-subagents "sid-1" 'claude-code)
+      (decknix--agent-session-subagents "sid-1" 'claude-code)
+      (should (= calls 2)))))
+
+(ert-deftest decknix-agent-session-subagents/distinct-sessions-cache-separately ()
+  "Different session ids are memoized under distinct keys."
+  (let ((decknix--agent-session-subagents-cache (make-hash-table :test 'equal))
+        (decknix--agent-session-subagents-throttle 3.0)
+        (calls 0))
+    (cl-letf (((symbol-function 'decknix--agent-session-subagents-compute)
+               (lambda (sid _pid) (cl-incf calls) (list (cons 'sid sid)))))
+      (should (equal (decknix--agent-session-subagents "sid-1" 'claude-code) '((sid . "sid-1"))))
+      (should (equal (decknix--agent-session-subagents "sid-2" 'claude-code) '((sid . "sid-2"))))
+      (should (= calls 2)))))
+
 (provide 'decknix-agent-session-history-test)
