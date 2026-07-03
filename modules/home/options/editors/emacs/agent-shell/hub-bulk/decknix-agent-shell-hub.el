@@ -109,6 +109,8 @@
                   "decknix-hub-attention-filter")
 (declare-function decknix--hub-toggle-requests-only-my-replies
                   "decknix-hub-attention-filter")
+(declare-function decknix--hub-toggle-requests-hide-i-replied-last
+                  "decknix-hub-attention-filter")
 (declare-function decknix--hub-toggle-requests-sort-reverse
                   "decknix-hub-attention-filter")
 (declare-function decknix-auto-review-cycle-mode "decknix-auto-review")
@@ -170,6 +172,7 @@
 (defvar decknix--hub-requests-hide-bot-pending)
 (defvar decknix--hub-requests-hide-reviewed)
 (defvar decknix--hub-requests-only-my-replies)
+(defvar decknix--hub-requests-hide-i-replied-last)
 (defvar decknix--hub-requests-hide-conflict)
 (defvar decknix--hub-requests-hide-draft)
 (defvar decknix--hub-requests-sort-reverse)
@@ -540,6 +543,21 @@ picker's dynamic binding unwinds.")
   :transient t
   (interactive)
   (call-interactively #'decknix--hub-toggle-requests-only-my-replies))
+
+(transient-define-suffix decknix-sidebar-transient--req-i-replied ()
+  :key "o"
+  :description
+  (lambda ()
+    (concat (decknix--hub-icon "⏳" 'default)
+            "             "
+            (propertize
+             (if decknix--hub-requests-hide-i-replied-last "[hide]" "[show]")
+             'face (if decknix--hub-requests-hide-i-replied-last
+                       'font-lock-constant-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix--hub-toggle-requests-hide-i-replied-last))
 
 (transient-define-suffix decknix-sidebar-transient--req-reviewed ()
   ;; `R' (not `v'): `v' is the Live "attention" toggle in the same
