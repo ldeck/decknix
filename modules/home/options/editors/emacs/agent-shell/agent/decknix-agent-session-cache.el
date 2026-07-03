@@ -132,6 +132,34 @@ Written as a printed Elisp alist; loaded at daemon startup via
     (when attrs
       (float-time (file-attribute-modification-time attrs)))))
 
+(defvar decknix--session-meta-reparse-throttle 4.0
+  "Seconds to serve slightly-stale cached metadata for a *changed* session file.
+An actively-streaming agent rewrites its session JSONL on every token, so
+its mtime bumps continuously and the mtime cache never hits.  Re-slurping
+the whole (often large) file through `jq' on every sidebar refresh is the
+dominant main-thread stall (CPU profiling caught 672 synchronous `jq'
+parses / 225s in a few minutes).  Within this window a changed file
+reuses its last parsed metadata instead of re-parsing, bounding re-parses
+to once per window per file no matter how fast the file churns.  Set to 0
+to always re-parse changed files (previous behaviour).")
+
+(defun decknix--session-cache-hit (entry mtime)
+  "Return usable cached :data from ENTRY for MTIME, or nil.
+Usable when the file is unchanged since the cached parse, OR it changed
+but was parsed within `decknix--session-meta-reparse-throttle' seconds
+\(see that variable).  MTIME is the file's current float-time mtime."
+  (when (and entry mtime)
+    (let ((cached-mtime (plist-get entry :mtime))
+          (parsed-at (plist-get entry :parsed-at))
+          (data (plist-get entry :data)))
+      (when (and data
+                 (or (and cached-mtime (= mtime cached-mtime))
+                     (and (> decknix--session-meta-reparse-throttle 0)
+                          parsed-at
+                          (< (- (float-time) parsed-at)
+                             decknix--session-meta-reparse-throttle))))
+        data))))
+
 (defun decknix--session-list-files (provider-id &optional max)
   "Return absolute session JSON paths for PROVIDER-ID sorted newest-first.
 When MAX is non-nil, limit to at most MAX files via `head'."
@@ -195,20 +223,19 @@ the session picker can identify the backend without rechecking paths.
 Returns nil when PATH does not exist."
   (let* ((mtime (decknix--session-file-mtime path))
          (entry (gethash path decknix--session-meta-cache))
-         (cached-mtime (and entry (plist-get entry :mtime))))
-    (if (and mtime cached-mtime (= mtime cached-mtime))
-        (plist-get entry :data)
-      (when mtime
-        (let* ((raw  (decknix--session-parse-file provider-id path))
-               ;; Phase 1.3: stamp providerId so callers (resume,
-               ;; session picker) know which backend owns this session.
-               (data (when raw
-                       (if (alist-get 'providerId raw) raw
-                         (cons (cons 'providerId provider-id) raw)))))
-          (when data
-            (puthash path (list :mtime mtime :data data)
-                     decknix--session-meta-cache)
-            data))))))
+         (hit (decknix--session-cache-hit entry mtime)))
+    (or hit
+        (when mtime
+          (let* ((raw  (decknix--session-parse-file provider-id path))
+                 ;; Phase 1.3: stamp providerId so callers (resume,
+                 ;; session picker) know which backend owns this session.
+                 (data (when raw
+                         (if (alist-get 'providerId raw) raw
+                           (cons (cons 'providerId provider-id) raw)))))
+            (when data
+              (puthash path (list :mtime mtime :data data :parsed-at (float-time))
+                       decknix--session-meta-cache)
+              data))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Persistence
@@ -383,7 +410,7 @@ reconstructing path from sessionId + dir."
                          (expand-file-name (concat sid ext) dir))))
              (mtime (and path (decknix--session-file-mtime path))))
         (when (and path mtime)
-          (puthash path (list :mtime mtime :data data)
+          (puthash path (list :mtime mtime :data data :parsed-at (float-time))
                    decknix--session-meta-cache))))))
 
 ;; ---------------------------------------------------------------------------
@@ -400,14 +427,13 @@ and the persistent cache is saved if any new entries were written."
          (files (decknix--session-list-files provider-id decknix--agent-session-cache-max-files))
          (cached-data nil)
          (new-files nil))
-    ;; Partition: cached (mtime match) vs new/changed.
+    ;; Partition: cached (mtime match or within re-parse throttle) vs new/changed.
     (dolist (path files)
       (let* ((mtime (decknix--session-file-mtime path))
              (entry (gethash path decknix--session-meta-cache))
-             (cached-mtime (and entry (plist-get entry :mtime))))
-        (if (and mtime cached-mtime (= mtime cached-mtime))
-            (let ((data (plist-get entry :data)))
-              (when data (push data cached-data)))
+             (hit (decknix--session-cache-hit entry mtime)))
+        (if hit
+            (push hit cached-data)
           (when mtime (push path new-files)))))
     (setq new-files (nreverse new-files))
     (let* ((before (hash-table-count decknix--session-meta-cache))
@@ -442,14 +468,13 @@ in a background subprocess."
       (let* ((files (decknix--session-list-files provider-id decknix--agent-session-cache-max-files))
              (cached-data nil)
              (new-files nil))
-        ;; Partition files.
+        ;; Partition files (cached / within re-parse throttle vs new/changed).
         (dolist (path files)
           (let* ((mtime (decknix--session-file-mtime path))
                  (entry (gethash path decknix--session-meta-cache))
-                 (cached-mtime (and entry (plist-get entry :mtime))))
-            (if (and mtime cached-mtime (= mtime cached-mtime))
-                (let ((data (plist-get entry :data)))
-                  (when data (push data cached-data)))
+                 (hit (decknix--session-cache-hit entry mtime)))
+            (if hit
+                (push hit cached-data)
               (when mtime (push path new-files)))))
         (setq new-files (nreverse new-files))
         (if (null new-files)

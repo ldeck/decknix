@@ -91,6 +91,61 @@
         (should (equal (alist-get 'sessionId result) "sid-001"))
         (should (eq (alist-get 'providerId result) 'claude-code))))))
 
+(ert-deftest decknix-session-meta--throttles-reparse-of-recently-parsed-changed-file ()
+  "A changed file re-parsed within the throttle window serves stale cached data.
+Guards the fix for the sidebar-refresh stall: an actively-streaming
+session's JSONL changes on every token, and re-slurping it through `jq'
+on each refresh saturated the main thread."
+  (let ((decknix--session-meta-cache (make-hash-table :test 'equal))
+        (decknix--session-meta-reparse-throttle 4.0)
+        (parse-called 0))
+    (puthash "/tmp/test.json"
+             (list :mtime 999.0 :data '((sessionId . "old")) :parsed-at (float-time))
+             decknix--session-meta-cache)
+    (cl-letf (((symbol-function 'decknix--session-file-mtime) (lambda (_p) 1001.0))
+              ((symbol-function 'decknix--session-parse-file)
+               (lambda (_provider _p) (cl-incf parse-called) '((sessionId . "new")))))
+      (let ((result (decknix--session-meta 'test-auggie "/tmp/test.json")))
+        (should (equal (alist-get 'sessionId result) "old"))
+        (should (= parse-called 0))))))
+
+(ert-deftest decknix-session-meta--reparses-changed-file-past-throttle-window ()
+  "A changed file whose last parse predates the throttle window re-parses."
+  (let ((decknix--session-meta-cache (make-hash-table :test 'equal))
+        (decknix--session-meta-reparse-throttle 4.0)
+        (parse-called 0))
+    (puthash "/tmp/test.json"
+             (list :mtime 999.0 :data '((sessionId . "old"))
+                   :parsed-at (- (float-time) 3600))
+             decknix--session-meta-cache)
+    (cl-letf (((symbol-function 'decknix--session-file-mtime) (lambda (_p) 1001.0))
+              ((symbol-function 'decknix--session-parse-file)
+               (lambda (_provider _p) (cl-incf parse-called) '((sessionId . "new")))))
+      (let ((result (decknix--session-meta 'test-auggie "/tmp/test.json")))
+        (should (equal (alist-get 'sessionId result) "new"))
+        (should (= parse-called 1))
+        ;; A fresh parse re-stamps parsed-at (and mtime) so subsequent churn
+        ;; is throttled again from now.
+        (let ((entry (gethash "/tmp/test.json" decknix--session-meta-cache)))
+          (should (plist-get entry :parsed-at))
+          (should (= (plist-get entry :mtime) 1001.0)))))))
+
+(ert-deftest decknix-session-meta--throttle-zero-always-reparses ()
+  "A throttle of 0 restores the previous always-reparse-on-change behaviour."
+  (let ((decknix--session-meta-cache (make-hash-table :test 'equal))
+        (decknix--session-meta-reparse-throttle 0)
+        (parse-called 0))
+    (puthash "/tmp/test.json"
+             (list :mtime 999.0 :data '((sessionId . "old")) :parsed-at (float-time))
+             decknix--session-meta-cache)
+    (cl-letf (((symbol-function 'decknix--session-file-mtime) (lambda (_p) 1001.0))
+              ((symbol-function 'decknix--session-parse-file)
+               (lambda (_provider _p) (cl-incf parse-called) '((sessionId . "new")))))
+      (should (equal (alist-get 'sessionId
+                                (decknix--session-meta 'test-auggie "/tmp/test.json"))
+                     "new"))
+      (should (= parse-called 1)))))
+
 (defmacro decknix-agent-session-cache-test--with-multi-provider (&rest body)
   "Register auggie + a claude-like provider so the all-providers path runs."
   `(let ((decknix-agent-provider-registry nil)
