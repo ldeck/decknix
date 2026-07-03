@@ -219,6 +219,33 @@ shell pipeline: walks the provider's sessions dir with
 by mtime.  Removes a shell fork from every sidebar refresh and fixes a
 latent bug where a missing sessions dir under zsh returned a bogus
 one-element list holding the shell's `no matches found' error text."
+  (let ((entry (decknix--session-list-files--entry provider-id)))
+    (when entry
+      (let ((paths (plist-get entry :paths)))
+        (if max (seq-take paths max) paths)))))
+
+(defun decknix--session-list-files-with-mtimes (provider-id &optional max)
+  "Return ((MTIME . PATH) ...) for PROVIDER-ID sorted newest-first.
+When MAX is non-nil, limit to at most MAX pairs.
+
+Pair-returning sibling of `decknix--session-list-files' backed by the
+same fingerprint cache: unchanged fs state returns the exact same cons
+cell across calls (skip-sort proof).  Lets
+`decknix--agent-session-refresh-{sync,async}' consume mtime alongside
+each path without a second per-file stat during the partition loop."
+  (let ((entry (decknix--session-list-files--entry provider-id)))
+    (when entry
+      (let ((pairs (plist-get entry :pairs)))
+        (if max (seq-take pairs max) pairs)))))
+
+(defun decknix--session-list-files--entry (provider-id)
+  "Return the cache entry for PROVIDER-ID: (:key KEY :paths PATHS :pairs PAIRS).
+Rebuilds via `directory-files-and-attributes' walk when the fs
+fingerprint (count . max-mtime) has changed; returns the cached entry
+as-is otherwise.  Returns nil when the sessions dir is empty/missing.
+Common back-end for `decknix--session-list-files' and
+`decknix--session-list-files-with-mtimes' so both APIs stay `eq'-stable
+and share the single sort pass."
   (let* ((dir (decknix-agent-provider-sessions-dir provider-id))
          (ext (decknix-agent-provider-session-file-extension provider-id))
          (hist (decknix-agent-provider-history-file provider-id))
@@ -227,23 +254,18 @@ one-element list holding the shell's `no matches found' error text."
          ;; Single-dir providers (auggie) at `<sessions-dir>/<sid>.json' -- depth 1.
          (pairs (decknix--session-collect-files-and-mtimes-depth
                  dir ext (if hist 2 1))))
-    (if (null pairs)
-        nil
+    (when pairs
       (let* ((count (length pairs))
              (max-mtime (apply #'max (mapcar #'car pairs)))
              (key (cons count max-mtime))
-             (cached (gethash provider-id decknix--session-list-files-cache))
-             (paths
-              (if (and cached (equal (plist-get cached :key) key))
-                  (plist-get cached :paths)
-                (let* ((sorted (sort pairs
-                                     (lambda (a b) (> (car a) (car b)))))
-                       (only-paths (mapcar #'cdr sorted)))
-                  (puthash provider-id
-                           (list :key key :paths only-paths)
-                           decknix--session-list-files-cache)
-                  only-paths))))
-        (if max (seq-take paths max) paths)))))
+             (cached (gethash provider-id decknix--session-list-files-cache)))
+        (if (and cached (equal (plist-get cached :key) key))
+            cached
+          (let* ((sorted (sort pairs (lambda (a b) (> (car a) (car b)))))
+                 (only-paths (mapcar #'cdr sorted))
+                 (fresh (list :key key :paths only-paths :pairs sorted)))
+            (puthash provider-id fresh decknix--session-list-files-cache)
+            fresh))))))
 
 (defun decknix--session-parse-file (provider-id path)
   "Extract session metadata from PATH for PROVIDER-ID.
@@ -484,17 +506,20 @@ Files already in the persistent cache cost only a hash lookup; only new
 or modified files trigger a jq parse.  The result is sorted newest-first
 and the persistent cache is saved if any new entries were written."
   (let* ((provider-id (or provider-id decknix-agent-default-provider))
-         (files (decknix--session-list-files provider-id decknix--agent-session-cache-max-files))
+         (pairs (decknix--session-list-files-with-mtimes
+                 provider-id decknix--agent-session-cache-max-files))
          (cached-data nil)
          (new-files nil))
     ;; Partition: cached (mtime match or within re-parse throttle) vs new/changed.
-    (dolist (path files)
-      (let* ((mtime (decknix--session-file-mtime path))
+    ;; Mtime comes from the list-files scan (single stat), not a per-file re-stat.
+    (dolist (pair pairs)
+      (let* ((mtime (car pair))
+             (path (cdr pair))
              (entry (gethash path decknix--session-meta-cache))
              (hit (decknix--session-cache-hit entry mtime)))
         (if hit
             (push hit cached-data)
-          (when mtime (push path new-files)))))
+          (push path new-files))))
     (setq new-files (nreverse new-files))
     (let* ((before (hash-table-count decknix--session-meta-cache))
            (new-data (when new-files
@@ -525,17 +550,20 @@ in a background subprocess."
   (let* ((provider-id (or provider-id decknix-agent-default-provider))
          (proc (gethash provider-id decknix--agent-session-refresh-proc-map)))
     (when (or (null proc) (not (process-live-p proc)))
-      (let* ((files (decknix--session-list-files provider-id decknix--agent-session-cache-max-files))
+      (let* ((pairs (decknix--session-list-files-with-mtimes
+                     provider-id decknix--agent-session-cache-max-files))
              (cached-data nil)
              (new-files nil))
         ;; Partition files (cached / within re-parse throttle vs new/changed).
-        (dolist (path files)
-          (let* ((mtime (decknix--session-file-mtime path))
+        ;; Mtime comes from the list-files scan (single stat), not a per-file re-stat.
+        (dolist (pair pairs)
+          (let* ((mtime (car pair))
+                 (path (cdr pair))
                  (entry (gethash path decknix--session-meta-cache))
                  (hit (decknix--session-cache-hit entry mtime)))
             (if hit
                 (push hit cached-data)
-              (when mtime (push path new-files)))))
+              (push path new-files))))
         (setq new-files (nreverse new-files))
         (if (null new-files)
             ;; Fully warm: assemble from memory, no subprocess.

@@ -608,4 +608,178 @@ does not invalidate the other's cached list."
         (let ((a2 (decknix--session-list-files 'test-a)))
           (should (eq a1 a2)))))))
 
+;; ---------------------------------------------------------------------------
+;; decknix--session-list-files-with-mtimes — pair-returning API (D re-eval Part B)
+;;
+;; Same fingerprint cache as `-list-files' but returns `((mtime . path) ...)'
+;; pairs so callers (`decknix--agent-session-refresh-{sync,async}') can
+;; consume mtime without a second per-file stat during the partition loop.
+;; The pair list and the path list are `eq'-stable across calls with no fs
+;; change; both are backed by the same `:key' fingerprint.
+;; ---------------------------------------------------------------------------
+
+(ert-deftest decknix-session-list-files-with-mtimes--sorted-newest-first ()
+  "Returns pairs sorted newest-first with matching mtime."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let ((decknix-agent-provider-registry nil))
+      (decknix-agent-register-provider 'test-auggie
+        `(:sessions-dir ,tmp
+          :session-file-extension ".json"
+          :label "T" :glyph "A"))
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "old.json" tmp) 1000.0)
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "mid.json" tmp) 2000.0)
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "new.json" tmp) 3000.0)
+      (let ((pairs (decknix--session-list-files-with-mtimes 'test-auggie)))
+        (should (equal (mapcar (lambda (p) (file-name-nondirectory (cdr p)))
+                               pairs)
+                       '("new.json" "mid.json" "old.json")))
+        (should (equal (mapcar #'car pairs) '(3000.0 2000.0 1000.0)))))))
+
+(ert-deftest decknix-session-list-files-with-mtimes--honours-max ()
+  "MAX truncates the returned pair list."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let ((decknix-agent-provider-registry nil))
+      (decknix-agent-register-provider 'test-auggie
+        `(:sessions-dir ,tmp
+          :session-file-extension ".json"
+          :label "T" :glyph "A"))
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "a.json" tmp) 1000.0)
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "b.json" tmp) 2000.0)
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "c.json" tmp) 3000.0)
+      (let ((pairs (decknix--session-list-files-with-mtimes 'test-auggie 2)))
+        (should (= (length pairs) 2))
+        (should (equal (mapcar (lambda (p) (file-name-nondirectory (cdr p)))
+                               pairs)
+                       '("c.json" "b.json")))))))
+
+(ert-deftest decknix-session-list-files-with-mtimes--cache-eq-when-unchanged ()
+  "Two back-to-back calls return the same cons cell (skip-sort proof)."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let ((decknix-agent-provider-registry nil))
+      (decknix-agent-register-provider 'test-auggie
+        `(:sessions-dir ,tmp
+          :session-file-extension ".json"
+          :label "T" :glyph "A"))
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "a.json" tmp) 1000.0)
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "b.json" tmp) 2000.0)
+      (let ((r1 (decknix--session-list-files-with-mtimes 'test-auggie))
+            (r2 (decknix--session-list-files-with-mtimes 'test-auggie)))
+        (should (eq r1 r2))))))
+
+(ert-deftest decknix-session-list-files-with-mtimes--shares-cache-with-paths ()
+  "Both APIs are backed by the same fingerprint cache: neither call
+invalidates the other, and the same underlying scan powers both."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let ((decknix-agent-provider-registry nil))
+      (decknix-agent-register-provider 'test-auggie
+        `(:sessions-dir ,tmp
+          :session-file-extension ".json"
+          :label "T" :glyph "A"))
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "a.json" tmp) 1000.0)
+      (decknix-agent-session-cache-test--touch
+       (expand-file-name "b.json" tmp) 2000.0)
+      ;; Prime with pairs API, then verify paths API returns the same
+      ;; cons cell across repeated calls (i.e. shared cache).
+      (decknix--session-list-files-with-mtimes 'test-auggie)
+      (let ((paths1 (decknix--session-list-files 'test-auggie))
+            (paths2 (decknix--session-list-files 'test-auggie)))
+        (should (eq paths1 paths2))
+        (should (equal (mapcar #'file-name-nondirectory paths1)
+                       '("b.json" "a.json"))))
+      ;; And vice versa.
+      (let ((pairs1 (decknix--session-list-files-with-mtimes 'test-auggie))
+            (pairs2 (decknix--session-list-files-with-mtimes 'test-auggie)))
+        (should (eq pairs1 pairs2))))))
+
+;; ---------------------------------------------------------------------------
+;; refresh-{sync,async} — mtime plumbed from list-files (D re-eval Part B)
+;;
+;; The refresh functions previously called `-file-mtime' once per path
+;; during partitioning (N extra stats per warm sidebar tick).  Now they
+;; consume the `((mtime . path) ...)' pairs directly from
+;; `-list-files-with-mtimes' so the partition loop is stat-free on the
+;; hot warm path.
+;;
+;; Characterisation: refresh a fully-warm cache and count how many times
+;; the partition loop invokes `-file-mtime'.  Must be 0.
+;; ---------------------------------------------------------------------------
+
+(ert-deftest decknix-refresh-sync--warm-path-does-not-restat ()
+  "On a fully-warm cache, refresh-sync must not call `-file-mtime' per file."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let* ((decknix-agent-provider-registry nil)
+           (decknix--session-meta-cache (make-hash-table :test 'equal))
+           (decknix--agent-session-cache-map (make-hash-table :test 'eq))
+           (decknix--agent-session-cache-time-map (make-hash-table :test 'eq))
+           (path-a (expand-file-name "a.json" tmp))
+           (path-b (expand-file-name "b.json" tmp))
+           (stat-count 0))
+      (decknix-agent-register-provider 'test-auggie
+        `(:sessions-dir ,tmp
+          :session-file-extension ".json"
+          :label "T" :glyph "A"))
+      (decknix-agent-session-cache-test--touch path-a 1000.0)
+      (decknix-agent-session-cache-test--touch path-b 2000.0)
+      ;; Seed meta cache with matching mtimes so both paths are warm hits.
+      (puthash path-a
+               (list :mtime 1000.0
+                     :data '((sessionId . "a") (providerId . test-auggie))
+                     :parsed-at (float-time))
+               decknix--session-meta-cache)
+      (puthash path-b
+               (list :mtime 2000.0
+                     :data '((sessionId . "b") (providerId . test-auggie))
+                     :parsed-at (float-time))
+               decknix--session-meta-cache)
+      ;; Count `-file-mtime' calls across the entire refresh.
+      (cl-letf* ((orig (symbol-function 'decknix--session-file-mtime))
+                 ((symbol-function 'decknix--session-file-mtime)
+                  (lambda (p) (cl-incf stat-count) (funcall orig p))))
+        (let ((result (decknix--agent-session-refresh-sync 'test-auggie)))
+          (should (= (length result) 2))))
+      (should (= stat-count 0)))))
+
+(ert-deftest decknix-refresh-async--warm-path-does-not-restat ()
+  "On a fully-warm cache, refresh-async must not call `-file-mtime' per file."
+  (decknix-agent-session-cache-test--with-tmp-dir tmp
+    (let* ((decknix-agent-provider-registry nil)
+           (decknix--session-meta-cache (make-hash-table :test 'equal))
+           (decknix--agent-session-cache-map (make-hash-table :test 'eq))
+           (decknix--agent-session-cache-time-map (make-hash-table :test 'eq))
+           (decknix--agent-session-refresh-proc-map
+            (make-hash-table :test 'eq))
+           (path-a (expand-file-name "a.json" tmp))
+           (path-b (expand-file-name "b.json" tmp))
+           (stat-count 0))
+      (decknix-agent-register-provider 'test-auggie
+        `(:sessions-dir ,tmp
+          :session-file-extension ".json"
+          :label "T" :glyph "A"))
+      (decknix-agent-session-cache-test--touch path-a 1000.0)
+      (decknix-agent-session-cache-test--touch path-b 2000.0)
+      (puthash path-a
+               (list :mtime 1000.0
+                     :data '((sessionId . "a") (providerId . test-auggie))
+                     :parsed-at (float-time))
+               decknix--session-meta-cache)
+      (puthash path-b
+               (list :mtime 2000.0
+                     :data '((sessionId . "b") (providerId . test-auggie))
+                     :parsed-at (float-time))
+               decknix--session-meta-cache)
+      (cl-letf* ((orig (symbol-function 'decknix--session-file-mtime))
+                 ((symbol-function 'decknix--session-file-mtime)
+                  (lambda (p) (cl-incf stat-count) (funcall orig p))))
+        (decknix--agent-session-refresh-async 'test-auggie))
+      (should (= stat-count 0)))))
+
 (provide 'decknix-agent-session-cache-test)
