@@ -49,6 +49,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'decknix-agent-provider)
 
 ;; Forward declaration: parser lives in sibling `decknix-agent-parse',
@@ -160,30 +161,54 @@ but was parsed within `decknix--session-meta-reparse-throttle' seconds
                              decknix--session-meta-reparse-throttle))))
         data))))
 
+(defun decknix--session-collect-files-depth (dir ext maxdepth)
+  "Return absolute paths under DIR ending in EXT, walking up to MAXDEPTH levels.
+MAXDEPTH 1 = files directly in DIR (auggie shape);
+MAXDEPTH 2 = files one subdir deep (claude `<sessions-dir>/<project>/`);
+etc.  Returns nil when DIR does not exist.  Symlinks are not followed.
+Hidden entries (leading dot) are skipped to match the shell glob semantics
+of the previous `ls -t1 %s/*%s' path."
+  (when (file-directory-p dir)
+    (let ((results nil)
+          (pattern (concat (regexp-quote ext) "\\'")))
+      (cl-labels
+          ((walk (d depth)
+             (when (>= depth 1)
+               (dolist (entry (directory-files d t "\\`[^.]" t))
+                 (cond
+                  ((file-symlink-p entry) nil)
+                  ((file-directory-p entry)
+                   (walk entry (1- depth)))
+                  ((string-match-p pattern entry)
+                   (push entry results)))))))
+        (walk dir maxdepth))
+      results)))
+
 (defun decknix--session-list-files (provider-id &optional max)
   "Return absolute session JSON paths for PROVIDER-ID sorted newest-first.
-When MAX is non-nil, limit to at most MAX files via `head'."
+When MAX is non-nil, limit to at most MAX files.
+
+Native replacement for the historical `ls -t1' / `find | xargs ls -t1'
+shell pipeline: walks the provider's sessions dir with `directory-files'
+via `decknix--session-collect-files-depth' and sorts in-process by
+mtime.  Removes a shell fork from every sidebar refresh and fixes a
+latent bug where a missing sessions dir under zsh returned a bogus
+one-element list holding the shell's `no matches found' error text."
   (let* ((dir (decknix-agent-provider-sessions-dir provider-id))
          (ext (decknix-agent-provider-session-file-extension provider-id))
-         (hist (decknix-agent-provider-history-file provider-id)))
-    (if hist
-        ;; Multi-project structure (e.g. Claude): use find to list across project dirs.
-        (let* ((cmd (if max
-                        (format "find %s -maxdepth 2 -name '*%s' -print0 2>/dev/null | xargs -0 ls -t1 2>/dev/null | head -%d"
-                                (shell-quote-argument dir) ext max)
-                      (format "find %s -maxdepth 2 -name '*%s' -print0 2>/dev/null | xargs -0 ls -t1 2>/dev/null"
-                              (shell-quote-argument dir) ext)))
-               (out (shell-command-to-string cmd)))
-          (split-string (string-trim out) "\n" t))
-      ;; Single directory structure (e.g. Auggie).
-      (let* ((dir-q (shell-quote-argument dir))
-             (cmd (if max
-                      (format "ls -t1 %s/*%s 2>/dev/null | head -%d"
-                              dir-q ext max)
-                    (format "ls -t1 %s/*%s 2>/dev/null"
-                            dir-q ext)))
-             (out (shell-command-to-string cmd)))
-        (split-string (string-trim out) "\n" t)))))
+         (hist (decknix-agent-provider-history-file provider-id))
+         ;; Multi-project providers (claude, :history-file set) live at
+         ;; `<sessions-dir>/<project-hash>/<sid>.jsonl' -- depth 2.
+         ;; Single-dir providers (auggie) at `<sessions-dir>/<sid>.json' -- depth 1.
+         (files (decknix--session-collect-files-depth dir ext (if hist 2 1))))
+    (let* ((with-mtime (delq nil
+                             (mapcar (lambda (f)
+                                       (let ((m (decknix--session-file-mtime f)))
+                                         (when m (cons m f))))
+                                     files)))
+           (sorted (sort with-mtime (lambda (a b) (> (car a) (car b)))))
+           (paths  (mapcar #'cdr sorted)))
+      (if max (seq-take paths max) paths))))
 
 (defun decknix--session-parse-file (provider-id path)
   "Extract session metadata from PATH for PROVIDER-ID.
