@@ -33,6 +33,7 @@
 (require 'decknix-hub-ci-filter)
 (require 'decknix-hub-mention-bot)
 (require 'decknix-hub-age-presets)
+(require 'decknix-hub-attention-filter)
 (require 'decknix-auto-review)
 (require 'decknix-focus)
 
@@ -67,7 +68,8 @@ persisted states rather than leaving the defaults in place."
          (orig-show-toggles decknix--sidebar-show-toggles)
          (orig-live-view decknix--sidebar-live-view-mode)
          (orig-show-hidden decknix--sidebar-show-hidden)
-         (orig-hub-display decknix--hub-display-mode))
+         (orig-hub-display decknix--hub-display-mode)
+         (orig-i-replied decknix--hub-requests-hide-i-replied-last))
     (unwind-protect
         (progn
           ;; 1. User sets non-default toggle states.
@@ -80,7 +82,8 @@ persisted states rather than leaving the defaults in place."
                 decknix--sidebar-show-toggles nil
                 decknix--sidebar-live-view-mode 'tree
                 decknix--sidebar-show-hidden t
-                decknix--hub-display-mode 'C)
+                decknix--hub-display-mode 'C
+                decknix--hub-requests-hide-i-replied-last nil)
           ;; 2. Pre-reload save captures the current values.
           (decknix--sidebar-state-save)
           (should (file-exists-p decknix--sidebar-state-file))
@@ -95,7 +98,8 @@ persisted states rather than leaving the defaults in place."
                 decknix--sidebar-show-toggles t
                 decknix--sidebar-live-view-mode 'flat
                 decknix--sidebar-show-hidden nil
-                decknix--hub-display-mode 'A)
+                decknix--hub-display-mode 'A
+                decknix--hub-requests-hide-i-replied-last t)
           ;; 4. Post-reload restore recovers the persisted values.
           (decknix--sidebar-state-restore)
           ;; 5. Each toggle must match what the user had, not the default.
@@ -108,7 +112,8 @@ persisted states rather than leaving the defaults in place."
           (should (eq decknix--sidebar-show-toggles nil))
           (should (eq decknix--sidebar-live-view-mode 'tree))
           (should (eq decknix--sidebar-show-hidden t))
-          (should (eq decknix--hub-display-mode 'C)))
+          (should (eq decknix--hub-display-mode 'C))
+          (should (eq decknix--hub-requests-hide-i-replied-last nil)))
       (setq decknix--hub-ci-filter orig-ci
             decknix--hub-mention-filter orig-mention
             decknix--hub-show-bots orig-bots
@@ -118,7 +123,8 @@ persisted states rather than leaving the defaults in place."
             decknix--sidebar-show-toggles orig-show-toggles
             decknix--sidebar-live-view-mode orig-live-view
             decknix--sidebar-show-hidden orig-show-hidden
-            decknix--hub-display-mode orig-hub-display)
+            decknix--hub-display-mode orig-hub-display
+            decknix--hub-requests-hide-i-replied-last orig-i-replied)
       (delete-directory tmp-dir t))))
 
 (ert-deftest decknix-sidebar-state--reset-restores-defaults ()

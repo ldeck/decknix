@@ -733,7 +733,12 @@ The `decknix--context-update-header` function delegates to the unified header
     filters out team-noise where someone else is already handling it),
     `C` ci, `c` 💬 comments (hide PRs whose latest non-bot activity is
     someone else), `M` ↩/👽 replies-to-me (show only PRs where a human or
-    bot replied in a thread I participated in), `s` sort ⇅ (flip
+    bot replied in a thread I participated in),
+    `o` ⏳ i-replied-last (hide PRs whose latest comment/review is mine
+    and has drawn no response — the ball is squarely in the author's or
+    another reviewer's court, so nothing is waiting on me; default on.
+    Complement of the `c` needs-reply signal, which fires when someone
+    else spoke last), `s` sort ⇅ (flip
     oldest→newest; picker honours the same flag, `M-s` inside a picker
     flips it ephemerally), `X` ⚠ conflict (hide PRs with a merge
     conflict — `mergeable = CONFLICTING` — default on; conflicting PRs

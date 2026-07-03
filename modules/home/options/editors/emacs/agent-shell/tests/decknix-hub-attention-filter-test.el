@@ -31,6 +31,7 @@
   (should     decknix--hub-requests-hide-bot-pending)   ; default ON
   (should     decknix--hub-requests-hide-conflict)      ; default ON
   (should     decknix--hub-requests-hide-draft)         ; default ON
+  (should     decknix--hub-requests-hide-i-replied-last) ; default ON
   (should (eq decknix--hub-requests-hide-reviewed 'hide-any)) ; default hide-any
   (should-not decknix--hub-requests-hide-needs-reply)
   (should-not decknix--hub-requests-only-my-replies)
@@ -87,6 +88,38 @@
         (decknix--hub-wip-only-my-replies       nil)
         (item '((bot_pending . t))))
     (should (decknix--hub-wip-attention-visible-p item))))
+
+;; -- requests i-replied-last filter -------------------------------
+
+(ert-deftest decknix-hub-attention-filter--i-replied-hidden-when-on ()
+  "With the toggle on (default), a PR I commented last is hidden."
+  (let ((decknix--hub-requests-hide-i-replied-last t)
+        (mine '((i_replied_last . t))))
+    (should-not (decknix--hub-requests-i-replied-visible-p mine))
+    (should-not (decknix--hub-requests-attention-visible-p mine))))
+
+(ert-deftest decknix-hub-attention-filter--i-replied-shown-when-off ()
+  "With the toggle off, a PR I commented last is visible again."
+  (let ((decknix--hub-requests-hide-i-replied-last nil)
+        (mine '((i_replied_last . t))))
+    (should (decknix--hub-requests-i-replied-visible-p mine))
+    (should (decknix--hub-requests-attention-visible-p mine))))
+
+(ert-deftest decknix-hub-attention-filter--i-replied-absent-never-suppressed ()
+  "An absent or :json-false i_replied_last field is treated as not-mine."
+  (let ((decknix--hub-requests-hide-i-replied-last t)
+        (absent '((needs_reply . t)))
+        (false  '((i_replied_last . :json-false))))
+    (should (decknix--hub-requests-i-replied-visible-p absent))
+    (should (decknix--hub-requests-i-replied-visible-p false))))
+
+(ert-deftest decknix-hub-attention-filter--i-replied-toggle-flips ()
+  "The toggle command flips the Requests i-replied-last state."
+  (let ((decknix--hub-requests-hide-i-replied-last t))
+    (call-interactively #'decknix--hub-toggle-requests-hide-i-replied-last)
+    (should-not decknix--hub-requests-hide-i-replied-last)
+    (call-interactively #'decknix--hub-toggle-requests-hide-i-replied-last)
+    (should decknix--hub-requests-hide-i-replied-last)))
 
 ;; -- request-activity-time ----------------------------------------
 
