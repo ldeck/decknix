@@ -827,6 +827,10 @@ let
     testFiles = [
       "decknix-agent-session-cache-test.el"
     ];
+    # The claude-code `:session-jq-filter' crash-safety tests shell out to
+    # jq against session-shaped fixtures; without this the sandbox has no
+    # jq on PATH and those cases skip themselves.
+    testInputs = [ pkgs.jq ];
   };
 
   # PR B.52: local session JSON path builder + pure history
@@ -2620,7 +2624,7 @@ in
             :env-var agent-shell-anthropic-claude-environment
             :sessions-dir "~/.claude/projects"
             :session-file-extension ".jsonl"
-            :session-jq-filter "(map(select(.type == \"user\" or .type == \"assistant\")) | {sessionId: (first | .sessionId), created: (first | .timestamp), modified: (last | .timestamp), exchangeCount: (map(select(.type == \"user\")) | length), firstUserMessage: (map(select(.type == \"user\" and .message.content[0].text != null)) | first | .message.content[0].text // \"\")[:200]})"
+            :session-jq-filter "(map(select(.type == \"user\" or .type == \"assistant\")) | {sessionId: (first | .sessionId), created: (first | .timestamp), modified: (last | .timestamp), exchangeCount: (map(select(.type == \"user\")) | length), firstUserMessage: ([ .[] | select(.type == \"user\") | .message.content | if type == \"array\" then (.[] | select(.type == \"text\") | .text) else . end | select(type == \"string\" and length > 0) ] | (first // \"\"))[:200]})"
             :history-file "~/.claude/history.jsonl"
             :label "Claude"
             :glyph "C"
