@@ -55,6 +55,104 @@
       (should (string-match-p "\\.json" cmd))
       (should (string-match-p "head -200" cmd)))))
 
+;; ---------------------------------------------------------------------------
+;; claude-code :session-jq-filter — crash-safety + first-text-block extraction
+;;
+;; Regression: the Claude provider filter used `.message.content[0].text',
+;; which (1) crashed jq with "Cannot index string with number" on any
+;; session whose user turns store `.message.content' as a plain STRING
+;; (very common — plain follow-ups, forked-session preambles, tool-result
+;; turns).  Because `decknix--session-parse-file' runs jq with 2>/dev/null
+;; and treats empty output as "no data", a crashed session was silently
+;; dropped from the list / picker / conv-key resolution.  A dropped session
+;; has no firstUserMessage, so `decknix--agent-latest-session-id-for-conv-key'
+;; can never match it and "restore previous session" fails with
+;; "Cannot restore: no session ID".  (2) Only inspecting `content[0]' also
+;; missed the first *text* block when a turn led with a tool_result/image.
+;;
+;; KEEP THE FILTER STRING BELOW IN SYNC with the `claude-code'
+;; `:session-jq-filter' in `agent-shell.nix'.  The tests shell out to the
+;; real filter so a regression there turns these red.
+;; ---------------------------------------------------------------------------
+
+(defconst decknix-agent-session-cache-test--claude-jq-filter
+  "(map(select(.type == \"user\" or .type == \"assistant\")) | {sessionId: (first | .sessionId), created: (first | .timestamp), modified: (last | .timestamp), exchangeCount: (map(select(.type == \"user\")) | length), firstUserMessage: ([ .[] | select(.type == \"user\") | .message.content | if type == \"array\" then (.[] | select(.type == \"text\") | .text) else . end | select(type == \"string\" and length > 0) ] | (first // \"\"))[:200]})"
+  "Mirror of the claude-code provider `:session-jq-filter' (agent-shell.nix).
+Kept here so the ERT cases exercise the real filter.  Update both together.")
+
+(defun decknix-agent-session-cache-test--jq-available-p ()
+  "Return non-nil when `jq' is on PATH."
+  (executable-find "jq"))
+
+(defmacro decknix-agent-session-cache-test--with-claude-filter (&rest body)
+  "Register a claude-shaped provider carrying the real filter; run BODY."
+  `(let ((decknix-agent-provider-registry nil)
+         (decknix--agent-session-jq-filter-map (make-hash-table :test 'eq)))
+     (decknix-agent-register-provider 'test-claude-filter
+       (list :sessions-dir "/tmp/test-claude-filter"
+             :session-file-extension ".jsonl"
+             :history-file "/tmp/test-claude-filter/history.jsonl"
+             :session-jq-filter decknix-agent-session-cache-test--claude-jq-filter
+             :label "Test Claude" :glyph "C"))
+     ,@body))
+
+(defun decknix-agent-session-cache-test--run-claude-filter (jsonl)
+  "Write JSONL to a tmp file, run the real filter via slurped `jq'.
+Returns a plist (:exit CODE :out STRING).  Mirrors the production
+invocation shape (`jq -Mcs -f FILTER FILE') so a crash surfaces as a
+non-zero exit code."
+  (let ((fixture (make-temp-file "decknix-claude-" nil ".jsonl"))
+        (filter (decknix--agent-session-ensure-jq-filter 'test-claude-filter)))
+    (unwind-protect
+        (progn
+          (with-temp-file fixture (insert jsonl))
+          (with-temp-buffer
+            (let ((code (call-process "jq" nil t nil "-Mcs" "-f" filter fixture)))
+              (list :exit code :out (buffer-string)))))
+      (when (file-exists-p fixture) (delete-file fixture))
+      (when (and filter (file-exists-p filter)) (delete-file filter)))))
+
+(ert-deftest decknix-claude-jq-filter--survives-string-content ()
+  "A user turn whose `.message.content' is a plain string must not crash
+jq (regression: `.message.content[0]' aborted the whole program, dropping
+the session)."
+  (skip-unless (decknix-agent-session-cache-test--jq-available-p))
+  (decknix-agent-session-cache-test--with-claude-filter
+    (let* ((jsonl (concat
+                   "{\"type\":\"user\",\"sessionId\":\"sid-1\",\"timestamp\":\"t0\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"HELLO FIRST\"}]}}\n"
+                   "{\"type\":\"assistant\",\"sessionId\":\"sid-1\",\"timestamp\":\"t1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n"
+                   "{\"type\":\"user\",\"sessionId\":\"sid-1\",\"timestamp\":\"t2\",\"message\":{\"role\":\"user\",\"content\":\"a plain string turn\"}}\n"
+                   "{\"type\":\"user\",\"sessionId\":\"sid-1\",\"timestamp\":\"t3\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"x\",\"content\":\"out\"}]}}\n"))
+           (res (decknix-agent-session-cache-test--run-claude-filter jsonl)))
+      (should (= (plist-get res :exit) 0))
+      (let ((obj (json-parse-string (plist-get res :out) :object-type 'alist)))
+        (should (equal (alist-get 'sessionId obj) "sid-1"))
+        (should (equal (alist-get 'firstUserMessage obj) "HELLO FIRST"))
+        (should (= (alist-get 'exchangeCount obj) 3))))))
+
+(ert-deftest decknix-claude-jq-filter--scans-past-nontext-lead-block ()
+  "firstUserMessage is the first *text* block, skipping a leading
+tool_result turn (regression: `content[0]' only saw the lead block)."
+  (skip-unless (decknix-agent-session-cache-test--jq-available-p))
+  (decknix-agent-session-cache-test--with-claude-filter
+    (let* ((jsonl (concat
+                   "{\"type\":\"user\",\"sessionId\":\"sid-2\",\"timestamp\":\"t0\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"x\",\"content\":\"o\"}]}}\n"
+                   "{\"type\":\"user\",\"sessionId\":\"sid-2\",\"timestamp\":\"t1\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"REAL PROMPT\"}]}}\n"))
+           (res (decknix-agent-session-cache-test--run-claude-filter jsonl)))
+      (should (= (plist-get res :exit) 0))
+      (let ((obj (json-parse-string (plist-get res :out) :object-type 'alist)))
+        (should (equal (alist-get 'firstUserMessage obj) "REAL PROMPT"))))))
+
+(ert-deftest decknix-claude-jq-filter--string-first-turn-used-verbatim ()
+  "When the first user turn's content is a bare string, it is used as-is."
+  (skip-unless (decknix-agent-session-cache-test--jq-available-p))
+  (decknix-agent-session-cache-test--with-claude-filter
+    (let* ((jsonl "{\"type\":\"user\",\"sessionId\":\"sid-3\",\"timestamp\":\"t0\",\"message\":{\"role\":\"user\",\"content\":\"bare string prompt\"}}\n")
+           (res (decknix-agent-session-cache-test--run-claude-filter jsonl)))
+      (should (= (plist-get res :exit) 0))
+      (let ((obj (json-parse-string (plist-get res :out) :object-type 'alist)))
+        (should (equal (alist-get 'firstUserMessage obj) "bare string prompt"))))))
+
 (ert-deftest decknix-session-meta--cache-hit ()
   (let ((decknix--session-meta-cache (make-hash-table :test 'equal))
         (parse-called 0))
