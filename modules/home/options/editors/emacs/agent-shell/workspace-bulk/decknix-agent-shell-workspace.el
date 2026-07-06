@@ -5301,13 +5301,26 @@ entry, once after a delay — without producing duplicate rows."
     (when (and b (buffer-live-p b))
       (with-current-buffer b
         (when (derived-mode-p 'agent-shell-mode)
-          (let* ((sid (decknix--agent-buffer-session-id))
+          (let* ((buffer-sid (decknix--agent-buffer-session-id))
                  (conv-key
                   (or (and (bound-and-true-p decknix--agent-conv-key)
                            decknix--agent-conv-key)
-                      (and sid
+                      (and buffer-sid
                            (ignore-errors
-                             (decknix--agent-conversation-key-for-session sid)))))
+                             (decknix--agent-conversation-key-for-session
+                              buffer-sid)))))
+                 ;; The buffer's ACP session-id can still be nil while a new
+                 ;; session warms up, even though the conversation is already
+                 ;; known.  Persisting a nil session-id is what later breaks
+                 ;; restore ("Cannot restore: no session ID"), so backfill it
+                 ;; from the conv-key -> session-id store when possible.  Once
+                 ;; the session has a file on disk this resolves; until then the
+                 ;; delayed re-record retries.
+                 (sid (or buffer-sid
+                          (and conv-key
+                               (ignore-errors
+                                 (decknix--agent-latest-session-id-for-conv-key
+                                  conv-key)))))
                  (tags (when conv-key
                          (decknix--agent-tags-for-conv-key conv-key)))
                  (ws (or (when conv-key
