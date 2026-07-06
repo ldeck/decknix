@@ -198,6 +198,37 @@ into the current one."
           (should (member "session-id-A"
                           (gethash "sessions" entry))))))))
 
+(ert-deftest decknix-agent-tags-store--read-survives-unwritable-store ()
+  "A migration-triggering read must not error when the write-back fails.
+On a read-only HOME (as in the Nix build sandbox) the migration's
+persist step signals; because it is best-effort, the read still returns
+the in-memory store migrated for this session."
+  (decknix-agent-tags-store-test--with-isolated-store
+    (let* ((store (make-hash-table :test 'equal))
+           (v1-entry (make-hash-table :test 'equal)))
+      (puthash "tags" '("legacy") v1-entry)
+      (puthash "session-id-A" v1-entry store)
+      (decknix--agent-tags-write store)      ; seed the file (real write)
+      (setq decknix--agent-tags-cache nil
+            decknix--agent-tags-cache-mtime nil
+            decknix--agent-tags-cache-checked-at 0.0)
+      (cl-letf (((symbol-function 'decknix--agent-session-list)
+                 (lambda ()
+                   '(((sessionId . "session-id-A")
+                      (firstUserMessage . "hi from A")))))
+                ((symbol-function 'decknix--agent-conversation-key)
+                 (lambda (msg) (and (equal msg "hi from A") "conv-A")))
+                ;; Simulate a read-only store: every write-back signals.
+                ((symbol-function 'decknix--agent-tags-write)
+                 (lambda (&rest _) (error "Read-only file system"))))
+        ;; Must complete without propagating the write error.
+        (let* ((read-store (decknix--agent-tags-read))
+               (entry (gethash "conv-A"
+                               (decknix--agent-tags-conversations read-store))))
+          ;; In-memory migration still happened this session.
+          (should (hash-table-p entry))
+          (should (equal '("legacy") (gethash "tags" entry))))))))
+
 ;; -- canonical conv-key migration ---------------------------------
 ;;
 ;; Pre-canonical writes hashed the unbounded comint input rather than

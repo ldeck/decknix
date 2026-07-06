@@ -199,11 +199,16 @@ or walking the store for orphaned v1 entries."
               ;; creation race.
               (remhash sid store)
               (setq migrated (1+ migrated)))))
-        ;; Write back the cleaned store
+        ;; Write back the cleaned store.  Best-effort: this migration is a
+        ;; side effect of *reading* the store, so a write failure (e.g. a
+        ;; read-only HOME, as in the Nix build sandbox) must not turn a
+        ;; plain lookup into an error.  The in-memory store keeps the
+        ;; migrated form for this session; a later read re-attempts the
+        ;; write once the filesystem is writable.
         (puthash "conversations" convs store)
         (unless (gethash "bookmarks" store)
           (puthash "bookmarks" (make-hash-table :test 'equal) store))
-        (decknix--agent-tags-write store)
+        (ignore-errors (decknix--agent-tags-write store))
         (when (> migrated 0)
           (message "Migrated %d v1 tag entries to conversation format"
                    migrated))))
@@ -240,7 +245,9 @@ cache populates."
           (puthash "_canonicalKeyVersion"
                    decknix--agent-tags-canonical-key-version
                    store)
-          (decknix--agent-tags-write store))))))
+          ;; Best-effort persist — see note in the v1->v2 migration above:
+          ;; a read must never error just because the store can't be written.
+          (ignore-errors (decknix--agent-tags-write store)))))))
 
 (defun decknix--agent-tags--canonicalize-keys (store sessions)
   "Re-key conversation entries in STORE under the canonical hash.
