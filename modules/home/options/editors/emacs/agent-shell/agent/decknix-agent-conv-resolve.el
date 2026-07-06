@@ -13,7 +13,7 @@
 ;; redirects in `decknix-agent-tags-store', and provides two
 ;; session-aware lookups built on top of `decknix-agent-session-cache'.
 ;;
-;; Four entry points:
+;; Five entry points:
 ;;
 ;;   `decknix--agent-conversation-key'
 ;;       Derive the canonical conv-key from a first-message string,
@@ -26,9 +26,13 @@
 ;;   `decknix--agent-conversation-key-for-session'
 ;;       Look up the conv-key for a given SESSION-ID by reading the
 ;;       cached session list.
+;;   `decknix--agent-conv-key-store-sessions'
+;;       Given a conv-key, return the session-ids the tag store has
+;;       recorded under it (the authoritative association).
 ;;   `decknix--agent-latest-session-id-for-conv-key'
-;;       Inverse of the above: given a conv-key, return the most
-;;       recently modified session-id that hashes back to it.
+;;       Given a conv-key, return the most recently modified matching
+;;       session-id -- matching either by first-message hash or by tag-
+;;       store membership, so wrapper-first sessions still resolve.
 ;;
 ;; The module sits at the cross-roads of the three already-extracted
 ;; agent/ packages so it can't live in any one of them; placing it
@@ -79,22 +83,48 @@ to avoid infinite loops from misconfiguration."
       (decknix--agent-conversation-key
        (alist-get 'firstUserMessage match "")))))
 
+(defun decknix--agent-conv-key-store-sessions (conv-key)
+  "Return the session-ids recorded under CONV-KEY in the tag store.
+The store (`agent-sessions.json') maps each conversation key to the set
+of session-ids that belong to it -- the authoritative association that
+`decknix-agent-tags-store' builds and maintains.  Follows any
+`mergedInto' redirect first so a merged conversation resolves to its
+target.  Returns nil when CONV-KEY is nil or the store has no entry."
+  (when conv-key
+    (let* ((canonical (decknix--agent-conv-resolve-key conv-key))
+           (store (decknix--agent-tags-read))
+           (convs (and store (decknix--agent-tags-conversations store)))
+           (entry (and (hash-table-p convs) (gethash canonical convs))))
+      (when (hash-table-p entry)
+        (gethash "sessions" entry)))))
+
 (defun decknix--agent-latest-session-id-for-conv-key (conv-key)
   "Return the session-id of the most recently modified snapshot for CONV-KEY.
 Returns nil when CONV-KEY is nil or no session matches.  Auggie writes
 a fresh session file whenever a conversation is interrupted/composed,
 so a single conv-key typically owns many session-ids; this picks the
 latest so resume flows pull in the full recent context, not an older
-snapshot."
+snapshot.
+
+A session matches when EITHER its first message hashes back to CONV-KEY
+OR its session-id is listed under CONV-KEY in the tag store.  The store
+path rescues sessions whose on-disk first message is a synthetic wrapper
+-- a `/slash-command' invocation or a forked-session preamble -- that
+hashes to a different key than the one the conversation was tagged with;
+without it those sessions are unrecoverable at restore time (the caller
+falls through to \"Cannot restore: no session ID\")."
   (when conv-key
     (let* ((sessions (decknix--agent-session-list))
+           (store-sids (decknix--agent-conv-key-store-sessions conv-key))
            (matches
             (seq-filter
              (lambda (s)
-               (let ((fm (alist-get 'firstUserMessage s "")))
-                 (and (not (string-empty-p fm))
-                      (string= (decknix--agent-conversation-key fm)
-                               conv-key))))
+               (or (and store-sids
+                        (member (alist-get 'sessionId s) store-sids))
+                   (let ((fm (alist-get 'firstUserMessage s "")))
+                     (and (not (string-empty-p fm))
+                          (string= (decknix--agent-conversation-key fm)
+                                   conv-key)))))
              sessions))
            (sorted (sort (copy-sequence matches)
                          (lambda (a b)
