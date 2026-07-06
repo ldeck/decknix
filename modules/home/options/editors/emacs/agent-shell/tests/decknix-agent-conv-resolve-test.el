@@ -166,5 +166,65 @@ ALIST is a list of (CONV-KEY . MERGED-INTO-KEY-OR-NIL) cells."
     (should (equal "real"
                    (decknix--agent-latest-session-id-for-conv-key "the-key")))))
 
+;; -- conv-key-store-sessions + store-backed resolution ------------
+
+(ert-deftest decknix-agent-conv-resolve--store-sessions-reads-and-follows-merge ()
+  "`store-sessions' returns the recorded session-ids, following mergedInto,
+and short-circuits on nil."
+  (let ((store (make-hash-table :test #'equal))
+        (convs (make-hash-table :test #'equal))
+        (src (make-hash-table :test #'equal))
+        (tgt (make-hash-table :test #'equal)))
+    (puthash "mergedInto" "tgt" src)
+    (puthash "sessions" '("s1" "s2") tgt)
+    (puthash "src" src convs)
+    (puthash "tgt" tgt convs)
+    (puthash "conversations" convs store)
+    (cl-letf (((symbol-function 'decknix--agent-tags-read) (lambda () store)))
+      (should (equal '("s1" "s2")
+                     (decknix--agent-conv-key-store-sessions "src")))
+      (should-not (decknix--agent-conv-key-store-sessions nil)))))
+
+(ert-deftest decknix-agent-conv-resolve--latest-matches-via-store-membership ()
+  "A session whose first message hashes elsewhere still resolves when the
+tag store lists its session-id under the conv-key (wrapper-first sessions:
+`/slash-command' invocations, forked-session preambles)."
+  (let ((store (make-hash-table :test #'equal))
+        (convs (make-hash-table :test #'equal))
+        (entry (make-hash-table :test #'equal)))
+    (puthash "sessions" '("wrap") entry)
+    (puthash "target" entry convs)
+    (puthash "conversations" convs store)
+    (cl-letf (((symbol-function 'decknix--agent-tags-read) (lambda () store))
+              ((symbol-function 'decknix--agent-session-list)
+               (lambda ()
+                 '(((sessionId . "wrap")
+                    (firstUserMessage . "<command-message>x</command-message>")
+                    (modified . "2025-01-01T00:00:00Z")))))
+              ((symbol-function 'decknix--agent-conversation-key)
+               (lambda (_fm) "DIFFERENT")))
+      (should (equal "wrap"
+                     (decknix--agent-latest-session-id-for-conv-key "target"))))))
+
+(ert-deftest decknix-agent-conv-resolve--latest-unions-store-and-hash-newest-wins ()
+  "Store-matched and hash-matched sessions are unioned; newest modified wins."
+  (let ((store (make-hash-table :test #'equal))
+        (convs (make-hash-table :test #'equal))
+        (entry (make-hash-table :test #'equal)))
+    (puthash "sessions" '("store-old") entry)
+    (puthash "k" entry convs)
+    (puthash "conversations" convs store)
+    (cl-letf (((symbol-function 'decknix--agent-tags-read) (lambda () store))
+              ((symbol-function 'decknix--agent-session-list)
+               (lambda ()
+                 '(((sessionId . "store-old") (firstUserMessage . "wrap")
+                    (modified . "2024-01-01T00:00:00Z"))
+                   ((sessionId . "hash-new") (firstUserMessage . "real")
+                    (modified . "2025-01-01T00:00:00Z")))))
+              ((symbol-function 'decknix--agent-conversation-key)
+               (lambda (fm) (if (equal fm "real") "k" "OTHER"))))
+      (should (equal "hash-new"
+                     (decknix--agent-latest-session-id-for-conv-key "k"))))))
+
 (provide 'decknix-agent-conv-resolve-test)
 ;;; decknix-agent-conv-resolve-test.el ends here
