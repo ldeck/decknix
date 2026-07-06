@@ -330,6 +330,7 @@ distinct operations, and it's worth knowing which one to reach for:
 | Continue the **same** conversation on the **same** agent | **Resume** — picker `C-c A s` (Previous / Saved), or restart `C-c s R` | No |
 | Continue a discussion on a **different** agent (Auggie → Claude / Pi) | **Fork** — `C-c A f` / `C-c s f` | **Yes** |
 | Change **model** mid-conversation (same agent) | `C-c C-v` | No |
+| Change **permission mode** mid-conversation (same agent) | `C-c C-m` | No |
 
 There is no "clone" command — **fork is the cross-agent path**.
 
@@ -427,6 +428,41 @@ resume like Claude. If `C-c C-v` reports *"No session models
 available"*, the Pi ACP bridge isn't advertising a model list — there's
 nothing to switch or persist, so select the model through Pi's own
 configuration instead.
+
+### Permission mode selection
+
+`C-c C-m` (set session mode) is the permission-mode analogue of
+`C-c C-v`. It lists whatever modes the running agent advertises and
+switches the live session over ACP. Today only **Claude** exposes
+session modes — `default` (prompt each time), `auto` (Claude
+auto-approves tool use, including shell commands, via its own
+classifier), `acceptEdits` (auto-accept file edits, still prompts for
+commands), `bypassPermissions` (no prompts — unsafe), and `plan`
+(read-only). Providers without session modes (Auggie, Pi) ignore it.
+
+decknix persists your choice against the conversation and **re-applies
+it on both resume and fork**, so a session you switched to `auto` stays
+on `auto` when you come back to it — no more re-approving commands after
+every resume. A fork inherits its parent conversation's mode. When a
+conversation has no saved mode override, resume/fork fall back to the
+`new-session` purpose default (below).
+
+The **default** for brand-new sessions is the `new-session` purpose's
+`mode`, which ships as `"auto"`. Override it (or the per-review-purpose
+modes) in Nix:
+
+```nix
+programs.emacs.decknix.agentShell.purposes = {
+  new-session   = { mode = "auto"; };        # default for C-c A n
+  pr-review     = { mode = "auto"; };
+  bot-pr-review = { mode = "auto"; };
+};
+```
+
+See [Per-Purpose Provider &
+Model](../configuration.md#per-purpose-provider--model) for the full
+purpose list and validation semantics (an unknown mode, or one for a
+provider without session modes, drops to `nil` at boot with a warning).
 
 ### Notes
 

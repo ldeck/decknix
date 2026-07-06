@@ -1129,6 +1129,26 @@ let
     ];
   };
 
+  # Sibling of the model store: per-conversation session/permission
+  # mode overrides.  Owns the read accessor
+  # (`decknix--agent-session-mode-for-conv-key', called by the resume
+  # and fork paths in main-bulk, which fall back to the `new-session'
+  # purpose default when it returns nil) and the write primitive
+  # (`decknix--agent-session-save-mode-for-conv-key', called from the
+  # on-success callback of `decknix-agent-set-session-mode' which stays
+  # in main-bulk per AGENTS.md Rule 2).  Mediates the
+  # `~/.config/decknix/agent-sessions.json' "mode" field.
+  decknix-agent-session-mode-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-session-mode";
+    src = ./agent-shell/agent;
+    # Top-level `(require 'decknix-agent-tags-store)' for shared
+    # JSON persistence of per-conversation overrides.
+    packageRequires = [ decknix-agent-tags-store-el ];
+    testFiles = [
+      "decknix-agent-session-mode-test.el"
+    ];
+  };
+
   # PR B.49: clipboard URL DWIM helper carved out of
   # `decknix-agent-shell-main' (main-bulk).  Co-resident with the
   # rest of the agent/ cluster.  Owns the tiny kill-ring +
@@ -2476,6 +2496,7 @@ in
           decknix-agent-link-store-el
           decknix-agent-conv-resolve-el
           decknix-agent-session-model-el
+          decknix-agent-session-mode-el
           decknix-agent-session-workspace-el
           decknix-agent-conv-recency-el
           decknix-agent-tags-read-el
@@ -2907,6 +2928,20 @@ in
                           "decknix-agent-session-model" (conv-key))
         (declare-function decknix--agent-session-save-model-for-conv-key
                           "decknix-agent-session-model" (conv-key model-id))
+
+        ;; Per-conversation session/permission mode overrides --
+        ;; sibling of the model store above.  Read accessor
+        ;; (`decknix--agent-session-mode-for-conv-key') is consulted
+        ;; by the resume/fork paths in main-bulk, which fall back to
+        ;; the `new-session' purpose default when it returns nil; the
+        ;; write primitive (`decknix--agent-session-save-mode-for-
+        ;; conv-key') is called from the on-success callback of
+        ;; `decknix-agent-set-session-mode' (main-bulk, per Rule 2).
+        (require 'decknix-agent-session-mode)
+        (declare-function decknix--agent-session-mode-for-conv-key
+                          "decknix-agent-session-mode" (conv-key))
+        (declare-function decknix--agent-session-save-mode-for-conv-key
+                          "decknix-agent-session-mode" (conv-key mode-id))
 
         ;; Per-conversation workspace persistence (PR B.40) --
         ;; reader + two writers that share the same agent-
@@ -5878,9 +5913,11 @@ ${optionalString cfg.hub.priority.enable ''
                     (local-set-key (kbd "<tab>") 'decknix--agent-tab-dwim)
                     ;; Buffer-local bindings — no C-c A prefix needed inside agent-shell.
                     ;; Native bindings: C-c C-c (interrupt), C-c C-v (model), C-c C-m (mode)
-                    ;; Override C-c C-v so model changes are persisted to
-                    ;; agent-sessions.json and survive session resume.
+                    ;; Override C-c C-v / C-c C-m so model + permission-mode
+                    ;; changes are persisted to agent-sessions.json and
+                    ;; survive session resume/fork.
                     (local-set-key (kbd "C-c C-v") 'decknix-agent-set-session-model)
+                    (local-set-key (kbd "C-c C-m") 'decknix-agent-set-session-mode)
                     (local-set-key (kbd "C-c b") 'decknix-agent-switch-buffer)
                     (local-set-key (kbd "C-c e") 'decknix-agent-compose)
                     (local-set-key (kbd "C-c E") 'decknix-agent-compose-interrupt)

@@ -131,7 +131,7 @@ Navigate / Quick / Actions plus `T` for the toggles sub-transient.
 | In-buffer | Global | Action |
 |-----------|--------|--------|
 | `C-c C-v` | — | Pick model (persists per-conversation; survives resume) |
-| `C-c M` | `C-c A M` | Pick mode |
+| `C-c C-m` | — | Pick permission mode (persists per-conversation; survives resume/fork) |
 
 See [Model Selection](./foundation.md#model-selection) for the
 recommended-model-by-task table and the per-purpose
