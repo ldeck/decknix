@@ -32,7 +32,9 @@
 
 (defvar decknix--sidebar-show-keys t
   "When non-nil, show categorised key listing in the sidebar footer.
-Defaults to t for discoverability; toggle with K.")
+Defaults to t for discoverability; toggle via the `?' shortcuts
+transient (the `k' \"pin shortcuts\" suffix) -- there is no standalone
+key binding.")
 
 (defvar decknix--sidebar-show-toggles t
   "When non-nil, show the Toggles state line in the sidebar footer.

@@ -1831,18 +1831,15 @@ where `k' toggles pinning this footer."
           (when (and (boundp 'decknix--sidebar-show-toggles)
                      decknix--sidebar-show-toggles)
             (decknix--sidebar-render-toggle-sections toggle-sections)))
-        ;; Trailing hint (always)
-        (insert (propertize " K " 'face 'font-lock-keyword-face)
-                (propertize "hide" 'face 'font-lock-comment-face)
-                "  "
-                (propertize "? " 'face 'font-lock-keyword-face)
+        ;; Trailing hint (always): ? opens the shortcuts transient, where
+        ;; `k' pins/hides this listing.  There is no standalone K binding.
+        (insert (propertize " ? " 'face 'font-lock-keyword-face)
                 (propertize "all + state" 'face 'font-lock-comment-face)
                 "\n"))
-    ;; Keys hidden: compact hint
+    ;; Keys hidden: compact hint.  ? opens the shortcuts transient, which
+    ;; carries the `k' pin toggle that reveals this listing.
     (insert (propertize " ?" 'face 'font-lock-keyword-face)
-            (propertize " actions  " 'face 'font-lock-comment-face)
-            (propertize "K" 'face 'font-lock-keyword-face)
-            (propertize " show keys" 'face 'font-lock-comment-face)
+            (propertize " actions" 'face 'font-lock-comment-face)
             "\n")))
 
 ;; `decknix--sidebar-abbreviate-workspace' and
