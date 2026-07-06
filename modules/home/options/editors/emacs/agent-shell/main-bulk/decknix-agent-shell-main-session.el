@@ -159,6 +159,8 @@ Use C-u prefix with the session picker to override.")
                   (conv-key session-id))
 (declare-function decknix--agent-session-model-for-conv-key
                   "decknix-agent-session-model" (conv-key))
+(declare-function decknix--agent-session-mode-for-conv-key
+                  "decknix-agent-session-mode" (conv-key))
 (declare-function decknix--agent-detect-workspace
                   "decknix-agent-workspace-detect")
 (declare-function decknix--agent-detect-branch
@@ -810,7 +812,17 @@ dedupes against live buffers before calling here."
          (augmented-cmd
           (decknix--agent-command-build
            provider validated-ws saved-model session-id))
-         (config (decknix--agent-make-config provider augmented-cmd))
+         ;; Re-apply the session/permission mode the conversation was
+         ;; left in (persisted per conv-key by `decknix-agent-set-
+         ;; session-mode'), falling back to the `new-session' purpose
+         ;; default (e.g. Claude "auto") when the conversation has no
+         ;; saved override.  Without this, resume drops back to the
+         ;; provider default and re-enables per-command permission
+         ;; prompts.  Ignored by providers without session modes.
+         (mode (or (decknix--agent-session-mode-for-conv-key conv-key)
+                   (plist-get (decknix-agent-purpose-resolve 'new-session)
+                              :mode)))
+         (config (decknix--agent-make-config provider augmented-cmd mode))
          (agent-shell-display-action
           (eval `(cons (lambda (buffer alist)
                          (let ((win ,target-win))
@@ -2277,7 +2289,15 @@ calling `decknix-agent-session-new' interactively."
                label src-session-id data-path src-tags))))
          (before-buffers (buffer-list))
          (augmented-cmd (decknix--agent-command-build provider workspace))
-         (config (decknix--agent-make-config provider augmented-cmd)))
+         ;; Inherit the source conversation's session/permission mode
+         ;; (persisted per conv-key), falling back to the `new-session'
+         ;; purpose default (e.g. Claude "auto") when the source has no
+         ;; saved override -- so a fork keeps the working style of its
+         ;; parent instead of reverting to the provider default.
+         (mode (or (decknix--agent-session-mode-for-conv-key src-conv-key)
+                   (plist-get (decknix-agent-purpose-resolve 'new-session)
+                              :mode)))
+         (config (decknix--agent-make-config provider augmented-cmd mode)))
     (let ((default-directory workspace))
       (agent-shell-start :config config))
     (setq decknix--agent-session-cache-time 0)

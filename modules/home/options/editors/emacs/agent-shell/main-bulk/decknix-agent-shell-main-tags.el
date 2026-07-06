@@ -127,6 +127,17 @@
 (declare-function decknix--agent-session-save-model-for-conv-key
                   "decknix-agent-session-model" (conv-key model-id))
 
+;; -- Per-session mode persistence --
+;; Sibling of the model store in
+;; agent-shell/agent/decknix-agent-session-mode.el.  The interactive
+;; `decknix-agent-set-session-mode' command stays here per AGENTS.md
+;; Rule 2 -- it wraps the upstream `agent-shell-set-session-mode' UI
+;; verb whose on-success callback calls into the module's `save'
+;; primitive so the chosen mode survives session resume/fork.
+(declare-function agent-shell-set-session-mode "ext:agent-shell" (&optional on-success))
+(declare-function decknix--agent-session-save-mode-for-conv-key
+                  "decknix-agent-session-mode" (conv-key mode-id))
+
 ;; -- Session file path helper --
 ;; Defined in agent-shell/agent/decknix-agent-session-history.el.
 (declare-function decknix--agent-session-file
@@ -168,6 +179,28 @@ it is immediately visible when browsing candidates."
                   (message "Model %s saved for this conversation"
                            model-id))))
            t))))
+
+(defun decknix-agent-set-session-mode ()
+  "Change the permission mode for the current session and persist it.
+Wraps `agent-shell-set-session-mode' with an on-success callback
+that records the new mode-id against the current conversation in
+agent-sessions.json so subsequent resumes/forks re-apply it instead
+of falling back to the provider default (which would re-enable
+per-command permission prompts)."
+  (interactive)
+  (agent-shell-set-session-mode
+   (eval `(lambda ()
+            (let ((mode-id (map-nested-elt
+                            (agent-shell--state)
+                            '(:session :mode-id)))
+                  (conv-key (bound-and-true-p
+                             decknix--agent-conv-key)))
+              (when (and conv-key mode-id)
+                (decknix--agent-session-save-mode-for-conv-key
+                 conv-key mode-id)
+                (message "Mode %s saved for this conversation"
+                         mode-id))))
+         t)))
 
 ;; -- PR / repo linking: store/retrieve linked items per conversation --
 ;; Source moved into agent-shell/agent/decknix-agent-link-store.el.

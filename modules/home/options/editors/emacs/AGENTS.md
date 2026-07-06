@@ -321,6 +321,22 @@ The largest module (~4400 lines). Key subsystems:
     `:default-model-id`; the default defers to Pi's own config. `C-c C-v` only
     populates (and thus only persists/replays) if `pi-acp` advertises a model
     list (otherwise it reports "No session models available").
+- **Mode persistence** (`C-c C-m`): the permission-mode analogue of the model
+  layer. `C-c C-m` is rebound to `decknix-agent-set-session-mode`
+  (`decknix-agent-shell-main-tags.el`), which wraps the upstream
+  `agent-shell-set-session-mode` verb and, on success, persists the chosen
+  mode-id (`(:session :mode-id)`) against the conversation via
+  `decknix--agent-session-save-mode-for-conv-key`
+  (`agent-shell/agent/decknix-agent-session-mode.el`, sibling of the model
+  store, "mode" field in `agent-sessions.json`). The **resume**
+  (`decknix--agent-session-resume--new`) and **fork**
+  (`decknix-agent-session-fork`) paths read
+  `decknix--agent-session-mode-for-conv-key` and pass it into
+  `decknix--agent-make-config`, falling back to the `new-session` purpose
+  `:mode` (default `"auto"`) when the conversation has no saved override.
+  Mode is applied by baking `:default-session-mode-id` into the session config;
+  only providers that declare that key (today `claude-code`) honour it —
+  Auggie/Pi ignore a stray mode, so it can never break a launch.
 
 ## Agent Providers
 

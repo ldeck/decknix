@@ -114,28 +114,31 @@ Each sub-module can be independently disabled. See [Agent Shell Overview](./agen
 
 ## Per-Purpose Provider & Model
 
-Automated agent launches (PR reviews, bot-authored PR reviews, and any
-future auto-dispatched workflow) can pin a specific `(provider,
-model)` pair via Nix, independent of the interactive
-`decknix-agent-default-provider`.  Two purposes ship today:
+Automated agent launches (PR reviews, bot-authored PR reviews) and the
+interactive `new-session` path can pin a specific `(provider, model,
+mode)` triple via Nix, independent of the interactive
+`decknix-agent-default-provider`.  Three purposes ship today:
 
-| Purpose | Trigger | Default provider | Default model |
-|---------|---------|------------------|---------------|
-| `pr-review` | `C-c A c r`, sidebar Requests row, batch processor | `auggie` | `prism-a` |
-| `bot-pr-review` | Auto-review dispatch on bot-authored PRs, or matched by author heuristic | `auggie` | `haiku4.5` |
+| Purpose | Trigger | Default provider | Default model | Default mode |
+|---------|---------|------------------|---------------|--------------|
+| `pr-review` | `C-c A c r`, sidebar Requests row, batch processor | `claude-code` | `sonnet` | `auto` |
+| `bot-pr-review` | Auto-review dispatch on bot-authored PRs, or matched by author heuristic | `claude-code` | `sonnet` | `auto` |
+| `new-session` | Interactive / QUICK `C-c A n` (its `provider` also feeds `decknix-agent-default-provider`) | `claude-code` | `null` | `auto` |
 
 ```nix
 { ... }: {
   programs.emacs.decknix.agentShell.purposes = {
     # Human PR reviews go through Claude with opus for depth.
-    pr-review     = { provider = "claude-code"; model = "opus"; };
+    pr-review     = { provider = "claude-code"; model = "opus"; mode = "auto"; };
     # Bot diffs are shallow — pin the cheapest capable model.
-    bot-pr-review = { provider = "claude-code"; model = "haiku"; };
+    bot-pr-review = { provider = "claude-code"; model = "haiku"; mode = "auto"; };
+    # Start new interactive sessions on Claude in auto (no per-command prompts).
+    new-session   = { provider = "claude-code"; mode = "auto"; };
   };
 }
 ```
 
-**Validation.** Both fields are validated at daemon start:
+**Validation.** All three fields are validated at daemon start:
 
 - `provider` must be a registered provider id (built-ins: `auggie`,
   `claude-code`, `pi`).  Unknown values coerce to
@@ -143,17 +146,26 @@ model)` pair via Nix, independent of the interactive
 - `model` must appear in `decknix-agent-known-models` for the chosen
   provider (or be `null` to defer to the provider default).  Unknown
   values drop to `nil` with a warning.
+- `mode` is a session/permission mode honoured only by providers that
+  expose one — today `claude-code`, whose ids are `default`, `auto`,
+  `acceptEdits`, `bypassPermissions`, and `plan`.  For providers
+  without session modes (Auggie, Pi) it drops to `nil` at boot with a
+  warning.  Set to `null` to keep the provider's own default.
 
 **Resume semantics.** For launch-flag providers (Auggie) the model is
 appended as `--model <id>`; for flagless providers (Claude, Pi) it is
-replayed over ACP once the session reports ready.  Either way, once
-you switch mid-session with `C-c C-v`, that per-conversation choice
-persists and wins over the purpose default on resume.
+replayed over ACP once the session reports ready.  The permission
+`mode` is baked into the session config and applied by agent-shell once
+the session reports ready.  Either way, once you switch mid-session
+with `C-c C-v` (model) or `C-c C-m` (mode), that per-conversation
+choice persists in `~/.config/decknix/agent-sessions.json` and wins
+over the purpose default on both resume **and** fork.
 
-**Scope.** Only automated launchers consult purposes.  Interactive
-`C-c A n`, `C-c A f` (fork), and the sidebar worktree `w s` action
-keep `decknix-agent-default-provider` with no model pin — they use
-the provider's own default until you pick a model with `C-c C-v`.
+**Scope.** The two `*-review` purposes are consulted by the automated
+review launchers; `new-session` seeds interactive `C-c A n`.  `C-c A f`
+(fork) inherits the source conversation's persisted model/mode (falling
+back to the `new-session` defaults), and the sidebar worktree `w s`
+action keeps `decknix-agent-default-provider` with no model pin.
 See [Model Selection](./agent-shell/foundation.md#model-selection)
 for the full override-lever hierarchy.
 

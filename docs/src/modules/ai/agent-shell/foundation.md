@@ -125,24 +125,30 @@ Three layers, narrowest wins:
    (`session/set_model`) once the resumed session reports ready.  See
    [Model selection by agent](productivity.md#model-selection-by-agent).
 2. **Per-purpose (Nix)** —
-   `programs.emacs.decknix.agentShell.purposes.<name>.{provider,model}`
-   pins both the **provider** and the **model** for every launch of a
-   given purpose.  Two purposes ship today:
+   `programs.emacs.decknix.agentShell.purposes.<name>.{provider,model,mode}`
+   pins the **provider**, **model**, and permission **mode** for every
+   launch of a given purpose.  Three purposes ship today:
    - `pr-review` — human-authored PR review (`C-c A c r`, sidebar
-     Requests row, batch processor).  Default: `provider = "auggie"`,
-     `model = "prism-a"`.
+     Requests row, batch processor).  Default: `provider =
+     "claude-code"`, `model = "sonnet"`, `mode = "auto"`.
    - `bot-pr-review` — PR whose author is a bot (auto-dispatched via
      the `A` auto-review toggle, or matched by author heuristic).
-     Default: `provider = "auggie"`, `model = "haiku4.5"` — the
-     cheapest capable model, since bot diffs are typically small.
+     Default: `provider = "claude-code"`, `model = "sonnet"`, `mode =
+     "auto"` — `sonnet` rather than the cheapest tier because an
+     unattended `auto` review needs a model that honours `auto`.
+   - `new-session` — interactive / QUICK `C-c A n`.  Default: `provider
+     = "claude-code"`, `model = null`, `mode = "auto"`.  Its `provider`
+     also feeds `decknix-agent-default-provider`.
 
-   Example — pin PR reviews to Claude with opus for depth, and route
-   bot diffs to the cheaper haiku on the same provider:
+   Example — pin PR reviews to Claude with opus for depth, route bot
+   diffs to the cheaper haiku on the same provider, and start new
+   sessions in `auto`:
 
    ```nix
    programs.emacs.decknix.agentShell.purposes = {
-     pr-review     = { provider = "claude-code"; model = "opus"; };
-     bot-pr-review = { provider = "claude-code"; model = "haiku"; };
+     pr-review     = { provider = "claude-code"; model = "opus"; mode = "auto"; };
+     bot-pr-review = { provider = "claude-code"; model = "haiku"; mode = "auto"; };
+     new-session   = { provider = "claude-code"; mode = "auto"; };
    };
    ```
 
@@ -171,4 +177,26 @@ Purposes that are **not** pinned via Nix (interactive `C-c A n`, fork,
 worktree `w s`) keep `decknix-agent-default-provider` with no model
 pin — they use the provider's own default until you make a
 per-session choice with `C-c C-v`.
+
+### Permission mode
+
+The session **permission mode** follows the same narrowest-wins
+hierarchy as the model, on providers that expose it (today Claude,
+whose modes are `default`, `auto`, `acceptEdits`, `bypassPermissions`,
+and `plan`):
+
+1. **Per-session** — `C-c C-m` inside any agent-shell buffer switches
+   the running conversation's mode; the choice is persisted in
+   `~/.config/decknix/agent-sessions.json` and **re-applied on both
+   resume and fork**, so a session left in `auto` doesn't fall back to
+   per-command permission prompts when you return to it.
+2. **Per-purpose (Nix)** — `purposes.<name>.mode` seeds the mode for
+   new launches of that purpose.  `new-session.mode` (default `"auto"`)
+   is what fresh `C-c A n` sessions start on, and it's the fallback for
+   resume/fork when a conversation has no saved mode override.
+3. **Provider default** — used when no purpose mode is set and the
+   conversation has no override.
+
+Providers without session modes (Auggie, Pi) ignore the mode entirely —
+it can never break a launch.
 
