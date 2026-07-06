@@ -148,6 +148,9 @@ ALIST is a list of (CONV-KEY . MERGED-INTO-KEY-OR-NIL) cells."
                   (modified . "2025-02-02T00:00:00Z"))
                  ((sessionId . "mid") (firstUserMessage . "x")
                   (modified . "2024-06-01T00:00:00Z")))))
+            ;; No store entry: exercises the pure hash-match path.  Stubbed
+            ;; so the resolver's tag-store lookup does not touch the disk.
+            ((symbol-function 'decknix--agent-tags-read) (lambda () nil))
             ((symbol-function 'decknix--agent-conversation-key)
              (lambda (_fm) "the-key")))
     (should (equal "new"
@@ -161,6 +164,7 @@ ALIST is a list of (CONV-KEY . MERGED-INTO-KEY-OR-NIL) cells."
                   (modified . "2099-01-01T00:00:00Z"))
                  ((sessionId . "real") (firstUserMessage . "x")
                   (modified . "2025-01-01T00:00:00Z")))))
+            ((symbol-function 'decknix--agent-tags-read) (lambda () nil))
             ((symbol-function 'decknix--agent-conversation-key)
              (lambda (_fm) "the-key")))
     (should (equal "real"
