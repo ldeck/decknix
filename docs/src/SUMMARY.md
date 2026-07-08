@@ -36,6 +36,7 @@
 - [AI Tooling](./modules/ai/overview.md)
   - [Configuration](./modules/ai/configuration.md)
   - [Agent Shell](./modules/ai/agent-shell/overview.md)
+    - [Guided Tour](./modules/ai/agent-shell/walkthrough.md)
     - [Foundation](./modules/ai/agent-shell/foundation.md)
     - [Multi-Session](./modules/ai/agent-shell/multi-session.md)
     - [Productivity](./modules/ai/agent-shell/productivity.md)
