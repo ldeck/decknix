@@ -127,7 +127,16 @@ pub struct JiraTasksFile {
 
 #[derive(Debug, Deserialize)]
 struct JiraSearchResponse {
+    #[serde(default)]
     issues: Vec<JiraIssue>,
+    /// Enhanced-search pagination cursor. Absent/empty on the final page.
+    /// Replaces the old offset paging (`startAt`/`total`), which the
+    /// `/search/jql` endpoint dropped.
+    #[serde(rename = "nextPageToken", default)]
+    next_page_token: Option<String>,
+    /// Some tenants also flag the final page explicitly.
+    #[serde(rename = "isLast", default)]
+    is_last: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -342,31 +351,72 @@ pub async fn poll_jira_tasks(config: &JiraConfig) -> Result<JiraTasksFile, Strin
     let client = Client::new();
 
     let jql = build_jql(config);
-    let url = format!("{}/rest/api/3/search", config.base_url.trim_end_matches('/'));
+    let base = config.base_url.trim_end_matches('/');
+    // Enhanced JQL search. Atlassian removed `GET /rest/api/3/search` (410
+    // Gone) in favour of `/search/jql`, which is cursor-paged via
+    // `nextPageToken` rather than `startAt`/`total`.
+    let url = format!("{}/rest/api/3/search/jql", base);
+    let fields = "summary,status,priority,assignee,parent,issuetype,updated,created,labels,subtasks,issuelinks";
 
-    let resp = client
-        .get(&url)
-        .basic_auth(&config.email, Some(&token))
-        .query(&[
-            ("jql", jql.as_str()),
-            ("maxResults", &config.max_results.to_string()),
-            ("fields", "summary,status,priority,assignee,parent,issuetype,updated,created,labels,subtasks,issuelinks"),
-        ])
-        .send()
-        .await
-        .map_err(|e| format!("Jira HTTP error: {e}"))?;
+    let max_total = config.max_results as usize;
+    let mut issues: Vec<JiraIssue> = Vec::new();
+    let mut next_page_token: Option<String> = None;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Jira API {status}: {}", &body[..body.len().min(200)]));
+    loop {
+        let remaining = max_total.saturating_sub(issues.len());
+        if remaining == 0 {
+            break;
+        }
+        // `/search/jql` caps a page at 100; request only what's left of the cap.
+        let page_size = remaining.min(100).to_string();
+
+        let mut query: Vec<(&str, String)> = vec![
+            ("jql", jql.clone()),
+            ("maxResults", page_size),
+            ("fields", fields.to_string()),
+        ];
+        if let Some(tok) = &next_page_token {
+            query.push(("nextPageToken", tok.clone()));
+        }
+
+        let resp = client
+            .get(&url)
+            .basic_auth(&config.email, Some(&token))
+            .query(&query)
+            .send()
+            .await
+            .map_err(|e| format!("Jira HTTP error: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Jira API {status}: {}", &body[..body.len().min(200)]));
+        }
+
+        let page: JiraSearchResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("Jira parse error: {e}"))?;
+
+        let empty_page = page.issues.is_empty();
+        issues.extend(page.issues);
+
+        // Stop on the last page: no cursor, an explicit `isLast`, or an empty
+        // page (guards against a server echoing a stale token indefinitely).
+        match page.next_page_token {
+            Some(tok)
+                if !tok.is_empty() && !page.is_last.unwrap_or(false) && !empty_page =>
+            {
+                next_page_token = Some(tok);
+            }
+            _ => break,
+        }
     }
 
-    let search: JiraSearchResponse = resp.json().await
-        .map_err(|e| format!("Jira parse error: {e}"))?;
+    // The final page can overshoot the cap; trim to the requested maximum.
+    issues.truncate(max_total);
 
-    let base = config.base_url.trim_end_matches('/');
-    let items: Vec<JiraTask> = search.issues.into_iter().map(|issue| {
+    let items: Vec<JiraTask> = issues.into_iter().map(|issue| {
         let f = issue.fields;
         let subtasks = f.subtasks.into_iter()
             .map(|sub| subtask_to_ref(sub, base))
@@ -450,5 +500,66 @@ pub async fn run_jira_adapter(
         update_meta(&meta, status, &dir).await;
         if once { return; }
         tokio::time::sleep(interval).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_jql_includes_project_and_statuses() {
+        let cfg = JiraConfig {
+            project: "NC".into(),
+            statuses: vec!["Ready".into(), "In Progress".into()],
+            ..Default::default()
+        };
+        let jql = build_jql(&cfg);
+        assert!(jql.contains("project = NC AND"), "{jql}");
+        assert!(jql.contains("assignee = currentUser()"), "{jql}");
+        assert!(jql.contains("status IN (\"Ready\", \"In Progress\")"), "{jql}");
+        assert!(jql.contains("ORDER BY priority ASC, updated DESC"), "{jql}");
+    }
+
+    #[test]
+    fn build_jql_omits_project_clause_when_empty() {
+        let cfg = JiraConfig { project: String::new(), ..Default::default() };
+        let jql = build_jql(&cfg);
+        assert!(!jql.contains("project ="), "{jql}");
+        assert!(jql.starts_with("assignee = currentUser()"), "{jql}");
+    }
+
+    // The enhanced `/search/jql` envelope: `issues` + a `nextPageToken`
+    // cursor + optional `isLast`. Locks the serde renames the migration
+    // depends on.
+    #[test]
+    fn search_response_parses_enhanced_jql_shape() {
+        let json = r#"{
+            "issues": [
+                {"key": "NC-1", "self": "https://x/rest/api/3/issue/1",
+                 "fields": {"summary": "s",
+                   "status": {"name": "Ready", "statusCategory": {"key": "new"}},
+                   "issuetype": {"name": "Task"},
+                   "updated": "2026-01-01T00:00:00.000+0000",
+                   "created": "2026-01-01T00:00:00.000+0000"}}
+            ],
+            "nextPageToken": "abc",
+            "isLast": false
+        }"#;
+        let resp: JiraSearchResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.issues.len(), 1);
+        assert_eq!(resp.next_page_token.as_deref(), Some("abc"));
+        assert_eq!(resp.is_last, Some(false));
+    }
+
+    // Last page: the cursor fields are simply absent — must default rather
+    // than fail, so the poll loop terminates.
+    #[test]
+    fn search_response_defaults_when_cursor_absent() {
+        let resp: JiraSearchResponse =
+            serde_json::from_str(r#"{"issues": []}"#).unwrap();
+        assert!(resp.issues.is_empty());
+        assert_eq!(resp.next_page_token, None);
+        assert_eq!(resp.is_last, None);
     }
 }
