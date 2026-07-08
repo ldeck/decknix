@@ -64,6 +64,10 @@ enum Commands {
         /// Destination for new files (defaults to decknix-config if in nurturecloud, else decknix)
         #[arg(long)]
         to: Option<String>,
+        /// Pull files even when their content looks STALE (matches an older
+        /// committed revision of the source, i.e. pulling would regress it)
+        #[arg(long)]
+        force: bool,
     },
     Help {
         /// The command to look up
@@ -361,6 +365,120 @@ fn calculate_hash(path: &Path) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("failed to compute sha256 for {}", path.display()))
 }
 
+/// Expand a manifest live-path (`~/…`) into an absolute path.
+fn expand_live_path(raw: &str) -> PathBuf {
+    if let Some(rest) = raw.strip_prefix("~/") {
+        dirs::home_dir().unwrap_or_default().join(rest)
+    } else {
+        PathBuf::from(raw)
+    }
+}
+
+/// Resolve a manifest `source_repo` name to its checkout root on disk.
+fn resolve_repo_root(repo_name: &str) -> Option<PathBuf> {
+    match repo_name {
+        "decknix" => Some(
+            std::env::var("DECKNIX_DEV")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join("tools/decknix")),
+        ),
+        "nc-config" | "decknix-config" => {
+            Some(dirs::home_dir().unwrap_or_default().join("Code/nurturecloud/decknix-config"))
+        }
+        _ => None,
+    }
+}
+
+/// Run `git -C <repo> <args>` and return trimmed stdout regardless of exit
+/// status. Some git porcelain we rely on (notably `diff --no-index`) exits
+/// non-zero precisely *because* the files differ, yet still prints the output
+/// we want; and lookups like `rev-parse <sha>:<missing-path>` exit non-zero
+/// with empty stdout, which callers treat as "no match". Returns None only if
+/// git could not be spawned at all.
+fn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {
+    let out = Command::new("git").arg("-C").arg(repo).args(args).output().ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// How a live file that diverges from its recorded manifest hash relates to the
+/// *current* source in its repo and that source's git history. This is what lets
+/// `pull-local-changes` tell a genuine new local edit apart from a stale copy
+/// whose pull would silently regress the tracked source.
+enum DriftClass {
+    /// Live content already equals the on-disk source — the manifest hash is
+    /// merely stale (e.g. after a redeploy); pulling is a harmless no-op that
+    /// just re-syncs the manifest hash.
+    Identical,
+    /// Live content is not present anywhere in the source's history — a genuine
+    /// local edit worth pulling. Carries an approximate added/removed line count
+    /// versus the current source.
+    NewEdit { added: u64, removed: u64 },
+    /// Live content matches an *older* committed revision of the source — pulling
+    /// it back would REGRESS the source. Carries that commit (short sha +
+    /// subject) and how many later commits changed the file after it.
+    Stale { short: String, subject: String, behind: usize },
+    /// Could not compute the live file's git blob at all (git binary missing or
+    /// the file is unreadable) — cannot classify. Note this is *not* reached
+    /// merely because the source is untracked or its root isn't a repo: in that
+    /// case history/identity lookups simply come up empty and the file falls
+    /// through to the conservative [`DriftClass::NewEdit`], so we never falsely
+    /// mark an unverifiable file as `Stale` (which would wrongly skip it).
+    Untracked,
+}
+
+/// Classify a live file against its source's git history. See [`DriftClass`].
+fn classify_drift(repo_root: &Path, repo_path: &str, live_path: &Path) -> DriftClass {
+    let live_str = live_path.to_string_lossy().to_string();
+    // Blob hash git would assign to the live content.
+    let live_blob = match git_stdout(repo_root, &["hash-object", "--", &live_str]) {
+        Some(h) if !h.is_empty() => h,
+        _ => return DriftClass::Untracked,
+    };
+
+    // Same for the on-disk source in the repo working tree.
+    let src_on_disk = repo_root.join(repo_path);
+    let src_str = src_on_disk.to_string_lossy().to_string();
+    if let Some(src_blob) = git_stdout(repo_root, &["hash-object", "--", &src_str]) {
+        if !src_blob.is_empty() && src_blob == live_blob {
+            return DriftClass::Identical;
+        }
+    }
+
+    // Walk the source file's history newest-first; if some commit's blob equals
+    // the live blob, the live file *is* that older revision -> stale/regression.
+    if let Some(log) = git_stdout(repo_root, &["log", "--format=%H%x1f%s", "--", repo_path]) {
+        for (behind, line) in log.lines().enumerate() {
+            let mut parts = line.splitn(2, '\u{1f}');
+            let commit = parts.next().unwrap_or("");
+            let subject = parts.next().unwrap_or("").to_string();
+            if commit.is_empty() {
+                continue;
+            }
+            let spec = format!("{}:{}", commit, repo_path);
+            if let Some(blob) = git_stdout(repo_root, &["rev-parse", "--verify", "-q", &spec]) {
+                if !blob.is_empty() && blob == live_blob {
+                    let short = commit.chars().take(9).collect::<String>();
+                    return DriftClass::Stale { short, subject, behind };
+                }
+            }
+        }
+    }
+
+    // Genuine new/divergent content: report churn versus the on-disk source.
+    let (mut added, mut removed) = (0u64, 0u64);
+    if let Some(numstat) = git_stdout(
+        repo_root,
+        &["diff", "--numstat", "--no-index", "--", &src_str, &live_str],
+    ) {
+        if let Some(first) = numstat.lines().next() {
+            let mut cols = first.split_whitespace();
+            added = cols.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            removed = cols.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        }
+    }
+    DriftClass::NewEdit { added, removed }
+}
+
 // Merge configs from decknix, and custom system and home extensions
 fn load_merged_extensions() -> ExtensionMap {
     let mut map = HashMap::new();
@@ -398,6 +516,7 @@ enum Style {
     Dim,
     Cyan,
     Green,
+    Yellow,
 }
 
 fn styled_str(text: &str, styles: &[Style]) -> String {
@@ -410,6 +529,7 @@ fn styled_str(text: &str, styles: &[Style]) -> String {
             Style::Dim => codes.push_str("\x1b[2m"),
             Style::Cyan => codes.push_str("\x1b[36m"),
             Style::Green => codes.push_str("\x1b[32m"),
+            Style::Yellow => codes.push_str("\x1b[33m"),
         }
     }
     // apply codes, then text, then reset everything at the end
@@ -698,16 +818,21 @@ fn print_extended_help(extensions: &ExtensionMap) {
     }
 }
 
-/// Build the system derivation for the current flake and return its /nix/store path.
-/// Uses `nix build --no-link --print-out-paths` so nothing is symlinked into $PWD.
-/// The subsequent `darwin-rebuild switch` reuses the cached build.
-fn build_system_path(config_dir: &Path, overrides: &[(String, PathBuf)]) -> anyhow::Result<PathBuf> {
+/// Evaluate the system derivation for the current flake and return its
+/// /nix/store output path *without building it*.
+///
+/// The preflight only needs to know whether the system *will change*, and
+/// a derivation's output path is fixed at evaluation time — so `nix eval`
+/// of `.outPath` answers that in seconds instead of realizing the whole
+/// system (packages, home-manager generation, …) up front. When the paths
+/// differ we hand off to `darwin-rebuild switch`, which does the actual
+/// build after activation is authorized.
+fn eval_system_path(config_dir: &Path, overrides: &[(String, PathBuf)]) -> anyhow::Result<PathBuf> {
     let mut cmd = Command::new("nix");
     cmd.current_dir(config_dir)
-        .arg("build")
-        .arg(".#darwinConfigurations.default.system")
-        .arg("--no-link")
-        .arg("--print-out-paths")
+        .arg("eval")
+        .arg(".#darwinConfigurations.default.system.outPath")
+        .arg("--raw")
         .arg("--impure");
     for (input_name, path) in overrides {
         cmd.arg("--override-input").arg(input_name)
@@ -716,11 +841,11 @@ fn build_system_path(config_dir: &Path, overrides: &[(String, PathBuf)]) -> anyh
     let output = cmd.output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("nix build failed:\n{}", stderr);
+        anyhow::bail!("nix eval failed:\n{}", stderr);
     }
     let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if path_str.is_empty() {
-        anyhow::bail!("nix build produced no output path");
+        anyhow::bail!("nix eval produced no output path");
     }
     Ok(PathBuf::from(path_str))
 }
@@ -1190,13 +1315,16 @@ fn main() -> anyhow::Result<()> {
                 sources.push(*src);
             }
 
-            // Preflight: build the derivation and compare with /run/current-system.
-            // When identical (and not forced or dry-run), skip sudo activation entirely
-            // and just verify LaunchAgents are still running. The nix build is cached,
-            // so if we do end up calling darwin-rebuild, it reuses this evaluation.
+            // Preflight: evaluate the derivation's output path and compare with
+            // /run/current-system. Evaluation (not a full build) is enough to tell
+            // whether the system will change, so this stays fast even for a large
+            // config. When identical (and not forced or dry-run), skip sudo
+            // activation entirely and just verify LaunchAgents are still running.
+            // When it differs, darwin-rebuild performs the actual build during
+            // activation (and reuses this evaluation).
             if !dry_run && !force {
                 println!("🔍 Preflight: evaluating system derivation...");
-                match build_system_path(&config_dir, &overrides) {
+                match eval_system_path(&config_dir, &overrides) {
                     Ok(new_path) => {
                         if let Some(current_path) = current_system_path() {
                             if new_path == current_path {
@@ -1272,7 +1400,7 @@ fn main() -> anyhow::Result<()> {
             let status = cmd.status()?;
             std::process::exit(status.code().unwrap_or(1));
         }
-        Some(Commands::PullLocalChanges { apply, message, to }) => {
+        Some(Commands::PullLocalChanges { apply, message, to, force }) => {
             let mut manifest = AgentSyncManifest::load()?;
             let mut repos_to_commit = HashSet::new();
             let mut changed_files = Vec::new();
@@ -1307,6 +1435,22 @@ fn main() -> anyhow::Result<()> {
                         }
 
                         let target_path = repo_root.join(&entry.repo_path);
+
+                        // Guard: never silently pull a stale copy back over a newer
+                        // tracked source (that would regress it). Skip unless --force.
+                        if !force {
+                            if let DriftClass::Stale { short, subject, behind } =
+                                classify_drift(&repo_root, &entry.repo_path, &live_path)
+                            {
+                                eprintln!(
+                                    "{} Skipping {} — content matches older commit {} \"{}\" ({} commit(s) behind source HEAD); pulling would REGRESS. Re-run with --force to override.",
+                                    styled_str("⚠", &[Style::Yellow]),
+                                    live_path_raw, short, subject, behind
+                                );
+                                continue;
+                            }
+                        }
+
                         if let Some(parent) = target_path.parent() {
                             fs::create_dir_all(parent)?;
                         }
@@ -1383,8 +1527,69 @@ fn main() -> anyhow::Result<()> {
 
             if !apply {
                 println!("{}", styled_str("Local changes detected (dry-run):", &[Style::B, Style::U]));
-                for (path, entry, _) in changed_files {
-                    println!("  - {} (belongs to {}/{})", path, entry.source_repo, entry.repo_path);
+                let mut stale_count = 0usize;
+                for (path, entry, _) in &changed_files {
+                    let repo_name = to.as_deref().unwrap_or(&entry.source_repo);
+                    let live_path = expand_live_path(path);
+                    let class = resolve_repo_root(repo_name)
+                        .filter(|root| root.is_dir())
+                        .map(|root| classify_drift(&root, &entry.repo_path, &live_path));
+
+                    let (marker, detail) = match &class {
+                        Some(DriftClass::Identical) => (
+                            styled_str("≡", &[Style::Dim]),
+                            styled_str(
+                                "identical to source — manifest hash stale, pull is a no-op",
+                                &[Style::Dim],
+                            ),
+                        ),
+                        Some(DriftClass::NewEdit { added, removed }) => (
+                            styled_str("✎", &[Style::Green]),
+                            format!(
+                                "local edit vs source ({}) — pull brings new content",
+                                styled_str(&format!("+{}/-{}", added, removed), &[Style::Green])
+                            ),
+                        ),
+                        Some(DriftClass::Stale { short, subject, behind }) => {
+                            stale_count += 1;
+                            (
+                                styled_str("⚠", &[Style::Yellow]),
+                                styled_str(
+                                    &format!(
+                                        "STALE — matches older commit {} \"{}\" ({} behind source HEAD); pulling would REGRESS",
+                                        short, subject, behind
+                                    ),
+                                    &[Style::Yellow],
+                                ),
+                            )
+                        }
+                        Some(DriftClass::Untracked) | None => (
+                            "·".to_string(),
+                            styled_str("source not git-tracked — cannot classify", &[Style::Dim]),
+                        ),
+                    };
+
+                    println!(
+                        "  {} {} {} {}/{}",
+                        marker,
+                        path,
+                        styled_str("→", &[Style::Dim]),
+                        entry.source_repo,
+                        entry.repo_path
+                    );
+                    println!("      {}", detail);
+                }
+                if stale_count > 0 {
+                    println!(
+                        "\n{}",
+                        styled_str(
+                            &format!(
+                                "⚠  {} file(s) look STALE (older than the tracked source). `--apply` will SKIP them; pass --force to pull anyway.",
+                                stale_count
+                            ),
+                            &[Style::Yellow, Style::B]
+                        )
+                    );
                 }
                 println!("\nUse --apply to pull these changes back into your repositories.");
                 return Ok(());
@@ -1782,6 +1987,88 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn git_in(repo: &Path, args: &[&str]) {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .expect("spawn git")
+            .status
+            .success();
+        assert!(ok, "git {:?} failed in {}", args, repo.display());
+    }
+
+    fn init_repo(dir: &Path) {
+        git_in(dir, &["init", "-q"]);
+        git_in(dir, &["config", "user.email", "test@example.com"]);
+        git_in(dir, &["config", "user.name", "Test"]);
+        git_in(dir, &["config", "commit.gpgsign", "false"]);
+    }
+
+    fn commit_file(repo: &Path, rel: &str, content: &str, msg: &str) {
+        fs::write(repo.join(rel), content).unwrap();
+        git_in(repo, &["add", rel]);
+        git_in(repo, &["commit", "-q", "-m", msg]);
+    }
+
+    // classify_drift must tell a genuine local edit apart from a stale copy whose
+    // pull would silently regress the tracked source — the whole point of the
+    // content-diff smarts. Exercise every DriftClass branch against a real repo.
+    #[test]
+    fn classify_drift_covers_all_branches() {
+        let repo = tempfile::tempdir().unwrap();
+        let live = tempfile::tempdir().unwrap();
+        let rp = repo.path();
+        init_repo(rp);
+
+        // Two revisions of the source at a stable path: v1, then v2 (= HEAD).
+        commit_file(rp, "f.md", "line1\nline2\n", "v1");
+        commit_file(rp, "f.md", "line1\nline2\nline3-new\n", "v2");
+
+        // Identical: live equals the current on-disk source (v2).
+        let l_ident = live.path().join("ident.md");
+        fs::write(&l_ident, "line1\nline2\nline3-new\n").unwrap();
+        assert!(
+            matches!(classify_drift(rp, "f.md", &l_ident), DriftClass::Identical),
+            "live matching current source should be Identical"
+        );
+
+        // Stale: live equals the older committed revision (v1) — one commit behind.
+        let l_stale = live.path().join("stale.md");
+        fs::write(&l_stale, "line1\nline2\n").unwrap();
+        match classify_drift(rp, "f.md", &l_stale) {
+            DriftClass::Stale { behind, .. } => {
+                assert_eq!(behind, 1, "v1 is exactly one commit behind HEAD")
+            }
+            _ => panic!("live matching an older revision should be Stale"),
+        }
+
+        // NewEdit: novel content not present anywhere in history (+1 line vs source).
+        let l_new = live.path().join("new.md");
+        fs::write(&l_new, "line1\nline2\nline3-new\nline4-local\n").unwrap();
+        match classify_drift(rp, "f.md", &l_new) {
+            DriftClass::NewEdit { added, removed } => {
+                assert_eq!((added, removed), (1, 0), "one added line, none removed")
+            }
+            _ => panic!("novel content should be NewEdit"),
+        }
+
+        // Safety fallback: when the source root isn't a git repo, history and
+        // identity lookups come up empty, so classification must degrade to the
+        // conservative NewEdit — never Stale (which would wrongly skip the file
+        // on --apply). This is the property that keeps an unverifiable file from
+        // being silently dropped.
+        let non_repo = tempfile::tempdir().unwrap();
+        assert!(
+            matches!(
+                classify_drift(non_repo.path(), "f.md", &l_ident),
+                DriftClass::NewEdit { .. }
+            ),
+            "a non-repo source root must degrade to NewEdit, not Stale"
+        );
+    }
 
     #[test]
     fn test_parse_duration() {
