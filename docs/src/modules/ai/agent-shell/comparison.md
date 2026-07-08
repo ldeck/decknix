@@ -1,10 +1,12 @@
 # How It Compares
 
 The Agent Shell is not another terminal multiplexer, IDE, or cloud agent — it is
-an **editor-native coordination framework**. This page compares it with the tools
-teams reach for when running AI coding agents, chosen to surface where decknix is
-architecturally distinct rather than to crown a winner. They solve overlapping
-problems on very different substrates.
+an **editor-native coordination framework**. This page is a **candid assessment,
+not a scorecard**: it compares the Agent Shell with the tools teams reach for when
+running AI coding agents to find (a) where those tools have better ideas worth
+**borrowing**, (b) where decknix genuinely **leads**, and (c) the **gaps nobody
+fills yet** that decknix is positioned to bridge. They solve overlapping problems
+on very different substrates.
 
 > **Legend:** ✅ native / first-class · ◐ partial or via workflow · ✗ absent
 >
@@ -72,9 +74,10 @@ every service, and when?"*
 | **Cost model** | Free / OSS | Free / OSS | Free beta | Paid IDE | Subscription / API | Paid (credits) | Subscription / API |
 | **Session persistence / resume** | ✅✅ resume + fork carry model, permission-mode, tags | ◐ contested | ✅ zmx reattach | ✅ | ✅ resume + fork | ✅ | ✅ resume + fork |
 
-## What makes the Agent Shell distinct
+## Where it genuinely leads
 
-Pulling the matrix together, four things are **rare or absent** everywhere else:
+Pulling the matrix together, four things are **rare or absent** everywhere else —
+these are real strengths today, not aspirations:
 
 1. **It lives in your editor.** Every other tool is a terminal, an app, a web
    workspace, or *its own* IDE. Agent Shell is a first-class Emacs citizen —
@@ -96,22 +99,61 @@ Pulling the matrix together, four things are **rare or absent** everywhere else:
    stay largely **git/PR-centric**; decknix models the *whole* footprint of a piece
    of work.
 
-## Where decknix is deliberately different (and on the roadmap)
+## Where it falls short — and what to borrow
 
-Being honest about the trade-offs:
+The honest weak spots, and where a competitor already has the better idea:
 
-- **Emacs-native is a floor and a ceiling.** If your team doesn't use Emacs, that
-  is real friction the terminal/IDE tools don't have.
-- **Not (yet) a fan-out racer.** One-click "spawn N agents in N worktrees and pick
-  the winner" is the home turf of cmux, supacode, Cursor, Codex, Claude Code's own
-  agent view, Conductor and Intent. decknix optimises for *coordinating and
-  accounting for* work rather than racing it; richer worktree-per-agent
-  orchestration is a roadmap item.
-- **Sub-agent status, resourcing tree, and timeline are in flight.** The primitives
-  exist (sub-agent discovery, the progress layer's state+attention model,
-  per-conversation links); the sidebar colourisation, the `C-c s a` resourcing
-  transient, and a swimlane timeline are the next build. Watch
-  [Sidebar Layouts](./layouts/index.md).
+- **Emacs-native is a floor *and* a ceiling.** It's the point for Emacs users, but
+  real onboarding friction for everyone else — the IDE/terminal tools have a gentler
+  on-ramp. Nothing to borrow here; just a cost to own.
+- **No one-command fan-out.** "Spawn N agents, each in its own worktree, then diff
+  and pick the winner" is the home turf of Cursor, Codex, Conductor, supacode and
+  Claude Code's `agent view`. decknix is worktree-*aware* but doesn't yet fan out.
+  **Borrow:** the worktree-per-agent launch plus a side-by-side diff/pick flow.
+- **Sub-agent status is invisible.** Sub-agents are discovered but carry no
+  lifecycle state. Team feedback from trialling cmux specifically praised its
+  per-session **"needs input vs still running"** indicator and **auto-rename by
+  conversation progress**. **Borrow both:** colourise sub-agents by state (the
+  progress layer's red/amber/green already models it) and generate a one-line
+  progress summary (à la Claude Code's agent-view summaries) to auto-name sessions.
+  This is Feature 1 of the resourcing roadmap.
+- **No in-editor verification surface.** cmux's embedded browser for PR review and
+  rendered docs is genuinely handy. decknix already ships `xwidget-webkit` and the
+  `/verify` skill — **borrow** the idea of surfacing them as a first-class
+  review/verify affordance beside the session.
+- **Sub-agents can't talk to each other.** Claude Code's experimental *agent teams*
+  give teammates a mailbox and a shared task list; decknix's sub-agents are
+  report-only. **Borrow** inter-agent coordination if multi-agent workflows deepen.
+- **Sessions aren't shareable.** Amp's referenceable, team-visible *Threads*
+  (`@T-id`) are a nice collaboration primitive; decknix sessions are local — worth
+  considering for team review visibility.
+
+## Gaps decknix is positioned to bridge
+
+Where the whole field has **white space** — and decknix already holds the primitives
+or a head start:
+
+- **Multi-human, multi-agent *governed* pairing.** Every tool here is
+  single-human-with-agents. None let *two or more people, each with their own
+  agents,* share one governed conversation — with full transcripts, durable
+  artifacts, and an explicit path from "we discussed it" to "there is a PR in the
+  right repo." decknix already specifies exactly this as the
+  **[Pair Protocol](../../../pair-protocol.md)** and has a bootstrap implementation
+  (`experiment-ai-pairing`). Promoting that to a first-class offering alongside the
+  Agent Shell would be genuinely novel in this landscape — nobody else is building
+  *collaboration through* agents, only *operation of* them.
+- **A cross-service resourcing ledger + timeline.** The `C-c s a` transient — a tree
+  of a session and its sub-agents, each with what it produced: PRs authored/reviewed,
+  **linked issues across Jira and GitHub**, worktrees, plus messaging, data, and
+  support activity — over a swimlane timeline of *when* it happened. The hub, the
+  progress layer, and per-conversation links are the raw material; no competitor
+  aggregates provenance this way.
+- **Accountability, not just fan-out.** The field optimises *starting* many agents;
+  decknix is positioned to own *accounting for* what they did — the provenance,
+  attention, and audit trail of a piece of work across every service it touched.
+
+The near-term build order (sub-agent state + colourisation → `C-c s a` resourcing
+transient → timeline) is tracked under [Sidebar Layouts](./layouts/index.md).
 
 ## The wider landscape
 
