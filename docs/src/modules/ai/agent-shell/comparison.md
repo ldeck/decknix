@@ -137,11 +137,11 @@ or a head start:
   single-human-with-agents. None let *two or more people, each with their own
   agents,* share one governed conversation — with full transcripts, durable
   artifacts, and an explicit path from "we discussed it" to "there is a PR in the
-  right repo." decknix already specifies exactly this as the
-  **[Pair Protocol](../../../pair-protocol.md)** and has a bootstrap implementation
-  (`experiment-ai-pairing`). Promoting that to a first-class offering alongside the
-  Agent Shell would be genuinely novel in this landscape — nobody else is building
-  *collaboration through* agents, only *operation of* them.
+  right repo." decknix already sketches this direction in its draft
+  **[Pair Protocol](../../../pair-protocol.md)**, and the pieces it would build on —
+  the coordination substrate, per-conversation identity, and provenance primitives —
+  are already in place. It is a genuinely open space: nobody in this landscape is
+  building *collaboration through* agents, only *operation of* them.
 - **A cross-service resourcing ledger + timeline.** The `C-c s a` transient — a tree
   of a session and its sub-agents, each with what it produced: PRs authored/reviewed,
   **linked issues across Jira and GitHub**, worktrees, plus messaging, data, and
