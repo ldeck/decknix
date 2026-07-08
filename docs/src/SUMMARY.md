@@ -42,6 +42,7 @@
     - [Integration](./modules/ai/agent-shell/integration.md)
     - [Context Awareness](./modules/ai/agent-shell/context.md)
     - [Keybindings](./modules/ai/agent-shell/keybindings.md)
+    - [How It Compares](./modules/ai/agent-shell/comparison.md)
     - [Sidebar Layouts](./modules/ai/agent-shell/layouts/index.md)
       - [Global](./modules/ai/agent-shell/layouts/global.md)
       - [Requests](./modules/ai/agent-shell/layouts/requests.md)
