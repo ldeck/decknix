@@ -15,6 +15,7 @@ let
     modules = [
       # Import all home-manager modules from the framework
       ../modules/home/options.nix
+      ../modules/home/options/cli/agent-sync.nix
       ../modules/home/options/cli/auggie.nix
       ../modules/home/options/cli/board.nix
       ../modules/home/options/cli/extensions.nix
