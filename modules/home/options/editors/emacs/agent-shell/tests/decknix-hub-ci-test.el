@@ -204,26 +204,22 @@
   (let ((icon (decknix--hub-icon "@" 'default)))
     (should-not (decknix-test--icon-display icon))))
 
-(ert-deftest decknix-hub-ci/icon-codepoint-range-boundaries ()
-  ;; Lower edge of 2600-27BF (Misc Symbols + Dingbats).
-  (should (equal '(height 0.7)
-                 (decknix-test--icon-display
-                  (decknix--hub-icon (string #x2600) 'default))))
-  ;; Upper edge of 2600-27BF.
-  (should (equal '(height 0.7)
-                 (decknix-test--icon-display
-                  (decknix--hub-icon (string #x27BF) 'default))))
-  ;; Just above 27BF — no longer matched.
-  (should-not (decknix-test--icon-display
-               (decknix--hub-icon (string #x27C0) 'default)))
-  ;; Lower edge of 1F300-1F9FF.
-  (should (equal '(height 0.7)
-                 (decknix-test--icon-display
-                  (decknix--hub-icon (string #x1F300) 'default))))
-  ;; Upper edge of 1F300-1F9FF.
-  (should (equal '(height 0.7)
-                 (decknix-test--icon-display
-                  (decknix--hub-icon (string #x1F9FF) 'default)))))
+(ert-deftest decknix-hub-ci/icon-text-symbols-not-shrunk ()
+  "Text-script glyphs used as 1-cell sidebar icons keep full size.
+Regression guard: the old codepoint-range heuristic (2600-27BF) shrank
+star/check/warning even though they render as text symbols, making
+them tiny next to full-size neighbours in the sidebar."
+  (dolist (g '("★" "✓" "✔" "⚠" "☑" "⟳"))
+    (should-not (decknix-test--icon-display (decknix--hub-icon g 'default)))))
+
+(ert-deftest decknix-hub-ci/icon-color-emoji-shrunk ()
+  "True color emoji (Unicode `emoji' script) are shrunk to fit the line.
+Covers both the high pictograph plane and the mixed 2600-27BF block, so
+the heuristic stays script-based rather than codepoint-range-based."
+  (dolist (g '("📥" "🤖" "💬" "✅" "❌" "⏳"))
+    (should (equal '(height 0.7)
+                   (decknix-test--icon-display
+                    (decknix--hub-icon g 'default))))))
 
 (ert-deftest decknix-hub-ci/icon-empty-string-propertizes-without-display ()
   ;; ch is nil -> emoji-p false -> no display, but face still applied.

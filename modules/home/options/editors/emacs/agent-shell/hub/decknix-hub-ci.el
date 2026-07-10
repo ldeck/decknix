@@ -108,17 +108,16 @@ per-repo soft patterns in addition to the global list."
 
 (defun decknix--hub-icon (str face)
   "Create a sidebar icon from STR with FACE.
-Only applies a display height property for emoji characters to prevent
-them from stretching line height.  Plain text symbols (✓, ✗, @, ⟳, etc.)
-are left at normal size for readability."
+Applies a 0.7 display-height only to true colour emoji so they do not
+stretch the line height.  Emoji are detected via the Unicode `emoji'
+script (`char-script-table'), NOT a codepoint range: the old
+2600-27BF range wrongly shrank text symbols that live in that block
+\(★ ✓ ✔ ⚠ ☑ …), rendering them tiny and hard to read next to
+full-size neighbours.  Those are `symbol' script and now stay full
+size; genuine emoji in the same block (✅ ❌ ⏳ …) are `emoji' script
+and still shrink."
   (let* ((ch (and (> (length str) 0) (aref str 0)))
-         (emoji-p (and ch (or
-                           ;; Miscellaneous Symbols & Pictographs
-                           (and (>= ch #x1F300) (<= ch #x1F9FF))
-                           ;; Emoticons, Transport, Supplemental
-                           (and (>= ch #x2600) (<= ch #x27BF))
-                           ;; Dingbats
-                           (and (>= ch #x2700) (<= ch #x27BF))))))
+         (emoji-p (and ch (eq (aref char-script-table ch) 'emoji))))
     (if emoji-p
         (propertize str 'face face 'display '(height 0.7))
       (propertize str 'face face))))
