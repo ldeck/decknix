@@ -316,12 +316,15 @@ ready PRs are never inadvertently suppressed."
                (mentioned . :json-false))))))
 
 (ert-deftest decknix-hub-attention-filter--hide-reviewed-hide-mine-hides-my-review ()
-  "State hide-mine: hides PRs where I approved or CHANGES_REQUESTED."
+  "State hide-mine: hides PRs where I approved, requested changes, or commented."
   (let ((decknix--hub-requests-hide-reviewed 'hide-mine))
     (should-not (decknix--hub-requests-reviewed-visible-p
                  '((my_review . "APPROVED") (mentioned . :json-false))))
     (should-not (decknix--hub-requests-reviewed-visible-p
-                 '((my_review . "CHANGES_REQUESTED") (mentioned . :json-false))))))
+                 '((my_review . "CHANGES_REQUESTED") (mentioned . :json-false))))
+    ;; COMMENTED now counts as "I have had my say" too.
+    (should-not (decknix--hub-requests-reviewed-visible-p
+                 '((my_review . "COMMENTED") (mentioned . :json-false))))))
 
 (ert-deftest decknix-hub-attention-filter--hide-reviewed-hide-mine-shows-colleague-approved ()
   "State hide-mine: still shows PRs where only a colleague approved."
@@ -339,16 +342,56 @@ ready PRs are never inadvertently suppressed."
     ;; Colleague approved (review_decision)
     (should-not (decknix--hub-requests-reviewed-visible-p
                  '((my_review . nil) (review_decision . "APPROVED")
-                   (mentioned . :json-false))))))
+                   (mentioned . :json-false))))
+    ;; Colleague has a standing review via others_reviewed, even when the
+    ;; aggregate review_decision is not yet conclusive (e.g. COMMENTED).
+    (should-not (decknix--hub-requests-reviewed-visible-p
+                 '((my_review . nil) (review_decision . "REVIEW_REQUIRED")
+                   (others_reviewed . t) (mentioned . :json-false))))))
 
-(ert-deftest decknix-hub-attention-filter--hide-reviewed-mentioned-always-shows ()
-  "Re-requested PRs (mentioned = t) always show in hide-mine and hide-any."
+(ert-deftest decknix-hub-attention-filter--hide-reviewed-approved-not-forced-by-request ()
+  "Being a currently-requested reviewer must NOT force an approved PR to show.
+This is the regression the blanket `mentioned' override caused: a PR a
+colleague already approved, on which I am still an individually-requested
+reviewer, was always shown under hide-any.  It must now be hidden."
+  (let ((item '((my_review . nil) (review_decision . "APPROVED")
+                (others_reviewed . t) (mentioned . t)
+                (re_requested . :json-false)
+                (comment_mentioned . :json-false)
+                (review_stale . :json-false))))
+    (let ((decknix--hub-requests-hide-reviewed 'hide-any))
+      (should-not (decknix--hub-requests-reviewed-visible-p item)))))
+
+(ert-deftest decknix-hub-attention-filter--hide-reviewed-re-request-resurfaces ()
+  "A genuine re-request (re_requested = t) resurfaces a reviewed PR."
   (let ((item '((my_review . "APPROVED") (review_decision . "APPROVED")
-                (mentioned . t))))
+                (re_requested . t))))
     (let ((decknix--hub-requests-hide-reviewed 'hide-mine))
       (should (decknix--hub-requests-reviewed-visible-p item)))
     (let ((decknix--hub-requests-hide-reviewed 'hide-any))
       (should (decknix--hub-requests-reviewed-visible-p item)))))
+
+(ert-deftest decknix-hub-attention-filter--hide-reviewed-comment-mention-resurfaces ()
+  "A direct @-mention (comment_mentioned = t) resurfaces a reviewed PR."
+  (let ((item '((my_review . nil) (review_decision . "APPROVED")
+                (others_reviewed . t) (comment_mentioned . t))))
+    (let ((decknix--hub-requests-hide-reviewed 'hide-any))
+      (should (decknix--hub-requests-reviewed-visible-p item)))))
+
+(ert-deftest decknix-hub-attention-filter--hide-reviewed-stale-resurfaces ()
+  "A stale review (review_stale = t) resurfaces the PR for another look."
+  ;; hide-mine: I approved, but the author has since pushed / resolved.
+  (let ((item '((my_review . "APPROVED") (review_stale . t))))
+    (let ((decknix--hub-requests-hide-reviewed 'hide-mine))
+      (should (decknix--hub-requests-reviewed-visible-p item)))
+    ;; hide-any: a colleague concluded, but it has since moved forward.
+    (let ((decknix--hub-requests-hide-reviewed 'hide-any))
+      (should (decknix--hub-requests-reviewed-visible-p
+               '((review_decision . "CHANGES_REQUESTED") (review_stale . t))))))
+  ;; But when the filter is nil everything shows regardless (sanity).
+  (let ((decknix--hub-requests-hide-reviewed nil))
+    (should (decknix--hub-requests-reviewed-visible-p
+             '((my_review . "APPROVED") (review_stale . :json-false))))))
 
 (ert-deftest decknix-hub-attention-filter--hide-reviewed-label ()
   "`decknix--hub-requests-reviewed-label' returns the right short string."

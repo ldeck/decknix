@@ -84,18 +84,53 @@ The `Requests (N)` header grows badges for active filters (`hub.el:2581`):
 
 ## Toggles (the `T` → Requests group)
 
+Each toggle owns one signal — no toggle does another's job, so they
+compose freely to fine-tune the list. The label beside each key in the
+transient is spelled out (not icon-only) so the state is unambiguous.
+
 | Key | Toggle | Effect |
 |-----|--------|--------|
 | `D` | Layout | cycle A → B → C → D |
 | `@` | Mention | off → me → team → me+team |
 | `F` | Age | `all` / `1d` / `3d` / `7d` / `14d` / `30d` |
 | `C` | CI | filter by CI state |
-| `b` | 🤖 bot-review | hide PRs whose latest activity is a bot (default on) |
 | `B` | bot-authors | hide → show → mentioned |
-| `c` | 💬 comments | hide PRs whose latest non-bot activity is someone else |
-| `M` | ↩/👽 replies-to-me | only PRs where a human or bot replied in my thread |
+| `b` | 🤖 bot-pending | hide PRs whose latest activity is a bot (default on) |
+| `c` | 💬 needs-my-reply | hide PRs whose latest non-bot activity is someone else, i.e. awaiting my reply (default off) |
+| `o` | ⏳ waiting-others | hide PRs where **I** posted last and am waiting on others (default on) |
+| `M` | ↩ replied-to-me | only PRs where a human replied in a thread I took part in |
+| `R` | reviewed | cycle `show` → `hide-mine` → `hide-any` (default `hide-any`) — see below |
 | `s` | sort ⇅ | flip oldest↔newest (seeds the `r` picker) |
 | `X` | ⚠ conflict | hide `mergeable = CONFLICTING` PRs (default on) |
+| `x` | 📝 draft | hide draft PRs (default on) |
+
+### The `reviewed` filter (`R`)
+
+Cycles three states so you can focus on PRs that still need a review from
+*someone*:
+
+- **`show`** — every request, regardless of review status.
+- **`hide-mine`** — hide PRs I have already reviewed **or commented on**
+  (`my_review` ∈ APPROVED / CHANGES_REQUESTED / COMMENTED). PRs only a
+  colleague has touched stay visible.
+- **`hide-any`** (default) — also hide PRs a **colleague** has engaged
+  with: another human's standing review (APPROVED / CHANGES_REQUESTED /
+  COMMENTED) or a conclusive aggregate `review_decision`. Someone else is
+  already on it.
+
+In `hide-mine` and `hide-any` a PR **resurfaces** when it genuinely wants
+you again:
+
+- a real **re-request** (you reviewed and the author re-requested you),
+- a direct **@-mention** by name in a comment or review, or
+- the review has gone **stale** — the author moved the PR forward since it
+  was reviewed (a commit landed after it, or changes were requested and
+  every inline thread is now resolved).
+
+These signals (`re_requested`, `comment_mentioned`, `others_reviewed`,
+`review_stale`) are computed by the [hub daemon](../../../../guides/decknix-hub.md)
+and read from `github-reviews.json`; being a merely still-requested
+reviewer no longer forces an already-approved PR to stay visible.
 
 ### Reviewing from the picker (`r`)
 
