@@ -376,14 +376,18 @@ Tries the hub cache first, falls back to `gh pr view'."
                 (string-trim output))))))))
 
 (defun decknix--agent-review-get-params (url)
-  "Get (MODEL COMMAND PROVIDER) for the PR at URL, aware of bot authors.
-MODEL and PROVIDER come from `decknix-agent-purpose-alist' (see
+  "Get (MODEL COMMAND PROVIDER MODE) for the PR at URL, aware of bot authors.
+MODEL, PROVIDER and MODE come from `decknix-agent-purpose-alist' (see
 `decknix-agent-purpose-resolve' / the Nix option block
 `programs.emacs.decknix.agentShell.purposes.*'): the
 `bot-pr-review' purpose is used when the PR author matches
 `decknix--hub-bot-author-p', otherwise `pr-review'.  COMMAND is
 `decknix-agent-review-bot-pr-command' for bots and
-`/review-service-pr' for humans."
+`/review-service-pr' for humans.  MODE is the session/permission
+mode-id (e.g. \"auto\") the launch should start in; nil means the
+provider default.  Both review purposes default MODE to \"auto\"
+in Nix so simple review commands run without blocking for
+per-command permission prompts."
   (let* ((author (decknix--agent-pr-author url))
          (is-bot (and author (fboundp 'decknix--hub-bot-author-p)
                       (decknix--hub-bot-author-p author)))
@@ -393,7 +397,8 @@ MODEL and PROVIDER come from `decknix-agent-purpose-alist' (see
                     "/review-service-pr")))
     (list (plist-get cfg :model)
           command
-          (plist-get cfg :provider))))
+          (plist-get cfg :provider)
+          (plist-get cfg :mode))))
 
 (defun decknix-agent-review-pr (url)
   "Start a PR review session for URL.
@@ -440,9 +445,10 @@ looks like a PR URL) and workspace (defaulting to current project)."
            (model (nth 0 params))
            (command-base (nth 1 params))
            (provider (nth 2 params))
+           (mode (nth 3 params))
            (command (format "%s %s" command-base url)))
       (decknix--agent-quickaction-start
-       name tags workspace command model provider)
+       name tags workspace command model provider mode)
       (message "Starting review: %s/%s#%s" owner repo number))))
 
 
