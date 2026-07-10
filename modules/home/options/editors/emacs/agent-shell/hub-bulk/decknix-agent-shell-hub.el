@@ -2980,8 +2980,12 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                (title (or (alist-get 'title item) ""))
                (primary-icon (decknix--hub-primary-status-icon item 'review))
                (status-str primary-icon)
-               ;; Activity icons: 🤖 bot-pending, 💬 needs-reply, ↩ replies-to-me
-               (reply-str (decknix--hub-activity-icons item))
+               ;; Activity icons: 🤖 bot-pending, 💬 needs-reply, ↩ replies-to-me.
+               ;; Reserve the 2-col slot even when empty so the repo/#num
+               ;; column stays aligned across rows (absent glyph keeps its
+               ;; space rather than collapsing).
+               (reply-str (let ((r (decknix--hub-activity-icons item)))
+                            (if (string-empty-p r) "  " r)))
                (status-str (if (string-empty-p reply-str)
                                status-str
                              (concat status-str reply-str)))
@@ -3258,9 +3262,12 @@ primary action is a no-op until a PR materialises."
             ""))
          ;; Combine signals: DTSP and activity.
          (ci-str deploy-str)
-         ;; Reply needed indicator
-         (reply-str (unless merged-p
-                      (decknix--hub-activity-icons pr)))
+         ;; Reply needed indicator.  Reserve the 2-col slot even when
+         ;; empty (incl. merged/suppressed) so the #num column stays
+         ;; aligned across rows instead of collapsing the space.
+         (reply-str (let ((r (if merged-p ""
+                               (decknix--hub-activity-icons pr))))
+                      (if (string-empty-p r) "  " r)))
          (ci-str (if (and reply-str (not (string-empty-p reply-str)))
                     (concat ci-str reply-str)
                   ci-str))
