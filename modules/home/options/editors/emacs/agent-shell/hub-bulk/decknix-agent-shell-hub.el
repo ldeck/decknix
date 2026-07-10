@@ -505,7 +505,8 @@ picker's dynamic binding unwinds.")
   :description
   (lambda ()
     (concat (decknix--hub-icon "💬" 'default)
-            "             "
+            " "
+            (format "%-15s" "needs-my-reply")
             (propertize
              (if decknix--hub-requests-hide-needs-reply "[hide]" "[show]")
              'face (if decknix--hub-requests-hide-needs-reply
@@ -520,7 +521,8 @@ picker's dynamic binding unwinds.")
   :description
   (lambda ()
     (concat (decknix--hub-icon "🤖" 'default)
-            "             "
+            " "
+            (format "%-15s" "bot-pending")
             (propertize
              (if decknix--hub-requests-hide-bot-pending "[hide]" "[show]")
              'face (if decknix--hub-requests-hide-bot-pending
@@ -534,7 +536,9 @@ picker's dynamic binding unwinds.")
   :key "M"
   :description
   (lambda ()
-    (format "↩/👽           %s"
+    (concat (decknix--hub-icon "↩" 'default)
+            " "
+            (format "%-15s" "replied-to-me")
             (propertize
              (if decknix--hub-requests-only-my-replies "[only]" "[all]")
              'face (if decknix--hub-requests-only-my-replies
@@ -549,7 +553,8 @@ picker's dynamic binding unwinds.")
   :description
   (lambda ()
     (concat (decknix--hub-icon "⏳" 'default)
-            "             "
+            " "
+            (format "%-15s" "waiting-others")
             (propertize
              (if decknix--hub-requests-hide-i-replied-last "[hide]" "[show]")
              'face (if decknix--hub-requests-hide-i-replied-last
