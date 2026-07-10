@@ -115,6 +115,29 @@ instead (see `decknix--agent-model-replay-needed-p')."
     (should-not (decknix--agent-model-replay-needed-p 'test-claude nil))
     (should-not (decknix--agent-model-replay-needed-p 'test-claude ""))))
 
+(ert-deftest decknix-agent-provider-resume-needs-primer-test ()
+  "Accessor returns the declared `:resume-needs-primer', nil when absent."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-claude
+      '(:resume-needs-primer t))
+    (decknix-agent-register-provider 'test-auggie
+      '(:model-launch-flag "--model"))
+    (should (decknix-agent-provider-resume-needs-primer 'test-claude))
+    (should (null (decknix-agent-provider-resume-needs-primer 'test-auggie)))))
+
+(ert-deftest decknix-agent-resume-primer-needed-p-test ()
+  "A primer is needed only for a provider that declares `:resume-needs-primer'.
+Auggie's native `--resume' restores context itself, so it opts out;
+Claude/Pi (separate ACP bridge) opt in.  The predicate normalises to
+a strict boolean."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-claude
+      '(:resume-needs-primer t))
+    (decknix-agent-register-provider 'test-auggie
+      '(:model-launch-flag "--model"))
+    (should (eq t (decknix--agent-resume-primer-needed-p 'test-claude)))
+    (should (eq nil (decknix--agent-resume-primer-needed-p 'test-auggie)))))
+
 (ert-deftest decknix-agent-make-config-test ()
   "Test the high-level config builder and its closure."
   (let ((decknix-agent-provider-registry nil))

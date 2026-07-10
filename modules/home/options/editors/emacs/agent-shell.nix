@@ -1576,6 +1576,23 @@ let
     ];
   };
 
+  # Resume continuation primer.  Separate-bridge providers (Claude,
+  # Pi) do not reload prior context into the model on `--resume' --
+  # only the buffer is repopulated -- so the model boots blank.  This
+  # pure helper builds the lightweight primer auto-sent as the first
+  # user message on resume; bulk owns the provider lookups,
+  # `agent-shell-subscribe-to' one-shot, and `shell-maker-submit'
+  # side-effects per AGENTS.md Rule 2 (this module only formats
+  # strings -- no deps).
+  decknix-agent-resume-primer-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-resume-primer";
+    src = ./agent-shell/resume-primer;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-resume-primer-test.el"
+    ];
+  };
+
   # PR B.84: Pure rg/jq shell-command builders carved from
   # `decknix--agent-session-rg-search-fast' /
   # `decknix--agent-session-rg-search-thorough'.  The bulk callers
@@ -2529,6 +2546,7 @@ in
           decknix-agent-batch-build-el
           decknix-agent-post-create-el
           decknix-agent-fork-el
+          decknix-agent-resume-primer-el
           decknix-agent-rg-search-command-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
@@ -2649,7 +2667,12 @@ in
             :history-file "~/.claude/history.jsonl"
             :label "Claude"
             :glyph "C"
-            :supports-workspace-root nil))
+            :supports-workspace-root nil
+            ;; `claude-agent-acp' resumes over ACP `session/new'; the
+            ;; `--resume' flag is a no-op, so the model boots with an
+            ;; empty context (only the buffer is repopulated).  Prime
+            ;; the model with a continuation message on resume.
+            :resume-needs-primer t))
 
         (decknix-agent-register-provider 'pi
           '(:make-config-fn agent-shell-pi-make-agent-config
@@ -2659,7 +2682,11 @@ in
             :sessions-dir "~/.pi/sessions"
             :label "Pi"
             :glyph "P"
-            :supports-workspace-root nil))
+            :supports-workspace-root nil
+            ;; Same as Claude: `pi-acp' does not restore prior context
+            ;; into the model on resume, so prime it with a
+            ;; continuation message once the session is ready.
+            :resume-needs-primer t))
 
         ;; Gemini CLI via `gemini --experimental-acp' (upstream
         ;; agent-shell-google.el).  Requires the `gemini' binary on PATH
@@ -3393,6 +3420,16 @@ ${optionalString cfg.tableOverlay.enable ''
         (declare-function decknix--agent-fork-handoff-message
                           "decknix-agent-fork"
                           (provider-label session-id data-path tags))
+
+        ;; Resume continuation primer -- pure builder for the first
+        ;; user message auto-sent when resuming a provider whose ACP
+        ;; bridge does not restore prior context into the model
+        ;; (Claude, Pi).  Bulk owns the prompt-ready one-shot + submit.
+        (require 'decknix-agent-resume-primer)
+        (declare-function decknix--agent-resume-primer-message
+                          "decknix-agent-resume-primer"
+                          (provider-label session-id data-path tags
+                                          last-user-message))
 
         ;; rg search command builders (PR B.84) -- pure shell-command
         ;; builders for the fast / thorough session-grep pipelines,

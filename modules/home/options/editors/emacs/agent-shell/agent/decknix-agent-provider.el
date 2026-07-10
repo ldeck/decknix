@@ -38,7 +38,18 @@ Attributes include:
                              model on the command line; the saved
                              per-conversation model is instead replayed
                              over ACP (session/set_model) after a
-                             resumed session reports ready.")
+                             resumed session reports ready.
+  :resume-needs-primer       Boolean; true when the provider's resume
+                             does NOT restore the prior conversation
+                             into the model's context (separate ACP
+                             bridges whose `--resume' flag is a no-op --
+                             Claude, Pi).  Such providers get a
+                             continuation \"primer\" auto-sent as the
+                             first user message on resume so the model
+                             knows it is continuing an existing
+                             conversation.  Auggie's native `--resume'
+                             reloads the transcript itself, so it leaves
+                             this nil.")
 
 (defvar decknix-agent-default-provider 'claude-code
   "The default AI agent provider to use for new sessions.
@@ -139,7 +150,26 @@ line; the saved per-conversation model is instead replayed over ACP
 \(`session/set_model') after a resumed session reports ready."
   (plist-get (decknix-agent-require-provider id) :model-launch-flag))
 
+(defun decknix-agent-provider-resume-needs-primer (id)
+  "Return non-nil when provider ID needs a continuation primer on resume.
+True for providers whose resume does not restore prior conversation
+into the model's context -- separate ACP bridges (Claude, Pi) whose
+`--resume' CLI flag is a no-op.  Nil for providers like auggie whose
+native `--resume' reloads the transcript into context itself."
+  (plist-get (decknix-agent-require-provider id) :resume-needs-primer))
+
 ;; -- Model persistence strategy ----------------------------------
+
+(defun decknix--agent-resume-primer-needed-p (provider-id)
+  "Return non-nil when PROVIDER-ID needs a continuation primer on resume.
+Thin predicate over `:resume-needs-primer' (see
+`decknix-agent-provider-resume-needs-primer'), the resume-time
+analogue of `decknix--agent-model-replay-needed-p'.  When true, the
+resume path auto-sends a primer as the first user message so the
+model knows it is continuing an earlier conversation; the separate
+ACP bridge (Claude, Pi) otherwise boots a fresh session with an
+empty context window."
+  (and (decknix-agent-provider-resume-needs-primer provider-id) t))
 
 (defun decknix--agent-model-replay-needed-p (provider-id model)
   "Return non-nil when MODEL must be replayed over ACP for PROVIDER-ID.
