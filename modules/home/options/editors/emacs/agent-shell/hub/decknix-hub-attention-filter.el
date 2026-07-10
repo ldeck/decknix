@@ -31,7 +31,7 @@
 ;;   `decknix--hub-requests-hide-bot-pending'   bound t    (toggle `b')
 ;;   `decknix--hub-requests-only-my-replies'    bound nil  (toggle `M')
 ;;   `decknix--hub-requests-hide-i-replied-last' bound t   (toggle `o')
-;;   `decknix--hub-requests-hide-reviewed'      bound hide-any  (cycle `v')
+;;   `decknix--hub-requests-hide-reviewed'      bound hide-any  (cycle `R')
 ;;   `decknix--hub-requests-hide-conflict'      bound t    (toggle `X')
 ;;   `decknix--hub-requests-hide-draft'         bound t    (toggle `x')
 ;;   `decknix--hub-requests-sort-reverse'       bound nil  (toggle `s')
@@ -57,7 +57,7 @@
 ;;   `decknix--hub-toggle-requests-hide-bot-pending'   (`b')
 ;;   `decknix--hub-toggle-requests-only-my-replies'    (`M')
 ;;   `decknix--hub-toggle-requests-hide-i-replied-last' (`o')
-;;   `decknix--hub-cycle-requests-hide-reviewed'        (`v')
+;;   `decknix--hub-cycle-requests-hide-reviewed'        (`R')
 ;;   `decknix--hub-toggle-requests-hide-conflict'      (`X')
 ;;   `decknix--hub-toggle-requests-hide-draft'         (`x')
 ;;   `decknix--hub-toggle-requests-sort-reverse'       (`s')
@@ -111,15 +111,16 @@ regardless.  Toggle with `o' (waiting on others).")
   "Reviewed-PR filter state for the Requests section.
 A symbol with one of these values:
   nil        — show all review requests regardless of approval status.
-  hide-mine  — hide PRs where I have already submitted APPROVED or
-               CHANGES_REQUESTED and the author has not re-requested my
-               review; PRs approved only by a colleague remain visible.
-  hide-any   — (default) hide PRs where any conclusive review outcome
-               exists: either I reviewed (my_review) or the aggregate
-               `review_decision' is APPROVED or CHANGES_REQUESTED.
-In all non-nil states, a PR where the author re-requests my review
-\(`mentioned' = t) always reappears.  Cycle with `v'.
-Legacy boolean `t' is treated as `hide-any' for backward compatibility.")
+  hide-mine  — hide PRs where I have already reviewed or commented
+               (`my_review' APPROVED/CHANGES_REQUESTED/COMMENTED); PRs
+               reviewed only by a colleague remain visible.
+  hide-any   — (default) also hide PRs a colleague has engaged with
+               (`others_reviewed', or a conclusive `review_decision') —
+               someone else is on it.
+In all non-nil states a PR reappears when I am specifically wanted again
+\(`re_requested' or `comment_mentioned') or the author has moved it
+forward since the review (`review_stale').  Cycle with `R' (the `T'
+toggles transient).  Legacy boolean `t' is treated as `hide-any'.")
 
 (defvar decknix--hub-requests-hide-reviewed-cycle
   '(nil hide-mine hide-any)
@@ -260,26 +261,47 @@ call site that renders the Requests list inherits it uniformly."
   "Return non-nil if ITEM passes the hide-reviewed filter.
 Three states drive filtering (see `decknix--hub-requests-hide-reviewed'):
   nil        — always visible; nothing is suppressed.
-  hide-mine  — hide if I reviewed (APPROVED/CHANGES_REQUESTED) and the
-               author has not re-requested my review.  PRs where only a
-               colleague concluded are still shown.
-  hide-any   — hide if any conclusive review outcome exists: either I
-               reviewed (my_review) or the aggregate review_decision is
-               APPROVED or CHANGES_REQUESTED.
-Re-request (`mentioned' = t) overrides hiding in all non-nil states.
-Legacy boolean `t' is treated identically to `hide-any'."
+  hide-mine  — hide if I have reviewed or commented
+               (`my_review' ∈ APPROVED/CHANGES_REQUESTED/COMMENTED).
+               PRs where only a colleague concluded are still shown.
+  hide-any   — also hide if another human has engaged: `others_reviewed'
+               (a colleague's standing APPROVED/CHANGES_REQUESTED/COMMENTED
+               review) or the aggregate `review_decision' is conclusive.
+
+Three signals resurface a PR regardless of the hiding state (but never
+when the filter is nil):
+  `re_requested'      — I reviewed and the author has requested me again.
+  `comment_mentioned' — I was @-mentioned by name in a comment/review.
+  `review_stale'      — the author moved the PR forward since the review
+                        (a commit landed after it, or changes were
+                        requested and all inline threads are now resolved).
+
+These replace the old blanket `mentioned' override, which force-showed
+every PR where I was merely a currently-requested reviewer — defeating
+`hide-any' for exactly the approved-by-a-colleague PRs it should hide.
+The finer signals are emitted by the hub daemon; against older data that
+predates them they read as nil, so hiding still works (approved PRs hide)
+— only the resurface refinements need the newer hub.  Legacy boolean `t'
+is treated identically to `hide-any'."
   (let* ((state        decknix--hub-requests-hide-reviewed)
-         (mentioned    (eq (alist-get 'mentioned item) t))
+         (re-requested (eq (alist-get 're_requested item) t))
+         (comment-ment (eq (alist-get 'comment_mentioned item) t))
+         (stale        (eq (alist-get 'review_stale item) t))
          (my-review    (alist-get 'my_review item))
          (decision     (alist-get 'review_decision item))
-         (i-reviewed   (member my-review '("APPROVED" "CHANGES_REQUESTED")))
-         (any-reviewed (or i-reviewed
+         (others-rev   (eq (alist-get 'others_reviewed item) t))
+         (i-reviewed   (member my-review
+                               '("APPROVED" "CHANGES_REQUESTED" "COMMENTED")))
+         (any-reviewed (or i-reviewed others-rev
                            (member decision '("APPROVED" "CHANGES_REQUESTED")))))
     (cond
-     ((null state)          t)                  ; nil: show all
-     (mentioned             t)                  ; re-requested: always show
-     ((eq state 'hide-mine) (not i-reviewed))   ; hide-mine: my reviews only
-     (t                     (not any-reviewed)))))
+     ((null state)                   t)   ; nil: show all
+     ;; Genuine re-request or a direct @-mention: I am specifically wanted.
+     ((or re-requested comment-ment) t)
+     ;; Author moved it forward since the review — bring it back to look.
+     (stale                          t)
+     ((eq state 'hide-mine)          (not i-reviewed))  ; hide-mine: mine only
+     (t                              (not any-reviewed))))) ; hide-any: anyone
 
 (defun decknix--hub-requests-conflict-visible-p (item)
   "Return non-nil if ITEM passes the conflict filter.
@@ -348,10 +370,13 @@ ready PRs are never inadvertently suppressed."
 (defun decknix--hub-cycle-requests-hide-reviewed ()
   "Cycle the Requests hide-reviewed filter: nil → hide-mine → hide-any → nil.
   nil        — show all PRs regardless of review status.
-  hide-mine  — hide only PRs I have already reviewed (APPROVED or
-               CHANGES_REQUESTED) without a re-request.
-  hide-any   — hide PRs where any conclusive review outcome exists
-               (my review OR colleague approval via review_decision)."
+  hide-mine  — hide PRs I have reviewed or commented on
+               (APPROVED/CHANGES_REQUESTED/COMMENTED).
+  hide-any   — also hide PRs a colleague has engaged with (others_reviewed
+               or a conclusive review_decision).
+A PR resurfaces on a genuine re-request, a direct @-mention, or when the
+author moves it forward since the review (see
+`decknix--hub-requests-reviewed-visible-p')."
   (interactive)
   (let* ((cycle decknix--hub-requests-hide-reviewed-cycle)
          (cur   decknix--hub-requests-hide-reviewed)
