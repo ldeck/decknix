@@ -169,6 +169,8 @@ struct ReviewRequest {
     unresolved_threads: Option<u32>, // unresolved threads where last comment author != me
     #[serde(skip_serializing_if = "Option::is_none")]
     review_decision: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    author_kind: Option<String>, // author provenance: "bot" | "bot_human" | "human"
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -414,6 +416,10 @@ struct GhLabel {
 
 #[derive(Debug, Deserialize)]
 struct GhAuthor {
+    /// Commit authors from unlinked git identities can lack a `login`, so
+    /// default to empty rather than failing deserialisation.  PR/review
+    /// authors always carry one.
+    #[serde(default)]
     login: String,
     /// GitHub marks App accounts with `is_bot: true` on `gh` output.
     /// Not always present, so we also fall back to the `[bot]` suffix
@@ -435,6 +441,39 @@ fn classify_author(author: Option<&GhAuthor>, my_login: &str) -> Actor {
         Some(a) if a.login.eq_ignore_ascii_case(my_login) => Actor::Me,
         Some(a) if a.is_bot.unwrap_or(false) || a.login.ends_with("[bot]") => Actor::Bot,
         _ => Actor::Other,
+    }
+}
+
+/// Whether a *commit* author A is a human — has a GitHub login and is not a
+/// bot.  Commits from unlinked git identities (empty login) are NOT counted
+/// as human: we can only positively attribute a human landing a commit when
+/// GitHub linked it to a non-bot account.  Conservative on purpose — better
+/// to under-flag `bot_human' than to mislabel a pure-bot PR.
+fn commit_author_is_human(a: &GhAuthor) -> bool {
+    !a.login.is_empty()
+        && !a.login.ends_with("[bot]")
+        && !a.is_bot.unwrap_or(false)
+}
+
+/// Whether any commit in COMMITS was authored by a human (see
+/// `commit_author_is_human`).  Flags a bot-opened PR that a human has since
+/// pushed to.
+fn commits_have_human(commits: &[GhCommit]) -> bool {
+    commits.iter().any(|c| c.authors.iter().any(commit_author_is_human))
+}
+
+/// Provenance class for a PR's author, driving the sidebar author glyph:
+/// "bot" (bot-opened, only bot commits), "bot_human" (bot-opened but a human
+/// has committed), or "human".  HUMAN_COMMITTED is only consulted for a
+/// bot-opened PR.
+fn pr_author_kind(author: Option<&GhAuthor>, human_committed: bool) -> &'static str {
+    let is_bot = author
+        .map(|a| a.is_bot.unwrap_or(false) || a.login.ends_with("[bot]"))
+        .unwrap_or(false);
+    if is_bot {
+        if human_committed { "bot_human" } else { "bot" }
+    } else {
+        "human"
     }
 }
 
@@ -540,6 +579,11 @@ struct GhReview {
 #[serde(rename_all = "camelCase")]
 struct GhCommit {
     committed_date: Option<String>,
+    /// Commit authors (from `gh pr view --json commits`).  Used to detect a
+    /// human landing commits on a bot-opened PR.  Absent for older payloads
+    /// or when the commit list is not requested.
+    #[serde(default)]
+    authors: Vec<GhAuthor>,
 }
 
 /// Whether another human reviewer (not me, not a bot) has a standing
@@ -742,6 +786,9 @@ struct ReviewPrDetails {
     total_threads: Option<u32>,
     unresolved_threads: Option<u32>,
     review_decision: Option<String>,
+    /// True when a human has committed to this (bot-opened) PR.  Only
+    /// meaningful for a bot author; consumed by `pr_author_kind`.
+    human_committed: Option<bool>,
 }
 
 impl Default for ReviewPrDetails {
@@ -754,6 +801,7 @@ impl Default for ReviewPrDetails {
             bot_pending: None, replies_to_me: None, bot_replies_to_me: None,
             i_replied_last: None, total_threads: None,
             unresolved_threads: None, review_decision: None,
+            human_committed: None,
         }
     }
 }
@@ -969,6 +1017,10 @@ async fn fetch_pr_ci(
                 .and_then(|rs| rs.iter().filter_map(|r| r.submitted_at.clone()).max());
             let latest_commit_ts = view.commits.as_ref()
                 .and_then(|cs| cs.iter().filter_map(|c| c.committed_date.clone()).max());
+            // Did a human land a commit on this PR?  (Only distinguishes a
+            // bot-opened PR later, via `pr_author_kind'.)
+            let human_committed = view.commits.as_deref()
+                .map(commits_have_human).unwrap_or(false);
             let total_t = threads.as_ref().map(|t| t.total).unwrap_or(0);
             let unresolved_t = threads.as_ref().map(|t| t.unresolved_to_me).unwrap_or(0);
             let review_stale = compute_review_stale(
@@ -993,6 +1045,7 @@ async fn fetch_pr_ci(
                 total_threads: threads.as_ref().map(|t| t.total),
                 unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
                 review_decision: view.review_decision,
+                human_committed: Some(human_committed),
             }
         }
         Err(_) => ReviewPrDetails {
@@ -1125,6 +1178,10 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             total_threads: details.total_threads,
             unresolved_threads: details.unresolved_threads,
             review_decision: details.review_decision,
+            author_kind: Some(
+                pr_author_kind(pr.author.as_ref(),
+                               details.human_committed.unwrap_or(false))
+                    .to_string()),
         });
     }
 
@@ -1702,6 +1759,49 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn author(login: &str, is_bot: Option<bool>) -> GhAuthor {
+        GhAuthor { login: login.to_string(), is_bot }
+    }
+    fn commit(authors: Vec<GhAuthor>) -> GhCommit {
+        GhCommit { committed_date: None, authors }
+    }
+
+    #[test]
+    fn commit_author_is_human_only_for_linked_non_bots() {
+        assert!(commit_author_is_human(&author("alice", Some(false))));
+        assert!(commit_author_is_human(&author("bob", None)));
+        // Bot by flag or by [bot] suffix -> not human.
+        assert!(!commit_author_is_human(&author("renovate", Some(true))));
+        assert!(!commit_author_is_human(&author("dependabot[bot]", None)));
+        // Unlinked identity (empty login) -> not positively human.
+        assert!(!commit_author_is_human(&author("", None)));
+    }
+
+    #[test]
+    fn commits_have_human_detects_a_human_push() {
+        let bot_only = vec![commit(vec![author("dependabot[bot]", None)])];
+        assert!(!commits_have_human(&bot_only));
+        let with_human = vec![
+            commit(vec![author("dependabot[bot]", None)]),
+            commit(vec![author("carol", Some(false))]),
+        ];
+        assert!(commits_have_human(&with_human));
+        assert!(!commits_have_human(&[]));
+    }
+
+    #[test]
+    fn pr_author_kind_three_way() {
+        let bot = author("dependabot[bot]", Some(true));
+        let human = author("dave", Some(false));
+        assert_eq!(pr_author_kind(Some(&bot), false), "bot");
+        assert_eq!(pr_author_kind(Some(&bot), true), "bot_human");
+        // A human author stays human regardless of who else committed.
+        assert_eq!(pr_author_kind(Some(&human), false), "human");
+        assert_eq!(pr_author_kind(Some(&human), true), "human");
+        // Missing author -> treated as human (no bot signal).
+        assert_eq!(pr_author_kind(None, false), "human");
+    }
 
     #[test]
     fn cache_entry_fresh_same_ts_within_ttl_is_hit() {
