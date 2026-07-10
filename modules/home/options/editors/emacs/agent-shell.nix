@@ -1617,6 +1617,12 @@ let
   decknix-agent-resourcing-el = mkEmacsTestedPackage {
     pname = "decknix-agent-resourcing";
     src = ./agent-shell/resourcing;
+    # Multi-file: the pure aggregator + the `*Agent Resources*' view
+    # (decknix-agent-resourcing-ui.el `require's the pure sibling and
+    # only reads live state via bound-and-true-p / declare-function).
+    extraSiteFiles = [
+      "decknix-agent-resourcing-ui.el"
+    ];
     packageRequires = [
       decknix-agent-subagent-state-el
       decknix-agent-url-parse-el
@@ -3488,6 +3494,12 @@ ${optionalString cfg.tableOverlay.enable ''
                           "decknix-agent-resourcing" (linked-repos))
         (declare-function decknix--agent-resource-tree
                           "decknix-agent-resourcing" (categories))
+        ;; Resourcing view (#145) -- the `C-c s a' command + `*Agent
+        ;; Resources*' buffer.  Reads live buffer-locals / hub globals,
+        ;; so it lives outside the pure aggregator.
+        (require 'decknix-agent-resourcing-ui)
+        (declare-function decknix-agent-resourcing
+                          "decknix-agent-resourcing-ui")
 
         ;; rg search command builders (PR B.84) -- pure shell-command
         ;; builders for the fast / thorough session-grep pipelines,
@@ -6050,6 +6062,9 @@ ${optionalString cfg.hub.priority.enable ''
                       (define-key map (kbd "u") 'decknix-agent-unlink-pr)
                       (define-key map (kbd "i") 'decknix-agent-session-info)
                       (define-key map (kbd "R") 'decknix-agent-session-restart)
+                      ;; C-c s a — resourcing view (#145): sub-agents +
+                      ;; linked PRs/repos for this conversation.
+                      (define-key map (kbd "a") 'decknix-agent-resourcing)
                       ;; C-c s t — session-scoped tags sub-prefix
                       (define-key tag-map (kbd "l") 'decknix-agent-tag-show)
                       (define-key tag-map (kbd "a") 'decknix-agent-tag-add)
@@ -6075,6 +6090,7 @@ ${optionalString cfg.hub.priority.enable ''
                         "C-c s u" "unlink PR / repo"
                         "C-c s i" "session info"
                         "C-c s R" "restart session"
+                        "C-c s a" "resources (sub-agents/PRs)"
                         "C-c s t"   "tags…"
                         "C-c s t l" "list / filter by tag"
                         "C-c s t a" "add tag"
