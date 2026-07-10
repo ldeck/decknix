@@ -893,6 +893,31 @@ workspace sidebar surface which sessions need attention.
   (sidebar live-view mode, pins, generic GitHub Actions Queue enrichment)
   are tracked in #142 / #141.
 
+### Resourcing View (`C-c s a`, #145 — agent resourcing Feature 2)
+- A per-**conversation** "what is this conversation touching?" view,
+  opened in a read-only `*Agent Resources*` buffer from an agent-shell
+  buffer. Aggregates the conversation's **sub-agents** (with the #144
+  liveness colour: running green / active amber / done shadow), its
+  **linked PRs** (hub-enriched by URL — CI-fail/conflict → red,
+  needs-reply/CI-running → amber, CI-pass → green), and its **linked
+  repos**, grouped by category and coloured by rolled-up attention.
+- `RET` opens a PR/repo URL, `g` refreshes, `q` quits (`special-mode`,
+  modelled on `decknix-priority`).
+- **Category-pluggable by design:** the pure aggregator
+  (`agent-shell/resourcing/decknix-agent-resourcing.el`, 13 ERT tests)
+  normalises each source into an item (`:label :url :state :attention
+  :meta`) → category (`:category :label :attention :items`) → tree
+  (`:attention :categories`), with `red > amber > green > none` rolling
+  up item→category→tree. A new source (jira, slack, worktree) is one more
+  `decknix--agent-resource-<x>` builder appended before
+  `decknix--agent-resource-tree`. It reads only normalised fields, so it
+  has no hub-gated dependency and sub-agent resourcing works with the hub
+  off. Collection + the renderer live in `decknix-agent-resourcing-ui.el`
+  (reads live buffer-locals / hub globals via `bound-and-true-p`).
+- Builds on Feature 1 (#144). Later phases (worktree-ownership,
+  jira/confluence/github-issue link types, a broader messaging/data/
+  support activity taxonomy) are tracked in #145.
+
 ### Output Formatting (`decknix-agent-table`, `decknix-agent-copy-region`)
 - The agent emits raw markdown; the comint buffer renders it literally
   (collapsed tables, `**bold**`, `### head`).  Two pure, ERT-tested
