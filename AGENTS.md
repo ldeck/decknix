@@ -132,46 +132,17 @@ cargo test --manifest-path pkgs/decknix-hub/Cargo.toml
 Before committing, always run incremental checks based on what changed:
 
 - **Nix Packages**: If you changed `Cargo.toml`, `Cargo.lock`, or source code for a package in `pkgs/`, verify the `cargoHash`/`vendorHash` by running a build of that specific derivation.
-- **Elisp Syntax**: For changes to standalone `.el` files, verify they parse and
-  byte-compile with **zero warnings**:
+- **Elisp changes** — zero-warning byte-compile, forward-declaration hygiene
+  (`declare-function` / `defvar`), heredoc `\"` vs standalone plain `"`, and a
+  **mandatory local ERT run before commit** for any function with a test file
+  under `agent-shell/tests/`. The full detail (and the reasons a clean
+  byte-compile isn't sufficient) lives in the **Emacs AGENTS.md**
+  (`modules/home/options/editors/emacs/AGENTS.md`) — follow it. In short:
   ```bash
+  # must be silent:
   emacs -Q -batch -f batch-byte-compile <file>.el
+  # any touched tested function must show `0 unexpected` before you commit
   ```
-  A clean run produces no output. Any warning line is a build risk — fix it before
-  committing. Common causes and fixes:
-  - `reference to free variable 'foo'` — add `(defvar foo)` to the forward
-    declarations block at the top of the file.
-  - `the function 'bar' is not known to be defined` — add
-    `(declare-function bar "source-file-without-extension")` to the forward
-    declarations block.
-  - Escaped quotes `\"` inside string literals — standalone `.el` files must use
-    plain `"`. Only Nix heredocs need `\"`. See **Heredoc Escaping** below.
-  - Docstring line exceeds 80 characters — wrap it.
-- **Elisp Declaration Hygiene**: Every cross-module reference must be declared at
-  the top of the calling file:
-  - Functions from other packages: `(declare-function fn-name "source-package")`
-  - Variables defined elsewhere: `(defvar var-name)` (no initial value = compiler hint only)
-  - Variables needed at runtime in tests: `(defvar var-name initial-value)` so
-    `let`-binding works dynamically (see Emacs AGENTS.md §Tests rule 2)
-  - Sidebar buffer name: always `agent-shell-workspace-sidebar-buffer-name` (forward-declared
-    as `(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")`),
-    never the literal string.
-- **Elisp Tests (MANDATORY when changing tested behaviour)**: A clean
-  byte-compile is **not** sufficient — a glyph / face / data-shape / signature
-  change compiles fine while silently diverging from its ERT suite, so the drift
-  only surfaces in the full Nix build (a wasted ~10 min cycle). Whenever you
-  touch a function that has a test file under `agent-shell/tests/`, run that
-  suite locally **before committing** and confirm `0 unexpected`:
-  ```bash
-  emacs -Q -batch \
-    -L modules/home/options/editors/emacs/agent-shell/hub/ \
-    -L modules/home/options/editors/emacs/agent-shell/tests/ \
-    -l decknix-<feature> -l decknix-<feature>-test \
-    --eval "(ert-run-tests-batch-and-exit t)"
-  ```
-  If the change is a deliberate contract change, the test edit comes **first**
-  (red → green); the local ERT run is what proves the implementation and the
-  spec agree before the Nix build re-confirms it.
 - **Nix Modules**: Verify the full system derivation builds (this catches Nix syntax errors and cross-module Elisp failures):
 
 ```bash
