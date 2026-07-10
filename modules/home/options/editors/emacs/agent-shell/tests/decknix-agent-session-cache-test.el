@@ -880,4 +880,50 @@ invalidates the other, and the same underlying scan powers both."
         (decknix--agent-session-refresh-async 'test-auggie))
       (should (= stat-count 0)))))
 
+;; -- sub-agent metadata fast path (#146) -----------------------------
+
+(ert-deftest decknix-subagent-meta-with-mtime--sets-modified-from-stat ()
+  "`modified' is derived from the float MTIME and round-trips; nil is a no-op."
+  (let* ((base '((sessionId . "s1") (created . "C") (modified . "OLD")))
+         (out (decknix--agent-subagent-meta-with-mtime base 1000000.0)))
+    ;; other fields preserved
+    (should (equal "s1" (alist-get 'sessionId out)))
+    (should (equal "C" (alist-get 'created out)))
+    ;; modified replaced, and parses back to the same instant (sub-second dropped)
+    (should-not (equal "OLD" (alist-get 'modified out)))
+    (should (= (floor 1000000.0)
+               (floor (float-time (date-to-time (alist-get 'modified out))))))
+    ;; input not mutated
+    (should (equal "OLD" (alist-get 'modified base)))
+    ;; nil mtime -> unchanged
+    (should (eq base (decknix--agent-subagent-meta-with-mtime base nil)))))
+
+(ert-deftest decknix-subagent-meta--parses-once-then-only-stats ()
+  "A streaming sub-agent parses once (permanent cache) and refreshes
+`modified' from the mtime on every call -- no repeated transcript parse."
+  (let ((decknix--agent-subagent-meta-cache (make-hash-table :test 'equal))
+        (meta-calls 0)
+        (stat-n 0))
+    (cl-letf (((symbol-function 'decknix--session-meta)
+               (lambda (_p _path)
+                 (cl-incf meta-calls)
+                 '((sessionId . "s1") (firstUserMessage . "hi") (modified . "OLD"))))
+              ((symbol-function 'decknix--session-file-mtime)
+               (lambda (_p) (cl-incf stat-n) (if (= stat-n 1) 1000.0 2000.0))))
+      (let ((r1 (decknix--agent-subagent-meta 'claude-code "/p/agent-1.jsonl"))
+            (r2 (decknix--agent-subagent-meta 'claude-code "/p/agent-1.jsonl")))
+        ;; transcript parsed exactly once despite two reads
+        (should (= meta-calls 1))
+        (should (equal "s1" (alist-get 'sessionId r1)))
+        ;; modified comes from the stat, and refreshes between calls
+        (should-not (equal "OLD" (alist-get 'modified r1)))
+        (should-not (equal (alist-get 'modified r1) (alist-get 'modified r2)))))))
+
+(ert-deftest decknix-subagent-meta--nil-when-unparseable ()
+  "When the underlying parse yields nil, so does the fast path (uncached)."
+  (let ((decknix--agent-subagent-meta-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'decknix--session-meta) (lambda (_p _path) nil))
+              ((symbol-function 'decknix--session-file-mtime) (lambda (_p) 1000.0)))
+      (should-not (decknix--agent-subagent-meta 'claude-code "/p/x.jsonl")))))
+
 (provide 'decknix-agent-session-cache-test)
