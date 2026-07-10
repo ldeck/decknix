@@ -140,7 +140,15 @@ struct ReviewRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     my_review: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "PENDING", "DISMISSED"
     #[serde(skip_serializing_if = "Option::is_none")]
-    mentioned: Option<bool>, // true when user was directly requested as reviewer (not just via team)
+    mentioned: Option<bool>, // true when user was directly requested as reviewer (not just via team) OR @-mentioned
+    #[serde(skip_serializing_if = "Option::is_none")]
+    re_requested: Option<bool>, // true when I have a prior review AND am currently requested again (genuine re-request)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    comment_mentioned: Option<bool>, // true when @-mentioned by name in a comment/review body
+    #[serde(skip_serializing_if = "Option::is_none")]
+    others_reviewed: Option<bool>, // true when another human's latest review is APPROVED/CHANGES_REQUESTED/COMMENTED
+    #[serde(skip_serializing_if = "Option::is_none")]
+    review_stale: Option<bool>, // true when a commit landed after the latest review, or CHANGES_REQUESTED with all threads resolved
     #[serde(skip_serializing_if = "Option::is_none")]
     team_requested: Option<bool>, // true when one of user's teams was requested as reviewer
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -524,6 +532,54 @@ struct GhReview {
     state: Option<String>,
 }
 
+/// A commit entry from `gh pr view --json commits`.  Only the commit
+/// timestamp is needed, to detect a push landing after the latest review
+/// (which invalidates the reviewed state — see `review_stale`).
+/// ISO-8601 UTC timestamps compare correctly with lexicographic `<`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhCommit {
+    committed_date: Option<String>,
+}
+
+/// Whether another human reviewer (not me, not a bot) has a standing
+/// review among the PR's `latestReviews'.  A COMMENTED review counts —
+/// GitHub batches inline review comments under a COMMENTED submission,
+/// so it is the carrier for "someone else is actively reviewing this".
+fn compute_others_reviewed(latest_reviews: &[GhReview], my_login: Option<&str>) -> bool {
+    latest_reviews.iter().any(|r| {
+        let is_other = match my_login {
+            Some(login) => classify_author(r.author.as_ref(), login) == Actor::Other,
+            None => r.author.as_ref()
+                .map(|a| !(a.is_bot.unwrap_or(false) || a.login.ends_with("[bot]")))
+                .unwrap_or(false),
+        };
+        is_other && matches!(r.state.as_deref(),
+            Some("APPROVED") | Some("CHANGES_REQUESTED") | Some("COMMENTED"))
+    })
+}
+
+/// Whether the reviewed state is stale — the author has moved the PR
+/// forward since it was last reviewed.  Two independent triggers:
+///   (a) a commit landed after the most recent review, or
+///   (b) changes were requested and every inline thread is now resolved.
+/// Timestamps are ISO-8601 UTC strings, which sort lexicographically, so
+/// `>' is a valid chronological comparison.
+fn compute_review_stale(
+    latest_commit_ts: Option<&str>,
+    latest_review_ts: Option<&str>,
+    review_decision: Option<&str>,
+    total_threads: u32,
+    unresolved_threads: u32,
+) -> bool {
+    let pushed_after_review = matches!(
+        (latest_commit_ts, latest_review_ts),
+        (Some(c), Some(r)) if c > r);
+    let changes_addressed = review_decision == Some("CHANGES_REQUESTED")
+        && total_threads > 0 && unresolved_threads == 0;
+    pushed_after_review || changes_addressed
+}
+
 /// Per-PR inline review thread stats used by the Tier 1 attention
 /// heuristic.  GraphQL `reviewThreads` carries the `isResolved` flag
 /// that `gh pr view --json` does not surface, so we run a small
@@ -672,6 +728,10 @@ struct ReviewPrDetails {
     mergeable: Option<String>,
     my_review: Option<String>,
     mentioned: Option<bool>,
+    re_requested: Option<bool>,
+    comment_mentioned: Option<bool>,
+    others_reviewed: Option<bool>,
+    review_stale: Option<bool>,
     team_requested: Option<bool>,
     others_requested: Option<bool>,
     needs_reply: Option<bool>,
@@ -688,6 +748,8 @@ impl Default for ReviewPrDetails {
     fn default() -> Self {
         Self {
             ci: None, mergeable: None, my_review: None, mentioned: None,
+            re_requested: None, comment_mentioned: None, others_reviewed: None,
+            review_stale: None,
             team_requested: None, others_requested: None, needs_reply: None,
             bot_pending: None, replies_to_me: None, bot_replies_to_me: None,
             i_replied_last: None, total_threads: None,
@@ -721,7 +783,7 @@ async fn fetch_pr_ci(
         "pr", "view",
         &number_s,
         "--repo", repo,
-        "--json", "statusCheckRollup,mergeable,mergeStateStatus,latestReviews,comments,reviews,reviewRequests,reviewDecision",
+        "--json", "statusCheckRollup,mergeable,mergeStateStatus,latestReviews,comments,reviews,reviewRequests,reviewDecision,commits",
     ];
     let threads = match prefetched_threads {
         Some(t) => Some(t),
@@ -748,6 +810,7 @@ async fn fetch_pr_ci(
         reviews: Option<Vec<GhReviewEntry>>,
         review_requests: Option<Vec<GhReviewRequestEntry>>,
         review_decision: Option<String>,
+        commits: Option<Vec<GhCommit>>,
     }
 
     /// A review request entry — can be a User or Team.
@@ -887,11 +950,39 @@ async fn fetch_pr_ci(
             }).unwrap_or((false, false, false, false, false, false));
             // mentioned = directly requested OR @-mentioned in a comment
             let mentioned = directly_requested || comment_mentioned;
+            // A *genuine* re-request: I already have a standing review AND
+            // the author has requested me again.  GitHub only re-adds a
+            // reviewer to the request list once they have reviewed, so
+            // `directly_requested && my_review.is_some()' distinguishes a
+            // real re-request from merely being an as-yet-unreviewed
+            // requested reviewer (which is true for most of the queue and
+            // must NOT force a reviewed PR back into view).
+            let re_requested = directly_requested && my_review.is_some();
+            // Has another human (not me, not a bot) left a standing review?
+            let others_reviewed = view.latest_reviews.as_deref()
+                .map(|revs| compute_others_reviewed(revs, my_login))
+                .unwrap_or(false);
+            // Is the reviewed state stale — has the author moved the PR
+            // forward since it was reviewed?  The most recent review and
+            // commit timestamps drive it (ISO-8601 UTC, so lexicographic).
+            let latest_review_ts = view.reviews.as_ref()
+                .and_then(|rs| rs.iter().filter_map(|r| r.submitted_at.clone()).max());
+            let latest_commit_ts = view.commits.as_ref()
+                .and_then(|cs| cs.iter().filter_map(|c| c.committed_date.clone()).max());
+            let total_t = threads.as_ref().map(|t| t.total).unwrap_or(0);
+            let unresolved_t = threads.as_ref().map(|t| t.unresolved_to_me).unwrap_or(0);
+            let review_stale = compute_review_stale(
+                latest_commit_ts.as_deref(), latest_review_ts.as_deref(),
+                view.review_decision.as_deref(), total_t, unresolved_t);
             ReviewPrDetails {
                 ci,
                 mergeable,
                 my_review,
                 mentioned: Some(mentioned),
+                re_requested: Some(re_requested),
+                comment_mentioned: Some(comment_mentioned),
+                others_reviewed: Some(others_reviewed),
+                review_stale: Some(review_stale),
                 team_requested: Some(team_requested),
                 others_requested: Some(others_requested),
                 needs_reply: Some(needs_reply),
@@ -1020,6 +1111,10 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             mergeable: details.mergeable,
             my_review: details.my_review,
             mentioned: details.mentioned,
+            re_requested: details.re_requested,
+            comment_mentioned: details.comment_mentioned,
+            others_reviewed: details.others_reviewed,
+            review_stale: details.review_stale,
             team_requested: details.team_requested,
             others_requested: details.others_requested,
             needs_reply: details.needs_reply,
@@ -1639,5 +1734,58 @@ mod tests {
         let now = Instant::now();
         let inserted = now.checked_sub(Duration::from_secs(300)).unwrap();
         assert!(!cache_entry_fresh("t1", "t1", inserted, now, Duration::from_secs(300)));
+    }
+
+    fn review(login: &str, is_bot: bool, state: &str) -> GhReview {
+        GhReview {
+            author: Some(GhAuthor { login: login.to_string(), is_bot: Some(is_bot) }),
+            state: Some(state.to_string()),
+        }
+    }
+
+    #[test]
+    fn others_reviewed_true_when_colleague_has_standing_review() {
+        let revs = [review("alice", false, "APPROVED")];
+        assert!(compute_others_reviewed(&revs, Some("ldeck")));
+        let revs = [review("bob", false, "COMMENTED")];
+        assert!(compute_others_reviewed(&revs, Some("ldeck")));
+    }
+
+    #[test]
+    fn others_reviewed_ignores_me_and_bots() {
+        // My own review is not "others".
+        assert!(!compute_others_reviewed(&[review("ldeck", false, "APPROVED")], Some("ldeck")));
+        // A bot's review is not a human reviewer.
+        assert!(!compute_others_reviewed(&[review("copilot[bot]", true, "COMMENTED")], Some("ldeck")));
+        // A non-conclusive/pending state does not count.
+        assert!(!compute_others_reviewed(&[review("alice", false, "PENDING")], Some("ldeck")));
+        assert!(!compute_others_reviewed(&[], Some("ldeck")));
+    }
+
+    #[test]
+    fn review_stale_true_when_commit_lands_after_review() {
+        assert!(compute_review_stale(
+            Some("2026-07-10T05:00:00Z"), Some("2026-07-10T03:00:00Z"),
+            Some("APPROVED"), 0, 0));
+    }
+
+    #[test]
+    fn review_stale_false_when_review_is_newest() {
+        assert!(!compute_review_stale(
+            Some("2026-07-10T03:00:00Z"), Some("2026-07-10T05:00:00Z"),
+            Some("APPROVED"), 3, 1));
+        // No review yet → never stale even if commits exist.
+        assert!(!compute_review_stale(Some("2026-07-10T05:00:00Z"), None, None, 0, 0));
+    }
+
+    #[test]
+    fn review_stale_true_when_changes_requested_and_all_threads_resolved() {
+        assert!(compute_review_stale(None, None, Some("CHANGES_REQUESTED"), 5, 0));
+        // Still-open threads → not addressed yet.
+        assert!(!compute_review_stale(None, None, Some("CHANGES_REQUESTED"), 5, 2));
+        // No threads at all → nothing to have been addressed.
+        assert!(!compute_review_stale(None, None, Some("CHANGES_REQUESTED"), 0, 0));
+        // Approved (not changes-requested) → thread resolution is irrelevant.
+        assert!(!compute_review_stale(None, None, Some("APPROVED"), 5, 0));
     }
 }
