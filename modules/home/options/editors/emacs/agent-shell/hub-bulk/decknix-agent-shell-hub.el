@@ -71,6 +71,7 @@
 (declare-function decknix--hub-ci-icon "decknix-hub-ci")
 (declare-function decknix--hub-ci-classify "decknix-hub-ci")
 (declare-function decknix--hub-primary-status-icon "decknix-hub-icons")
+(declare-function decknix--hub-author-icon "decknix-hub-icons")
 
 (defvar decknix--hub-display-mode)
 (defvar decknix--sidebar-requests-display-mode)
@@ -2978,8 +2979,12 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                (repo (car (last (split-string repo-full "/"))))
                (number (alist-get 'number item))
                (title (or (alist-get 'title item) ""))
+               ;; Author provenance column: π bot / bold Ω bot+human / Ω
+               ;; human — precedes the state glyph so the leading pair reads
+               ;; "who opened it, what state it's in".
+               (author-icon (decknix--hub-author-icon item))
                (primary-icon (decknix--hub-primary-status-icon item 'review))
-               (status-str primary-icon)
+               (status-str (concat author-icon primary-icon))
                ;; Activity icons: 🤖 bot-pending, 💬 needs-reply, ↩ replies-to-me.
                ;; Reserve the 2-col slot even when empty so the repo/#num
                ;; column stays aligned across rows (absent glyph keeps its
@@ -3056,7 +3061,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                                     primary-icon label-str
                                     (if draft (propertize short-title 'face 'font-lock-comment-face) short-title))))
                          ('B ;; Scoped
-                          (format "%s %s%s %s"
+                          (format "%s%s %s%s %s"
+                                  author-icon
                                   primary-icon
                                   mention-str reply-str
                                   (if draft (propertize short-title 'face 'font-lock-comment-face) short-title)))
