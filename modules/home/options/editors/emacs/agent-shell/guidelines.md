@@ -1,4 +1,4 @@
-# Augment Agent Guidelines (User-level)
+# Agent Guidelines (User-level)
 
 These rules apply globally across ALL workspaces. Workspace-level
 AGENTS.md files may add project-specific rules but should not need
