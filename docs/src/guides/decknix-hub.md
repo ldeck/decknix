@@ -202,7 +202,7 @@ All state is stored in `~/.config/decknix/hub/`:
 
 | File | Content |
 |------|---------|
-| `github-reviews.json` | PR reviews needing your attention |
+| `github-reviews.json` | PR reviews needing your attention (per-PR attention signals — `my_review`, `others_reviewed`, `re_requested`, `comment_mentioned`, `review_stale`, `review_decision` — drive the sidebar's [reviewed filter](../modules/ai/agent-shell/layouts/requests.md#the-reviewed-filter-r)) |
 | `github-wip.json` | Your open PRs with CI status and branches |
 | `jira-tasks.json` | Jira tasks assigned to you |
 | `teamcity-builds.json` | TeamCity build status for WIP branches |
