@@ -82,7 +82,7 @@ prefix — no decknix-specific in-buffer binding. The agent-namespaced
 | `c` | Pick & insert a slash command |
 | `n` | Create new command |
 | `e` | Edit existing command |
-| `r` | Review PR (quick action) |
+| `r` | Review PR by URL (quick action; launches in the `pr-review` purpose's `auto` mode) |
 | `B` | Batch process (multi-session launcher) |
 | `l` | Link PR to session |
 | `L` | Link repo+branch to session (direct-push repos) |
