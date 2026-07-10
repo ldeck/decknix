@@ -78,12 +78,15 @@ than a human batch."
             ((symbol-function 'decknix--hub-bot-author-p) (lambda (_) t))
             (decknix-agent-purpose-alist
              '((pr-review     . (:provider auggie      :model "reg-model"))
-               (bot-pr-review . (:provider claude-code :model "bot-model"))))
+               (bot-pr-review . (:provider claude-code :model "bot-model"
+                                 :mode "auto"))))
             (decknix-agent-review-bot-pr-command "/bot-cmd"))
     (let ((params (decknix--agent-review-get-params "url")))
       (should (equal "bot-model"    (nth 0 params)))
       (should (equal "/bot-cmd"     (nth 1 params)))
-      (should (eq    'claude-code   (nth 2 params))))))
+      (should (eq    'claude-code   (nth 2 params)))
+      ;; MODE is threaded through so the launch starts in it (not default).
+      (should (equal "auto"         (nth 3 params))))))
 
 (ert-deftest decknix-agent-review-bot--get-params-falls-back-to-regular ()
   "Falls back to the `pr-review' purpose for non-bot authors.
@@ -91,12 +94,14 @@ Provider must come from `pr-review', not `bot-pr-review'."
   (cl-letf (((symbol-function 'decknix--agent-pr-author) (lambda (_) "human"))
             ((symbol-function 'decknix--hub-bot-author-p) (lambda (_) nil))
             (decknix-agent-purpose-alist
-             '((pr-review     . (:provider auggie      :model "reg-model"))
+             '((pr-review     . (:provider auggie      :model "reg-model"
+                                 :mode "auto"))
                (bot-pr-review . (:provider claude-code :model "bot-model")))))
     (let ((params (decknix--agent-review-get-params "url")))
       (should (equal "reg-model"          (nth 0 params)))
       (should (equal "/review-service-pr" (nth 1 params)))
-      (should (eq    'auggie              (nth 2 params))))))
+      (should (eq    'auggie              (nth 2 params)))
+      (should (equal "auto"               (nth 3 params))))))
 
 (provide 'decknix-agent-review-bot-test)
 ;;; decknix-agent-review-bot-test.el ends here

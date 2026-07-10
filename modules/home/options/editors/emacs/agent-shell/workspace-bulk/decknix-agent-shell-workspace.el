@@ -2295,12 +2295,13 @@ preventing extra splits when called from the sidebar."
              (model (nth 0 params))
              (command (format "%s %s" (nth 1 params) url))
              (provider (nth 2 params))
+             (mode (nth 3 params))
              ;; Target main window to avoid sidebar splits
              (main (window-main-window (selected-frame))))
         (when (and main (window-live-p main))
           (select-window main))
         (decknix--agent-quickaction-start
-         name tags workspace command model provider)
+         name tags workspace command model provider mode)
         (message "Starting review: %s/%s#%s" owner repo number)))))
 
 ;; PR B.51: `decknix--hub-review-ready-requests' and
