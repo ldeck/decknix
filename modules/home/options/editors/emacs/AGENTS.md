@@ -225,6 +225,38 @@ Conventions:
    breaks live toggle refresh because the actual buffer name has a
    capital `A` / space / capital `S` — easy to mis-spell.
 
+## Transients — single-key exit (required)
+
+Every `transient-define-prefix` MUST be exitable in **one keypress**. The
+user should never have to hammer `ESC ESC ESC` to escape, especially out of
+a nested transient (a submenu opened from another transient).
+
+Rules for every prefix we define:
+
+- Bind **`q`** to `transient-quit-all` (NOT `transient-quit-one`).
+  `-one` pops a single level, so from a submenu the user must press it once
+  per level; `-all` tears the whole stack down at once.
+- Ensure **`C-g`** also fully exits. Transient binds `C-g` to
+  `transient-quit-one` by default, so add an explicit
+  `("C-g" ... transient-quit-all)` (or set it in the prefix's keymap) on any
+  prefix that can be reached as a submenu.
+- Put both in the prefix's trailing group so they are always present, e.g.:
+
+  ```elisp
+  ["" ("q"   "Quit"  transient-quit-all)
+      ("C-g" "Quit"  transient-quit-all :transient nil)]
+  ```
+
+- A suffix that opens a **child** transient does not need its own quit — the
+  child carries the group above — but the child MUST still use
+  `transient-quit-all` so `q`/`C-g` returns the user all the way out, not
+  back to the parent menu.
+
+When editing an existing prefix, migrate any top-level `q →
+transient-quit-one` to `transient-quit-all`. Reserve `transient-quit-one`
+only for an explicit, labelled "Back" affordance that is clearly distinct
+from Quit.
+
 ## Package Sourcing
 
 ```
