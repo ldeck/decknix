@@ -337,6 +337,28 @@ The largest module (~4400 lines). Key subsystems:
   Mode is applied by baking `:default-session-mode-id` into the session config;
   only providers that declare that key (today `claude-code`) honour it —
   Auggie/Pi ignore a stray mode, so it can never break a launch.
+- **Resume continuation primer**: auggie's native `--resume` reloads the prior
+  transcript into the *model's* context, so a resumed auggie session already
+  knows the conversation. The separate-bridge providers (Claude via
+  `claude-agent-acp`, Pi via `pi-acp`) do **not** — their `--resume` flag is a
+  no-op, the ACP session starts on a fresh `session/new`, and only the Emacs
+  **buffer** is repopulated from disk (`decknix--agent-session-prepopulate`).
+  The model itself boots with an empty context window, so `/show-context` and
+  the agent behave as if there were no prior session. To close that gap,
+  `decknix--agent-session-resume--new` auto-sends a lightweight **primer** as the
+  first user message once the resumed session reports ready — mirroring the fork
+  hand-off (`decknix--agent-resume-primer-on-ready` → `shell-maker-submit`). The
+  primer tells the model it is continuing an ongoing conversation, points it at
+  the transcript file (so it reloads context lazily rather than pasting it
+  inline and bloating the prompt), includes the last user turn as a grounding
+  cue, and asks it to summarise where things left off and wait. Gated by the
+  per-provider `:resume-needs-primer` flag (set on `claude-code` + `pi`; pure
+  predicate `decknix--agent-resume-primer-needed-p` in `decknix-agent-provider.el`)
+  and the `decknix-agent-resume-primer-enable` defcustom (default `t`). The pure
+  message builder is carved + ERT-tested in
+  `agent-shell/resume-primer/decknix-agent-resume-primer.el`. Follow-up (#143):
+  resume via ACP `session/load` so the transcript is restored natively into the
+  model instead of re-read by it.
 
 ## Agent Providers
 
