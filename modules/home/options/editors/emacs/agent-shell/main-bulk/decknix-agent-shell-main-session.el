@@ -66,6 +66,18 @@
   "Default number of recent exchanges to show when resuming a session.
 Use C-u prefix with the session picker to override.")
 
+(defcustom decknix-agent-resume-primer-enable t
+  "When non-nil, prime resumed sessions that need a continuation cue.
+Providers whose ACP bridge does not restore prior context into the
+model on resume (Claude, Pi -- see
+`decknix--agent-resume-primer-needed-p') get a lightweight primer
+auto-sent as the first user message so the model knows it is
+continuing an earlier conversation and can reload the transcript.
+Set to nil to resume silently (the buffer still shows restored
+history; only the model-facing primer is suppressed)."
+  :type 'boolean
+  :group 'decknix)
+
 ;; Provider abstraction.
 (require 'decknix-agent-provider)
 (declare-function decknix-agent-require-provider "decknix-agent-provider")
@@ -198,6 +210,12 @@ Use C-u prefix with the session picker to override.")
 (declare-function decknix--agent-fork-handoff-message
                   "decknix-agent-fork"
                   (provider-label session-id data-path tags))
+(declare-function decknix--agent-resume-primer-message
+                  "decknix-agent-resume-primer"
+                  (provider-label session-id data-path tags
+                                  last-user-message))
+(declare-function decknix--agent-resume-primer-needed-p
+                  "decknix-agent-provider" (provider-id))
 (declare-function decknix-agent-provider-sessions-dir
                   "decknix-agent-provider" (id))
 (declare-function decknix-agent-provider-session-file-extension
@@ -760,6 +778,38 @@ their model is already on the command line (see
                     :model-id model-id)))))))
     token))
 
+(defun decknix--agent-resume-primer-on-ready (shell-buf primer)
+  "Auto-send PRIMER as the first user message in SHELL-BUF once ready.
+The resume-time analogue of `decknix--agent-model-replay-on-ready':
+for providers whose bridge does not restore prior context into the
+model on resume (Claude, Pi), PRIMER is a short continuation message
+\(built by `decknix--agent-resume-primer-message') that tells the
+model it is resuming an earlier conversation and points it at the
+transcript.  Subscribes to the one-shot `prompt-ready' event and then
+submits PRIMER via `shell-maker-submit', mirroring the fork hand-off
+send path (`decknix-agent-session-fork').
+
+Fires exactly once even though `prompt-ready' recurs on every prompt."
+  (let ((done nil)
+        (token nil))
+    (setq token
+          (agent-shell-subscribe-to
+           :shell-buffer shell-buf
+           :event 'prompt-ready
+           :on-event
+           (lambda (_event)
+             (unless done
+               (setq done t)
+               (when token
+                 (agent-shell-unsubscribe :subscription token))
+               (when (and (buffer-live-p shell-buf)
+                          (stringp primer)
+                          (not (string-empty-p primer)))
+                 (with-current-buffer shell-buf
+                   (goto-char (point-max))
+                   (shell-maker-submit :input primer)))))))
+    token))
+
 (defun decknix--agent-session-resume--new (session-id history-count
                                            &optional display-name
                                            workspace conv-key
@@ -848,6 +898,38 @@ dedupes against live buffers before calling here."
     (when (and (buffer-live-p shell-buf)
                (decknix--agent-model-replay-needed-p provider saved-model))
       (decknix--agent-model-replay-on-ready shell-buf saved-model))
+    ;; Continuation primer for providers whose ACP bridge does NOT
+    ;; restore prior context into the model on resume (Claude, Pi --
+    ;; their `--resume' flag is a no-op, so the model boots on a fresh
+    ;; `session/new' even though the BUFFER is repopulated from disk).
+    ;; Auggie's native `--resume' reloads the transcript itself, so it
+    ;; declares no `:resume-needs-primer' and never reaches here.  We
+    ;; build the primer synchronously (one JSON read for the last turn)
+    ;; and auto-send it once the resumed session reports ready, so the
+    ;; model knows it is continuing an earlier conversation.  Follow-up
+    ;; (#143): resume via ACP `session/load' so the transcript is
+    ;; restored natively instead of re-read by the model.
+    (when (and (buffer-live-p shell-buf)
+               decknix-agent-resume-primer-enable
+               (decknix--agent-resume-primer-needed-p provider))
+      (let* ((turns (ignore-errors
+                      (decknix--agent-session-extract-all-turns session-id)))
+             ;; Turns are oldest-first; the tail is the most recent
+             ;; exchange, whose `car' is the last user message.
+             (last-user (car (car (last turns))))
+             (data-path (decknix--agent-fork-source-data-path
+                         (decknix-agent-provider-sessions-dir provider)
+                         (decknix-agent-provider-session-file-extension
+                          provider)
+                         session-id))
+             (primer (decknix--agent-resume-primer-message
+                      (decknix-agent-provider-label provider)
+                      session-id data-path
+                      (and conv-key
+                           (decknix--agent-tags-for-conv-key conv-key))
+                      last-user)))
+        (when primer
+          (decknix--agent-resume-primer-on-ready shell-buf primer))))
     ;; Use a timer to rename and prepopulate once the process is ready.
     (let ((sid session-id)
           (n history-count)
