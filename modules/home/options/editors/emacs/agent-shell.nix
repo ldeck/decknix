@@ -1593,6 +1593,21 @@ let
     ];
   };
 
+  # Sub-agent liveness state derivation (#144, agent resourcing
+  # Feature 1).  Pure ladder over transcript mtime + parent liveness
+  # (running / active / done) so the sidebar can colourise sub-agent
+  # rows instead of the flat `shadow' face.  Render side-effects stay
+  # in workspace-bulk per AGENTS.md Rule 2; this module only decides
+  # (no deps beyond built-in time-date).
+  decknix-agent-subagent-state-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-subagent-state";
+    src = ./agent-shell/subagent-state;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-subagent-state-test.el"
+    ];
+  };
+
   # PR B.84: Pure rg/jq shell-command builders carved from
   # `decknix--agent-session-rg-search-fast' /
   # `decknix--agent-session-rg-search-thorough'.  The bulk callers
@@ -2547,6 +2562,7 @@ in
           decknix-agent-post-create-el
           decknix-agent-fork-el
           decknix-agent-resume-primer-el
+          decknix-agent-subagent-state-el
           decknix-agent-rg-search-command-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
@@ -3430,6 +3446,16 @@ ${optionalString cfg.tableOverlay.enable ''
                           "decknix-agent-resume-primer"
                           (provider-label session-id data-path tags
                                           last-user-message))
+
+        ;; Sub-agent liveness state (#144) -- pure ladder consumed by
+        ;; the sidebar sub-agent row renderer (workspace-bulk) to
+        ;; colourise running / active / done sub-agents.
+        (require 'decknix-agent-subagent-state)
+        (declare-function decknix--agent-subagent-state
+                          "decknix-agent-subagent-state"
+                          (subagent now &optional parent-live-p))
+        (declare-function decknix--agent-subagent-attention
+                          "decknix-agent-subagent-state" (state))
 
         ;; rg search command builders (PR B.84) -- pure shell-command
         ;; builders for the fast / thorough session-grep pipelines,
