@@ -788,6 +788,8 @@ The `decknix--context-update-header` function delegates to the unified header
   - **Live**: `d` display mode, `H` hidden, `S` quick-switch,
     `N` repo-name cap (short/medium/full),
     `E` PRs (4-way cycle: off/PR/pipeline/both),
+    `G` sub-agents (`[all]` ↔ `[running]` — hide finished (`done`)
+    sub-agent rows; default `[all]`, #144),
     `y` symbol style (ascii/emoji), `t` tile (cycles desired tile
     count `off → 2 → 3 → 4 → off`; the count is persisted via
     `decknix--sidebar-state-file` and auto-applied on every sidebar
@@ -1060,7 +1062,16 @@ workspace sidebar surface which sessions need attention.
 
 ### Planned Features
 
-- **Sub-agent tree** — Show spawned sub-agents as children in sidebar (#95) (Planned)
+- **Sub-agent tree** — Show spawned sub-agents as children in sidebar (#95) (Planned).
+  Sub-agent rows (`↳` under a Live session, Claude only) are colourised by a
+  derived liveness state (#144, agent resourcing Feature 1): `running` (green,
+  transcript written within `decknix-agent-subagent-running-window` under a live
+  parent) / `active` (amber, within `-active-window`) / `done` (shadow). State is
+  a pure, ERT-tested ladder over transcript mtime + parent liveness
+  (`agent-shell/subagent-state/decknix-agent-subagent-state.el`); `failed` is
+  reserved but not emitted (`agent-deaths.log` is process-level, not joinable to
+  a sub-agent). The `G` Live toggle hides `done` rows. Next: `C-c s a` resourcing
+  transient (Feature 2).
 - **Hub: Slack adapter** — Unread mentions requiring follow-up (Planned)
 - **Hub: Cross-linking** — Associate sessions with work items (reviews, tasks) (Planned)
 - **Hub: Expandable Recent** — Expand a saved session to see related work items (Planned)
