@@ -2954,11 +2954,15 @@ Returns one of:
         ;; picker's display order would ignore the let-bound
         ;; sort flag even though the prompt hint correctly
         ;; reflects it.
+        ;; REQUIRE-MATCH is nil (not t) so a typed value that matches no
+        ;; candidate is returned verbatim — this is what lets the caller
+        ;; treat a pasted PR URL that isn't in the list as an ad-hoc
+        ;; review target (see the RET branch in the requests picker).
         (let ((choice (minibuffer-with-setup-hook setup-fn
                         (completing-read full-prompt
                           (decknix--agent-unsorted-table
                            (mapcar #'car entries))
-                          nil t)))
+                          nil nil)))
               (sel decknix--hub-picker-captured-selections))
           (setq decknix--hub-picker-captured-selections nil)
           (cond
@@ -3151,13 +3155,24 @@ Interactively: \\[universal-argument] N r limits to N items;
                     (decknix--hub-launch-review-items
                      items (eq choice ?s))))
                 (throw 'decknix--req-done nil))
-               ;; RET: hand off to the rich action transient.
+               ;; RET: hand off to the rich action transient.  When the
+               ;; typed text matches no candidate (REQUIRE-MATCH is nil),
+               ;; treat it as an ad-hoc PR URL and start a review directly
+               ;; so `r' can review any PR, not only the ones already in
+               ;; the requests list.  `decknix--nav-hub-start-review'
+               ;; validates the URL and messages on a bad one.
                (t
                 (let ((item (cdr (assoc (car result) entries))))
-                  (when item
+                  (cond
+                   (item
                     (let ((tagged (cons (cons 'decknix-type 'review) item)))
                       (decknix--nav-hub-item-actions tagged)))
-                  (throw 'decknix--req-done nil)))))))))))
+                   ((and (stringp (car result))
+                         (not (string-empty-p
+                               (string-trim (car result)))))
+                    (decknix--nav-hub-start-review
+                     (string-trim (car result))))))
+                (throw 'decknix--req-done nil))))))))))
 
 (defun decknix-sidebar-nav-wip-consult ()
   "Pick a WIP PR via consult completion with filtering."

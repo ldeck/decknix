@@ -97,6 +97,14 @@ The `Requests (N)` header grows badges for active filters (`hub.el:2581`):
 | `s` | sort ⇅ | flip oldest↔newest (seeds the `r` picker) |
 | `X` | ⚠ conflict | hide `mergeable = CONFLICTING` PRs (default on) |
 
+### Reviewing from the picker (`r`)
+
+`r` opens the Requests picker (consult). Select a row to act on it, or —
+because the picker no longer requires a match — **paste a PR URL that
+isn't in the list** and press `RET` to review it directly. The review
+launches through the same path as the `C-c A c r` quick action, so it
+inherits the `pr-review` purpose's provider / model / `auto` mode.
+
 ## Source
 
 - Renderer + layout cycle: `agent-shell/hub-bulk/decknix-agent-shell-hub.el:2563`
