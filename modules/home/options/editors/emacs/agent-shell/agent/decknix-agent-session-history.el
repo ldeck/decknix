@@ -86,6 +86,8 @@
 ;; `decknix-agent-session-cache' (not required here to avoid a load
 ;; cycle -- it is present at runtime in the daemon).
 (declare-function decknix--session-meta "decknix-agent-session-cache")
+(declare-function decknix--agent-subagent-meta
+                  "decknix-agent-session-cache" (provider-id path))
 
 (defvar decknix--agent-session-file-cache (make-hash-table :test 'equal)
   "Memo of resolved multi-project session-transcript paths.
@@ -396,8 +398,11 @@ to the main session transcript."
               (let* ((files (directory-files sub-dir t (concat ".*" ext "$")))
                      (subagents nil))
                 (dolist (f files)
-                  ;; Parse metadata (using the mtime-keyed cache)
-                  (let ((data (decknix--session-meta p-id f)))
+                  ;; Parse metadata via the sub-agent fast path (#146):
+                  ;; immutable fields cached permanently by path, `modified'
+                  ;; from the file mtime -- no per-paint `jq' re-parse for a
+                  ;; streaming sub-agent.
+                  (let ((data (decknix--agent-subagent-meta p-id f)))
                     (when data (push data subagents))))
                 (sort subagents
                       (lambda (a b)

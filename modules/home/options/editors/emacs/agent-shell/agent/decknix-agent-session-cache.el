@@ -320,6 +320,55 @@ Returns nil when PATH does not exist."
               data))))))
 
 ;; ---------------------------------------------------------------------------
+;; Sub-agent metadata fast path (#146)
+;; ---------------------------------------------------------------------------
+;;
+;; The sidebar walks a session's `subagents/' dir on every paint and, for a
+;; STREAMING sub-agent, the transcript's mtime bumps on every token so the
+;; mtime cache never hits -- re-spawning `jq' per file per paint was the
+;; dominant main-thread stall (see `decknix--session-meta-reparse-throttle').
+;; But a sub-agent transcript's identity fields (sessionId / created /
+;; firstUserMessage, from the immutable first line) never change, so we parse
+;; them ONCE and cache permanently by path; only `modified' is refreshed, and
+;; from the file mtime (a stat) rather than a re-parse.  No subprocess on the
+;; hot path once a file has been seen.
+
+(defvar decknix--agent-subagent-meta-cache
+  (make-hash-table :test 'equal :size 256)
+  "Permanent immutable-field cache for sub-agent metadata, keyed by path.
+Value is the alist last returned by `decknix--session-meta' for that path.
+Never invalidated by mtime -- the transcript's first line is immutable, so
+a streaming sub-agent no longer re-parses on every sidebar paint.  Cleared
+only on daemon reload.")
+
+(defun decknix--agent-subagent-meta-with-mtime (base mtime)
+  "Return BASE metadata with `modified' set from MTIME (a float-time).
+The on-disk mtime is fresher than the last-parsed transcript timestamp and
+free to read, and drives sub-agent liveness.  MTIME nil -> BASE unchanged.
+Does not mutate BASE."
+  (if (null mtime)
+      base
+    (cons (cons 'modified (format-time-string "%Y-%m-%dT%H:%M:%S%z"
+                                              (seconds-to-time mtime)))
+          (seq-remove (lambda (kv) (eq (car-safe kv) 'modified)) base))))
+
+(defun decknix--agent-subagent-meta (provider-id path)
+  "Return sub-agent metadata for PATH without re-parsing a streaming file.
+Immutable fields are parsed once (via `decknix--session-meta', which may
+already be a cache hit) and cached permanently by PATH; `modified' is
+refreshed from the file mtime on every call.  Returns nil when PATH is
+missing or unparseable."
+  (when (and path (stringp path))
+    (let ((base (or (gethash path decknix--agent-subagent-meta-cache)
+                    (let ((parsed (decknix--session-meta provider-id path)))
+                      (when parsed
+                        (puthash path parsed decknix--agent-subagent-meta-cache))
+                      parsed))))
+      (when base
+        (decknix--agent-subagent-meta-with-mtime
+         base (decknix--session-file-mtime path))))))
+
+;; ---------------------------------------------------------------------------
 ;; Persistence
 ;; ---------------------------------------------------------------------------
 
