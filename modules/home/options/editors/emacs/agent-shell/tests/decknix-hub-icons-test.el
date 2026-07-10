@@ -368,6 +368,42 @@ Stream-based ladder still applies."
                  (decknix--hub-activity-icons
                   '((bot_pending . t))))))
 
+;; -- author-icon: bot / bot+human / human provenance --------------
+
+(ert-deftest decknix-hub-icons--author-icon-bot ()
+  "author_kind \"bot\" -> π (bot-opened, only bot commits)."
+  (should (equal "π" (decknix-test--icon-glyph
+                      (decknix--hub-author-icon '((author_kind . "bot")))))))
+
+(ert-deftest decknix-hub-icons--author-icon-bot-human-is-bold-omega ()
+  "author_kind \"bot_human\" -> bold Ω (a human committed to a bot PR)."
+  (let ((icon (decknix--hub-author-icon '((author_kind . "bot_human")))))
+    (should (equal "Ω" (decknix-test--icon-glyph icon)))
+    (should (eq 'bold (plist-get (decknix-test--icon-face icon) :weight)))))
+
+(ert-deftest decknix-hub-icons--author-icon-human-is-plain-omega ()
+  "author_kind \"human\" -> dim Ω (non-bold)."
+  (let ((icon (decknix--hub-author-icon '((author_kind . "human")))))
+    (should (equal "Ω" (decknix-test--icon-glyph icon)))
+    (should (eq 'shadow (decknix-test--icon-face icon)))))
+
+(ert-deftest decknix-hub-icons--author-icon-fallback-without-kind ()
+  "Old data (no author_kind) degrades via the author login: a bot login
+-> π (can't detect a human committer without commit data), else Ω."
+  (should (equal "π" (decknix-test--icon-glyph
+                      (decknix--hub-author-icon '((author . "dependabot[bot]"))))))
+  (should (equal "Ω" (decknix-test--icon-glyph
+                      (decknix--hub-author-icon '((author . "alice")))))))
+
+(ert-deftest decknix-hub-icons--primary-status-bot-shows-state-not-pi ()
+  "A bot-authored PR now shows its state glyph — provenance moved to the
+author column, so the leading glyph is no longer replaced by π."
+  (let ((item '((state . "OPEN")
+                (author . "dependabot[bot]")
+                (review_decision . "REVIEW_REQUIRED"))))
+    (should (equal "◐" (decknix-test--icon-glyph
+                        (decknix--hub-primary-status-icon item 'review))))))
+
 (ert-deftest decknix-hub-icons--primary-status-placeholder ()
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-primary-status-icon '() 'placeholder))

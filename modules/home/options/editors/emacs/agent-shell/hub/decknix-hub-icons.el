@@ -84,12 +84,11 @@ Shows the overall review status of the user's own PR:
   "Return a primary status icon for ITEM of KIND.
 KIND is one of `wip', `review', `placeholder', or `done'.
 OPTIONAL TC-STATUS is a TeamCity build alist.
-Follows the shape-family system: ○ ★ ◐ ● ▣ ■ plus bot icon π.
+Follows the shape-family system: ○ ★ ◐ ● ▣ ■.  Author provenance
+\(bot vs human) is a separate column -- see `decknix--hub-author-icon'.
 Incorporates CI and mergeable status into the primary signal to
 reduce sidebar duplication."
   (let* ((state (alist-get 'state item))
-         (author (alist-get 'author item))
-         (is-bot (decknix--hub-bot-author-p author))
          (draft (eq (alist-get 'draft item) t))
          (ci (alist-get 'ci item))
          (mergeable (alist-get 'mergeable item))
@@ -101,8 +100,10 @@ reduce sidebar duplication."
                          ((eq kind 'review) (alist-get 'my_review item))
                          (t nil))))
     (cond
-     (is-bot
-      (decknix--hub-icon "π" '(:foreground "#af5f87"))) ;; Bot author (pinkish)
+     ;; Author provenance (bot vs human) is rendered in its own column by
+     ;; `decknix--hub-author-icon' now, so the primary glyph is pure state
+     ;; even for bot-opened PRs (which previously collapsed to π and hid
+     ;; their CI / draft / merge state).
      ((eq kind 'placeholder)
       (decknix--hub-icon "○" 'shadow))
      ((string= state "MERGED")
@@ -138,6 +139,26 @@ reduce sidebar duplication."
                          (t          'shadow)))
              (glyph (if approved "●" "◐")))
         (decknix--hub-icon glyph face))))))
+
+(defun decknix--hub-author-icon (item)
+  "Return the author-provenance glyph for a Requests row ITEM.
+
+  π         bot-opened PR, only bot commits.
+  Ω (bold)  bot-opened PR a human has since committed to.
+  Ω         human-authored PR.
+
+Reads the hub-provided `author_kind' (\"bot\" | \"bot_human\" |
+\"human\").  When it is absent (payload predates the field) it degrades
+via the author login's bot pattern -- a bot login yields π, anything
+else Ω -- since without commit data a human contributor to a bot PR
+cannot be detected."
+  (pcase (alist-get 'author_kind item)
+    ("bot"       (decknix--hub-icon "π" '(:foreground "#af5f87")))
+    ("bot_human" (decknix--hub-icon "Ω" '(:foreground "#af5f87" :weight bold)))
+    ("human"     (decknix--hub-icon "Ω" 'shadow))
+    (_ (if (decknix--hub-bot-author-p (alist-get 'author item))
+           (decknix--hub-icon "π" '(:foreground "#af5f87"))
+         (decknix--hub-icon "Ω" 'shadow)))))
 
 (defvar decknix--hub-symbol-style)
 
