@@ -1608,6 +1608,24 @@ let
     ];
   };
 
+  # Per-conversation resource aggregation (#145, agent resourcing
+  # Feature 2).  Pure, category-pluggable layer that normalises a
+  # conversation's sub-agents / linked PRs / linked repos (hub-enriched
+  # by URL) into an attention-rolled-up tree for the `C-c s a' view.
+  # Impure collection + the interactive display stay in main-bulk per
+  # AGENTS.md Rule 2.
+  decknix-agent-resourcing-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-resourcing";
+    src = ./agent-shell/resourcing;
+    packageRequires = [
+      decknix-agent-subagent-state-el
+      decknix-agent-url-parse-el
+    ];
+    testFiles = [
+      "decknix-agent-resourcing-test.el"
+    ];
+  };
+
   # PR B.84: Pure rg/jq shell-command builders carved from
   # `decknix--agent-session-rg-search-fast' /
   # `decknix--agent-session-rg-search-thorough'.  The bulk callers
@@ -2563,6 +2581,7 @@ in
           decknix-agent-fork-el
           decknix-agent-resume-primer-el
           decknix-agent-subagent-state-el
+          decknix-agent-resourcing-el
           decknix-agent-rg-search-command-el
           decknix-agent-vcs-el
           decknix-agent-review-format-el
@@ -3456,6 +3475,19 @@ ${optionalString cfg.tableOverlay.enable ''
                           (subagent now &optional parent-live-p))
         (declare-function decknix--agent-subagent-attention
                           "decknix-agent-subagent-state" (state))
+
+        ;; Per-conversation resource aggregation (#145) -- pure tree
+        ;; builder consumed by the `C-c s a' resourcing view.
+        (require 'decknix-agent-resourcing)
+        (declare-function decknix--agent-resource-subagents
+                          "decknix-agent-resourcing"
+                          (subagents now &optional parent-live-p))
+        (declare-function decknix--agent-resource-prs
+                          "decknix-agent-resourcing" (linked-prs hub-items))
+        (declare-function decknix--agent-resource-repos
+                          "decknix-agent-resourcing" (linked-repos))
+        (declare-function decknix--agent-resource-tree
+                          "decknix-agent-resourcing" (categories))
 
         ;; rg search command builders (PR B.84) -- pure shell-command
         ;; builders for the fast / thorough session-grep pipelines,
