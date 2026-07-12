@@ -2507,9 +2507,18 @@ in
           })
           commandFiles))
       //
-      # User-level augment guidelines → ~/.augment-guidelines
+      # User-level guidelines → ~/.augment-guidelines (Auggie's native
+      # user-guidance path) AND ~/.claude/CLAUDE.md (Claude Code's global
+      # user-memory file).  One source, fanned out to each agent's native
+      # discovery path so the same durable defaults reach Claude and Auggie
+      # and survive `decknix switch` / reimage.
       {
         "~/${guidelinesFile}" = {
+          source = ./agent-shell/guidelines.md;
+          repo = "decknix";
+          repoPath = "modules/home/options/editors/emacs/agent-shell/guidelines.md";
+        };
+        "~/.claude/CLAUDE.md" = {
           source = ./agent-shell/guidelines.md;
           repo = "decknix";
           repoPath = "modules/home/options/editors/emacs/agent-shell/guidelines.md";

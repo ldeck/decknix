@@ -4,6 +4,29 @@ These rules apply globally across ALL workspaces. Workspace-level
 AGENTS.md files may add project-specific rules but should not need
 to repeat these.
 
+## Durable Knowledge — Config Over Memory
+
+When you learn something worth remembering, encode the FIX in a place
+that reproduces on a fresh machine — never in machine-local memory
+files. This system is rebuilt from `decknix` / `decknix-config` via
+`decknix switch`; anything under `~/.claude/**/memory/` (or similar
+per-agent memory stores) is lost on reimage and is not version
+controlled.
+
+1. **Prefer a real fix over a note about the problem.** If a discovered
+   issue has a code or config fix, make the fix. A memory entry that
+   merely describes the issue is redundant once the fix lands.
+2. **Choose the reproducible home** for durable knowledge, in order:
+   a code/default change in `decknix` / `decknix-config`; a workspace
+   `AGENTS.md`; this user-level guidelines file; a slash command or
+   skill; or `settings.json` (permissions/env/hooks).
+3. **Do not accumulate memory files.** Treat per-agent memory as a
+   last resort for genuinely non-reproducible, session-spanning context
+   only — and promote it into version-controlled config as soon as it
+   is actionable. Do not create a memory file for anything that a repo,
+   its AGENTS.md, git history, or a config default already records (or
+   should record).
+
 ## Command Execution — Prefer Nix-managed Tools
 
 This is a Nix-managed macOS system. All tooling is installed via Nix.
