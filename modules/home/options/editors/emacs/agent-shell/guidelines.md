@@ -46,6 +46,28 @@ This is a Nix-managed macOS system. All tooling is installed via Nix.
 5. **Exception**: `#!/usr/bin/env bash` shebangs are acceptable —
    this is the standard portable idiom.
 
+## Secrets
+
+- Store secrets as **raw `0600` files under the org's secrets dir**:
+  `~/.config/decknix/<org>/secrets/<name>` (e.g.
+  `~/.config/decknix/nurturecloud/secrets/jira-token`). The dir is `0700`.
+- **Never** route a secret through Nix `home.file.text` / a `secrets.nix`
+  string — that copies it into the world-readable `/nix/store`. A raw file
+  is both un-committed and out of the store. Reference it by *path* from
+  config (e.g. a wrapper that `cat`s the file at runtime); `~/.claude.json`
+  env values are literal strings and cannot read a file.
+- Secrets are never committed. `~/.config/decknix` is not a git repo; the
+  bootstrap scripts **prompt** for each secret and place it, so a machine
+  rebuild re-collects them.
+
+## Code Review
+
+When prompting a model (Opus/Sonnet) for code review, ask it to **report
+everything with a severity/confidence rating and filter downstream** — do
+NOT instruct "be conservative / only high-severity". Recall-suppressing
+framing measurably lowers bug-finding on current models; a missed bug costs
+more than triaging an extra low-severity note.
+
 ## Response Formatting in Agent Shell
 
 You are running inside an Emacs agent-shell — a comint buffer that

@@ -102,6 +102,13 @@
   #   identity.nix                        — org user identity (auto-wired to config.<org>.user.*)
   #   home.nix, system.nix, secrets.nix   — direct files (secrets loaded into both layers)
   #   home/<anything>.nix                 — recursive subdirectory loading
+  #   secrets/<name>                      — raw 0600 secret files (NOT .nix; ignored by
+  #                                         the loader, referenced by path from config —
+  #                                         keeps secrets out of the world-readable /nix/store)
+  #
+  # NOTE: the authoritative config root is `~/.config/decknix/`. `~/.local/decknix/`
+  # is a SEPARATE, older git repo that the live loader does NOT read — do not edit
+  # it expecting effect.
   #
   # Identity files:
   #   When <org>/identity.nix exists, the loader generates NixOS module
