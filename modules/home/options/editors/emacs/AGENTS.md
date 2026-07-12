@@ -369,6 +369,22 @@ The largest module (~4400 lines). Key subsystems:
   Mode is applied by baking `:default-session-mode-id` into the session config;
   only providers that declare that key (today `claude-code`) honour it —
   Auggie/Pi ignore a stray mode, so it can never break a launch.
+  - **Mode-id semantics** (upstream Claude Agent SDK `PermissionMode`; `C-c RET`
+    / `C-c C-m` sets the *mode*, distinct from `C-c C-v` which sets the *model*):
+    `default` prompts for risky ops; `acceptEdits` auto-accepts file edits only
+    (Bash/MCP still prompt); `auto` runs a model classifier that silently
+    approves routine calls but **still escalates risky/ambiguous ones by design**
+    (and an org "ask" ceiling can force a prompt) — so `auto` ≠ "never ask";
+    `dontAsk` never prompts but DENIES anything not pre-approved;
+    `bypassPermissions` is the only true never-ask (needs
+    `skipDangerousModePermissionPrompt` in `~/.claude/settings.json` to avoid the
+    entry nag). To cut prompts without full bypass, add `permissions.allow` globs
+    to `~/.claude/settings.json` (or a workspace `.claude/settings.local.json`) —
+    they auto-approve across modes; the `fewer-permission-prompts` skill
+    generates them. Do NOT build a decknix fallback model/mode picker for the
+    subscription-auth empty-model-list case: the bridge validates any change
+    against that empty list and errors on selection, so a picker is strictly
+    worse than the honest "No session models available".
 - **Resume continuation primer**: auggie's native `--resume` reloads the prior
   transcript into the *model's* context, so a resumed auggie session already
   knows the conversation. The separate-bridge providers (Claude via
@@ -451,6 +467,30 @@ sessions schema); new sessions via `C-c A n` work fully.
 interface.  Run them through **Goose** (or OpenCode): configure a Goose
 provider pointed at Ollama's server (`http://localhost:11434`), then start
 a normal Goose session.
+
+#### Adding another provider — CLI + ACP bridge reference
+
+nixpkgs attribute names + ACP entrypoints for backends not yet wired into the
+registry (verified against the pinned nixpkgs, nixos-25.11 rev `d030887`,
+2026-07-03 — re-verify before relying, several are non-obvious):
+
+- **pi** → `pi-coding-agent` is **unstable-only** (`pkgs.unstable.pi-coding-agent`);
+  the `pi-acp` bridge shells out to the `pi` binary, so the bridge alone is not
+  enough (this caused "pi not installed").
+- **goose** → `goose-cli` (binary `goose`), NOT the unrelated `goose` package.
+- **qwen** → `qwen-code` (binary `qwen`); **opencode** → `opencode`.
+- **codex** → `codex` CLI is in nixpkgs, but the bridge `codex-acp` is a **Rust**
+  project (github.com/zed-industries/codex-acp), not npm.
+- **cursor** → `cursor-cli`; bridge `@blowmage/cursor-agent-acp` (npm).
+- **droid** (Factory) → CLI not in nixpkgs (curl installer); bridge `droid-acp` (npm).
+- **mistral vibe** → CLI via `uv`; bridge `vibe-acp` (not on npm).
+- **kiro** → `kiro` (not `kiro-cli` in the pin); no upstream agent-shell module yet.
+
+Built-in-ACP (no separate bridge): opencode (`opencode acp`), goose
+(`goose acp`), qwen (`qwen --experimental-acp`), gemini (`gemini
+--experimental-acp`). Separate-bridge: claude (`claude-agent-acp`), pi
+(`pi-acp`), codex (`codex-acp`), cursor (`cursor-agent-acp`), droid
+(`droid-acp`), mistral (`vibe-acp`).
 
 #### Gemini CLI — Setup
 
