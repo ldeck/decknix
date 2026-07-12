@@ -5570,12 +5570,23 @@ or the session list is stale)."
   (let* ((stored-sid (alist-get 'session-id entry))
          (workspace (alist-get 'workspace entry))
          (conv-key (alist-get 'conv-key entry))
-         (sid (or (decknix--agent-latest-session-id-for-conv-key conv-key)
-                  stored-sid))
+         (latest-sid (decknix--agent-latest-session-id-for-conv-key conv-key))
+         ;; Prefer the freshest snapshot for this conversation; fall back
+         ;; to the stored (possibly stale) sid only when none is found.
+         (sid (or latest-sid stored-sid))
          ;; Re-derive from the current tag store (same helper as the
          ;; render path) so the resumed buffer's name hint reflects
          ;; live tags rather than the stale baked-in `name'.
          (display-name (decknix--sidebar-previous-display-name entry)))
+    ;; Surface a silent fall-back to the stored snapshot: when a conv-key
+    ;; is present but resolves to no fresh session, the resumed context
+    ;; may be older than the user expects (e.g. continued work that was
+    ;; never linked back to the conversation).  Warn rather than resume
+    ;; the stale snapshot invisibly.
+    (when (and conv-key (not latest-sid) stored-sid)
+      (message
+       "decknix: no fresh session for this conversation; resuming stored snapshot %s"
+       stored-sid))
     (if (not sid)
         (message "Cannot restore: no session ID")
       ;; Select a non-sidebar content window so agent-session-resume
