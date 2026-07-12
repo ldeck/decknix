@@ -810,6 +810,47 @@ Fires exactly once even though `prompt-ready' recurs on every prompt."
                    (shell-maker-submit :input primer)))))))
     token))
 
+(defun decknix--agent-resume-register-real-sid-on-ready (shell-buf conv-key)
+  "Link the resumed session's REAL ACP session-id to CONV-KEY once ready.
+Providers whose `--resume' is a no-op (Claude, Pi) boot a fresh ACP
+session on resume, so the running conversation writes to a NEW
+transcript whose id differs from the one we resumed from.  The
+synchronous registration in `decknix--agent-session-resume--new' only
+knows the OLD (resolved) id; unless the NEW id is also registered
+under CONV-KEY, continued work is invisible to
+`decknix--agent-latest-session-id-for-conv-key' and the next conv-key
+resume freezes on an older snapshot (the cross-session continuity bug).
+
+Subscribes to the one-shot `prompt-ready' event, reads the established
+ACP session-id from `agent-shell--state', and registers it under
+CONV-KEY (bumping recency).  Harmless for auggie -- its `--resume'
+reuses the same id, so registration is an idempotent no-op.  No-ops
+when CONV-KEY is nil, or the id is absent/blank at ready time."
+  (when conv-key
+    (let ((done nil)
+          (token nil))
+      (setq token
+            (agent-shell-subscribe-to
+             :shell-buffer shell-buf
+             :event 'prompt-ready
+             :on-event
+             (lambda (_event)
+               ;; One-shot: `prompt-ready' recurs on every prompt.
+               (unless done
+                 (setq done t)
+                 (when token
+                   (agent-shell-unsubscribe :subscription token))
+                 (when (buffer-live-p shell-buf)
+                   (with-current-buffer shell-buf
+                     (let ((sid (ignore-errors
+                                  (map-nested-elt (agent-shell--state)
+                                                  '(:session :id)))))
+                       (when (and sid (stringp sid)
+                                  (not (string-empty-p sid)))
+                         (decknix--agent-register-session-id conv-key sid)
+                         (decknix--agent-conv-touch conv-key)))))))))
+      token)))
+
 (defun decknix--agent-session-resume--new (session-id history-count
                                            &optional display-name
                                            workspace conv-key
@@ -930,6 +971,14 @@ dedupes against live buffers before calling here."
                       last-user)))
         (when primer
           (decknix--agent-resume-primer-on-ready shell-buf primer))))
+    ;; Link the resumed session's REAL ACP session-id back to the
+    ;; conversation once ready.  Claude/Pi resume boots a fresh ACP
+    ;; session whose transcript id differs from the resumed one; without
+    ;; this the continued work never joins the conv-key's session set and
+    ;; the next resume freezes on an older snapshot.  Idempotent for
+    ;; auggie (same id on `--resume').
+    (when (and (buffer-live-p shell-buf) conv-key)
+      (decknix--agent-resume-register-real-sid-on-ready shell-buf conv-key))
     ;; Use a timer to rename and prepopulate once the process is ready.
     (let ((sid session-id)
           (n history-count)

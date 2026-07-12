@@ -44,14 +44,14 @@
 ;; -- conv-key collapsing ------------------------------------------
 
 (ert-deftest decknix-sidebar-previous-dedupe--collapses-by-conv-key ()
-  "Two entries with the same conv-key collapse to the first."
+  "Two entries with the same conv-key collapse to the NEWEST (last)."
   (let* ((e1 (decknix-sidebar-previous-test--entry "s1" "ck-a" "first"))
          (e2 (decknix-sidebar-previous-test--entry "s2" "ck-a" "second"))
          (result (decknix--sidebar-previous-dedupe (list e1 e2))))
     (should (= (length result) 1))
-    ;; First occurrence wins (input order).
-    (should (equal (alist-get 'session-id (car result)) "s1"))
-    (should (equal (alist-get 'name (car result)) "first"))))
+    ;; Newest occurrence wins (live file is appended oldest-first).
+    (should (equal (alist-get 'session-id (car result)) "s2"))
+    (should (equal (alist-get 'name (car result)) "second"))))
 
 (ert-deftest decknix-sidebar-previous-dedupe--preserves-order ()
   "Distinct conv-keys all kept, in original order."
@@ -64,13 +64,14 @@
                    '("s1" "s2" "s3")))))
 
 (ert-deftest decknix-sidebar-previous-dedupe--three-share-one-key ()
-  "Three entries sharing a conv-key collapse to one (the first)."
+  "Three entries sharing a conv-key collapse to one (the NEWEST/last)."
   (let* ((e1 (decknix-sidebar-previous-test--entry "s1" "ck-a" "alpha"))
          (e2 (decknix-sidebar-previous-test--entry "s2" "ck-a" "beta"))
          (e3 (decknix-sidebar-previous-test--entry "s3" "ck-a" "gamma"))
          (result (decknix--sidebar-previous-dedupe (list e1 e2 e3))))
     (should (= (length result) 1))
-    (should (equal (alist-get 'name (car result)) "alpha"))))
+    (should (equal (alist-get 'session-id (car result)) "s3"))
+    (should (equal (alist-get 'name (car result)) "gamma"))))
 
 ;; -- nil conv-key fallback ---------------------------------------
 

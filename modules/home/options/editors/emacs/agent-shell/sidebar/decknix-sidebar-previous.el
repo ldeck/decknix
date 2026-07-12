@@ -144,24 +144,33 @@ Best-effort — errors leave the ring unchanged."
       (error nil))))
 
 (defun decknix--sidebar-previous-dedupe (entries)
-  "Return ENTRIES with at most one entry per conv-key.
+  "Return ENTRIES with at most one entry per conv-key, keeping the NEWEST.
 auggie writes a fresh session file on every interrupt/compose, so a
 single conversation can own several session-ids on disk.  When the
 Previous list (persisted or in-memory) carries two entries sharing a
-conv-key, they both resolve to the same latest snapshot at restore
-time and render as visually identical rows — this helper collapses
-them down to the first occurrence, keeping render/picker/restore
-flows in sync.  Entries without a conv-key fall back to
+conv-key, they both resolve to the same conversation at restore time
+and render as visually identical rows — this helper collapses them to
+one row per conv-key.
+
+The live-sessions file is appended oldest-first (see
+`decknix--live-sessions-add-entry'), so a later entry is a NEWER
+snapshot of the same conversation.  We therefore keep the LAST
+occurrence per conv-key rather than the first, so the retained row
+carries the freshest session-id/name and restore/resume resolve to
+the most recent session instead of the oldest.  Output order follows
+each conv-key's FIRST appearance, so the visible ordering is stable
+across snapshots.  Entries without a conv-key fall back to
 session-id-based uniqueness so they are never accidentally merged."
-  (let ((seen (make-hash-table :test 'equal))
-        (out nil))
+  (let ((latest (make-hash-table :test 'equal))
+        (order nil))
     (dolist (e entries)
       (let* ((ck (alist-get 'conv-key e))
              (key (or ck (cons 'sid (alist-get 'session-id e)))))
-        (unless (gethash key seen)
-          (puthash key t seen)
-          (push e out))))
-    (nreverse out)))
+        (unless (gethash key latest)
+          (push key order))
+        ;; Overwrite so the newest (last-seen) entry for KEY wins.
+        (puthash key e latest)))
+    (mapcar (lambda (key) (gethash key latest)) (nreverse order))))
 
 (defun decknix--sidebar-previous-display-name (entry)
   "Return the row label for Previous-Sessions ENTRY.
