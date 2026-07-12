@@ -80,11 +80,16 @@ Captures the most recent write into `last-store'."
     (decknix--agent-register-session-id "key" nil)
     (should-not last-store)))
 
-(ert-deftest decknix-register-session-id--no-entry-noop ()
-  "No-op when the conv-key has no entry yet."
+(ert-deftest decknix-register-session-id--creates-entry-when-missing ()
+  "Creates a fresh conversation entry when the conv-key has none yet.
+A brand-new (untagged) session must be linked so it is recoverable at
+restore time -- previously this no-opped and the session was orphaned."
   (decknix-test--with-store nil
     (decknix--agent-register-session-id "missing" "sid")
-    (should-not last-store)))
+    (should last-store)
+    (let ((entry (gethash "missing" convs)))
+      (should entry)
+      (should (equal (gethash "sessions" entry) '("sid"))))))
 
 (ert-deftest decknix-register-session-id--prepends-new-session ()
   "Prepends a new session id to the existing list."

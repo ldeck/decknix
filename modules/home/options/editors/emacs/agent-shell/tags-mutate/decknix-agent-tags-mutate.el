@@ -72,18 +72,28 @@ where the first message is the command itself)."
 (defun decknix--agent-register-session-id (conv-key session-id)
   "Ensure SESSION-ID is in the sessions list for CONV-KEY.
 This keeps all session snapshots (original + resumed) linked to
-the same conversation."
+the same conversation.
+
+Creates a conversation entry when CONV-KEY has none yet, rather than
+no-opping: a brand-new (untagged) session must still be linked so it
+is discoverable at restore time.  Previously such sessions were left
+unregistered and became orphans -- absent from the store entirely and
+thus invisible to `decknix--agent-latest-session-id-for-conv-key',
+which is how a resumed conversation could freeze on an older snapshot."
   (when (and conv-key session-id)
     (let* ((store (decknix--agent-tags-read))
            (convs (decknix--agent-tags-conversations store))
-           (entry (gethash conv-key convs)))
-      (when entry
-        (let ((sids (gethash "sessions" entry)))
-          (unless (and sids (member session-id sids))
-            (puthash "sessions"
-                     (cons session-id (or sids '()))
-                     entry)
-            (decknix--agent-tags-write store)))))))
+           (entry (or (gethash conv-key convs)
+                      (let ((h (make-hash-table :test 'equal)))
+                        (puthash "sessions" nil h)
+                        h)))
+           (sids (gethash "sessions" entry)))
+      (unless (and sids (member session-id sids))
+        (puthash "sessions"
+                 (cons session-id (or sids '()))
+                 entry)
+        (puthash conv-key entry convs)
+        (decknix--agent-tags-write store)))))
 
 (defun decknix--agent-flush-pending-metadata (input)
   "Persist pending metadata for the current buffer using INPUT.
