@@ -51,7 +51,12 @@ Shows all turns from the resumed session's history cache in a
 read-only bottom window.  Use n/p to navigate, s to search."
   :interactive nil
   (setq truncate-lines nil
-        buffer-read-only t))
+        buffer-read-only t)
+  ;; Redisplay perf: rendered turns are LTR and can be long/heavily
+  ;; propertized — force LTR + skip bidi bracket-pair resolution so
+  ;; window relayout stays cheap (see agent-shell-mode-hook).
+  (setq-local bidi-paragraph-direction 'left-to-right)
+  (setq-local bidi-inhibit-bpa t))
 
 ;;; Rendering ----------------------------------------------------------
 
