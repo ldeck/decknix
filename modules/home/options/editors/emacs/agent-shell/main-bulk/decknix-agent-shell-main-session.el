@@ -216,6 +216,10 @@ history; only the model-facing primer is suppressed)."
                                   last-user-message))
 (declare-function decknix--agent-resume-primer-needed-p
                   "decknix-agent-provider" (provider-id))
+(declare-function decknix-agent-provider-resume-cli-flag
+                  "decknix-agent-provider" (id))
+(defvar decknix--agent-resume-target-sid)
+(defvar decknix--agent-resume-native-done)
 (declare-function decknix-agent-provider-sessions-dir
                   "decknix-agent-provider" (id))
 (declare-function decknix-agent-provider-session-file-extension
@@ -782,12 +786,17 @@ their model is already on the command line (see
   "Auto-send PRIMER as the first user message in SHELL-BUF once ready.
 The resume-time analogue of `decknix--agent-model-replay-on-ready':
 for providers whose bridge does not restore prior context into the
-model on resume (Claude, Pi), PRIMER is a short continuation message
-\(built by `decknix--agent-resume-primer-message') that tells the
-model it is resuming an earlier conversation and points it at the
-transcript.  Subscribes to the one-shot `prompt-ready' event and then
-submits PRIMER via `shell-maker-submit', mirroring the fork hand-off
-send path (`decknix-agent-session-fork').
+model on resume, PRIMER is a short continuation message (built by
+`decknix--agent-resume-primer-message') that tells the model it is
+resuming an earlier conversation and points it at the transcript.
+Subscribes to the one-shot `prompt-ready' event and then submits PRIMER
+via `shell-maker-submit', mirroring the fork hand-off send path
+\(`decknix-agent-session-fork').
+
+Suppressed when the session was resumed natively over ACP
+\(`decknix--agent-resume-native-done' -- the `session/resume' path
+loaded real context, so there is nothing to prime).  The primer thus
+only fires as the fallback when native resume was unavailable or failed.
 
 Fires exactly once even though `prompt-ready' recurs on every prompt."
   (let ((done nil)
@@ -804,7 +813,11 @@ Fires exactly once even though `prompt-ready' recurs on every prompt."
                  (agent-shell-unsubscribe :subscription token))
                (when (and (buffer-live-p shell-buf)
                           (stringp primer)
-                          (not (string-empty-p primer)))
+                          (not (string-empty-p primer))
+                          ;; Skip when native ACP resume already loaded
+                          ;; the prior context into the model.
+                          (not (buffer-local-value
+                                'decknix--agent-resume-native-done shell-buf)))
                  (with-current-buffer shell-buf
                    (goto-char (point-max))
                    (shell-maker-submit :input primer)))))))
@@ -931,6 +944,19 @@ dedupes against live buffers before calling here."
          (shell-buf
           (let ((default-directory (or validated-ws default-directory)))
             (agent-shell-start :config config))))
+    ;; Native ACP `session/resume' (#143 follow-up).  Providers whose
+    ;; CLI resumes on the command line (auggie, `:resume-cli-flag') have
+    ;; already restored context by the time the ACP session comes up; the
+    ;; rest (Claude, Pi -- pure ACP bridges) mark the buffer so the
+    ;; `agent-shell--initiate-session' advice resumes THIS exact session
+    ;; over the wire instead of minting a fresh one.  Set synchronously,
+    ;; before the async handshake reaches session init.  The advice is a
+    ;; no-op unless the bridge also advertises the resume capability, so
+    ;; a provider that lacks it degrades to `session/new' + primer.
+    (when (and (buffer-live-p shell-buf)
+               (not (decknix-agent-provider-resume-cli-flag provider)))
+      (with-current-buffer shell-buf
+        (setq-local decknix--agent-resume-target-sid session-id)))
     ;; Model persistence for providers that can't pin the model at
     ;; launch (no `:model-launch-flag' -- Claude, Pi).  Auggie already
     ;; carries `--model' in `augmented-cmd' above; for the rest we
