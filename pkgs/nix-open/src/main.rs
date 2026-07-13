@@ -31,6 +31,12 @@ struct Cli {
     #[arg(short, long, requires = "restart")]
     all: bool,
 
+    /// Show status of a running app: whether it's running the latest
+    /// Nix-deployed version or needs a restart. For Emacs, also shows
+    /// daemon uptime.
+    #[arg(short, long)]
+    status: bool,
+
     /// Application name(s) (without .app suffix).
     /// Not required when --all is used.
     #[arg(required_unless_present = "all")]
@@ -499,6 +505,153 @@ fn handle_emacs_daemon_frame() -> bool {
     false
 }
 
+/// Get the executable path of the running Emacs daemon process.
+fn running_emacs_daemon_exe() -> Option<String> {
+    let output = Command::new("pgrep")
+        .args(["-f", "emacs.*--fg-daemon"])
+        .output()
+        .ok()?;
+    let pids: Vec<&str> = std::str::from_utf8(&output.stdout)
+        .ok()?
+        .lines()
+        .collect();
+    let pid = pids.first()?;
+
+    let ps_out = Command::new("ps")
+        .args(["-o", "args=", "-p", pid])
+        .output()
+        .ok()?;
+    let args = std::str::from_utf8(&ps_out.stdout).ok()?.trim();
+    args.split_whitespace().next().map(|s| s.to_string())
+}
+
+/// Get the current Nix profile's emacs path (resolved through symlinks).
+fn current_profile_emacs() -> Option<String> {
+    let home = dirs::home_dir()?;
+    let emacs_link = home.join(".nix-profile/bin/emacs");
+    fs::canonicalize(&emacs_link)
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+/// Show the status of a running app: version comparison and restart hint.
+/// For Emacs, also shows daemon uptime.
+fn handle_app_status(name: &str) {
+    // Special case: Emacs daemon
+    if name.eq_ignore_ascii_case("emacs") {
+        handle_emacs_daemon_status();
+        return;
+    }
+
+    // General app status
+    let app_path = match find_app(name) {
+        Some(p) => p,
+        None => {
+            eprintln!("{}: not found in any application directory", name);
+            return;
+        }
+    };
+
+    let display = app_display_name(&app_path);
+    let installed = resolved_app_store_path(&app_path);
+
+    match running_app_exe(name) {
+        Some((pid, exe_path)) => {
+            let running_label = nix_store_label(&exe_path);
+            let installed_label = installed.as_ref().and_then(|p| nix_store_label(p));
+
+            match (&running_label, &installed_label) {
+                (Some(r), Some(i)) if r == i => {
+                    eprintln!("{}: up to date (pid {})", display, pid);
+                    eprintln!("  Version: {}", r);
+                }
+                (Some(r), Some(i)) => {
+                    eprintln!("{}: stale (restart needed, pid {})", display, pid);
+                    eprintln!("  Running: {}", r);
+                    eprintln!("  Current: {}", i);
+                    eprintln!("  Run: nix-open -r {}", name.to_lowercase());
+                }
+                (Some(r), None) => {
+                    eprintln!("{}: running (pid {})", display, pid);
+                    eprintln!("  Version: {}", r);
+                }
+                (None, _) => {
+                    eprintln!("{}: running (pid {})", display, pid);
+                }
+            }
+        }
+        None => {
+            eprintln!("{}: not running", display);
+            if let Some(label) = installed.as_ref().and_then(|p| nix_store_label(p)) {
+                eprintln!("  Installed: {}", label);
+            }
+        }
+    }
+}
+
+/// Show the status of the Emacs daemon: running/stopped, uptime, version status.
+fn handle_emacs_daemon_status() {
+    let client = emacsclient_path();
+
+    // Check if daemon responds
+    let uptime_result = Command::new(&client)
+        .args(["-e", "(emacs-uptime)"])
+        .output();
+
+    let uptime = match uptime_result {
+        Ok(out) if out.status.success() => {
+            Some(String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .trim_matches('"')
+                .to_string())
+        }
+        _ => None,
+    };
+
+    // Check version status
+    let running = running_emacs_daemon_exe();
+    let current = current_profile_emacs();
+
+    match (&running, &current, &uptime) {
+        (Some(r), Some(c), Some(up)) if r == c => {
+            eprintln!("Emacs daemon: up to date");
+            eprintln!("  Uptime:  {}", up);
+            if let Some(label) = nix_store_label(r) {
+                eprintln!("  Version: {}", label);
+            }
+        }
+        (Some(r), Some(c), Some(up)) => {
+            eprintln!("Emacs daemon: stale (restart needed)");
+            eprintln!("  Uptime:  {}", up);
+            if let Some(old) = nix_store_label(r) {
+                eprintln!("  Running: {}", old);
+            }
+            if let Some(new) = nix_store_label(c) {
+                eprintln!("  Current: {}", new);
+            }
+            eprintln!("  Run: launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server");
+        }
+        (Some(r), _, Some(up)) => {
+            eprintln!("Emacs daemon: running");
+            eprintln!("  Uptime:  {}", up);
+            if let Some(label) = nix_store_label(r) {
+                eprintln!("  Version: {}", label);
+            }
+        }
+        (_, _, None) => {
+            eprintln!("Emacs daemon: not running");
+            if let Some(c) = &current {
+                if let Some(label) = nix_store_label(c) {
+                    eprintln!("  Installed: {}", label);
+                }
+            }
+        }
+        _ => {
+            eprintln!("Emacs daemon: running (cannot determine version)");
+        }
+    }
+}
+
 fn handle_open_app(name: &str, restart: bool, new_instance: bool) -> bool {
     // Special case: Emacs — connect to the running daemon instead of
     // spawning a separate standalone Emacs.app process.  This keeps all
@@ -574,6 +727,14 @@ fn handle_open_app(name: &str, restart: bool, new_instance: bool) -> bool {
 
 fn main() {
     let cli = Cli::parse();
+
+    if cli.status {
+        // --status: show app version status
+        for name in &cli.apps {
+            handle_app_status(name);
+        }
+        return;
+    }
 
     if cli.all {
         // --restart --all: find and restart stale Nix-managed apps
