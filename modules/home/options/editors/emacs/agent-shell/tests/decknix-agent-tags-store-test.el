@@ -29,6 +29,8 @@
 ;; return value is needed.
 (unless (fboundp 'decknix--agent-session-list)
   (defun decknix--agent-session-list () nil))
+(unless (fboundp 'decknix--agent-session-list-if-warm)
+  (defun decknix--agent-session-list-if-warm () nil))
 (unless (fboundp 'decknix--agent-conversation-key)
   (defun decknix--agent-conversation-key (_first-message) nil))
 
@@ -184,6 +186,10 @@ into the current one."
                  (lambda ()
                    '(((sessionId . "session-id-A")
                       (firstUserMessage . "hi from A")))))
+                ((symbol-function 'decknix--agent-session-list-if-warm)
+                 (lambda ()
+                   '(((sessionId . "session-id-A")
+                      (firstUserMessage . "hi from A")))))
                 ((symbol-function 'decknix--agent-conversation-key)
                  (lambda (msg)
                    (and (equal msg "hi from A") "conv-A"))))
@@ -216,6 +222,10 @@ the in-memory store migrated for this session."
                  (lambda ()
                    '(((sessionId . "session-id-A")
                       (firstUserMessage . "hi from A")))))
+                ((symbol-function 'decknix--agent-session-list-if-warm)
+                 (lambda ()
+                   '(((sessionId . "session-id-A")
+                      (firstUserMessage . "hi from A")))))
                 ((symbol-function 'decknix--agent-conversation-key)
                  (lambda (msg) (and (equal msg "hi from A") "conv-A")))
                 ;; Simulate a read-only store: every write-back signals.
@@ -240,12 +250,15 @@ the in-memory store migrated for this session."
 
 (defmacro decknix-agent-tags-store-test--with-canonical-stubs
     (sessions key-fn &rest body)
-  "Run BODY with `decknix--agent-session-list' / `-conversation-key' stubbed.
-SESSIONS is the list returned by the session-list stub; KEY-FN is the
+  "Run BODY with session-list / conversation-key stubbed.
+SESSIONS is the list returned by both session-list stubs; KEY-FN is the
 function that maps a firstUserMessage string to a conv-key for the
-conversation-key stub."
+conversation-key stub.  Stubs both `decknix--agent-session-list' and
+`decknix--agent-session-list-if-warm' to return SESSIONS."
   (declare (indent 2))
   `(cl-letf (((symbol-function 'decknix--agent-session-list)
+              (lambda () ,sessions))
+             ((symbol-function 'decknix--agent-session-list-if-warm)
               (lambda () ,sessions))
              ((symbol-function 'decknix--agent-conversation-key)
               ,key-fn))

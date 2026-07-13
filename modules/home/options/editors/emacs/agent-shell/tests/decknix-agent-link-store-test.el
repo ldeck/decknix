@@ -27,6 +27,8 @@
 
 (unless (fboundp 'decknix--agent-session-list)
   (defun decknix--agent-session-list () nil))
+(unless (fboundp 'decknix--agent-session-list-if-warm)
+  (defun decknix--agent-session-list-if-warm () nil))
 (unless (fboundp 'decknix--agent-conversation-key)
   (defun decknix--agent-conversation-key (_first-message) nil))
 
