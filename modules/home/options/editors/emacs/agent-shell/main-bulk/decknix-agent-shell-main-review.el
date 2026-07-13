@@ -110,6 +110,10 @@ the review back to the source agent-shell session.
 \\{decknix-agent-review-mode-map}"
   (setq-local fill-column 100)
   (setq-local truncate-lines nil)
+  ;; Redisplay perf: quoted exchanges are LTR and can be long — force LTR
+  ;; + skip bidi bracket-pair resolution (see agent-shell-mode-hook).
+  (setq-local bidi-paragraph-direction 'left-to-right)
+  (setq-local bidi-inhibit-bpa t)
   (visual-line-mode 1)
   (when (fboundp 'yas-minor-mode)
     (yas-minor-mode 1))
