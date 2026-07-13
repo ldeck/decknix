@@ -64,17 +64,24 @@ Model flags are gated on `:model-launch-flag': only providers that
 declare a launch flag (e.g. auggie's \"--model\") pin the model on
 the command line.  Flagless providers (Claude, Pi) omit the model
 entirely here -- the saved model is replayed over ACP after resume
-instead (see `decknix--agent-model-replay-needed-p')."
+instead (see `decknix--agent-model-replay-needed-p').
+
+The resume flag is likewise gated on `:resume-cli-flag': only providers
+whose CLI resumes on the command line (auggie's \"--resume\") append the
+session id.  Separate-bridge providers (Claude, Pi) declare none -- their
+bridge ignores it in argv, so they resume over ACP instead (see
+`decknix-agent-resume-native.el')."
   (let ((decknix-agent-provider-registry nil))
     (decknix-agent-register-provider 'test-agent
       '(:acp-command-var test-auggie-cmd
         :supports-workspace-root t
-        :model-launch-flag "--model"))
+        :model-launch-flag "--model"
+        :resume-cli-flag "--resume"))
     (decknix-agent-register-provider 'test-claude
       '(:acp-command-var test-auggie-cmd
         :supports-workspace-root nil))
 
-    ;; Auggie style (supports workspace root + model launch flag)
+    ;; Auggie style (workspace root + model launch flag + resume flag)
     (should (equal (decknix--agent-command-build 'test-agent "~/ws")
                    '("auggie" "--acp" "--workspace-root" "~/ws")))
     (should (equal (decknix--agent-command-build 'test-agent "~/ws" "gpt-4")
@@ -82,14 +89,25 @@ instead (see `decknix--agent-model-replay-needed-p')."
     (should (equal (decknix--agent-command-build 'test-agent "~/ws" "gpt-4" "sid-123")
                    '("auggie" "--acp" "--workspace-root" "~/ws" "--model" "gpt-4" "--resume" "sid-123")))
 
-    ;; Claude style (no workspace root flag, no model launch flag):
-    ;; the model is never placed on the command line.
+    ;; Claude style (no workspace root flag, no model launch flag, no
+    ;; resume flag): neither the model NOR the session id lands on the
+    ;; command line -- resume is driven over ACP.
     (should (equal (decknix--agent-command-build 'test-claude "~/ws")
                    '("auggie" "--acp")))
     (should (equal (decknix--agent-command-build 'test-claude "~/ws" "claude-3")
                    '("auggie" "--acp")))
     (should (equal (decknix--agent-command-build 'test-claude "~/ws" "claude-3" "sid-123")
-                   '("auggie" "--acp" "--resume" "sid-123")))))
+                   '("auggie" "--acp")))))
+
+(ert-deftest decknix-agent-provider-resume-cli-flag-test ()
+  "Accessor returns the declared `:resume-cli-flag', nil when absent."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-auggie
+      '(:resume-cli-flag "--resume"))
+    (decknix-agent-register-provider 'test-claude '(:glyph "C"))
+    (should (equal (decknix-agent-provider-resume-cli-flag 'test-auggie)
+                   "--resume"))
+    (should (null (decknix-agent-provider-resume-cli-flag 'test-claude)))))
 
 (ert-deftest decknix-agent-provider-model-launch-flag-test ()
   "Accessor returns the declared launch flag, or nil when absent."

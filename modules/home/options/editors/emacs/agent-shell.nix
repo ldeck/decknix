@@ -1593,6 +1593,23 @@ let
     ];
   };
 
+  # Native ACP `session/resume' on resume (#143 follow-up).  For
+  # separate-bridge providers (Claude, Pi) whose CLI ignores `--resume'
+  # in argv, resume the exact saved session over the wire via
+  # `session/resume' -- the bridge reloads the transcript into the
+  # model's context natively (same engine as `claude --resume'), so the
+  # continuation primer becomes unnecessary.  Pure predicate carved +
+  # ERT-tested; the `:around' advice on `agent-shell--initiate-session'
+  # is registered in the heredoc per AGENTS.md Rule 2.
+  decknix-agent-resume-native-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-resume-native";
+    src = ./agent-shell/resume-native;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-resume-native-test.el"
+    ];
+  };
+
   # Sub-agent liveness state derivation (#144, agent resourcing
   # Feature 1).  Pure ladder over transcript mtime + parent liveness
   # (running / active / done) so the sidebar can colourise sub-agent
@@ -2595,6 +2612,7 @@ in
           decknix-agent-post-create-el
           decknix-agent-fork-el
           decknix-agent-resume-primer-el
+          decknix-agent-resume-native-el
           decknix-agent-subagent-state-el
           decknix-agent-resourcing-el
           decknix-agent-rg-search-command-el
@@ -2711,7 +2729,14 @@ in
             ;; the saved per-conversation model rides the command line.
             ;; Providers WITHOUT this flag (Claude, Pi) replay the model
             ;; over ACP (session/set_model) once the session is ready.
-            :model-launch-flag "--model"))
+            :model-launch-flag "--model"
+            ;; Auggie's own CLI is the ACP server and accepts `--resume
+            ;; <sid>' on the command line (natively reloads the
+            ;; transcript into context).  Separate-bridge providers
+            ;; (Claude, Pi) declare no `:resume-cli-flag' -- their bridge
+            ;; ignores such a flag in argv, so they resume over ACP via
+            ;; `session/resume' (`decknix-agent-resume-native.el').
+            :resume-cli-flag "--resume"))
 
         (decknix-agent-register-provider 'claude-code
           '(:make-config-fn agent-shell-anthropic-make-claude-code-config
@@ -2725,10 +2750,16 @@ in
             :label "Claude"
             :glyph "C"
             :supports-workspace-root nil
-            ;; `claude-agent-acp' resumes over ACP `session/new'; the
-            ;; `--resume' flag is a no-op, so the model boots with an
-            ;; empty context (only the buffer is repopulated).  Prime
-            ;; the model with a continuation message on resume.
+            ;; No `:resume-cli-flag': `claude-agent-acp' is a pure ACP
+            ;; server and ignores `--resume' in argv.  Resume is driven
+            ;; over the wire via ACP `session/resume' -- the bridge
+            ;; advertises `sessionCapabilities.resume' and reloads the
+            ;; prior transcript into the model's context natively (same
+            ;; engine as `claude --resume').  See
+            ;; `decknix-agent-resume-native.el'.  `:resume-needs-primer'
+            ;; stays as the fallback: if a bridge ever fails to advertise
+            ;; the resume capability we drop back to `session/new' + the
+            ;; continuation primer rather than boot with empty context.
             :resume-needs-primer t))
 
         (decknix-agent-register-provider 'pi
@@ -3487,6 +3518,20 @@ ${optionalString cfg.tableOverlay.enable ''
                           "decknix-agent-resume-primer"
                           (provider-label session-id data-path tags
                                           last-user-message))
+
+        ;; Native ACP `session/resume' (#143 follow-up).  When a resume
+        ;; targets a provider whose CLI ignores `--resume' in argv
+        ;; (Claude, Pi), restore the exact saved session over the wire so
+        ;; the model boots with real context instead of the primer.  The
+        ;; `:around' advice is a named function so re-`advice-add' across
+        ;; `decknix switch' hot-reloads is idempotent (no stacking).
+        (require 'decknix-agent-resume-native)
+        (declare-function decknix--agent-resume-native-initiate-session
+                          "decknix-agent-resume-native" (orig-fn &rest args))
+        (defvar decknix--agent-resume-target-sid)
+        (defvar decknix--agent-resume-native-done)
+        (advice-add 'agent-shell--initiate-session :around
+                    #'decknix--agent-resume-native-initiate-session)
 
         ;; Sub-agent liveness state (#144) -- pure ladder consumed by
         ;; the sidebar sub-agent row renderer (workspace-bulk) to

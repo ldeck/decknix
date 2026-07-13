@@ -158,6 +158,17 @@ into the model's context -- separate ACP bridges (Claude, Pi) whose
 native `--resume' reloads the transcript into context itself."
   (plist-get (decknix-agent-require-provider id) :resume-needs-primer))
 
+(defun decknix-agent-provider-resume-cli-flag (id)
+  "Return the CLI flag provider ID uses to resume a session, or nil.
+Only providers whose own CLI is the ACP server AND accepts a resume
+flag on the command line declare this (auggie's \"--resume\").  The
+separate-bridge providers (Claude, Pi) do NOT: their bridge is a pure
+ACP server that ignores such a flag in argv, so resume for them is
+driven over the wire via ACP `session/resume' instead (see
+`decknix-agent-resume-native.el').  When nil, no resume flag is placed
+on the command line."
+  (plist-get (decknix-agent-require-provider id) :resume-cli-flag))
+
 ;; -- Model persistence strategy ----------------------------------
 
 (defun decknix--agent-resume-primer-needed-p (provider-id)
@@ -197,7 +208,14 @@ MODEL is placed on the command line only when PROVIDER-ID declares a
 used verbatim so a provider can use an equivalent switch.  Providers
 without a launch flag (Claude, Pi) omit MODEL here -- it is replayed
 over ACP after resume instead (see
-`decknix--agent-model-replay-needed-p')."
+`decknix--agent-model-replay-needed-p').
+
+SESSION-ID is placed on the command line only when PROVIDER-ID declares
+a `:resume-cli-flag' (auggie's \"--resume\").  The separate-bridge
+providers (Claude, Pi) declare none: their bridge ignores a resume flag
+in argv, so passing it would be dead weight (and could leak into the
+bridge's re-invoked `/login' command).  They resume over ACP instead
+via `session/resume' (`decknix-agent-resume-native.el')."
   (let* ((base-cmd (decknix-agent-provider-acp-command provider-id))
          (ws-args  (when (and (stringp workspace)
                               (not (string-empty-p workspace))
@@ -208,8 +226,9 @@ over ACP after resume instead (see
                                 (stringp model)
                                 (not (string-empty-p model)))
                        (list model-flag model)))
-         (resume-args (when session-id
-                        (list "--resume" session-id))))
+         (resume-flag (decknix-agent-provider-resume-cli-flag provider-id))
+         (resume-args (when (and resume-flag session-id)
+                        (list resume-flag session-id))))
     (append base-cmd ws-args model-args resume-args)))
 
 (defun decknix--agent-make-config (provider-id augmented-cmd &optional mode)
