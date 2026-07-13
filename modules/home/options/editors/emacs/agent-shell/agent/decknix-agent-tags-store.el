@@ -57,6 +57,8 @@
 ;; is sufficient here.
 (declare-function decknix--agent-session-list
                   "decknix-agent-session-cache" ())
+(declare-function decknix--agent-session-list-if-warm
+                  "decknix-agent-session-cache" ())
 (declare-function decknix--agent-conversation-key
                   "ext:decknix-agent-shell-main" (first-message))
 
@@ -145,7 +147,6 @@ or walking the store for orphaned v1 entries."
       ;; incremental migration (orphaned v1 entries coexisting with v2).
       (let ((convs (or (gethash "conversations" store)
                        (make-hash-table :test 'equal)))
-            (sessions (decknix--agent-session-list))
             (old-entries nil)
             (migrated 0))
       ;; Collect orphaned session-keyed entries (UUID keys with tags).
@@ -160,7 +161,10 @@ or walking the store for orphaned v1 entries."
                    (push (cons key val) old-entries)))
                store)
       (when old-entries
-        ;; Resolve each old session → conversation and merge tags
+        ;; Resolve each old session → conversation and merge tags.
+        ;; Fetch session list only when needed — avoids a blocking
+        ;; synchronous scan of all session files on every tag-store read.
+        (let ((sessions (decknix--agent-session-list)))
         (dolist (entry old-entries)
           (let* ((sid (car entry))
                  (data (cdr entry))
@@ -198,7 +202,7 @@ or walking the store for orphaned v1 entries."
               ;; source of tag loss on the guided-session
               ;; creation race.
               (remhash sid store)
-              (setq migrated (1+ migrated)))))
+              (setq migrated (1+ migrated))))))
         ;; Write back the cleaned store.  Best-effort: this migration is a
         ;; side effect of *reading* the store, so a write failure (e.g. a
         ;; read-only HOME, as in the Nix build sandbox) must not turn a
@@ -225,13 +229,14 @@ or walking the store for orphaned v1 entries."
 (defun decknix--agent-tags--maybe-canonicalize-keys (store)
   "Run the canonical conv-key migration on STORE if needed.
 Gated by the `_canonicalKeyVersion' flag so the walk only happens
-once per upgrade.  Skipped entirely when `decknix--agent-session-list'
-is empty, so the migration defers gracefully until the session
-cache populates."
+once per upgrade.  Skipped entirely when the session cache is cold,
+so the migration defers gracefully until the cache warms up naturally
+(e.g., when the user opens the session picker).  Uses the non-blocking
+`decknix--agent-session-list-if-warm' to avoid stalling daemon startup."
   (let ((current (gethash "_canonicalKeyVersion" store)))
     (when (or (not (numberp current))
               (< current decknix--agent-tags-canonical-key-version))
-      (let* ((sessions (decknix--agent-session-list))
+      (let* ((sessions (decknix--agent-session-list-if-warm))
              (rekeyed (and sessions
                            (decknix--agent-tags--canonicalize-keys
                             store sessions))))

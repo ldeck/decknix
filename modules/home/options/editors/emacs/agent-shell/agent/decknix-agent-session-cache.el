@@ -739,6 +739,38 @@ callers can render a provider glyph and filter by provider."
                       (mb (alist-get 'modified b)))
                   (string> (or ma "") (or mb "")))))))
 
+(defun decknix--agent-session-cache-warm-p (&optional provider-id)
+  "Return non-nil if the session cache for PROVIDER-ID is populated.
+When PROVIDER-ID is nil, checks if ANY registered provider has a warm cache.
+This is a cheap O(1) check that does NOT trigger a synchronous refresh —
+use it to guard code that should defer when the cache is cold (e.g.,
+background migrations that can wait until the user opens the session picker)."
+  (if provider-id
+      (> (or (gethash provider-id decknix--agent-session-cache-time-map) 0) 0)
+    (catch 'warm
+      (dolist (entry decknix-agent-provider-registry)
+        (when (> (or (gethash (car entry) decknix--agent-session-cache-time-map) 0) 0)
+          (throw 'warm t)))
+      nil)))
+
+(defun decknix--agent-session-list-if-warm (&optional provider-id)
+  "Return cached sessions if the cache is warm, otherwise nil.
+Unlike `decknix--agent-session-list', this NEVER triggers a synchronous
+refresh — it returns nil immediately when the cache is cold.  Use this
+for background migrations that can defer until the cache warms up naturally."
+  (when (decknix--agent-session-cache-warm-p provider-id)
+    (if provider-id
+        (gethash provider-id decknix--agent-session-cache-map)
+      (let ((all nil))
+        (dolist (entry decknix-agent-provider-registry)
+          (let ((p-id (car entry)))
+            (when (gethash p-id decknix--agent-session-cache-map)
+              (setq all (append all (gethash p-id decknix--agent-session-cache-map))))))
+        (sort all (lambda (a b)
+                    (let ((ma (alist-get 'modified a))
+                          (mb (alist-get 'modified b)))
+                      (string> (or ma "") (or mb "")))))))))
+
 ;; ---------------------------------------------------------------------------
 ;; Provider-id lookup by session-id (Phase 1.3)
 ;; ---------------------------------------------------------------------------
