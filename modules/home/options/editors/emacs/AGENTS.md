@@ -385,14 +385,34 @@ The largest module (~4400 lines). Key subsystems:
     subscription-auth empty-model-list case: the bridge validates any change
     against that empty list and errors on selection, so a picker is strictly
     worse than the honest "No session models available".
-- **Resume continuation primer**: auggie's native `--resume` reloads the prior
-  transcript into the *model's* context, so a resumed auggie session already
-  knows the conversation. The separate-bridge providers (Claude via
-  `claude-agent-acp`, Pi via `pi-acp`) do **not** — their `--resume` flag is a
-  no-op, the ACP session starts on a fresh `session/new`, and only the Emacs
-  **buffer** is repopulated from disk (`decknix--agent-session-prepopulate`).
-  The model itself boots with an empty context window, so `/show-context` and
-  the agent behave as if there were no prior session. To close that gap,
+- **Native ACP `session/resume`** (#143): auggie's own CLI is the ACP server and
+  accepts `--resume <sid>` on the command line, so a resumed auggie session
+  reloads the prior transcript into the *model's* context itself (its provider
+  declares `:resume-cli-flag "--resume"`, appended by `decknix--agent-command-build`).
+  The separate-bridge providers (Claude via `claude-agent-acp`, Pi via `pi-acp`)
+  declare **no** `:resume-cli-flag` — their bridge is a pure ACP server that
+  ignores a resume flag in argv. Their bridges now advertise the ACP
+  `sessionCapabilities.resume` capability, so we resume over the wire instead:
+  `decknix--agent-session-resume--new` marks the shell buffer with
+  `decknix--agent-resume-target-sid`, and an `:around` advice on
+  `agent-shell--initiate-session` (in `agent-shell/resume-native/`) sends a
+  `session/resume` request for that exact id — skipping upstream's
+  `session/list` + strategy selection, which only offers "latest"/"prompt" and
+  cannot target an arbitrary saved session. On success it mirrors the upstream
+  load path (`agent-shell--set-session-from-response` +
+  `agent-shell--finalize-session-init`), so the state machine then applies the
+  saved model + permission mode as for a new session, and the transcript
+  continues in-place (the bridge keeps the same session id on resume). We use
+  `session/resume` and **never** `session/load`: `resume` restores context
+  without replaying the transcript back to the client, so it composes with our
+  own buffer prepopulation (`decknix--agent-session-prepopulate`), whereas
+  `load` would replay history and double-render. Pure predicate
+  `decknix--agent-resume-native-p` carved + ERT-tested; the advice registration
+  (a named `decknix--` function, so hot-reload's stale-advice strip handles it)
+  lives in the heredoc per Rule 2.
+- **Resume continuation primer** (fallback): when a bridge does **not** advertise
+  the resume capability (native resume unavailable, or the `session/resume`
+  request fails), we fall back to `session/new` and
   `decknix--agent-session-resume--new` auto-sends a lightweight **primer** as the
   first user message once the resumed session reports ready — mirroring the fork
   hand-off (`decknix--agent-resume-primer-on-ready` → `shell-maker-submit`). The
@@ -402,11 +422,10 @@ The largest module (~4400 lines). Key subsystems:
   cue, and asks it to summarise where things left off and wait. Gated by the
   per-provider `:resume-needs-primer` flag (set on `claude-code` + `pi`; pure
   predicate `decknix--agent-resume-primer-needed-p` in `decknix-agent-provider.el`)
-  and the `decknix-agent-resume-primer-enable` defcustom (default `t`). The pure
-  message builder is carved + ERT-tested in
-  `agent-shell/resume-primer/decknix-agent-resume-primer.el`. Follow-up (#143):
-  resume via ACP `session/load` so the transcript is restored natively into the
-  model instead of re-read by it.
+  and the `decknix-agent-resume-primer-enable` defcustom (default `t`), and
+  **suppressed** when native resume already loaded context
+  (`decknix--agent-resume-native-done`). The pure message builder is carved +
+  ERT-tested in `agent-shell/resume-primer/decknix-agent-resume-primer.el`.
 
 ## Agent Providers
 
