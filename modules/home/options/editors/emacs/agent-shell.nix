@@ -2666,6 +2666,13 @@ in
         ;; they are harmless and still logged to *Warnings*
         (setq native-comp-async-report-warnings-errors 'silent)
 
+        ;; Never let `gh' page: any gh subprocess spawned on a PTY detects a
+        ;; terminal and forks `less', which blocks forever waiting for stdin
+        ;; and leaks the gh + less pair (the 60 s CI poll accumulated 100+).
+        ;; The async CI runner also uses a pipe; this is the daemon-global
+        ;; backstop covering every gh spawn (PR actions, hub, future).
+        (setenv "GH_PAGER" "cat")
+
         ;; == Core: agent-shell with auggie defaults ==
         (require 'agent-shell)
         (require 'agent-shell-auggie)

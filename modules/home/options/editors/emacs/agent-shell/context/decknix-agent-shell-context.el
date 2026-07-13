@@ -248,6 +248,15 @@ buffer when it is still live.  Async counterpart of
 `decknix--context-gh-json'/`-gh-json-array'."
   (let* ((buf (current-buffer))
          (out (generate-new-buffer " *decknix-context-gh*"))
+         ;; Use a pipe (not the default PTY) and disable gh's pager.  On a
+         ;; PTY, gh detects a terminal and forks `less' to page its output;
+         ;; `less' then blocks forever waiting for stdin that never comes, so
+         ;; the gh process never exits, the sentinel never fires, and BOTH
+         ;; the gh and less processes leak — one pair per 60 s CI poll (seen
+         ;; accumulating to 100+ zombie gh/less pairs).  A pipe stops the TTY
+         ;; detection; GH_PAGER=cat is a belt-and-suspenders backstop.
+         (process-connection-type nil)
+         (process-environment (cons "GH_PAGER=cat" process-environment))
          (proc (ignore-errors
                  (start-process-shell-command
                   "decknix-context-gh" out
