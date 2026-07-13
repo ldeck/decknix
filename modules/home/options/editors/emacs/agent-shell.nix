@@ -5990,6 +5990,15 @@ ${optionalString cfg.hub.priority.enable ''
         (add-hook 'agent-shell-mode-hook
                   (lambda ()
                     (display-line-numbers-mode 0)
+                    ;; Redisplay perf: agent output is LTR and often carries
+                    ;; very long, heavily-propertized lines (tool-result JSON,
+                    ;; logs).  Forcing LTR paragraph direction and skipping
+                    ;; bidi bracket-pair resolution removes the dominant cost
+                    ;; from window relayout — CPU sampling of a wedged daemon
+                    ;; showed bidi_find_bracket_pairs / bidi_resolve_brackets /
+                    ;; bidi_move_to_visually_next saturating redisplay_window.
+                    (setq-local bidi-paragraph-direction 'left-to-right)
+                    (setq-local bidi-inhibit-bpa t)
                     ;; Auto-persist workspace on first exchange — safety net
                     ;; for sessions created via any path (upstream c, resume,
                     ;; quickaction, etc.) so they never show as "unknown".

@@ -343,12 +343,23 @@ renders as ^J, not a line break.  All items therefore live on one line."
   "Update the header-line-format for the current agent-shell buffer.
 Skips the update when input is pending so the 2-second repeating
 timer (one per live buffer) does not block the user while typing.
-The header catches up on the next tick."
+The header catches up on the next tick.
+
+Redisplay perf: also skips buffers not shown in any window (refreshing
+an offscreen header helps no one and still dirties it), and only calls
+`force-mode-line-update' when the freshly built header actually differs
+from what is displayed — so a steady-state (non-animating) session no
+longer forces a window relayout every tick.  This is the difference
+between one `force-mode-line-update' per *visible, changed* buffer and
+one per *live* buffer every 2 s, which CPU sampling showed re-paying
+the full bidi/interval relayout cost across all sessions."
   (unless (input-pending-p)
-    (when (derived-mode-p 'agent-shell-mode)
-      (setq-local header-line-format
-                  (list (decknix--header-build)))
-      (force-mode-line-update))))
+    (when (and (derived-mode-p 'agent-shell-mode)
+               (get-buffer-window (current-buffer) t))
+      (let ((new (list (decknix--header-build))))
+        (unless (equal new header-line-format)
+          (setq-local header-line-format new)
+          (force-mode-line-update))))))
 
 (defun decknix--header-start-timer ()
   "Start a buffer-local 2-second timer to refresh the header-line.

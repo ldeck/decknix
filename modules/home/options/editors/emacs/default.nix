@@ -175,7 +175,13 @@ in
         (use-package gcmh
           :demand t
           :config
-          (setq gcmh-high-cons-threshold (* 256 1024 1024)  ; 256 MB during work
+          ;; 512 MB during work (was 256): long agent-shell sessions churn
+          ;; large overlay/text-property/interval trees, and CPU sampling
+          ;; showed GC *marking* (mark_overlays / traverse_intervals /
+          ;; mark_char_table) as a top cost.  A higher work-time threshold
+          ;; keeps that collection from firing mid-typing; gcmh still
+          ;; reclaims on idle.
+          (setq gcmh-high-cons-threshold (* 512 1024 1024)  ; 512 MB during work
                 gcmh-idle-delay 5)                           ; GC after 5s idle
           (gcmh-mode 1))
 

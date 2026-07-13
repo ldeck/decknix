@@ -354,5 +354,68 @@ prev-status memo exists."
       (decknix--header-stop-timer)
       (should (null decknix--header-timer)))))
 
+;; -- Update gating (redisplay perf) ------------------------------
+
+(ert-deftest decknix-header-update--skips-when-not-displayed ()
+  "No window for the buffer -> no build, no force, header untouched."
+  (let ((forced nil) (built nil))
+    (cl-letf (((symbol-function 'input-pending-p) (lambda () nil))
+              ((symbol-function 'derived-mode-p) (lambda (&rest _) t))
+              ((symbol-function 'get-buffer-window) (lambda (&rest _) nil))
+              ((symbol-function 'decknix--header-build)
+               (lambda () (setq built t) "x"))
+              ((symbol-function 'force-mode-line-update)
+               (lambda (&rest _) (setq forced t))))
+      (with-temp-buffer
+        (setq-local header-line-format nil)
+        (decknix--header-update)
+        (should-not forced)
+        (should-not built)
+        (should (null header-line-format))))))
+
+(ert-deftest decknix-header-update--skips-force-when-unchanged ()
+  "Visible but freshly built header is identical -> no force-mode-line-update."
+  (let ((forced nil))
+    (cl-letf (((symbol-function 'input-pending-p) (lambda () nil))
+              ((symbol-function 'derived-mode-p) (lambda (&rest _) t))
+              ((symbol-function 'get-buffer-window) (lambda (&rest _) (selected-window)))
+              ((symbol-function 'decknix--header-build) (lambda () "same"))
+              ((symbol-function 'force-mode-line-update)
+               (lambda (&rest _) (setq forced t))))
+      (with-temp-buffer
+        (setq-local header-line-format (list "same"))
+        (decknix--header-update)
+        (should-not forced)))))
+
+(ert-deftest decknix-header-update--forces-when-changed ()
+  "Visible and header differs -> updates format and forces redisplay once."
+  (let ((forced nil))
+    (cl-letf (((symbol-function 'input-pending-p) (lambda () nil))
+              ((symbol-function 'derived-mode-p) (lambda (&rest _) t))
+              ((symbol-function 'get-buffer-window) (lambda (&rest _) (selected-window)))
+              ((symbol-function 'decknix--header-build) (lambda () "new"))
+              ((symbol-function 'force-mode-line-update)
+               (lambda (&rest _) (setq forced t))))
+      (with-temp-buffer
+        (setq-local header-line-format (list "old"))
+        (decknix--header-update)
+        (should forced)
+        (should (equal header-line-format (list "new")))))))
+
+(ert-deftest decknix-header-update--skips-when-input-pending ()
+  "Pending input -> skip entirely so typing is never blocked."
+  (let ((forced nil))
+    (cl-letf (((symbol-function 'input-pending-p) (lambda () t))
+              ((symbol-function 'derived-mode-p) (lambda (&rest _) t))
+              ((symbol-function 'get-buffer-window) (lambda (&rest _) (selected-window)))
+              ((symbol-function 'decknix--header-build) (lambda () "new"))
+              ((symbol-function 'force-mode-line-update)
+               (lambda (&rest _) (setq forced t))))
+      (with-temp-buffer
+        (setq-local header-line-format (list "old"))
+        (decknix--header-update)
+        (should-not forced)
+        (should (equal header-line-format (list "old")))))))
+
 (provide 'decknix-agent-header-test)
 ;;; decknix-agent-header-test.el ends here
