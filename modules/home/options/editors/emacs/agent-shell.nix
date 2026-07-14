@@ -5495,6 +5495,8 @@ ${optionalString cfg.hub.priority.enable ''
         (require 'decknix-hub-sidebar-paint)
         (declare-function decknix--sidebar-refresh-debounce-advice
                           "decknix-hub-sidebar-paint")
+        (declare-function decknix--sidebar-install-idle-tick
+                          "decknix-hub-sidebar-paint")
 
         (with-eval-after-load 'agent-shell-workspace
           (advice-add 'agent-shell-workspace-sidebar-refresh :around
@@ -5544,7 +5546,32 @@ ${optionalString cfg.hub.priority.enable ''
           ;; set so it passes through instead of re-deferring.  A named
           ;; function keeps this idempotent across hot-reloads.
           (advice-add 'agent-shell-workspace-sidebar-refresh :around
-                      #'decknix--sidebar-refresh-debounce-advice))
+                      #'decknix--sidebar-refresh-debounce-advice)
+
+          ;; Replace the mode's blind `(run-with-timer 2 2 refresh)' with a
+          ;; dirty-checked idle tick: same 2 s cadence, but it only repaints
+          ;; when the hub data / a live-session status changed (or once per
+          ;; force interval for relative-time drift).  This is what stops the
+          ;; idle sidebar from pegging a core in `redisplay_internal'.
+          (advice-add 'agent-shell-workspace-sidebar-mode :after
+                      #'decknix--sidebar-install-idle-tick))
+
+        ;; Throttle the busy-session heartbeat.  Upstream animates the
+        ;; header + mode-line spinner at 10 beats/sec (`agent-shell-
+        ;; heartbeat-make' default), forcing a `redisplay_internal' pass
+        ;; 10x/second for as long as ANY agent is busy.  Clamp to 3/sec:
+        ;; still a live spinner, ~3x less redisplay churn while agents run.
+        ;; `:filter-args' rewrites the `:beats-per-second' keyword before
+        ;; the heartbeat timer is armed.  Named function → hot-reload-safe.
+        (defun decknix--heartbeat-clamp-bps (args)
+          "Clamp `agent-shell-heartbeat-make' :beats-per-second to <=3.
+ARGS is the `&key' plist; returns a fresh plist so the caller's is not
+mutated."
+          (plist-put (copy-sequence args) :beats-per-second
+                     (min 3 (or (plist-get args :beats-per-second) 10))))
+        (with-eval-after-load 'agent-shell-heartbeat
+          (advice-add 'agent-shell-heartbeat-make :filter-args
+                      #'decknix--heartbeat-clamp-bps))
 
         ;; Add Hub group to the sidebar transient
         ;; -- Hub: org filter (multi-select transient) --
