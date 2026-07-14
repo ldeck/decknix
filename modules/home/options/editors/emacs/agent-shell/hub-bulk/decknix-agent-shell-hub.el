@@ -889,7 +889,7 @@ lint-only failures and still-running checks."
   [""
    ("a" "Show all" decknix--hub-ci-filter-show-all :transient t)
    ("n" "Show none" decknix--hub-ci-filter-show-none :transient t)
-   ("q" "Done" transient-quit-one)])
+   ("q" "Done" transient-quit-all)])
 
 (defun decknix--hub-cycle-mention-filter ()
   "Cycle the mention filter through off → me → team → me+team → off."
