@@ -151,5 +151,32 @@
         (should (equal got-args '(a b)))
         (should-not scheduled)))))
 
+;; -- Dirty-checked idle tick decision --------------------------------
+
+(ert-deftest decknix-sidebar-paint--idle-paints-when-fingerprint-changed ()
+  "A changed fingerprint forces a repaint even inside the force window."
+  (should (decknix--sidebar-idle-should-paint-p
+           '(:b) '(:a) 100.0 100.5 60)))
+
+(ert-deftest decknix-sidebar-paint--idle-skips-when-unchanged-in-window ()
+  "Same fingerprint within the force window -> skip (no repaint)."
+  (should-not (decknix--sidebar-idle-should-paint-p
+               '(:a) '(:a) 100.0 130.0 60)))
+
+(ert-deftest decknix-sidebar-paint--idle-forces-after-interval ()
+  "Same fingerprint but past the force interval -> repaint (relative times)."
+  (should (decknix--sidebar-idle-should-paint-p
+           '(:a) '(:a) 100.0 161.0 60)))
+
+(ert-deftest decknix-sidebar-paint--idle-force-boundary-is-inclusive ()
+  "Exactly FORCE-INTERVAL seconds elapsed repaints (>= boundary)."
+  (should (decknix--sidebar-idle-should-paint-p
+           '(:a) '(:a) 100.0 160.0 60)))
+
+(ert-deftest decknix-sidebar-paint--idle-unset-baseline-paints ()
+  "The initial `unset' baseline never equals a real fingerprint -> paints."
+  (should (decknix--sidebar-idle-should-paint-p
+           '(nil nil) 'unset 0 0.0 60)))
+
 (provide 'decknix-hub-sidebar-paint-test)
 ;;; decknix-hub-sidebar-paint-test.el ends here
