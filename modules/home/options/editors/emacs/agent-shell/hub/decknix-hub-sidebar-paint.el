@@ -35,6 +35,10 @@
 ;; Provided by the upstream `agent-shell-workspace' package; only ever
 ;; called through the advice, so a forward declaration is enough.
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
+(declare-function agent-shell-buffers "ext:agent-shell")
+(declare-function agent-shell-workspace--buffer-status "ext:agent-shell-workspace")
+(defvar decknix--hub-dir)
+(defvar agent-shell-workspace-sidebar--refresh-timer)
 
 (defvar decknix-sidebar-paint-idle-delay 0.6
   "Idle seconds to wait before repainting the sidebar after a request.
@@ -81,6 +85,11 @@ cannot leave the guard stuck."
   (setq decknix--sidebar-paint-timer nil)
   (let ((decknix--sidebar-paint-in-progress t))
     (ignore-errors (funcall refresh-fn)))
+  ;; Re-baseline the idle-tick dirty check off this fresh paint, so the
+  ;; 2 s tick only repaints on changes that happen AFTER it (from any
+  ;; source), never redundantly re-painting what we just drew.
+  (setq decknix--sidebar-idle-last-fingerprint (decknix--sidebar-idle-fingerprint)
+        decknix--sidebar-idle-last-paint (float-time))
   ;; Universal eager-persist net: any state change reaches the sidebar
   ;; through a repaint, so persist toggle state (debounced + dirty-
   ;; checked, hence free when nothing changed) after each real paint.
@@ -100,6 +109,98 @@ paints and never a visible input hitch."
   (if (input-pending-p)
       (decknix--sidebar-schedule-paint #'decknix--sidebar-paint-tick)
     (decknix--sidebar-paint-now #'agent-shell-workspace-sidebar-refresh)))
+
+;; -- Dirty-checked idle tick (replaces the blind 2 s repaint timer) --
+;;
+;; Upstream arms `(run-with-timer 2 2 #'agent-shell-workspace-sidebar-refresh)'
+;; in `agent-shell-workspace-sidebar-mode', so the sidebar fully repaints
+;; every 2 s forever -- even when nothing changed.  On a large sidebar
+;; that ~100ms erase+rebuild, 30x/minute, pegs a core in `redisplay_internal'.
+;;
+;; We swap that timer for `decknix--sidebar-idle-tick': same 2 s cadence,
+;; but it repaints ONLY when the inputs that change passively (hub JSON
+;; files + live-session statuses) actually changed, or once per
+;; `decknix-sidebar-idle-force-interval' so relative timestamps still
+;; advance.  User/event driven changes (toggles, selection, file-notify,
+;; `g') keep painting immediately through the normal refresh path, so
+;; they need not appear in the fingerprint.
+
+(defvar decknix-sidebar-idle-force-interval 60
+  "Seconds after which the idle tick repaints even if nothing changed.
+Bounds worst-case staleness (e.g. a relative \"6h\" timestamp, or any
+input not covered by the fingerprint) and refreshes relative times.
+Small enough to feel current, large enough that a static sidebar costs
+one paint a minute instead of one every two seconds.")
+
+(defconst decknix--sidebar-idle-hub-files
+  '("github-reviews.json" "github-wip.json" "teamcity-deploys.json"
+    "teamcity-builds.json" "jira-tasks.json" "meta.json")
+  "Hub data files whose mtime/size drives a sidebar repaint.")
+
+(defvar decknix--sidebar-idle-last-fingerprint 'unset
+  "Fingerprint of the sidebar inputs as of the last real paint.")
+
+(defvar decknix--sidebar-idle-last-paint 0
+  "`float-time' of the last real sidebar paint (for the force interval).")
+
+(defun decknix--sidebar-idle-fingerprint ()
+  "Cheap fingerprint of the sidebar inputs that change passively.
+Covers hub data file mtime+size and the live agent-shell buffers'
+statuses -- the two things the blind 2 s timer existed to catch.  A few
+`file-attributes' calls plus a buffer walk: sub-millisecond, versus the
+~100ms paint it guards."
+  (list
+   (when (and (boundp 'decknix--hub-dir) decknix--hub-dir)
+     (mapcar (lambda (f)
+               (let ((attrs (file-attributes
+                             (expand-file-name f decknix--hub-dir))))
+                 (when attrs
+                   (list f (file-attribute-modification-time attrs)
+                         (file-attribute-size attrs)))))
+             decknix--sidebar-idle-hub-files))
+   (when (and (fboundp 'agent-shell-buffers)
+              (fboundp 'agent-shell-workspace--buffer-status))
+     (mapcar (lambda (b)
+               (cons (buffer-name b)
+                     (ignore-errors (agent-shell-workspace--buffer-status b))))
+             (agent-shell-buffers)))))
+
+(defun decknix--sidebar-idle-should-paint-p (fingerprint last-fingerprint
+                                                         last-paint now
+                                                         force-interval)
+  "Return non-nil when the idle tick should repaint the sidebar.
+Repaint when FINGERPRINT differs from LAST-FINGERPRINT (an input
+changed), or when NOW is at least FORCE-INTERVAL seconds past LAST-PAINT.
+Pure, so the decision is unit-testable without a live sidebar."
+  (or (not (equal fingerprint last-fingerprint))
+      (>= (- now last-paint) force-interval)))
+
+(defun decknix--sidebar-idle-tick ()
+  "Dirty-checked replacement for the sidebar's blind 2 s auto-refresh.
+Repaints (through the normal debounced refresh) only when an input
+changed or the force interval elapsed, so an idle sidebar stops pegging
+`redisplay_internal'."
+  (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
+             (decknix--sidebar-idle-should-paint-p
+              (decknix--sidebar-idle-fingerprint)
+              decknix--sidebar-idle-last-fingerprint
+              decknix--sidebar-idle-last-paint
+              (float-time)
+              decknix-sidebar-idle-force-interval))
+    (agent-shell-workspace-sidebar-refresh)))
+
+(defun decknix--sidebar-install-idle-tick (&rest _)
+  "Swap the sidebar's blind 2 s refresh timer for the dirty-checked tick.
+Attached as `:after' advice on `agent-shell-workspace-sidebar-mode'.
+Cancels the timer the mode just armed and re-uses the same storage var so
+the upstream `kill-buffer-hook' still tears ours down with the buffer."
+  (when (boundp 'agent-shell-workspace-sidebar--refresh-timer)
+    (when (timerp agent-shell-workspace-sidebar--refresh-timer)
+      (cancel-timer agent-shell-workspace-sidebar--refresh-timer))
+    (setq decknix--sidebar-idle-last-fingerprint 'unset
+          decknix--sidebar-idle-last-paint 0
+          agent-shell-workspace-sidebar--refresh-timer
+          (run-with-timer 2 2 #'decknix--sidebar-idle-tick))))
 
 (defun decknix--sidebar-refresh-debounce-advice (orig-fn &rest args)
   "Around-advice for `agent-shell-workspace-sidebar-refresh'.
