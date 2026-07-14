@@ -4065,7 +4065,34 @@ cannot close over the surrounding `let' binding."
 
         (with-eval-after-load 'acp
           (advice-add 'acp--start-client :after
-                      #'decknix--agent-install-death-recorder))
+                      #'decknix--agent-install-death-recorder)
+
+          ;; == Model switching: use spec-standard `session/set_config_option' ==
+          ;; Upstream `acp.el' emits `session/set_model', a legacy
+          ;; `claude-code-acp' extension that the current
+          ;; `@agentclientprotocol/claude-agent-acp' adapter (and the ACP
+          ;; spec itself) no longer implement -- the agent replies -32601
+          ;; "Method not found", breaking both interactive model switching
+          ;; (`C-c C-v' / `agent-shell-set-session-model') and decknix's
+          ;; resume-time model restore (the id:3 request on session resume).
+          ;; The spec-standard way to change the model is
+          ;; `session/set_config_option' with `configId' "model" (see
+          ;; `MODEL_CONFIG_ID' in the adapter).  Redefining the request
+          ;; builder fixes every caller at once; the `on-success' handlers
+          ;; ignore the response body, so the differing `{configOptions ...}'
+          ;; reply is harmless.  Verified against claude-agent-acp
+          ;; 0.54.1..0.59.0 (none register `session/set_model').
+          (cl-defun acp-make-session-set-model-request (&key session-id model-id)
+            "Instantiate a `session/set_config_option' request to set the model.
+SESSION-ID is the session to change; MODEL-ID is the model value
+\(e.g. \"default\", \"opus\", \"claude-opus-4-8\").  Replaces
+upstream acp.el's stale `session/set_model' builder -- see the comment above."
+            (unless session-id (error ":session-id is required"))
+            (unless model-id (error ":model-id is required"))
+            `((:method . "session/set_config_option")
+              (:params . ((sessionId . ,session-id)
+                          (configId . "model")
+                          (value . ,model-id))))))
 
         (defun decknix--agent-insert-death-record (rec)
           "Insert REC into the current buffer."
