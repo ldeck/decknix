@@ -39,11 +39,20 @@
 
 ;; -- Predicate ---------------------------------------------------
 
-(ert-deftest decknix-hub-wip-terminal-filter--predicate-hides-merged ()
-  "When toggle is on, a MERGED PR is filtered out."
+(ert-deftest decknix-hub-wip-terminal-filter--predicate-keeps-merged-until-prod ()
+  "Deploy-gated (#137): a MERGED PR not yet in production stays visible.
+Even with the toggle on, a merged PR is kept until its code ships so its
+worktree is not pruned prematurely."
   (let ((decknix--hub-wip-hide-terminal t))
-    (should-not (decknix--hub-wip-terminal-visible-p
-                 '((state . "MERGED"))))))
+    ;; deployed-to-prod-p nil -> still rolling out -> visible
+    (should (decknix--hub-wip-terminal-visible-p '((state . "MERGED")) nil))
+    ;; back-compat: no deploy arg supplied -> treated as not-deployed -> visible
+    (should (decknix--hub-wip-terminal-visible-p '((state . "MERGED"))))))
+
+(ert-deftest decknix-hub-wip-terminal-filter--predicate-hides-merged-once-prod ()
+  "Deploy-gated (#137): a MERGED PR is hidden once it reaches production."
+  (let ((decknix--hub-wip-hide-terminal t))
+    (should-not (decknix--hub-wip-terminal-visible-p '((state . "MERGED")) t))))
 
 (ert-deftest decknix-hub-wip-terminal-filter--predicate-hides-closed ()
   "When toggle is on, a CLOSED PR is filtered out."
@@ -106,6 +115,24 @@ Mirrors `decknix--hub-wip-terminal-visible-p' so the two
 predicates only ever disagree across the toggle."
   (should-not (decknix--hub-wip-pr-terminal-p
                '((number . 42) (title . "no state field")))))
+
+;; -- Deploy-gated cleanup-ready predicate (#137) -----------------
+
+(ert-deftest decknix-hub-wip-terminal-filter--cleanup-ready-closed ()
+  "CLOSED is immediately cleanup-ready regardless of deploy state."
+  (should (decknix--hub-wip-pr-cleanup-ready-p '((state . "CLOSED")) nil))
+  (should (decknix--hub-wip-pr-cleanup-ready-p '((state . "CLOSED")) t)))
+
+(ert-deftest decknix-hub-wip-terminal-filter--cleanup-ready-merged-gated ()
+  "MERGED is cleanup-ready only once deployed to production."
+  (should-not (decknix--hub-wip-pr-cleanup-ready-p '((state . "MERGED")) nil))
+  (should (decknix--hub-wip-pr-cleanup-ready-p '((state . "MERGED")) t)))
+
+(ert-deftest decknix-hub-wip-terminal-filter--cleanup-ready-open-never ()
+  "OPEN / draft / missing-state rows are never cleanup-ready."
+  (should-not (decknix--hub-wip-pr-cleanup-ready-p '((state . "OPEN")) t))
+  (should-not (decknix--hub-wip-pr-cleanup-ready-p '((state . "DRAFT")) t))
+  (should-not (decknix--hub-wip-pr-cleanup-ready-p '((number . 42)) t)))
 
 ;; -- Toggle ------------------------------------------------------
 

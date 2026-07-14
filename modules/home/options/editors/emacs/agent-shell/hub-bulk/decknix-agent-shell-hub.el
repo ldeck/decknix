@@ -84,6 +84,7 @@
 (declare-function decknix--hub-tc-build-for-branch "decknix-hub-teamcity")
 (declare-function decknix--hub-tc-icon "decknix-hub-teamcity")
 (declare-function decknix--hub-deploy-indicator "decknix-hub-teamcity")
+(declare-function decknix--hub-deployed-to-prod-p "decknix-hub-teamcity")
 (declare-function decknix--hub-task-status-icon "decknix-hub-jira-tasks")
 (declare-function decknix--hub-org-visibility "decknix-hub-org-filter")
 (declare-function decknix--hub-org-visible-p "decknix-hub-org-filter")
@@ -1168,9 +1169,12 @@ unknown conflict."
 ;; transient suffix at ~line 615).  The transient suffix itself
 ;; stays in this file per Rule 2.
 (declare-function decknix--hub-wip-terminal-visible-p
-                  "decknix-hub-wip-terminal-filter" (pr))
+                  "decknix-hub-wip-terminal-filter"
+                  (pr &optional deployed-to-prod-p))
 (declare-function decknix--hub-wip-pr-terminal-p
                   "decknix-hub-wip-terminal-filter" (pr))
+(declare-function decknix--hub-wip-pr-cleanup-ready-p
+                  "decknix-hub-wip-terminal-filter" (pr deployed-to-prod-p))
 (declare-function decknix--hub-toggle-wip-hide-terminal
                   "decknix-hub-wip-terminal-filter")
 
@@ -3245,12 +3249,15 @@ primary action is a no-op until a PR materialises."
          (pr-state (or (alist-get 'state pr) "OPEN"))
          (merged-p (string= pr-state "MERGED"))
          (closed-p (string= pr-state "CLOSED"))
-         ;; Issue #138: terminal-state PRs are normally
-         ;; hidden by `decknix--hub-wip-hide-terminal'; if
-         ;; the user has flipped the toggle off to audit
-         ;; them, decorate the row with a `⊘' stale badge
-         ;; so it is obviously not actionable.
-         (terminal-p (decknix--hub-wip-pr-terminal-p pr))
+         ;; Deploy-gated terminal state (#137/#138).  A merged PR is
+         ;; only "done" once its code reaches production; until then it
+         ;; stays visible (rolling out).  `deployed-to-prod-p' drives
+         ;; both the hide filter and the row badge below.
+         (deployed-to-prod-p (and merged-p
+                                  (fboundp 'decknix--hub-deployed-to-prod-p)
+                                  (decknix--hub-deployed-to-prod-p
+                                   repo-full (alist-get 'merged_at pr)
+                                   decknix--hub-deploys)))
          (draft (eq (alist-get 'draft pr) t))
          (branch (alist-get 'branch pr))
          (url (alist-get 'url pr))
@@ -3284,11 +3291,18 @@ primary action is a no-op until a PR materialises."
          (short-title (if (> (length title) max-title)
                           (concat (substring title 0 (- max-title 1)) "…")
                         title))
-         ;; Issue #138: prepend `⊘ ' badge to terminal rows.
-         (stale-badge (if terminal-p
-                         (propertize "⊘ "
-                                    'face 'font-lock-comment-face)
-                       ""))
+         ;; Deploy-gated row badge (#138).  These rows only surface
+         ;; when hide-terminal is toggled off (auditing cleanup):
+         ;;   ⊘ closed        — dead, nothing to ship
+         ;;   ✓ merged+prod   — shipped to production, safe to prune
+         ;;   (merged, still deploying — no badge; the DTSP indicator
+         ;;    already shows its rollout progress)
+         (stale-badge (cond
+                       (closed-p
+                        (propertize "⊘ " 'face 'font-lock-comment-face))
+                       ((and merged-p deployed-to-prod-p)
+                        (propertize "✓ " 'face 'success))
+                       (t "")))
          (short-title (concat stale-badge short-title))
          ;; Terminal PRs (MERGED/CLOSED) and drafts get dimmed styling.
          (title-face (cond (merged-p 'font-lock-comment-face)
@@ -3387,7 +3401,14 @@ t=0 instead of waiting for the PR + GitHub Search indexing."
          (pr-visible-p
           (lambda (repo-full pr)
             (and (decknix--hub-wip-attention-visible-p pr)
-                 (decknix--hub-wip-terminal-visible-p pr)
+                 ;; Deploy-gated: a merged PR is hidden only once its
+                 ;; code reaches production, so merged worktrees stay
+                 ;; visible until they ship (#137).
+                 (decknix--hub-wip-terminal-visible-p
+                  pr (and (fboundp 'decknix--hub-deployed-to-prod-p)
+                          (decknix--hub-deployed-to-prod-p
+                           repo-full (alist-get 'merged_at pr)
+                           decknix--hub-deploys)))
                  (not (decknix--hub-wip-pr-live-linked-p
                        repo-full (alist-get 'number pr) linked-set)))))
          ;; Filter repos by org, then filter PRs by age + link status
