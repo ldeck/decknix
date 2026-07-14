@@ -73,15 +73,35 @@ toggle-off path with a stale badge (#138)."
   (let ((state (or (alist-get 'state pr) "OPEN")))
     (member state '("MERGED" "CLOSED"))))
 
-(defun decknix--hub-wip-terminal-visible-p (pr)
-  "Return non-nil if PR passes the terminal-state filter.
+(defun decknix--hub-wip-pr-cleanup-ready-p (pr deployed-to-prod-p)
+  "Return non-nil when PR is safe to hide/prune under the deploy gate.
+CLOSED PRs are immediately cleanup-ready (nothing left to deploy).  A
+MERGED PR is cleanup-ready only once DEPLOYED-TO-PROD-P is non-nil --
+until its code positively reaches production it is deliberately kept
+visible so its rollout can be tracked and its worktree is not pruned
+prematurely.  OPEN / placeholder rows (no terminal `state') are never
+cleanup-ready.  Pure -- does not consult `decknix--hub-wip-hide-terminal'.
+
+DEPLOYED-TO-PROD-P is supplied by the WIP renderer from TeamCity deploy
+data (`decknix--hub-deployed-to-prod-p'); it is only meaningful for a
+MERGED PR."
+  (let ((state (or (alist-get 'state pr) "OPEN")))
+    (cond ((string= state "CLOSED") t)
+          ((string= state "MERGED") (and deployed-to-prod-p t))
+          (t nil))))
+
+(defun decknix--hub-wip-terminal-visible-p (pr &optional deployed-to-prod-p)
+  "Return non-nil if PR passes the deploy-gated terminal filter.
 When `decknix--hub-wip-hide-terminal' is nil, every PR is visible.
-When non-nil, PRs whose `state' is MERGED or CLOSED are hidden.
-A PR with no explicit `state' field is treated as OPEN so that
-older snapshots and placeholder rows do not get accidentally
-filtered out."
+When non-nil, a PR is hidden only once it is cleanup-ready
+\(`decknix--hub-wip-pr-cleanup-ready-p'): CLOSED, or MERGED with its code
+already DEPLOYED-TO-PROD-P.  A merged PR still rolling out to production
+stays visible so its deploy can be tracked -- the change that keeps
+merged worktrees alive until they ship.
+A PR with no explicit `state' field is treated as OPEN so that older
+snapshots and placeholder rows do not get accidentally filtered out."
   (or (not decknix--hub-wip-hide-terminal)
-      (not (decknix--hub-wip-pr-terminal-p pr))))
+      (not (decknix--hub-wip-pr-cleanup-ready-p pr deployed-to-prod-p))))
 
 (defun decknix--hub-toggle-wip-hide-terminal ()
   "Toggle hiding of MERGED / CLOSED PRs from the WIP section."
