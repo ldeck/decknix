@@ -4745,6 +4745,17 @@ duration -- the most important number on this branch."
         ;; -- Sidebar transient menu (magit-style ? popup) --
         (require 'transient)
 
+        ;; Single-key exit contract (AGENTS.md): `q'/`C-g' must drop the
+        ;; WHOLE transient stack in one press, never one level per press.
+        ;; Every prefix binds `q' to `transient-quit-all'; `C-g' defaults
+        ;; to `transient-quit-one' in `transient-base-map', so a nested
+        ;; submenu would need a `C-g' per level.  Rebind it once here so
+        ;; `C-g' fully exits any transient (ours or built-in) in one hit,
+        ;; instead of threading a per-prefix `C-g' suffix through all ~11
+        ;; prefixes.  Idempotent across `decknix switch' hot-reloads.
+        (when (boundp 'transient-base-map)
+          (keymap-set transient-base-map "C-g" #'transient-quit-all))
+
         ;; == Sidebar visibility/filter toggles ==
         ;;
         ;; Source moved out of this heredoc into

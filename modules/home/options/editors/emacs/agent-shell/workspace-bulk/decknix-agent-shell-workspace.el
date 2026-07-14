@@ -934,7 +934,7 @@ keys.  Press `C-g' to abort."
     (decknix-sidebar-transient--wt-hide-placeholders)  ;; placeholders (p)
     (decknix-sidebar-transient--wt-group-by-repo)]]    ;; repo-grouped (r)
   ["" ("?" "describe key" decknix-sidebar-toggles-describe-key :transient t)
-      ("q" "Back" transient-quit-one)])
+      ("q" "Quit" transient-quit-all)])
 
 (transient-define-prefix decknix-sidebar-toggles-transient ()
   "Sidebar toggles grouped by section.
@@ -1004,7 +1004,7 @@ WIP / Sessions / Worktrees."
     ("w" "Worktrees..." decknix-sidebar-transient--worktrees)]]
   ["" ("?" "describe key" decknix-sidebar-toggles-describe-key)
       ("!" "Reset to defaults" decknix-sidebar-reset-toggles)
-      ("q" "Done" transient-quit-one)])
+      ("q" "Done" transient-quit-all)])
 
 (defun decknix-sidebar-refresh ()
   "Refresh the sidebar, first updating the worktree registry via `decknix wt refresh'.
@@ -2678,7 +2678,7 @@ the review appears side-by-side with the current buffer."
     ("m" decknix--hub-action-merge)
     ("l" decknix--hub-action-close)
     ("M" decknix--hub-action-comment)]]
-  [("q" "Cancel" transient-quit-one)])
+  [("q" "Cancel" transient-quit-all)])
 
 (defun decknix--nav-hub-item-actions (item)
   "Show the action transient for a hub ITEM (review or WIP PR).
@@ -2905,7 +2905,7 @@ Shows result in the echo area and triggers a hub refresh on success."
                    transient--prefix
                    (list key label cmd))))
        (list (transient-parse-suffix transient--prefix
-               '("q" "Back" transient-quit-one)))))))
+               '("q" "Quit" transient-quit-all)))))))
 
 ;; -- Consult-based section pickers --
 ;; All section navigation (r, w, l, p) uses consult for filtering.
@@ -3502,7 +3502,7 @@ without selecting any individually.  C-g cancels."
                 (setq idx (1+ idx)))))))
       (append (nreverse children)
               (list (transient-parse-suffix transient--prefix
-                      '("q" "Back" transient-quit-one)))))))
+                      '("q" "Quit" transient-quit-all)))))))
 
 (transient-define-prefix decknix-sidebar-nav-wip ()
   "Pick a WIP PR."
@@ -3536,7 +3536,7 @@ without selecting any individually.  C-g cancels."
                    transient--prefix
                    (list key short cmd))))
        (list (transient-parse-suffix transient--prefix
-               '("q" "Back" transient-quit-one)))))))
+               '("q" "Quit" transient-quit-all)))))))
 
 (transient-define-prefix decknix-sidebar-nav-live ()
   "Pick a live agent session."
@@ -3581,7 +3581,7 @@ without selecting any individually.  C-g cancels."
                          (propertize short 'face 'font-lock-comment-face)
                          cmd))))
        (list (transient-parse-suffix transient--prefix
-               '("q" "Back" transient-quit-one)))))))
+               '("q" "Quit" transient-quit-all)))))))
 
 (transient-define-prefix decknix-sidebar-nav-previous ()
   "Pick a previous session to restore."
@@ -3889,7 +3889,7 @@ auggie review, etc.) are one tap from any PR row."
     ("C" decknix--sb-act-jump-ci)]
    ["Other"
     ("L" decknix--sb-act-reveal)]]
-  [("q" "Cancel" transient-quit-one)])
+  [("q" "Cancel" transient-quit-all)])
 
 (transient-define-prefix decknix-sidebar-wip-menu ()
   "Action menu for a WIP row (my open PR).
@@ -3914,7 +3914,7 @@ the uppercase category keys `R Review…' / `W Worktree…'.
      :inapt-if decknix--sb-act-deploy-absent-p)]
    ["Other"
     ("L" decknix--sb-act-reveal)]]
-  [("q" "Cancel" transient-quit-one)])
+  [("q" "Cancel" transient-quit-all)])
 
 (transient-define-prefix decknix-sidebar-task-menu ()
   "Action menu for a Tasks row (Jira issue).
@@ -3937,7 +3937,7 @@ because Tasks have no Review submenu to receive it."
     ("A" decknix--sb-act-align-jira)
     ("y" decknix--sb-act-analyze)
     ("s" decknix--sb-act-spec)]]
-  [("q" "Cancel" transient-quit-one)])
+  [("q" "Cancel" transient-quit-all)])
 
 (transient-define-prefix decknix-sidebar-linked-pr-menu ()
   "Action menu for a linked PR row (under a session).
@@ -3965,7 +3965,7 @@ the canonical uppercase `W'."
      :inapt-if decknix--sb-act-deploy-absent-p)]
    ["Other"
     ("L" decknix--sb-act-reveal)]]
-  [("q" "Cancel" transient-quit-one)])
+  [("q" "Cancel" transient-quit-all)])
 
 (transient-define-prefix decknix-sidebar-linked-repo-menu ()
   "Action menu for a linked repo row (under a session).
@@ -3985,7 +3985,7 @@ Per spec §3.7, `i investigate' and `u unlink' graduated into
      :inapt-if decknix--sb-act-deploy-absent-p)]
    ["Other"
     ("L" decknix--sb-act-reveal)]]
-  [("q" "Cancel" transient-quit-one)])
+  [("q" "Cancel" transient-quit-all)])
 
 ;; -- Worktree submenu (#129; spec §3.6.4) --
 ;; Surfaces the registry from #128 as a stable-shape transient.
@@ -4505,7 +4505,7 @@ Also accessible as `M-x decknix-worktree-hygiene' from any buffer."
    ("M" decknix--hyg-prune-all)
    ("c" decknix--hyg-clean)
    ("f" decknix--sb-act-clean-fork-remotes)]
-  [("q" "Cancel" transient-quit-one)])
+  [("q" "Cancel" transient-quit-all)])
 
 (transient-define-prefix decknix-sidebar-worktree-menu ()
   "Worktree submenu (#129; spec §3.6.4).
@@ -4525,7 +4525,7 @@ Press H to open the cross-repo hygiene transient (spec §3.6.11)."
     ("c" decknix--sb-act-wt-copy)
     ("p" decknix--sb-act-wt-prune-metadata)]]
   [("H" "Hygiene…" decknix-worktree-hygiene)
-   ("q" "Cancel" transient-quit-one)])
+   ("q" "Cancel" transient-quit-all)])
 
 (transient-define-suffix decknix--sb-act-worktree ()
   "Open the worktree submenu for the active row."
@@ -4590,7 +4590,7 @@ route here."
     ("s" decknix--sb-act-review-split)
     ("c" decknix--sb-act-comment)
     ("R" decknix--sb-act-review-comment)]]
-  [("q" "Cancel" transient-quit-one)])
+  [("q" "Cancel" transient-quit-all)])
 
 (transient-define-suffix decknix--sb-act-review-submenu ()
   "Open the review submenu for the active row."
@@ -4609,7 +4609,7 @@ in-menu `S Session…' entry both route here."
    ["Session"
     ("u" decknix--sb-act-unlink :inapt-if decknix--sb-act-not-linked-p)
     ("i" decknix--sb-act-investigate :inapt-if decknix--sb-act-not-task-p)]]
-  [("q" "Cancel" transient-quit-one)])
+  [("q" "Cancel" transient-quit-all)])
 
 (transient-define-suffix decknix--sb-act-session-submenu ()
   "Open the session submenu for the active row."

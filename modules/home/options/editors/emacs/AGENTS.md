@@ -236,15 +236,15 @@ Rules for every prefix we define:
 - Bind **`q`** to `transient-quit-all` (NOT `transient-quit-one`).
   `-one` pops a single level, so from a submenu the user must press it once
   per level; `-all` tears the whole stack down at once.
-- Ensure **`C-g`** also fully exits. Transient binds `C-g` to
-  `transient-quit-one` by default, so add an explicit
-  `("C-g" ... transient-quit-all)` (or set it in the prefix's keymap) on any
-  prefix that can be reached as a submenu.
-- Put both in the prefix's trailing group so they are always present, e.g.:
+- **`C-g` is handled globally** — no per-prefix binding needed. The heredoc
+  rebinds `C-g` in `transient-base-map` to `transient-quit-all` (right after
+  `(require 'transient)` in the sidebar block), so a single `C-g` tears down
+  the whole stack from any transient, ours or built-in. Do NOT re-add a
+  per-prefix `("C-g" ... transient-quit-all)` suffix; it is redundant.
+- Put `q` in the prefix's trailing group so it is always present, e.g.:
 
   ```elisp
-  ["" ("q"   "Quit"  transient-quit-all)
-      ("C-g" "Quit"  transient-quit-all :transient nil)]
+  ["" ("q" "Quit" transient-quit-all)]
   ```
 
 - A suffix that opens a **child** transient does not need its own quit — the
