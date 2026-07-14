@@ -4714,6 +4714,7 @@ duration -- the most important number on this branch."
         (declare-function decknix--hub-tc-build-for-branch "decknix-hub-teamcity")
         (declare-function decknix--hub-tc-icon "decknix-hub-teamcity")
         (declare-function decknix--hub-deploy-indicator "decknix-hub-teamcity")
+        (declare-function decknix--hub-deployed-to-prod-p "decknix-hub-teamcity")
         (declare-function decknix--hub-discover-orgs "decknix-hub-org-filter")
         (declare-function decknix--hub-org-visible-p "decknix-hub-org-filter")
         (declare-function decknix--hub-org-filter-summary "decknix-hub-org-filter")
@@ -5865,9 +5866,13 @@ ${optionalString cfg.hub.priority.enable ''
         (require 'decknix-hub-wip-terminal-filter)
         (defvar decknix--hub-wip-hide-terminal)
         (declare-function decknix--hub-wip-terminal-visible-p
-                          "decknix-hub-wip-terminal-filter" (pr))
+                          "decknix-hub-wip-terminal-filter"
+                          (pr &optional deployed-to-prod-p))
         (declare-function decknix--hub-wip-pr-terminal-p
                           "decknix-hub-wip-terminal-filter" (pr))
+        (declare-function decknix--hub-wip-pr-cleanup-ready-p
+                          "decknix-hub-wip-terminal-filter"
+                          (pr deployed-to-prod-p))
         (declare-function decknix--hub-toggle-wip-hide-terminal
                           "decknix-hub-wip-terminal-filter")
 

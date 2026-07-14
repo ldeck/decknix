@@ -276,5 +276,80 @@
     (should (equal '(:foreground "#98c379" :weight bold)
                    (decknix-test--face-at out 1)))))
 
+;; -- Production-reached predicate (deploy-gated WIP cleanup, #137) --
+
+(ert-deftest decknix-hub-deployed-to-prod/true-when-prod-success-after-merge ()
+  "Production SUCCESS finishing at/after merge -> reached production."
+  (let ((deploys (decknix-test-make-teamcity-deploys
+                  `(("o/r" "__default__"
+                     ,(decknix-test-make-teamcity-env
+                       :env "production" :status "SUCCESS"
+                       :finished "2026-05-01T12:00:00Z"))))))
+    (should (decknix--hub-deployed-to-prod-p
+             "o/r" "2026-05-01T10:00:00Z" deploys))))
+
+(ert-deftest decknix-hub-deployed-to-prod/nil-when-prod-predates-merge ()
+  "Production deploy that finished BEFORE the merge does not count."
+  (let ((deploys (decknix-test-make-teamcity-deploys
+                  `(("o/r" "__default__"
+                     ,(decknix-test-make-teamcity-env
+                       :env "production" :status "SUCCESS"
+                       :finished "2026-05-01T08:00:00Z"))))))
+    (should-not (decknix--hub-deployed-to-prod-p
+                 "o/r" "2026-05-01T10:00:00Z" deploys))))
+
+(ert-deftest decknix-hub-deployed-to-prod/nil-when-prod-not-success ()
+  "A failed/running production deploy is not \"reached production\"."
+  (let ((deploys (decknix-test-make-teamcity-deploys
+                  `(("o/r" "__default__"
+                     ,(decknix-test-make-teamcity-env
+                       :env "production" :status "FAILURE"
+                       :finished "2026-05-01T12:00:00Z"))))))
+    (should-not (decknix--hub-deployed-to-prod-p
+                 "o/r" "2026-05-01T10:00:00Z" deploys))))
+
+(ert-deftest decknix-hub-deployed-to-prod/nil-when-no-prod-env ()
+  "A repo tracked only up to `stable' has not reached production."
+  (let ((deploys (decknix-test-make-teamcity-deploys
+                  `(("o/r" "__default__"
+                     ,(decknix-test-make-teamcity-env
+                       :env "stable" :status "SUCCESS"
+                       :finished "2026-05-01T12:00:00Z"))))))
+    (should-not (decknix--hub-deployed-to-prod-p
+                 "o/r" "2026-05-01T10:00:00Z" deploys))))
+
+(ert-deftest decknix-hub-deployed-to-prod/nil-when-merged-at-missing ()
+  "No merge timestamp -> cannot confirm; treat as not-yet-deployed."
+  (let ((deploys (decknix-test-make-teamcity-deploys
+                  `(("o/r" "__default__"
+                     ,(decknix-test-make-teamcity-env
+                       :env "production" :status "SUCCESS"
+                       :finished "2026-05-01T12:00:00Z"))))))
+    (should-not (decknix--hub-deployed-to-prod-p "o/r" nil deploys))
+    (should-not (decknix--hub-deployed-to-prod-p "o/r" "" deploys))))
+
+(ert-deftest decknix-hub-deployed-to-prod/nil-when-repo-untracked ()
+  "A repo with no deploy pipeline entry is not-yet-deployed (kept visible)."
+  (let ((deploys (decknix-test-make-teamcity-deploys
+                  `(("other/repo" "__default__"
+                     ,(decknix-test-make-teamcity-env
+                       :env "production" :status "SUCCESS"
+                       :finished "2026-05-01T12:00:00Z"))))))
+    (should-not (decknix--hub-deployed-to-prod-p
+                 "o/r" "2026-05-01T10:00:00Z" deploys))))
+
+(ert-deftest decknix-hub-deployed-to-prod/honours-explicit-branch ()
+  "The optional BRANCH arg overrides the `__default__' lookup."
+  (let ((deploys (decknix-test-make-teamcity-deploys
+                  `(("o/r" "release/1.2"
+                     ,(decknix-test-make-teamcity-env
+                       :env "production" :status "SUCCESS"
+                       :finished "2026-05-01T12:00:00Z"))))))
+    (should (decknix--hub-deployed-to-prod-p
+             "o/r" "2026-05-01T10:00:00Z" deploys "release/1.2"))
+    ;; default branch lookup misses the release branch
+    (should-not (decknix--hub-deployed-to-prod-p
+                 "o/r" "2026-05-01T10:00:00Z" deploys))))
+
 (provide 'decknix-hub-teamcity-test)
 ;;; decknix-hub-teamcity-test.el ends here

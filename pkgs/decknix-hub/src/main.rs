@@ -86,6 +86,12 @@ struct GitHubConfig {
     wip_interval_secs: u64,
     /// Repos to watch for review requests. Empty = all (uses gh search).
     review_repos: Vec<String>,
+    /// How many days a merged PR is retained in the WIP feed after merge.
+    /// The sidebar keeps merged rows visible until their code reaches
+    /// production (deploy-gated cleanup), so this must comfortably exceed a
+    /// typical merge-to-production window; a slow deploy that outruns it
+    /// drops the row before it ships.
+    wip_merged_retention_days: u64,
 }
 
 impl Default for HubConfig {
@@ -107,6 +113,10 @@ impl Default for GitHubConfig {
             reviews_interval_secs: 60,
             wip_interval_secs: 60,
             review_repos: vec![],
+            // Generous default: most pipelines reach production within days,
+            // and the sidebar hides a merged row the moment it ships anyway,
+            // so this is only the safety cap for a never-deployed merge.
+            wip_merged_retention_days: 30,
         }
     }
 }
@@ -1385,9 +1395,11 @@ struct GhMyPr {
 }
 
 /// Fetch the current user's open + recently merged PRs across all repos.
-/// Merged PRs are included for up to 7 days after merge, allowing the
-/// sidebar to track them until they are deployed.
-async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
+/// Merged PRs are retained for `wip_merged_retention_days` after merge so
+/// the sidebar can keep them visible until their code reaches production
+/// (deploy-gated cleanup); a merged row is hidden the moment it ships, so
+/// this window is only the safety cap for a merge that never deploys.
+async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
     let json_fields = "number,title,url,state,isDraft,updatedAt,repository";
 
     // 1. Open PRs
@@ -1402,8 +1414,9 @@ async fn poll_github_wip(_config: &GitHubConfig) -> Result<WipFile, String> {
     let open_prs: Vec<GhMyPr> = serde_json::from_str(&open_output)
         .map_err(|e| format!("parse open: {e}"))?;
 
-    // 2. Recently merged PRs (last 7 days)
-    let cutoff = (Utc::now() - chrono::Duration::days(7))
+    // 2. Recently merged PRs, within the configured retention window.
+    let retention_days = config.wip_merged_retention_days.max(1) as i64;
+    let cutoff = (Utc::now() - chrono::Duration::days(retention_days))
         .format("%Y-%m-%d")
         .to_string();
     let merged_output = gh_json(&[
@@ -1697,6 +1710,7 @@ async fn main() {
                 reviews_interval_secs: gh_cfg.reviews_interval_secs,
                 wip_interval_secs: gh_cfg.wip_interval_secs,
                 review_repos: gh_cfg.review_repos.clone(),
+                wip_merged_retention_days: gh_cfg.wip_merged_retention_days,
             },
             dir.clone(),
             meta.clone(),

@@ -13,6 +13,7 @@ let
       reviews_interval_secs = cfg.github.reviewsInterval;
       wip_interval_secs = cfg.github.wipInterval;
       review_repos = cfg.github.reviewRepos;
+      wip_merged_retention_days = cfg.github.mergedRetentionDays;
     };
     jira = {
       enabled = cfg.jira.enable;
@@ -84,6 +85,20 @@ in
           GitHub repos to check for review requests.
           Empty means all repos (uses gh search).
           Format: "owner/repo".
+        '';
+      };
+
+      mergedRetentionDays = mkOption {
+        type = types.int;
+        default = 30;
+        description = ''
+          How many days a merged PR is kept in the WIP feed after merge.
+
+          The sidebar keeps merged PR rows (and their worktrees) visible
+          until the code reaches production (deploy-gated cleanup), then
+          hides them.  This window must comfortably exceed a typical
+          merge-to-production time; a deploy slower than this drops the row
+          before it ships.  Only the safety cap for a never-deployed merge.
         '';
       };
     };

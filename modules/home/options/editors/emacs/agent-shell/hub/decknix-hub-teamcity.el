@@ -64,6 +64,56 @@ Returns nil if no match or no TC data."
         (propertize "●" 'face 'error))
        (t (propertize "○" 'face 'shadow))))))
 
+;; -- Deploy pipeline lookup + production-reached predicate --
+(defun decknix--hub-deploy-environments (repo-full branch deploys)
+  "Return the environments list for (REPO-FULL, BRANCH) in DEPLOYS, or nil.
+DEPLOYS is a parsed `teamcity-deploys.json' alist.  Pure lookup shared by
+`decknix--hub-deploy-indicator' and `decknix--hub-deployed-to-prod-p'."
+  (let* ((repos (alist-get 'repos deploys))
+         (repo-entry (seq-find
+                      (lambda (r)
+                        (string= (or (alist-get 'repo r) "") repo-full))
+                      repos))
+         (branches (when repo-entry (alist-get 'branches repo-entry)))
+         (branch-entry (when branches
+                         (seq-find
+                          (lambda (b)
+                            (string= (or (alist-get 'branch b) "") branch))
+                          branches))))
+    (when branch-entry (alist-get 'environments branch-entry))))
+
+(defun decknix--hub-deployed-to-prod-p (repo-full merged-at deploys &optional branch)
+  "Return non-nil when REPO-FULL has reached production after MERGED-AT.
+Pure over DEPLOYS (parsed `teamcity-deploys.json' alist).  True when the
+`production' environment for (REPO-FULL, BRANCH) has status SUCCESS and a
+`finished' timestamp at or after MERGED-AT -- i.e. a production deploy
+that positively contains the merged code.
+
+BRANCH defaults to \"__default__\", where a merged PR's post-merge deploys
+are recorded by the hub daemon (a merge lands on the repo's default
+branch).  MERGED-AT and the env `finished' are ISO-8601 UTC strings,
+which order correctly under `string<'.
+
+Returns nil when MERGED-AT is missing, the repo/branch has no tracked
+pipeline, or production has not yet succeeded post-merge -- so a merged
+PR is treated as \"still deploying\" (kept visible) until production is
+positively confirmed."
+  (and (stringp merged-at)
+       (not (string-empty-p merged-at))
+       (let ((envs (decknix--hub-deploy-environments
+                    repo-full (or branch "__default__") deploys)))
+         (and envs
+              (seq-some
+               (lambda (e)
+                 (and (string= (or (alist-get 'env e) "") "production")
+                      (string= (or (alist-get 'status e) "") "SUCCESS")
+                      (let ((finished (alist-get 'finished e)))
+                        (and (stringp finished)
+                             ;; finished >= merged-at (deploy contains the merge)
+                             (not (string< finished merged-at))))))
+               envs)
+              t))))
+
 ;; -- Deploy pipeline indicator (DTSP) --
 (defun decknix--hub-deploy-indicator (repo-full branch &optional merged-at)
   "Return colored DTSP deploy indicator for REPO-FULL and BRANCH.
@@ -77,18 +127,8 @@ deployed artefact predates the merge so it cannot contain this PR."
   (if (or (not decknix--hub-show-deploys)
           (not decknix--hub-deploys))
       ""
-    (let* ((repos (alist-get 'repos decknix--hub-deploys))
-           (repo-entry (seq-find
-                        (lambda (r)
-                          (string= (or (alist-get 'repo r) "") repo-full))
-                        repos))
-           (branches (when repo-entry (alist-get 'branches repo-entry)))
-           (branch-entry (when branches
-                           (seq-find
-                            (lambda (b)
-                              (string= (or (alist-get 'branch b) "") branch))
-                            branches)))
-           (envs (when branch-entry (alist-get 'environments branch-entry))))
+    (let ((envs (decknix--hub-deploy-environments
+                 repo-full branch decknix--hub-deploys)))
       (if (not envs)
           ""
         ;; Build the indicator string
