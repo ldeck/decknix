@@ -6148,10 +6148,19 @@ mutated."
                     ;; Buffer-local hook so we only act on this buffer.
                     (add-hook 'kill-buffer-hook
                               #'decknix--sidebar-forget-buffer-as-live nil t)
-                    ;; Disable cape-file in agent-shell buffers — synchronous
-                    ;; filesystem scans freeze the cursor during typing.
+                    ;; Disable cape-file AND cape-dabbrev in agent-shell
+                    ;; buffers.  cape-file does synchronous filesystem scans
+                    ;; that freeze the cursor while typing; cape-dabbrev
+                    ;; scans the (huge) transcript buffer on every
+                    ;; corfu-auto tick and, in these buffers, errors in
+                    ;; `cape--dabbrev-bounds' ("setting-constant nil"),
+                    ;; which corfu re-fires on a timer and spams *Messages*.
+                    ;; Neither adds value in the transcript; the compose
+                    ;; buffer keeps its own @-file / slash-command capfs.
                     (setq-local completion-at-point-functions
-                                (remove #'cape-file completion-at-point-functions))
+                                (seq-remove
+                                 (lambda (f) (memq f '(cape-file cape-dabbrev)))
+                                 completion-at-point-functions))
                     ;; Keep prompt pinned to the bottom of the window
                     (setq-local comint-scroll-to-bottom-on-input t)
                     (setq-local comint-scroll-to-bottom-on-output t)
