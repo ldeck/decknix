@@ -6155,6 +6155,15 @@ mutated."
                     ;; bidi_move_to_visually_next saturating redisplay_window.
                     (setq-local bidi-paragraph-direction 'left-to-right)
                     (setq-local bidi-inhibit-bpa t)
+                    ;; The two settings above force LTR + skip bracket-pair
+                    ;; resolution, but Emacs STILL runs the bidi reordering
+                    ;; machinery per line on every redisplay (scroll, type,
+                    ;; stream) while `bidi-display-reordering' is t — which it
+                    ;; is by default.  These transcripts are LTR English/code,
+                    ;; so disable reordering outright: this is the piece that
+                    ;; actually removes the per-line bidi cost that made
+                    ;; scrolling and typing laggy.
+                    (setq-local bidi-display-reordering nil)
                     ;; Auto-persist workspace on first exchange — safety net
                     ;; for sessions created via any path (upstream c, resume,
                     ;; quickaction, etc.) so they never show as "unknown".

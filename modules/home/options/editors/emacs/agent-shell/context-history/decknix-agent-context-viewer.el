@@ -56,7 +56,11 @@ read-only bottom window.  Use n/p to navigate, s to search."
   ;; propertized — force LTR + skip bidi bracket-pair resolution so
   ;; window relayout stays cheap (see agent-shell-mode-hook).
   (setq-local bidi-paragraph-direction 'left-to-right)
-  (setq-local bidi-inhibit-bpa t))
+  (setq-local bidi-inhibit-bpa t)
+  ;; Disable bidi reordering outright (LTR content) — the piece that
+  ;; actually removes the per-line redisplay cost; direction + bpa alone
+  ;; leave the reordering machinery running.
+  (setq-local bidi-display-reordering nil))
 
 ;;; Rendering ----------------------------------------------------------
 
