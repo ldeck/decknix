@@ -38,6 +38,10 @@ return a fixed 3-element list so the count is deterministic."
          (decknix-saved-count-test--group-calls 0))
      (cl-letf (((symbol-function 'decknix--agent-session-list)
                 (lambda (&rest _) '(a b c)))
+               ;; The recompute reads the WARM-ONLY list so it never blocks
+               ;; on a cold-cache filesystem scan; default it warm here.
+               ((symbol-function 'decknix--agent-session-list-if-warm)
+                (lambda (&rest _) '(a b c)))
                ((symbol-function 'decknix--agent-session-group-by-conversation)
                 (lambda (&rest _)
                   (setq decknix-saved-count-test--group-calls
@@ -85,6 +89,19 @@ return a fixed 3-element list so the count is deterministic."
     (should (= 3 (decknix--sidebar-saved-count)))
     (should (= 1 decknix-saved-count-test--group-calls))
     (should (null decknix--sidebar-saved-count-refresh-timer))))
+
+(ert-deftest decknix-sidebar-saved-count/recompute-cold-cache-never-blocks ()
+  "A cold session cache (`-if-warm' -> nil) keeps the last count and does
+NOT run the expensive grouping -- the fix for the 21s freeze."
+  (decknix-saved-count-test--with-env
+    (setq decknix--sidebar-saved-count-cache 7)   ; a prior value
+    (cl-letf (((symbol-function 'decknix--agent-session-list-if-warm)
+               (lambda (&rest _) nil))            ; cache cold
+              ((symbol-function 'decknix--agent-session-refresh-async) #'ignore))
+      (decknix--sidebar-saved-count-recompute)
+      ;; grouping never ran; last count preserved.
+      (should (= 0 decknix-saved-count-test--group-calls))
+      (should (= 7 decknix--sidebar-saved-count-cache)))))
 
 (ert-deftest decknix-sidebar-saved-count/warm-cache-no-work ()
   "A fresh in-TTL cache neither recomputes nor schedules."
