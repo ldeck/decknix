@@ -114,6 +114,9 @@ the review back to the source agent-shell session.
   ;; + skip bidi bracket-pair resolution (see agent-shell-mode-hook).
   (setq-local bidi-paragraph-direction 'left-to-right)
   (setq-local bidi-inhibit-bpa t)
+  ;; Disable bidi reordering outright — direction + bpa still leave the
+  ;; per-line reordering machinery running on every redisplay.
+  (setq-local bidi-display-reordering nil)
   (visual-line-mode 1)
   (when (fboundp 'yas-minor-mode)
     (yas-minor-mode 1))
