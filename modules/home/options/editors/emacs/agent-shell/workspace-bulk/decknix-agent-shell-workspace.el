@@ -3245,10 +3245,12 @@ Interactively: \\[universal-argument] N r limits to N items;
                 (throw 'decknix--req-done nil))
                ;; RET: hand off to the rich action transient.  When the
                ;; typed text matches no candidate (REQUIRE-MATCH is nil),
-               ;; treat it as an ad-hoc PR URL and start a review directly
-               ;; so `r' can review any PR, not only the ones already in
-               ;; the requests list.  `decknix--nav-hub-start-review'
-               ;; validates the URL and messages on a bad one.
+               ;; treat it as an ad-hoc PR URL -- but still route it
+               ;; through the SAME action transient (review / split /
+               ;; open / browser) rather than launching a review
+               ;; directly, so an arbitrary URL is handled identically to
+               ;; a listed item.  A URL that does not parse as a PR is
+               ;; reported and opens nothing.
                (t
                 (let ((item (cdr (assoc (car result) entries))))
                   (cond
@@ -3258,8 +3260,19 @@ Interactively: \\[universal-argument] N r limits to N items;
                    ((and (stringp (car result))
                          (not (string-empty-p
                                (string-trim (car result)))))
-                    (decknix--nav-hub-start-review
-                     (string-trim (car result))))))
+                    (let* ((url (string-trim (car result)))
+                           (parsed (decknix--agent-parse-pr-url url)))
+                      (if (not parsed)
+                          (message "Not a valid PR URL: %s" url)
+                        (let ((owner (alist-get 'owner parsed))
+                              (repo (alist-get 'repo parsed))
+                              (number (alist-get 'number parsed)))
+                          (decknix--nav-hub-item-actions
+                           (list (cons 'decknix-type 'review)
+                                 (cons 'url url)
+                                 (cons 'repo (format "%s/%s" owner repo))
+                                 (cons 'number number)
+                                 (cons 'title (format "%s#%s" repo number))))))))))
                 (throw 'decknix--req-done nil))))))))))
 
 (defun decknix-sidebar-nav-wip-consult ()
