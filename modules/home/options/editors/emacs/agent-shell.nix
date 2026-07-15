@@ -240,6 +240,19 @@ let
     ];
   };
 
+  # Always-on background hitch profiler: times every timer + command and
+  # logs the slow tail (with the responsible function named) so a
+  # performance-inhibiting function is surfaced rather than guessed at.
+  # Default-on, runtime-toggleable.  Pure label/tally helpers ERT-tested.
+  decknix-perf-hitch-el = mkEmacsTestedPackage {
+    pname = "decknix-perf-hitch";
+    src = ./agent-shell/perf-hitch;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-perf-hitch-test.el"
+    ];
+  };
+
   decknix-sidebar-toggles-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-toggles";
     src = ./agent-shell/sidebar;
@@ -2627,6 +2640,7 @@ in
           decknix-agent-resume-primer-el
           decknix-agent-resume-native-el
           decknix-agent-heartbeat-watch-el
+          decknix-perf-hitch-el
           decknix-agent-subagent-state-el
           decknix-agent-resourcing-el
           decknix-agent-rg-search-command-el
@@ -3555,6 +3569,16 @@ ${optionalString cfg.tableOverlay.enable ''
         (declare-function decknix--agent-hb-watch-start
                           "decknix-agent-heartbeat-watch")
         (decknix--agent-hb-watch-start)
+
+        ;; Always-on hitch profiler (default-on, `decknix-perf-hitch-toggle'
+        ;; to disable at runtime).  Surfaces slow timers/commands so we can
+        ;; keep optimising as the config grows.  `M-x decknix-perf-hitch-report'
+        ;; tallies the worst offenders.
+        (require 'decknix-perf-hitch)
+        (declare-function decknix-perf-hitch-start "decknix-perf-hitch")
+        (defvar decknix-perf-hitch-enable)
+        (when decknix-perf-hitch-enable
+          (decknix-perf-hitch-start))
 
         ;; Sub-agent liveness state (#144) -- pure ladder consumed by
         ;; the sidebar sub-agent row renderer (workspace-bulk) to
