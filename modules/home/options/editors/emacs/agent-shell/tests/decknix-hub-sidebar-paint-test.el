@@ -178,5 +178,67 @@
   (should (decknix--sidebar-idle-should-paint-p
            '(nil nil) 'unset 0 0.0 60)))
 
+;; -- Incremental diff render -----------------------------------------
+
+(ert-deftest decknix-sidebar-diff--split-lines-keeps-newlines ()
+  "Lines retain their trailing newline; last line only if present."
+  (should (equal (decknix--sidebar-split-lines "a\nb\nc") '("a\n" "b\n" "c")))
+  (should (equal (decknix--sidebar-split-lines "a\nb\n") '("a\n" "b\n")))
+  (should (equal (decknix--sidebar-split-lines "") '())))
+
+(ert-deftest decknix-sidebar-diff--identical-is-nil ()
+  "Identical inputs produce no edit."
+  (should-not (decknix--sidebar-line-diff '("a\n" "b\n" "c") '("a\n" "b\n" "c"))))
+
+(ert-deftest decknix-sidebar-diff--middle-line-changed ()
+  "A single changed middle line: keep prefix + suffix, replace the middle."
+  (let ((d (decknix--sidebar-line-diff '("a\n" "OLD\n" "c") '("a\n" "NEW\n" "c"))))
+    (should (equal (plist-get d :prefix-chars) 2))   ; "a\n"
+    (should (equal (plist-get d :suffix-chars) 1))   ; "c"
+    (should (equal (plist-get d :middle) "NEW\n"))))
+
+(ert-deftest decknix-sidebar-diff--inserted-line ()
+  "A line inserted in the middle replaces the minimal span."
+  (let ((d (decknix--sidebar-line-diff '("a\n" "c") '("a\n" "b\n" "c"))))
+    (should (equal (plist-get d :prefix-chars) 2))
+    (should (equal (plist-get d :suffix-chars) 1))
+    (should (equal (plist-get d :middle) "b\n"))))
+
+(ert-deftest decknix-sidebar-diff--face-only-change-counts ()
+  "A same-text, different-face line is treated as changed (property-aware)."
+  (let* ((old (propertize "row\n" 'face 'default))
+         (new (propertize "row\n" 'face 'error))
+         (d (decknix--sidebar-line-diff (list old) (list new))))
+    (should d)
+    (should (equal-including-properties (plist-get d :middle) new))))
+
+(ert-deftest decknix-sidebar-diff--apply-updates-buffer ()
+  "`decknix--sidebar-diff-apply' rewrites only the changed middle."
+  (let ((target (get-buffer-create " *decknix-diff-target*"))
+        (src (get-buffer-create " *decknix-diff-src*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer target (erase-buffer) (insert "a\nOLD\nc"))
+          (with-current-buffer src (erase-buffer) (insert "a\nNEW\nc"))
+          (decknix--sidebar-diff-apply target src)
+          (should (equal (with-current-buffer target (buffer-string)) "a\nNEW\nc")))
+      (kill-buffer target)
+      (kill-buffer src))))
+
+(ert-deftest decknix-sidebar-diff--apply-noop-when-identical ()
+  "Identical content makes zero buffer edits (redisplay saver)."
+  (let ((target (get-buffer-create " *decknix-diff-target*"))
+        (src (get-buffer-create " *decknix-diff-src*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer target (erase-buffer) (insert "a\nb\nc"))
+          (with-current-buffer src (erase-buffer) (insert "a\nb\nc"))
+          (let ((tick (with-current-buffer target (buffer-chars-modified-tick))))
+            (decknix--sidebar-diff-apply target src)
+            (should (= tick (with-current-buffer target
+                              (buffer-chars-modified-tick))))))
+      (kill-buffer target)
+      (kill-buffer src))))
+
 (provide 'decknix-hub-sidebar-paint-test)
 ;;; decknix-hub-sidebar-paint-test.el ends here

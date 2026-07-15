@@ -5520,6 +5520,17 @@ ${optionalString cfg.hub.priority.enable ''
                           "decknix-hub-sidebar-paint")
         (declare-function decknix--sidebar-install-idle-tick
                           "decknix-hub-sidebar-paint")
+        (declare-function decknix--sidebar-diff-render
+                          "decknix-hub-sidebar-paint" (orig-fn &rest args))
+
+        ;; Incremental diff paint: wrap the sidebar `--render' (our
+        ;; `:override' above) so it renders into a scratch buffer and only
+        ;; the changed lines are applied to the visible sidebar -- redisplay
+        ;; then reprocesses just those rows, not the whole buffer.  Added as
+        ;; a named `:around' so it wraps the override and stays idempotent
+        ;; across hot-reloads.
+        (advice-add 'agent-shell-workspace-sidebar--render :around
+                    #'decknix--sidebar-diff-render)
 
         (with-eval-after-load 'agent-shell-workspace
           (advice-add 'agent-shell-workspace-sidebar-refresh :around
