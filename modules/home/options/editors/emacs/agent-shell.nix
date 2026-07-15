@@ -227,6 +227,19 @@ let
     ];
   };
 
+  # Stuck-heartbeat watchdog: reclaims a busy spinner whose prompt request
+  # never got a response (dead/orphaned bridge), which otherwise animates
+  # forever and pegs redisplay a few times a second.  Pure decision carved
+  # + ERT-tested; the watchdog timer is armed in the heredoc (Rule 2).
+  decknix-agent-heartbeat-watch-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-heartbeat-watch";
+    src = ./agent-shell/heartbeat-watch;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-heartbeat-watch-test.el"
+    ];
+  };
+
   decknix-sidebar-toggles-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-toggles";
     src = ./agent-shell/sidebar;
@@ -2613,6 +2626,7 @@ in
           decknix-agent-fork-el
           decknix-agent-resume-primer-el
           decknix-agent-resume-native-el
+          decknix-agent-heartbeat-watch-el
           decknix-agent-subagent-state-el
           decknix-agent-resourcing-el
           decknix-agent-rg-search-command-el
@@ -3532,6 +3546,15 @@ ${optionalString cfg.tableOverlay.enable ''
         (defvar decknix--agent-resume-native-done)
         (advice-add 'agent-shell--initiate-session :around
                     #'decknix--agent-resume-native-initiate-session)
+
+        ;; Stuck-heartbeat watchdog: reclaim a busy spinner whose prompt
+        ;; request never responded (dead/orphaned bridge) so it stops
+        ;; animating the header a few times a second forever.  Arm the
+        ;; slow watchdog timer here (idempotent across hot-reloads).
+        (require 'decknix-agent-heartbeat-watch)
+        (declare-function decknix--agent-hb-watch-start
+                          "decknix-agent-heartbeat-watch")
+        (decknix--agent-hb-watch-start)
 
         ;; Sub-agent liveness state (#144) -- pure ladder consumed by
         ;; the sidebar sub-agent row renderer (workspace-bulk) to
