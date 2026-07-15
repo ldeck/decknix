@@ -119,6 +119,8 @@
 (declare-function decknix--agent-session-display-name "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-session-group-by-conversation "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-session-list "decknix-agent-session-cache")
+(declare-function decknix--agent-session-list-if-warm "decknix-agent-session-cache")
+(declare-function decknix--agent-session-refresh-async "decknix-agent-session-cache")
 (declare-function decknix--agent-unsorted-table "ext:decknix-agent-shell-main")
 ;; More bulk hub module symbols.
 (declare-function decknix--hub-item-visible-p "ext:decknix-agent-shell-hub")
@@ -2029,8 +2031,10 @@ for why this is never computed inside the header-line `:eval'.")
 (defvar decknix--sidebar-saved-count-cache-time 0.0
   "`float-time' when `decknix--sidebar-saved-count-cache' was last set.")
 
-(defconst decknix--sidebar-saved-count-ttl 2.0
-  "Seconds to trust the cached saved-count before recomputing.")
+(defconst decknix--sidebar-saved-count-ttl 30.0
+  "Seconds to trust the cached saved-count before recomputing.
+The saved-conversation count changes rarely, and the recompute reads a
+warm cache; 30s keeps the header current without needless timer churn.")
 
 (defvar decknix--sidebar-saved-count-refresh-timer nil
   "Idle timer coalescing off-redisplay saved-count recomputes, or nil.")
@@ -2044,11 +2048,22 @@ sidebar reflects the new value on the next redisplay — which then
 just reads the now-fresh cache without recomputing."
   (setq decknix--sidebar-saved-count-refresh-timer nil)
   (setq decknix--sidebar-saved-count-cache-time (float-time))
-  (setq decknix--sidebar-saved-count-cache
-        (condition-case nil
-            (length (decknix--agent-session-group-by-conversation
-                     (decknix--agent-session-list)))
-          (error 0)))
+  ;; Use the WARM-ONLY session list.  `decknix--agent-session-list' does a
+  ;; multi-second SYNCHRONOUS filesystem scan when its cache is cold -- and
+  ;; the cache goes cold every time a session is created or resumed -- so
+  ;; running it on this header-line idle timer froze the whole editor for
+  ;; up to 21s per fire.  `-if-warm' never blocks: when the cache is cold it
+  ;; returns nil, so we keep the last count and kick a NON-blocking async
+  ;; warm; the next tick reads the freshly-warmed cache.
+  (let ((sessions (ignore-errors (decknix--agent-session-list-if-warm))))
+    (if sessions
+        (setq decknix--sidebar-saved-count-cache
+              (condition-case nil
+                  (length (decknix--agent-session-group-by-conversation sessions))
+                (error (or decknix--sidebar-saved-count-cache 0))))
+      (when (fboundp 'decknix--agent-session-refresh-async)
+        (dolist (entry (bound-and-true-p decknix-agent-provider-registry))
+          (ignore-errors (decknix--agent-session-refresh-async (car entry)))))))
   ;; Cheap: just flags buffers for redisplay, does not itself redraw.
   (force-mode-line-update t))
 
