@@ -32,6 +32,8 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 ;; Provided by the upstream `agent-shell-workspace' package; only ever
 ;; called through the advice, so a forward declaration is enough.
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
@@ -211,6 +213,99 @@ between keystrokes."
   (if (decknix--sidebar-paint-through-p)
       (apply orig-fn args)
     (decknix--sidebar-schedule-paint #'decknix--sidebar-paint-tick)))
+
+;; -- Incremental diff render ----------------------------------------
+;;
+;; Even a needed repaint erases the whole sidebar and re-inserts every
+;; row, so `redisplay_internal' reprocesses the entire buffer -- the
+;; dominant remaining cost once idle repaints were gone.  Instead, render
+;; the fresh content into a scratch buffer and apply only the lines that
+;; actually changed to the visible buffer, so redisplay touches just
+;; those rows.  A plain `replace-buffer-contents' is unusable here: it
+;; keeps the OLD text properties for character-identical text, so a
+;; face-only change (the selection highlight moving, a deploy glyph going
+;; yellow->green) would silently not render.  Hence a property-aware
+;; line diff: lines compare with `equal-including-properties'.
+
+(defun decknix--sidebar-split-lines (s)
+  "Split S into a list of lines, each RETAINING its trailing newline.
+The final line carries a newline only if S ended with one.  Text
+properties are preserved on each substring."
+  (let ((lines nil) (start 0) (len (length s)))
+    (while (< start len)
+      (let ((nl (string-search "\n" s start)))
+        (if nl
+            (progn (push (substring s start (1+ nl)) lines)
+                   (setq start (1+ nl)))
+          (push (substring s start) lines)
+          (setq start len))))
+    (nreverse lines)))
+
+(defun decknix--sidebar-line-diff (old-lines new-lines)
+  "Minimal single-region edit turning OLD-LINES into NEW-LINES.
+Both are line lists (with trailing newlines) from
+`decknix--sidebar-split-lines'; lines compare with
+`equal-including-properties' so a face-only change counts as a change.
+Returns a plist (:prefix-chars N :suffix-chars M :middle STR): keep the
+first N and last M characters of the old text, replace the differing
+middle with STR.  Returns nil when the two are identical.  Pure, so the
+edit computation is ERT-testable without a buffer."
+  (let ((pre-a old-lines) (pre-b new-lines))
+    (while (and pre-a pre-b
+                (equal-including-properties (car pre-a) (car pre-b)))
+      (setq pre-a (cdr pre-a) pre-b (cdr pre-b)))
+    (if (and (null pre-a) (null pre-b))
+        nil                             ; identical -> no edit
+      (let ((suf 0) (x (reverse pre-a)) (y (reverse pre-b)))
+        (while (and x y (equal-including-properties (car x) (car y)))
+          (setq suf (1+ suf) x (cdr x) y (cdr y)))
+        (let ((prefix-lines (butlast old-lines (length pre-a)))
+              (suffix-lines (last pre-a suf))
+              (middle-lines (butlast pre-b suf)))
+          (list :prefix-chars (apply #'+ 0 (mapcar #'length prefix-lines))
+                :suffix-chars (apply #'+ 0 (mapcar #'length suffix-lines))
+                :middle (apply #'concat middle-lines)))))))
+
+(defun decknix--sidebar-diff-apply (target-buf src-buf)
+  "Update TARGET-BUF's text to match SRC-BUF, editing only the changed span.
+Computes a property-aware line diff and replaces just the differing
+middle region, so redisplay reprocesses only the changed rows and the
+common head/tail (usually most of the sidebar) is left untouched."
+  (when (and (buffer-live-p target-buf) (buffer-live-p src-buf))
+    (let ((new (with-current-buffer src-buf (buffer-string))))
+      (with-current-buffer target-buf
+        (let ((diff (decknix--sidebar-line-diff
+                     (decknix--sidebar-split-lines (buffer-string))
+                     (decknix--sidebar-split-lines new))))
+          (when diff
+            (let ((inhibit-read-only t)
+                  (beg (+ (point-min) (plist-get diff :prefix-chars)))
+                  (end (- (point-max) (plist-get diff :suffix-chars))))
+              (save-excursion
+                (goto-char beg)
+                (delete-region beg end)
+                (insert (plist-get diff :middle))))))))))
+
+(defun decknix--sidebar-diff-render (orig-fn &rest args)
+  "Around-advice for `agent-shell-workspace-sidebar--render': diff paint.
+Render ORIG-FN's fresh content into a scratch buffer -- with the
+sidebar's own window selected so `window-width'-based truncation stays
+correct -- then apply only the changed lines to the visible buffer via
+`decknix--sidebar-diff-apply'.  Falls back to a direct render when the
+sidebar buffer is not live."
+  (let* ((target (current-buffer))
+         (win (get-buffer-window target))
+         (src (get-buffer-create " *decknix-sidebar-render*")))
+    (if (not (buffer-live-p target))
+        (apply orig-fn args)
+      (with-current-buffer src
+        (setq-local inhibit-read-only t)
+        (erase-buffer))
+      (cl-flet ((paint () (with-current-buffer src (apply orig-fn args))))
+        (if (window-live-p win)
+            (with-selected-window win (paint))
+          (paint)))
+      (decknix--sidebar-diff-apply target src))))
 
 (provide 'decknix-hub-sidebar-paint)
 ;;; decknix-hub-sidebar-paint.el ends here
