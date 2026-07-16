@@ -41,9 +41,10 @@ let
                   that you hit throughout the day).
           false — on-demand: the launchd agent is still installed, but stays
                   dormant until you start it explicitly and is not restarted
-                  when it exits. Start/stop it with:
-                    launchctl kickstart -k gui/$(id -u)/iap-proxy-<name>
-                    launchctl kill TERM   gui/$(id -u)/iap-proxy-<name>
+                  when it exits. Start/stop it with (nix-darwin prefixes the
+                  launchd label with org.nixos.):
+                    launchctl kickstart -k gui/$(id -u)/org.nixos.iap-proxy-<name>
+                    launchctl kill TERM   gui/$(id -u)/org.nixos.iap-proxy-<name>
                   Use for targets you only reach occasionally (e.g. a production
                   monolith you proxy for a one-off support/migration task).
         '';
