@@ -181,8 +181,13 @@ in
           ;; mark_char_table) as a top cost.  A higher work-time threshold
           ;; keeps that collection from firing mid-typing; gcmh still
           ;; reclaims on idle.
+          ;; `gcmh-idle-delay' was 5s, so any think-pause over 5s fired the
+          ;; ~213ms reclaim GC right as the user resumed typing (the profiler
+          ;; caught it as the "cursor stuck on resume" hitch).  Raise it to
+          ;; 20s (above gcmh's own 15s default) so only genuine idle
+          ;; reclaims; memory headroom is ample (~600MB RSS, no pressure).
           (setq gcmh-high-cons-threshold (* 512 1024 1024)  ; 512 MB during work
-                gcmh-idle-delay 5)                           ; GC after 5s idle
+                gcmh-idle-delay 20)                          ; reclaim only after 20s idle
           (gcmh-mode 1))
 
         ;; Increase process output buffer (important for LSP)
