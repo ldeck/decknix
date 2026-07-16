@@ -1956,7 +1956,16 @@ Respects these toggles:
 Cap of `decknix--sidebar-max-saved' applied after all filters so
 the visible count matches the heading."
   (condition-case nil
-      (let* ((sessions (decknix--agent-session-list))
+      (let* (;; Never block the sidebar on the cold-cache session scan
+             ;; (`decknix--agent-session-list' does a synchronous ~8.5s
+             ;; disk scan of every transcript when the cache is cold,
+             ;; which froze the paint tick and `C-c b').  Read only a warm
+             ;; cache; on a cold cache render an empty Previous section and
+             ;; kick an async warm — its completion repaints with the list.
+             (sessions (or (decknix--agent-session-list-if-warm)
+                           (progn
+                             (ignore-errors (decknix--agent-session-refresh-async))
+                             nil)))
              (groups (when sessions
                        (decknix--agent-session-group-by-conversation
                         sessions decknix--sidebar-show-hidden)))
