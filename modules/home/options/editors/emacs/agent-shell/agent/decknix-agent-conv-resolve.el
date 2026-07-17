@@ -73,9 +73,18 @@ to avoid infinite loops from misconfiguration."
               (setq hops 5))))))  ;; break
     (or key conv-key)))
 
-(defun decknix--agent-conversation-key-for-session (session-id)
-  "Look up the conversation key for SESSION-ID from cached session data."
-  (let* ((sessions (decknix--agent-session-list))
+(defun decknix--agent-conversation-key-for-session (session-id &optional no-block)
+  "Look up the conversation key for SESSION-ID from cached session data.
+With NO-BLOCK non-nil, use the non-blocking `warm-or-async' accessor: a
+cold cache returns nil (no key yet) and warms in the background rather
+than blocking on a synchronous scan.  Passive decoration paths (tags,
+live-session recording) pass NO-BLOCK so a cold `C-c b' / sidebar never
+stalls; the value self-heals via `decknix-agent-session-cache-refresh-
+functions' once the async scan lands.  Action paths that need a definite
+answer (resume, require-conv-key) omit it and accept the brief block."
+  (let* ((sessions (if no-block
+                       (decknix--agent-session-list-warm-or-async)
+                     (decknix--agent-session-list)))
          (match (seq-find (lambda (s)
                             (string= (alist-get 'sessionId s) session-id))
                           sessions)))
