@@ -797,13 +797,38 @@ for background migrations that can defer until the cache warms up naturally."
                           (mb (alist-get 'modified b)))
                       (string> (or ma "") (or mb "")))))))))
 
+(defvar decknix--agent-session-refresh-pending (make-hash-table :test 'eq)
+  "Providers with a deferred refresh timer already armed.
+Dedups `decknix--agent-session-schedule-refresh' so a burst of decoration
+calls (one per buffer in `C-c b', one per sidebar row) arms at most one
+idle refresh per provider instead of stacking dozens.")
+
+(defun decknix--agent-session-schedule-refresh (provider-id)
+  "Arm a one-shot idle refresh for PROVIDER-ID, off the interactive path.
+`decknix--agent-session-refresh-async' still parses SMALL new-file sets
+synchronously (a per-file jq that can run into seconds on fat transcripts).
+Calling it inline from a decoration path (tags, sidebar) is what made the
+first `C-c b' after a daemon start block for seconds.  Deferring it onto a
+zero-length idle timer lets the interactive call return with last-known
+data immediately; the parse then runs once Emacs is idle and the completion
+hook repaints.  Idempotent per provider via `decknix--agent-session-refresh-
+pending' so repeated decoration calls never stack timers."
+  (unless (gethash provider-id decknix--agent-session-refresh-pending)
+    (puthash provider-id t decknix--agent-session-refresh-pending)
+    (run-with-idle-timer
+     0 nil
+     (lambda ()
+       (remhash provider-id decknix--agent-session-refresh-pending)
+       (decknix--agent-session-refresh-async provider-id)))))
+
 (defun decknix--agent-session-list-warm-or-async (&optional provider-id)
   "Return cached sessions WITHOUT ever blocking, warming the cache async.
 Like `decknix--agent-session-list' but with the synchronous cold-cache
 scan removed: a cold cache returns nil (last-known = nothing yet) and a
-stale cache returns whatever it holds, and EITHER case kicks a background
-`decknix--agent-session-refresh-async' so the data lands (and fires
-`decknix-agent-session-cache-refresh-functions') a moment later.
+stale cache returns whatever it holds, and EITHER case schedules a
+DEFERRED background refresh (via `decknix--agent-session-schedule-refresh',
+off the interactive path) so the data lands — and fires
+`decknix-agent-session-cache-refresh-functions' — a moment later.
 
 This is the accessor for passive, per-paint / per-buffer decoration paths
 (tags, live-session recording, the sidebar) that must feel instant even
@@ -821,9 +846,9 @@ on the very first `C-c b' after a daemon start — see the module header."
                                 (setq oldest (if oldest (min oldest tp) tp))))))))
               (> (- (float-time) (or time 0)) decknix--agent-session-cache-ttl)))
     (if provider-id
-        (decknix--agent-session-refresh-async provider-id)
+        (decknix--agent-session-schedule-refresh provider-id)
       (dolist (entry decknix-agent-provider-registry)
-        (decknix--agent-session-refresh-async (car entry)))))
+        (decknix--agent-session-schedule-refresh (car entry)))))
   (decknix--agent-session-list-if-warm provider-id))
 
 ;; ---------------------------------------------------------------------------
