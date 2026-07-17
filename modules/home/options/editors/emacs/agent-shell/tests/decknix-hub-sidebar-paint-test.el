@@ -240,5 +240,47 @@
       (kill-buffer target)
       (kill-buffer src))))
 
+;; -- Live-section render cache ---------------------------------------
+
+(require 'cl-lib)
+
+(ert-deftest decknix-sidebar-live-cache--miss-renders-then-hit-reuses ()
+  "First call renders (miss); a same-fingerprint call reuses the cached
+text without calling ORIG again."
+  (let ((decknix--sidebar-live-render-cache nil)
+        (calls 0))
+    (cl-letf (((symbol-function 'decknix--sidebar-live-render-fingerprint)
+               (lambda (&rest _) 'FP)))
+      (with-temp-buffer
+        (let ((n (decknix--sidebar-render-live-cached
+                  (lambda (ln &rest _) (setq calls (1+ calls)) (insert "LIVE") (+ ln 2))
+                  0 nil nil nil 10)))
+          (should (= calls 1)) (should (= n 2))
+          (should (equal (buffer-string) "LIVE")))
+        (erase-buffer)
+        ;; hit: orig must NOT run again; cached "LIVE" re-inserted
+        (let ((n (decknix--sidebar-render-live-cached
+                  (lambda (ln &rest _) (setq calls (1+ calls)) (insert "NOPE") (+ ln 99))
+                  0 nil nil nil 10)))
+          (should (= calls 1))
+          (should (= n 2))
+          (should (equal (buffer-string) "LIVE")))))))
+
+(ert-deftest decknix-sidebar-live-cache--fingerprint-change-re-renders ()
+  "A changed fingerprint bypasses the cache and re-renders."
+  (let ((decknix--sidebar-live-render-cache nil)
+        (calls 0)
+        (fp 'A))
+    (cl-letf (((symbol-function 'decknix--sidebar-live-render-fingerprint)
+               (lambda (&rest _) fp)))
+      (with-temp-buffer
+        (decknix--sidebar-render-live-cached
+         (lambda (ln &rest _) (setq calls (1+ calls)) (insert "x") (+ ln 1)) 0 nil nil nil 1)
+        (setq fp 'B)                    ; input changed
+        (erase-buffer)
+        (decknix--sidebar-render-live-cached
+         (lambda (ln &rest _) (setq calls (1+ calls)) (insert "y") (+ ln 1)) 0 nil nil nil 1)
+        (should (= calls 2))))))        ; both rendered
+
 (provide 'decknix-hub-sidebar-paint-test)
 ;;; decknix-hub-sidebar-paint-test.el ends here

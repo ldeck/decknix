@@ -307,5 +307,67 @@ sidebar buffer is not live."
           (paint)))
       (decknix--sidebar-diff-apply target src))))
 
+;; -- Live-section render cache --------------------------------------
+;;
+;; `decknix--sidebar-render-live-sessions' costs ~350ms of pure compute on
+;; every paint (box-building + colourising dozens of sub-agent rows), even
+;; when nothing in the Live section changed -- the dominant residual paint
+;; cost once the cold-scan freeze was gone.  Cache the rendered text and
+;; re-insert it when a cheap fingerprint of the inputs is unchanged.
+
+(declare-function agent-shell-workspace--buffer-status "ext:agent-shell-workspace")
+(declare-function decknix--agent-session-subagents "ext:decknix-agent-session-history")
+(defvar decknix--agent-auggie-session-id)
+(defvar decknix--agent-session-id)
+(defvar decknix--agent-provider-id)
+
+(defvar decknix--sidebar-live-render-cache nil
+  "Cache of the rendered Live section: (FINGERPRINT RENDERED-STRING . LINE-DELTA).")
+
+(defun decknix--sidebar-live-render-fingerprint (buffers selected tiled max-name-width)
+  "Cheap fingerprint of the inputs to the Live-section render.
+Captures everything that changes its output without the render's
+expensive work: per-buffer name + status + sub-agent `modified' strings
+(unparsed), the selected + tiled sets, the name width, and a 15s time
+bucket so time-based sub-agent liveness fades still refresh."
+  (list max-name-width
+        (and (buffer-live-p selected) (buffer-name selected))
+        (mapcar (lambda (b) (and (buffer-live-p b) (buffer-name b))) tiled)
+        (floor (float-time) 15)
+        (mapcar
+         (lambda (b)
+           (when (buffer-live-p b)
+             (with-current-buffer b
+               (list (buffer-name b)
+                     (ignore-errors (agent-shell-workspace--buffer-status b))
+                     (let ((sid (or (bound-and-true-p decknix--agent-auggie-session-id)
+                                    (bound-and-true-p decknix--agent-session-id)))
+                           (pid (bound-and-true-p decknix--agent-provider-id)))
+                       (when (fboundp 'decknix--agent-session-subagents)
+                         (mapcar (lambda (s) (alist-get 'modified s))
+                                 (ignore-errors
+                                   (decknix--agent-session-subagents sid pid)))))))))
+         buffers)))
+
+(defun decknix--sidebar-render-live-cached (orig line-num buffers selected tiled max-name-width)
+  "Caching :around advice for `decknix--sidebar-render-live-sessions'.
+Re-insert the previously rendered Live-section text when its fingerprint
+is unchanged, avoiding the ~350ms recompute on every paint.  ORIG renders
+into the current buffer and returns the next line number."
+  (let ((fp (ignore-errors
+              (decknix--sidebar-live-render-fingerprint
+               buffers selected tiled max-name-width))))
+    (if (and fp (equal fp (car decknix--sidebar-live-render-cache)))
+        (progn
+          (insert (cadr decknix--sidebar-live-render-cache))
+          (+ line-num (cddr decknix--sidebar-live-render-cache)))
+      (let* ((start (point))
+             (end-ln (funcall orig line-num buffers selected tiled max-name-width)))
+        (when fp
+          (setq decknix--sidebar-live-render-cache
+                (cons fp (cons (buffer-substring start (point))
+                               (- end-ln line-num)))))
+        end-ln))))
+
 (provide 'decknix-hub-sidebar-paint)
 ;;; decknix-hub-sidebar-paint.el ends here
