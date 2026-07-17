@@ -2,6 +2,8 @@ use clap::Parser;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[derive(Parser)]
 #[command(name = "nix-open")]
@@ -36,6 +38,13 @@ struct Cli {
     /// daemon uptime.
     #[arg(short, long)]
     status: bool,
+
+    /// Wait for the app to be ready after opening/restarting.
+    /// For Emacs: polls until the daemon responds to emacsclient.
+    /// For other apps: waits until the process is running.
+    /// Timeout: 60 seconds (exits with error if not ready).
+    #[arg(short, long)]
+    wait: bool,
 
     /// Application name(s) (without .app suffix).
     /// Not required when --all is used.
@@ -356,6 +365,77 @@ fn try_emacs_frame(client: &str, quiet: bool) -> bool {
         cmd.stderr(Stdio::null());
     }
     cmd.status().map(|s| s.success()).unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// Wait for app readiness (--wait flag)
+// ---------------------------------------------------------------------------
+
+const WAIT_FLAG_TIMEOUT_SECS: u64 = 60;
+const WAIT_FLAG_POLL_INTERVAL_MS: u64 = 500;
+
+/// Wait for a generic app to be running (by process name).
+/// Returns true if app is found running, false on timeout.
+fn wait_for_app_process(name: &str) -> bool {
+    let start = Instant::now();
+    let timeout = Duration::from_secs(WAIT_FLAG_TIMEOUT_SECS);
+    let poll_interval = Duration::from_millis(WAIT_FLAG_POLL_INTERVAL_MS);
+
+    eprint!("Waiting for {}", name);
+    while start.elapsed() < timeout {
+        // Check if the app has a running process
+        if running_app_exe(name).is_some() {
+            eprintln!(" ready ({:.1}s)", start.elapsed().as_secs_f32());
+            return true;
+        }
+
+        eprint!(".");
+        thread::sleep(poll_interval);
+    }
+
+    eprintln!(" timeout after {}s", WAIT_FLAG_TIMEOUT_SECS);
+    false
+}
+
+/// Wait for the Emacs daemon to respond, with progress output.
+/// Returns true if daemon is ready, false on timeout.
+fn wait_for_emacs_daemon_verbose() -> bool {
+    let client = emacsclient_path();
+    let start = Instant::now();
+    let timeout = Duration::from_secs(WAIT_FLAG_TIMEOUT_SECS);
+    let poll_interval = Duration::from_millis(WAIT_FLAG_POLL_INTERVAL_MS);
+
+    eprint!("Waiting for Emacs daemon");
+    while start.elapsed() < timeout {
+        let ready = Command::new(&client)
+            .args(["-e", "t"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if ready {
+            eprintln!(" ready ({:.1}s)", start.elapsed().as_secs_f32());
+            return true;
+        }
+
+        eprint!(".");
+        thread::sleep(poll_interval);
+    }
+
+    eprintln!(" timeout after {}s", WAIT_FLAG_TIMEOUT_SECS);
+    false
+}
+
+/// Wait for an app to be ready after opening (--wait flag handler).
+/// Dispatches to app-specific wait logic (Emacs daemon) or generic process check.
+fn wait_for_app(name: &str) -> bool {
+    if name.eq_ignore_ascii_case("emacs") {
+        wait_for_emacs_daemon_verbose()
+    } else {
+        wait_for_app_process(name)
+    }
 }
 
 /// Parse the `pid = N` line out of `launchctl print` output.  Factored out so
@@ -784,6 +864,8 @@ fn main() {
         for (name, _) in &stale {
             if !handle_open_app(name, true, false) {
                 all_ok = false;
+            } else if cli.wait && !wait_for_app(name) {
+                all_ok = false;
             }
         }
         if !all_ok {
@@ -793,6 +875,8 @@ fn main() {
         let mut all_ok = true;
         for name in &cli.apps {
             if !handle_open_app(name, cli.restart, cli.new) {
+                all_ok = false;
+            } else if cli.wait && !wait_for_app(name) {
                 all_ok = false;
             }
         }
