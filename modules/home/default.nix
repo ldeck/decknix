@@ -44,6 +44,7 @@ in
     wget
     tree
     jq
+    yq-go # mikefarah yq v4 (YAML/JSON processor; NOT the python `yq`).
     ripgrep
     gh
   ];
