@@ -78,6 +78,25 @@ in {
           without disturbing Claude's own runtime-written keys.
         '';
       };
+
+      deny = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = [ "Bash(sudo:*)" "Read(~/.config/decknix/**/secrets/**)" ];
+        description = ''
+          Claude Code permission DENY rules to merge into
+          `~/.claude/settings.json` (`permissions.deny`).  Deny always wins
+          over allow, so this is the backstop for a broad allow-list
+          ("blacklist" model): allow a tool generally via `permissions.allow`
+          (e.g. bare `Bash`), then name the few never-do commands here.
+
+          Deep-merged (union + de-duplicated) like `allow`, and never removes
+          Claude's own runtime-written keys.  Uses Claude's rule syntax, e.g.
+          `Bash(<prefix>:*)` for a prefix match or `Read(<glob>)` for a path
+          glob.  The host's own destructive-command classifier remains an
+          independent guard regardless of what is (or isn't) denied here.
+        '';
+      };
     };
 
     mcpServers = mkOption {
@@ -140,7 +159,8 @@ in {
     # apply our rules).  Instead we jq deep-merge only `.permissions.allow`
     # (union + unique), leaving every other key untouched.  Idempotent across
     # switches.
-    home.activation.claude-permissions = mkIf (allowRules != [ ])
+    home.activation.claude-permissions =
+      mkIf (allowRules != [ ] || cfg.permissions.deny != [ ])
       (lib.hm.dag.entryAfter [ "writeBoundary" ] ''
         CLAUDE_SETTINGS="$HOME/.claude/settings.json"
         ${pkgs.coreutils}/bin/mkdir -p "$(${pkgs.coreutils}/bin/dirname "$CLAUDE_SETTINGS")"
@@ -150,11 +170,15 @@ in {
         TMP="$(${pkgs.coreutils}/bin/mktemp)"
         if ${pkgs.jq}/bin/jq \
              --argjson add '${builtins.toJSON allowRules}' \
+             --argjson deny '${builtins.toJSON cfg.permissions.deny}' \
              '.permissions = (.permissions // {})
-              | .permissions.allow = (((.permissions.allow // []) + $add) | unique)' \
+              | .permissions.allow = (((.permissions.allow // []) + $add) | unique)
+              | (if ($deny | length) > 0
+                 then .permissions.deny = (((.permissions.deny // []) + $deny) | unique)
+                 else . end)' \
              "$CLAUDE_SETTINGS" > "$TMP"; then
           ${pkgs.coreutils}/bin/mv "$TMP" "$CLAUDE_SETTINGS"
-          echo "  [claude-permissions] Ensured ${toString (length allowRules)} managed allow rule(s) in $CLAUDE_SETTINGS"
+          echo "  [claude-permissions] Ensured ${toString (length allowRules)} allow + ${toString (length cfg.permissions.deny)} deny rule(s) in $CLAUDE_SETTINGS"
         else
           ${pkgs.coreutils}/bin/rm -f "$TMP"
           echo "  [claude-permissions] WARNING: failed to update $CLAUDE_SETTINGS (left unchanged)" >&2
