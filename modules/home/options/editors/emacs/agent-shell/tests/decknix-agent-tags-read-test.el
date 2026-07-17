@@ -46,7 +46,7 @@
                ((symbol-function 'decknix--agent-tags-conversations)
                 (lambda (store) (gethash "conversations" store)))
                ((symbol-function 'decknix--agent-conversation-key-for-session)
-                (lambda (sid)
+                (lambda (sid &optional _no-block)
                   (cdr (assoc sid decknix-test-tags-read--session-to-conv)))))
        ,@body)))
 

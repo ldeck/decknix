@@ -53,11 +53,11 @@
 (declare-function decknix--agent-tags-conversations
                   "decknix-agent-tags-store" (store))
 (declare-function decknix--agent-conversation-key-for-session
-                  "decknix-agent-conv-resolve" (session-id))
+                  "decknix-agent-conv-resolve" (session-id &optional no-block))
 
 (defun decknix--agent-tags-for-session (session-id)
   "Return the list of tags for the conversation containing SESSION-ID."
-  (let* ((conv-key (decknix--agent-conversation-key-for-session session-id))
+  (let* ((conv-key (decknix--agent-conversation-key-for-session session-id t))
          (store (decknix--agent-tags-read))
          (convs (decknix--agent-tags-conversations store)))
     (when conv-key
