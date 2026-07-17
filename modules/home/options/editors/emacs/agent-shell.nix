@@ -3077,7 +3077,7 @@ in
         (declare-function decknix--agent-conv-resolve-key
                           "decknix-agent-conv-resolve" (conv-key))
         (declare-function decknix--agent-conversation-key-for-session
-                          "decknix-agent-conv-resolve" (session-id))
+                          "decknix-agent-conv-resolve" (session-id &optional no-block))
         (declare-function decknix--agent-latest-session-id-for-conv-key
                           "decknix-agent-conv-resolve" (conv-key))
 
@@ -5610,6 +5610,22 @@ ${optionalString cfg.hub.priority.enable ''
                           (orig line-num buffers selected tiled max-name-width))
         (advice-add 'decknix--sidebar-render-live-sessions :around
                     #'decknix--sidebar-render-live-cached)
+
+        ;; Listen for status changes: when the async session-cache scan
+        ;; lands (a cold cache warmed, or a session file changed on disk),
+        ;; request a debounced sidebar repaint so the tags / conversation
+        ;; grouping that the non-blocking accessors returned empty on a cold
+        ;; `C-c b' / first paint self-heal a moment later.  The paint is
+        ;; coalesced by the outermost sidebar-refresh advice, so this never
+        ;; paints synchronously and a burst of session writes collapses to
+        ;; one idle paint.  `add-hook' is idempotent by symbol -> survives
+        ;; `decknix switch' hot-reloads without stacking.
+        (defun decknix--sidebar-repaint-on-session-refresh ()
+          "Request a debounced sidebar repaint after new session data lands."
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (ignore-errors (agent-shell-workspace-sidebar-refresh))))
+        (add-hook 'decknix-agent-session-cache-refresh-functions
+                  #'decknix--sidebar-repaint-on-session-refresh)
 
         (with-eval-after-load 'agent-shell-workspace
           (advice-add 'agent-shell-workspace-sidebar-refresh :around
