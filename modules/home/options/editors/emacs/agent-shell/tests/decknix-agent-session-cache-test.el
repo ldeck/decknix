@@ -316,6 +316,81 @@ never by parsing transcripts or refreshing the cache."
         (should (= refresh-called 0))))))
 
 ;; ---------------------------------------------------------------------------
+;; Non-blocking accessor + refresh hook (the "C-c b / sidebar must never
+;; block, take last-known status, and self-heal when the async scan lands").
+;; ---------------------------------------------------------------------------
+
+(ert-deftest decknix-session-warm-or-async--cold-returns-nil-kicks-async ()
+  "A cold cache never blocks: returns nil and kicks a background refresh
+for every registered provider (never the synchronous scan)."
+  (decknix-agent-session-cache-test--with-multi-provider
+    (let ((sync-called 0) (async-providers nil))
+      (cl-letf (((symbol-function 'decknix--agent-session-refresh-sync)
+                 (lambda (&rest _) (cl-incf sync-called) nil))
+                ((symbol-function 'decknix--agent-session-refresh-async)
+                 (lambda (&optional p) (push p async-providers) nil)))
+        (should (null (decknix--agent-session-list-warm-or-async)))
+        (should (= sync-called 0))
+        ;; One async kick per registered provider.
+        (should (= (length async-providers) 2))
+        (should (memq 'test-auggie async-providers))
+        (should (memq 'test-claude async-providers))))))
+
+(ert-deftest decknix-session-warm-or-async--warm-fresh-no-refresh ()
+  "A warm, fresh cache returns cached data with no refresh of any kind."
+  (decknix-agent-session-cache-test--with-multi-provider
+    (let ((sync-called 0) (async-called 0)
+          (now (float-time)))
+      (puthash 'test-auggie '(((sessionId . "sid-A") (modified . "2026-01-02")))
+               decknix--agent-session-cache-map)
+      (puthash 'test-claude '(((sessionId . "sid-C") (modified . "2026-01-01")))
+               decknix--agent-session-cache-map)
+      (puthash 'test-auggie now decknix--agent-session-cache-time-map)
+      (puthash 'test-claude now decknix--agent-session-cache-time-map)
+      (cl-letf (((symbol-function 'decknix--agent-session-refresh-sync)
+                 (lambda (&rest _) (cl-incf sync-called) nil))
+                ((symbol-function 'decknix--agent-session-refresh-async)
+                 (lambda (&rest _) (cl-incf async-called) nil)))
+        (let ((result (decknix--agent-session-list-warm-or-async)))
+          (should (= (length result) 2))
+          (should (= sync-called 0))
+          (should (= async-called 0)))))))
+
+(ert-deftest decknix-session-warm-or-async--stale-returns-cached-kicks-async ()
+  "A warm but stale cache returns the cached data immediately AND kicks a
+background refresh (never blocks on a sync scan)."
+  (decknix-agent-session-cache-test--with-multi-provider
+    (let ((sync-called 0) (async-called 0)
+          (stale (- (float-time) (* 10 decknix--agent-session-cache-ttl))))
+      (puthash 'test-auggie '(((sessionId . "sid-A") (modified . "2026-01-02")))
+               decknix--agent-session-cache-map)
+      (puthash 'test-auggie stale decknix--agent-session-cache-time-map)
+      (puthash 'test-claude stale decknix--agent-session-cache-time-map)
+      (cl-letf (((symbol-function 'decknix--agent-session-refresh-sync)
+                 (lambda (&rest _) (cl-incf sync-called) nil))
+                ((symbol-function 'decknix--agent-session-refresh-async)
+                 (lambda (&rest _) (cl-incf async-called) nil)))
+        (let ((result (decknix--agent-session-list-warm-or-async)))
+          (should (>= (length result) 1))
+          (should (= sync-called 0))
+          (should (> async-called 0)))))))
+
+(ert-deftest decknix-session-refresh-hook--runs-all-swallows-errors ()
+  "The refresh hook runs every listener and one failing listener never
+aborts the others (so a bad UI listener can't break cache refreshes)."
+  (let ((decknix-agent-session-cache-refresh-functions nil)
+        (ran nil))
+    (add-hook 'decknix-agent-session-cache-refresh-functions
+              (lambda () (push 'a ran)))
+    (add-hook 'decknix-agent-session-cache-refresh-functions
+              (lambda () (error "boom")))
+    (add-hook 'decknix-agent-session-cache-refresh-functions
+              (lambda () (push 'c ran)))
+    (decknix--agent-session-cache-run-refresh-hook)
+    (should (memq 'a ran))
+    (should (memq 'c ran))))
+
+;; ---------------------------------------------------------------------------
 ;; Claude mtime-cache regression tests (NC-XXXX: multi-project sessions
 ;; were never written to the persistent mtime cache because
 ;; decknix--session-store-parsed skipped them when :history-file was set,
