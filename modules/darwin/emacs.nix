@@ -32,9 +32,13 @@ let
   #
   # The daemon only restarts when this script's content changes (never for
   # Elisp-only changes) or when the Emacs binary package itself changes.
+  #
+  # We use --fg-daemon='server' (explicit name) instead of bare --fg-daemon
+  # because GNU Emacs 30+ only calls server-start automatically when a
+  # server name is provided. Without it, the socket is never created.
   emacsLauncher = pkgs.writeShellScript "emacs-daemon-launcher" ''
     EMACS="${homeDir}/.nix-profile/bin/emacs"
-    exec "$EMACS" --fg-daemon
+    exec "$EMACS" --fg-daemon='server'
   '';
 in
 {
