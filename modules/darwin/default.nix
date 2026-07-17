@@ -1,7 +1,10 @@
 { config, pkgs, lib, ... }:
 let
   username = config.system.primaryUser;
-  homeDir = config.users.users.${username}.home;
+  # Avoid using config.users.users.${username}.home directly in nix.settings
+  # because nix.linux-builder triggers evaluation of nix.settings, which would
+  # then need users.users, creating infinite recursion. Use literal path instead.
+  homeDir = "/Users/${username}";
 in
 {
   # set and forget
@@ -66,6 +69,34 @@ in
   nix.extraOptions = ''
     !include ${homeDir}/.config/nix/access-tokens.conf
   '';
+
+  # Authenticate Nix's fetchers to NurtureCloud's private GAR Maven repo the same
+  # way Gradle does — so hermetic builds that vendor private deps (e.g. CONN-539's
+  # nix container build) can pull them without per-artifact workarounds. On the
+  # multi-user daemon, fixed-output fetches read the daemon's netrc-file (a client
+  # `--option` is ignored), so it must be set here. Points at a user-writable file
+  # the daemon reads; refresh it with a short-lived token before such a build:
+  #   printf 'machine australia-southeast1-maven.pkg.dev\nlogin oauth2accesstoken\npassword %s\n' \
+  #     "$(gcloud auth print-access-token)" > ~/.config/nix/netrc
+  # Fetches are content-addressed, so this is only needed until each artifact is
+  # in the store. A missing file is harmless (public fetches don't consult it).
+  nix.settings.netrc-file = "${homeDir}/.config/nix/netrc";
+
+  # Linux remote builder (lightweight NixOS VM via Apple Virtualization) so macOS
+  # can build Linux derivations locally — e.g. `dockerTools` OCI images for the
+  # hermetic Nix container builds (CONN-539). The guest is aarch64-linux (native
+  # under Apple silicon), which is enough to build and run the image locally; the
+  # linux/amd64 deploy image is built natively in CI. The VM runs as a
+  # LaunchDaemon after a `decknix switch` (sudo darwin-rebuild).
+  nix.linux-builder = {
+    enable = true;
+    maxJobs = 4;
+    config.virtualisation = {
+      cores = 6;
+      darwin-builder.diskSize = 40 * 1024; # MB — room for the JVM dep closure
+      darwin-builder.memorySize = 6 * 1024; # MB
+    };
+  };
 
   # 3. SYSTEM PACKAGES
   # These are installed in /run/current-system/sw (available to all users).
