@@ -205,15 +205,63 @@ manages — each executable agent-sync file becomes a narrow
     permissions.allow = [
       "Bash(gh pr view:*)"
     ];
+
+    # DENY rules always win over allow — the backstop for a broad allow-list.
+    permissions.deny = [
+      "Bash(sudo:*)"
+      "Read(~/.config/decknix/**/secrets/**)"
+    ];
   };
 }
 ```
 
-The rules are **deep-merged** into `~/.claude/settings.json` — decknix updates
-only `.permissions.allow` (union + de-duplicated) and leaves every other key
-untouched, because Claude mutates this file at runtime (e.g. it writes
-`skipDangerousModePermissionPrompt`). Set `allowManagedTools = false` to manage
-the allowlist entirely by hand.
+Both lists are **deep-merged** into `~/.claude/settings.json` — decknix updates
+only `.permissions.allow` and `.permissions.deny` (each union + de-duplicated)
+and leaves every other key untouched, because Claude mutates this file at
+runtime (e.g. it writes `skipDangerousModePermissionPrompt`). Set
+`allowManagedTools = false` to manage the allowlist entirely by hand.
+
+### Allowlist vs. blacklist model
+
+A path-scoped allowlist rots the moment a managed tool moves on disk: every
+stale `Bash(<old-abs-path>:*)` rule silently matches nothing, and Claude
+re-prompts for the relocated tool every session. Two ways to avoid that:
+
+- **Allowlist (default).** Keep `allowManagedTools = true` and let the
+  auto-derived rules track each tool's current absolute path. They regenerate
+  on every `decknix switch`, so a move updates the rule automatically —
+  provided the tool stays a managed executable agent-sync file.
+- **Blacklist.** Allow the common tools *broadly* and lean on `permissions.deny`
+  as the backstop:
+
+  ```nix
+  decknix.ai.claude.permissions = {
+    allowManagedTools = false;              # broad Bash below supersedes them
+    allow = [ "Bash" "Read" "Edit" "Write" ];
+    deny  = [
+      "Read(~/.config/decknix/**/secrets/**)"
+      "Bash(sudo:*)"
+      "Bash(rm -rf /:*)"
+      "Bash(rm -rf ~:*)"
+    ];
+  };
+  ```
+
+  A bare `Bash` allow can't rot when a script moves, so this trades a
+  maintained allowlist for a small never-do denylist. Two caveats:
+
+  - `deny` is evaluated before `allow` and always wins, but the host's own
+    destructive-command classifier still runs independently — it remains the
+    real backstop even under a broad allow.
+  - A `Read(...)` deny guards the Read/Edit **tool** path only. Under a broad
+    `Bash` allow a shell `cat`/`<` can still reach a denied file, so treat
+    secret denies as defence-in-depth (and against accidental whole-dir
+    slurps), not a hard boundary. Keep secrets `0600` and out of the Nix
+    store regardless.
+
+Leave `defaultMode` at `default` for the blacklist model. `bypassPermissions`
+would skip permission evaluation entirely — including your own `deny` rules —
+which is the opposite of what a denylist is for.
 
 ## Claude MCP Servers
 
