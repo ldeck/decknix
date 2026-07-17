@@ -253,6 +253,19 @@ let
     ];
   };
 
+  # Quick-capture: jot a feature/bug/investigation/discussion into a GitHub
+  # issue/comment or taskwarrior without leaving Emacs or waiting on a busy
+  # agent.  Tool-agnostic (gh + task CLIs), hexagonal (pluggable
+  # destinations).  Pure arg builders + hub-repo extraction ERT-tested.
+  decknix-capture-el = mkEmacsTestedPackage {
+    pname = "decknix-capture";
+    src = ./agent-shell/capture;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-capture-test.el"
+    ];
+  };
+
   decknix-sidebar-toggles-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-toggles";
     src = ./agent-shell/sidebar;
@@ -2641,6 +2654,7 @@ in
           decknix-agent-resume-native-el
           decknix-agent-heartbeat-watch-el
           decknix-perf-hitch-el
+          decknix-capture-el
           decknix-agent-subagent-state-el
           decknix-agent-resourcing-el
           decknix-agent-rg-search-command-el
@@ -3570,6 +3584,13 @@ ${optionalString cfg.tableOverlay.enable ''
                           "decknix-agent-heartbeat-watch")
         (decknix--agent-hb-watch-start)
 
+        ;; Quick-capture: `C-c A C' -> jot a feature/bug/investigation into a
+        ;; GitHub issue/comment or taskwarrior, async, even while an agent is
+        ;; busy.  Tool-agnostic; the key binding is added below with the rest
+        ;; of the agent prefix map.
+        (require 'decknix-capture)
+        (declare-function decknix-capture "decknix-capture" (&optional with-body))
+
         ;; Always-on hitch profiler (default-on, `decknix-perf-hitch-toggle'
         ;; to disable at runtime).  Surfaces slow timers/commands so we can
         ;; keep optimising as the config grows.  `M-x decknix-perf-hitch-report'
@@ -4200,6 +4221,7 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         ;; C-c A c — commands sub-prefix ("Commands")
         (define-prefix-command 'decknix-agent-command-map)
         (define-key decknix-agent-prefix-map (kbd "c") 'decknix-agent-command-map)
+        (define-key decknix-agent-prefix-map (kbd "C") 'decknix-capture)             ; Quick-capture issue/task
         (define-key decknix-agent-command-map (kbd "c") 'decknix-agent-command-run)    ; Pick & insert
         (define-key decknix-agent-command-map (kbd "n") 'decknix-agent-command-new)    ; New
         (define-key decknix-agent-command-map (kbd "e") 'decknix-agent-command-edit)   ; Edit
