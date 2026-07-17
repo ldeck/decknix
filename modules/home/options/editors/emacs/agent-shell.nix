@@ -5556,6 +5556,17 @@ ${optionalString cfg.hub.priority.enable ''
         (advice-add 'agent-shell-workspace-sidebar--render :around
                     #'decknix--sidebar-diff-render)
 
+        ;; Live-section render cache: `decknix--sidebar-render-live-sessions'
+        ;; costs ~350ms/paint (box-building + colourising dozens of sub-agent
+        ;; rows) even when nothing changed -- the dominant residual paint
+        ;; cost.  Reuse the rendered text when a cheap fingerprint is
+        ;; unchanged.  Named `:around' -> hot-reload-idempotent.
+        (declare-function decknix--sidebar-render-live-cached
+                          "decknix-hub-sidebar-paint"
+                          (orig line-num buffers selected tiled max-name-width))
+        (advice-add 'decknix--sidebar-render-live-sessions :around
+                    #'decknix--sidebar-render-live-cached)
+
         (with-eval-after-load 'agent-shell-workspace
           (advice-add 'agent-shell-workspace-sidebar-refresh :around
             (lambda (orig-fn &rest args)
