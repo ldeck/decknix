@@ -309,5 +309,47 @@
       (should (= 5 (decknix-test-stub-call-count
                     'agent-shell-workspace-sidebar-refresh))))))
 
+;; -- view-mode (support mode) -------------------------------------
+
+(ert-deftest decknix-sidebar-toggles/cycle-view-mode-cycles ()
+  "Three-way cycle: standard -> support -> hybrid -> standard, refreshing each."
+  (let ((decknix--sidebar-view-mode 'standard)
+        (decknix--sidebar-refresh-suspended nil))
+    (decknix-test-with-stubbed-deps (agent-shell-workspace-sidebar-refresh)
+      (decknix-sidebar-cycle-view-mode)
+      (should (equal 'support decknix--sidebar-view-mode))
+      (decknix-sidebar-cycle-view-mode)
+      (should (equal 'hybrid decknix--sidebar-view-mode))
+      (decknix-sidebar-cycle-view-mode)
+      (should (equal 'standard decknix--sidebar-view-mode))
+      (should (= 3 (decknix-test-stub-call-count
+                    'agent-shell-workspace-sidebar-refresh))))))
+
+(ert-deftest decknix-sidebar-toggles/section-visible-p-per-mode ()
+  "The pure predicate gates sections by mode from the section map."
+  ;; standard: developer sections, no support section
+  (should (decknix--sidebar-section-visible-p 'requests 'standard))
+  (should (decknix--sidebar-section-visible-p 'wip 'standard))
+  (should-not (decknix--sidebar-section-visible-p 'support 'standard))
+  ;; support: Support + Live only; developer sections suppressed
+  (should (decknix--sidebar-section-visible-p 'support 'support))
+  (should (decknix--sidebar-section-visible-p 'live 'support))
+  (should-not (decknix--sidebar-section-visible-p 'requests 'support))
+  (should-not (decknix--sidebar-section-visible-p 'wip 'support))
+  ;; hybrid: everything
+  (should (decknix--sidebar-section-visible-p 'support 'hybrid))
+  (should (decknix--sidebar-section-visible-p 'requests 'hybrid)))
+
+(ert-deftest decknix-sidebar-toggles/section-visible-p-defaults-to-current-mode ()
+  "Omitting MODE consults `decknix--sidebar-view-mode'."
+  (let ((decknix--sidebar-view-mode 'support))
+    (should (decknix--sidebar-section-visible-p 'support))
+    (should-not (decknix--sidebar-section-visible-p 'requests))))
+
+(ert-deftest decknix-sidebar-toggles/section-visible-p-unknown-mode-fails-safe ()
+  "An unknown mode hides every section rather than rendering a broken view."
+  (should-not (decknix--sidebar-section-visible-p 'live 'bogus))
+  (should-not (decknix--sidebar-section-visible-p 'support 'bogus)))
+
 (provide 'decknix-sidebar-toggles-test)
 ;;; decknix-sidebar-toggles-test.el ends here
