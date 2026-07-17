@@ -253,6 +253,18 @@ let
     ];
   };
 
+  # Auto-file recurring hitch outliers into taskwarrior (the "live task
+  # list built from profiling").  Shares the perf-hitch src dir; requires
+  # the profiler for its tally.  Pure predicate/desc builder ERT-tested.
+  decknix-perf-hitch-autofile-el = mkEmacsTestedPackage {
+    pname = "decknix-perf-hitch-autofile";
+    src = ./agent-shell/perf-hitch;
+    packageRequires = [ decknix-perf-hitch-el ];
+    testFiles = [
+      "decknix-perf-hitch-autofile-test.el"
+    ];
+  };
+
   # Quick-capture: jot a feature/bug/investigation/discussion into a GitHub
   # issue/comment or taskwarrior without leaving Emacs or waiting on a busy
   # agent.  Tool-agnostic (gh + task CLIs), hexagonal (pluggable
@@ -2654,6 +2666,7 @@ in
           decknix-agent-resume-native-el
           decknix-agent-heartbeat-watch-el
           decknix-perf-hitch-el
+          decknix-perf-hitch-autofile-el
           decknix-capture-el
           decknix-agent-subagent-state-el
           decknix-agent-resourcing-el
@@ -3600,6 +3613,15 @@ ${optionalString cfg.tableOverlay.enable ''
         (defvar decknix-perf-hitch-enable)
         (when decknix-perf-hitch-enable
           (decknix-perf-hitch-start))
+
+        ;; Auto-file recurring hitch outliers into taskwarrior on a slow
+        ;; timer -- the profiler feeds a live perf task list.
+        (require 'decknix-perf-hitch-autofile)
+        (declare-function decknix-perf-hitch-autofile-start
+                          "decknix-perf-hitch-autofile")
+        (defvar decknix-perf-hitch-autofile-enable)
+        (when (and decknix-perf-hitch-enable decknix-perf-hitch-autofile-enable)
+          (decknix-perf-hitch-autofile-start))
 
         ;; Sub-agent liveness state (#144) -- pure ladder consumed by
         ;; the sidebar sub-agent row renderer (workspace-bulk) to
