@@ -24,11 +24,9 @@
 ;;
 ;; This module owns the storage layer:
 ;;
-;;   `decknix--agent-tags-read'           — cached read with v1 -> v2
-;;                                            auto-migration plus a
-;;                                            second-pass canonical
+;;   `decknix--agent-tags-read'           — cached read with canonical
 ;;                                            conv-key re-keying for
-;;                                            v2 entries written before
+;;                                            entries written before
 ;;                                            the jq-truncated hash
 ;;                                            convention was honoured
 ;;   `decknix--agent-tags-write'          — write hash to disk +
@@ -49,14 +47,12 @@
 (require 'seq)
 
 ;; -- Forward declarations ----------------------------------------
-;; `decknix--agent-session-list' is defined in the sibling
+;; `decknix--agent-session-list-if-warm' is defined in the sibling
 ;; `decknix-agent-session-cache' package; `decknix--agent-conversation-key'
 ;; lives in the heredoc (`decknix-agent-shell-main') because it threads
 ;; mergedInto-redirect resolution through this very store.  Both are
 ;; resolved at call time, not compile time, so a forward declaration
 ;; is sufficient here.
-(declare-function decknix--agent-session-list
-                  "decknix-agent-session-cache" ())
 (declare-function decknix--agent-session-list-if-warm
                   "decknix-agent-session-cache" ())
 (declare-function decknix--agent-conversation-key
@@ -142,81 +138,12 @@ or walking the store for orphaned v1 entries."
                 (make-hash-table :test 'equal)))
         (setq decknix--agent-tags-cache-mtime current-mtime)))
     (let ((store decknix--agent-tags-cache))
-      ;; Auto-migrate v1 format: session-keyed entries → conversation-keyed.
-      ;; Handles both initial migration (no "conversations" key) and
-      ;; incremental migration (orphaned v1 entries coexisting with v2).
-      (let ((convs (or (gethash "conversations" store)
-                       (make-hash-table :test 'equal)))
-            (old-entries nil)
-            (migrated 0))
-      ;; Collect orphaned session-keyed entries (UUID keys with tags).
-      ;; Skip the well-known root keys plus the `_canonicalKeyVersion'
-      ;; bookkeeping flag added by the canonical conv-key migration.
-      (maphash (lambda (key val)
-                 (when (and (hash-table-p val)
-                            (gethash "tags" val)
-                            (not (member key '("conversations"
-                                               "bookmarks"
-                                               "_canonicalKeyVersion"))))
-                   (push (cons key val) old-entries)))
-               store)
-      (when old-entries
-        ;; Resolve each old session → conversation and merge tags.
-        ;; Fetch session list only when needed — avoids a blocking
-        ;; synchronous scan of all session files on every tag-store read.
-        (let ((sessions (decknix--agent-session-list)))
-        (dolist (entry old-entries)
-          (let* ((sid (car entry))
-                 (data (cdr entry))
-                 (match (seq-find
-                         (eval `(lambda (s)
-                                  (string= (alist-get 'sessionId s) ,sid))
-                               t)
-                         sessions))
-                 (conv-key (when match
-                             (decknix--agent-conversation-key
-                              (alist-get 'firstUserMessage match ""))))
-                 (tags (gethash "tags" data)))
-            (when (and conv-key tags)
-              (let ((conv-entry (or (gethash conv-key convs)
-                                    (let ((h (make-hash-table :test 'equal)))
-                                      (puthash "tags" nil h)
-                                      (puthash "sessions" nil h)
-                                      h))))
-                ;; Merge tags
-                (let ((existing (gethash "tags" conv-entry)))
-                  (dolist (tag tags)
-                    (cl-pushnew tag existing :test #'string=))
-                  (puthash "tags" existing conv-entry))
-                ;; Track session
-                (let ((sids (gethash "sessions" conv-entry)))
-                  (cl-pushnew sid sids :test #'string=)
-                  (puthash "sessions" sids conv-entry))
-                (puthash conv-key conv-entry convs))
-              ;; Only remove the v1 entry once it has been
-              ;; successfully merged into v2.  Leaving
-              ;; unresolved v1 entries in place lets a later
-              ;; pass complete the migration when session-list
-              ;; / firstUserMessage data becomes available —
-              ;; the previous unconditional `remhash' was the
-              ;; source of tag loss on the guided-session
-              ;; creation race.
-              (remhash sid store)
-              (setq migrated (1+ migrated))))))
-        ;; Write back the cleaned store.  Best-effort: this migration is a
-        ;; side effect of *reading* the store, so a write failure (e.g. a
-        ;; read-only HOME, as in the Nix build sandbox) must not turn a
-        ;; plain lookup into an error.  The in-memory store keeps the
-        ;; migrated form for this session; a later read re-attempts the
-        ;; write once the filesystem is writable.
-        (puthash "conversations" convs store)
-        (unless (gethash "bookmarks" store)
-          (puthash "bookmarks" (make-hash-table :test 'equal) store))
-        (ignore-errors (decknix--agent-tags-write store))
-        (when (> migrated 0)
-          (message "Migrated %d v1 tag entries to conversation format"
-                   migrated))))
-      ;; Second-pass migration: re-key v2 entries that were written
+      ;; Ensure root keys exist.
+      (unless (gethash "conversations" store)
+        (puthash "conversations" (make-hash-table :test 'equal) store))
+      (unless (gethash "bookmarks" store)
+        (puthash "bookmarks" (make-hash-table :test 'equal) store))
+      ;; Canonical conv-key migration: re-key v2 entries that were written
       ;; under the pre-canonical hash (full comint input, not the
       ;; jq-truncated firstUserMessage prefix the read side uses).
       ;; Idempotent via `_canonicalKeyVersion'.  Requires a populated
