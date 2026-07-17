@@ -320,26 +320,32 @@ never by parsing transcripts or refreshing the cache."
 ;; block, take last-known status, and self-heal when the async scan lands").
 ;; ---------------------------------------------------------------------------
 
-(ert-deftest decknix-session-warm-or-async--cold-returns-nil-kicks-async ()
-  "A cold cache never blocks: returns nil and kicks a background refresh
-for every registered provider (never the synchronous scan)."
+(ert-deftest decknix-session-warm-or-async--cold-returns-nil-defers-refresh ()
+  "A cold cache never blocks: returns nil, never touches the sync OR the
+inline async parse, and DEFERS a background refresh for every provider.
+The deferral (idle timer) is what keeps a cold `C-c b' instant even though
+`refresh-async' itself can parse a small new-file set synchronously."
   (decknix-agent-session-cache-test--with-multi-provider
-    (let ((sync-called 0) (async-providers nil))
+    (let ((sync-called 0) (inline-async 0) (scheduled nil)
+          (decknix--agent-session-refresh-pending (make-hash-table :test 'eq)))
       (cl-letf (((symbol-function 'decknix--agent-session-refresh-sync)
                  (lambda (&rest _) (cl-incf sync-called) nil))
                 ((symbol-function 'decknix--agent-session-refresh-async)
-                 (lambda (&optional p) (push p async-providers) nil)))
+                 (lambda (&rest _) (cl-incf inline-async) nil))
+                ((symbol-function 'decknix--agent-session-schedule-refresh)
+                 (lambda (p) (push p scheduled) nil)))
         (should (null (decknix--agent-session-list-warm-or-async)))
         (should (= sync-called 0))
-        ;; One async kick per registered provider.
-        (should (= (length async-providers) 2))
-        (should (memq 'test-auggie async-providers))
-        (should (memq 'test-claude async-providers))))))
+        ;; Nothing parsed inline; a deferred refresh scheduled per provider.
+        (should (= inline-async 0))
+        (should (= (length scheduled) 2))
+        (should (memq 'test-auggie scheduled))
+        (should (memq 'test-claude scheduled))))))
 
 (ert-deftest decknix-session-warm-or-async--warm-fresh-no-refresh ()
   "A warm, fresh cache returns cached data with no refresh of any kind."
   (decknix-agent-session-cache-test--with-multi-provider
-    (let ((sync-called 0) (async-called 0)
+    (let ((sync-called 0) (scheduled 0)
           (now (float-time)))
       (puthash 'test-auggie '(((sessionId . "sid-A") (modified . "2026-01-02")))
                decknix--agent-session-cache-map)
@@ -349,18 +355,18 @@ for every registered provider (never the synchronous scan)."
       (puthash 'test-claude now decknix--agent-session-cache-time-map)
       (cl-letf (((symbol-function 'decknix--agent-session-refresh-sync)
                  (lambda (&rest _) (cl-incf sync-called) nil))
-                ((symbol-function 'decknix--agent-session-refresh-async)
-                 (lambda (&rest _) (cl-incf async-called) nil)))
+                ((symbol-function 'decknix--agent-session-schedule-refresh)
+                 (lambda (&rest _) (cl-incf scheduled) nil)))
         (let ((result (decknix--agent-session-list-warm-or-async)))
           (should (= (length result) 2))
           (should (= sync-called 0))
-          (should (= async-called 0)))))))
+          (should (= scheduled 0)))))))
 
-(ert-deftest decknix-session-warm-or-async--stale-returns-cached-kicks-async ()
-  "A warm but stale cache returns the cached data immediately AND kicks a
-background refresh (never blocks on a sync scan)."
+(ert-deftest decknix-session-warm-or-async--stale-returns-cached-defers-refresh ()
+  "A warm but stale cache returns the cached data immediately AND schedules
+a deferred background refresh (never blocks on a sync scan)."
   (decknix-agent-session-cache-test--with-multi-provider
-    (let ((sync-called 0) (async-called 0)
+    (let ((sync-called 0) (scheduled 0)
           (stale (- (float-time) (* 10 decknix--agent-session-cache-ttl))))
       (puthash 'test-auggie '(((sessionId . "sid-A") (modified . "2026-01-02")))
                decknix--agent-session-cache-map)
@@ -368,12 +374,26 @@ background refresh (never blocks on a sync scan)."
       (puthash 'test-claude stale decknix--agent-session-cache-time-map)
       (cl-letf (((symbol-function 'decknix--agent-session-refresh-sync)
                  (lambda (&rest _) (cl-incf sync-called) nil))
-                ((symbol-function 'decknix--agent-session-refresh-async)
-                 (lambda (&rest _) (cl-incf async-called) nil)))
+                ((symbol-function 'decknix--agent-session-schedule-refresh)
+                 (lambda (&rest _) (cl-incf scheduled) nil)))
         (let ((result (decknix--agent-session-list-warm-or-async)))
           (should (>= (length result) 1))
           (should (= sync-called 0))
-          (should (> async-called 0)))))))
+          (should (> scheduled 0)))))))
+
+(ert-deftest decknix-session-schedule-refresh--dedups-per-provider ()
+  "Repeated schedule calls for a provider arm at most one timer until it
+fires (so a burst of decoration calls never stacks dozens of refreshes)."
+  (let ((decknix--agent-session-refresh-pending (make-hash-table :test 'eq))
+        (armed 0))
+    (cl-letf (((symbol-function 'run-with-idle-timer)
+               (lambda (&rest _) (cl-incf armed) nil)))
+      (decknix--agent-session-schedule-refresh 'test-auggie)
+      (decknix--agent-session-schedule-refresh 'test-auggie)
+      (decknix--agent-session-schedule-refresh 'test-auggie)
+      ;; One timer armed; the provider is marked pending.
+      (should (= armed 1))
+      (should (gethash 'test-auggie decknix--agent-session-refresh-pending)))))
 
 (ert-deftest decknix-session-refresh-hook--runs-all-swallows-errors ()
   "The refresh hook runs every listener and one failing listener never
