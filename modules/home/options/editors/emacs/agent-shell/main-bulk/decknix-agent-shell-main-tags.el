@@ -69,7 +69,7 @@
 (declare-function decknix--agent-conv-resolve-key
                   "decknix-agent-conv-resolve" (conv-key))
 (declare-function decknix--agent-conversation-key-for-session
-                  "decknix-agent-conv-resolve" (session-id))
+                  "decknix-agent-conv-resolve" (session-id &optional no-block))
 (declare-function decknix--agent-latest-session-id-for-conv-key
                   "decknix-agent-conv-resolve" (conv-key))
 

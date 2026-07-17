@@ -5452,7 +5452,7 @@ entry, once after a delay — without producing duplicate rows."
                       (and buffer-sid
                            (ignore-errors
                              (decknix--agent-conversation-key-for-session
-                              buffer-sid)))))
+                              buffer-sid t)))))
                  ;; The buffer's ACP session-id can still be nil while a new
                  ;; session warms up, even though the conversation is already
                  ;; known.  Persisting a nil session-id is what later breaks
@@ -5492,7 +5492,7 @@ next start needs to read as Previous Sessions."
                      decknix--agent-conv-key)
                 (and sid
                      (ignore-errors
-                       (decknix--agent-conversation-key-for-session sid))))))
+                       (decknix--agent-conversation-key-for-session sid t))))))
       (when (or sid conv-key)
         (decknix--live-sessions-forget conv-key sid)))))
 

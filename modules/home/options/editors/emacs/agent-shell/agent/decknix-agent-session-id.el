@@ -46,7 +46,7 @@
 ;; upstream agent-shell package and does not need a `declare-
 ;; function' / `defvar', but `derived-mode-p' is a built-in.
 (declare-function decknix--agent-conversation-key-for-session
-                  "decknix-agent-conv-resolve" (session-id))
+                  "decknix-agent-conv-resolve" (session-id &optional no-block))
 
 ;; The buffer-local session-id var is defined in main-bulk; we
 ;; reference it via `defvar' so the byte-compiler sees a binding

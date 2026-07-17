@@ -132,6 +132,30 @@ ALIST is a list of (CONV-KEY . MERGED-INTO-KEY-OR-NIL) cells."
     (should (equal "K:world"
                    (decknix--agent-conversation-key-for-session "S2")))))
 
+(ert-deftest decknix-agent-conv-resolve--key-for-session-blocks-by-default ()
+  "Without NO-BLOCK the resolver uses the blocking `decknix--agent-session-list'
+(the action/resume path that needs a definite answer)."
+  (let ((blocking-called 0) (nonblocking-called 0))
+    (cl-letf (((symbol-function 'decknix--agent-session-list)
+               (lambda (&rest _) (cl-incf blocking-called) nil))
+              ((symbol-function 'decknix--agent-session-list-warm-or-async)
+               (lambda (&rest _) (cl-incf nonblocking-called) nil)))
+      (decknix--agent-conversation-key-for-session "S1")
+      (should (= blocking-called 1))
+      (should (= nonblocking-called 0)))))
+
+(ert-deftest decknix-agent-conv-resolve--key-for-session-nonblocking-with-flag ()
+  "With NO-BLOCK the resolver uses the non-blocking `warm-or-async' accessor
+so a cold `C-c b' / sidebar decoration never stalls on a synchronous scan."
+  (let ((blocking-called 0) (nonblocking-called 0))
+    (cl-letf (((symbol-function 'decknix--agent-session-list)
+               (lambda (&rest _) (cl-incf blocking-called) nil))
+              ((symbol-function 'decknix--agent-session-list-warm-or-async)
+               (lambda (&rest _) (cl-incf nonblocking-called) nil)))
+      (decknix--agent-conversation-key-for-session "S1" t)
+      (should (= blocking-called 0))
+      (should (= nonblocking-called 1)))))
+
 ;; -- latest-session-id-for-conv-key ------------------------------
 
 (ert-deftest decknix-agent-conv-resolve--latest-nil-conv-key ()

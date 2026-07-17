@@ -91,6 +91,27 @@
 (defvar decknix--agent-session-cache-ttl 120
   "Seconds before the session cache is considered stale.")
 
+(defvar decknix-agent-session-cache-refresh-functions nil
+  "Functions run (no args) after the session cache gains NEW/CHANGED data.
+Fired by the sync and async refresh paths only when files were actually
+parsed — i.e. a cold cache warmed or a session file changed on disk (a
+status change).  A pure-warm refresh that re-uses every cached entry does
+NOT fire this, so idle callers stay quiet.  Use it to repaint status-
+decorated UI (sidebar, header) once the non-blocking accessors have data:
+this is what lets a cold `C-c b' / sidebar show last-known state instantly
+and then self-heal when the async scan lands, instead of blocking.")
+
+(defun decknix--agent-session-cache-run-refresh-hook ()
+  "Run `decknix-agent-session-cache-refresh-functions', swallowing errors.
+Each function runs in `condition-case' so one bad listener never aborts
+the others or the refresh path that fired the hook."
+  (dolist (fn decknix-agent-session-cache-refresh-functions)
+    (condition-case err
+        (funcall fn)
+      (error
+       (message "decknix session-cache refresh hook %s failed: %s"
+                fn (error-message-string err))))))
+
 (defvar decknix--agent-session-cache-max-files 200
   "Maximum number of session JSON files to consider per refresh (newest first).
 With 1000+ session files this limits the mtime-diff scan to the most
@@ -633,7 +654,9 @@ in a background subprocess."
                   (puthash provider-id (float-time) decknix--agent-session-cache-time-map)
                   (when (eq provider-id 'auggie)
                     (setq decknix--agent-session-cache full-list
-                          decknix--agent-session-cache-time (float-time)))))
+                          decknix--agent-session-cache-time (float-time))))
+                ;; New/changed data landed: notify status-decorated UI.
+                (when new-data (decknix--agent-session-cache-run-refresh-hook)))
             ;; Large new set (cold cache): spawn a subprocess for parallel jq.
             (let* ((cmd (decknix--agent-session-jq-cmd provider-id))
                    (list-file (make-temp-file (format "agent-%s-files-" provider-id)))
@@ -676,7 +699,10 @@ in a background subprocess."
                                  (puthash p-id (float-time) decknix--agent-session-cache-time-map)
                                  (when (eq p-id 'auggie)
                                    (setq decknix--agent-session-cache full-list
-                                         decknix--agent-session-cache-time (float-time))))))
+                                         decknix--agent-session-cache-time (float-time))))
+                               ;; Cold scan finished: repaint status UI now
+                               ;; that the non-blocking accessors have data.
+                               (decknix--agent-session-cache-run-refresh-hook)))
                            (kill-buffer pbuf)))))))))))))))
 
 ;; ---------------------------------------------------------------------------
@@ -770,6 +796,35 @@ for background migrations that can defer until the cache warms up naturally."
                     (let ((ma (alist-get 'modified a))
                           (mb (alist-get 'modified b)))
                       (string> (or ma "") (or mb "")))))))))
+
+(defun decknix--agent-session-list-warm-or-async (&optional provider-id)
+  "Return cached sessions WITHOUT ever blocking, warming the cache async.
+Like `decknix--agent-session-list' but with the synchronous cold-cache
+scan removed: a cold cache returns nil (last-known = nothing yet) and a
+stale cache returns whatever it holds, and EITHER case kicks a background
+`decknix--agent-session-refresh-async' so the data lands (and fires
+`decknix-agent-session-cache-refresh-functions') a moment later.
+
+This is the accessor for passive, per-paint / per-buffer decoration paths
+(tags, live-session recording, the sidebar) that must feel instant even
+on the very first `C-c b' after a daemon start — see the module header."
+  (when (or (not (decknix--agent-session-cache-warm-p provider-id))
+            (let ((time (if provider-id
+                            (or (gethash provider-id
+                                         decknix--agent-session-cache-time-map) 0)
+                          ;; nil = all providers: warm from the oldest one.
+                          (let ((oldest nil))
+                            (dolist (entry decknix-agent-provider-registry oldest)
+                              (let ((tp (or (gethash (car entry)
+                                                     decknix--agent-session-cache-time-map)
+                                            0)))
+                                (setq oldest (if oldest (min oldest tp) tp))))))))
+              (> (- (float-time) (or time 0)) decknix--agent-session-cache-ttl)))
+    (if provider-id
+        (decknix--agent-session-refresh-async provider-id)
+      (dolist (entry decknix-agent-provider-registry)
+        (decknix--agent-session-refresh-async (car entry)))))
+  (decknix--agent-session-list-if-warm provider-id))
 
 ;; ---------------------------------------------------------------------------
 ;; Provider-id lookup by session-id (Phase 1.3)
