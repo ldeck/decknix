@@ -50,6 +50,41 @@ Valid values:
   `tree'      grouped by first tag; remaining tags shown per row.
 Toggle with `z' in the sidebar Toggles transient (Live section).")
 
+(defvar decknix--sidebar-view-mode 'standard
+  "Which family of sidebar sections is shown.
+Valid values:
+  `standard'  the normal developer view — Live, Requests, WIP, Sessions,
+              Previous (default; no support section).
+  `support'   on-support focus — the Support section (DoS board, weekly
+              Techops report status, alert feed) plus Live agents; the
+              developer sections (Requests/WIP/Sessions/Previous) are
+              suppressed so the rotation's priorities dominate the view.
+  `hybrid'    everything — the Support section on top of the full
+              developer view.
+Cycle with `decknix-sidebar-cycle-view-mode'.  Section membership per
+mode is data-driven via `decknix-sidebar-view-mode-sections' so the
+render path only asks `decknix--sidebar-section-visible-p'.")
+
+(defvar decknix-sidebar-view-mode-sections
+  '((standard . (live requests wip sessions previous))
+    (support  . (support live))
+    (hybrid   . (support live requests wip sessions previous)))
+  "Alist mapping a `decknix--sidebar-view-mode' to the sections it shows.
+Each value is a list of section symbols (`live' `requests' `wip'
+`sessions' `previous' `support').  Edit this to re-tune what each mode
+surfaces without touching the render path, which consults it only through
+`decknix--sidebar-section-visible-p'.")
+
+(defun decknix--sidebar-section-visible-p (section &optional mode)
+  "Return non-nil when SECTION renders under MODE (default the current mode).
+Pure lookup into `decknix-sidebar-view-mode-sections' — unit-testable
+without a live sidebar.  An unknown MODE hides every section (returns nil)
+so a mis-set mode fails safe rather than rendering a half-broken view."
+  (and (memq section
+             (alist-get (or mode decknix--sidebar-view-mode)
+                        decknix-sidebar-view-mode-sections))
+       t))
+
 (defvar decknix--sidebar-wip-group-mode 'repo
   "Grouping mode for the WIP section.
 Valid values:
@@ -167,6 +202,19 @@ and Requests age toggles share vocabulary."
           (_          'repo)))
   (decknix--sidebar-refresh-now)
   (message "WIP grouping: %s" decknix--sidebar-wip-group-mode))
+
+(defun decknix-sidebar-cycle-view-mode ()
+  "Cycle the sidebar view mode: standard -> support -> hybrid -> standard.
+`standard' is the normal developer view, `support' focuses on the
+on-support rotation (Support + Live), and `hybrid' shows both."
+  (interactive)
+  (setq decknix--sidebar-view-mode
+        (pcase decknix--sidebar-view-mode
+          ('standard 'support)
+          ('support  'hybrid)
+          (_         'standard)))
+  (decknix--sidebar-refresh-now)
+  (message "Sidebar view: %s" decknix--sidebar-view-mode))
 
 (defun decknix-sidebar-cycle-requests-display-mode ()
   "Cycle Requests display mode: inherit → A → B → C → D → inherit."
