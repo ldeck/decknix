@@ -9,11 +9,11 @@
 ;;
 ;; ERT characterisation tests for the tag store storage layer
 ;; extracted from the main heredoc.  Covers the cache-state defaults,
-;; round-tripping a v2 store through write+read, the lazy
-;; `conversations' accessor, the fast-path TTL gate that skips the
-;; mtime + migration walk, and the v1 -> v2 auto-migration.
+;; round-tripping a store through write+read, the lazy `conversations'
+;; accessor, the fast-path TTL gate that skips the mtime check, and the
+;; canonical conv-key re-keying migration.
 ;;
-;; Stubs `decknix--agent-session-list' and
+;; Stubs `decknix--agent-session-list-if-warm' and
 ;; `decknix--agent-conversation-key' (both forward-declared by the
 ;; module) so the migration walk has predictable input without
 ;; needing an `~/.augment/sessions/' tree.
@@ -130,11 +130,13 @@ into the current one."
 ;; -- read missing file -> empty hash + cached ---------------------
 
 (ert-deftest decknix-agent-tags-store--read-missing-file ()
-  "Reading with no file present returns an empty hash + caches it."
+  "Reading with no file present returns a store with root keys + caches it."
   (decknix-agent-tags-store-test--with-isolated-store
     (let ((store (decknix--agent-tags-read)))
       (should (hash-table-p store))
-      (should (= (hash-table-count store) 0))
+      ;; Root keys are seeded automatically.
+      (should (hash-table-p (gethash "conversations" store)))
+      (should (hash-table-p (gethash "bookmarks" store)))
       ;; A second call returns the same cached hash without falling
       ;; back to the disk path again.
       (should (eq store (decknix--agent-tags-read))))))
@@ -166,78 +168,6 @@ into the current one."
         (should (equal "/tmp/ws"
                        (gethash "workspace" read-entry)))))))
 
-;; -- v1 -> v2 auto-migration --------------------------------------
-
-(ert-deftest decknix-agent-tags-store--read-migrates-v1-entries ()
-  "Orphan v1 (session-keyed) entries are folded into a v2 conversation."
-  (decknix-agent-tags-store-test--with-isolated-store
-    (let* ((store (make-hash-table :test 'equal))
-           (v1-entry (make-hash-table :test 'equal)))
-      (puthash "tags" '("legacy") v1-entry)
-      (puthash "session-id-A" v1-entry store)
-      (decknix--agent-tags-write store)
-      ;; Force a real read.
-      (setq decknix--agent-tags-cache nil
-            decknix--agent-tags-cache-mtime nil
-            decknix--agent-tags-cache-checked-at 0.0)
-      ;; Stub the heredoc callbacks so the migration walk can resolve
-      ;; the orphan session-id to a conversation key.
-      (cl-letf (((symbol-function 'decknix--agent-session-list)
-                 (lambda ()
-                   '(((sessionId . "session-id-A")
-                      (firstUserMessage . "hi from A")))))
-                ((symbol-function 'decknix--agent-session-list-if-warm)
-                 (lambda ()
-                   '(((sessionId . "session-id-A")
-                      (firstUserMessage . "hi from A")))))
-                ((symbol-function 'decknix--agent-conversation-key)
-                 (lambda (msg)
-                   (and (equal msg "hi from A") "conv-A"))))
-        (let* ((read-store (decknix--agent-tags-read))
-               (read-convs (decknix--agent-tags-conversations read-store))
-               (entry (gethash "conv-A" read-convs)))
-          ;; v1 orphan removed
-          (should-not (gethash "session-id-A" read-store))
-          ;; v2 entry created with the legacy tag
-          (should (hash-table-p entry))
-          (should (equal '("legacy") (gethash "tags" entry)))
-          (should (member "session-id-A"
-                          (gethash "sessions" entry))))))))
-
-(ert-deftest decknix-agent-tags-store--read-survives-unwritable-store ()
-  "A migration-triggering read must not error when the write-back fails.
-On a read-only HOME (as in the Nix build sandbox) the migration's
-persist step signals; because it is best-effort, the read still returns
-the in-memory store migrated for this session."
-  (decknix-agent-tags-store-test--with-isolated-store
-    (let* ((store (make-hash-table :test 'equal))
-           (v1-entry (make-hash-table :test 'equal)))
-      (puthash "tags" '("legacy") v1-entry)
-      (puthash "session-id-A" v1-entry store)
-      (decknix--agent-tags-write store)      ; seed the file (real write)
-      (setq decknix--agent-tags-cache nil
-            decknix--agent-tags-cache-mtime nil
-            decknix--agent-tags-cache-checked-at 0.0)
-      (cl-letf (((symbol-function 'decknix--agent-session-list)
-                 (lambda ()
-                   '(((sessionId . "session-id-A")
-                      (firstUserMessage . "hi from A")))))
-                ((symbol-function 'decknix--agent-session-list-if-warm)
-                 (lambda ()
-                   '(((sessionId . "session-id-A")
-                      (firstUserMessage . "hi from A")))))
-                ((symbol-function 'decknix--agent-conversation-key)
-                 (lambda (msg) (and (equal msg "hi from A") "conv-A")))
-                ;; Simulate a read-only store: every write-back signals.
-                ((symbol-function 'decknix--agent-tags-write)
-                 (lambda (&rest _) (error "Read-only file system"))))
-        ;; Must complete without propagating the write error.
-        (let* ((read-store (decknix--agent-tags-read))
-               (entry (gethash "conv-A"
-                               (decknix--agent-tags-conversations read-store))))
-          ;; In-memory migration still happened this session.
-          (should (hash-table-p entry))
-          (should (equal '("legacy") (gethash "tags" entry))))))))
 
 ;; -- canonical conv-key migration ---------------------------------
 ;;
