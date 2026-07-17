@@ -534,6 +534,34 @@ fn current_profile_emacs() -> Option<String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
+/// Check if the profile's emacs wrapper references the running emacs binary.
+/// The profile resolves to emacs-with-packages which wraps the base emacs.
+/// We check via `nix-store -q --references` if the wrapper depends on the
+/// running binary's store path.
+fn emacs_wrapper_references_running(wrapper_path: &str, running_path: &str) -> bool {
+    // Extract the store path (the /nix/store/...-name portion)
+    let running_store = running_path
+        .strip_suffix("/bin/emacs")
+        .or_else(|| running_path.strip_suffix("/bin/emacs-30.2"))
+        .unwrap_or(running_path);
+
+    let wrapper_store = wrapper_path
+        .strip_suffix("/bin/emacs")
+        .unwrap_or(wrapper_path);
+
+    let output = Command::new("nix-store")
+        .args(["-q", "--references", wrapper_store])
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let refs = String::from_utf8_lossy(&out.stdout);
+            refs.lines().any(|line| line == running_store)
+        }
+        _ => false,
+    }
+}
+
 /// Show the status of a running app: version comparison and restart hint.
 /// For Emacs, also shows daemon uptime.
 fn handle_app_status(name: &str) {
@@ -612,8 +640,16 @@ fn handle_emacs_daemon_status() {
     let running = running_emacs_daemon_exe();
     let current = current_profile_emacs();
 
+    // The profile's emacs resolves to emacs-with-packages-30.2 which wraps
+    // the base emacs-30.2 binary. The daemon runs the base binary directly.
+    // Check if the wrapper references the running binary via nix-store refs.
+    let versions_match = match (&running, &current) {
+        (Some(r), Some(c)) => r == c || emacs_wrapper_references_running(c, r),
+        _ => false,
+    };
+
     match (&running, &current, &uptime) {
-        (Some(r), Some(c), Some(up)) if r == c => {
+        (Some(r), Some(_c), Some(up)) if versions_match => {
             eprintln!("Emacs daemon: up to date");
             eprintln!("  Uptime:  {}", up);
             if let Some(label) = nix_store_label(r) {
