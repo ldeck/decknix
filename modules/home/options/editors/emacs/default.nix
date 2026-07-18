@@ -59,6 +59,14 @@ in
         ;; This is especially important for GUI Emacs and the Emacs daemon
         (use-package exec-path-from-shell
           :config
+          ;; Import AI-provider API keys from the login shell so tools launched
+          ;; by the daemon (e.g. agent-shell's pi via the pi-acp bridge) inherit
+          ;; them.  The keys themselves are set at runtime from 0600 secret files
+          ;; by the shell rc (never through the Nix store); here we only widen the
+          ;; set of variables exec-path-from-shell copies.  Unset keys are a no-op.
+          (dolist (v '("GEMINI_API_KEY" "ANTHROPIC_API_KEY"
+                       "OPENAI_API_KEY" "OPENROUTER_API_KEY"))
+            (add-to-list 'exec-path-from-shell-variables v))
           (when (or (daemonp) (memq window-system '(mac ns x)))
             (exec-path-from-shell-initialize)))
 
