@@ -278,6 +278,19 @@ let
     ];
   };
 
+  # Deterministic (LLM-free) live support monitoring dashboard: polls the DoS
+  # Jira board via `atlassian-cli' into an auto-refreshing read-only buffer.
+  # Pure parse/format/render layer is ERT-tested; the fetch is async and the
+  # refresh timer is armed in the heredoc (Rule 2).
+  decknix-support-dashboard-el = mkEmacsTestedPackage {
+    pname = "decknix-support-dashboard";
+    src = ./agent-shell/support-dashboard;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-support-dashboard-test.el"
+    ];
+  };
+
   decknix-sidebar-toggles-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-toggles";
     src = ./agent-shell/sidebar;
@@ -2668,6 +2681,7 @@ in
           decknix-perf-hitch-el
           decknix-perf-hitch-autofile-el
           decknix-capture-el
+          decknix-support-dashboard-el
           decknix-agent-subagent-state-el
           decknix-agent-resourcing-el
           decknix-agent-rg-search-command-el
@@ -3604,6 +3618,23 @@ ${optionalString cfg.tableOverlay.enable ''
         (require 'decknix-capture)
         (declare-function decknix-capture "decknix-capture" (&optional with-body))
 
+        ;; Live support monitoring dashboard (`C-c A D', bound below): a
+        ;; deterministic, LLM-free DoS-board view fed by `atlassian-cli' that
+        ;; auto-refreshes on a timer while displayed.  The tick only refreshes
+        ;; when the buffer is visible, so it is cheap to leave armed.  Timer is
+        ;; re-armed idempotently across `decknix switch' hot-reloads.
+        (require 'decknix-support-dashboard)
+        (declare-function decknix-support-dashboard "decknix-support-dashboard")
+        (declare-function decknix--support-dashboard-tick "decknix-support-dashboard")
+        (defvar decknix-support-dashboard-refresh-interval)
+        (defvar decknix--support-dashboard-timer nil)
+        (when (timerp decknix--support-dashboard-timer)
+          (cancel-timer decknix--support-dashboard-timer))
+        (setq decknix--support-dashboard-timer
+              (run-with-timer decknix-support-dashboard-refresh-interval
+                              decknix-support-dashboard-refresh-interval
+                              #'decknix--support-dashboard-tick))
+
         ;; Always-on hitch profiler (default-on, `decknix-perf-hitch-toggle'
         ;; to disable at runtime).  Surfaces slow timers/commands so we can
         ;; keep optimising as the config grows.  `M-x decknix-perf-hitch-report'
@@ -4244,6 +4275,7 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         (define-prefix-command 'decknix-agent-command-map)
         (define-key decknix-agent-prefix-map (kbd "c") 'decknix-agent-command-map)
         (define-key decknix-agent-prefix-map (kbd "C") 'decknix-capture)             ; Quick-capture issue/task
+        (define-key decknix-agent-prefix-map (kbd "D") 'decknix-support-dashboard)   ; Live support/DoS-board dashboard
         (define-key decknix-agent-command-map (kbd "c") 'decknix-agent-command-run)    ; Pick & insert
         (define-key decknix-agent-command-map (kbd "n") 'decknix-agent-command-new)    ; New
         (define-key decknix-agent-command-map (kbd "e") 'decknix-agent-command-edit)   ; Edit
