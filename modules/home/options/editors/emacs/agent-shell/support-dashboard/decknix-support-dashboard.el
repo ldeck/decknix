@@ -25,9 +25,17 @@
 ;;; Code:
 
 (require 'subr-x)
+(require 'cl-lib)
 
 (defvar decknix-support-dashboard-buffer-name "*decknix-support*"
   "Name of the support monitoring dashboard buffer.")
+
+(defvar decknix-support-dashboard-status-order
+  '("In Progress" "In Review" "Blocked" "To Do" "Selected for Development"
+    "Backlog")
+  "Preferred display order for status groups.
+Statuses not listed here sort after the listed ones, alphabetically — so the
+work you are actively on (In Progress) leads the board and the backlog trails.")
 
 (defvar decknix-support-dashboard-atlassian-cli "atlassian-cli"
   "The atlassian-cli executable used to fetch Jira data.")
@@ -75,8 +83,32 @@ CLI hiccup degrades to an empty dashboard instead of an error."
             (truncate-string-to-width assignee 16)
             summary)))
 
+(defun decknix--support-dashboard-group-by-status (issues)
+  "Group ISSUES into a list of (STATUS . ISSUE-LIST) cells.
+Cells are ordered by `decknix-support-dashboard-status-order' then
+alphabetically; issues within a group keep their input order.  Pure."
+  (let ((groups nil))
+    (dolist (i issues)
+      (let* ((s (or (alist-get 'status i) "Unknown"))
+             (cell (assoc s groups)))
+        (if cell
+            (setcdr cell (cons i (cdr cell)))
+          (push (cons s (list i)) groups))))
+    (setq groups (mapcar (lambda (g) (cons (car g) (nreverse (cdr g)))) groups))
+    (sort groups
+          (lambda (a b)
+            (let ((ia (cl-position (car a) decknix-support-dashboard-status-order
+                                   :test #'equal))
+                  (ib (cl-position (car b) decknix-support-dashboard-status-order
+                                   :test #'equal)))
+              (cond ((and ia ib) (< ia ib))
+                    (ia t)
+                    (ib nil)
+                    (t (string< (car a) (car b)))))))))
+
 (defun decknix--support-dashboard-render (issues &optional timestamp)
   "Render ISSUES (a list of issue alists) into the dashboard's buffer text.
+Issues are grouped by status (In Progress first) with a per-group count header.
 TIMESTAMP is an optional display string appended to the footer; when nil it is
 omitted, which keeps this function pure for tests."
   (concat
@@ -84,8 +116,14 @@ omitted, which keeps this function pure for tests."
    (make-string 64 ?-) "\n"
    (if (null issues)
        "  (no open DoS issues)\n"
-     (concat (mapconcat #'decknix--support-dashboard-format-issue issues "\n")
-             "\n"))
+     (mapconcat
+      (lambda (group)
+        (concat (format "\n%s (%d)\n" (car group) (length (cdr group)))
+                (mapconcat #'decknix--support-dashboard-format-issue
+                           (cdr group) "\n")
+                "\n"))
+      (decknix--support-dashboard-group-by-status issues)
+      ""))
    "\n"
    (format "%d open%s\n"
            (length issues)

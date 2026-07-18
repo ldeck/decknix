@@ -94,5 +94,35 @@
                 decknix-support-dashboard-test--bare-json))))
     (should-not (string-match-p "updated" text))))
 
+;; -- group-by-status ----------------------------------------------------
+
+(ert-deftest decknix-support-dashboard/group-orders-in-progress-first ()
+  "In Progress leads; To Do trails; issues keep input order within a group."
+  (let* ((issues (decknix--support-dashboard-parse
+                  decknix-support-dashboard-test--bare-json)) ; DOS-429 IP, DOS-430 ToDo
+         (groups (decknix--support-dashboard-group-by-status issues)))
+    (should (equal "In Progress" (car (nth 0 groups))))
+    (should (equal "To Do" (car (nth 1 groups))))
+    (should (equal "DOS-429" (alist-get 'key (car (cdr (nth 0 groups))))))))
+
+(ert-deftest decknix-support-dashboard/group-unknown-status-sorts-after ()
+  "A status not in the preferred order sorts after the listed ones."
+  (let ((groups (decknix--support-dashboard-group-by-status
+                 '(((key . "A") (status . "Xyzzy"))
+                   ((key . "B") (status . "In Progress"))))))
+    (should (equal "In Progress" (car (nth 0 groups))))
+    (should (equal "Xyzzy" (car (nth 1 groups))))))
+
+(ert-deftest decknix-support-dashboard/render-shows-group-headers ()
+  "Render emits per-status group headers with counts."
+  (let ((text (decknix--support-dashboard-render
+               (decknix--support-dashboard-parse
+                decknix-support-dashboard-test--bare-json))))
+    (should (string-match-p "In Progress (1)" text))
+    (should (string-match-p "To Do (1)" text))
+    ;; In Progress header precedes the To Do header
+    (should (< (string-match "In Progress (1)" text)
+               (string-match "To Do (1)" text)))))
+
 (provide 'decknix-support-dashboard-test)
 ;;; decknix-support-dashboard-test.el ends here
