@@ -789,6 +789,24 @@ Accessible only via the `?' transient; no standalone key binding."
   (interactive)
   (call-interactively #'decknix-focus-cycle))
 
+(transient-define-suffix decknix-sidebar-transient--view-mode ()
+  "Cycle the sidebar view mode: standard -> support -> hybrid."
+  :key "k"
+  :description
+  (lambda ()
+    (format "view mode     %s"
+            (propertize
+             (format "[%s]" (symbol-name
+                             (if (boundp 'decknix--sidebar-view-mode)
+                                 decknix--sidebar-view-mode 'standard)))
+             'face (if (and (boundp 'decknix--sidebar-view-mode)
+                            (not (eq decknix--sidebar-view-mode 'standard)))
+                       'font-lock-constant-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (decknix-sidebar-cycle-view-mode))
+
 ;; -- Worktrees toggle suffixes (§3.6.12) --
 ;; Ordered alphabetically by display label to match the sidebar footer.
 
@@ -951,6 +969,7 @@ WIP / Sessions / Worktrees."
   :transient-suffix 'transient--do-stay
   [["Global"
     (decknix-sidebar-transient--focus)            ;; focus (g)
+    (decknix-sidebar-transient--view-mode)        ;; view mode (k)
     (decknix-sidebar-transient--show-toggles)     ;; footer toggles (f)
     (decknix-sidebar-transient--hub-display-mode) ;; Layout (D)
     (decknix-sidebar-transient--org-filter)       ;; Org filter (O)
