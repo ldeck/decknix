@@ -111,6 +111,14 @@
                 config = prev.config;
               };
             };
+          # LLVM 20.x getMacOSHostVersion test fails on macOS Sequoia (Darwin 25.x).
+          # Skip tests until upstream fixes: https://github.com/llvm/llvm-project/issues/
+          # Use overrideScope so clang and other dependents pick up the patched llvm.
+            llvmTestFixOverlay = final: prev: {
+              llvmPackages_20 = prev.llvmPackages_20.overrideScope (llvmFinal: llvmPrev: {
+                llvm = llvmPrev.llvm.overrideAttrs { doCheck = false; };
+              });
+            };
           in
           {
             imports =
@@ -128,7 +136,8 @@
             # pinned rustPlatform; it must be applied here (not in
             # modules/darwin) because only this flake closes over the private
             # nixpkgs-rust input.
-            config.nixpkgs.overlays = [ unstableOverlay self.overlays.default ];
+            # llvmTestFixOverlay disables LLVM 20 tests that fail on macOS Sequoia.
+            config.nixpkgs.overlays = [ llvmTestFixOverlay unstableOverlay self.overlays.default ];
 
             # Propagate pkgs.unstable AND the decknix custom-package overlay
             # (decknix-cli/hub, nix-open, claude-agent-acp, pi-acp) into
@@ -136,7 +145,7 @@
             # so it does not inherit the system's nixpkgs.overlays — modules
             # that reference e.g. pkgs.pi-acp need the overlay applied here too.
             config.home-manager.sharedModules = [{
-              nixpkgs.overlays = [ unstableOverlay self.overlays.default ];
+              nixpkgs.overlays = [ llvmTestFixOverlay unstableOverlay self.overlays.default ];
             }];
           };
         };
