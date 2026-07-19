@@ -25,7 +25,8 @@ in {
   config = mkIf cfg.enable {
     # The Gemini CLI itself speaks ACP via `--experimental-acp'; no
     # separate adapter package is needed (unlike pi-acp / claude-agent-acp).
-    home.packages = [ pkgs.gemini-cli ];
+    # Use unstable for newer version and to avoid LLVM 20 build issues on Sequoia.
+    home.packages = [ pkgs.unstable.gemini-cli ];
 
     # If we have settings, generate the file and sync it.
     decknix.cli.agentSync.enable = true;
