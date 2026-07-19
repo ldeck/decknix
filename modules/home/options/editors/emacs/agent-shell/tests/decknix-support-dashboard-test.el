@@ -124,5 +124,85 @@
     (should (< (string-match "In Progress (1)" text)
                (string-match "To Do (1)" text)))))
 
+;; -- alert feed (CSV) ---------------------------------------------------
+
+;; Real Slack MCP conversations_history shape: a leading "OK ...: header" line,
+;; then CSV rows (Text at index 6, Time at 7, BotName at 9), some rows quoted
+;; because the message contains a comma.
+(defconst decknix-support-dashboard-test--alert-csv
+  (concat
+   "OK  conversations_history: MsgID,UserID,UserName,RealName,Channel,ThreadTs,Text,Time,Reactions,BotName,FileCount,AttachmentIDs,HasMedia,Cursor\n"
+   "1784290965.371799,U012,U012,U012,C08A5P8PN2G,1784290965.371799,A A119.94 cost anomaly on AlloyDB,2026-07-17T12:22:45Z,,Doitsy,0,,false,\n"
+   "1783755099.501249,U012,U012,U012,C08A5P8PN2G,1783755099.501249,\"REMINDER A A1,312.69 cost anomaly on App Engine\",2026-07-11T07:31:39Z,,Doitsy,0,,false,\n"))
+
+(ert-deftest decknix-support-dashboard/csv-line-plain-and-quoted ()
+  "The CSV line parser splits plain fields and keeps commas inside quotes."
+  (should (equal '("a" "b" "c")
+                 (decknix--support-dashboard-parse-csv-line "a,b,c")))
+  (should (equal '("a" "b,c" "d")
+                 (decknix--support-dashboard-parse-csv-line "a,\"b,c\",d")))
+  (should (equal '("x\"y")
+                 (decknix--support-dashboard-parse-csv-line "\"x\"\"y\""))))
+
+(ert-deftest decknix-support-dashboard/parse-alerts-from-csv ()
+  "Alerts parse from the CSV, header dropped, text/time/bot extracted, commas
+inside a quoted message preserved."
+  (let ((alerts (decknix--support-dashboard-parse-alerts
+                 decknix-support-dashboard-test--alert-csv)))
+    (should (= 2 (length alerts)))
+    (should (equal "A A119.94 cost anomaly on AlloyDB"
+                   (alist-get 'text (car alerts))))
+    (should (equal "2026-07-17T12:22:45Z" (alist-get 'time (car alerts))))
+    (should (equal "Doitsy" (alist-get 'bot (car alerts))))
+    (should (equal "REMINDER A A1,312.69 cost anomaly on App Engine"
+                   (alist-get 'text (cadr alerts))))))
+
+(ert-deftest decknix-support-dashboard/parse-alerts-blank-nil ()
+  "Blank alert output degrades to nil."
+  (should (null (decknix--support-dashboard-parse-alerts "")))
+  (should (null (decknix--support-dashboard-parse-alerts nil))))
+
+(ert-deftest decknix-support-dashboard/format-alert-extracts-hhmm ()
+  "An alert row shows HH:MM from the ISO time and the message text."
+  (let ((row (decknix--support-dashboard-format-alert
+              '((time . "2026-07-17T12:22:45Z") (text . "cost anomaly")))))
+    (should (string-match-p "12:22" row))
+    (should (string-match-p "cost anomaly" row))))
+
+(ert-deftest decknix-support-dashboard/render-alerts-empty-and-populated ()
+  "The alert section renders a placeholder when empty and rows when populated."
+  (should (string-match-p "(no recent alerts)"
+                          (decknix--support-dashboard-render-alerts nil)))
+  (let ((text (decknix--support-dashboard-render-alerts
+               (decknix--support-dashboard-parse-alerts
+                decknix-support-dashboard-test--alert-csv))))
+    (should (string-match-p "doit-collab" text))
+    (should (string-match-p "12:22" text))))
+
+(ert-deftest decknix-support-dashboard/render-full-composes-sections ()
+  "The composite render carries both the DoS board and the alert feed + footer."
+  (let* ((issues (decknix--support-dashboard-parse
+                  decknix-support-dashboard-test--bare-json))
+         (alerts (decknix--support-dashboard-parse-alerts
+                  decknix-support-dashboard-test--alert-csv))
+         (text (decknix--support-dashboard-render-full
+                issues nil alerts nil "09:41:00")))
+    (should (string-match-p "DoS Board" text))
+    (should (string-match-p "DOS-429" text))
+    (should (string-match-p "Alerts — #nurturecloud-doit-collab" text))
+    (should (string-match-p "AlloyDB" text))
+    (should (string-match-p "2 open · 2 alerts" text))
+    (should (string-match-p "updated 09:41:00" text))
+    ;; DoS section precedes the Alerts section
+    (should (< (string-match "DoS Board" text)
+               (string-match "Alerts —" text)))))
+
+(ert-deftest decknix-support-dashboard/render-full-errors-and-unconfigured ()
+  "Section errors and an unconfigured alert feed render inline, not as a crash."
+  (let ((text (decknix--support-dashboard-render-full
+               nil "jira down" nil 'unconfigured "09:41:00")))
+    (should (string-match-p "Error: jira down" text))
+    (should (string-match-p "(alert feed not configured)" text))))
+
 (provide 'decknix-support-dashboard-test)
 ;;; decknix-support-dashboard-test.el ends here

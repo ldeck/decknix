@@ -132,6 +132,103 @@ omitted, which keeps this function pure for tests."
              ""))))
 
 ;; ---------------------------------------------------------------------------
+;; Alert feed (Slack #nurturecloud-doit-collab) — pure parse/format/render.
+;; ---------------------------------------------------------------------------
+;;
+;; The alert source is a command whose stdout is the Slack MCP
+;; `conversations_history' CSV (first line `OK ...: <header>', then one row per
+;; message; column order is fixed by the MCP: index 6 Text, 7 Time, 9 BotName).
+;; Left nil in decknix (generic); a workspace sets it — see the module's
+;; `decknix-support-dashboard-alert-command'.
+
+(defvar decknix-support-dashboard-alert-command nil
+  "Command (list of program + args) whose stdout is the Slack alert CSV.
+When nil the alert feed is disabled and shown as not-configured — decknix stays
+generic; a workspace (e.g. decknix-config) points this at its Slack MCP helper
+and channel.  Example value:
+  (list \"/path/to/slack-mcp-call.py\" \"conversations_history\"
+        \"{\\\"channel_id\\\":\\\"C08A5P8PN2G\\\",\\\"limit\\\":\\\"8\\\"}\")")
+
+(defun decknix--support-dashboard-parse-csv-line (line)
+  "Parse a single CSV LINE into a list of fields.
+Handles double-quoted fields with embedded commas and doubled \"\" escapes
+\(RFC4180-ish), which the Slack MCP uses when a message contains commas."
+  (let ((fields nil) (field "") (i 0) (n (length line)) (in-quote nil))
+    (while (< i n)
+      (let ((c (aref line i)))
+        (cond
+         (in-quote
+          (cond
+           ((and (eq c ?\") (< (1+ i) n) (eq (aref line (1+ i)) ?\"))
+            (setq field (concat field "\"") i (1+ i)))
+           ((eq c ?\") (setq in-quote nil))
+           (t (setq field (concat field (char-to-string c))))))
+         ((eq c ?\") (setq in-quote t))
+         ((eq c ?,) (push field fields) (setq field ""))
+         (t (setq field (concat field (char-to-string c)))))
+        (setq i (1+ i))))
+    (push field fields)
+    (nreverse fields)))
+
+(defun decknix--support-dashboard-parse-alerts (output)
+  "Parse Slack conversations_history OUTPUT (CSV) into alert alists.
+Drops the leading `OK ...: header' line; each alert carries `text', `time',
+`bot'.  Degrades to nil on blank input or rows too short to hold a message."
+  (when (and (stringp output) (not (string-blank-p output)))
+    (let ((data (cdr (split-string output "\n" t))))  ; drop header line
+      (delq nil
+            (mapcar
+             (lambda (line)
+               (let ((f (decknix--support-dashboard-parse-csv-line line)))
+                 (when (> (length f) 7)
+                   (list (cons 'text (nth 6 f))
+                         (cons 'time (nth 7 f))
+                         (cons 'bot  (nth 9 f))))))
+             data)))))
+
+(defun decknix--support-dashboard-format-alert (alert)
+  "Format one ALERT alist into a `HH:MM  text' row."
+  (let* ((time (or (alist-get 'time alert) ""))
+         (hhmm (if (string-match "T\\([0-9][0-9]:[0-9][0-9]\\)" time)
+                   (match-string 1 time)
+                 (truncate-string-to-width time 5)))
+         (text (string-trim (or (alist-get 'text alert) ""))))
+    (format "  %-5s  %s" hhmm text)))
+
+(defun decknix--support-dashboard-render-alerts (alerts)
+  "Render ALERTS (a list of alert alists) into the alert-feed section text."
+  (concat "\nAlerts — #nurturecloud-doit-collab\n"
+          (make-string 64 ?-) "\n"
+          (if (null alerts)
+              "  (no recent alerts)\n"
+            (concat (mapconcat #'decknix--support-dashboard-format-alert
+                               alerts "\n")
+                    "\n"))))
+
+(defun decknix--support-dashboard-render-full (issues issues-err alerts alerts-err
+                                                      &optional timestamp)
+  "Compose the full dashboard text: DoS section, alert section, timestamp.
+Reuses `decknix--support-dashboard-render' for the DoS part (no refactor).
+ISSUES-ERR / ALERTS-ERR render an error line for their section instead."
+  (concat
+   (if issues-err
+       (format "NurtureCloud Support — DoS Board\n%s\nError: %s\n"
+               (make-string 64 ?-) issues-err)
+     (decknix--support-dashboard-render issues nil))
+   (cond
+    ((eq alerts-err 'unconfigured)
+     (concat "\nAlerts — #nurturecloud-doit-collab\n" (make-string 64 ?-)
+             "\n  (alert feed not configured)\n"))
+    (alerts-err
+     (format "\nAlerts — #nurturecloud-doit-collab\n%s\nError: %s\n"
+             (make-string 64 ?-) alerts-err))
+    (t (decknix--support-dashboard-render-alerts alerts)))
+   (if (and timestamp (not (string-empty-p timestamp)))
+       (format "\n%d open · %d alerts   ·   updated %s\n"
+               (length issues) (length alerts) timestamp)
+     "")))
+
+;; ---------------------------------------------------------------------------
 ;; Side-effecting layer: async fetch + buffer refresh + command.
 ;; ---------------------------------------------------------------------------
 
@@ -164,23 +261,53 @@ CALLBACK receives the parsed ISSUES list (nil on failure) and an ERR string
                       (and ok (decknix--support-dashboard-parse out))
                       (unless ok (string-trim (or out "fetch failed")))))))))))
 
+(defun decknix--support-dashboard-fetch-alerts (callback)
+  "Fetch recent alerts asynchronously; call CALLBACK with (ALERTS ERR).
+ERR is the symbol `unconfigured' when `decknix-support-dashboard-alert-command'
+is nil, or an error string on failure.  Never blocks the UI."
+  (let ((cmd decknix-support-dashboard-alert-command))
+    (cond
+     ((null cmd) (funcall callback nil 'unconfigured))
+     ((not (executable-find (car cmd)))
+      (funcall callback nil (format "%s not found" (car cmd))))
+     (t
+      (let ((buf (generate-new-buffer " *decknix-support-alerts*")))
+        (make-process
+         :name "decknix-support-alerts"
+         :buffer buf
+         :noquery t
+         :connection-type 'pipe
+         :command cmd
+         :sentinel
+         (lambda (proc _event)
+           (when (memq (process-status proc) '(exit signal))
+             (let* ((out (and (buffer-live-p buf)
+                              (with-current-buffer buf (buffer-string))))
+                    (ok (and (eq (process-status proc) 'exit)
+                             (= 0 (process-exit-status proc)))))
+               (when (buffer-live-p buf) (kill-buffer buf))
+               (funcall callback
+                        (and ok (decknix--support-dashboard-parse-alerts out))
+                        (unless ok (string-trim (or out "alert fetch failed")))))))))))))
+
 (defun decknix-support-dashboard-refresh ()
-  "Refresh the support dashboard buffer from Jira (async, non-blocking)."
+  "Refresh the dashboard from the DoS board and the alert feed (async).
+Fetches issues, then alerts, then renders the composite; neither fetch blocks."
   (interactive)
   (let ((target (get-buffer-create decknix-support-dashboard-buffer-name)))
     (decknix--support-dashboard-fetch
-     (lambda (issues err)
-       (when (buffer-live-p target)
-         (with-current-buffer target
-           (let ((inhibit-read-only t)
-                 (pos (point)))
-             (erase-buffer)
-             (insert (if err
-                         (format "NurtureCloud Support — DoS Board\n%s\nError: %s\n"
-                                 (make-string 64 ?-) err)
-                       (decknix--support-dashboard-render
-                        issues (format-time-string "%H:%M:%S"))))
-             (goto-char (min pos (point-max))))))))))
+     (lambda (issues issues-err)
+       (decknix--support-dashboard-fetch-alerts
+        (lambda (alerts alerts-err)
+          (when (buffer-live-p target)
+            (with-current-buffer target
+              (let ((inhibit-read-only t)
+                    (pos (point)))
+                (erase-buffer)
+                (insert (decknix--support-dashboard-render-full
+                         issues issues-err alerts alerts-err
+                         (format-time-string "%H:%M:%S")))
+                (goto-char (min pos (point-max))))))))))))
 
 (defun decknix--support-dashboard-visible-p ()
   "Return non-nil when the dashboard buffer exists and is displayed."
