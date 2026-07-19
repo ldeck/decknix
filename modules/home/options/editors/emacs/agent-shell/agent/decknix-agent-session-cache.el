@@ -803,23 +803,41 @@ Dedups `decknix--agent-session-schedule-refresh' so a burst of decoration
 calls (one per buffer in `C-c b', one per sidebar row) arms at most one
 idle refresh per provider instead of stacking dozens.")
 
+(defvar decknix--agent-session-refresh-idle-delay 1.5
+  "Idle seconds to wait before a deferred session-cache refresh runs.
+`decknix--agent-session-refresh-async' still parses new/changed session files
+on the main thread (per-file jq that can run into SECONDS on a cold cache with
+hundreds of fat transcripts).  A zero-length idle timer would fire that between
+keystrokes and freeze the cursor; waiting for a genuine typing pause — and
+re-deferring while `input-pending-p' — keeps that cost off the interactive path.")
+
+(defun decknix--agent-session-refresh-run-when-idle (provider-id)
+  "Run the deferred refresh for PROVIDER-ID once Emacs is genuinely idle.
+Re-arms while input is pending so the (possibly multi-second) parse never
+starts mid-keystroke.  The pending flag stays set across re-defers so no
+duplicate chain is armed; it is cleared only when the parse actually runs."
+  (run-with-idle-timer
+   decknix--agent-session-refresh-idle-delay nil
+   (lambda ()
+     (if (input-pending-p)
+         (decknix--agent-session-refresh-run-when-idle provider-id)
+       (remhash provider-id decknix--agent-session-refresh-pending)
+       (decknix--agent-session-refresh-async provider-id)))))
+
 (defun decknix--agent-session-schedule-refresh (provider-id)
-  "Arm a one-shot idle refresh for PROVIDER-ID, off the interactive path.
+  "Arm a deferred idle refresh for PROVIDER-ID, off the interactive path.
 `decknix--agent-session-refresh-async' still parses SMALL new-file sets
 synchronously (a per-file jq that can run into seconds on fat transcripts).
 Calling it inline from a decoration path (tags, sidebar) is what made the
-first `C-c b' after a daemon start block for seconds.  Deferring it onto a
-zero-length idle timer lets the interactive call return with last-known
-data immediately; the parse then runs once Emacs is idle and the completion
-hook repaints.  Idempotent per provider via `decknix--agent-session-refresh-
-pending' so repeated decoration calls never stack timers."
+first `C-c b' after a daemon start block for seconds.  Deferring it lets the
+interactive call return with last-known data immediately; the parse then runs
+during a genuine idle pause (see `decknix--agent-session-refresh-run-when-idle')
+and the completion hook repaints.  Idempotent per provider via
+`decknix--agent-session-refresh-pending' so repeated decoration calls never
+stack timers."
   (unless (gethash provider-id decknix--agent-session-refresh-pending)
     (puthash provider-id t decknix--agent-session-refresh-pending)
-    (run-with-idle-timer
-     0 nil
-     (lambda ()
-       (remhash provider-id decknix--agent-session-refresh-pending)
-       (decknix--agent-session-refresh-async provider-id)))))
+    (decknix--agent-session-refresh-run-when-idle provider-id)))
 
 (defun decknix--agent-session-list-warm-or-async (&optional provider-id)
   "Return cached sessions WITHOUT ever blocking, warming the cache async.

@@ -395,6 +395,30 @@ fires (so a burst of decoration calls never stacks dozens of refreshes)."
       (should (= armed 1))
       (should (gethash 'test-auggie decknix--agent-session-refresh-pending)))))
 
+(ert-deftest decknix-session-refresh-defer--waits-for-idle-not-mid-keystroke ()
+  "The deferred refresh re-arms while input is pending and only parses once idle
+— so the multi-second cold parse never freezes the cursor mid-typing."
+  (let ((decknix--agent-session-refresh-pending (make-hash-table :test 'eq))
+        (armed 0) (parsed 0) (pending t) captured)
+    (puthash 'p t decknix--agent-session-refresh-pending)
+    (cl-letf (((symbol-function 'run-with-idle-timer)
+               (lambda (_delay _repeat fn) (cl-incf armed) (setq captured fn) nil))
+              ((symbol-function 'input-pending-p) (lambda () pending))
+              ((symbol-function 'decknix--agent-session-refresh-async)
+               (lambda (&rest _) (cl-incf parsed))))
+      (decknix--agent-session-refresh-run-when-idle 'p)
+      (should (= armed 1))
+      ;; Fires while typing: re-arms, does NOT parse, keeps pending.
+      (funcall captured)
+      (should (= armed 2))
+      (should (= parsed 0))
+      (should (gethash 'p decknix--agent-session-refresh-pending))
+      ;; Now genuinely idle: parses once and clears pending.
+      (setq pending nil)
+      (funcall captured)
+      (should (= parsed 1))
+      (should-not (gethash 'p decknix--agent-session-refresh-pending)))))
+
 (ert-deftest decknix-session-refresh-hook--runs-all-swallows-errors ()
   "The refresh hook runs every listener and one failing listener never
 aborts the others (so a bad UI listener can't break cache refreshes)."
