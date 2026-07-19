@@ -774,7 +774,7 @@ Accessible only via the `?' transient; no standalone key binding."
 ;; not scoped to any one sidebar section.
 
 (transient-define-suffix decknix-sidebar-transient--focus ()
-  :key "g"
+  :key "l"
   :description
   (lambda ()
     (format "focus         %s"
@@ -968,7 +968,7 @@ single tall column.  Row 1: Global / Requests / Live.  Row 2:
 WIP / Sessions / Worktrees."
   :transient-suffix 'transient--do-stay
   [["Global"
-    (decknix-sidebar-transient--focus)            ;; focus (g)
+    (decknix-sidebar-transient--focus)            ;; focus (l)
     (decknix-sidebar-transient--view-mode)        ;; view mode (k)
     (decknix-sidebar-transient--show-toggles)     ;; footer toggles (f)
     (decknix-sidebar-transient--hub-display-mode) ;; Layout (D)
