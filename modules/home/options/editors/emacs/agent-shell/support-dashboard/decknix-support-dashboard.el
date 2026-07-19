@@ -26,6 +26,8 @@
 
 (require 'subr-x)
 (require 'cl-lib)
+(require 'seq)
+(require 'transient)
 
 (defvar decknix-support-dashboard-buffer-name "*decknix-support*"
   "Name of the support monitoring dashboard buffer.")
@@ -46,6 +48,19 @@ work you are actively on (In Progress) leads the board and the backlog trails.")
 
 (defvar decknix-support-dashboard-limit 40
   "Maximum number of DoS issues to fetch.")
+
+(defvar decknix-support-dashboard-jira-base-url "https://vmxproperty.atlassian.net"
+  "Base Atlassian URL; `/browse/<KEY>' is appended to open an issue.")
+
+(defvar-local decknix--support-dashboard-issues nil
+  "Last-fetched DoS issues, cached so status filtering redraws without re-fetch.")
+(defvar-local decknix--support-dashboard-alerts nil
+  "Last-fetched alerts, cached alongside the issues.")
+(defvar-local decknix--support-dashboard-status-filter nil
+  "When non-nil, only issues whose status equals this string are shown.")
+(defvar-local decknix--support-dashboard-issues-err nil)
+(defvar-local decknix--support-dashboard-alerts-err nil)
+(defvar-local decknix--support-dashboard-updated nil)
 
 (defvar decknix-support-dashboard-refresh-interval 120
   "Seconds between auto-refreshes while the dashboard buffer is displayed.")
@@ -72,16 +87,19 @@ CLI hiccup degrades to an empty dashboard instead of an error."
       (error nil))))
 
 (defun decknix--support-dashboard-format-issue (issue)
-  "Format one ISSUE alist into a fixed-width dashboard row string."
-  (let ((key      (or (alist-get 'key issue) "?"))
-        (status   (or (alist-get 'status issue) ""))
-        (assignee (or (alist-get 'assignee issue) "unassigned"))
-        (summary  (or (alist-get 'summary issue) "")))
-    (format "%-9s  %-13s  %-16s  %s"
-            key
-            (format "[%s]" status)
-            (truncate-string-to-width assignee 16)
-            summary)))
+  "Format one ISSUE alist into a fixed-width dashboard row string.
+The row carries the issue key as the `decknix-issue-key' text property so
+row-action commands (browse, assign, investigate) can target the row at point."
+  (let* ((key      (or (alist-get 'key issue) "?"))
+         (status   (or (alist-get 'status issue) ""))
+         (assignee (or (alist-get 'assignee issue) "unassigned"))
+         (summary  (or (alist-get 'summary issue) ""))
+         (row (format "%-9s  %-13s  %-16s  %s"
+                      key
+                      (format "[%s]" status)
+                      (truncate-string-to-width assignee 16)
+                      summary)))
+    (propertize row 'decknix-issue-key key)))
 
 (defun decknix--support-dashboard-group-by-status (issues)
   "Group ISSUES into a list of (STATUS . ISSUE-LIST) cells.
@@ -290,9 +308,31 @@ is nil, or an error string on failure.  Never blocks the UI."
                         (and ok (decknix--support-dashboard-parse-alerts out))
                         (unless ok (string-trim (or out "alert fetch failed")))))))))))))
 
+(defun decknix--support-dashboard-redraw ()
+  "Re-render the dashboard buffer from cached data, applying the status filter.
+Assumes `current-buffer' is the dashboard buffer.  Client-side, so filtering
+never re-hits Jira."
+  (let* ((filter decknix--support-dashboard-status-filter)
+         (issues (if filter
+                     (seq-filter (lambda (i)
+                                   (equal filter (alist-get 'status i)))
+                                 decknix--support-dashboard-issues)
+                   decknix--support-dashboard-issues))
+         (inhibit-read-only t)
+         (pos (point)))
+    (erase-buffer)
+    (insert (decknix--support-dashboard-render-full
+             issues decknix--support-dashboard-issues-err
+             decknix--support-dashboard-alerts
+             decknix--support-dashboard-alerts-err
+             decknix--support-dashboard-updated))
+    (when filter
+      (insert (format "\n[filtered: status = %s — press / to clear]\n" filter)))
+    (goto-char (min pos (point-max)))))
+
 (defun decknix-support-dashboard-refresh ()
   "Refresh the dashboard from the DoS board and the alert feed (async).
-Fetches issues, then alerts, then renders the composite; neither fetch blocks."
+Fetches issues, then alerts, caches both, then redraws; neither fetch blocks."
   (interactive)
   (let ((target (get-buffer-create decknix-support-dashboard-buffer-name)))
     (decknix--support-dashboard-fetch
@@ -301,13 +341,12 @@ Fetches issues, then alerts, then renders the composite; neither fetch blocks."
         (lambda (alerts alerts-err)
           (when (buffer-live-p target)
             (with-current-buffer target
-              (let ((inhibit-read-only t)
-                    (pos (point)))
-                (erase-buffer)
-                (insert (decknix--support-dashboard-render-full
-                         issues issues-err alerts alerts-err
-                         (format-time-string "%H:%M:%S")))
-                (goto-char (min pos (point-max))))))))))))
+              (setq decknix--support-dashboard-issues issues
+                    decknix--support-dashboard-issues-err issues-err
+                    decknix--support-dashboard-alerts alerts
+                    decknix--support-dashboard-alerts-err alerts-err
+                    decknix--support-dashboard-updated (format-time-string "%H:%M:%S"))
+              (decknix--support-dashboard-redraw)))))))))
 
 (defun decknix--support-dashboard-visible-p ()
   "Return non-nil when the dashboard buffer exists and is displayed."
@@ -320,17 +359,130 @@ Cheap when hidden (a single window lookup), so it is safe to run on a timer."
   (when (decknix--support-dashboard-visible-p)
     (decknix-support-dashboard-refresh)))
 
+;; ---------------------------------------------------------------------------
+;; Row actions + mode/keymap/transient (the support "submenu").
+;; ---------------------------------------------------------------------------
+
+(defun decknix-support-dashboard-issue-key-at-point ()
+  "Return the DoS issue key on the current row, or nil."
+  (get-text-property (point) 'decknix-issue-key))
+
+(defun decknix--support-dashboard-issue-at-point ()
+  "Return the cached issue alist for the row at point, or nil."
+  (let ((key (decknix-support-dashboard-issue-key-at-point)))
+    (when key
+      (seq-find (lambda (i) (equal key (alist-get 'key i)))
+                decknix--support-dashboard-issues))))
+
+(defun decknix-support-dashboard-browse ()
+  "Open the DoS issue on the current row in the browser."
+  (interactive)
+  (let ((key (decknix-support-dashboard-issue-key-at-point)))
+    (unless key (user-error "No issue on this row"))
+    (browse-url (format "%s/browse/%s"
+                        (string-trim-right decknix-support-dashboard-jira-base-url "/")
+                        key))))
+
+(defun decknix-support-dashboard-filter-status ()
+  "Filter the DoS list by status (client-side); clear it if already filtered."
+  (interactive)
+  (if decknix--support-dashboard-status-filter
+      (progn (setq decknix--support-dashboard-status-filter nil)
+             (decknix--support-dashboard-redraw)
+             (message "Status filter cleared"))
+    (let ((statuses (delete-dups
+                     (delq nil (mapcar (lambda (i) (alist-get 'status i))
+                                       decknix--support-dashboard-issues)))))
+      (if (null statuses)
+          (message "No issues to filter")
+        (setq decknix--support-dashboard-status-filter
+              (completing-read "Filter status: " statuses nil t))
+        (decknix--support-dashboard-redraw)))))
+
+(defun decknix-support-dashboard-assign ()
+  "Assign the DoS issue on the current row to someone via atlassian-cli (async)."
+  (interactive)
+  (let ((key (decknix-support-dashboard-issue-key-at-point)))
+    (unless key (user-error "No issue on this row"))
+    (let ((assignee (read-string (format "Assign %s to (email): " key))))
+      (when (string-empty-p assignee) (user-error "No assignee given"))
+      (message "Assigning %s to %s…" key assignee)
+      (make-process
+       :name "decknix-support-assign"
+       :buffer (generate-new-buffer " *decknix-support-assign*")
+       :noquery t
+       :command (list decknix-support-dashboard-atlassian-cli
+                      "jira" "issue" "assign" "--assignee" assignee key)
+       :sentinel
+       (lambda (proc _e)
+         (when (eq (process-status proc) 'exit)
+           (if (= 0 (process-exit-status proc))
+               (progn (message "Assigned %s to %s" key assignee)
+                      (decknix-support-dashboard-refresh))
+             (message "Assign failed for %s" key))))))))
+
+(defun decknix-support-dashboard-investigate ()
+  "Start investigating the DoS issue on the current row with an agent.
+Copies a ready investigation prompt (issue + summary + link) to the kill-ring
+and, when available, opens a new agent-shell session to paste it into."
+  (interactive)
+  (let ((issue (decknix--support-dashboard-issue-at-point)))
+    (unless issue (user-error "No issue on this row"))
+    (let* ((key (alist-get 'key issue))
+           (prompt (format (concat "Investigate %s: %s\n\nOpen %s/browse/%s, "
+                                   "determine the root cause, and propose a fix "
+                                   "or concrete next steps.")
+                           key (or (alist-get 'summary issue) "")
+                           (string-trim-right decknix-support-dashboard-jira-base-url "/")
+                           key)))
+      (kill-new prompt)
+      (if (fboundp 'decknix-agent-session-new)
+          (progn (call-interactively 'decknix-agent-session-new)
+                 (message "Investigation prompt for %s on the kill-ring — yank it in"
+                          key))
+        (message "Investigation prompt for %s copied to kill-ring" key)))))
+
+(transient-define-prefix decknix-support-dashboard-transient ()
+  "Support dashboard actions."
+  ["Row"
+   ("b" "Browse to issue"        decknix-support-dashboard-browse)
+   ("a" "Assign issue"           decknix-support-dashboard-assign)
+   ("i" "Investigate with agent" decknix-support-dashboard-investigate)]
+  ["List"
+   ("/" "Filter by status"       decknix-support-dashboard-filter-status)
+   ("g" "Refresh"                decknix-support-dashboard-refresh)]
+  [("q" "Close menu" transient-quit-one)])
+
+(defvar decknix-support-dashboard-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "b")   #'decknix-support-dashboard-browse)
+    (define-key map (kbd "RET") #'decknix-support-dashboard-browse)
+    (define-key map (kbd "/")   #'decknix-support-dashboard-filter-status)
+    (define-key map (kbd "a")   #'decknix-support-dashboard-assign)
+    (define-key map (kbd "i")   #'decknix-support-dashboard-investigate)
+    (define-key map (kbd "g")   #'decknix-support-dashboard-refresh)
+    (define-key map (kbd "?")   #'decknix-support-dashboard-transient)
+    (define-key map (kbd ".")   #'decknix-support-dashboard-transient)
+    map)
+  "Keymap for `decknix-support-dashboard-mode'.")
+
+(define-derived-mode decknix-support-dashboard-mode special-mode "Support"
+  "Major mode for the live support monitoring dashboard.
+Row actions (submenu on `?'): `b' browse, `a' assign, `i' investigate;
+list actions: `/' filter by status, `g' refresh, `q' bury.
+\\{decknix-support-dashboard-mode-map}"
+  (setq-local revert-buffer-function
+              (lambda (&rest _) (decknix-support-dashboard-refresh))))
+
 ;;;###autoload
 (defun decknix-support-dashboard ()
-  "Open the live support monitoring dashboard (DoS board), and refresh it.
-The buffer is read-only (`special-mode': `g' reverts, `q' buries)."
+  "Open the live support monitoring dashboard (DoS board + alerts), and refresh.
+Read-only; press `?' for the action submenu (browse/filter/assign/investigate)."
   (interactive)
   (let ((buf (get-buffer-create decknix-support-dashboard-buffer-name)))
     (with-current-buffer buf
-      (unless (derived-mode-p 'special-mode)
-        (special-mode))
-      (setq-local revert-buffer-function
-                  (lambda (&rest _) (decknix-support-dashboard-refresh))))
+      (unless (derived-mode-p 'decknix-support-dashboard-mode)
+        (decknix-support-dashboard-mode)))
     (pop-to-buffer buf)
     (decknix-support-dashboard-refresh)))
 

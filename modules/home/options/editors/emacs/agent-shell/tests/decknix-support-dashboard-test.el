@@ -204,5 +204,25 @@ inside a quoted message preserved."
     (should (string-match-p "Error: jira down" text))
     (should (string-match-p "(alert feed not configured)" text))))
 
+;; -- row actions --------------------------------------------------------
+
+(ert-deftest decknix-support-dashboard/format-issue-carries-key-property ()
+  "Each formatted row carries its issue key as the `decknix-issue-key' property
+so row-action commands can target the row at point."
+  (let ((row (decknix--support-dashboard-format-issue
+              '((key . "DOS-429") (status . "In Progress") (summary . "x")))))
+    (should (equal "DOS-429" (get-text-property 0 'decknix-issue-key row)))))
+
+(ert-deftest decknix-support-dashboard/issue-key-at-point ()
+  "`issue-key-at-point' reads the key property at point in the buffer."
+  (with-temp-buffer
+    (insert (decknix--support-dashboard-format-issue
+             '((key . "DOS-9") (status . "To Do") (summary . "y"))))
+    (goto-char (point-min))
+    (should (equal "DOS-9" (decknix-support-dashboard-issue-key-at-point)))
+    (goto-char (point-max))
+    ;; End-of-line still on the propertized row.
+    (should (equal "DOS-9" (get-text-property (1- (point)) 'decknix-issue-key)))))
+
 (provide 'decknix-support-dashboard-test)
 ;;; decknix-support-dashboard-test.el ends here
