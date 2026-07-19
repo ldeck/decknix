@@ -325,6 +325,24 @@
       (should (= 3 (decknix-test-stub-call-count
                     'agent-shell-workspace-sidebar-refresh))))))
 
+(ert-deftest decknix-sidebar-toggles/cycle-view-mode-opens-dashboard-on-support ()
+  "Entering support/hybrid surfaces the support dashboard; standard does not."
+  (let ((decknix--sidebar-view-mode 'standard)
+        (decknix--sidebar-refresh-suspended nil)
+        (opened 0))
+    (cl-letf (((symbol-function 'agent-shell-workspace-sidebar-refresh)
+               (lambda (&rest _) nil))
+              ((symbol-function 'decknix-support-dashboard)
+               (lambda () (cl-incf opened))))
+      (decknix-sidebar-cycle-view-mode)     ; -> support
+      (should (equal 'support decknix--sidebar-view-mode))
+      (should (= opened 1))
+      (decknix-sidebar-cycle-view-mode)     ; -> hybrid
+      (should (= opened 2))
+      (decknix-sidebar-cycle-view-mode)     ; -> standard: does NOT open it
+      (should (equal 'standard decknix--sidebar-view-mode))
+      (should (= opened 2)))))
+
 (ert-deftest decknix-sidebar-toggles/section-visible-p-per-mode ()
   "The pure predicate gates sections by mode from the section map."
   ;; standard: developer sections, no support section

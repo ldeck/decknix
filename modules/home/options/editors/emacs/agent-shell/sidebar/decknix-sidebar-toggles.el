@@ -206,13 +206,23 @@ and Requests age toggles share vocabulary."
 (defun decknix-sidebar-cycle-view-mode ()
   "Cycle the sidebar view mode: standard -> support -> hybrid -> standard.
 `standard' is the normal developer view, `support' focuses on the
-on-support rotation (Support + Live), and `hybrid' shows both."
+on-support rotation (Support + Live), and `hybrid' shows both.
+
+Entering `support' or `hybrid' surfaces the live support dashboard (the
+DoS board / alert monitor) in a side window without stealing point, so the
+toggle produces immediate, useful support content.  Full sidebar section
+gating (hiding developer sections in `support') is driven by
+`decknix--sidebar-section-visible-p' and wired into the render separately."
   (interactive)
   (setq decknix--sidebar-view-mode
         (pcase decknix--sidebar-view-mode
           ('standard 'support)
           ('support  'hybrid)
           (_         'standard)))
+  (when (and (memq decknix--sidebar-view-mode '(support hybrid))
+             (fboundp 'decknix-support-dashboard))
+    ;; Show without stealing focus from wherever the user is working.
+    (save-selected-window (decknix-support-dashboard)))
   (decknix--sidebar-refresh-now)
   (message "Sidebar view: %s" decknix--sidebar-view-mode))
 
