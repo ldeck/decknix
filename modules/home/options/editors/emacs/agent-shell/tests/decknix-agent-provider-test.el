@@ -9,6 +9,11 @@
 (defvar test-auggie-auth '(:login t))
 (defvar test-auggie-env '(("FOO" . "BAR")))
 (defun test-auggie-make-config () '((:buffer-name . "TestAuggie")))
+;; pi-like: declares the mode key but leaves it nil (does not use session modes).
+(defun test-pi-make-config () '((:buffer-name . "Pi") (:default-session-mode-id . nil)))
+;; mode-using provider: ships a real default mode.
+(defun test-modeful-make-config ()
+  '((:buffer-name . "MF") (:default-session-mode-id . "plan")))
 
 (ert-deftest decknix-agent-provider-registration ()
   "Test registration and basic accessors."
@@ -292,5 +297,24 @@ Builds a FRESH alist each call (like the real provider config-fns) so
       (should (decknix-agent-buffer-visible-p (current-buffer) '(pi)))
       (should-not (decknix-agent-buffer-visible-p
                    (current-buffer) '(auggie))))))
+
+(ert-deftest decknix-agent-make-config--mode-not-forced-when-base-mode-nil ()
+  "A provider that declares `:default-session-mode-id' nil (e.g. pi) does NOT
+get a forced session mode — avoids the ACP `Unknown modeId: auto' rejection."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-pi
+      '(:make-config-fn test-pi-make-config :label "Pi" :glyph "P"))
+    (let* ((cfg (decknix--agent-make-config 'test-pi '("pi") "auto"))
+           (m (alist-get :default-session-mode-id cfg)))
+      (should (null (if (functionp m) (funcall m) m))))))
+
+(ert-deftest decknix-agent-make-config--mode-applied-when-base-has-mode ()
+  "A provider that ships a real default mode DOES get the configured override."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-mf
+      '(:make-config-fn test-modeful-make-config :label "MF" :glyph "M"))
+    (let* ((cfg (decknix--agent-make-config 'test-mf '("mf") "auto"))
+           (m (alist-get :default-session-mode-id cfg)))
+      (should (equal "auto" (if (functionp m) (funcall m) m))))))
 
 (provide 'decknix-agent-provider-test)
