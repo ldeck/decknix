@@ -52,6 +52,11 @@ work you are actively on (In Progress) leads the board and the backlog trails.")
 (defvar decknix-support-dashboard-jira-base-url "https://vmxproperty.atlassian.net"
   "Base Atlassian URL; `/browse/<KEY>' is appended to open an issue.")
 
+(defvar decknix-support-dashboard-alert-response-command
+  "/nc-alert-response:alert-response"
+  "Agent slash-command that investigates an alert and comments on its ticket.
+Referenced (as text) in the alert investigation prompt; override per workspace.")
+
 (defvar decknix-support-dashboard-confluence-space "TechOps"
   "Confluence space key holding the weekly Techops report.")
 
@@ -114,6 +119,22 @@ row-action commands (browse, assign, investigate) can target the row at point."
                       (truncate-string-to-width assignee 16)
                       summary)))
     (propertize row 'decknix-issue-key key)))
+
+(defun decknix--support-dashboard-alert-prompt (key summary command browse-url)
+  "Build the alert-investigation prompt for issue KEY (SUMMARY).
+COMMAND is the alert-response slash-command; BROWSE-URL is the issue link.
+Encodes the Playbook alert workflow: triage/investigate, comment on the
+ticket, and the reminder that resolving the Jira ticket does NOT resolve the
+GCP alert.  Pure -- returns the prompt string."
+  (format (concat "%s %s\n\n"
+                  "Investigate alert %s: %s\n"
+                  "Open %s. Triage and diagnose the alert, determine impact "
+                  "(outage / broken functionality / noise / recoverable?), and "
+                  "post your findings as a comment on the ticket. Propose a "
+                  "root-cause fix (not a silence). If it depends on other work, "
+                  "mark it Blocked. Reminder: resolving the Jira ticket does NOT "
+                  "resolve the GCP alert — resolve it in the GCP console too.")
+          command key key (or summary "") browse-url))
 
 (defun decknix--support-dashboard-group-by-status (issues)
   "Group ISSUES into a list of (STATUS . ISSUE-LIST) cells.
@@ -530,6 +551,29 @@ and, when available, opens a new agent-shell session to paste it into."
                           key))
         (message "Investigation prompt for %s copied to kill-ring" key)))))
 
+(defun decknix-support-dashboard-investigate-alert ()
+  "Investigate the row at point AS AN ALERT (Playbook alert workflow).
+Copies an alert-response prompt (triage → comment on ticket → root-cause fix,
+with the resolve-in-GCP-console reminder) to the kill-ring and, when available,
+opens a new agent-shell session to paste it into."
+  (interactive)
+  (let ((issue (decknix--support-dashboard-issue-at-point)))
+    (unless issue (user-error "No issue on this row"))
+    (let* ((key (alist-get 'key issue))
+           (prompt (decknix--support-dashboard-alert-prompt
+                    key (alist-get 'summary issue)
+                    decknix-support-dashboard-alert-response-command
+                    (format "%s/browse/%s"
+                            (string-trim-right
+                             decknix-support-dashboard-jira-base-url "/")
+                            key))))
+      (kill-new prompt)
+      (if (fboundp 'decknix-agent-session-new)
+          (progn (call-interactively 'decknix-agent-session-new)
+                 (message "Alert-response prompt for %s on the kill-ring — yank it in"
+                          key))
+        (message "Alert-response prompt for %s copied to kill-ring" key)))))
+
 (defun decknix--support-dashboard-resolve-report (callback)
   "Resolve the current weekly report page; call CALLBACK with (ID . TITLE).
 If `decknix-support-dashboard-report-page-id' is set, use it directly.
@@ -625,7 +669,8 @@ to Confluence.  Paste it into the weekly report (`r' opens it) after editing."
   ["Row"
    ("b" "Browse to issue"        decknix-support-dashboard-browse)
    ("a" "Assign issue"           decknix-support-dashboard-assign)
-   ("i" "Investigate with agent" decknix-support-dashboard-investigate)]
+   ("i" "Investigate with agent" decknix-support-dashboard-investigate)
+   ("A" "Investigate as alert"   decknix-support-dashboard-investigate-alert)]
   ["List"
    ("/" "Filter by status"       decknix-support-dashboard-filter-status)
    ("g" "Refresh"                decknix-support-dashboard-refresh)]
@@ -643,6 +688,7 @@ to Confluence.  Paste it into the weekly report (`r' opens it) after editing."
     (define-key map (kbd "/")   #'decknix-support-dashboard-filter-status)
     (define-key map (kbd "a")   #'decknix-support-dashboard-assign)
     (define-key map (kbd "i")   #'decknix-support-dashboard-investigate)
+    (define-key map (kbd "A")   #'decknix-support-dashboard-investigate-alert)
     (define-key map (kbd "r")   #'decknix-support-dashboard-open-report)
     (define-key map (kbd "R")   #'decknix-support-dashboard-draft-daily-log)
     (define-key map (kbd "w")   #'decknix-support-dashboard-open-workflow)

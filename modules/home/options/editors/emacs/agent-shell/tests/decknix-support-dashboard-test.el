@@ -297,5 +297,26 @@ so row-action commands can target the row at point."
     (should (string-match-p "Alerts:\\* 0 recent" draft))
     (should (string-match-p "(none)" draft))))
 
+;; -- alert investigation prompt (pure) ----------------------------------
+
+(ert-deftest decknix-support-dashboard/alert-prompt-encodes-workflow ()
+  "The alert prompt names the command, key, link, and the GCP reminder."
+  (let ((p (decknix--support-dashboard-alert-prompt
+            "DOS-501" "AlloyDB cost anomaly"
+            "/nc-alert-response:alert-response"
+            "https://x.atlassian.net/browse/DOS-501")))
+    (should (string-prefix-p "/nc-alert-response:alert-response DOS-501" p))
+    (should (string-match-p "AlloyDB cost anomaly" p))
+    (should (string-match-p "https://x.atlassian.net/browse/DOS-501" p))
+    (should (string-match-p "comment on the ticket" p))
+    (should (string-match-p "GCP console" p))
+    ;; guides toward a root-cause fix, not silencing
+    (should (string-match-p "not a silence" p))))
+
+(ert-deftest decknix-support-dashboard/alert-prompt-tolerates-nil-summary ()
+  "A nil summary renders as empty, never errors."
+  (should (stringp (decknix--support-dashboard-alert-prompt
+                    "DOS-9" nil "/cmd" "http://x/browse/DOS-9"))))
+
 (provide 'decknix-support-dashboard-test)
 ;;; decknix-support-dashboard-test.el ends here
