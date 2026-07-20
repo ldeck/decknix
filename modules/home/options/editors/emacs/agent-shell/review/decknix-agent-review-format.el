@@ -119,5 +119,47 @@ header on the agent route."
    "> option and update prior assumptions.\n"
    "\n"))
 
+(defun decknix--agent-review-header-line ()
+  "Return the compact header-line string for the review buffer.
+Advertises the annotation triggers and the key commands so the buffer is
+self-documenting.  Pure -- no buffer/global reads."
+  (concat " Review │ annotate: ,c 💬 ,a ✅ ,r ❌ ,o 🔀 ,f 🚩 +TAB"
+          " │ C-c C-c send · C-c C-k cancel · C-c C-h help"))
+
+(defun decknix--agent-review-help-text ()
+  "Return the full how-to text for the review buffer (annotations + keys).
+Pure -- a static documentation string, so it is ERT-testable and can back both
+the `?'-menu and a help buffer."
+  (concat
+   "Agent Review — how to annotate and route\n"
+   "========================================\n"
+   "\n"
+   "You are annotating an agent-shell exchange. Add your notes inline as\n"
+   "blockquote lines, immediately after the text they refer to. Type a\n"
+   "trigger then press TAB to expand a snippet (yasnippet):\n"
+   "\n"
+   "  ,c   > 💬 comment            a plain remark / question\n"
+   "  ,a   > ✅ approved           accept this part\n"
+   "  ,r   > ❌ reject — reason    reject; give a concrete reason\n"
+   "  ,o   > 🔀 option B           pick an alternative the agent offered\n"
+   "  ,m   > 💬 <collaborator>     attribute a comment to someone else\n"
+   "  ,f   > 🚩 follow-up — title  flag a follow-up (also stashed)\n"
+   "\n"
+   "Keep annotations in order; don't collapse several into one. The agent is\n"
+   "asked to reply under each with `> 💬 **agent:** …'.\n"
+   "\n"
+   "Keys\n"
+   "----\n"
+   "  C-c C-c   submit / route the review (agent · PR comment · Jira · file)\n"
+   "  C-c C-k   cancel — abandon this review buffer\n"
+   "  C-c C-f   flag the current paragraph as a follow-up\n"
+   "  C-c C-l   list stashed follow-ups (mark done / reopen / delete)\n"
+   "  C-c C-m   add a collaborator to the mention list\n"
+   "  C-c C-h   show this help\n"
+   "\n"
+   "Routing (C-c C-c): [a]gent sends it back to the source session as a new\n"
+   "prompt; [p] copies it for a PR comment; [j] saves a Jira draft; [f] writes\n"
+   "it to a file.\n"))
+
 (provide 'decknix-agent-review-format)
 ;;; decknix-agent-review-format.el ends here

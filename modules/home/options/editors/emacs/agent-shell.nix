@@ -6404,6 +6404,9 @@ mutated."
                       ;; C-c s a — resourcing view (#145): sub-agents +
                       ;; linked PRs/repos for this conversation.
                       (define-key map (kbd "a") 'decknix-agent-resourcing)
+                      ;; C-c s v — review the last exchange (twin of C-c A v),
+                      ;; so the review verb lives under the session prefix too.
+                      (define-key map (kbd "v") 'decknix-agent-review)
                       ;; C-c s t — session-scoped tags sub-prefix
                       (define-key tag-map (kbd "l") 'decknix-agent-tag-show)
                       (define-key tag-map (kbd "a") 'decknix-agent-tag-add)
@@ -6430,6 +6433,7 @@ mutated."
                         "C-c s i" "session info"
                         "C-c s R" "restart session"
                         "C-c s a" "resources (sub-agents/PRs)"
+                        "C-c s v" "review last exchange"
                         "C-c s t"   "tags…"
                         "C-c s t l" "list / filter by tag"
                         "C-c s t a" "add tag"

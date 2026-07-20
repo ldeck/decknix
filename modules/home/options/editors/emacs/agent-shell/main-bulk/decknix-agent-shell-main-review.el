@@ -50,6 +50,10 @@
                   (session-name workspace collaborators))
 (declare-function decknix--agent-review-format-exchanges
                   "decknix-agent-review-format" (exchanges))
+(declare-function decknix--agent-review-header-line
+                  "decknix-agent-review-format" ())
+(declare-function decknix--agent-review-help-text
+                  "decknix-agent-review-format" ())
 (declare-function decknix--agent-review-content-for-route
                   "decknix-agent-review-submit" (route))
 (declare-function decknix--agent-review-submit-to-agent
@@ -100,16 +104,38 @@
     (define-key map (kbd "C-c C-f") #'decknix-agent-review-flag-followup)
     (define-key map (kbd "C-c C-l") #'decknix-agent-review-list-followups)
     (define-key map (kbd "C-c C-m") #'decknix-agent-review-add-collaborator)
+    (define-key map (kbd "C-c C-h") #'decknix-agent-review-help)
     map)
   "Keymap for `decknix-agent-review-mode'.")
+
+(defun decknix-agent-review-help ()
+  "Show how to annotate and route in a review buffer (triggers + keys)."
+  (interactive)
+  (let ((buf (get-buffer-create "*agent-review help*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (decknix--agent-review-help-text))
+        (goto-char (point-min)))
+      (view-mode 1))
+    (display-buffer buf)))
 
 (define-derived-mode decknix-agent-review-mode markdown-mode "AgentReview"
   "Major mode for annotating agent-shell exchanges.
 Supports inline Option-1 annotations (💬 ✅ ❌ 🔀 🚩) and routing
 the review back to the source agent-shell session.
+
+Annotate by typing a trigger then TAB: `,c' 💬 comment, `,a' ✅ approve,
+`,r' ❌ reject, `,o' 🔀 option, `,m' mention, `,f' 🚩 follow-up.
+Press \\[decknix-agent-review-help] for the full guide; the header-line
+shows the triggers and keys at a glance.
 \\{decknix-agent-review-mode-map}"
   (setq-local fill-column 100)
   (setq-local truncate-lines nil)
+  ;; Self-document: header-line advertises the annotation triggers + keys so
+  ;; the buffer isn't an undiscoverable wall of instructions (C-c C-h for the
+  ;; full guide).
+  (setq-local header-line-format (decknix--agent-review-header-line))
   ;; Redisplay perf: quoted exchanges are LTR and can be long — force LTR
   ;; + skip bidi bracket-pair resolution (see agent-shell-mode-hook).
   (setq-local bidi-paragraph-direction 'left-to-right)
