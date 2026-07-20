@@ -257,6 +257,99 @@ transient-quit-one` to `transient-quit-all`. Reserve `transient-quit-one`
 only for an explicit, labelled "Back" affordance that is clearly distinct
 from Quit.
 
+## Performance — never block user-facing input (required)
+
+The daemon is shared and long-lived: a single blocking call on an
+interactive path freezes **every** frame until it returns.  Real
+regressions we have shipped and had to chase down: `C-c b` taking
+seconds to open, arrow/`RET` in the sidebar hanging 2–3.5 s, ~50–100 ms
+of lag *per keystroke* in pickers, and an 8 s parse firing *between*
+keystrokes.  Every one was a heavy operation on a path the user drives
+with the keyboard.  Treat the rules below as a hard contract for any
+code reachable from a keybinding, a hook, a timer, or a process
+sentinel that repaints the UI.
+
+### The budget
+
+- A command bound to a **frequently-pressed key** (buffer/session
+  switchers, sidebar navigation, completion, self-insert hooks) may do
+  only trivial main-thread work — target well under one frame (~16 ms).
+- Anything heavier — network/CLI calls, JSON parsing, `gh`/`jq`/`git`
+  shell-outs, walking `obarray`, large buffer re-renders — is **async
+  or idle-deferred**, never inline on the keystroke.
+
+### Never block the UI thread
+
+1. **No synchronous subprocess on an interactive path.**  Never
+   `call-process`, `shell-command-to-string`, `process-file`, or a
+   blocking `url-retrieve-synchronously` from a command, hook, or timer
+   that the user is waiting on.  Use `make-process` with a `:sentinel`
+   that updates the buffer when the data arrives (see
+   `decknix--support-dashboard-fetch`, `-fetch-alerts`, and the hub's
+   Rust daemon → JSON-file → `file-notify` pattern — the sidebar does
+   *zero* polling itself).
+2. **No synchronous fetch to satisfy a redraw.**  Cache the last-known
+   data and render from the cache; filtering, sorting, and re-layout are
+   client-side and must never re-hit the source (see
+   `decknix--support-dashboard-redraw`, which filters cached issues
+   instead of re-querying Jira).  "Take the latest known status" is the
+   default; a refresh is a separate, async, best-effort action.
+
+### Defer heavy work to *genuine* idle, and re-defer on input
+
+A naïve `(run-with-idle-timer 0 …)` fires in the gap *between* two
+keystrokes and still lands on the user.  When you must schedule heavy
+work (a session-list parse, an index rebuild):
+
+- Use a **real idle delay** (≥ ~1 s), not `0`.
+- In the timer body, if `(input-pending-p)`, **re-schedule instead of
+  running** — do not proceed just because the idle timer fired.
+- De-dupe pending work through a guard variable so bursts collapse to
+  one run.
+
+Reference implementation: `decknix--agent-session-refresh-run-when-idle`
+in `agent-shell/agent/decknix-agent-session-cache.el`.
+
+### Guard every UI tick / paint function
+
+Timer- or hook-driven functions that repaint (sidebar paint, header-line
+refresh, badge updates) must **bail cheaply when the user is busy**:
+
+```elisp
+(defun decknix--sidebar-paint-tick ()
+  (if (or (input-pending-p) (active-minibuffer-window))
+      (decknix--sidebar-schedule-paint #'decknix--sidebar-paint-tick) ; re-defer
+    (decknix--sidebar-paint-now …)))                                  ; safe to paint
+```
+
+`input-pending-p` keeps repaint off the keystroke path; the
+`active-minibuffer-window` check keeps a background repaint from
+fighting an open picker.  A cheap visibility check first
+(`get-buffer-window`) so a hidden buffer's timer costs nothing (see
+`decknix--support-dashboard-visible-p` / `-tick`).
+
+### Don't stack completion UIs
+
+`corfu-auto` inside a `vertico`-driven minibuffer added ~50–100 ms per
+keystroke to every picker.  When two interactive frameworks can overlap,
+suppress the inner one — e.g. `global-corfu-minibuffer` returns nil while
+`vertico--input`/`mct--active` is set (see `completion.nix`).  Check any
+new always-on minor mode for this class of interaction before shipping.
+
+### Measure — the profiler is always on
+
+Do not guess at performance; the config runs an always-on hitch profiler
+(`decknix-perf-hitch`, default-on) plus an auto-filer
+(`decknix-perf-hitch-autofile`) that records recurring outliers.
+
+- Reproduce a reported hang, then `M-x decknix-perf-hitch-report` to see
+  which function and how long — fix from the data, not a hypothesis.
+- After a fix, confirm the outlier is gone from the report before
+  committing.
+- When you add a new interactive/timer/sentinel path, keep it profilable
+  (named `defun`s, not deep anonymous lambdas) so a future regression
+  shows up attributed, not as "unknown".
+
 ## Package Sourcing
 
 ```
