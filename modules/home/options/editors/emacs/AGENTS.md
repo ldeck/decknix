@@ -138,6 +138,13 @@ Current in-tree packages:
 | `agent-shell/progress/decknix-progress.el` | Progress data layer | Provider-agnostic items, attention rollup |
 | `agent-shell/progress/decknix-progress-ui.el` | `*decknix-progress*` buffer | Magit-style hierarchical view |
 | `agent-shell/progress/decknix-progress-sidebar.el` | Sidebar badge integration | Mtime-cached `index.json` reads |
+| `agent-shell/support-dashboard/decknix-support-dashboard.el` | On-support DoS + alert dashboard | `C-c A D`; live DoS board + Slack alert feed; row actions (browse/assign/investigate/alert); weekly-report open + daily-log draft |
+| `agent-shell/support-workflow/decknix-support-workflow.el` | Guided daily support work order | `C-c A W`; day-aware Playbook checklist (Incidents → Daily Checks → Scheduled → Work Items/Alerts); `RET` runs each item's action |
+
+Both support packages default their org-specific URLs / JQL / activity list
+to the NurtureCloud/vmxproperty values as overridable defvars (same pattern
+as the rest of the dashboard), so a different org points them elsewhere
+without patching the package.
 
 ### Verification
 
