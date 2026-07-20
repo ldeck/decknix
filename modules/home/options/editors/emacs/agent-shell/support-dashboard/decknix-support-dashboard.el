@@ -613,6 +613,13 @@ to Confluence.  Paste it into the weekly report (`r' opens it) after editing."
     (pop-to-buffer buf)
     (message "Daily-log draft ready (also on kill-ring) — review before pasting")))
 
+(defun decknix-support-dashboard-open-workflow ()
+  "Open the guided support workflow (the systematic daily work order)."
+  (interactive)
+  (if (fboundp 'decknix-support-workflow)
+      (call-interactively 'decknix-support-workflow)
+    (message "Support workflow not available")))
+
 (transient-define-prefix decknix-support-dashboard-transient ()
   "Support dashboard actions."
   ["Row"
@@ -625,6 +632,8 @@ to Confluence.  Paste it into the weekly report (`r' opens it) after editing."
   ["Weekly report"
    ("r" "Open weekly report"     decknix-support-dashboard-open-report)
    ("R" "Draft daily log"        decknix-support-dashboard-draft-daily-log)]
+  ["Guide"
+   ("w" "Support workflow (what to do, when)" decknix-support-dashboard-open-workflow)]
   [("q" "Close menu" transient-quit-one)])
 
 (defvar decknix-support-dashboard-mode-map
@@ -636,6 +645,7 @@ to Confluence.  Paste it into the weekly report (`r' opens it) after editing."
     (define-key map (kbd "i")   #'decknix-support-dashboard-investigate)
     (define-key map (kbd "r")   #'decknix-support-dashboard-open-report)
     (define-key map (kbd "R")   #'decknix-support-dashboard-draft-daily-log)
+    (define-key map (kbd "w")   #'decknix-support-dashboard-open-workflow)
     (define-key map (kbd "g")   #'decknix-support-dashboard-refresh)
     (define-key map (kbd "?")   #'decknix-support-dashboard-transient)
     (define-key map (kbd ".")   #'decknix-support-dashboard-transient)
