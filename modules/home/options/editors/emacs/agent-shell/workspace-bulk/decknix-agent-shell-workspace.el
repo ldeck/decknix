@@ -48,6 +48,8 @@
 ;; Forward declarations for symbols defined in the heredoc, in
 ;; agent-shell-workspace upstream, in helper modules, or in the
 ;; per-feature bulk modules (main, hub, context).
+(declare-function decknix-support-dashboard "decknix-support-dashboard")
+(declare-function decknix-support-workflow "decknix-support-workflow")
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
 (declare-function agent-shell-workspace-sidebar-mode-map "ext:agent-shell-workspace")
 (declare-function agent-shell-workspace-toggle "ext:agent-shell-workspace")
@@ -1067,6 +1069,9 @@ and again once the registry write completes."
    ("a m" "Set mode"      agent-shell-workspace-sidebar-set-mode)
    ("a a" "Add tile"      agent-shell-workspace-tile-add)
    ("a x" "Remove tile"   agent-shell-workspace-tile-remove)]
+  ["Support (on-rotation)"
+   ("D" "Dashboard (DoS + alerts)" decknix-support-dashboard)
+   ("W" "Workflow (what to do, when)" decknix-support-workflow)]
   ["" ("T" "Toggles…"     decknix-sidebar-toggles-transient)])
 
 ;; -- Enhanced sidebar render: live + saved sessions + key footer --
