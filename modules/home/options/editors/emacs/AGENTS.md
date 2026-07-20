@@ -295,20 +295,46 @@ sentinel that repaints the UI.
    instead of re-querying Jira).  "Take the latest known status" is the
    default; a refresh is a separate, async, best-effort action.
 
-### Defer heavy work to *genuine* idle, and re-defer on input
+### Intentionally-async work belongs in a background process, not the main thread
 
-A naïve `(run-with-idle-timer 0 …)` fires in the gap *between* two
-keystrokes and still lands on the user.  When you must schedule heavy
-work (a session-list parse, an index rebuild):
+Idle-deferral is **not** the tool for work that is meant to be
+asynchronous — it only moves that work to a *quieter moment on the same
+single thread*, where a long-running parse or compute still freezes every
+frame once it starts.  The Emacs main thread is a foreground thread; the
+only true "background" is another OS process.  So, in order of
+preference:
+
+1. **Move it out of the Emacs process entirely.**  Anything intentionally
+   asynchronous — CLI/network I/O, large JSON parses, `gh`/`jq`/`git`
+   fan-out, expensive computation — runs in a **background OS process**
+   (`make-process`, or the Rust hub daemon writing JSON that Emacs reads
+   via `file-notify`).  Emacs' main thread only ever touches the *small,
+   finished result* in the `:sentinel`/watcher callback.  Do the parse in
+   the child where practical (e.g. `jq` shaping JSON to exactly the fields
+   the row needs) so the callback has almost nothing left to do.
+2. **Idle-defer only the residual main-thread work** that genuinely must
+   run *inside* Emacs because it touches buffer/window/UI state (a
+   re-render, applying text properties, rebuilding an in-memory index).
+   This is a fallback for the part that cannot be a subprocess — never the
+   home for the heavy part itself.
+
+When you do idle-defer (case 2), a naïve `(run-with-idle-timer 0 …)` fires
+in the gap *between* two keystrokes and still lands on the user:
 
 - Use a **real idle delay** (≥ ~1 s), not `0`.
 - In the timer body, if `(input-pending-p)`, **re-schedule instead of
   running** — do not proceed just because the idle timer fired.
 - De-dupe pending work through a guard variable so bursts collapse to
   one run.
+- If the deferred body itself turns out to be heavy (a multi-second
+  parse), that is the signal it was miscategorised — push it back to
+  case 1 and hand the main thread only the finished result.
 
-Reference implementation: `decknix--agent-session-refresh-run-when-idle`
-in `agent-shell/agent/decknix-agent-session-cache.el`.
+Reference implementations: `decknix--support-dashboard-fetch` (heavy work
+in a child process, tiny sentinel) for case 1;
+`decknix--agent-session-refresh-run-when-idle` in
+`agent-shell/agent/decknix-agent-session-cache.el` for the case-2
+idle-defer + re-defer guard.
 
 ### Guard every UI tick / paint function
 
