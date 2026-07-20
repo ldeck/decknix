@@ -128,6 +128,16 @@ in
               corfu-quit-no-match 'separator
               corfu-quit-at-boundary 'separator)
 
+        ;; Don't pop corfu inside a completing-read minibuffer that another
+        ;; UI (vertico) already drives.  With `corfu-auto', corfu was auto-
+        ;; completing in pickers like `C-c b', adding ~50-100ms per keystroke
+        ;; on top of vertico.  Keep corfu for bare minibuffers (M-:, eval)
+        ;; but suppress it while vertico is handling completion.
+        (setq global-corfu-minibuffer
+              (lambda ()
+                (not (or (bound-and-true-p vertico--input)
+                         (bound-and-true-p mct--active)))))
+
         ;; Corfu in terminal (guard for daemon mode where display-graphic-p
         ;; is nil at init time even for GUI frames)
         (when (and (not (display-graphic-p))
