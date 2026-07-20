@@ -224,5 +224,78 @@ so row-action commands can target the row at point."
     ;; End-of-line still on the propertized row.
     (should (equal "DOS-9" (get-text-property (1- (point)) 'decknix-issue-key)))))
 
+;; -- weekly report resolution (pure) ------------------------------------
+
+;; The exact shape `atlassian-cli --format json confluence search cql' returns:
+;; a bare array of {content_type, id, title}, newest-first by `created desc'.
+(defconst decknix-support-dashboard-test--report-json
+  "[{\"content_type\":\"page\",\"id\":\"4929126621\",\"title\":\"2026-07-28: Weekly Techops Report\"},{\"content_type\":\"page\",\"id\":\"4914315412\",\"title\":\"2026-07-21: Weekly Techops Report\"},{\"content_type\":\"page\",\"id\":\"4900487263\",\"title\":\"2026-07-14: Weekly Techops Report\"}]")
+
+(ert-deftest decknix-support-dashboard/pick-report-newest-by-date ()
+  "The newest dated matching page is picked regardless of input order."
+  (let* ((pages (decknix--support-dashboard-parse
+                 decknix-support-dashboard-test--report-json))
+         ;; Reverse so date-sorting, not input order, must do the work.
+         (page (decknix--support-dashboard-pick-report-page (reverse pages))))
+    (should (equal "4929126621" (alist-get 'id page)))
+    (should (equal "2026-07-28: Weekly Techops Report" (alist-get 'title page)))))
+
+(ert-deftest decknix-support-dashboard/pick-report-filters-non-matching ()
+  "Pages whose title lacks the match string are ignored; nil when none match."
+  (let ((page (decknix--support-dashboard-pick-report-page
+               '(((id . "1") (title . "Runbook: Incident Response"))
+                 ((id . "2") (title . "2026-07-28: Weekly Techops Report"))))))
+    (should (equal "2" (alist-get 'id page))))
+  (should (null (decknix--support-dashboard-pick-report-page
+                 '(((id . "1") (title . "Unrelated page"))))))
+  (should (null (decknix--support-dashboard-pick-report-page nil))))
+
+(ert-deftest decknix-support-dashboard/pick-report-undated-falls-back-to-order ()
+  "Undated matching titles keep CQL's newest-first input order."
+  (let ((page (decknix--support-dashboard-pick-report-page
+               '(((id . "new") (title . "Weekly Techops Report"))
+                 ((id . "old") (title . "Weekly Techops Report"))))))
+    (should (equal "new" (alist-get 'id page)))))
+
+(ert-deftest decknix-support-dashboard/report-url-built-from-space-and-id ()
+  "The report URL joins base, space, and page id under /wiki/spaces."
+  (let ((decknix-support-dashboard-jira-base-url "https://x.atlassian.net")
+        (decknix-support-dashboard-confluence-space "TechOps"))
+    (should (equal "https://x.atlassian.net/wiki/spaces/TechOps/pages/4929126621"
+                   (decknix--support-dashboard-report-url "4929126621")))))
+
+(ert-deftest decknix-support-dashboard/title-date-extracts-or-nil ()
+  "A leading YYYY-MM-DD is extracted; an undated title yields nil."
+  (should (equal "2026-07-28"
+                 (decknix--support-dashboard-title-date
+                  "2026-07-28: Weekly Techops Report")))
+  (should (null (decknix--support-dashboard-title-date "Weekly Techops Report"))))
+
+;; -- daily-log draft (pure) ---------------------------------------------
+
+(ert-deftest decknix-support-dashboard/daily-log-draft-summarises-state ()
+  "The draft carries the date, per-status DoS keys, alert lines, and prompts."
+  (let* ((issues (decknix--support-dashboard-parse
+                  decknix-support-dashboard-test--bare-json))
+         (alerts (decknix--support-dashboard-parse-alerts
+                  decknix-support-dashboard-test--alert-csv))
+         (draft (decknix--support-dashboard-daily-log-draft
+                 issues alerts "2026-07-20")))
+    (should (string-match-p "2026-07-20 — Daily update" draft))
+    (should (string-match-p "DoS board:\\* 2 open" draft))
+    (should (string-match-p "In Progress (1): DOS-429" draft))
+    (should (string-match-p "To Do (1): DOS-430" draft))
+    (should (string-match-p "Alerts:\\* 2 recent" draft))
+    (should (string-match-p "AlloyDB" draft))
+    (should (string-match-p "Actions taken:" draft))
+    (should (string-match-p "Follow-ups / next:" draft))))
+
+(ert-deftest decknix-support-dashboard/daily-log-draft-empty-state ()
+  "With no issues or alerts the draft still renders placeholders, never errors."
+  (let ((draft (decknix--support-dashboard-daily-log-draft nil nil "2026-07-20")))
+    (should (string-match-p "DoS board:\\* 0 open" draft))
+    (should (string-match-p "Alerts:\\* 0 recent" draft))
+    (should (string-match-p "(none)" draft))))
+
 (provide 'decknix-support-dashboard-test)
 ;;; decknix-support-dashboard-test.el ends here

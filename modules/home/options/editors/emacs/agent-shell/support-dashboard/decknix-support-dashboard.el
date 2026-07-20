@@ -52,6 +52,20 @@ work you are actively on (In Progress) leads the board and the backlog trails.")
 (defvar decknix-support-dashboard-jira-base-url "https://vmxproperty.atlassian.net"
   "Base Atlassian URL; `/browse/<KEY>' is appended to open an issue.")
 
+(defvar decknix-support-dashboard-confluence-space "TechOps"
+  "Confluence space key holding the weekly Techops report.")
+
+(defvar decknix-support-dashboard-report-title-match "Weekly Techops Report"
+  "Substring identifying the weekly report pages (titles are dated, e.g.
+\"2026-07-28: Weekly Techops Report\").  The newest matching page is the
+current week's report, so it resolves with zero weekly maintenance.")
+
+(defvar decknix-support-dashboard-report-page-id nil
+  "Explicit Confluence page id for the weekly report.
+When nil (default) the current report is resolved by title via CQL (newest
+matching `decknix-support-dashboard-report-title-match').  Set this to pin a
+specific page.")
+
 (defvar-local decknix--support-dashboard-issues nil
   "Last-fetched DoS issues, cached so status filtering redraws without re-fetch.")
 (defvar-local decknix--support-dashboard-alerts nil
@@ -245,6 +259,80 @@ ISSUES-ERR / ALERTS-ERR render an error line for their section instead."
        (format "\n%d open · %d alerts   ·   updated %s\n"
                (length issues) (length alerts) timestamp)
      "")))
+
+;; ---------------------------------------------------------------------------
+;; Weekly Techops report (Confluence) — pure resolve/draft, ERT-tested.
+;; ---------------------------------------------------------------------------
+;;
+;; The current week's report is the newest page whose title matches
+;; `decknix-support-dashboard-report-title-match' (titles are dated,
+;; e.g. "2026-07-28: Weekly Techops Report"), resolved via CQL so there is
+;; nothing to update week to week.  The draft daily-log entry is generated from
+;; the live dashboard state and shown for review — never written silently.
+
+(defun decknix--support-dashboard-title-date (title)
+  "Return the leading YYYY-MM-DD date in TITLE as a sortable string, or nil."
+  (when (and (stringp title)
+             (string-match "\\`\\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\)" title))
+    (match-string 1 title)))
+
+(defun decknix--support-dashboard-pick-report-page (pages)
+  "Pick the current weekly report from PAGES (parsed CQL result alists).
+Keeps only pages whose title contains
+`decknix-support-dashboard-report-title-match', then returns the one with the
+newest leading date (falling back to input order, which CQL already sorts
+newest-first).  Returns the page alist (with `id' and `title') or nil.  Pure."
+  (let ((matches
+         (seq-filter
+          (lambda (p)
+            (let ((title (or (alist-get 'title p) "")))
+              (string-match-p
+               (regexp-quote decknix-support-dashboard-report-title-match) title)))
+          pages)))
+    (car
+     (seq-sort
+      (lambda (a b)
+        (let ((da (decknix--support-dashboard-title-date (alist-get 'title a)))
+              (db (decknix--support-dashboard-title-date (alist-get 'title b))))
+          (cond ((and da db) (string> da db))
+                (da t)
+                (db nil)
+                (t nil))))          ; stable: keep CQL's newest-first order
+      matches))))
+
+(defun decknix--support-dashboard-report-url (id)
+  "Return the Confluence web URL for page ID."
+  (format "%s/wiki/spaces/%s/pages/%s"
+          (string-trim-right decknix-support-dashboard-jira-base-url "/")
+          decknix-support-dashboard-confluence-space
+          id))
+
+(defun decknix--support-dashboard-daily-log-draft (issues alerts date)
+  "Build a reviewable daily-log entry (Confluence wiki markup) from live state.
+ISSUES and ALERTS are the cached dashboard data; DATE is a YYYY-MM-DD string.
+Pure: no I/O, so it is fully ERT-testable.  The blank Service Health / Actions /
+Follow-ups lines are intentional prompts for the reviewer to fill in."
+  (let ((groups (decknix--support-dashboard-group-by-status issues)))
+    (concat
+     (format "h3. %s — Daily update (on-support)\n\n" date)
+     "*Service Health:* (checked — note anomalies, else \"all nominal\")\n\n"
+     (format "*DoS board:* %d open\n" (length issues))
+     (if (null groups)
+         "  (none)\n"
+       (mapconcat
+        (lambda (g)
+          (format "  %s (%d): %s\n"
+                  (car g) (length (cdr g))
+                  (mapconcat (lambda (i) (or (alist-get 'key i) "?"))
+                             (cdr g) ", ")))
+        groups ""))
+     (format "\n*Alerts:* %d recent\n" (length alerts))
+     (if (null alerts)
+         "  (none)\n"
+       (concat (mapconcat #'decknix--support-dashboard-format-alert alerts "\n")
+               "\n"))
+     "\n*Actions taken:*\n-\n"
+     "\n*Follow-ups / next:*\n-\n")))
 
 ;; ---------------------------------------------------------------------------
 ;; Side-effecting layer: async fetch + buffer refresh + command.
@@ -442,6 +530,89 @@ and, when available, opens a new agent-shell session to paste it into."
                           key))
         (message "Investigation prompt for %s copied to kill-ring" key)))))
 
+(defun decknix--support-dashboard-resolve-report (callback)
+  "Resolve the current weekly report page; call CALLBACK with (ID . TITLE).
+If `decknix-support-dashboard-report-page-id' is set, use it directly.
+Otherwise run a CQL title search via atlassian-cli (async) and pick the newest
+matching page.  On failure CALLBACK gets (nil . ERR-STRING).  Never blocks."
+  (if decknix-support-dashboard-report-page-id
+      (funcall callback (cons decknix-support-dashboard-report-page-id nil))
+    (if (not (executable-find decknix-support-dashboard-atlassian-cli))
+        (funcall callback
+                 (cons nil (format "%s not found on PATH"
+                                   decknix-support-dashboard-atlassian-cli)))
+      (let ((buf (generate-new-buffer " *decknix-support-report*"))
+            (cql (format (concat "space = %s and title ~ \"%s\" "
+                                 "and type = page order by created desc")
+                         decknix-support-dashboard-confluence-space
+                         decknix-support-dashboard-report-title-match)))
+        (make-process
+         :name "decknix-support-report"
+         :buffer buf
+         :noquery t
+         :connection-type 'pipe
+         :command (list decknix-support-dashboard-atlassian-cli
+                        "--format" "json" "confluence" "search" "cql" cql
+                        "--limit" "5")
+         :sentinel
+         (lambda (proc _e)
+           (when (memq (process-status proc) '(exit signal))
+             (let* ((out (and (buffer-live-p buf)
+                              (with-current-buffer buf (buffer-string))))
+                    (ok (and (eq (process-status proc) 'exit)
+                             (= 0 (process-exit-status proc)))))
+               (when (buffer-live-p buf) (kill-buffer buf))
+               (if (not ok)
+                   (funcall callback
+                            (cons nil (string-trim (or out "report lookup failed"))))
+                 (let ((page (decknix--support-dashboard-pick-report-page
+                              (decknix--support-dashboard-parse out))))
+                   (if page
+                       (funcall callback (cons (alist-get 'id page)
+                                               (alist-get 'title page)))
+                     (funcall callback
+                              (cons nil "no matching report page")))))))))))))
+
+(defun decknix-support-dashboard-open-report ()
+  "Open the current week's Weekly Techops Report in the browser.
+Resolves the newest matching Confluence page by title (async)."
+  (interactive)
+  (message "Resolving weekly report…")
+  (decknix--support-dashboard-resolve-report
+   (lambda (result)
+     (let ((id (car result)) (err (cdr result)))
+       (if (not id)
+           (message "Report lookup failed: %s" err)
+         (browse-url (decknix--support-dashboard-report-url id))
+         (message "Opened %s" (or err (decknix--support-dashboard-report-url id))))))))
+
+(defun decknix-support-dashboard-draft-daily-log ()
+  "Draft today's daily-log entry from live dashboard state for review.
+Generates a Confluence-wiki-markup entry from the cached DoS issues and alerts,
+shows it in a review buffer, and copies it to the kill-ring — it does NOT write
+to Confluence.  Paste it into the weekly report (`r' opens it) after editing."
+  (interactive)
+  (let* ((src (get-buffer decknix-support-dashboard-buffer-name))
+         (issues (and src (buffer-local-value
+                           'decknix--support-dashboard-issues src)))
+         (alerts (and src (buffer-local-value
+                           'decknix--support-dashboard-alerts src)))
+         (date (format-time-string "%Y-%m-%d"))
+         (draft (decknix--support-dashboard-daily-log-draft issues alerts date))
+         (buf (get-buffer-create "*decknix-daily-log-draft*")))
+    (kill-new draft)
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert ";; Draft daily-log entry — review/edit, then paste into the\n"
+                ";; weekly report ('r' in the dashboard opens it).  Also on the\n"
+                ";; kill-ring.  Nothing has been written to Confluence.\n\n")
+        (insert draft))
+      (goto-char (point-min))
+      (view-mode 1))
+    (pop-to-buffer buf)
+    (message "Daily-log draft ready (also on kill-ring) — review before pasting")))
+
 (transient-define-prefix decknix-support-dashboard-transient ()
   "Support dashboard actions."
   ["Row"
@@ -451,6 +622,9 @@ and, when available, opens a new agent-shell session to paste it into."
   ["List"
    ("/" "Filter by status"       decknix-support-dashboard-filter-status)
    ("g" "Refresh"                decknix-support-dashboard-refresh)]
+  ["Weekly report"
+   ("r" "Open weekly report"     decknix-support-dashboard-open-report)
+   ("R" "Draft daily log"        decknix-support-dashboard-draft-daily-log)]
   [("q" "Close menu" transient-quit-one)])
 
 (defvar decknix-support-dashboard-mode-map
@@ -460,6 +634,8 @@ and, when available, opens a new agent-shell session to paste it into."
     (define-key map (kbd "/")   #'decknix-support-dashboard-filter-status)
     (define-key map (kbd "a")   #'decknix-support-dashboard-assign)
     (define-key map (kbd "i")   #'decknix-support-dashboard-investigate)
+    (define-key map (kbd "r")   #'decknix-support-dashboard-open-report)
+    (define-key map (kbd "R")   #'decknix-support-dashboard-draft-daily-log)
     (define-key map (kbd "g")   #'decknix-support-dashboard-refresh)
     (define-key map (kbd "?")   #'decknix-support-dashboard-transient)
     (define-key map (kbd ".")   #'decknix-support-dashboard-transient)
@@ -469,7 +645,8 @@ and, when available, opens a new agent-shell session to paste it into."
 (define-derived-mode decknix-support-dashboard-mode special-mode "Support"
   "Major mode for the live support monitoring dashboard.
 Row actions (submenu on `?'): `b' browse, `a' assign, `i' investigate;
-list actions: `/' filter by status, `g' refresh, `q' bury.
+list actions: `/' filter by status, `g' refresh, `q' bury;
+weekly report: `r' open the current report, `R' draft today's daily log.
 \\{decknix-support-dashboard-mode-map}"
   (setq-local revert-buffer-function
               (lambda (&rest _) (decknix-support-dashboard-refresh))))
