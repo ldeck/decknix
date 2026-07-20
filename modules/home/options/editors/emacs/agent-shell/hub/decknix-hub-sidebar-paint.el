@@ -101,14 +101,24 @@ cannot leave the guard stuck."
   (when (fboundp 'decknix--sidebar-state-write)
     (decknix--sidebar-state-write)))
 
+(defun decknix--sidebar-paint-defer-p ()
+  "Return non-nil when the sidebar repaint should defer instead of running now.
+Defers while input is pending (mid-typing) OR while a minibuffer is active —
+the full erase+rebuild runs into SECONDS with many live sessions, and firing it
+during a `completing-read' picker (e.g. `C-c b') froze the cursor for 2-3s on
+every up/down/RET.  The sidebar does not need to update while you are picking;
+it repaints on the next tick once the minibuffer closes."
+  (or (input-pending-p)
+      (active-minibuffer-window)))
+
 (defun decknix--sidebar-paint-tick ()
   "Idle-timer entry point: perform the real sidebar repaint.
-If the user has resumed typing by the moment the idle timer fires
-\(`input-pending-p'), re-defer onto a fresh idle timer rather than run
-the ~100ms synchronous paint ahead of that queued keystroke.  The paint
-then lands on the next genuine pause, so continuous typing yields zero
-paints and never a visible input hitch."
-  (if (input-pending-p)
+When the paint should defer (see `decknix--sidebar-paint-defer-p' — typing in
+progress, or a minibuffer/picker open), re-defer onto a fresh idle timer rather
+than run the multi-hundred-ms (to multi-second) synchronous paint ahead of the
+user's interaction.  The paint then lands on the next genuine idle, so
+continuous typing and picker navigation yield zero paints and never a hitch."
+  (if (decknix--sidebar-paint-defer-p)
       (decknix--sidebar-schedule-paint #'decknix--sidebar-paint-tick)
     (decknix--sidebar-paint-now #'agent-shell-workspace-sidebar-refresh)))
 

@@ -282,5 +282,31 @@ text without calling ORIG again."
          (lambda (ln &rest _) (setq calls (1+ calls)) (insert "y") (+ ln 1)) 0 nil nil nil 1)
         (should (= calls 2))))))        ; both rendered
 
+(ert-deftest decknix-sidebar-paint--defer-p-input-or-minibuffer ()
+  "Paint defers while input is pending OR a minibuffer is active."
+  (cl-letf (((symbol-function 'input-pending-p) (lambda () nil))
+            ((symbol-function 'active-minibuffer-window) (lambda () nil)))
+    (should-not (decknix--sidebar-paint-defer-p)))
+  (cl-letf (((symbol-function 'input-pending-p) (lambda () t))
+            ((symbol-function 'active-minibuffer-window) (lambda () nil)))
+    (should (decknix--sidebar-paint-defer-p)))
+  (cl-letf (((symbol-function 'input-pending-p) (lambda () nil))
+            ((symbol-function 'active-minibuffer-window) (lambda () 'win)))
+    (should (decknix--sidebar-paint-defer-p))))
+
+(ert-deftest decknix-sidebar-paint--tick-redefers-when-minibuffer-active ()
+  "The tick re-schedules (never paints) while a minibuffer/picker is open —
+this is the fix for the multi-second freeze on up/down/RET in `C-c b'."
+  (let ((scheduled 0) (painted 0))
+    (cl-letf (((symbol-function 'input-pending-p) (lambda () nil))
+              ((symbol-function 'active-minibuffer-window) (lambda () 'win))
+              ((symbol-function 'decknix--sidebar-schedule-paint)
+               (lambda (_fn) (cl-incf scheduled)))
+              ((symbol-function 'decknix--sidebar-paint-now)
+               (lambda (_fn) (cl-incf painted))))
+      (decknix--sidebar-paint-tick)
+      (should (= scheduled 1))
+      (should (= painted 0)))))
+
 (provide 'decknix-hub-sidebar-paint-test)
 ;;; decknix-hub-sidebar-paint-test.el ends here
