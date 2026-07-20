@@ -291,6 +291,15 @@ let
     ];
   };
 
+  decknix-support-workflow-el = mkEmacsTestedPackage {
+    pname = "decknix-support-workflow";
+    src = ./agent-shell/support-workflow;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-support-workflow-test.el"
+    ];
+  };
+
   decknix-sidebar-toggles-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-toggles";
     src = ./agent-shell/sidebar;
@@ -2682,6 +2691,7 @@ in
           decknix-perf-hitch-autofile-el
           decknix-capture-el
           decknix-support-dashboard-el
+          decknix-support-workflow-el
           decknix-agent-subagent-state-el
           decknix-agent-resourcing-el
           decknix-agent-rg-search-command-el
@@ -3635,6 +3645,12 @@ ${optionalString cfg.tableOverlay.enable ''
                               decknix-support-dashboard-refresh-interval
                               #'decknix--support-dashboard-tick))
 
+        ;; Guided support workflow (the systematic "what to do, when, how"
+        ;; distilled from the Techops Playbook work order).  No timer -- it is
+        ;; a static, day-aware checklist buffer opened on demand.
+        (require 'decknix-support-workflow)
+        (declare-function decknix-support-workflow "decknix-support-workflow")
+
         ;; Always-on hitch profiler (default-on, `decknix-perf-hitch-toggle'
         ;; to disable at runtime).  Surfaces slow timers/commands so we can
         ;; keep optimising as the config grows.  `M-x decknix-perf-hitch-report'
@@ -3947,7 +3963,10 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c A R" "rename session"
             "C-c A r" "recent sessions"
             "C-c A P" "Progress (conv-key)"
-            "C-c A p" "priority view"))
+            "C-c A p" "priority view"
+            "C-c A v" "review last exchange"
+            "C-c A D" "support dashboard"
+            "C-c A W" "support workflow (guided)"))
 
         ;; Global keybindings under C-c A prefix
         ;; Only actions that make sense from OUTSIDE an agent-shell buffer.
@@ -4276,6 +4295,7 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         (define-key decknix-agent-prefix-map (kbd "c") 'decknix-agent-command-map)
         (define-key decknix-agent-prefix-map (kbd "C") 'decknix-capture)             ; Quick-capture issue/task
         (define-key decknix-agent-prefix-map (kbd "D") 'decknix-support-dashboard)   ; Live support/DoS-board dashboard
+        (define-key decknix-agent-prefix-map (kbd "W") 'decknix-support-workflow)    ; Guided support daily workflow
         (define-key decknix-agent-command-map (kbd "c") 'decknix-agent-command-run)    ; Pick & insert
         (define-key decknix-agent-command-map (kbd "n") 'decknix-agent-command-new)    ; New
         (define-key decknix-agent-command-map (kbd "e") 'decknix-agent-command-edit)   ; Edit
