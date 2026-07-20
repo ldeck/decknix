@@ -186,5 +186,24 @@ block in place (current strip-meta behaviour, see existing test
     (should (string-match-p "📋 \\*\\*instructions" stripped))
     (should (string-match-p "Respond inline using" stripped))))
 
+(ert-deftest decknix-agent-review-header-line--advertises-triggers-and-keys ()
+  "The header-line names the annotation triggers and the core keys."
+  (let ((h (decknix--agent-review-header-line)))
+    (should (string-match-p ",c" h))
+    (should (string-match-p ",a" h))
+    (should (string-match-p ",r" h))
+    (should (string-match-p "C-c C-c" h))
+    (should (string-match-p "C-c C-h" h))))
+
+(ert-deftest decknix-agent-review-help-text--documents-annotations-and-routing ()
+  "The help text documents every trigger, the TAB expansion, and routing."
+  (let ((h (decknix--agent-review-help-text)))
+    (should (string-match-p "TAB" h))
+    (dolist (trig '(",c" ",a" ",r" ",o" ",m" ",f"))
+      (should (string-match-p (regexp-quote trig) h)))
+    (should (string-match-p "C-c C-c" h))
+    (should (string-match-p "follow-up" h))
+    (should (string-match-p "Routing" h))))
+
 (provide 'decknix-agent-review-format-test)
 ;;; decknix-agent-review-format-test.el ends here
