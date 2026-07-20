@@ -321,7 +321,13 @@ in
       (define-key deckmacs-prefix-map (kbd "s") #'deckmacs-status)
       (define-key deckmacs-prefix-map (kbd "d") #'deckmacs-diff)
       (define-key deckmacs-prefix-map (kbd "l") #'deckmacs-log)
-
+${lib.optionalString config.programs.emacs.decknix.recording.enable ''
+      ;; Screen-recording toggles (commands defined in recording.nix).  Bound
+      ;; here on the prefix owner so the map is defined first; define-key stores
+      ;; the command symbol and resolves it at press time (order-independent).
+      (define-key deckmacs-prefix-map (kbd "V") #'decknix-screencast-toggle)
+      (define-key deckmacs-prefix-map (kbd "K") #'decknix-screencast-keys-toggle)
+''}
       ;; == which-key labels ==
 
       (with-eval-after-load 'which-key
@@ -330,7 +336,10 @@ in
           "C-c D r" "reload"
           "C-c D s" "status"
           "C-c D d" "diff"
-          "C-c D l" "log"))
+          "C-c D l" "log"${lib.optionalString config.programs.emacs.decknix.recording.enable ''
+
+          "C-c D V" "screencast (rec)"
+          "C-c D K" "keystroke overlay"''}))
 
       ;; == Initial store path capture ==
       ;; Record the currently loaded store path on first load.
