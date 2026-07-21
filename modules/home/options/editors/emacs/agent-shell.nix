@@ -6359,6 +6359,16 @@ mutated."
                                 (seq-remove
                                  (lambda (f) (memq f '(cape-file cape-dabbrev)))
                                  completion-at-point-functions))
+                    ;; Don't auto-pop completion while chatting.  `corfu-auto'
+                    ;; fires the remaining file/comint capfs on EVERY keystroke;
+                    ;; `agent-shell--file-completion-at-point' in a large
+                    ;; workspace (e.g. the nurturecloud monorepo root) returns
+                    ;; huge candidate sets that stall typing for seconds --
+                    ;; `corfu--auto-complete-deferred' was a top hitch offender
+                    ;; (2.7s worst, 64 fires).  A conversational buffer doesn't
+                    ;; need auto-popup completion; TAB (`decknix--agent-tab-dwim')
+                    ;; still completes on demand.
+                    (setq-local corfu-auto nil)
                     ;; Keep prompt pinned to the bottom of the window
                     (setq-local comint-scroll-to-bottom-on-input t)
                     (setq-local comint-scroll-to-bottom-on-output t)
