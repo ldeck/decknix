@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
+mod session;
+
 // 1. Static Core Commands
 #[derive(Parser)]
 #[command(name = "decknix")]
@@ -52,6 +54,12 @@ enum Commands {
     Wt {
         #[command(subcommand)]
         action: WtAction,
+    },
+    /// Find, create, and resume Claude sessions (workspace + tag aware)
+    #[command(alias = "s")]
+    Session {
+        #[command(subcommand)]
+        action: session::SessionAction,
     },
     /// Pull local changes to agent skills/commands back into repositories
     PullLocalChanges {
@@ -1945,6 +1953,9 @@ fn main() -> anyhow::Result<()> {
                     run_clean(&registry, &sessions, &compiled, orphans, /*require_merged*/ !orphans, apply);
                 }
             }
+        }
+        Some(Commands::Session { action }) => {
+            session::run(action)?;
         }
         Some(Commands::External(args)) => {
             let cmd_name = &args[0];

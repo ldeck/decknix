@@ -13,7 +13,7 @@ rustPlatform.buildRustPackage {
 
   # This hash locks dependencies.
   # Set to lib.fakeHash initially; Nix will error and give you the real one.
-  cargoHash = "sha256-GXgDhPvXf6qnKHUq2U0L2v8/z09CQVoi5U5CvkUu/EM=";
+  cargoHash = "sha256-rMNxIMW0rGacNeFigOVQ3uCKwXPsysG3AaFX/vkNf3U=";
 
   # Tests require git for classify_drift_covers_all_branches
   nativeCheckInputs = [ git ];
