@@ -129,6 +129,16 @@ ID is a symbol (e.g. `auggie').  PROPS is a property list."
   (let ((file (plist-get (decknix-agent-require-provider id) :history-file)))
     (when file (expand-file-name file))))
 
+(defun decknix-agent-provider-session-modes-p (id)
+  "Return non-nil when provider ID uses Claude-style session/permission modes.
+Only such providers (flagged `:session-modes t' in the registry -- today
+`claude-code') get a requested MODE baked into their session config by
+`decknix--agent-make-config'.  Providers without the flag (auggie, gemini)
+or that reject a modeId over ACP (pi) leave the mode unset, so a Claude
+session always opens in the requested mode while a stray mode can never
+wedge a mode-less provider's launch."
+  (plist-get (decknix-agent-require-provider id) :session-modes))
+
 (defun decknix-agent-provider-label (id)
   "Return the human-readable :label for provider ID.
 Falls back to the symbol name when :label is absent."
@@ -237,20 +247,27 @@ The config includes a `:client-maker' closure that encapsulates the
 command, parameters, and environment variables.
 
 Optional MODE is a session/permission mode id (e.g. Claude's \"auto\").
-It is baked into this session's config only -- overriding the
-provider's `:default-session-mode-id' -- and only when the base config
-already ships a NON-NIL default mode (i.e. the provider genuinely uses
-session modes).  Checking the value, not just the key's presence, matters:
-some providers (pi via pi-acp) DECLARE `:default-session-mode-id' but leave
-it nil, and forcing a mode like \"auto\" onto them makes the ACP agent reject
-the session (\"Unknown modeId: auto\").  So a stray mode can never break a
-launch.  The mode is applied by agent-shell after the session reports ready."
+It is baked into this session's config -- overriding the provider's
+`:default-session-mode-id' -- only when the provider is flagged
+`:session-modes' in the registry (i.e. it genuinely uses Claude-style
+session/permission modes; today that is `claude-code').  Gating on the
+registry flag, NOT on whether the base config happens to ship a non-nil
+default, is what keeps the two failure modes apart:
+  - claude-code's upstream config leaves `:default-session-mode-id' unset,
+    so a value-based check would (wrongly) never apply \"auto\" and the
+    session would open in the ACP `default' mode -- re-enabling a permission
+    prompt on every tool call.  We MUST apply \"auto\" here.
+  - pi (via pi-acp) does NOT use session modes and rejects a stray modeId
+    (\"Unknown modeId: auto\"), which would wedge the launch.  It carries no
+    `:session-modes' flag, so we never touch its mode.
+So a stray mode can never break a mode-less provider, and a Claude session
+always opens in the requested mode.  agent-shell applies the baked mode
+after the session reports ready."
   (let* ((make-fn (decknix-agent-provider-make-config-fn provider-id))
-         (base (funcall make-fn))
-         (base-mode (alist-get :default-session-mode-id base)))
+         (base (funcall make-fn)))
     (when (and (stringp mode)
                (not (string-empty-p mode))
-               (if (functionp base-mode) (funcall base-mode) base-mode))
+               (decknix-agent-provider-session-modes-p provider-id))
       (setf (alist-get :default-session-mode-id base)
             (let ((m mode)) (lambda () m))))
     (setf (alist-get :client-maker base)

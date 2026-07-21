@@ -189,11 +189,18 @@ Builds a FRESH alist each call (like the real provider config-fns) so
   (list (cons :buffer-name "TestClaude")
         (cons :default-session-mode-id (lambda () "default"))))
 
-(ert-deftest decknix-agent-make-config-bakes-mode-when-supported ()
-  "MODE overrides `:default-session-mode-id' for a provider that declares it."
+(defun test-claude-nokey-make-config ()
+  "Fake Claude config that omits `:default-session-mode-id' entirely.
+Mirrors the REAL `agent-shell-anthropic-make-claude-code-config', which does
+not ship a default mode -- the case that regressed Claude into `default'
+mode when baking gated on the base value instead of the registry flag."
+  (list (cons :buffer-name "TestClaudeNoKey")))
+
+(ert-deftest decknix-agent-make-config-bakes-mode-when-session-modes ()
+  "MODE is baked for a provider flagged `:session-modes' (base ships a mode)."
   (let ((decknix-agent-provider-registry nil))
     (decknix-agent-register-provider 'test-claude
-      '(:make-config-fn test-claude-make-config))
+      '(:make-config-fn test-claude-make-config :session-modes t))
     (cl-letf (((symbol-function 'agent-shell--make-acp-client)
                (lambda (&rest args) args)))
       (let* ((config (decknix--agent-make-config 'test-claude '("c") "auto"))
@@ -201,22 +208,38 @@ Builds a FRESH alist each call (like the real provider config-fns) so
         (should (functionp mode-fn))
         (should (equal "auto" (funcall mode-fn)))))))
 
-(ert-deftest decknix-agent-make-config-ignores-mode-without-key ()
-  "A provider whose config has no `:default-session-mode-id' ignores MODE."
+(ert-deftest decknix-agent-make-config-bakes-mode-when-base-lacks-key ()
+  "MODE is baked even when the base config omits the mode key, as long as the
+provider is flagged `:session-modes' -- the real claude-code case.  This is
+the regression guard: a Claude session must open in `auto', not `default'."
   (let ((decknix-agent-provider-registry nil))
-    (decknix-agent-register-provider 'test-agent
-      '(:make-config-fn test-auggie-make-config))
+    (decknix-agent-register-provider 'test-claude
+      '(:make-config-fn test-claude-nokey-make-config :session-modes t))
     (cl-letf (((symbol-function 'agent-shell--make-acp-client)
                (lambda (&rest args) args)))
-      (let ((config (decknix--agent-make-config 'test-agent '("c") "auto")))
-        ;; No key added, so nothing to apply -> mode silently dropped.
+      (let* ((config (decknix--agent-make-config 'test-claude '("c") "auto"))
+             (mode-fn (alist-get :default-session-mode-id config)))
+        (should (functionp mode-fn))
+        (should (equal "auto" (funcall mode-fn)))))))
+
+(ert-deftest decknix-agent-make-config-ignores-mode-without-session-modes ()
+  "A provider NOT flagged `:session-modes' never gets MODE baked -- even if its
+base config declares a (nil) mode key, mirroring pi via pi-acp, which rejects
+a stray modeId."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-pi
+      '(:make-config-fn test-auggie-make-config))   ; no :session-modes
+    (cl-letf (((symbol-function 'agent-shell--make-acp-client)
+               (lambda (&rest args) args)))
+      (let ((config (decknix--agent-make-config 'test-pi '("c") "auto")))
+        ;; Flag absent -> mode not applied.
         (should (null (alist-get :default-session-mode-id config)))))))
 
 (ert-deftest decknix-agent-make-config-nil-mode-keeps-base ()
   "A nil MODE leaves the base `:default-session-mode-id' untouched."
   (let ((decknix-agent-provider-registry nil))
     (decknix-agent-register-provider 'test-claude
-      '(:make-config-fn test-claude-make-config))
+      '(:make-config-fn test-claude-make-config :session-modes t))
     (cl-letf (((symbol-function 'agent-shell--make-acp-client)
                (lambda (&rest args) args)))
       (let* ((config (decknix--agent-make-config 'test-claude '("c") nil))
@@ -309,10 +332,12 @@ get a forced session mode — avoids the ACP `Unknown modeId: auto' rejection."
       (should (null (if (functionp m) (funcall m) m))))))
 
 (ert-deftest decknix-agent-make-config--mode-applied-when-base-has-mode ()
-  "A provider that ships a real default mode DOES get the configured override."
+  "A provider flagged `:session-modes' DOES get the configured override,
+overriding the real default it ships."
   (let ((decknix-agent-provider-registry nil))
     (decknix-agent-register-provider 'test-mf
-      '(:make-config-fn test-modeful-make-config :label "MF" :glyph "M"))
+      '(:make-config-fn test-modeful-make-config :label "MF" :glyph "M"
+        :session-modes t))
     (let* ((cfg (decknix--agent-make-config 'test-mf '("mf") "auto"))
            (m (alist-get :default-session-mode-id cfg)))
       (should (equal "auto" (if (functionp m) (funcall m) m))))))

@@ -2829,6 +2829,14 @@ in
             :label "Claude"
             :glyph "C"
             :supports-workspace-root nil
+            ;; Claude Code is the one provider that uses Claude-style
+            ;; session/permission modes (default/acceptEdits/auto/...).  This
+            ;; flag is what makes `decknix--agent-make-config' bake the
+            ;; requested mode (the `new-session' purpose default is "auto")
+            ;; into the session, so a new/resumed Claude session opens in
+            ;; "auto" instead of the ACP "default" (which prompts on every
+            ;; tool call).  Mode-less providers (auggie/gemini/pi) omit it.
+            :session-modes t
             ;; No `:resume-cli-flag': `claude-agent-acp' is a pure ACP
             ;; server and ignores `--resume' in argv.  Resume is driven
             ;; over the wire via ACP `session/resume' -- the bridge
