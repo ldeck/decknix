@@ -48,16 +48,26 @@
 ;; warning-clean.  Resolved at runtime in the daemon's load-path.
 (defvar shell-maker--busy)
 
-(defun decknix--compose-wait-decision (busy-p elapsed budget)
+(defun decknix--compose-wait-decision (busy-p elapsed budget &optional min-settle)
   "Return the next action for the wait-not-busy poller.
 
 BUSY-P is the caller-evaluated `shell-maker--busy' state of the
 target buffer.  ELAPSED is the seconds since the wait started.
-BUDGET is the timeout ceiling in seconds.
+BUDGET is the timeout ceiling in seconds.  MIN-SETTLE (default 0)
+is a floor: after an interrupt we must give the agent a real gap
+to process the ACP cancel before the new prompt is sent.
+
+This matters because `agent-shell-interrupt' clears
+`shell-maker--busy' SYNCHRONOUSLY (via `shell-maker-interrupt'),
+so a plain not-busy check fires on the very first poll — sending
+the new prompt in the same instant as the cancel, which the agent
+can conflate (the message appears to be posted, THEN interrupted).
+The MIN-SETTLE floor holds the submit for a beat so the cancel
+lands first.
 
 Result:
-  `fire'      -- ready: busy cleared, or budget reached
-  `continue'  -- still busy and within budget; poll again
+  `fire'      -- ready: budget reached, or (not busy AND settled)
+  `continue'  -- still busy, or not yet settled; poll again
 
 The caller is responsible for the side-effects (cancelling the
 timer, invoking the callback, scheduling the next tick).  This
@@ -65,36 +75,48 @@ function never touches a timer, buffer, or process.
 
 Decision table:
 
-  busy-p | elapsed >= budget | result
-  -------+-------------------+----------
-  nil    |        *          | fire
-  t      |        nil        | continue
-  t      |        t          | fire"
+  elapsed >= budget | busy-p | elapsed >= min-settle | result
+  ------------------+--------+-----------------------+----------
+        t           |   *    |          *            | fire
+        nil         |  nil   |          t            | fire
+        nil         |  nil   |         nil           | continue
+        nil         |   t    |          *            | continue"
   (cond
-   ((not busy-p)        'fire)
-   ((>= elapsed budget) 'fire)
-   (t                   'continue)))
+   ((>= elapsed budget)                          'fire)
+   ((and (not busy-p) (>= elapsed (or min-settle 0))) 'fire)
+   (t                                            'continue)))
+
+(defvar decknix-compose-interrupt-settle 0.6
+  "Seconds to hold a post-interrupt submit after the agent reports idle.
+`agent-shell-interrupt' clears `shell-maker--busy' synchronously, so without a
+floor the new prompt is sent in the same instant as the ACP cancel and the
+agent can action it before the interrupt lands.  This gap lets the cancel be
+processed first, so the sequence is interrupt-then-submit.  The 2 s wait budget
+still caps the total delay.")
 
 (defun decknix--compose-wait-not-busy (target on-ready
-                                              &optional timeout interval)
+                                              &optional timeout interval min-settle)
   "Poll TARGET's `shell-maker--busy' flag, then call ON-READY.
 
 TARGET is the agent-shell buffer (or buffer-name) whose busy
 flag drives the wait.  ON-READY is a zero-arg function called
-exactly once -- either when busy clears (the agent has
-acknowledged the prior interrupt) or after TIMEOUT seconds have
-elapsed (a safety net for a wedged process).  TIMEOUT defaults
-to 2.0; INTERVAL (the poll cadence) defaults to 0.05.
+exactly once -- either when busy clears AND MIN-SETTLE seconds
+have elapsed (so the agent has processed the prior interrupt) or
+after TIMEOUT seconds (a safety net for a wedged process).
+TIMEOUT defaults to 2.0; INTERVAL (the poll cadence) defaults to
+0.05; MIN-SETTLE defaults to `decknix-compose-interrupt-settle'.
 
 Returns the active timer object.  Callers usually discard it --
 the helper self-cancels on fire.
 
 This replaces the fixed `sit-for 0.3' / `run-at-time 0.3' dance
-in the three compose / review interrupt-then-submit flows so the
-new prompt is guaranteed to be ordered AFTER the agent's
-\"[interrupted]\" marker in the buffer."
+in the three compose / review interrupt-then-submit flows.  The
+settle floor is essential: `shell-maker-interrupt' clears
+`shell-maker--busy' synchronously, so a plain not-busy check
+would fire immediately and race the cancel."
   (let* ((budget (or timeout 2.0))
          (step   (or interval 0.05))
+         (settle (or min-settle decknix-compose-interrupt-settle))
          (start  (float-time))
          (called nil)
          (timer  nil))
@@ -105,7 +127,7 @@ new prompt is guaranteed to be ordered AFTER the agent's
                                (bound-and-true-p shell-maker--busy))))
                   (elapsed (- (float-time) start))
                   (decision (decknix--compose-wait-decision
-                             busy elapsed budget)))
+                             busy elapsed budget settle)))
              (pcase decision
                ('fire
                 (unless called
