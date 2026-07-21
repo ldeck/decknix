@@ -50,6 +50,34 @@
 (declare-function decknix-agent-provider-glyph-for-session
                   "decknix-agent-provider" (session))
 
+(defun decknix--agent-conv-preview-text (first-message)
+  "Return a human-scannable one-line preview for FIRST-MESSAGE.
+
+Claude records an invoked slash command as a wrapper block whose first
+line is the opaque `<command-message>NAME</command-message>' —
+identical across every invocation of the same command, so a list of
+review sessions collapses to indistinguishable rows.  When
+FIRST-MESSAGE is such a wrapper, surface the command plus its target
+instead: a GitHub PR URL argument renders as `/NAME repo#number', any
+other argument as `/NAME arg', and an argless command as `/NAME'.
+Non-wrapper messages return their first non-blank line unchanged."
+  (if (and first-message
+           (string-match "<command-name>\\([^<]*\\)</command-name>"
+                         first-message))
+      (let ((name (string-trim (match-string 1 first-message)))
+            (args (when (string-match
+                         "<command-args>\\([^<]*\\)</command-args>"
+                         first-message)
+                    (string-trim (match-string 1 first-message)))))
+        (cond
+         ((and args (string-match
+                     "github\\.com/[^/]+/\\([^/]+\\)/pull/\\([0-9]+\\)" args))
+          (format "%s %s#%s" name (match-string 1 args) (match-string 2 args)))
+         ((and args (not (string-empty-p args)))
+          (format "%s %s" name args))
+         (t name)))
+    (car (split-string (or first-message "") "\n" t))))
+
 (defun decknix--agent-conversation-preview (conv-group)
   "Format a one-line preview for a conversation CONV-GROUP.
 CONV-GROUP is (CONV-KEY LATEST-SESSION ALL-SESSIONS).
@@ -63,7 +91,7 @@ Shows: glyph id  age  exchanges  preview [tags] (N sessions) @workspace"
          (modified (alist-get 'modified latest))
          (exchanges (alist-get 'exchangeCount latest 0))
          (first-msg (alist-get 'firstUserMessage latest ""))
-         (preview (car (split-string first-msg "\n" t)))
+         (preview (decknix--agent-conv-preview-text first-msg))
          (tags (decknix--agent-tags-for-conv-key conv-key))
          (tag-str (if tags (format " [%s]" (string-join tags ", ")) ""))
          (count-str (if (> session-count 1)

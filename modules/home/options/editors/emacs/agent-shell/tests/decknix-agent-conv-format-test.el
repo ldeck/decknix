@@ -154,5 +154,48 @@ the abbreviated path (so `~/Code/decknix' becomes ` @decknix')."
       (let ((line (decknix--agent-conversation-preview g)))
         (should (string-match-p " @/" line))))))
 
+;; -- preview-text (slash-command wrappers) -------------------------
+
+(ert-deftest decknix-agent-conv-format/preview-text-pr-url ()
+  "A command wrapper with a PR URL renders as `/NAME repo#number'."
+  (should (equal
+           (decknix--agent-conv-preview-text
+            (concat "<command-message>review-service-pr</command-message>\n"
+                    "<command-name>/review-service-pr</command-name>\n"
+                    "<command-args>https://github.com/UpsideRealty/"
+                    "listing-performance-service/pull/1311</command-args>"))
+           "/review-service-pr listing-performance-service#1311")))
+
+(ert-deftest decknix-agent-conv-format/preview-text-non-url-arg ()
+  "A command wrapper with a non-URL arg renders as `/NAME arg'."
+  (should (equal
+           (decknix--agent-conv-preview-text
+            (concat "<command-name>/ship</command-name>"
+                    "<command-args>42</command-args>"))
+           "/ship 42")))
+
+(ert-deftest decknix-agent-conv-format/preview-text-argless ()
+  "An argless command wrapper renders as just `/NAME'."
+  (should (equal (decknix--agent-conv-preview-text
+                  "<command-name>/status</command-name>")
+                 "/status")))
+
+(ert-deftest decknix-agent-conv-format/preview-text-plain-first-line ()
+  "A plain message returns its first non-blank line unchanged."
+  (should (equal (decknix--agent-conv-preview-text "hello there\nsecond line")
+                 "hello there")))
+
+(ert-deftest decknix-agent-conv-format/preview-surfaces-pr-in-full-line ()
+  "The composed preview line surfaces the PR, not the opaque wrapper."
+  (let* ((g (decknix-agent-conv-format-test--group
+             (decknix-agent-conv-format-test--session
+              nil
+              (concat "<command-name>/review-bot-pr</command-name>"
+                      "<command-args>https://github.com/o/beholder/pull/9"
+                      "</command-args>")))))
+    (let ((line (decknix--agent-conversation-preview g)))
+      (should (string-match-p "/review-bot-pr beholder#9" line))
+      (should-not (string-match-p "command-message" line)))))
+
 (provide 'decknix-agent-conv-format-test)
 ;;; decknix-agent-conv-format-test.el ends here

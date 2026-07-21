@@ -113,19 +113,57 @@ write-side keys that the read side could never resolve, leaving
 their tags / workspace / linked-PR metadata orphaned in
 `agent-sessions.json'.")
 
+(defun decknix--agent-canonicalize-command-message (first-message)
+  "Return the conversation-keying canonical form of FIRST-MESSAGE.
+
+When a slash command is invoked, Claude records the first user turn
+as a wrapper block rather than the literal command, e.g.
+
+  <command-message>review-bot-pr</command-message>
+  <command-name>/review-bot-pr</command-name>
+  <command-args>https://github.com/o/r/pull/1</command-args>
+
+but the quickaction launchers store the session's metadata under the
+literal command string they auto-send (\"/review-bot-pr <url>\", from
+`(format \"%s %s\" command url)').  Hashing the wrapper verbatim thus
+produced a read-side key the write side never used, orphaning the
+session's tags / workspace in `agent-sessions.json' and leaving the
+picker with only the identical `<command-message>…>' first line to
+show.
+
+When FIRST-MESSAGE is such a wrapper, collapse it to
+\"<command-name> <command-args>\" so both sides hash the same
+canonical form.  A wrapper with no args collapses to just the name.
+Non-wrapper messages are returned unchanged."
+  (if (and first-message
+           (string-match "<command-name>\\([^<]*\\)</command-name>"
+                         first-message))
+      (let ((name (string-trim (match-string 1 first-message)))
+            (args (when (string-match
+                         "<command-args>\\([^<]*\\)</command-args>"
+                         first-message)
+                    (string-trim (match-string 1 first-message)))))
+        (if (and args (not (string-empty-p args)))
+            (concat name " " args)
+          name))
+    first-message))
+
 (defun decknix--agent-conversation-key-raw (first-message)
   "Derive the raw conversation key from FIRST-MESSAGE.
-Truncates FIRST-MESSAGE to the first
-`decknix--agent-conv-key-canonical-length' characters and returns
-SHA-256 of that prefix, itself truncated to 16 hex chars.  Does NOT
-resolve merges — use `decknix--agent-conversation-key' for the
-canonical key."
+Canonicalises slash-command wrapper messages (see
+`decknix--agent-canonicalize-command-message'), truncates the result
+to the first `decknix--agent-conv-key-canonical-length' characters,
+and returns SHA-256 of that prefix, itself truncated to 16 hex chars.
+Does NOT resolve merges — use `decknix--agent-conversation-key' for
+the canonical key."
   (when (and first-message (not (string-empty-p first-message)))
-    (let* ((len (length first-message))
+    (let* ((normalized (decknix--agent-canonicalize-command-message
+                        first-message))
+           (len (length normalized))
            (canonical (if (> len decknix--agent-conv-key-canonical-length)
-                          (substring first-message 0
+                          (substring normalized 0
                                      decknix--agent-conv-key-canonical-length)
-                        first-message)))
+                        normalized)))
       (substring (secure-hash 'sha256 canonical) 0 16))))
 
 (provide 'decknix-agent-parse)

@@ -139,6 +139,89 @@ submission."
                      #'decknix--agent-flush-pending-metadata
                      t)))))
 
+;; -- Backfill: retro-tag review sessions + migrate legacy tags -----
+
+(declare-function decknix--agent-canonicalize-command-message
+                  "decknix-agent-parse" (first-message))
+(declare-function decknix--agent-conversation-key-raw
+                  "decknix-agent-parse" (first-message))
+(declare-function decknix--agent-parse-pr-url "decknix-agent-url-parse" (url))
+(declare-function decknix--agent-session-list-all "decknix-agent-session-cache" ())
+(defvar decknix--agent-tags-file)
+
+(defun decknix--agent-tags-backfill-review-tags (first-message)
+  "Return review tags for FIRST-MESSAGE, or nil when it is not a review.
+Recognises a `/review-service-pr' or `/review-bot-pr' invocation — in
+either the literal or the Claude command-wrapper form — whose argument
+is a GitHub PR URL, and returns (\"review\" REPO \"#<number>\")."
+  (let ((canon (and first-message
+                    (decknix--agent-canonicalize-command-message first-message))))
+    (when (and canon
+               (string-match
+                "\\`/review-\\(?:service\\|bot\\)-pr[ \t]+\\(https?://[^ \t\n]+\\)"
+                canon))
+      (when-let* ((parsed (decknix--agent-parse-pr-url (match-string 1 canon))))
+        (list "review"
+              (alist-get 'repo parsed)
+              (concat "#" (alist-get 'number parsed)))))))
+
+(defun decknix--agent-tags-backfill-plan ()
+  "Compute the backfill plan without mutating anything.
+Returns a list of (CONV-KEY . TAGS) for review sessions whose store
+entry is missing the `review' tag, driven off the saved-session
+transcripts."
+  (let* ((store (decknix--agent-tags-read))
+         (convs (and store (decknix--agent-tags-conversations store)))
+         (reviews nil))
+    (dolist (session (ignore-errors (decknix--agent-session-list-all)))
+      (let* ((fm (alist-get 'firstUserMessage session))
+             (tags (decknix--agent-tags-backfill-review-tags fm)))
+        (when tags
+          (let* ((key (decknix--agent-conversation-key-raw fm))
+                 (entry (and convs (gethash key convs)))
+                 (have (and entry (gethash "tags" entry))))
+            (unless (member "review" have)
+              (cl-pushnew (cons key tags) reviews
+                          :test (lambda (a b) (equal (car a) (car b)))))))))
+    (nreverse reviews)))
+
+(defun decknix-agent-tags-backfill-reviews (&optional apply)
+  "Retro-tag review sessions and migrate legacy `#<n>' tags.
+
+Without a prefix arg this is a DRY RUN: it prints the plan to a
+*tags-backfill* buffer and writes nothing.  With a prefix arg
+(\\[universal-argument]) it backs up `agent-sessions.json' and applies
+the plan.
+
+Complements the launch-time tagging: reviews started by typing
+`/review-service-pr <url>' into a plain session are never seen by a
+launcher, so they carry no tags; this scans the saved transcripts and
+writes them under the same `#<n>' scheme the launchers use."
+  (interactive "P")
+  (let ((reviews (decknix--agent-tags-backfill-plan)))
+    (with-current-buffer (get-buffer-create "*tags-backfill*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "Tags backfill — %s\n\n"
+                        (if apply "APPLY" "DRY RUN (prefix arg to apply)")))
+        (insert (format "Review sessions to tag: %d\n" (length reviews)))
+        (dolist (r reviews)
+          (insert (format "  %s  <- %s\n" (car r)
+                          (mapconcat #'identity (cdr r) " "))))
+        (goto-char (point-min)))
+      (display-buffer (current-buffer)))
+    (when apply
+      (when (file-exists-p decknix--agent-tags-file)
+        (copy-file decknix--agent-tags-file
+                   (concat decknix--agent-tags-file
+                           (format-time-string ".bak-backfill-%Y%m%d%H%M%S"))
+                   t))
+      ;; Review tags: idempotent adds (cl-pushnew inside the store writer).
+      (dolist (r reviews)
+        (decknix--agent-store-metadata-by-conv-key (car r) (cdr r) nil))
+      (message "Backfill applied: %d review session(s) tagged"
+               (length reviews)))))
+
 (provide 'decknix-agent-tags-mutate)
 
 ;;; decknix-agent-tags-mutate.el ends here

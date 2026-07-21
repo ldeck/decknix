@@ -139,6 +139,38 @@ restore time -- previously this no-opped and the session was orphaned."
           (should (equal (gethash "tags" entry) '("rev")))
           (should (string= (gethash "workspace" entry) "/ws")))))))
 
+;; -- backfill pure helpers -----------------------------------------
+
+;; Prefer the real deps when on the load path; fall back to faithful
+;; stubs so the suite is self-contained in the package test harness.
+(require 'decknix-agent-parse nil t)
+(require 'decknix-agent-url-parse nil t)
+(unless (fboundp 'decknix--agent-canonicalize-command-message)
+  (defun decknix--agent-canonicalize-command-message (m) m))
+(unless (fboundp 'decknix--agent-parse-pr-url)
+  (defun decknix--agent-parse-pr-url (url)
+    (when (string-match "github\\.com/[^/]+/\\([^/]+\\)/pull/\\([0-9]+\\)" url)
+      (list (cons 'repo (match-string 1 url))
+            (cons 'number (match-string 2 url))))))
+
+(ert-deftest decknix-agent-tags-backfill-review-tags--literal ()
+  "A literal review command yields (review REPO #<n>)."
+  (should (equal (decknix--agent-tags-backfill-review-tags
+                  "/review-service-pr https://github.com/o/svc/pull/1311")
+                 '("review" "svc" "#1311"))))
+
+(ert-deftest decknix-agent-tags-backfill-review-tags--bot-variant ()
+  "The bot-review command is also recognised."
+  (should (equal (decknix--agent-tags-backfill-review-tags
+                  "/review-bot-pr https://github.com/o/beholder/pull/9")
+                 '("review" "beholder" "#9"))))
+
+(ert-deftest decknix-agent-tags-backfill-review-tags--non-review-nil ()
+  "Non-review messages return nil."
+  (should-not (decknix--agent-tags-backfill-review-tags "/ship 42"))
+  (should-not (decknix--agent-tags-backfill-review-tags "just a chat message"))
+  (should-not (decknix--agent-tags-backfill-review-tags nil)))
+
 (provide 'decknix-agent-tags-mutate-test)
 
 ;;; decknix-agent-tags-mutate-test.el ends here
