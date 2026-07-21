@@ -430,29 +430,43 @@ never re-hits Jira."
          (inhibit-read-only t)
          (pos (point)))
     (erase-buffer)
-    (insert (decknix--support-dashboard-render-full
-             issues decknix--support-dashboard-issues-err
-             decknix--support-dashboard-alerts
-             decknix--support-dashboard-alerts-err
-             decknix--support-dashboard-updated))
-    (when filter
-      (insert (format "\n[filtered: status = %s — press / to clear]\n" filter)))
+    (if (and (null decknix--support-dashboard-updated)
+             (null decknix--support-dashboard-issues)
+             (null decknix--support-dashboard-issues-err))
+        ;; Never fetched yet — show a loading frame so the buffer is never
+        ;; blank while the first async fetch is in flight.
+        (insert "NurtureCloud Support — DoS Board\n"
+                (make-string 64 ?-) "\n\n"
+                "  Loading DoS board + alerts…   (g to refresh)\n")
+      (insert (decknix--support-dashboard-render-full
+               issues decknix--support-dashboard-issues-err
+               decknix--support-dashboard-alerts
+               decknix--support-dashboard-alerts-err
+               decknix--support-dashboard-updated))
+      (when filter
+        (insert (format "\n[filtered: status = %s — press / to clear]\n" filter))))
     (goto-char (min pos (point-max)))))
 
 (defun decknix-support-dashboard-refresh ()
   "Refresh the dashboard from the DoS board and the alert feed (async).
-Fetches issues, then alerts, caches both, then redraws; neither fetch blocks."
+Renders the DoS board as soon as it arrives, then fills in the alert feed when
+it arrives — a slow or empty alert source can never blank/withhold the board.
+Neither fetch blocks the UI."
   (interactive)
   (let ((target (get-buffer-create decknix-support-dashboard-buffer-name)))
     (decknix--support-dashboard-fetch
      (lambda (issues issues-err)
+       (when (buffer-live-p target)
+         (with-current-buffer target
+           (setq decknix--support-dashboard-issues issues
+                 decknix--support-dashboard-issues-err issues-err
+                 decknix--support-dashboard-updated (format-time-string "%H:%M:%S"))
+           (decknix--support-dashboard-redraw)))
        (decknix--support-dashboard-fetch-alerts
         (lambda (alerts alerts-err)
           (when (buffer-live-p target)
             (with-current-buffer target
-              (setq decknix--support-dashboard-issues issues
-                    decknix--support-dashboard-issues-err issues-err
-                    decknix--support-dashboard-alerts alerts
+              (setq decknix--support-dashboard-alerts alerts
                     decknix--support-dashboard-alerts-err alerts-err
                     decknix--support-dashboard-updated (format-time-string "%H:%M:%S"))
               (decknix--support-dashboard-redraw)))))))))
@@ -715,7 +729,10 @@ Read-only; press `?' for the action submenu (browse/filter/assign/investigate)."
   (let ((buf (get-buffer-create decknix-support-dashboard-buffer-name)))
     (with-current-buffer buf
       (unless (derived-mode-p 'decknix-support-dashboard-mode)
-        (decknix-support-dashboard-mode)))
+        (decknix-support-dashboard-mode))
+      ;; Draw an immediate frame (cached data, or a loading line on first
+      ;; open) so the buffer is never blank while the async fetch runs.
+      (decknix--support-dashboard-redraw))
     (pop-to-buffer buf)
     (decknix-support-dashboard-refresh)))
 
