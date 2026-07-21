@@ -42,6 +42,20 @@ work you are actively on (In Progress) leads the board and the backlog trails.")
 (defvar decknix-support-dashboard-atlassian-cli "atlassian-cli"
   "The atlassian-cli executable used to fetch Jira data.")
 
+(defvar decknix-support-dashboard-known-services
+  '("Monolith" "DAPI" "Listing-Perf" "ETL Functions" "Nct Monolith Outbox"
+    "Noser" "Photo upload" "Decompressor" "Beholder")
+  "Shared service names used to derive an issue's owning service.
+DoS issues carry no structured service field, so the service is inferred by
+matching these names (case-insensitively) against the issue summary.")
+
+(defvar decknix-support-dashboard-type-abbrev
+  '(("DoS Operations" . "DoSOps")
+    ("Engineering Health" . "EngHealth")
+    ("Support Request" . "Support")
+    ("Alert Response" . "Alert"))
+  "Map of Jira issue type -> short category label shown on each row.")
+
 (defvar decknix-support-dashboard-jql
   "project = DOS AND statusCategory != Done ORDER BY status ASC, updated DESC"
   "JQL for the DoS worklist shown in the dashboard (open/in-progress issues).")
@@ -75,8 +89,10 @@ specific page.")
   "Last-fetched DoS issues, cached so status filtering redraws without re-fetch.")
 (defvar-local decknix--support-dashboard-alerts nil
   "Last-fetched alerts, cached alongside the issues.")
-(defvar-local decknix--support-dashboard-status-filter nil
-  "When non-nil, only issues whose status equals this string are shown.")
+(defvar-local decknix--support-dashboard-filters nil
+  "Active client-side filters: an alist of (DIMENSION . VALUE).
+DIMENSION is one of `status' `type' `assignee' `service'; all must match (AND).
+Filtering redraws from the cache, so it never re-hits Jira.")
 (defvar-local decknix--support-dashboard-issues-err nil)
 (defvar-local decknix--support-dashboard-alerts-err nil)
 (defvar-local decknix--support-dashboard-updated nil)
@@ -105,20 +121,74 @@ CLI hiccup degrades to an empty dashboard instead of an error."
             data))                     ; bare array (list of alists)
       (error nil))))
 
-(defun decknix--support-dashboard-format-issue (issue)
+(defun decknix--support-dashboard-type-label (type)
+  "Return the short category label for Jira issue TYPE (or TYPE itself).  Pure."
+  (or (cdr (assoc type decknix-support-dashboard-type-abbrev)) type ""))
+
+(defun decknix--support-dashboard-issue-assignee (issue)
+  "Return ISSUE's assignee, or \"unassigned\" when absent/empty.  Pure."
+  (let ((a (alist-get 'assignee issue)))
+    (if (and a (not (string-empty-p a))) a "unassigned")))
+
+(defun decknix--support-dashboard-service-for-issue (issue services)
+  "Return the first name in SERVICES that appears in ISSUE's summary, else nil.
+Match is case-insensitive on the summary text (DoS issues have no service
+field, so the owning service is inferred from the title).  Pure."
+  (let ((summary (downcase (or (alist-get 'summary issue) ""))))
+    (seq-find (lambda (s) (string-match-p (regexp-quote (downcase s)) summary))
+              services)))
+
+(defun decknix--support-dashboard-format-issue (issue &optional services)
   "Format one ISSUE alist into a fixed-width dashboard row string.
-The row carries the issue key as the `decknix-issue-key' text property so
-row-action commands (browse, assign, investigate) can target the row at point."
+Columns: key, [category], assignee, summary — with the derived owning service
+appended as `· <service>' when SERVICES matches the summary.  Status is the
+group header, so it is not repeated per row.  The row carries the issue key as
+the `decknix-issue-key' text property so row-action commands can target it."
   (let* ((key      (or (alist-get 'key issue) "?"))
-         (status   (or (alist-get 'status issue) ""))
-         (assignee (or (alist-get 'assignee issue) "unassigned"))
+         (type     (decknix--support-dashboard-type-label
+                    (alist-get 'issue_type issue)))
+         (assignee (decknix--support-dashboard-issue-assignee issue))
          (summary  (or (alist-get 'summary issue) ""))
-         (row (format "%-9s  %-13s  %-16s  %s"
+         (service  (and services
+                        (decknix--support-dashboard-service-for-issue issue services)))
+         (row (format "%-9s  %-11s  %-15s  %s%s"
                       key
-                      (format "[%s]" status)
-                      (truncate-string-to-width assignee 16)
-                      summary)))
+                      (format "[%s]" type)
+                      (truncate-string-to-width assignee 15)
+                      summary
+                      (if service (format "   · %s" service) ""))))
     (propertize row 'decknix-issue-key key)))
+
+(defun decknix--support-dashboard-filter-match-p (issue filters services)
+  "Return non-nil when ISSUE satisfies every active filter in FILTERS.
+FILTERS is an alist of (DIMENSION . VALUE) where DIMENSION is one of
+`status', `type', `assignee', `service'; all active dimensions must match (AND).
+SERVICES is the known-service list used to derive an issue's service.  Pure."
+  (seq-every-p
+   (lambda (f)
+     (pcase (car f)
+       ('status   (equal (cdr f) (alist-get 'status issue)))
+       ('type     (equal (cdr f) (alist-get 'issue_type issue)))
+       ('assignee (equal (cdr f) (decknix--support-dashboard-issue-assignee issue)))
+       ('service  (equal (cdr f)
+                         (decknix--support-dashboard-service-for-issue issue services)))
+       (_ t)))
+   filters))
+
+(defun decknix--support-dashboard-distinct (issues dimension services)
+  "Return the sorted distinct values of DIMENSION across ISSUES.
+DIMENSION is one of `status' `type' `assignee' `service'; SERVICES derives an
+issue's service.  Used to populate the filter picker.  Pure."
+  (let ((vals (delq nil
+                    (mapcar
+                     (lambda (i)
+                       (pcase dimension
+                         ('status   (alist-get 'status i))
+                         ('type     (alist-get 'issue_type i))
+                         ('assignee (decknix--support-dashboard-issue-assignee i))
+                         ('service  (decknix--support-dashboard-service-for-issue i services))))
+                     issues))))
+    (sort (delete-dups vals) #'string<)))
 
 (defun decknix--support-dashboard-alert-prompt (key summary command browse-url)
   "Build the alert-investigation prompt for issue KEY (SUMMARY).
@@ -159,9 +229,10 @@ alphabetically; issues within a group keep their input order.  Pure."
                     (ib nil)
                     (t (string< (car a) (car b)))))))))
 
-(defun decknix--support-dashboard-render (issues &optional timestamp)
+(defun decknix--support-dashboard-render (issues &optional timestamp services)
   "Render ISSUES (a list of issue alists) into the dashboard's buffer text.
-Issues are grouped by status (In Progress first) with a per-group count header.
+Issues are grouped by status (In Progress first) with a per-group count header;
+each row shows the category and (when SERVICES matches) the owning service.
 TIMESTAMP is an optional display string appended to the footer; when nil it is
 omitted, which keeps this function pure for tests."
   (concat
@@ -172,7 +243,8 @@ omitted, which keeps this function pure for tests."
      (mapconcat
       (lambda (group)
         (concat (format "\n%s (%d)\n" (car group) (length (cdr group)))
-                (mapconcat #'decknix--support-dashboard-format-issue
+                (mapconcat (lambda (i)
+                             (decknix--support-dashboard-format-issue i services))
                            (cdr group) "\n")
                 "\n"))
       (decknix--support-dashboard-group-by-status issues)
@@ -264,15 +336,16 @@ Drops the leading `OK ...: header' line; each alert carries `text', `time',
                     "\n"))))
 
 (defun decknix--support-dashboard-render-full (issues issues-err alerts alerts-err
-                                                      &optional timestamp)
+                                                      &optional timestamp services)
   "Compose the full dashboard text: DoS section, alert section, timestamp.
 Reuses `decknix--support-dashboard-render' for the DoS part (no refactor).
+SERVICES is threaded to the DoS renderer to show each issue's owning service.
 ISSUES-ERR / ALERTS-ERR render an error line for their section instead."
   (concat
    (if issues-err
        (format "NurtureCloud Support — DoS Board\n%s\nError: %s\n"
                (make-string 64 ?-) issues-err)
-     (decknix--support-dashboard-render issues nil))
+     (decknix--support-dashboard-render issues nil services))
    (cond
     ((eq alerts-err 'unconfigured)
      (concat "\nAlerts — #nurturecloud-doit-collab\n" (make-string 64 ?-)
@@ -442,14 +515,16 @@ is nil, or an error string on failure.  Never blocks the UI."
                             "alert feed timed out (Slack MCP down?)"))))))))))
 
 (defun decknix--support-dashboard-redraw ()
-  "Re-render the dashboard buffer from cached data, applying the status filter.
+  "Re-render the dashboard buffer from cached data, applying active filters.
 Assumes `current-buffer' is the dashboard buffer.  Client-side, so filtering
 never re-hits Jira."
-  (let* ((filter decknix--support-dashboard-status-filter)
-         (issues (if filter
-                     (seq-filter (lambda (i)
-                                   (equal filter (alist-get 'status i)))
-                                 decknix--support-dashboard-issues)
+  (let* ((filters decknix--support-dashboard-filters)
+         (services decknix-support-dashboard-known-services)
+         (issues (if filters
+                     (seq-filter
+                      (lambda (i)
+                        (decknix--support-dashboard-filter-match-p i filters services))
+                      decknix--support-dashboard-issues)
                    decknix--support-dashboard-issues))
          (inhibit-read-only t)
          (pos (point)))
@@ -466,9 +541,12 @@ never re-hits Jira."
                issues decknix--support-dashboard-issues-err
                decknix--support-dashboard-alerts
                decknix--support-dashboard-alerts-err
-               decknix--support-dashboard-updated))
-      (when filter
-        (insert (format "\n[filtered: status = %s — press / to clear]\n" filter))))
+               decknix--support-dashboard-updated services))
+      (when filters
+        (insert (format "\n[filtered: %s — / add · \\ clear · %d shown]\n"
+                        (mapconcat (lambda (f) (format "%s=%s" (car f) (cdr f)))
+                                   filters ", ")
+                        (length issues)))))
     (goto-char (min pos (point-max)))))
 
 (defun decknix-support-dashboard-refresh ()
@@ -530,21 +608,43 @@ Cheap when hidden (a single window lookup), so it is safe to run on a timer."
                         (string-trim-right decknix-support-dashboard-jira-base-url "/")
                         key))))
 
-(defun decknix-support-dashboard-filter-status ()
-  "Filter the DoS list by status (client-side); clear it if already filtered."
+(defconst decknix--support-dashboard-filter-dimensions
+  '(("status"   . status)
+    ("category" . type)
+    ("user"     . assignee)
+    ("service"  . service))
+  "Filter picker labels -> dimension symbol.")
+
+(defun decknix-support-dashboard-filter ()
+  "Add a client-side filter: pick a dimension (status/category/user/service),
+then a value.  Filters combine (AND) and stack across dimensions; re-picking a
+dimension replaces its value.  Press \\ to clear.  Never re-hits Jira."
   (interactive)
-  (if decknix--support-dashboard-status-filter
-      (progn (setq decknix--support-dashboard-status-filter nil)
-             (decknix--support-dashboard-redraw)
-             (message "Status filter cleared"))
-    (let ((statuses (delete-dups
-                     (delq nil (mapcar (lambda (i) (alist-get 'status i))
-                                       decknix--support-dashboard-issues)))))
-      (if (null statuses)
-          (message "No issues to filter")
-        (setq decknix--support-dashboard-status-filter
-              (completing-read "Filter status: " statuses nil t))
-        (decknix--support-dashboard-redraw)))))
+  (unless decknix--support-dashboard-issues
+    (user-error "No issues to filter"))
+  (let* ((dim-label (completing-read
+                     "Filter by: "
+                     (mapcar #'car decknix--support-dashboard-filter-dimensions)
+                     nil t))
+         (dim (cdr (assoc dim-label decknix--support-dashboard-filter-dimensions)))
+         (values (decknix--support-dashboard-distinct
+                  decknix--support-dashboard-issues dim
+                  decknix-support-dashboard-known-services)))
+    (if (null values)
+        (message "No %s values to filter on" dim-label)
+      (let ((val (completing-read (format "%s = " dim-label) values nil t)))
+        (setf (alist-get dim decknix--support-dashboard-filters nil nil #'eq) val)
+        (decknix--support-dashboard-redraw)
+        (message "Filter: %s = %s  (\\ to clear)" dim-label val)))))
+
+(defun decknix-support-dashboard-filter-clear ()
+  "Clear all active client-side filters."
+  (interactive)
+  (if (null decknix--support-dashboard-filters)
+      (message "No filters active")
+    (setq decknix--support-dashboard-filters nil)
+    (decknix--support-dashboard-redraw)
+    (message "Filters cleared")))
 
 (defun decknix-support-dashboard-assign ()
   "Assign the DoS issue on the current row to someone via atlassian-cli (async)."
@@ -710,7 +810,8 @@ to Confluence.  Paste it into the weekly report (`r' opens it) after editing."
    ("i" "Investigate with agent" decknix-support-dashboard-investigate)
    ("A" "Investigate as alert"   decknix-support-dashboard-investigate-alert)]
   ["List"
-   ("/" "Filter by status"       decknix-support-dashboard-filter-status)
+   ("/" "Filter (status/category/user/service)" decknix-support-dashboard-filter)
+   ("\\" "Clear filters"         decknix-support-dashboard-filter-clear)
    ("g" "Refresh"                decknix-support-dashboard-refresh)]
   ["Weekly report"
    ("r" "Open weekly report"     decknix-support-dashboard-open-report)
@@ -723,7 +824,8 @@ to Confluence.  Paste it into the weekly report (`r' opens it) after editing."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "b")   #'decknix-support-dashboard-browse)
     (define-key map (kbd "RET") #'decknix-support-dashboard-browse)
-    (define-key map (kbd "/")   #'decknix-support-dashboard-filter-status)
+    (define-key map (kbd "/")   #'decknix-support-dashboard-filter)
+    (define-key map (kbd "\\")  #'decknix-support-dashboard-filter-clear)
     (define-key map (kbd "a")   #'decknix-support-dashboard-assign)
     (define-key map (kbd "i")   #'decknix-support-dashboard-investigate)
     (define-key map (kbd "A")   #'decknix-support-dashboard-investigate-alert)
@@ -738,8 +840,9 @@ to Confluence.  Paste it into the weekly report (`r' opens it) after editing."
 
 (define-derived-mode decknix-support-dashboard-mode special-mode "Support"
   "Major mode for the live support monitoring dashboard.
-Row actions (submenu on `?'): `b' browse, `a' assign, `i' investigate;
-list actions: `/' filter by status, `g' refresh, `q' bury;
+Row actions (submenu on `?'): `b' browse, `a' assign, `i' investigate,
+`A' investigate-as-alert; list actions: `/' filter (status / category /
+user / service), `\\' clear filters, `g' refresh, `q' bury;
 weekly report: `r' open the current report, `R' draft today's daily log.
 \\{decknix-support-dashboard-mode-map}"
   (setq-local revert-buffer-function

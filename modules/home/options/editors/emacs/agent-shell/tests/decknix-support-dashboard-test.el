@@ -53,20 +53,84 @@
 ;; -- format-issue -------------------------------------------------------
 
 (ert-deftest decknix-support-dashboard/format-issue-has-fields ()
-  "A formatted row carries the key, bracketed status, assignee, and summary."
+  "A formatted row carries the key, bracketed CATEGORY, assignee, and summary.
+Status is the group header, so the per-row bracket shows the issue type."
   (let ((row (decknix--support-dashboard-format-issue
-              '((key . "DOS-429") (status . "In Progress")
+              '((key . "DOS-429") (status . "In Progress") (issue_type . "Bug")
                 (assignee . "Ye Wang") (summary . "Flaky test")))))
     (should (string-match-p "DOS-429" row))
-    (should (string-match-p "\\[In Progress\\]" row))
+    (should (string-match-p "\\[Bug\\]" row))
     (should (string-match-p "Ye Wang" row))
     (should (string-match-p "Flaky test" row))))
+
+(ert-deftest decknix-support-dashboard/format-issue-abbreviates-type ()
+  "Long issue types render as short category labels."
+  (should (string-match-p "\\[DoSOps\\]"
+                          (decknix--support-dashboard-format-issue
+                           '((key . "DOS-1") (issue_type . "DoS Operations")))))
+  (should (string-match-p "\\[Support\\]"
+                          (decknix--support-dashboard-format-issue
+                           '((key . "DOS-2") (issue_type . "Support Request"))))))
+
+(ert-deftest decknix-support-dashboard/format-issue-shows-service ()
+  "When SERVICES matches the summary, the owning service is appended."
+  (let ((row (decknix--support-dashboard-format-issue
+              '((key . "DOS-449") (issue_type . "Task")
+                (summary . "Replay listing-perf DLQs"))
+              '("Monolith" "Listing-Perf" "Noser"))))
+    (should (string-match-p "· Listing-Perf" row)))
+  ;; No known service in the summary -> no suffix.
+  (should-not (string-match-p "·"
+                              (decknix--support-dashboard-format-issue
+                               '((key . "DOS-9") (summary . "generic task"))
+                               '("Monolith")))))
 
 (ert-deftest decknix-support-dashboard/format-issue-defaults-unassigned ()
   "A missing assignee renders as `unassigned', missing fields don't error."
   (let ((row (decknix--support-dashboard-format-issue
               '((key . "DOS-9") (status . "To Do") (summary . "x")))))
     (should (string-match-p "unassigned" row))))
+
+;; -- multi-dimension filter (pure) --------------------------------------
+
+(ert-deftest decknix-support-dashboard/service-for-issue-matches-summary ()
+  "Service is derived case-insensitively from the summary; nil when none match."
+  (let ((svcs '("Monolith" "Listing-Perf" "DAPI")))
+    (should (equal "Listing-Perf"
+                   (decknix--support-dashboard-service-for-issue
+                    '((summary . "replay LISTING-PERF dlqs")) svcs)))
+    (should (null (decknix--support-dashboard-service-for-issue
+                   '((summary . "unrelated work")) svcs)))))
+
+(ert-deftest decknix-support-dashboard/filter-match-p-ands-dimensions ()
+  "An issue must satisfy EVERY active (dimension . value) filter."
+  (let ((issue '((status . "In Progress") (issue_type . "Bug")
+                 (assignee . "Ye Wang") (summary . "monolith crash")))
+        (svcs '("Monolith")))
+    (should (decknix--support-dashboard-filter-match-p
+             issue '((status . "In Progress") (type . "Bug")) svcs))
+    (should (decknix--support-dashboard-filter-match-p
+             issue '((assignee . "Ye Wang") (service . "Monolith")) svcs))
+    ;; One mismatching dimension fails the whole predicate.
+    (should-not (decknix--support-dashboard-filter-match-p
+                 issue '((status . "In Progress") (type . "Task")) svcs))
+    ;; Empty filters match everything.
+    (should (decknix--support-dashboard-filter-match-p issue nil svcs))))
+
+(ert-deftest decknix-support-dashboard/filter-match-p-unassigned ()
+  "The `assignee' dimension treats a missing/empty assignee as \"unassigned\"."
+  (should (decknix--support-dashboard-filter-match-p
+           '((summary . "x")) '((assignee . "unassigned")) nil))
+  (should (decknix--support-dashboard-filter-match-p
+           '((assignee . "") (summary . "x")) '((assignee . "unassigned")) nil)))
+
+(ert-deftest decknix-support-dashboard/distinct-values-per-dimension ()
+  "Distinct returns sorted unique values for a dimension across issues."
+  (let ((issues '(((issue_type . "Bug")) ((issue_type . "Task"))
+                  ((issue_type . "Bug"))))
+        )
+    (should (equal '("Bug" "Task")
+                   (decknix--support-dashboard-distinct issues 'type nil)))))
 
 ;; -- render -------------------------------------------------------------
 
