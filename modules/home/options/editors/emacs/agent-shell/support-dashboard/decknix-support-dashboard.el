@@ -194,6 +194,11 @@ omitted, which keeps this function pure for tests."
 ;; Left nil in decknix (generic); a workspace sets it — see the module's
 ;; `decknix-support-dashboard-alert-command'.
 
+(defvar decknix-support-dashboard-alert-timeout 12
+  "Seconds before the alert fetch is killed and reported as timed out.
+Guards against a hung alert source (e.g. a down Slack MCP server) leaking a
+blocked process on every auto-refresh.")
+
 (defvar decknix-support-dashboard-alert-command nil
   "Command (list of program + args) whose stdout is the Slack alert CSV.
 When nil the alert feed is disabled and shown as not-configured — decknix stays
@@ -398,24 +403,43 @@ is nil, or an error string on failure.  Never blocks the UI."
      ((not (executable-find (car cmd)))
       (funcall callback nil (format "%s not found" (car cmd))))
      (t
-      (let ((buf (generate-new-buffer " *decknix-support-alerts*")))
-        (make-process
-         :name "decknix-support-alerts"
-         :buffer buf
-         :noquery t
-         :connection-type 'pipe
-         :command cmd
-         :sentinel
-         (lambda (proc _event)
-           (when (memq (process-status proc) '(exit signal))
-             (let* ((out (and (buffer-live-p buf)
-                              (with-current-buffer buf (buffer-string))))
-                    (ok (and (eq (process-status proc) 'exit)
-                             (= 0 (process-exit-status proc)))))
-               (when (buffer-live-p buf) (kill-buffer buf))
-               (funcall callback
-                        (and ok (decknix--support-dashboard-parse-alerts out))
-                        (unless ok (string-trim (or out "alert fetch failed")))))))))))))
+      (let ((buf (generate-new-buffer " *decknix-support-alerts*"))
+            (done nil)
+            (timer nil)
+            (proc nil))
+        (setq proc
+              (make-process
+               :name "decknix-support-alerts"
+               :buffer buf
+               :noquery t
+               :connection-type 'pipe
+               :command cmd
+               :sentinel
+               (lambda (p _event)
+                 (when (and (not done) (memq (process-status p) '(exit signal)))
+                   (setq done t)
+                   (when (timerp timer) (cancel-timer timer))
+                   (let* ((out (and (buffer-live-p buf)
+                                    (with-current-buffer buf (buffer-string))))
+                          (ok (and (eq (process-status p) 'exit)
+                                   (= 0 (process-exit-status p)))))
+                     (when (buffer-live-p buf) (kill-buffer buf))
+                     (funcall callback
+                              (and ok (decknix--support-dashboard-parse-alerts out))
+                              (unless ok
+                                (string-trim (or out "alert fetch failed")))))))))
+        ;; Kill a hung fetch so a down alert source can't leak a blocked
+        ;; process on every refresh; report it instead of stalling the feed.
+        (setq timer
+              (run-with-timer
+               decknix-support-dashboard-alert-timeout nil
+               (lambda ()
+                 (unless done
+                   (setq done t)
+                   (when (process-live-p proc) (delete-process proc))
+                   (when (buffer-live-p buf) (kill-buffer buf))
+                   (funcall callback nil
+                            "alert feed timed out (Slack MCP down?)"))))))))))
 
 (defun decknix--support-dashboard-redraw ()
   "Re-render the dashboard buffer from cached data, applying the status filter.
