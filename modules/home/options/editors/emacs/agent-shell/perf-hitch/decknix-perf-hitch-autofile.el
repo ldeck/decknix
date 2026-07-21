@@ -51,8 +51,12 @@
   "Taskwarrior project for auto-filed perf tasks."
   :type 'string :group 'decknix-perf-hitch-autofile)
 
-(defvar decknix--perf-hitch-autofile-seen (make-hash-table :test 'equal)
-  "Labels already filed this session (in-memory dedup).")
+(defvar decknix--perf-hitch-autofile-last (make-hash-table :test 'equal)
+  "Label -> occurrence count at its last file/annotate.
+Throttles how often a still-hitching label is re-annotated within a session
+\(annotate again only after it accrues another `min-count' hits).  Lost on
+restart, which is harmless: taskwarrior itself is the persistent dedup store
+\(one task per issue tag), so a restart never re-adds a duplicate task.")
 
 (defvar decknix--perf-hitch-autofile-timer nil)
 
@@ -78,41 +82,81 @@ Excluded to avoid a feedback loop (the scan/tally themselves hitching)."
   (format "perf: %s hitch (%dx, max %dms) — investigate/optimise"
           label count max-ms))
 
+(defun decknix--perf-hitch-autofile-issue-tag (label)
+  "Return a stable taskwarrior tag identifying the hitch issue for LABEL.
+A short hash so the (possibly gibberish/bytecode) label maps to one durable
+tag — this is how the same issue is deduped across daemon restarts (query the
+tag; if a task exists, update it instead of adding a second).  Pure."
+  (concat "h" (substring (secure-hash 'md5 (or label "")) 0 10)))
+
+(defun decknix--perf-hitch-autofile-priority (max-ms)
+  "Return the taskwarrior priority (\"H\"/\"M\"/\"L\") for a MAX-MS spike.
+Severity escalates the priority so the worst blockers (multi-second freezes)
+rank highest.  Pure."
+  (cond ((>= max-ms 1500) "H")
+        ((>= max-ms 600)  "M")
+        (t                "L")))
+
 ;; -- Orchestration --------------------------------------------------
 
-(defun decknix--perf-hitch-autofile-add-task (label count max-ms)
-  "Add a taskwarrior task for a recurring hitch LABEL (async)."
-  (let ((desc (decknix--perf-hitch-autofile-task-desc label count max-ms)))
+(defun decknix--perf-hitch-autofile-upsert-task (label count max-ms)
+  "File-or-update the taskwarrior task for recurring hitch LABEL (async).
+Uses taskwarrior as the persistent store: query the issue's stable tag; if a
+pending task exists, annotate it with the fresh evidence and (re)set its
+priority by severity — so a recurring bottleneck accrues evidence and escalates
+rather than spawning duplicates.  If none exists, add it.  Survives restarts."
+  (let* ((tag  (decknix--perf-hitch-autofile-issue-tag label))
+         (prio (decknix--perf-hitch-autofile-priority max-ms))
+         (desc (decknix--perf-hitch-autofile-task-desc label count max-ms))
+         (annot (format "still hitching: %dx, max %dms" count max-ms))
+         (proj decknix-perf-hitch-autofile-project)
+         (cmd (format
+               (concat
+                "u=$(task rc.verbose=nothing rc.confirmation=off +%s status:pending _uuid 2>/dev/null | head -1); "
+                "if [ -n \"$u\" ]; then "
+                "  task rc.verbose=nothing rc.confirmation=off \"$u\" annotate %s >/dev/null 2>&1; "
+                "  task rc.verbose=nothing rc.confirmation=off \"$u\" modify priority:%s >/dev/null 2>&1; "
+                "else "
+                "  task rc.verbose=nothing rc.confirmation=off add %s project:%s +perf +autofiled +%s priority:%s >/dev/null 2>&1; "
+                "fi")
+               tag (shell-quote-argument annot) prio
+               (shell-quote-argument desc) proj tag prio)))
     (ignore-errors
       (make-process
        :name "decknix-hitch-autofile"
        :buffer nil
        :connection-type 'pipe
-       :command (list "task" "add" desc
-                      (concat "project:" decknix-perf-hitch-autofile-project)
-                      "+perf" "+autofiled")
+       :command (list "sh" "-c" cmd)
        :sentinel
        (lambda (p _e)
          (when (and (eq (process-status p) 'exit)
                     (= 0 (process-exit-status p)))
-           (message "decknix: auto-filed perf task for %s" label)))))))
+           (message "decknix: tracked perf hitch %s (%dx, max %dms, prio %s)"
+                    label count max-ms prio)))))))
 
 (defun decknix--perf-hitch-autofile-scan ()
-  "Scan the hitch tally and file any new recurring outliers."
+  "Scan the hitch tally; file new recurring outliers and update recurring ones.
+An outlier files once (deduped by its issue tag in taskwarrior, so a restart
+never duplicates it), then re-annotates + re-prioritises each time it accrues
+another `min-count' hits — so a persistent bottleneck accumulates evidence and
+climbs in priority automatically."
   (when (fboundp 'decknix--perf-hitch-tally)
     (dolist (row (decknix--perf-hitch-tally))
       (let* ((label (car row))
              (v (cdr row))
              (count (nth 0 v))
-             (max-ms (nth 2 v)))
-        (when (and (not (gethash label decknix--perf-hitch-autofile-seen))
-                   (not (decknix--perf-hitch-autofile-self-p label))
+             (max-ms (nth 2 v))
+             (last (gethash label decknix--perf-hitch-autofile-last 0)))
+        (when (and (not (decknix--perf-hitch-autofile-self-p label))
                    (decknix--perf-hitch-outlier-p
                     count max-ms
                     decknix-perf-hitch-autofile-min-count
-                    decknix-perf-hitch-autofile-min-max-ms))
-          (puthash label t decknix--perf-hitch-autofile-seen)
-          (decknix--perf-hitch-autofile-add-task label count max-ms))))))
+                    decknix-perf-hitch-autofile-min-max-ms)
+                   ;; File first time; then re-update only after another batch
+                   ;; of hits, so a persistent hitch escalates without spamming.
+                   (>= (- count last) decknix-perf-hitch-autofile-min-count))
+          (puthash label count decknix--perf-hitch-autofile-last)
+          (decknix--perf-hitch-autofile-upsert-task label count max-ms))))))
 
 (defun decknix-perf-hitch-autofile-start ()
   "Arm the periodic auto-file scan (idempotent across hot-reloads)."
