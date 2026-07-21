@@ -55,6 +55,27 @@
   (should (eq 'fire (decknix--compose-wait-decision t 2.5 2.0)))
   (should (eq 'fire (decknix--compose-wait-decision t 60.0 2.0))))
 
+(ert-deftest decknix-compose-wait-decision/settle-floor-holds-submit ()
+  "With a MIN-SETTLE floor, not-busy does NOT fire until settled — this is what
+stops the post-interrupt submit racing the ACP cancel (busy is cleared
+synchronously by the interrupt, so elapsed starts at ~0)."
+  ;; idle but not yet settled -> keep waiting
+  (should (eq 'continue (decknix--compose-wait-decision nil 0.0 2.0 0.6)))
+  (should (eq 'continue (decknix--compose-wait-decision nil 0.3 2.0 0.6)))
+  ;; idle and settled -> fire
+  (should (eq 'fire (decknix--compose-wait-decision nil 0.6 2.0 0.6)))
+  (should (eq 'fire (decknix--compose-wait-decision nil 1.0 2.0 0.6))))
+
+(ert-deftest decknix-compose-wait-decision/settle-never-defeats-budget ()
+  "The safety-net budget still wins even when the settle floor is unmet, so a
+wedged agent can't strand the submit forever."
+  (should (eq 'fire (decknix--compose-wait-decision nil 2.0 2.0 0.6)))
+  (should (eq 'fire (decknix--compose-wait-decision t 2.0 2.0 0.6))))
+
+(ert-deftest decknix-compose-wait-decision/settle-still-waits-while-busy ()
+  "A settle floor does not short-circuit the busy check: still busy -> continue."
+  (should (eq 'continue (decknix--compose-wait-decision t 1.0 2.0 0.6))))
+
 ;; -- async wait (timer stubs) --------------------------------------
 
 (defmacro decknix-compose-wait-test--with-timer-stubs (scheduled-var
@@ -89,7 +110,7 @@ tick events."
       (with-temp-buffer
         (setq-local shell-maker--busy nil)
         (decknix--compose-wait-not-busy
-         (current-buffer) (lambda () (cl-incf called)) 2.0 0.05)
+         (current-buffer) (lambda () (cl-incf called)) 2.0 0.05 0)
         ;; One tick scheduled at delay 0 (the initial tick).
         (should (= 1 (length scheduled)))
         (should (equal 0 (caar scheduled)))
@@ -105,7 +126,7 @@ tick events."
       (with-temp-buffer
         (setq-local shell-maker--busy t)
         (decknix--compose-wait-not-busy
-         (current-buffer) (lambda () (cl-incf called)) 2.0 0.05)
+         (current-buffer) (lambda () (cl-incf called)) 2.0 0.05 0)
         ;; Initial tick: busy, no fire, re-arms at INTERVAL.
         (funcall (cdr (pop scheduled)))
         (should (= 0 called))
@@ -127,7 +148,7 @@ tick events."
       (with-temp-buffer
         (setq-local shell-maker--busy nil)
         (decknix--compose-wait-not-busy
-         (current-buffer) (lambda () (cl-incf called)) 2.0 0.05)
+         (current-buffer) (lambda () (cl-incf called)) 2.0 0.05 0)
         ;; Tick the first scheduled call -- fires.
         (let ((tick (cdr (pop scheduled))))
           (funcall tick)
@@ -148,7 +169,7 @@ its own dead-target bail-out."
       (with-current-buffer buf
         (setq-local shell-maker--busy t))
       (decknix--compose-wait-not-busy
-       buf (lambda () (cl-incf called)) 2.0 0.05)
+       buf (lambda () (cl-incf called)) 2.0 0.05 0)
       ;; First tick: busy, re-arms.
       (funcall (cdr (pop scheduled)))
       (should (= 0 called))
