@@ -33,11 +33,13 @@
   "Name of the support monitoring dashboard buffer.")
 
 (defvar decknix-support-dashboard-status-order
-  '("In Progress" "In Review" "Blocked" "To Do" "Selected for Development"
-    "Backlog")
+  '("Triage" "In Progress" "Ready" "Code Review" "In Review" "Blocked"
+    "To Do" "Selected for Development" "Backlog" "Done" "Duplicated")
   "Preferred display order for status groups.
-Statuses not listed here sort after the listed ones, alphabetically — so the
-work you are actively on (In Progress) leads the board and the backlog trails.")
+Statuses not listed here sort after the listed ones, alphabetically.  Triage
+leads (alerts awaiting triage are the top priority), then the work you are
+actively on; recently-resolved items (Done/Duplicated, kept ~2 days by the
+board filter) trail at the bottom.")
 
 (defvar decknix-support-dashboard-atlassian-cli "atlassian-cli"
   "The atlassian-cli executable used to fetch Jira data.")
@@ -57,11 +59,17 @@ matching these names (case-insensitively) against the issue summary.")
   "Map of Jira issue type -> short category label shown on each row.")
 
 (defvar decknix-support-dashboard-jql
-  "project = DOS AND statusCategory != Done ORDER BY status ASC, updated DESC"
-  "JQL for the DoS worklist shown in the dashboard (open/in-progress issues).")
+  "filter = 11769"
+  "JQL for the worklist shown in the dashboard.
+Defaults to the DoS Board's own saved filter (board 757, filter 11769) so the
+dashboard shows exactly what the board shows: `(project = DOS OR project = ALR)
+AND status WAS NOT IN (Done, Duplicated) BEFORE -2d' — i.e. both the DoS tickets
+AND the ALR alerts, plus items resolved in the last ~2 days.  Referencing the
+saved filter by id keeps the dashboard in sync with the board even if the
+board's JQL changes.  Override to scope it differently.")
 
-(defvar decknix-support-dashboard-limit 40
-  "Maximum number of DoS issues to fetch.")
+(defvar decknix-support-dashboard-limit 100
+  "Maximum number of issues to fetch (the board filter returns ~60).")
 
 (defvar decknix-support-dashboard-jira-base-url "https://vmxproperty.atlassian.net"
   "Base Atlassian URL; `/browse/<KEY>' is appended to open an issue.")
