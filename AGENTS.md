@@ -21,7 +21,7 @@ shell, git, AI tooling, and system configuration with a 3-layer override model
 | `modules/home/options/editors/emacs/` | Emacs configuration (13+ modules) |
 | `pkgs/decknix-hub/` | Background work-item aggregator (GitHub, Jira, TeamCity) |
 | `pkgs/nix-open/` | Nix-aware macOS app launcher/restarter |
-| `cli/` | Rust CLI (`decknix switch`, `decknix update`, etc.) |
+| `cli/` | Rust CLI (`decknix switch`, `decknix update`, `decknix session`, etc.) |
 | `docs/` | mdBook documentation |
 | `templates/` | Flake templates for `nix flake init` |
 

@@ -15,6 +15,7 @@ chrono = { version = "0.4", features = ["serde"] }
 lexpr = "0.2.7"
 regex = "1.12.3"
 toml = "1.1.2"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3.27.0"
