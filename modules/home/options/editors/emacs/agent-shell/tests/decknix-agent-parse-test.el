@@ -229,5 +229,49 @@ Computed independently: SHA-256 of 200 lowercase `a' chars."
   (should (equal (decknix--agent-conversation-key-raw (make-string 200 ?a))
                  "c2a908d98f5df987")))
 
+;; -- command-message canonicalisation (slash-command wrappers) -----
+
+(defconst decknix-agent-parse-test--wrapper
+  (concat "<command-message>review-bot-pr</command-message>\n"
+          "<command-name>/review-bot-pr</command-name>\n"
+          "<command-args>https://github.com/o/r/pull/1</command-args>")
+  "A representative Claude slash-command first-message wrapper.")
+
+(ert-deftest decknix-agent-canonicalize-command-message--wrapper ()
+  "A command wrapper collapses to `<name> <args>' (the literal command)."
+  (should (equal (decknix--agent-canonicalize-command-message
+                  decknix-agent-parse-test--wrapper)
+                 "/review-bot-pr https://github.com/o/r/pull/1")))
+
+(ert-deftest decknix-agent-canonicalize-command-message--no-args ()
+  "A wrapper without args collapses to just the command name."
+  (should (equal (decknix--agent-canonicalize-command-message
+                  "<command-name>/review</command-name>")
+                 "/review")))
+
+(ert-deftest decknix-agent-canonicalize-command-message--plain-unchanged ()
+  "Non-wrapper messages pass through untouched."
+  (let ((plain "please review this and tell me what you think"))
+    (should (equal (decknix--agent-canonicalize-command-message plain) plain))))
+
+(ert-deftest decknix-agent-conversation-key-raw--wrapper-matches-literal ()
+  "The core fix: a slash-command wrapper and the literal command the
+launcher auto-sends resolve to the SAME conversation key, so
+launcher-written tags are found on the wrapper-recorded transcript."
+  (should (equal (decknix--agent-conversation-key-raw
+                  decknix-agent-parse-test--wrapper)
+                 (decknix--agent-conversation-key-raw
+                  "/review-bot-pr https://github.com/o/r/pull/1"))))
+
+(ert-deftest decknix-agent-conversation-key-raw--distinct-prs-distinct-keys ()
+  "Wrappers for different PRs still key distinctly (args are part of the key)."
+  (should-not
+   (equal (decknix--agent-conversation-key-raw
+           (concat "<command-name>/review-service-pr</command-name>"
+                   "<command-args>https://github.com/o/r/pull/1</command-args>"))
+          (decknix--agent-conversation-key-raw
+           (concat "<command-name>/review-service-pr</command-name>"
+                   "<command-args>https://github.com/o/r/pull/2</command-args>")))))
+
 (provide 'decknix-agent-parse-test)
 ;;; decknix-agent-parse-test.el ends here
