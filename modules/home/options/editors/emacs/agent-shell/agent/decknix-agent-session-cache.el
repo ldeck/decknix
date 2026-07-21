@@ -483,6 +483,24 @@ Scans at most `decknix--agent-session-cache-max-files' newest files."
      " {} 2>/dev/null"
      " | jq -Msc 'sort_by(.modified) | reverse'")))
 
+(defun decknix--agent-session-jq-cmd-for-list-file (provider-id list-file)
+  "Shell command to parallel-jq the session files named in LIST-FILE.
+Same metadata extraction as `decknix--agent-session-jq-cmd', but scoped to an
+explicit newline-separated file list (the new/changed files) instead of
+re-scanning the whole sessions dir.  Used by the async refresh so a refresh
+only re-parses what changed — the heavy jq (reading fat transcripts) runs in a
+background subprocess, never on the main thread."
+  (let* ((jqf (decknix--agent-session-ensure-jq-filter provider-id))
+         (ext (decknix-agent-provider-session-file-extension provider-id))
+         (jq-args (if (string= ext ".jsonl") "-Mcs" "-Mc")))
+    (concat
+     "cat " (shell-quote-argument list-file)
+     " | tr '\\n' '\\0'"
+     " | xargs -0 -P8 -I{} jq " jq-args " -f "
+     (shell-quote-argument jqf)
+     " {} 2>/dev/null"
+     " | jq -Msc 'sort_by(.modified) | reverse'")))
+
 ;; ---------------------------------------------------------------------------
 ;; Internal: parse a set of files (small = sequential, large = parallel jq)
 ;; ---------------------------------------------------------------------------
@@ -643,67 +661,57 @@ in a background subprocess."
               (when (eq provider-id 'auggie)
                 (setq decknix--agent-session-cache full-list
                       decknix--agent-session-cache-time (float-time))))
-          (if (< (length new-files) 20)
-              ;; Small new set: parse synchronously (fast per-file jq).
-              (let ((new-data (delq nil (mapcar (lambda (f) (decknix--session-parse-file provider-id f))
-                                                new-files))))
-                (decknix--session-store-parsed provider-id new-data)
-                (when new-data (decknix--session-meta-cache-save))
-                (let ((full-list (append (nreverse cached-data) new-data)))
-                  (puthash provider-id full-list decknix--agent-session-cache-map)
-                  (puthash provider-id (float-time) decknix--agent-session-cache-time-map)
-                  (when (eq provider-id 'auggie)
-                    (setq decknix--agent-session-cache full-list
-                          decknix--agent-session-cache-time (float-time))))
-                ;; New/changed data landed: notify status-decorated UI.
-                (when new-data (decknix--agent-session-cache-run-refresh-hook)))
-            ;; Large new set (cold cache): spawn a subprocess for parallel jq.
-            (let* ((cmd (decknix--agent-session-jq-cmd provider-id))
-                   (list-file (make-temp-file (format "agent-%s-files-" provider-id)))
-                   (buf (generate-new-buffer (format " *agent-%s-session-list*" provider-id))))
-              (with-temp-file list-file
-                (dolist (f new-files) (insert f "\n")))
-              ;; Re-build cmd with the list file if the jq-cmd doesn't already handle it?
-              ;; Actually, jq-cmd uses `ls` or `find`.
-              ;; Wait, `decknix--agent-session-jq-cmd` doesn't take a file list.
-              ;; I should probably refactor jq-cmd or use the logic from sync.
-              (let ((proc (start-process-shell-command (format "agent-%s-session-list" provider-id)
-                                                       buf cmd)))
-                (puthash provider-id proc decknix--agent-session-refresh-proc-map)
-                (when (eq provider-id 'auggie)
-                  (setq decknix--agent-session-refresh-proc proc))
-                (set-process-sentinel
-                 proc
-                 ;; Lexical closure captures provider-id, c-data, n-files.
-                 ;; n-files is the list of new-or-changed paths fed to the
-                 ;; subprocess; it is used to stamp filePath on the parsed
-                 ;; results so decknix--session-store-parsed can cache
-                 ;; multi-project (claude-code) sessions correctly.
-                 (let ((p-id provider-id)
-                       (c-data (nreverse cached-data))
-                       (n-files new-files))
-                   (lambda (proc _event)
-                     (when (eq (process-status proc) 'exit)
-                       (let ((pbuf (process-buffer proc)))
-                         (when (buffer-live-p pbuf)
-                           (let ((new-parsed
-                                  (decknix--session-stamp-file-paths
-                                   (decknix--agent-session-parse
-                                    (with-current-buffer pbuf (buffer-string)))
-                                   n-files)))
-                             (when new-parsed
-                               (decknix--session-store-parsed p-id new-parsed)
-                               (decknix--session-meta-cache-save)
-                               (let ((full-list (append c-data new-parsed)))
-                                 (puthash p-id full-list decknix--agent-session-cache-map)
-                                 (puthash p-id (float-time) decknix--agent-session-cache-time-map)
-                                 (when (eq p-id 'auggie)
-                                   (setq decknix--agent-session-cache full-list
-                                         decknix--agent-session-cache-time (float-time))))
-                               ;; Cold scan finished: repaint status UI now
-                               ;; that the non-blocking accessors have data.
-                               (decknix--agent-session-cache-run-refresh-hook)))
-                           (kill-buffer pbuf)))))))))))))))
+          ;; New/changed files exist: parse them OFF the main thread, ALWAYS.
+          ;; Even one fat transcript (10s of MB) is ~1-2s of jq, and the active
+          ;; agent grows its transcript continuously, so an inline "small set"
+          ;; parse froze the UI for tens of seconds (N changed files x seconds).
+          ;; Spawn a background subprocess (parallel jq) scoped to just the
+          ;; changed files via a list-file; the sentinel parses only the compact
+          ;; jq output (one small metadata object per session), which is cheap.
+          ;; So the front-end stays nimble no matter how many agents are active.
+          (let* ((list-file (make-temp-file (format "agent-%s-files-" provider-id)))
+                 (cmd (decknix--agent-session-jq-cmd-for-list-file provider-id list-file))
+                 (buf (generate-new-buffer (format " *agent-%s-session-list*" provider-id))))
+            (with-temp-file list-file
+              (dolist (f new-files) (insert f "\n")))
+            (let ((proc (start-process-shell-command
+                         (format "agent-%s-session-list" provider-id) buf cmd)))
+              (puthash provider-id proc decknix--agent-session-refresh-proc-map)
+              (when (eq provider-id 'auggie)
+                (setq decknix--agent-session-refresh-proc proc))
+              (set-process-sentinel
+               proc
+               ;; Closure captures provider-id, the warm cached data, the
+               ;; new-file paths (to stamp filePath so multi-project sessions
+               ;; cache correctly) and the list-file (to clean up).
+               (let ((p-id provider-id)
+                     (c-data (nreverse cached-data))
+                     (n-files new-files)
+                     (lf list-file))
+                 (lambda (proc _event)
+                   (when (memq (process-status proc) '(exit signal))
+                     (let ((pbuf (process-buffer proc)))
+                       (unwind-protect
+                           (when (buffer-live-p pbuf)
+                             (let ((new-parsed
+                                    (decknix--session-stamp-file-paths
+                                     (decknix--agent-session-parse
+                                      (with-current-buffer pbuf (buffer-string)))
+                                     n-files)))
+                               (when new-parsed
+                                 (decknix--session-store-parsed p-id new-parsed)
+                                 (decknix--session-meta-cache-save)
+                                 (let ((full-list (append c-data new-parsed)))
+                                   (puthash p-id full-list decknix--agent-session-cache-map)
+                                   (puthash p-id (float-time) decknix--agent-session-cache-time-map)
+                                   (when (eq p-id 'auggie)
+                                     (setq decknix--agent-session-cache full-list
+                                           decknix--agent-session-cache-time (float-time))))
+                                 ;; Parse finished: repaint status UI now that
+                                 ;; the non-blocking accessors have data.
+                                 (decknix--agent-session-cache-run-refresh-hook))))
+                         (when (buffer-live-p pbuf) (kill-buffer pbuf))
+                         (when (file-exists-p lf) (delete-file lf)))))))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Public cache read
