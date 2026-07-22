@@ -1748,10 +1748,28 @@ let
   # defvar stays in main-bulk -- it is initialised inside the
   # agent-shell startup hook (a side-effect that belongs in the
   # heredoc by Rule 2).
+  # Pure lifecycle-state classifier for the agent board (#150): turns
+  # observable signals into a state + attention score.  No deps; sole
+  # occupant of `agent-shell/state/'.  Soft-required by
+  # `decknix-agent-session-id' to decorate + attention-sort the
+  # live-sessions list/board.
+  decknix-session-state-el = mkEmacsTestedPackage {
+    pname = "decknix-session-state";
+    src = ./agent-shell/state;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-session-state-test.el"
+    ];
+  };
+
   decknix-agent-session-id-el = mkEmacsTestedPackage {
     pname = "decknix-agent-session-id";
     src = ./agent-shell/agent;
-    packageRequires = [ ];
+    # Soft-requires `decknix-session-state' to classify live sessions;
+    # declared here so it is loaded before the board's `(require ... nil t)'.
+    packageRequires = [
+      decknix-session-state-el
+    ];
     testFiles = [
       "decknix-agent-session-id-test.el"
     ];
@@ -2657,6 +2675,7 @@ in
           decknix-agent-tags-read-el
           decknix-agent-workspace-detect-el
           decknix-agent-command-discover-el
+          decknix-session-state-el
           decknix-agent-session-id-el
           decknix-agent-clipboard-el
           decknix-agent-help-el
