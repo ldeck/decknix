@@ -117,12 +117,10 @@ yields nil (no flag emitted).")
   "Return the `claude --permission-mode' value for MODE-ID, or nil."
   (and mode-id (cdr (assoc mode-id decknix--agent-cli-permission-mode-map))))
 
-(defconst decknix--agent-terminal-alt-permission-modes
-  '("acceptEdits" "bypassPermissions" "default")
-  "The practical `--permission-mode' postures offered as commented
-alternatives under each Claude session, so it can be resumed more or
-less permissively than its saved mode.  The session's own resolved
-mode is not repeated.")
+(defconst decknix--agent-cli-permission-mode-choices
+  '("acceptEdits" "bypassPermissions" "default" "dontAsk" "plan" "none")
+  "The `--permission-mode' values offered when setting a session's mode
+in the live-sessions buffer.  \"none\" drops the flag entirely.")
 
 (defun decknix--agent-terminal-resume-command (provider-id session-id workspace
                                                            &optional mode-id)
@@ -144,18 +142,12 @@ so the resumed session keeps the same permission posture."
                 (if perm (format " --permission-mode %s" perm) "")
                 session-id)))))
 
-(defun decknix-agent-live-sessions-terminal ()
-  "List live agent sessions with terminal commands to resume them.
-
-Pops a *live-agent-sessions* buffer whose lines can be run in a
-terminal to carry a session across a `decknix switch' (or to move it
-out of Emacs).  Resume state lives in the provider transcript, so the
-resumed terminal process continues the same conversation.
-
-Run the resume command AFTER Emacs has released the session (e.g. post
-switch) to avoid two live clients on one conversation."
-  (interactive)
-  (let ((rows nil)
+(defun decknix--live-sessions-collect ()
+  "Return a list of live-session entry plists (:name :provider :sid
+:ws :perm :marked), newest agent buffers first.  :perm is the CLI
+`--permission-mode' resolved from the session's saved mode (nil = no
+flag / non-Claude)."
+  (let ((entries nil)
         (buffers (if (fboundp 'agent-shell-buffers)
                      (agent-shell-buffers)
                    (buffer-list))))
@@ -172,46 +164,146 @@ switch) to avoid two live clients on one conversation."
                                      (decknix--agent-session-mode-for-conv-key conv-key))
                                 (and (fboundp 'decknix-agent-purpose-resolve)
                                      (plist-get (decknix-agent-purpose-resolve 'new-session)
-                                                :mode))))
-                   (cmd (and provider
-                             (decknix--agent-terminal-resume-command
-                              provider sid ws mode-id))))
-              (push (list (buffer-name) provider sid ws cmd) rows))))))
-    (setq rows (nreverse rows))
-    (let ((resumable 0))
-      (dolist (r rows) (when (nth 4 r) (setq resumable (1+ resumable))))
-      (with-current-buffer (get-buffer-create "*live-agent-sessions*")
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (insert (format "# %d live agent session(s) — %d resumable from a terminal\n"
-                          (length rows) resumable))
-          (insert "# Run a block in a terminal AFTER a switch has released the session.\n")
-          (insert "# 'auto' sessions resume as --permission-mode acceptEdits (Bash/MCP still\n")
-          (insert "# prompt); change to bypassPermissions by hand for a fully unattended run.\n\n")
-          (dolist (r rows)
-            (let ((name (nth 0 r)) (provider (nth 1 r))
-                  (sid (nth 2 r)) (ws (nth 3 r)) (cmd (nth 4 r)))
-              (insert (format "# %s  [%s]%s\n" name (or provider "?")
-                              (if sid (format "  %s" (substring sid 0 (min 8 (length sid)))) "")))
-              (cond
-               ((null cmd)
-                (insert (format "# no terminal CLI for provider %s%s — reopen via the picker\n\n"
-                                (or provider "?")
-                                (if sid "" " (no session id yet)"))))
-               (t
-                (insert cmd "\n")
-                ;; Offer the other permission postures as commented variants.
-                (when (eq provider 'claude-code)
-                  (dolist (alt decknix--agent-terminal-alt-permission-modes)
-                    (let ((altcmd (decknix--agent-terminal-resume-command
-                                   provider sid ws alt)))
-                      (when (and altcmd (not (equal altcmd cmd)))
-                        (insert (format "#   or: %s\n" altcmd))))))
-                (insert "\n")))))
-          (when (null rows) (insert "# (no live agent-shell sessions)\n"))
-          (goto-char (point-min))
-          (view-mode 1))
-        (display-buffer (current-buffer))))))
+                                                :mode)))))
+              (push (list :name (buffer-name) :provider provider :sid sid
+                          :ws ws :perm (decknix--agent-cli-permission-mode mode-id)
+                          :marked nil)
+                    entries))))))
+    (nreverse entries)))
+
+(defun decknix--live-sessions-entry-command (entry)
+  "Return the terminal resume command for ENTRY, or nil."
+  (decknix--agent-terminal-resume-command
+   (plist-get entry :provider) (plist-get entry :sid)
+   (plist-get entry :ws) (plist-get entry :perm)))
+
+(defvar-local decknix--live-sessions-entries nil
+  "Buffer-local list of live-session entry plists for the current view.")
+
+(defun decknix--live-sessions-redraw ()
+  "Redraw the *live-agent-sessions* buffer from `decknix--live-sessions-entries'."
+  (let ((inhibit-read-only t)
+        (idx 0)
+        (line (line-number-at-pos)))
+    (erase-buffer)
+    (insert (propertize
+             "Live agent sessions — RET/w copy · m/u mark · p perm-mode · g refresh · q quit\n\n"
+             'face 'font-lock-comment-face))
+    (dolist (entry decknix--live-sessions-entries)
+      (let* ((sid (plist-get entry :sid))
+             (provider (plist-get entry :provider))
+             (perm (plist-get entry :perm))
+             (has-cmd (decknix--live-sessions-entry-command entry))
+             (start (point)))
+        (insert (format "%s %-28s %-13s %-9s %s\n"
+                        (if (plist-get entry :marked) "*" " ")
+                        (truncate-string-to-width (or (plist-get entry :name) "?") 28)
+                        (format "[%s]" (or provider "?"))
+                        (if sid (substring sid 0 (min 8 (length sid))) "—")
+                        (cond ((not has-cmd) "(no CLI — use picker)")
+                              (perm (concat "--permission-mode " perm))
+                              ((eq provider 'claude-code) "(default perms)")
+                              (t ""))))
+        (put-text-property start (point) 'decknix-idx idx))
+      (setq idx (1+ idx)))
+    (when (null decknix--live-sessions-entries)
+      (insert "  (no live agent-shell sessions)\n"))
+    (goto-char (point-min))
+    (forward-line (1- (max line 3)))))
+
+(defun decknix--live-sessions-current-entry ()
+  "Return the entry on the current line, or nil."
+  (let ((idx (get-text-property (point) 'decknix-idx)))
+    (and idx (nth idx decknix--live-sessions-entries))))
+
+(defun decknix--live-sessions-target-entries ()
+  "Return marked entries, or the current-line entry when none are marked."
+  (or (seq-filter (lambda (e) (plist-get e :marked)) decknix--live-sessions-entries)
+      (let ((e (decknix--live-sessions-current-entry))) (and e (list e)))))
+
+(defun decknix-live-sessions-mark ()
+  "Mark the session on this line and move to the next."
+  (interactive)
+  (when-let ((e (decknix--live-sessions-current-entry)))
+    (plist-put e :marked t) (decknix--live-sessions-redraw) (forward-line 1)))
+
+(defun decknix-live-sessions-unmark ()
+  "Unmark the session on this line and move to the next."
+  (interactive)
+  (when-let ((e (decknix--live-sessions-current-entry)))
+    (plist-put e :marked nil) (decknix--live-sessions-redraw) (forward-line 1)))
+
+(defun decknix-live-sessions-unmark-all ()
+  "Unmark every session."
+  (interactive)
+  (dolist (e decknix--live-sessions-entries) (plist-put e :marked nil))
+  (decknix--live-sessions-redraw))
+
+(defun decknix-live-sessions-set-perm (mode)
+  "Set the `--permission-mode' MODE on the marked sessions (or this line).
+Only Claude sessions are affected; \"none\" drops the flag."
+  (interactive
+   (list (completing-read "Permission mode: "
+                          decknix--agent-cli-permission-mode-choices nil t)))
+  (let ((perm (unless (equal mode "none") mode))
+        (n 0))
+    (dolist (e (decknix--live-sessions-target-entries))
+      (when (eq (plist-get e :provider) 'claude-code)
+        (plist-put e :perm perm) (setq n (1+ n))))
+    (decknix--live-sessions-redraw)
+    (message "Set permission mode on %d Claude session(s)" n)))
+
+(defun decknix-live-sessions-copy ()
+  "Copy resume command(s) for the marked sessions (or this line) to the kill ring."
+  (interactive)
+  (let ((cmds (delq nil (mapcar #'decknix--live-sessions-entry-command
+                                (decknix--live-sessions-target-entries)))))
+    (if (null cmds)
+        (message "No resumable session under point")
+      (kill-new (mapconcat #'identity cmds "\n"))
+      (message "Copied %d resume command(s) to the kill ring" (length cmds)))))
+
+(defun decknix-live-sessions-refresh ()
+  "Re-scan live agent buffers (discards marks and permission overrides)."
+  (interactive)
+  (setq decknix--live-sessions-entries (decknix--live-sessions-collect))
+  (decknix--live-sessions-redraw))
+
+(defvar decknix-live-sessions-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'decknix-live-sessions-copy)
+    (define-key map (kbd "w")   #'decknix-live-sessions-copy)
+    (define-key map (kbd "c")   #'decknix-live-sessions-copy)
+    (define-key map (kbd "m")   #'decknix-live-sessions-mark)
+    (define-key map (kbd "u")   #'decknix-live-sessions-unmark)
+    (define-key map (kbd "U")   #'decknix-live-sessions-unmark-all)
+    (define-key map (kbd "p")   #'decknix-live-sessions-set-perm)
+    (define-key map (kbd "g")   #'decknix-live-sessions-refresh)
+    (define-key map (kbd "n")   #'next-line)
+    map)
+  "Keymap for `decknix-live-sessions-mode'.")
+
+(define-derived-mode decknix-live-sessions-mode special-mode "LiveSessions"
+  "Major mode for the live agent-session resume list.
+\\{decknix-live-sessions-mode-map}")
+
+(defun decknix-agent-live-sessions-terminal ()
+  "List live agent sessions with keyboard-driven terminal resume actions.
+
+Pops an interactive *live-agent-sessions* buffer.  Each row is a live
+session; resume state lives in the provider transcript, so the terminal
+command carries the session across a `decknix switch' (or out of Emacs).
+Run the copied command AFTER Emacs releases the session to avoid two
+clients on one conversation.
+
+Keys: RET/w copy · m/u mark · U unmark-all · p set permission mode (on
+marked or current) · g refresh · q quit."
+  (interactive)
+  (with-current-buffer (get-buffer-create "*live-agent-sessions*")
+    (decknix-live-sessions-mode)
+    (setq decknix--live-sessions-entries (decknix--live-sessions-collect))
+    (decknix--live-sessions-redraw)
+    (display-buffer (current-buffer))))
 
 (provide 'decknix-agent-session-id)
 ;;; decknix-agent-session-id.el ends here
