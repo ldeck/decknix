@@ -90,6 +90,8 @@
 (declare-function decknix--agent-session-mode-for-conv-key
                   "decknix-agent-session-mode" (conv-key))
 (declare-function decknix-agent-purpose-resolve "decknix-agent-purposes" (purpose))
+(declare-function decknix--agent-workspace-for-conv-key
+                  "decknix-agent-session-workspace" (conv-key))
 
 (defconst decknix--agent-terminal-resume-clis
   '((claude-code . "claude")
@@ -142,6 +144,26 @@ so the resumed session keeps the same permission posture."
                 (if perm (format " --permission-mode %s" perm) "")
                 session-id)))))
 
+(defun decknix--agent-claude-session-cwd (session-id)
+  "Return the recorded cwd for a Claude SESSION-ID, or nil.
+Claude scopes `claude --resume' to the project directory the session
+was created in — recorded as `cwd' in the transcript under
+~/.claude/projects/<encoded-cwd>/<session-id>.jsonl.  That cwd is the
+only directory the resume works from, so it is the authoritative
+workspace for the terminal command (the buffer-local workspace is not
+tracked for Claude, whose provider is `:supports-workspace-root nil')."
+  (when (and session-id (stringp session-id) (not (string-empty-p session-id)))
+    (let ((files (file-expand-wildcards
+                  (expand-file-name
+                   (format "~/.claude/projects/*/%s.jsonl" session-id)))))
+      (when files
+        (with-temp-buffer
+          (insert-file-contents (car files) nil 0 8192)
+          (goto-char (point-min))
+          (when (re-search-forward
+                 "\"cwd\"[[:space:]]*:[[:space:]]*\"\\([^\"]+\\)\"" nil t)
+            (match-string 1)))))))
+
 (defun decknix--live-sessions-collect ()
   "Return a list of live-session entry plists (:name :provider :sid
 :ws :perm :marked), newest agent buffers first.  :perm is the CLI
@@ -157,8 +179,17 @@ flag / non-Claude)."
           (when (derived-mode-p 'agent-shell-mode)
             (let* ((provider (bound-and-true-p decknix--agent-provider-id))
                    (sid (bound-and-true-p decknix--agent-auggie-session-id))
-                   (ws (bound-and-true-p decknix--agent-session-workspace))
                    (conv-key (bound-and-true-p decknix--agent-conv-key))
+                   ;; Claude resumes only from its transcript's recorded cwd,
+                   ;; which the buffer-local workspace does not track (its
+                   ;; provider is :supports-workspace-root nil) — prefer it.
+                   (ws (or (and (eq provider 'claude-code)
+                                (decknix--agent-claude-session-cwd sid))
+                           (bound-and-true-p decknix--agent-session-workspace)
+                           (and conv-key
+                                (fboundp 'decknix--agent-workspace-for-conv-key)
+                                (decknix--agent-workspace-for-conv-key conv-key))
+                           (expand-file-name default-directory)))
                    (mode-id (or (and conv-key
                                      (fboundp 'decknix--agent-session-mode-for-conv-key)
                                      (decknix--agent-session-mode-for-conv-key conv-key))
