@@ -244,14 +244,28 @@ flag / non-Claude)."
 (defvar-local decknix--live-sessions-entries nil
   "Buffer-local list of live-session entry plists for the current view.")
 
+(defvar-local decknix--live-sessions-layout 'list
+  "Current layout of the live-sessions buffer: `list' or `board'.")
+
 (defun decknix--live-sessions-redraw ()
-  "Redraw the *live-agent-sessions* buffer from `decknix--live-sessions-entries'."
+  "Redraw the buffer in the current layout (`list' or `board')."
+  (pcase decknix--live-sessions-layout
+    ('board (decknix--live-sessions-redraw-board))
+    (_      (decknix--live-sessions-redraw-list))))
+
+(defun decknix--live-sessions--pad (str width)
+  "Truncate STR to fit and right-pad it to WIDTH display columns."
+  (let ((s (truncate-string-to-width str (1- width) nil nil "…")))
+    (concat s (make-string (max 0 (- width (string-width s))) ?\s))))
+
+(defun decknix--live-sessions-redraw-list ()
+  "Render the one-row-per-session list layout."
   (let ((inhibit-read-only t)
         (idx 0)
         (line (line-number-at-pos)))
     (erase-buffer)
     (insert (propertize
-             "Live agent sessions (attention-sorted) — RET/w copy · m/u mark · p perm-mode · g refresh · q quit\n\n"
+             "Live agent sessions (attention-sorted) — RET/w copy · m/u mark · p perm-mode · v board · g refresh · q quit\n\n"
              'face 'font-lock-comment-face))
     (dolist (entry decknix--live-sessions-entries)
       (let* ((sid (plist-get entry :sid))
@@ -281,6 +295,69 @@ flag / non-Claude)."
       (insert "  (no live agent-shell sessions)\n"))
     (goto-char (point-min))
     (forward-line (1- (max line 3)))))
+
+(defun decknix--live-sessions-redraw-board ()
+  "Render the kanban board layout: one column per lifecycle state.
+Cards carry the same `decknix-idx' property as the list, so mark / copy
+/ perm actions work identically when point is on a card."
+  (let* ((inhibit-read-only t)
+         (entries decknix--live-sessions-entries)
+         (order (if (boundp 'decknix-session-state-order)
+                    (symbol-value 'decknix-session-state-order)
+                  '(error needs-input review running idle done)))
+         (width 24)
+         (groups (make-hash-table :test 'eq))
+         (idx 0))
+    (erase-buffer)
+    (insert (propertize
+             "Live agent sessions — board · v list · m mark · RET/w copy · p perm · g refresh · q quit\n\n"
+             'face 'font-lock-comment-face))
+    (dolist (e entries)
+      (let ((st (or (plist-get e :state) 'idle)))
+        (puthash st (append (gethash st groups) (list idx)) groups))
+      (setq idx (1+ idx)))
+    (let* ((cols (seq-filter (lambda (st) (gethash st groups)) order))
+           (maxrows (apply #'max 0 (mapcar (lambda (st) (length (gethash st groups))) cols))))
+      (if (null cols)
+          (insert "  (no live agent-shell sessions)\n")
+        (dolist (st cols)
+          (let ((glyph (if (fboundp 'decknix-session-state-glyph)
+                           (decknix-session-state-glyph st) "•"))
+                (label (if (fboundp 'decknix-session-state-label)
+                           (decknix-session-state-label st) (symbol-name st))))
+            (insert (decknix--live-sessions--pad
+                     (format "%s %s (%d)" glyph label (length (gethash st groups))) width))))
+        (insert "\n")
+        (dolist (_ cols) (insert (decknix--live-sessions--pad (make-string 16 ?─) width)))
+        (insert "\n")
+        (dotimes (r maxrows)
+          (dolist (st cols)
+            (let ((eidx (nth r (gethash st groups))))
+              (if (null eidx)
+                  (insert (make-string width ?\s))
+                (let* ((e (nth eidx entries))
+                       (mark (if (plist-get e :marked) "*" " "))
+                       (prov (pcase (plist-get e :provider)
+                               ('claude-code "C") ('auggie "A") ('pi "P")
+                               ('gemini "G") (_ "?")))
+                       (start (point)))
+                  (insert (decknix--live-sessions--pad
+                           (format "%s%s %s" mark prov (or (plist-get e :name) "?"))
+                           width))
+                  (put-text-property start (point) 'decknix-idx eidx)))))
+          (insert "\n"))))
+    (goto-char (point-min))
+    (forward-line 3)))
+
+(defun decknix-live-sessions-toggle-layout ()
+  "Toggle between the list and board (kanban) layouts."
+  (interactive)
+  (setq decknix--live-sessions-layout
+        (if (eq decknix--live-sessions-layout 'board) 'list 'board))
+  (when (and (eq decknix--live-sessions-layout 'board)
+             (not (fboundp 'decknix-session-state-glyph)))
+    (message "Board layout groups by lifecycle state — load decknix-session-state for full glyphs/labels"))
+  (decknix--live-sessions-redraw))
 
 (defun decknix--live-sessions-current-entry ()
   "Return the entry on the current line, or nil."
@@ -350,6 +427,7 @@ Only Claude sessions are affected; \"none\" drops the flag."
     (define-key map (kbd "U")   #'decknix-live-sessions-unmark-all)
     (define-key map (kbd "p")   #'decknix-live-sessions-set-perm)
     (define-key map (kbd "g")   #'decknix-live-sessions-refresh)
+    (define-key map (kbd "v")   #'decknix-live-sessions-toggle-layout)
     (define-key map (kbd "n")   #'next-line)
     map)
   "Keymap for `decknix-live-sessions-mode'.")
