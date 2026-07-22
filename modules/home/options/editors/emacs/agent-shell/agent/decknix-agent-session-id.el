@@ -412,10 +412,18 @@ Only Claude sessions are affected; \"none\" drops the flag."
       (message "Copied %d resume command(s) to the kill ring" (length cmds)))))
 
 (defun decknix-live-sessions-refresh ()
-  "Re-scan live agent buffers (discards marks and permission overrides)."
+  "Re-scan live agent buffers, preserving marks (by session id).
+Permission-mode overrides are re-derived from the session's saved mode."
   (interactive)
-  (setq decknix--live-sessions-entries (decknix--live-sessions-collect))
-  (decknix--live-sessions-redraw))
+  (let ((marked (delq nil (mapcar (lambda (e)
+                                    (and (plist-get e :marked) (plist-get e :sid)))
+                                  decknix--live-sessions-entries))))
+    (setq decknix--live-sessions-entries (decknix--live-sessions-collect))
+    (when marked
+      (dolist (e decknix--live-sessions-entries)
+        (when (member (plist-get e :sid) marked)
+          (plist-put e :marked t))))
+    (decknix--live-sessions-redraw)))
 
 (defun decknix-live-sessions-jump ()
   "Jump to the live agent-shell buffer for the session at point."
