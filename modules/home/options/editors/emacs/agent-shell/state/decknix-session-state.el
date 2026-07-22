@@ -60,6 +60,27 @@ signals to one state.  Higher :score sorts the card nearer the top."
    ((plist-get signals :busy)                '(:state running     :score 30))
    (t                                        '(:state idle        :score 10))))
 
+(defconst decknix-session-status-signal-map
+  '(("killed"       . (:error t))
+    ("waiting"      . (:attention t))
+    ("working"      . (:busy t))
+    ("finished"     . (:unread t))
+    ("ready"        . nil)
+    ("initializing" . nil))
+  "Map an agent-shell status string to `decknix-session-classify' signals.
+The status strings are those produced by `agent-shell-workspace--buffer-status'
+/ `decknix--header-detect-status'.  Unmapped / \"ready\" / \"initializing\"
+statuses carry no signals, classifying as `idle'.")
+
+(defun decknix-session-signals-from-status (status)
+  "Return classifier signals (a plist) for agent-shell STATUS string."
+  (cdr (assoc status decknix-session-status-signal-map)))
+
+(defun decknix-session-classify-status (status)
+  "Classify an agent-shell STATUS string directly.
+Convenience over signals-from-status + `decknix-session-classify'."
+  (decknix-session-classify (decknix-session-signals-from-status status)))
+
 (defun decknix-session-state (result)
   "Return the state symbol from a `decknix-session-classify' RESULT."
   (plist-get result :state))

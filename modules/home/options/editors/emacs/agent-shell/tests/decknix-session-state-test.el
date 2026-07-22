@@ -71,5 +71,21 @@
   (should (equal (decknix-session-state-glyph 'nonsense) "?"))
   (should (equal (decknix-session-state-label 'nonsense) "nonsense")))
 
+;; -- status-string mapping (adapter input) -------------------------
+
+(ert-deftest decknix-session-classify-status--vocabulary ()
+  "Each agent-shell status string maps to the expected state."
+  (should (eq (decknix-session-state (decknix-session-classify-status "killed"))   'error))
+  (should (eq (decknix-session-state (decknix-session-classify-status "waiting"))  'needs-input))
+  (should (eq (decknix-session-state (decknix-session-classify-status "working"))  'running))
+  (should (eq (decknix-session-state (decknix-session-classify-status "finished")) 'review))
+  (should (eq (decknix-session-state (decknix-session-classify-status "ready"))    'idle))
+  (should (eq (decknix-session-state (decknix-session-classify-status "initializing")) 'idle)))
+
+(ert-deftest decknix-session-classify-status--unknown-is-idle ()
+  "An unrecognised status carries no signals and classifies as idle."
+  (should (null (decknix-session-signals-from-status "wat")))
+  (should (eq (decknix-session-state (decknix-session-classify-status "wat")) 'idle)))
+
 (provide 'decknix-session-state-test)
 ;;; decknix-session-state-test.el ends here
