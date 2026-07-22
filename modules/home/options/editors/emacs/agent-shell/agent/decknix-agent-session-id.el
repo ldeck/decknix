@@ -144,6 +144,12 @@ so the resumed session keeps the same permission posture."
                 (if perm (format " --permission-mode %s" perm) "")
                 session-id)))))
 
+(defvar decknix--agent-claude-cwd-cache (make-hash-table :test 'equal)
+  "Memoised session-id -> transcript cwd.
+A Claude session's project dir is immutable, so cwd is cached forever.
+Only successful reads are stored, so a not-yet-written transcript is
+re-read on the next call rather than cached as a permanent miss.")
+
 (defun decknix--agent-claude-session-cwd (session-id)
   "Return the recorded cwd for a Claude SESSION-ID, or nil.
 Claude scopes `claude --resume' to the project directory the session
@@ -151,18 +157,21 @@ was created in — recorded as `cwd' in the transcript under
 ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl.  That cwd is the
 only directory the resume works from, so it is the authoritative
 workspace for the terminal command (the buffer-local workspace is not
-tracked for Claude, whose provider is `:supports-workspace-root nil')."
+tracked for Claude, whose provider is `:supports-workspace-root nil').
+Result is memoised in `decknix--agent-claude-cwd-cache'."
   (when (and session-id (stringp session-id) (not (string-empty-p session-id)))
-    (let ((files (file-expand-wildcards
-                  (expand-file-name
-                   (format "~/.claude/projects/*/%s.jsonl" session-id)))))
-      (when files
-        (with-temp-buffer
-          (insert-file-contents (car files) nil 0 8192)
-          (goto-char (point-min))
-          (when (re-search-forward
-                 "\"cwd\"[[:space:]]*:[[:space:]]*\"\\([^\"]+\\)\"" nil t)
-            (match-string 1)))))))
+    (or (gethash session-id decknix--agent-claude-cwd-cache)
+        (let ((files (file-expand-wildcards
+                      (expand-file-name
+                       (format "~/.claude/projects/*/%s.jsonl" session-id)))))
+          (when files
+            (with-temp-buffer
+              (insert-file-contents (car files) nil 0 8192)
+              (goto-char (point-min))
+              (when (re-search-forward
+                     "\"cwd\"[[:space:]]*:[[:space:]]*\"\\([^\"]+\\)\"" nil t)
+                (puthash session-id (match-string 1)
+                         decknix--agent-claude-cwd-cache))))))))
 
 (defun decknix--live-sessions-collect ()
   "Return a list of live-session entry plists (:name :provider :sid
