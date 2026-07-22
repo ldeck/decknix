@@ -117,6 +117,13 @@ yields nil (no flag emitted).")
   "Return the `claude --permission-mode' value for MODE-ID, or nil."
   (and mode-id (cdr (assoc mode-id decknix--agent-cli-permission-mode-map))))
 
+(defconst decknix--agent-terminal-alt-permission-modes
+  '("acceptEdits" "bypassPermissions" "default")
+  "The practical `--permission-mode' postures offered as commented
+alternatives under each Claude session, so it can be resumed more or
+less permissively than its saved mode.  The session's own resolved
+mode is not repeated.")
+
 (defun decknix--agent-terminal-resume-command (provider-id session-id workspace
                                                            &optional mode-id)
   "Return a shell command that resumes SESSION-ID in a terminal, or nil.
@@ -183,14 +190,24 @@ switch) to avoid two live clients on one conversation."
           (insert "# prompt); change to bypassPermissions by hand for a fully unattended run.\n\n")
           (dolist (r rows)
             (let ((name (nth 0 r)) (provider (nth 1 r))
-                  (sid (nth 2 r)) (cmd (nth 4 r)))
+                  (sid (nth 2 r)) (ws (nth 3 r)) (cmd (nth 4 r)))
               (insert (format "# %s  [%s]%s\n" name (or provider "?")
                               (if sid (format "  %s" (substring sid 0 (min 8 (length sid)))) "")))
-              (if cmd
-                  (insert cmd "\n\n")
+              (cond
+               ((null cmd)
                 (insert (format "# no terminal CLI for provider %s%s — reopen via the picker\n\n"
                                 (or provider "?")
-                                (if sid "" " (no session id yet)"))))))
+                                (if sid "" " (no session id yet)"))))
+               (t
+                (insert cmd "\n")
+                ;; Offer the other permission postures as commented variants.
+                (when (eq provider 'claude-code)
+                  (dolist (alt decknix--agent-terminal-alt-permission-modes)
+                    (let ((altcmd (decknix--agent-terminal-resume-command
+                                   provider sid ws alt)))
+                      (when (and altcmd (not (equal altcmd cmd)))
+                        (insert (format "#   or: %s\n" altcmd))))))
+                (insert "\n")))))
           (when (null rows) (insert "# (no live agent-shell sessions)\n"))
           (goto-char (point-min))
           (view-mode 1))
