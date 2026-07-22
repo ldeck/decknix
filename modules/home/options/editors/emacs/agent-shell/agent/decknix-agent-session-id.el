@@ -265,7 +265,7 @@ flag / non-Claude)."
         (line (line-number-at-pos)))
     (erase-buffer)
     (insert (propertize
-             "Live agent sessions (attention-sorted) — RET/w copy · m/u mark · p perm-mode · v board · g refresh · q quit\n\n"
+             "Live agent sessions (attention-sorted) — RET jump · w copy · m/u mark · p perm · v board · g refresh · q quit\n\n"
              'face 'font-lock-comment-face))
     (dolist (entry decknix--live-sessions-entries)
       (let* ((sid (plist-get entry :sid))
@@ -310,7 +310,7 @@ Cards carry the same `decknix-idx' property as the list, so mark / copy
          (idx 0))
     (erase-buffer)
     (insert (propertize
-             "Live agent sessions — board · v list · m mark · RET/w copy · p perm · g refresh · q quit\n\n"
+             "Live agent sessions — board · RET jump · w copy · v list · m mark · p perm · g refresh · q quit\n\n"
              'face 'font-lock-comment-face))
     (dolist (e entries)
       (let ((st (or (plist-get e :state) 'idle)))
@@ -417,9 +417,20 @@ Only Claude sessions are affected; \"none\" drops the flag."
   (setq decknix--live-sessions-entries (decknix--live-sessions-collect))
   (decknix--live-sessions-redraw))
 
+(defun decknix-live-sessions-jump ()
+  "Jump to the live agent-shell buffer for the session at point."
+  (interactive)
+  (let* ((e (decknix--live-sessions-current-entry))
+         (buf (and e (get-buffer (plist-get e :name)))))
+    (cond ((null e)   (user-error "No session at point"))
+          ((null buf) (user-error "Buffer %s is gone — refresh (g)"
+                                  (plist-get e :name)))
+          (t (pop-to-buffer buf)))))
+
 (defvar decknix-live-sessions-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET") #'decknix-live-sessions-copy)
+    (define-key map (kbd "RET") #'decknix-live-sessions-jump)
+    (define-key map (kbd "o")   #'decknix-live-sessions-jump)
     (define-key map (kbd "w")   #'decknix-live-sessions-copy)
     (define-key map (kbd "c")   #'decknix-live-sessions-copy)
     (define-key map (kbd "m")   #'decknix-live-sessions-mark)
@@ -445,8 +456,9 @@ command carries the session across a `decknix switch' (or out of Emacs).
 Run the copied command AFTER Emacs releases the session to avoid two
 clients on one conversation.
 
-Keys: RET/w copy · m/u mark · U unmark-all · p set permission mode (on
-marked or current) · g refresh · q quit."
+Keys: RET/o jump to session · w/c copy resume command · m/u mark · U
+unmark-all · p set permission mode (on marked or current) · v toggle
+list/board layout · g refresh · q quit."
   (interactive)
   (with-current-buffer (get-buffer-create "*live-agent-sessions*")
     (decknix-live-sessions-mode)
