@@ -1775,6 +1775,19 @@ let
     ];
   };
 
+  # Magit-style DB connect over jumpbox tunnels (sole occupant of `db/').
+  # Pure deps only (transient / sql / seq / subr-x are built-in), so no
+  # `packageRequires'.  Services come from `decknix-db-services', populated
+  # by the NurtureCloud config; the package ships empty.
+  decknix-db-el = mkEmacsTestedPackage {
+    pname = "decknix-db";
+    src = ./db;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-db-test.el"
+    ];
+  };
+
   # PR B.46: custom auggie command discovery carved out of
   # `decknix-agent-shell-main' (main-bulk).  Co-resident with the
   # rest of the agent/ persistence + detection cluster.  Owns the
@@ -2677,6 +2690,7 @@ in
           decknix-agent-command-discover-el
           decknix-session-state-el
           decknix-agent-session-id-el
+          decknix-db-el
           decknix-agent-clipboard-el
           decknix-agent-help-el
           decknix-agent-header-el
@@ -3654,6 +3668,13 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; of the agent prefix map.
         (require 'decknix-capture)
         (declare-function decknix-capture "decknix-capture" (&optional with-body))
+
+        ;; DB connect: `M-x decknix-db' -> magit-style transient to reach a
+        ;; managed database over its jumpbox tunnel, least-privilege first.
+        ;; Services come from `decknix-db-services' (set by the NurtureCloud
+        ;; config); the package ships empty.
+        (require 'decknix-db)
+        (declare-function decknix-db "decknix-db")
 
         ;; Live support monitoring dashboard (`C-c A D', bound below): a
         ;; deterministic, LLM-free DoS-board view fed by `atlassian-cli' that
