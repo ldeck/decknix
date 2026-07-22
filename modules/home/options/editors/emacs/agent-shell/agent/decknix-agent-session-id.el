@@ -265,7 +265,7 @@ flag / non-Claude)."
         (line (line-number-at-pos)))
     (erase-buffer)
     (insert (propertize
-             "Live agent sessions (attention-sorted) — RET jump · w copy · m/u mark · p perm · v board · g refresh · q quit\n\n"
+             "Live agent sessions (attention-sorted) — RET jump · w copy · m/u mark · M/U all · p perm · v board · g refresh · q quit\n\n"
              'face 'font-lock-comment-face))
     (dolist (entry decknix--live-sessions-entries)
       (let* ((sid (plist-get entry :sid))
@@ -310,7 +310,7 @@ Cards carry the same `decknix-idx' property as the list, so mark / copy
          (idx 0))
     (erase-buffer)
     (insert (propertize
-             "Live agent sessions — board · RET jump · w copy · v list · m mark · p perm · g refresh · q quit\n\n"
+             "Live agent sessions — board · RET jump · w copy · v list · m/u mark · M/U all · p perm · g refresh · q quit\n\n"
              'face 'font-lock-comment-face))
     (dolist (e entries)
       (let ((st (or (plist-get e :state) 'idle)))
@@ -387,6 +387,12 @@ Cards carry the same `decknix-idx' property as the list, so mark / copy
   (dolist (e decknix--live-sessions-entries) (plist-put e :marked nil))
   (decknix--live-sessions-redraw))
 
+(defun decknix-live-sessions-mark-all ()
+  "Mark every session."
+  (interactive)
+  (dolist (e decknix--live-sessions-entries) (plist-put e :marked t))
+  (decknix--live-sessions-redraw))
+
 (defun decknix-live-sessions-set-perm (mode)
   "Set the `--permission-mode' MODE on the marked sessions (or this line).
 Only Claude sessions are affected; \"none\" drops the flag."
@@ -444,6 +450,7 @@ Permission-mode overrides are re-derived from the session's saved mode."
     (define-key map (kbd "m")   #'decknix-live-sessions-mark)
     (define-key map (kbd "u")   #'decknix-live-sessions-unmark)
     (define-key map (kbd "U")   #'decknix-live-sessions-unmark-all)
+    (define-key map (kbd "M")   #'decknix-live-sessions-mark-all)
     (define-key map (kbd "p")   #'decknix-live-sessions-set-perm)
     (define-key map (kbd "g")   #'decknix-live-sessions-refresh)
     (define-key map (kbd "v")   #'decknix-live-sessions-toggle-layout)
@@ -464,9 +471,9 @@ command carries the session across a `decknix switch' (or out of Emacs).
 Run the copied command AFTER Emacs releases the session to avoid two
 clients on one conversation.
 
-Keys: RET/o jump to session · w/c copy resume command · m/u mark · U
-unmark-all · p set permission mode (on marked or current) · v toggle
-list/board layout · g refresh · q quit."
+Keys: RET/o jump to session · w/c copy resume command · m/u mark · M/U
+mark/unmark all · p set permission mode (on marked or current) · v
+toggle list/board layout · g refresh · q quit."
   (interactive)
   (with-current-buffer (get-buffer-create "*live-agent-sessions*")
     (decknix-live-sessions-mode)
