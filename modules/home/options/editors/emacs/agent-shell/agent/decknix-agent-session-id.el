@@ -92,6 +92,15 @@
 (declare-function decknix-agent-purpose-resolve "decknix-agent-purposes" (purpose))
 (declare-function decknix--agent-workspace-for-conv-key
                   "decknix-agent-session-workspace" (conv-key))
+;; Soft dependency: the state classifier decorates rows with a lifecycle
+;; state + attention score when loaded; the list still works without it.
+(require 'decknix-session-state nil t)
+(declare-function decknix-session-classify-status "decknix-session-state" (status))
+(declare-function decknix-session-state "decknix-session-state" (result))
+(declare-function decknix-session-score "decknix-session-state" (result))
+(declare-function decknix-session-state-glyph "decknix-session-state" (state))
+(declare-function decknix-session-state-label "decknix-session-state" (state))
+(declare-function decknix--header-detect-status "decknix-agent-header" ())
 
 (defconst decknix--agent-terminal-resume-clis
   '((claude-code . "claude")
@@ -204,12 +213,27 @@ flag / non-Claude)."
                                      (decknix--agent-session-mode-for-conv-key conv-key))
                                 (and (fboundp 'decknix-agent-purpose-resolve)
                                      (plist-get (decknix-agent-purpose-resolve 'new-session)
-                                                :mode)))))
+                                                :mode))))
+                   ;; Lifecycle state + attention score from the existing
+                   ;; per-buffer status detection (when the classifier is loaded).
+                   (cls (when (and (fboundp 'decknix--header-detect-status)
+                                   (fboundp 'decknix-session-classify-status))
+                          (decknix-session-classify-status
+                           (decknix--header-detect-status))))
+                   (state (and cls (decknix-session-state cls)))
+                   (score (and cls (decknix-session-score cls))))
               (push (list :name (buffer-name) :provider provider :sid sid
                           :ws ws :perm (decknix--agent-cli-permission-mode mode-id)
-                          :marked nil)
+                          :state state :score score :marked nil)
                     entries))))))
-    (nreverse entries)))
+    (setq entries (nreverse entries))
+    ;; Attention-to-top: sort by score when any entry is classified.  Emacs
+    ;; `sort' is stable, so newest-first order is preserved within a score.
+    (if (seq-some (lambda (e) (plist-get e :score)) entries)
+        (sort entries (lambda (a b)
+                        (> (or (plist-get a :score) -1)
+                           (or (plist-get b :score) -1))))
+      entries)))
 
 (defun decknix--live-sessions-entry-command (entry)
   "Return the terminal resume command for ENTRY, or nil."
@@ -227,19 +251,26 @@ flag / non-Claude)."
         (line (line-number-at-pos)))
     (erase-buffer)
     (insert (propertize
-             "Live agent sessions — RET/w copy · m/u mark · p perm-mode · g refresh · q quit\n\n"
+             "Live agent sessions (attention-sorted) — RET/w copy · m/u mark · p perm-mode · g refresh · q quit\n\n"
              'face 'font-lock-comment-face))
     (dolist (entry decknix--live-sessions-entries)
       (let* ((sid (plist-get entry :sid))
              (provider (plist-get entry :provider))
              (perm (plist-get entry :perm))
+             (state (plist-get entry :state))
+             (glyph (if (and state (fboundp 'decknix-session-state-glyph))
+                        (decknix-session-state-glyph state) " "))
+             (state-str (if (and state (fboundp 'decknix-session-state-label))
+                            (decknix-session-state-label state) ""))
              (has-cmd (decknix--live-sessions-entry-command entry))
              (start (point)))
-        (insert (format "%s %-28s %-13s %-9s %s\n"
+        (insert (format "%s %s %-26s %-11s %-8s %-11s %s\n"
                         (if (plist-get entry :marked) "*" " ")
-                        (truncate-string-to-width (or (plist-get entry :name) "?") 28)
+                        glyph
+                        (truncate-string-to-width (or (plist-get entry :name) "?") 26)
                         (format "[%s]" (or provider "?"))
                         (if sid (substring sid 0 (min 8 (length sid))) "—")
+                        state-str
                         (cond ((not has-cmd) "(no CLI — use picker)")
                               (perm (concat "--permission-mode " perm))
                               ((eq provider 'claude-code) "(default perms)")
