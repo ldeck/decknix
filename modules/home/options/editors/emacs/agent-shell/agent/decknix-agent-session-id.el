@@ -85,7 +85,11 @@
 
 (defvar decknix--agent-provider-id)
 (defvar decknix--agent-session-workspace)
+(defvar decknix--agent-conv-key)
 (declare-function agent-shell-buffers "agent-shell" ())
+(declare-function decknix--agent-session-mode-for-conv-key
+                  "decknix-agent-session-mode" (conv-key))
+(declare-function decknix-agent-purpose-resolve "decknix-agent-purposes" (purpose))
 
 (defconst decknix--agent-terminal-resume-clis
   '((claude-code . "claude")
@@ -94,18 +98,44 @@
 Providers absent here have no known interactive resume CLI; their
 sessions can still be reopened via the picker (\\[decknix-agent-session-picker]).")
 
-(defun decknix--agent-terminal-resume-command (provider-id session-id workspace)
+(defconst decknix--agent-cli-permission-mode-map
+  '(("default"           . "default")
+    ("acceptEdits"       . "acceptEdits")
+    ("dontAsk"           . "dontAsk")
+    ("bypassPermissions" . "bypassPermissions")
+    ("plan"              . "plan")
+    ;; decknix's `auto' (model-classifier mode) has no `claude
+    ;; --permission-mode' equivalent; the closest non-dangerous mapping
+    ;; keeps edits flowing (Bash/MCP still prompt).  Bump to
+    ;; bypassPermissions by hand for a fully unattended run.
+    ("auto"              . "acceptEdits"))
+  "Map a decknix session mode-id to a `claude --permission-mode' value.
+Values are exactly the CLI's accepted choices; an unmapped mode-id
+yields nil (no flag emitted).")
+
+(defun decknix--agent-cli-permission-mode (mode-id)
+  "Return the `claude --permission-mode' value for MODE-ID, or nil."
+  (and mode-id (cdr (assoc mode-id decknix--agent-cli-permission-mode-map))))
+
+(defun decknix--agent-terminal-resume-command (provider-id session-id workspace
+                                                           &optional mode-id)
   "Return a shell command that resumes SESSION-ID in a terminal, or nil.
 PROVIDER-ID selects the CLI (see `decknix--agent-terminal-resume-clis');
 the command cd's into WORKSPACE first so the provider resolves the
-right project."
+right project.  For the Claude CLI, MODE-ID is mapped to a
+`--permission-mode' flag (see `decknix--agent-cli-permission-mode-map')
+so the resumed session keeps the same permission posture."
   (let ((cli (alist-get provider-id decknix--agent-terminal-resume-clis)))
     (when (and cli session-id (stringp session-id)
                (not (string-empty-p session-id)))
-      (format "(cd %s && %s --resume %s)"
-              (shell-quote-argument (or workspace
-                                        (expand-file-name default-directory)))
-              cli session-id))))
+      (let ((perm (and (equal cli "claude")
+                       (decknix--agent-cli-permission-mode mode-id))))
+        (format "(cd %s && %s%s --resume %s)"
+                (shell-quote-argument (or workspace
+                                          (expand-file-name default-directory)))
+                cli
+                (if perm (format " --permission-mode %s" perm) "")
+                session-id)))))
 
 (defun decknix-agent-live-sessions-terminal ()
   "List live agent sessions with terminal commands to resume them.
@@ -129,9 +159,16 @@ switch) to avoid two live clients on one conversation."
             (let* ((provider (bound-and-true-p decknix--agent-provider-id))
                    (sid (bound-and-true-p decknix--agent-auggie-session-id))
                    (ws (bound-and-true-p decknix--agent-session-workspace))
+                   (conv-key (bound-and-true-p decknix--agent-conv-key))
+                   (mode-id (or (and conv-key
+                                     (fboundp 'decknix--agent-session-mode-for-conv-key)
+                                     (decknix--agent-session-mode-for-conv-key conv-key))
+                                (and (fboundp 'decknix-agent-purpose-resolve)
+                                     (plist-get (decknix-agent-purpose-resolve 'new-session)
+                                                :mode))))
                    (cmd (and provider
                              (decknix--agent-terminal-resume-command
-                              provider sid ws))))
+                              provider sid ws mode-id))))
               (push (list (buffer-name) provider sid ws cmd) rows))))))
     (setq rows (nreverse rows))
     (let ((resumable 0))
@@ -141,7 +178,9 @@ switch) to avoid two live clients on one conversation."
           (erase-buffer)
           (insert (format "# %d live agent session(s) — %d resumable from a terminal\n"
                           (length rows) resumable))
-          (insert "# Run a block in a terminal AFTER a switch has released the session.\n\n")
+          (insert "# Run a block in a terminal AFTER a switch has released the session.\n")
+          (insert "# 'auto' sessions resume as --permission-mode acceptEdits (Bash/MCP still\n")
+          (insert "# prompt); change to bypassPermissions by hand for a fully unattended run.\n\n")
           (dolist (r rows)
             (let ((name (nth 0 r)) (provider (nth 1 r))
                   (sid (nth 2 r)) (cmd (nth 4 r)))
