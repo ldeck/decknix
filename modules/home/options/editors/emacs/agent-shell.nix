@@ -4007,6 +4007,7 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c A w" "workspace"
             "C-c A j" "attention jump"
             "C-c A o" "sidebar focus"
+            "C-c A O" "sidebar toggle (this tab)"
             "C-c A q" "quit session"
             "C-c A R" "rename session"
             "C-c A r" "recent sessions"
@@ -4019,10 +4020,27 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; Global keybindings under C-c A prefix
         ;; Only actions that make sense from OUTSIDE an agent-shell buffer.
         ;; Buffer-local bindings (C-c ...) handle in-buffer actions — no duplicates.
+
+        ;; Toggle the agent sidebar's visibility on the CURRENT tab without
+        ;; reflowing the tab's main window layout (the sidebar is a side
+        ;; window).  Unlike `window-toggle-side-windows' (C-x w s), which only
+        ;; toggles side windows that already exist on the current tab (and
+        ;; errors "no side window state" on a plain single-window tab), this
+        ;; opens the sidebar on the current tab when absent and hides it when
+        ;; present — so it works from any tab.
+        (defun decknix-sidebar-visibility-toggle ()
+          "Toggle the agent sidebar's visibility on the current tab."
+          (interactive)
+          (let ((win (get-buffer-window agent-shell-workspace-sidebar-buffer-name)))
+            (if (and win (window-live-p win))
+                (delete-window win)
+              (agent-shell-workspace-sidebar-open))))
+
         (define-key decknix-agent-prefix-map (kbd "a") 'agent-shell)                      ; Start/switch to agent
         (define-key decknix-agent-prefix-map (kbd "n") 'decknix-agent-session-new)          ; New session (guided)
         (define-key decknix-agent-prefix-map (kbd "f") 'decknix-agent-session-fork)         ; Fork session (inherit ws+tags)
         (define-key decknix-agent-prefix-map (kbd "o") 'decknix-focus-sidebar)               ; Jump to the sidebar window
+        (define-key decknix-agent-prefix-map (kbd "O") 'decknix-sidebar-visibility-toggle)   ; Toggle sidebar visibility (this tab)
         (define-key decknix-agent-prefix-map (kbd "q") 'decknix-agent-session-quit)         ; Quit/close session
         (define-key decknix-agent-prefix-map (kbd "?") 'decknix-agent-help-map)           ; Help sub-prefix
         (define-key decknix-agent-help-map (kbd "k") 'decknix-agent-help-keys)            ; Keybindings
