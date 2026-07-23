@@ -1945,22 +1945,43 @@ Triggers an async refresh when the entry is missing or older than
       (or (plist-get (decknix-hub-worktree-registry-get rk) :primary)
           (cdr (assoc rk (decknix--hub-worktree-discover-clones)))))))
 
+(defvar decknix--hub-worktree-live-ws-cache nil
+  "Cached live-workspace hash table from `decknix--hub-worktree-live-workspaces'.")
+(defvar decknix--hub-worktree-live-ws-time 0.0
+  "`float-time' when `decknix--hub-worktree-live-ws-cache' was built.")
+(defconst decknix--hub-worktree-live-ws-ttl 1.0
+  "Seconds the live-workspace set is reused before rebuilding.
+A single sidebar paint calls `decknix--hub-worktree-live-workspaces' once per
+worktree row (dozens of times), each rebuild iterating every agent buffer.
+The set is identical within a paint, so a short TTL collapses those rebuilds
+to one; it only changes when a session opens/closes, where <=1 s stale is
+imperceptible.")
+
 (defun decknix--hub-worktree-live-workspaces ()
   "Return a hash table of normalised workspace dirs used by live sessions.
 Keys are file-name-as-directory expanded paths; value is t.  Used by
 `decknix--hub-worktree-row-badge' to mark the active session's branch
-with `⎇*' instead of plain `⎇'."
-  (let ((set (make-hash-table :test 'equal)))
-    (when (fboundp 'agent-shell-buffers)
-      (dolist (buf (agent-shell-buffers))
-        (when (buffer-live-p buf)
-          (let ((dir (with-current-buffer buf
-                       default-directory)))
-            (when (and dir (stringp dir))
-              (puthash (file-name-as-directory
-                        (expand-file-name dir))
-                       t set))))))
-    set))
+with `⎇*' instead of plain `⎇'.  Cached for
+`decknix--hub-worktree-live-ws-ttl' seconds so a paint's many per-row calls
+reuse one build instead of re-scanning every buffer each time."
+  (let ((now (float-time)))
+    (if (and decknix--hub-worktree-live-ws-cache
+             (< (- now decknix--hub-worktree-live-ws-time)
+                decknix--hub-worktree-live-ws-ttl))
+        decknix--hub-worktree-live-ws-cache
+      (setq decknix--hub-worktree-live-ws-time now)
+      (setq decknix--hub-worktree-live-ws-cache
+            (let ((set (make-hash-table :test 'equal)))
+              (when (fboundp 'agent-shell-buffers)
+                (dolist (buf (agent-shell-buffers))
+                  (when (buffer-live-p buf)
+                    (let ((dir (with-current-buffer buf
+                                 default-directory)))
+                      (when (and dir (stringp dir))
+                        (puthash (file-name-as-directory
+                                  (expand-file-name dir))
+                                 t set))))))
+              set)))))
 
 (defun decknix--hub-worktree-row-badge (repo branch)
   "Return a 2-char propertized badge for REPO @ BRANCH (spec §3.6.3).
