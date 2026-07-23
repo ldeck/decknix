@@ -1282,6 +1282,18 @@ let
     ];
   };
 
+  # Tint tab-bar tabs by the status of the single agent they hold.  Uses
+  # `decknix--header-detect-status' at runtime (resolved in the daemon's
+  # load-path); no build-time dep, so packageRequires stays empty.
+  decknix-agent-tab-status-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-tab-status";
+    src = ./agent-shell/tab-status;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-tab-status-test.el"
+    ];
+  };
+
   # PR B.66: four small read-only buffer / conv-key lookups
   # carved out of `decknix-agent-shell-main' (main-bulk).  Owns:
   #   `-buffer-session-id'                auggie-id with ACP fallback
@@ -2694,6 +2706,7 @@ in
           decknix-agent-clipboard-el
           decknix-agent-help-el
           decknix-agent-header-el
+          decknix-agent-tab-status-el
           decknix-focus-el
           decknix-agent-table-el
           decknix-agent-copy-region-el
@@ -3320,6 +3333,16 @@ in
         ;; shell startup hook below (which lives in the heredoc per
         ;; AGENTS.md Rule 2: top-level side-effects belong in main).
         (require 'decknix-agent-header)
+
+        ;; Tint tab-bar tabs by the status of the single agent they hold.  The
+        ;; tab-bar keymap is uncached (rebuilt each redisplay), so the header's
+        ;; existing status poll (force-mode-line-update) repaints the tabs —
+        ;; no extra timer.  Install idempotently across hot-reloads.
+        (require 'decknix-agent-tab-status)
+        (declare-function decknix-agent-tab-status-install "decknix-agent-tab-status")
+        (defvar decknix-agent-tab-status-enable)
+        (decknix-agent-tab-status-install)
+
         (declare-function decknix--header-update "decknix-agent-header")
         (declare-function decknix--header-build "decknix-agent-header")
         (declare-function decknix--header-start-timer
