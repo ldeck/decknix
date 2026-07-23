@@ -63,14 +63,28 @@ older than this it is `done'.  Default 10 minutes."
   :type 'integer
   :group 'decknix)
 
+(defvar decknix--agent-subagent-mtime-cache (make-hash-table :test 'equal :size 512)
+  "Memoize ISO-8601 `modified' string -> float-time.
+`date-to-time' is ~20 ms per call (it runs the full `parse-time-string'),
+and the sidebar re-parses the SAME `modified' strings for every sub-agent on
+every paint — hundreds of parses each repaint, which dominated the paint cost
+(seconds).  A sub-agent's `modified' string is stable until it writes again,
+so keying the parse on the string collapses those repeats to a single parse.")
+
 (defun decknix--agent-subagent-mtime (subagent)
   "Return SUBAGENT's last-write time as float-time, or nil.
 Reads the `modified' ISO-8601 field produced by the session walker;
 returns nil when it is absent or unparseable, so callers can treat an
-unknown age as `done' rather than erroring."
+unknown age as `done' rather than erroring.  Memoised on the `modified'
+string (see `decknix--agent-subagent-mtime-cache') because `date-to-time' is
+expensive and the same strings recur across every sidebar paint."
   (let ((modified (and (listp subagent) (alist-get 'modified subagent))))
     (when (and (stringp modified) (not (string-empty-p modified)))
-      (ignore-errors (float-time (date-to-time modified))))))
+      (let ((cached (gethash modified decknix--agent-subagent-mtime-cache)))
+        (or cached
+            (let ((v (ignore-errors (float-time (date-to-time modified)))))
+              (when v (puthash modified v decknix--agent-subagent-mtime-cache))
+              v))))))
 
 (defun decknix--agent-subagent-state (subagent now &optional parent-live-p)
   "Return the derived liveness state of SUBAGENT at NOW.
