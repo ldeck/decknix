@@ -39,14 +39,29 @@
 (require 'decknix-hub-ci)
 (require 'decknix-hub-mention-bot)
 
+(defvar decknix--hub-age-parse-cache (make-hash-table :test 'equal :size 256)
+  "Memoize ISO-time string -> epoch float (or nil for unparseable).
+`iso8601-parse'+`encode-time' is ~8 ms, and the sidebar formats the SAME
+timestamps for dozens of rows on every paint.  The parsed epoch of a fixed
+ISO string never changes, so caching it collapses those repeats; the age math
+still uses the live clock, so ages stay fresh.")
+
 (defun decknix--hub-format-age (iso-time)
-  "Format an ISO timestamp as a compact age string (e.g. 3d, 5h, 12m)."
+  "Format an ISO timestamp as a compact age string (e.g. 3d, 5h, 12m).
+The parse is memoized (see `decknix--hub-age-parse-cache'); only the cheap
+subtraction from the current time runs per call."
   (if (and iso-time (stringp iso-time))
-      (let* ((then (condition-case nil
-                       (encode-time (iso8601-parse iso-time))
-                     (error nil)))
-             (secs (when then
-                     (float-time (time-subtract (current-time) then)))))
+      (let* ((cached (gethash iso-time decknix--hub-age-parse-cache 'miss))
+             (then (if (eq cached 'miss)
+                       (let ((v (condition-case nil
+                                    (float-time (encode-time (iso8601-parse iso-time)))
+                                  (error nil))))
+                         (puthash iso-time v decknix--hub-age-parse-cache)
+                         v)
+                     cached))
+             ;; `(current-time)' (not bare `(float-time)') so a stubbed clock
+             ;; is honoured in tests; identical to real-now in production.
+             (secs (when then (- (float-time (current-time)) then))))
         (cond
          ((null secs) "?")
          ((>= secs 86400) (format "%dd" (truncate (/ secs 86400))))
