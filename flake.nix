@@ -119,6 +119,20 @@
                 llvm = llvmPrev.llvm.overrideAttrs { doCheck = false; };
               });
             };
+          # setproctitle 1.3.7's fork tests segfault (SIGSEGV / exitcode -11)
+          # in the macOS build sandbox on Python 3.13, breaking any dependent
+          # (e.g. pgcli).  Skip its checkPhase across every python package set
+          # via pythonPackagesExtensions so all consumers pick up the fix.
+          # Mirrors the existing pkgs/iap-proxy override, but global.
+            setproctitleTestFixOverlay = final: prev: {
+              pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
+                (pyFinal: pyPrev: {
+                  setproctitle = pyPrev.setproctitle.overridePythonAttrs (_: {
+                    doCheck = false;
+                  });
+                })
+              ];
+            };
           in
           {
             imports =
@@ -137,7 +151,7 @@
             # modules/darwin) because only this flake closes over the private
             # nixpkgs-rust input.
             # llvmTestFixOverlay disables LLVM 20 tests that fail on macOS Sequoia.
-            config.nixpkgs.overlays = [ llvmTestFixOverlay unstableOverlay self.overlays.default ];
+            config.nixpkgs.overlays = [ llvmTestFixOverlay setproctitleTestFixOverlay unstableOverlay self.overlays.default ];
 
             # Propagate pkgs.unstable AND the decknix custom-package overlay
             # (decknix-cli/hub, nix-open, claude-agent-acp, pi-acp) into
@@ -145,7 +159,7 @@
             # so it does not inherit the system's nixpkgs.overlays — modules
             # that reference e.g. pkgs.pi-acp need the overlay applied here too.
             config.home-manager.sharedModules = [{
-              nixpkgs.overlays = [ llvmTestFixOverlay unstableOverlay self.overlays.default ];
+              nixpkgs.overlays = [ llvmTestFixOverlay setproctitleTestFixOverlay unstableOverlay self.overlays.default ];
             }];
           };
         };
