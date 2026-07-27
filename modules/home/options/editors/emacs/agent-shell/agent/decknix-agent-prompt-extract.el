@@ -63,29 +63,81 @@ on subsequent calls."
               " // \"\" | select(length > 0)] | reverse\n")))
   decknix--prompt-extract-jq-filter-file)
 
-(defun decknix--prompt-extract-from-file (file)
-  "Extract user prompts from a single session FILE using jq.
-Returns a list of non-empty strings, newest first.  Returns nil
-on shell / parse failure, missing file, or empty / non-array
-output -- consumers treat nil as `no prompts'."
-  (condition-case nil
-      (let* ((jqf (decknix--prompt-extract-ensure-jq-filter))
-             (raw (shell-command-to-string
-                   (concat "jq -c -f "
-                           (shell-quote-argument jqf) " "
-                           (shell-quote-argument file)
-                           " 2>/dev/null")))
-             (trimmed (string-trim raw)))
-        (when (and (not (string-empty-p trimmed))
-                   (string-prefix-p "[" trimmed))
-          (let* ((json-array-type 'list)
-                 (json-key-type 'symbol)
-                 (msgs (json-read-from-string trimmed)))
-            (seq-filter (lambda (m)
-                          (and (stringp m)
-                               (not (string-empty-p (string-trim m)))))
-                        msgs))))
-    (error nil)))
+;; ── Hexagonal extraction: one PORT, per-provider ADAPTERS ──────────────
+;;
+;; A session file's on-disk shape differs per agent backend (auggie: a single
+;; JSON with `chatHistory[].exchange'; claude-code: line-delimited `.jsonl'
+;; with `{"type":"user","message":{"content":...}}'; pi/gemini: TBD).  So
+;; prompt extraction is a PORT — `decknix--prompt-extract-from-file' — that
+;; dispatches to a per-provider ADAPTER keyed by provider-id.  The core knows
+;; no format; a new backend plugs in by registering an adapter fn (FILE -> list
+;; of prompt strings, NEWEST FIRST) in `decknix-prompt-extract-adapters'.
+
+(defvar decknix-prompt-extract-adapters
+  '((auggie      . decknix--prompt-extract-auggie)
+    (claude-code . decknix--prompt-extract-claude))
+  "Alist of provider-id -> prompt-extraction adapter fn.
+Each adapter takes a session FILE and returns the user's prompt strings, NEWEST
+FIRST.  Providers with no entry fall back to the auggie adapter (safe: it
+yields nil for a non-auggie file).  Register an adapter to add a backend (pi,
+gemini, ...).")
+
+(defun decknix--prompt-extract-adapter (provider-id)
+  "Return the prompt-extraction adapter fn for PROVIDER-ID (auggie default)."
+  (or (cdr (assq provider-id decknix-prompt-extract-adapters))
+      #'decknix--prompt-extract-auggie))
+
+(defun decknix--prompt-extract-parse-ndjson-strings (raw)
+  "Parse RAW (newline-delimited JSON) into its non-blank string values.
+Returns them in INPUT order; non-string, blank, or unparseable lines drop."
+  (let ((json-array-type 'list) (json-key-type 'symbol) (out nil))
+    (dolist (line (split-string (or raw "") "\n" t) (nreverse out))
+      (let ((s (ignore-errors (json-read-from-string line))))
+        (when (and (stringp s) (not (string-empty-p (string-trim s))))
+          (push s out))))))
+
+(defun decknix--prompt-extract-claude (file)
+  "Adapter: user prompts from a Claude `.jsonl' session FILE, newest first.
+jq STREAMS the file line by line (no slurp — low memory), taking the text of
+each `type==user' message; tool-result-only messages collapse to \"\" and are
+dropped in elisp.  Unbounded but cheap (~1 s on a 17 MB / 6 k-line transcript)
+and run once on resume; a line/byte cap was rejected because it under-samples
+tool-heavy sessions (recent turns are mostly tool-result `user' messages)."
+  (let* ((jq (concat "select(.type==\"user\") | "
+                     "(.message.content | if type==\"array\" then "
+                     "(map(select(.type==\"text\")|.text)|join(\"\\n\")) "
+                     "else . end) | select(type==\"string\")"))
+         (cmd (format "jq -c %s %s 2>/dev/null"
+                      (shell-quote-argument jq)
+                      (shell-quote-argument file)))
+         (raw (shell-command-to-string cmd)))
+    ;; jq emits oldest-first; reverse to newest-first.
+    (nreverse (decknix--prompt-extract-parse-ndjson-strings raw))))
+
+(defun decknix--prompt-extract-auggie (file)
+  "Adapter: user prompts from an auggie session FILE (single JSON), newest first."
+  (let* ((jqf (decknix--prompt-extract-ensure-jq-filter))
+         (raw (shell-command-to-string
+               (concat "jq -c -f " (shell-quote-argument jqf) " "
+                       (shell-quote-argument file) " 2>/dev/null")))
+         (trimmed (string-trim raw)))
+    (when (and (not (string-empty-p trimmed))
+               (string-prefix-p "[" trimmed))
+      (let ((json-array-type 'list) (json-key-type 'symbol))
+        (seq-filter (lambda (m)
+                      (and (stringp m) (not (string-empty-p (string-trim m)))))
+                    (json-read-from-string trimmed))))))
+
+(defun decknix--prompt-extract-from-file (file &optional provider-id)
+  "Extract the user's prompts from session FILE (newest first).
+PORT of the hexagonal extraction: dispatches to the per-provider adapter in
+`decknix-prompt-extract-adapters' (PROVIDER-ID nil -> auggie default).  Returns
+nil on a missing file or any adapter/parse failure -- consumers treat nil as
+`no prompts'."
+  (when (and file (stringp file) (file-exists-p file))
+    (condition-case nil
+        (funcall (decknix--prompt-extract-adapter provider-id) file)
+      (error nil))))
 
 (provide 'decknix-agent-prompt-extract)
 ;;; decknix-agent-prompt-extract.el ends here

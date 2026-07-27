@@ -138,5 +138,55 @@ Caller is expected to issue its own `skip-unless' for jq presence."
         "{not valid json" file
       (should (null (decknix--prompt-extract-from-file file))))))
 
+;; -- hexagonal: adapter dispatch (pure) ---------------------------
+
+(ert-deftest decknix-agent-prompt-extract/adapter-dispatch ()
+  "Provider-id selects the adapter; unknown / nil fall back to auggie."
+  (should (eq #'decknix--prompt-extract-claude
+              (decknix--prompt-extract-adapter 'claude-code)))
+  (should (eq #'decknix--prompt-extract-auggie
+              (decknix--prompt-extract-adapter 'auggie)))
+  ;; no adapter registered yet -> auggie default (safe, yields nil)
+  (should (eq #'decknix--prompt-extract-auggie
+              (decknix--prompt-extract-adapter 'pi)))
+  (should (eq #'decknix--prompt-extract-auggie
+              (decknix--prompt-extract-adapter nil))))
+
+;; -- hexagonal: NDJSON parsing (pure) -----------------------------
+
+(ert-deftest decknix-agent-prompt-extract/ndjson-parse-strings ()
+  "Parse keeps non-blank strings in input order; drops blanks/non-strings."
+  (should (equal '("a" "b")
+                 (decknix--prompt-extract-parse-ndjson-strings
+                  "\"a\"\n\"\"\n\"   \"\n\"b\"\n{\"x\":1}\nnot-json")))
+  (should (null (decknix--prompt-extract-parse-ndjson-strings "")))
+  (should (null (decknix--prompt-extract-parse-ndjson-strings nil))))
+
+;; -- claude adapter + port dispatch (jq) --------------------------
+
+(ert-deftest decknix-agent-prompt-extract/claude-adapter-jsonl ()
+  "Claude adapter extracts user prompts (string + text-array) newest-first,
+dropping assistant lines and tool-result-only user messages."
+  (skip-unless (decknix-agent-prompt-extract-test--jq-available-p))
+  (decknix-agent-prompt-extract-test--with-fixture
+      (concat
+       "{\"type\":\"user\",\"message\":{\"content\":\"first\"}}\n"
+       "{\"type\":\"assistant\",\"message\":{\"content\":\"reply\"}}\n"
+       "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"second\"}]}}\n"
+       "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"out\"}]}}\n"
+       "{\"type\":\"user\",\"message\":{\"content\":\"third\"}}\n")
+      file
+    (should (equal '("third" "second" "first")
+                   (decknix--prompt-extract-claude file)))))
+
+(ert-deftest decknix-agent-prompt-extract/port-dispatches-to-claude ()
+  "The port routes provider `claude-code' through the claude adapter."
+  (skip-unless (decknix-agent-prompt-extract-test--jq-available-p))
+  (decknix-agent-prompt-extract-test--with-fixture
+      "{\"type\":\"user\",\"message\":{\"content\":\"only\"}}\n"
+      file
+    (should (equal '("only")
+                   (decknix--prompt-extract-from-file file 'claude-code)))))
+
 (provide 'decknix-agent-prompt-extract-test)
 ;;; decknix-agent-prompt-extract-test.el ends here
