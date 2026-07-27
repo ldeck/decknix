@@ -300,6 +300,22 @@ let
     ];
   };
 
+  # The "living playbook": a read-only, auto-refreshing board that renders the
+  # `nc-dos-sidebar --json' runbook priority model (incidents -> alerts -> DoS)
+  # as magit-like lanes with single-key actions on the row at point.  It
+  # recomputes nothing — the nc-dos CLI (decknix-config) is the single engine
+  # and owns every spawn — so emacs + terminal stay in parity.  Pure
+  # parse/lane/format/header layer is ERT-tested; the async CLI run + timer are
+  # the impure shell.
+  decknix-dos-board-el = mkEmacsTestedPackage {
+    pname = "decknix-dos-board";
+    src = ./agent-shell/dos-board;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-dos-board-test.el"
+    ];
+  };
+
   decknix-sidebar-toggles-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-toggles";
     src = ./agent-shell/sidebar;
@@ -2738,6 +2754,7 @@ in
           decknix-capture-el
           decknix-support-dashboard-el
           decknix-support-workflow-el
+          decknix-dos-board-el
           decknix-agent-subagent-state-el
           decknix-agent-resourcing-el
           decknix-agent-rg-search-command-el
@@ -3722,6 +3739,24 @@ ${optionalString cfg.tableOverlay.enable ''
         (require 'decknix-support-workflow)
         (declare-function decknix-support-workflow "decknix-support-workflow")
 
+        ;; The living playbook — DoS priority board (`C-c A B', bound below).
+        ;; Renders the `nc-dos-sidebar --json' runbook model as magit-like,
+        ;; single-key-actionable lanes; recomputes nothing (the CLI is the one
+        ;; engine and owns spawns).  Its refresh tick is visibility-gated, so
+        ;; the timer is cheap to leave armed; re-armed idempotently across
+        ;; `decknix switch' hot-reloads.
+        (require 'decknix-dos-board)
+        (declare-function decknix-dos-board "decknix-dos-board")
+        (declare-function decknix-dos-board--tick "decknix-dos-board")
+        (defvar decknix-dos-board-refresh-interval)
+        (defvar decknix-dos-board--timer nil)
+        (when (timerp decknix-dos-board--timer)
+          (cancel-timer decknix-dos-board--timer))
+        (setq decknix-dos-board--timer
+              (run-with-timer decknix-dos-board-refresh-interval
+                              decknix-dos-board-refresh-interval
+                              #'decknix-dos-board--tick))
+
         ;; Always-on hitch profiler (default-on, `decknix-perf-hitch-toggle'
         ;; to disable at runtime).  Surfaces slow timers/commands so we can
         ;; keep optimising as the config grows.  `M-x decknix-perf-hitch-report'
@@ -4038,6 +4073,7 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c A p" "priority view"
             "C-c A v" "review last exchange"
             "C-c A D" "support dashboard"
+            "C-c A B" "DoS priority board (live)"
             "C-c A W" "support workflow (guided)"))
 
         ;; Global keybindings under C-c A prefix
@@ -4384,6 +4420,7 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         (define-key decknix-agent-prefix-map (kbd "c") 'decknix-agent-command-map)
         (define-key decknix-agent-prefix-map (kbd "C") 'decknix-capture)             ; Quick-capture issue/task
         (define-key decknix-agent-prefix-map (kbd "D") 'decknix-support-dashboard)   ; Live support/DoS-board dashboard
+        (define-key decknix-agent-prefix-map (kbd "B") 'decknix-dos-board)           ; Living playbook: DoS priority board
         (define-key decknix-agent-prefix-map (kbd "W") 'decknix-support-workflow)    ; Guided support daily workflow
         (define-key decknix-agent-command-map (kbd "c") 'decknix-agent-command-run)    ; Pick & insert
         (define-key decknix-agent-command-map (kbd "n") 'decknix-agent-command-new)    ; New
