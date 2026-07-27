@@ -810,6 +810,111 @@ to Confluence.  Paste it into the weekly report (`r' opens it) after editing."
       (call-interactively 'decknix-support-workflow)
     (message "Support workflow not available")))
 
+;; ---------------------------------------------------------------------------
+;; nc-dos CLI bridge — priority panel + fg/bg agent spawns + auto-spawn toggle.
+;; ---------------------------------------------------------------------------
+;;
+;; The terminal `nc-dos-sidebar' (decknix-config pkgs/nc-dos) is the single
+;; engine for the runbook priority panel and for spawning agents; the dashboard
+;; delegates to it so the emacs and terminal experiences stay in parity and
+;; share one state file (daily-check ticks, the auto-spawn toggle).  The
+;; foreground spawn stays emacs-native (`i'/`A' open an agent-shell session);
+;; the CLI owns background spawns (logged to its runs dir) and the toggle.
+;; These commands never block the UI.
+
+(defvar decknix-support-dashboard-dos-cli "nc-dos-sidebar"
+  "The nc-dos priority-console CLI used for the priority panel + agent spawns.")
+
+(defun decknix--support-dashboard-dos-run (args on-done)
+  "Run the nc-dos CLI with ARGS (a list) async; call ON-DONE with its stdout.
+Messages and no-ops when the CLI is not on PATH (e.g. before `decknix switch')."
+  (if (not (executable-find decknix-support-dashboard-dos-cli))
+      (message "%s not on PATH (run decknix switch)"
+               decknix-support-dashboard-dos-cli)
+    (let ((buf (generate-new-buffer " *decknix-dos-cli*")))
+      (make-process
+       :name "decknix-dos-cli"
+       :buffer buf
+       :noquery t
+       :connection-type 'pipe
+       :command (cons decknix-support-dashboard-dos-cli args)
+       :sentinel
+       (lambda (proc _e)
+         (when (memq (process-status proc) '(exit signal))
+           (let ((out (and (buffer-live-p buf)
+                           (with-current-buffer buf (buffer-string)))))
+             (when (buffer-live-p buf) (kill-buffer buf))
+             (funcall on-done (string-trim (or out ""))))))))))
+
+(defun decknix-support-dashboard-priority ()
+  "Show the nc-dos runbook PRIORITY PANEL (incidents→daily→alerts→DoS→freeze).
+Renders `nc-dos-sidebar --once' into a read-only buffer — parity with the
+terminal console's panel."
+  (interactive)
+  (message "Computing DoS priority panel…")
+  (decknix--support-dashboard-dos-run
+   '("--once")
+   (lambda (out)
+     (let ((buf (get-buffer-create "*decknix-dos-priority*")))
+       (with-current-buffer buf
+         (let ((inhibit-read-only t))
+           (erase-buffer)
+           (insert (if (string-empty-p out)
+                       "(no output from nc-dos-sidebar)" out)))
+         (goto-char (point-min))
+         (view-mode 1))
+       (pop-to-buffer buf)))))
+
+(defun decknix-support-dashboard-spawn-background ()
+  "Spawn a BACKGROUND agent on the issue at point (`nc-dos-sidebar --spawn-bg').
+Output is logged under the nc-dos runs dir; never blocks the UI."
+  (interactive)
+  (let ((key (decknix-support-dashboard-issue-key-at-point)))
+    (unless key (user-error "No issue on this row"))
+    (message "Spawning background agent on %s…" key)
+    (decknix--support-dashboard-dos-run
+     (list "--spawn-bg" key)
+     (lambda (out)
+       (message "%s" (if (string-empty-p out) "background agent spawned" out))))))
+
+(defun decknix-support-dashboard-print-command ()
+  "Print (and copy) the exact fg/bg agent spawn commands for the issue at point."
+  (interactive)
+  (let ((key (decknix-support-dashboard-issue-key-at-point)))
+    (unless key (user-error "No issue on this row"))
+    (decknix--support-dashboard-dos-run
+     (list "--print-cmd" key)
+     (lambda (out)
+       (kill-new out)
+       (with-output-to-temp-buffer "*decknix-dos-command*" (princ out))
+       (message "Spawn commands for %s copied to kill-ring" key)))))
+
+(defun decknix-support-dashboard-toggle-auto-spawn ()
+  "Toggle nc-dos auto-spawn of background agents on ai-able/ai-autonomous items.
+Conservative: default OFF; flips the shared nc-dos state file.  When ON, the
+CLI's `X' action enqueues background agents for unassigned, not-In-Progress
+ai-able + ai-autonomous DoS/ALR items (alerts still obey the pre-comment gate)."
+  (interactive)
+  (decknix--support-dashboard-dos-run
+   '("--toggle-auto-spawn")
+   (lambda (out)
+     (message "nc-dos auto-spawn is now %s"
+              (if (string-empty-p out) "toggled" out)))))
+
+;;;###autoload
+(defun decknix-dos-spawn-session (key prompt)
+  "Create a new agent-shell session seeded with PROMPT for issue KEY.
+This is the emacs hook the terminal `nc-dos-sidebar' calls (via emacsclient)
+when it targets emacs for a FOREGROUND agent spawn.  Puts PROMPT on the
+kill-ring and opens a new agent-shell session to paste it into."
+  (kill-new prompt)
+  (if (fboundp 'decknix-agent-session-new)
+      (progn (call-interactively 'decknix-agent-session-new)
+             (message "nc-dos: %s prompt on the kill-ring — yank it into the session"
+                      key))
+    (message "nc-dos: %s prompt copied to kill-ring (no agent-shell available)"
+             key)))
+
 (transient-define-prefix decknix-support-dashboard-transient ()
   "Support dashboard actions."
   ["Row"
@@ -817,6 +922,11 @@ to Confluence.  Paste it into the weekly report (`r' opens it) after editing."
    ("a" "Assign issue"           decknix-support-dashboard-assign)
    ("i" "Investigate with agent" decknix-support-dashboard-investigate)
    ("A" "Investigate as alert"   decknix-support-dashboard-investigate-alert)]
+  ["DoS console (nc-dos)"
+   ("p" "Priority panel"         decknix-support-dashboard-priority)
+   ("x" "Spawn background agent" decknix-support-dashboard-spawn-background)
+   ("c" "Print/copy spawn cmd"   decknix-support-dashboard-print-command)
+   ("t" "Toggle auto-spawn"      decknix-support-dashboard-toggle-auto-spawn)]
   ["List"
    ("/" "Filter (status/category/user/service)" decknix-support-dashboard-filter)
    ("\\" "Clear filters"         decknix-support-dashboard-filter-clear)
@@ -837,6 +947,10 @@ to Confluence.  Paste it into the weekly report (`r' opens it) after editing."
     (define-key map (kbd "a")   #'decknix-support-dashboard-assign)
     (define-key map (kbd "i")   #'decknix-support-dashboard-investigate)
     (define-key map (kbd "A")   #'decknix-support-dashboard-investigate-alert)
+    (define-key map (kbd "p")   #'decknix-support-dashboard-priority)
+    (define-key map (kbd "x")   #'decknix-support-dashboard-spawn-background)
+    (define-key map (kbd "c")   #'decknix-support-dashboard-print-command)
+    (define-key map (kbd "t")   #'decknix-support-dashboard-toggle-auto-spawn)
     (define-key map (kbd "r")   #'decknix-support-dashboard-open-report)
     (define-key map (kbd "R")   #'decknix-support-dashboard-draft-daily-log)
     (define-key map (kbd "w")   #'decknix-support-dashboard-open-workflow)
@@ -849,9 +963,11 @@ to Confluence.  Paste it into the weekly report (`r' opens it) after editing."
 (define-derived-mode decknix-support-dashboard-mode special-mode "Support"
   "Major mode for the live support monitoring dashboard.
 Row actions (submenu on `?'): `b' browse, `a' assign, `i' investigate,
-`A' investigate-as-alert; list actions: `/' filter (status / category /
-user / service), `\\' clear filters, `g' refresh, `q' bury;
-weekly report: `r' open the current report, `R' draft today's daily log.
+`A' investigate-as-alert; DoS console (nc-dos): `p' priority panel,
+`x' spawn background agent, `c' print/copy spawn cmd, `t' toggle auto-spawn;
+list actions: `/' filter (status / category / user / service),
+`\\' clear filters, `g' refresh, `q' bury; weekly report: `r' open the
+current report, `R' draft today's daily log.
 \\{decknix-support-dashboard-mode-map}"
   (setq-local revert-buffer-function
               (lambda (&rest _) (decknix-support-dashboard-refresh))))
