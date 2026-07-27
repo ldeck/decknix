@@ -543,8 +543,12 @@ buffer) so we never clobber fresh history with stale on-disk data."
              (ring-p comint-input-ring)
              (ring-empty-p comint-input-ring))
     (let* ((file (decknix--agent-session-file session-id))
+           ;; Provider-aware: the resumed buffer's backend selects the
+           ;; extraction adapter (auggie JSON vs claude .jsonl vs ...).  Read
+           ;; the buffer-local provider set earlier in the resume closure.
            (prompts (and (file-exists-p file)
-                         (decknix--prompt-extract-from-file file))))
+                         (decknix--prompt-extract-from-file
+                          file (bound-and-true-p decknix--agent-provider-id)))))
       (when prompts
         ;; PR B.78: ring-sizing and insertion-ordering rules are
         ;; pinned by `decknix-agent-input-ring' (carved, +11 ERT).
