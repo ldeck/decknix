@@ -400,6 +400,15 @@ error there."
       (goto-char (point-max))
       (shell-maker-submit :input input))))
 
+(defun decknix--compose-stash-input (input)
+  "Save INPUT to the kill-ring so a broken submit never loses the text.
+Called from every path that consumes the compose buffer (submit / queue /
+interrupt-and-submit); a no-op for blank INPUT.  With
+`select-enable-clipboard' (the default) this also reaches the system
+clipboard, so the text is recoverable even if the agent send errors out."
+  (when (and (stringp input) (not (string-empty-p (string-trim input))))
+    (kill-new input)))
+
 (defun decknix-agent-compose-submit ()
   "Submit the compose buffer content to the agent-shell.
 If the agent is busy, offers three options:
@@ -429,6 +438,10 @@ interrupt."
      ((string-empty-p input)
       (user-error "Empty prompt — nothing to submit"))
      (t
+      ;; Safety net: stash the composed text the instant we commit to
+      ;; submit/queue, so a broken send (or a cancelled busy prompt) can
+      ;; never lose what the user typed.
+      (decknix--compose-stash-input input)
       (let* ((busy-p (and (buffer-live-p target)
                           (with-current-buffer target
                             (bound-and-true-p shell-maker--busy))))
@@ -497,6 +510,7 @@ before."
         (compose-buf (current-buffer)))
     (if (string-empty-p input)
         (user-error "Empty prompt — nothing to submit")
+      (decknix--compose-stash-input input)
       ;; Interrupt the agent first.
       (when (buffer-live-p target)
         (with-current-buffer target

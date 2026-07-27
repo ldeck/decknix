@@ -746,20 +746,40 @@ Bound to \\[decknix-agent-session-info] in agent-shell buffers."
          (key-display (if conv-key
                           (substring conv-key 0 (min 16 (length conv-key)))
                         "none")))
-    (message
-     (concat "Session: %s  Conv: %s\n"
-             "Model: %s  Exchanges: %s\n"
-             "Tags: %s\n"
-             "Workspace: %s\n"
-             "Created: %s  Modified: %s")
-     id-display
-     key-display
-     (or model "default")
-     (or (and exchanges (number-to-string exchanges)) "?")
-     (if tags (mapconcat (lambda (tag) (format "#%s" tag)) tags " ") "none")
-     (or workspace "none")
-     (funcall fmt-time created)
-     (funcall fmt-time modified))))
+    ;; The echo-area message can't be selected/copied, so also stash a
+    ;; copyable version on the kill-ring — with the FULL session-id / conv-key
+    ;; (the display truncates them), which are the bits you actually want to
+    ;; paste elsewhere.  `select-enable-clipboard' carries it to the system
+    ;; clipboard too.
+    (let ((copy-text
+           (format (concat "Session: %s\nConv: %s\n"
+                           "Model: %s  Exchanges: %s\n"
+                           "Tags: %s\nWorkspace: %s\n"
+                           "Created: %s  Modified: %s")
+                   (or session-id "none")
+                   (or conv-key "none")
+                   (or model "default")
+                   (or (and exchanges (number-to-string exchanges)) "?")
+                   (if tags (mapconcat (lambda (tag) (format "#%s" tag)) tags " ") "none")
+                   (or workspace "none")
+                   (funcall fmt-time created)
+                   (funcall fmt-time modified))))
+      (kill-new copy-text)
+      (message
+       (concat "Session: %s  Conv: %s\n"
+               "Model: %s  Exchanges: %s\n"
+               "Tags: %s\n"
+               "Workspace: %s\n"
+               "Created: %s  Modified: %s\n"
+               "(copied to kill-ring — yank/paste for full ids)")
+       id-display
+       key-display
+       (or model "default")
+       (or (and exchanges (number-to-string exchanges)) "?")
+       (if tags (mapconcat (lambda (tag) (format "#%s" tag)) tags " ") "none")
+       (or workspace "none")
+       (funcall fmt-time created)
+       (funcall fmt-time modified)))))
 
 (provide 'decknix-agent-shell-main-tags)
 ;;; decknix-agent-shell-main-tags.el ends here
