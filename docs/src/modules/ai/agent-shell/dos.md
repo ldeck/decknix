@@ -114,7 +114,33 @@ other surfaces so you can jump from a step to the live view.
    the weekly report (`r` opens the report). The report is an *export surface*
    for the day's work, kept current as you go.
 6. **Parity outside Emacs.** The same engine runs in a plain terminal for
-   teammates who don't use Emacs — see the org config docs.
+   teammates who don't use Emacs — see *From the terminal* below.
+
+## From the terminal (CLI parity)
+
+Every board action is delegated to a CLI, so the whole flow is available without
+Emacs. Two CLIs are relevant:
+
+- **The org priority engine** (org-provided; NurtureCloud ships `nc-dos`):
+  `nc-dos-sidebar` is the single-key priority console the board renders,
+  `nc-dos-sidebar --once` prints the panel, `--json` feeds the board, and
+  `nc-dos-worksheet` exports the day's worksheet. See your org config's
+  *TechOps On-Support* page for the full command set.
+- **[`decknix session`](../../../cli/core-commands.md#decknix-session)** — the
+  framework's workspace- and tag-aware session CLI. The agents the board spawns
+  on a ticket land as ordinary sessions, so you can list, resume, tag, or start
+  them from the terminal and they stay in sync with the sidebar:
+
+  ```bash
+  # Resume the latest session you spawned on a DoS item (by tag)
+  decknix session resume --tag dos
+
+  # Start a session on a ticket, seeded and pre-tagged
+  decknix session new --tag dos -- "Investigate ALR-5752"
+
+  # List Claude sessions touched today, as JSON
+  decknix session list --agent claude --since 1d --json
+  ```
 
 ## How it fits together
 

@@ -129,6 +129,129 @@ decknix update nixpkgs
 
 Runs `nix flake update [input]` under the hood. After updating, run `decknix switch` to apply.
 
+## `decknix session`
+
+Find, create, resume, and tag agent sessions from the terminal — the
+workspace- and tag-aware CLI companion to the in-editor session tooling. It
+resolves against the same session store the Emacs sidebar and pickers use
+(Claude and Auggie), so a session you spawn in Emacs can be resumed here and
+vice versa, and tags are shared both ways.
+
+```
+Usage: decknix session <COMMAND>
+
+Commands:
+  list    List sessions in a workspace (default: current directory)
+  resume  Resume a session (exec into the agent by default)
+  new     Start a new session (exec into the agent by default)
+  tag     Add or remove tags on a session's conversation
+  tags    List all known tags with usage counts
+```
+
+### `decknix session list`
+
+List sessions (newest first), scoped to a workspace by default.
+
+```
+Options:
+      --agent <AGENT>          claude, auggie, or all [default: all]
+      --workspace <WORKSPACE>  Workspace to list (default: current directory)
+      --all                    List across every workspace instead of just one
+      --tag <TAGS>             Only sessions carrying this tag (repeatable; all must match)
+      --grep <GREP>            Only sessions whose transcript matches this regex
+      --since <SINCE>          Only sessions touched within a window (e.g. 7d, 12h, 30m)
+      --limit <LIMIT>          Cap the number of rows
+      --json                   Emit JSON instead of aligned columns
+```
+
+```bash
+# Sessions in this workspace, all agents
+decknix session list
+
+# Claude sessions tagged #dos touched in the last day, as JSON
+decknix session list --agent claude --tag dos --since 1d --json
+
+# Everything across every workspace whose transcript matches a regex
+decknix session list --all --grep "replay.dlq"
+```
+
+### `decknix session resume`
+
+Resume a session — by id/prefix, by tag (the latest match), or the most recent
+in scope. Execs into the agent by default; `-n`/`--print` prints the resolved
+command instead of running it.
+
+```
+Usage: decknix session resume [OPTIONS] [ID]
+
+Arguments:
+  [ID]  Session id or unique prefix
+
+Options:
+      --agent <AGENT>          claude, auggie, or all [default: all]
+      --tag <TAGS>             Resume the latest session carrying this tag (repeatable)
+      --last                   Resume the most recently touched session in scope
+      --workspace <WORKSPACE>  Workspace to resolve within (default: current directory)
+      --all                    Resolve across every workspace
+  -n, --print                  Print the resolved command instead of exec-ing it
+```
+
+```bash
+# Resume by id prefix
+decknix session resume d8df9eb9
+
+# Resume the latest session tagged #dos in this workspace
+decknix session resume --tag dos
+
+# Resume the most recent session anywhere — just print the command
+decknix session resume --last --all --print
+```
+
+### `decknix session new`
+
+Start a new session, optionally with an initial prompt (everything after `--`)
+and pre-applied tags.
+
+```
+Usage: decknix session new [OPTIONS] [-- <PROMPT>...]
+
+Arguments:
+  [PROMPT]...  Initial prompt (everything after `--`)
+
+Options:
+      --agent <AGENT>          claude or auggie [default: claude]
+      --tag <TAGS>             Pre-tag the conversation (requires an initial prompt to key it)
+      --workspace <WORKSPACE>  Workspace to start in (default: current directory)
+      --model <MODEL>          Per-conversation model override
+  -n, --print                  Print the resolved command instead of exec-ing it
+```
+
+```bash
+# New Claude session in this workspace
+decknix session new
+
+# New session pre-tagged and seeded with a prompt
+decknix session new --tag dos --tag triage -- "Investigate ALR-5752"
+```
+
+### `decknix session tag` / `decknix session tags`
+
+Add or remove tags on a conversation, or list every known tag with usage counts.
+
+```bash
+# Tag / untag a conversation (by id or unique prefix)
+decknix session tag d8df9eb9 --add dos --add day5
+decknix session tag d8df9eb9 --remove day5
+
+# List all known tags with counts (--json for machine output)
+decknix session tags
+decknix session tags --json
+```
+
+> Tags are shared with the Emacs session tooling (`C-c A T`), so a session
+> tagged here appears under that tag in the sidebar and pickers — and the agents
+> the DoS board spawns on a ticket can be found and resumed later by tag.
+
 ## `decknix help`
 
 Show help for all commands, including dynamically discovered extensions.
