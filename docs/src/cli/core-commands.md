@@ -252,6 +252,59 @@ decknix session tags --json
 > tagged here appears under that tag in the sidebar and pickers — and the agents
 > the DoS board spawns on a ticket can be found and resumed later by tag.
 
+## `decknix wt`
+
+Manage git worktrees across all your repos from one place. decknix keeps a
+registry of every worktree it knows about (used by the Emacs sidebar too), and
+`decknix wt` inspects and cleans that set — handy when agent work spins up many
+short-lived worktrees.
+
+```
+Usage: decknix wt <COMMAND>
+
+Commands:
+  list                List all worktrees from the registry
+  refresh             Re-probe worktrees and update the cache
+  audit               Dry-run report: stale / dirty / orphan-fork / branch-deleted-upstream
+  orphans             List worktrees whose upstream branch has been deleted
+  clean               Clean up old merged worktrees
+  prune               Expunge stale worktrees (directory + branch + metadata + fork-remotes)
+  prune-metadata      Prune git worktree metadata only
+  clean-fork-remotes  Sweep orphan fork remotes
+  registry            Dump the registry
+```
+
+Most cleanup verbs are **dry-run by default** — they report what they would do
+and only act when you add `--apply`.
+
+```
+Common options (audit / clean / orphans / prune):
+  -r, --regex <REGEX>            Match against repo identifier or worktree path
+      --older-than <OLDER_THAN>  Only worktrees older than a window (e.g. 7d, 12h, 30m)
+      --apply                    Actually perform the deletion (else dry-run)
+      --json                     Machine-readable output (list / audit / orphans)
+```
+
+```bash
+# See every worktree decknix tracks (optionally one repo)
+decknix wt list
+decknix wt list --repo UpsideRealty/pubsub-dlq-forwarder
+
+# Dry-run health report: stale, dirty, orphaned, upstream-branch-deleted
+decknix wt audit
+decknix wt audit --json
+
+# Worktrees whose upstream branch was deleted (e.g. after a merged PR)
+decknix wt orphans
+
+# Remove old, MERGED worktrees — preview, then apply
+decknix wt clean --older-than 7d
+decknix wt clean --older-than 7d --apply
+
+# Full sweep of stale worktrees (dir + branch + metadata + fork remotes)
+decknix wt prune --apply --safe-delete-branch
+```
+
 ## `decknix help`
 
 Show help for all commands, including dynamically discovered extensions.
