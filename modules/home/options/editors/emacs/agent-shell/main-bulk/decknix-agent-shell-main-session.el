@@ -117,7 +117,7 @@ history; only the model-facing primer is suppressed)."
 (declare-function decknix--agent-session-ensure-jq-filter
                   "decknix-agent-session-cache")
 (declare-function decknix--agent-session-file
-                  "decknix-agent-session-history" (session-id))
+                  "decknix-agent-session-history" (session-id &optional provider-id))
 (declare-function decknix--agent-session-extract-history
                   "decknix-agent-session-history" (session-id n))
 (declare-function decknix--agent-session-extract-all-turns
@@ -224,6 +224,26 @@ history; only the model-facing primer is suppressed)."
                   "decknix-agent-provider" (id))
 (declare-function decknix-agent-provider-session-file-extension
                   "decknix-agent-provider" (id))
+
+(defun decknix--agent-source-data-path (provider-id session-id)
+  "Return the REAL transcript path for PROVIDER-ID's SESSION-ID for a hand-off.
+
+Resolves the actual on-disk file via `decknix--agent-session-file', which
+handles multi-project providers whose transcripts nest under a per-workspace
+project subdir — e.g. Claude at
+`~/.claude/projects/<encoded-cwd>/<sid>.jsonl' — as well as single-dir
+providers (Auggie at `~/.augment/sessions/<sid>.json').  Falls back to the
+best-effort `decknix--agent-fork-source-data-path' join only when the
+transcript is not yet on disk, so the fork/resume hand-off never points a
+Claude session at the wrong (un-nested) path."
+  (let ((real (ignore-errors (decknix--agent-session-file session-id provider-id))))
+    (if (and real (stringp real) (not (string-empty-p real)))
+        real
+      (decknix--agent-fork-source-data-path
+       (decknix-agent-provider-sessions-dir provider-id)
+       (decknix-agent-provider-session-file-extension provider-id)
+       session-id))))
+
 (declare-function decknix--header-status-icon
                   "decknix-agent-header" (status))
 (declare-function decknix--header-status-face
@@ -327,7 +347,7 @@ Prevents the auto-persist hook from firing repeatedly.")
 ;; resolves the carved symbols.
 
 (declare-function decknix--agent-session-file
-                  "decknix-agent-session-history" (session-id))
+                  "decknix-agent-session-history" (session-id &optional provider-id))
 (declare-function decknix--agent-session-extract-history
                   "decknix-agent-session-history" (session-id n))
 ;; Timeline navigation helpers (#136) — pure list/index math used
@@ -988,11 +1008,7 @@ dedupes against live buffers before calling here."
              ;; Turns are oldest-first; the tail is the most recent
              ;; exchange, whose `car' is the last user message.
              (last-user (car (car (last turns))))
-             (data-path (decknix--agent-fork-source-data-path
-                         (decknix-agent-provider-sessions-dir provider)
-                         (decknix-agent-provider-session-file-extension
-                          provider)
-                         session-id))
+             (data-path (decknix--agent-source-data-path provider session-id))
              (primer (decknix--agent-resume-primer-message
                       (decknix-agent-provider-label provider)
                       session-id data-path
@@ -2441,11 +2457,8 @@ calling `decknix-agent-session-new' interactively."
                                (decknix-agent-provider-label src-provider-id)))
                    (data-path
                     (and src-provider-id src-session-id
-                         (decknix--agent-fork-source-data-path
-                          (decknix-agent-provider-sessions-dir src-provider-id)
-                          (decknix-agent-provider-session-file-extension
-                           src-provider-id)
-                          src-session-id))))
+                         (decknix--agent-source-data-path
+                          src-provider-id src-session-id))))
               (decknix--agent-fork-handoff-message
                label src-session-id data-path src-tags))))
          (before-buffers (buffer-list))
