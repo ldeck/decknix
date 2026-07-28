@@ -3433,18 +3433,25 @@ in
         (require 'decknix-agent-table-overlay)
         (declare-function decknix-agent-table-overlay-buffer
                           "decknix-agent-table-overlay")
+        (declare-function decknix-agent-table-overlay-schedule
+                          "decknix-agent-table-overlay")
         (declare-function decknix-agent-table-overlay-mode
                           "decknix-agent-table-overlay")
         (defvar decknix-agent-table-overlay-enable)
         (setq decknix-agent-table-overlay-enable ${
           if cfg.tableOverlay.enable then "t" else "nil"})
 ${optionalString cfg.tableOverlay.enable ''
-        ;; agent-shell output: re-paint after each markdown render pass.
+        ;; agent-shell output: SCHEDULE a coalesced table repaint after each
+        ;; markdown render pass -- never repaint synchronously here.  A whole
+        ;; buffer table pass per render pass is O(buffer) each time and churns
+        ;; `display' overlays under redisplay/jit timers, which wedged large
+        ;; session buffers with `args-out-of-range' loops.  The debounced
+        ;; scheduler runs one bounded, abortable pass off the redisplay path.
         (with-eval-after-load 'markdown-overlays
           (advice-add 'markdown-overlays-put :after
                       (lambda (&rest _)
-                        "Align GFM tables in agent-shell output."
-                        (ignore-errors (decknix-agent-table-overlay-buffer)))))
+                        "Schedule a debounced GFM table repaint of agent output."
+                        (ignore-errors (decknix-agent-table-overlay-schedule)))))
         ;; review / markdown buffers (D-C: both): jit-lock minor mode.
         ;; decknix-agent-review-mode derives from markdown-mode.
         (add-hook 'decknix-agent-review-mode-hook

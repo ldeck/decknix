@@ -74,5 +74,29 @@
     (should (null (decknix-agent-table-overlay-region
                    (point-min) (point-max) 200)))))
 
+(ert-deftest decknix-agent-table-overlay/out-of-range-args-are-clamped ()
+  "Stale/out-of-range BEG/END must not signal and must still align the table.
+Guards the redisplay-loop fix: `make-overlay' can never see a position past
+`point-max'."
+  (decknix-agent-table-overlay-test--with-buffer
+    (let ((ovs (decknix-agent-table-overlay-region
+                -50 (+ (point-max) 9999) 200)))
+      (should (= 1 (length ovs)))
+      (should (<= (overlay-start (car ovs)) (overlay-end (car ovs))))
+      (should (<= (overlay-end (car ovs)) (point-max))))))
+
+(ert-deftest decknix-agent-table-overlay/tail-region-bounds-large-buffers ()
+  "The debounced repaint rescans only the tail of a large buffer, whole of a small one."
+  (with-temp-buffer
+    ;; Multi-line so the tail snaps to a line start strictly after point-min.
+    (dotimes (_ 100) (insert "xxxxxxxx\n"))
+    (let ((decknix-agent-table-overlay-max-scan 200000))
+      (should (= (car (decknix-agent-table--tail-region)) (point-min))))
+    (let ((decknix-agent-table-overlay-max-scan 10))
+      (let ((r (decknix-agent-table--tail-region)))
+        (should (> (car r) (point-min)))           ; only a tail is scanned
+        (should (= (cdr r) (point-max)))
+        (should (eq (char-after (car r)) ?x)))))) ; snapped to a line start
+
 (provide 'decknix-agent-table-overlay-test)
 ;;; decknix-agent-table-overlay-test.el ends here
