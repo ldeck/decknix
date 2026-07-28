@@ -58,6 +58,27 @@ Decknix ships with several extensions:
 | `decknix space` | Space picker (GUI) |
 | `decknix verify` | Verify system integration |
 
+### `decknix board` — cross-repo issue dashboard
+
+Prints a compact, colourised dashboard of GitHub issues across your configured
+repos (open/closed counts per repo, then the open issues with their labels). It
+is a thin wrapper over `gh issue list`, so it accepts that command's flags and
+passes them through per repo:
+
+```bash
+# The board (open issues across all configured repos)
+decknix board
+
+# Filter by label / assignee / search, or show closed issues
+decknix board --label enhancement
+decknix board --assignee @me
+decknix board --state closed --limit 20
+decknix board --search "sidebar in:title"
+```
+
+Requires an authenticated `gh` (`gh auth status`). The repo set comes from the
+extension's own configuration.
+
 ## Zsh Completion
 
 Extensions automatically get zsh tab-completion. The module generates a completion script that includes all built-in commands plus discovered extensions.
