@@ -240,6 +240,20 @@ let
     ];
   };
 
+  # Default-OFF diagnostic (issue #150): record the ACP event stream + the
+  # agent-shell turn boundaries (TURN-START/TURN-END) so a Claude session's
+  # real turn-return timing can be compared to when the buffer status flips.
+  # `:before' advices, cheap no-ops while disabled.  Pure summarize/detail/
+  # format layer is ERT-tested; the ring + file + advices are the shell.
+  decknix-agent-acp-trace-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-acp-trace";
+    src = ./agent-shell/acp-trace;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-acp-trace-test.el"
+    ];
+  };
+
   # Always-on background hitch profiler: times every timer + command and
   # logs the slow tail (with the responsible function named) so a
   # performance-inhibiting function is surfaced rather than guessed at.
@@ -2749,6 +2763,7 @@ in
           decknix-agent-resume-primer-el
           decknix-agent-resume-native-el
           decknix-agent-heartbeat-watch-el
+          decknix-agent-acp-trace-el
           decknix-perf-hitch-el
           decknix-perf-hitch-autofile-el
           decknix-capture-el
@@ -4231,6 +4246,27 @@ the `&key' plist passed to `agent-shell--on-notification'."
                  (equal kind "session_info_update"))))
         (advice-add 'agent-shell--on-notification :before-until
                     #'decknix--agent-shell-swallow-session-info)
+
+        ;; Default-OFF ACP turn/status trace (issue #150): record the ACP event
+        ;; stream + agent-shell turn boundaries so Claude's real turn-return
+        ;; timing can be compared to when the buffer status flips.  All advices
+        ;; are `:before' (value ignored) and cheap no-ops while disabled, so
+        ;; loading it costs nothing until `M-x decknix-agent-acp-trace-toggle'.
+        ;; Named functions keep every advice idempotent across `decknix switch'.
+        (require 'decknix-agent-acp-trace)
+        (declare-function decknix--agent-acp-trace-on-notification
+                          "decknix-agent-acp-trace" (&rest args))
+        (declare-function decknix--agent-acp-trace-on-heartbeat-start
+                          "decknix-agent-acp-trace" (&rest args))
+        (declare-function decknix--agent-acp-trace-on-heartbeat-stop
+                          "decknix-agent-acp-trace" (&rest args))
+        (advice-add 'agent-shell--on-notification :before
+                    #'decknix--agent-acp-trace-on-notification)
+        (with-eval-after-load 'agent-shell-heartbeat
+          (advice-add 'agent-shell-heartbeat-start :before
+                      #'decknix--agent-acp-trace-on-heartbeat-start)
+          (advice-add 'agent-shell-heartbeat-stop :before
+                      #'decknix--agent-acp-trace-on-heartbeat-stop))
 
         ;; Pre-fetch prompt search cache on daemon start
         (run-at-time 5 nil #'decknix--prompt-search-refresh-async)
