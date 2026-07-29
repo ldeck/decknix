@@ -46,8 +46,11 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'seq)
+(require 'map)
 
 (declare-function decknix--agent-buffer-session-id "decknix-agent-buffer-lookup" (&optional buf))
+(declare-function agent-shell-workspace--buffer-status "ext:agent-shell-workspace" (buffer))
+(defvar agent-shell--state)
 
 (defvar decknix-agent-acp-trace-enable nil
   "When non-nil, record ACP notifications + turn start/stop for diagnosis.
@@ -128,11 +131,31 @@ Pure: no I/O."
 
 ;; ── Impure shell: ring + file + advice callbacks ───────────────────────
 
+(defun decknix--agent-acp-trace--status-suffix ()
+  "Return \" status=X tc=N\" for the current agent-shell buffer, else \"\".
+X is the upstream-derived status (the exact string the sidebar/board show); N is
+the live `:tool-calls' count.  This is the decisive #150 signal: it lets the
+timeline show a status that stayed `working' after TURN-END, or a tool-call
+count that never returned to 0 — i.e. WHICH turn-end failure mode occurred."
+  (if (and (derived-mode-p 'agent-shell-mode)
+           (fboundp 'agent-shell-workspace--buffer-status))
+      (let ((st (ignore-errors
+                  (agent-shell-workspace--buffer-status (current-buffer))))
+            (tc (ignore-errors
+                  (length (map-elt (bound-and-true-p agent-shell--state)
+                                   :tool-calls)))))
+        (format " status=%s tc=%s" (or st "?") (or tc "?")))
+    ""))
+
 (defun decknix--agent-acp-trace-record (label &optional session detail)
-  "Record a trace event (LABEL, optional SESSION, DETAIL) — ring + log file."
+  "Record a trace event (LABEL, optional SESSION, DETAIL) — ring + log file.
+When called inside an agent-shell buffer, the derived status + tool-call count
+are appended to DETAIL so the timeline shows status transitions directly."
   (when decknix-agent-acp-trace-enable
     (let ((event (list :time (float-time) :label label
-                       :session session :detail detail)))
+                       :session session
+                       :detail (concat (or detail "")
+                                       (decknix--agent-acp-trace--status-suffix)))))
       (push event decknix--agent-acp-trace-ring)
       (when (> (length decknix--agent-acp-trace-ring) decknix-agent-acp-trace-max)
         (setq decknix--agent-acp-trace-ring
