@@ -19,19 +19,38 @@ death, and sessions are monitorable/reattachable from outside Emacs.
 
 ## Key feasibility finding
 
-`acp-make-client` (upstream `acp.el`) **requires `:command`** and spawns it via
-`make-process`; it has no socket/network transport. Rather than patch acp.el,
-point `:command` at an **attach client** for a detached supervisor:
+`acp-make-client` (upstream `acp.el`) **requires `:command`** and spawns it with
+**`:connection-type 'pipe`** (verified: `acp.el` `make-process … :connection-type
+'pipe`; stderr via `make-pipe-process`). It has no socket transport. So whatever
+Emacs attaches to must be a **plain pipe** — no controlling terminal, no pty.
 
-- Launch the bridge detached, stdio multiplexed on a socket:
-  `dtach -n <sock> claude-agent-acp …`  (or `abduco -n <name> …`)
-- Emacs ACP client spawns the *attach*:
-  `:command "dtach" :command-params ("-a" "<sock>")`
-  dtach forwards the live bridge's stdio to Emacs; acp speaks JSON-RPC over it
-  as if it had spawned the bridge directly. **No acp.el change required.**
+### M1 spike result (2026-07-30): dtach/abduco are the WRONG transport
 
-`dtach -n` daemonises the bridge OUT of Emacs' process tree, so Emacs death
-leaves it running; a fresh `dtach -a` reattaches.
+The original plan — point `:command` at `dtach -a <sock>` — does **not** work,
+and the reason rules out terminal multiplexers entirely:
+
+- `dtach -a` **requires a controlling terminal** (`dtach: Attaching to a session
+  requires a terminal.`) — it refuses to run under acp.el's pipe `make-process`.
+- Both `dtach` and `abduco` run the child under a **pty**. A pty echoes input and
+  does line-discipline translation, which would **corrupt newline-delimited
+  JSON-RPC framing** even if the tty requirement were worked around.
+- `dtach -n` *does* daemonise the child out of Emacs' tree (verified: the pid
+  survives), so the *detach* half is fine — it's the *attach* transport that's
+  unsuitable.
+
+Conclusion: a pty-based multiplexer cannot be the attach transport for a
+pipe-framed JSON-RPC bridge. The cheap-prototype path (raw dtach) is closed.
+
+### Revised transport: a small pipe-clean broker
+
+The bridge must be held by a **broker** that keeps its stdio on pipes and exposes
+a **unix-domain socket**; Emacs attaches with a pipe-clean `:command` such as
+`socat - UNIX-CONNECT:<sock>` (or `nc -U <sock>`) — clean bidirectional stdio, no
+pty, still **no acp.el change**. Plain `socat UNIX-LISTEN … EXEC:bridge` is *not*
+enough: `,fork` spawns a fresh bridge per client, and without it the bridge dies
+when the client disconnects — neither gives "one persistent bridge, reattachable".
+Holding one bridge and multiplexing attach/detach is exactly the broker from
+open-question #3 below: the spike shows it is **required, not optional**.
 
 ## Architecture
 
@@ -58,20 +77,31 @@ without Emacs.
 
 ## Prototype milestones (Claude only first)
 
-- **M1 — Spike detach/reattach.** `dtach -n` a `claude-agent-acp`; drive it with
-  a raw JSON-RPC client (or `acp-traffic`); detach; reattach; confirm the ACP
-  session is intact and a turn started before detach can be observed after.
-  Decide `dtach` vs `abduco` (abduco is cleaner programmatically; both fine).
-- **M2 — Emacs attach transport.** Register a Claude provider variant whose
-  `:acp-command` is the `dtach -a <sock>` attach, and a launcher that `dtach -n`
-  the bridge + writes the registry file. Open/close the buffer = attach/detach;
-  the bridge keeps running.
-- **M3 — Registry + lazy-attach.** Sidebar/board list sessions from the registry
+Revised after the M1 spike: build the broker first (raw dtach is closed).
+
+- **M1 — DONE (spike).** Result above: dtach/abduco unsuitable (tty + pty echo);
+  acp.el is pipe-only; a pipe-clean broker is required.
+- **M2 — Minimal broker.** A small long-lived process (prototype in Python or
+  the hub's Rust; end-state = Rust sibling of the hub daemon) that: spawns
+  `claude-agent-acp` once and holds its stdin/stdout on **pipes**; listens on a
+  unix socket `~/.config/decknix/agent-sockets/<sid>.sock`; relays
+  newline-delimited JSON-RPC between the current client and the bridge;
+  **survives client disconnect** (keeps the bridge; on reattach, resyncs via ACP
+  `session/resume` if needed — see risk 1). Verify: connect with
+  `socat - UNIX-CONNECT:<sock>`, run an ACP `initialize`+turn, disconnect
+  mid-turn, reconnect, confirm the session is intact.
+- **M3 — Emacs attach transport.** Register a Claude provider variant whose
+  `:acp-command` is `socat - UNIX-CONNECT:<sock>` (pipe-clean), plus a launcher
+  that starts the broker + writes the registry file. Open/close the buffer =
+  attach/detach; the bridge keeps running. Add `socat` (or use `nc -U`) to the
+  package set **when this lands**, not before.
+- **M4 — Registry + lazy-attach.** Sidebar/board list sessions from the registry
   (no live connection); attach the ACP client only when a session is opened.
   Non-attached rows get status from the registry + transcript, not a socket.
-- **M4 — Survive `decknix switch` / Emacs restart.** On startup, scan the
+- **M5 — Survive `decknix switch` / Emacs restart.** On startup, scan the
   registry, prune dead sockets, and offer reattach. Wire into the existing
-  terminal-resume UI (Tier 1) as the "reattach" action.
+  terminal-resume UI (Tier 1) as the "reattach" action. The broker is also the
+  natural producer of the `(state, attention, last-activity)` signal for #150.
 
 ## Open questions / risks
 
