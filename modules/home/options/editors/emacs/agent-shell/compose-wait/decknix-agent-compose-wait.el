@@ -91,8 +91,19 @@ Decision table:
 `agent-shell-interrupt' clears `shell-maker--busy' synchronously, so without a
 floor the new prompt is sent in the same instant as the ACP cancel and the
 agent can action it before the interrupt lands.  This gap lets the cancel be
-processed first, so the sequence is interrupt-then-submit.  The 2 s wait budget
+processed first, so the sequence is interrupt-then-submit.  The wait budget
 still caps the total delay.")
+
+(defvar decknix-compose-interrupt-budget 8.0
+  "Seconds to wait for the busy flag to clear after an interrupt before submitting.
+Auggie's `agent-shell-interrupt' clears `shell-maker--busy' synchronously, but
+a Claude interrupt only SENDS an async ACP `session/cancel' — the flag clears
+later when the agent acks it (the in-flight prompt resolves with a `cancelled'
+stop reason).  With the old 2 s budget that ack often arrived after the timeout,
+so the wait fired the submit while still busy and the new prompt landed BEFORE
+the \"[interrupted]\" marker.  A budget generous enough to cover the ack keeps
+the order interrupt-then-submit; the busy-clear still fires the submit early in
+the common case, so this only extends the rare slow/wedged path.")
 
 (defun decknix--compose-wait-not-busy (target on-ready
                                               &optional timeout interval min-settle)
@@ -103,8 +114,9 @@ flag drives the wait.  ON-READY is a zero-arg function called
 exactly once -- either when busy clears AND MIN-SETTLE seconds
 have elapsed (so the agent has processed the prior interrupt) or
 after TIMEOUT seconds (a safety net for a wedged process).
-TIMEOUT defaults to 2.0; INTERVAL (the poll cadence) defaults to
-0.05; MIN-SETTLE defaults to `decknix-compose-interrupt-settle'.
+TIMEOUT defaults to `decknix-compose-interrupt-budget' (generous enough to cover
+a Claude async cancel-ack); INTERVAL (the poll cadence) defaults to 0.05;
+MIN-SETTLE defaults to `decknix-compose-interrupt-settle'.
 
 Returns the active timer object.  Callers usually discard it --
 the helper self-cancels on fire.
@@ -114,7 +126,7 @@ in the three compose / review interrupt-then-submit flows.  The
 settle floor is essential: `shell-maker-interrupt' clears
 `shell-maker--busy' synchronously, so a plain not-busy check
 would fire immediately and race the cancel."
-  (let* ((budget (or timeout 2.0))
+  (let* ((budget (or timeout decknix-compose-interrupt-budget))
          (step   (or interval 0.05))
          (settle (or min-settle decknix-compose-interrupt-settle))
          (start  (float-time))
