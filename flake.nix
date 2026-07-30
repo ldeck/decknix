@@ -53,6 +53,7 @@
         {
           decknix-cli = final.callPackage ./pkgs/decknix-cli/default.nix rustArgs;
           decknix-hub = final.callPackage ./pkgs/decknix-hub/default.nix rustArgs;
+          decknix-agent-broker = final.callPackage ./pkgs/decknix-agent-broker/default.nix rustArgs;
           nix-open = final.callPackage ./pkgs/nix-open/default.nix rustArgs;
           # ACP bridges for agent-shell providers (not yet in nixpkgs)
           claude-agent-acp = final.callPackage ./pkgs/claude-agent-acp/default.nix { };
@@ -74,6 +75,7 @@
         # This allows you to run 'nix run .#decknix' or 'nix build'
         packages.decknix-cli = pkgs.callPackage ./pkgs/decknix-cli/default.nix rustArgs;
         packages.decknix-hub = pkgs.callPackage ./pkgs/decknix-hub/default.nix rustArgs;
+        packages.decknix-agent-broker = pkgs.callPackage ./pkgs/decknix-agent-broker/default.nix rustArgs;
         packages.nix-open = pkgs.callPackage ./pkgs/nix-open/default.nix rustArgs;
         packages.claude-agent-acp = pkgs.callPackage ./pkgs/claude-agent-acp/default.nix { };
         packages.pi-acp = pkgs.callPackage ./pkgs/pi-acp/default.nix { };

@@ -81,15 +81,24 @@ Revised after the M1 spike: build the broker first (raw dtach is closed).
 
 - **M1 — DONE (spike).** Result above: dtach/abduco unsuitable (tty + pty echo);
   acp.el is pipe-only; a pipe-clean broker is required.
-- **M2 — Minimal broker.** A small long-lived process (prototype in Python or
-  the hub's Rust; end-state = Rust sibling of the hub daemon) that: spawns
-  `claude-agent-acp` once and holds its stdin/stdout on **pipes**; listens on a
-  unix socket `~/.config/decknix/agent-sockets/<sid>.sock`; relays
-  newline-delimited JSON-RPC between the current client and the bridge;
-  **survives client disconnect** (keeps the bridge; on reattach, resyncs via ACP
-  `session/resume` if needed — see risk 1). Verify: connect with
-  `socat - UNIX-CONNECT:<sock>`, run an ACP `initialize`+turn, disconnect
-  mid-turn, reconnect, confirm the session is intact.
+- **M2 — Minimal broker. DONE (Rust, validated 2026-07-30).**
+  `pkgs/decknix-agent-broker/` (sibling of `decknix-hub`): a tokio process that
+  spawns the bridge once and holds its stdin/stdout on **pipes**; listens on a
+  unix socket; relays client⇄bridge; **always drains** bridge stdout to a log +
+  the attached client, so the bridge never blocks and — the key property — only
+  ever sees ONE stable peer (the broker). Client attach/detach is invisible to
+  the bridge, so **"does the bridge tolerate a vanishing client mid-turn" is
+  moot**. One client at a time (a new attach replaces the old); socket cleaned on
+  exit / SIGINT / SIGTERM.
+  Validation (mock stateful bridge + `socat - UNIX-CONNECT`): client connects →
+  gets `reply:1` → disconnects; the bridge child **survives** (same pid); a
+  second client **reconnects** → gets `reply:2` — proving the bridge kept its
+  in-process state across disconnect/reconnect, over **clean pipe stdio** (no
+  pty mangling). This is exactly what dtach/abduco could not do.
+  Decision applied (reattach = cheap): the broker does NOT buffer/replay; a
+  reattached client gets the LIVE stream only. Reviewing what streamed while
+  detached is a separate "walk history" command over the transcript — so no ACP
+  `session/resume` is needed in the broker itself.
 - **M3 — Emacs attach transport.** Register a Claude provider variant whose
   `:acp-command` is `socat - UNIX-CONNECT:<sock>` (pipe-clean), plus a launcher
   that starts the broker + writes the registry file. Open/close the buffer =
