@@ -87,5 +87,14 @@
   (should (null (decknix-session-signals-from-status "wat")))
   (should (eq (decknix-session-state (decknix-session-classify-status "wat")) 'idle)))
 
+(ert-deftest decknix-session-classify-status--closing ()
+  "The \"closing\" status maps to the distinct `closing' state with its glyph."
+  (should (equal '(:closing t) (decknix-session-signals-from-status "closing")))
+  (should (eq 'closing (decknix-session-state (decknix-session-classify-status "closing"))))
+  (should (string= "⏻" (decknix-session-state-glyph 'closing)))
+  ;; low attention — below anything that needs you, but distinct from idle/done
+  (should (< (decknix-session-score (decknix-session-classify-status "closing"))
+             (decknix-session-score (decknix-session-classify-status "working")))))
+
 (provide 'decknix-session-state-test)
 ;;; decknix-session-state-test.el ends here

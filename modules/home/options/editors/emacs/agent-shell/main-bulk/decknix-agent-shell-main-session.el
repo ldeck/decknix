@@ -250,6 +250,8 @@ Claude session at the wrong (un-nested) path."
                   "decknix-agent-header" (status))
 (declare-function agent-shell-workspace--buffer-status
                   "ext:agent-shell-workspace" (buffer))
+(declare-function decknix-agent-buffer-status
+                  "decknix-agent-auto-close" (buffer))
 (declare-function decknix--quickaction-window-is-sidebar-p
                   "decknix-agent-quickaction-window"
                   (window-side dedicated-p buf-name sidebar-buf))
@@ -1946,10 +1948,12 @@ With \\[universal-argument], shows all individual session snapshots."
 Falls back to two spaces when the upstream status helper or the
 header icon/face helpers aren't loaded yet (build-time stubbing,
 early daemon start) so the column stays aligned regardless."
-  (let ((status (and (fboundp 'agent-shell-workspace--buffer-status)
-                     (buffer-live-p buf)
+  (let ((status (and (buffer-live-p buf)
                      (ignore-errors
-                       (agent-shell-workspace--buffer-status buf)))))
+                       (if (fboundp 'decknix-agent-buffer-status)
+                           (decknix-agent-buffer-status buf)
+                         (and (fboundp 'agent-shell-workspace--buffer-status)
+                              (agent-shell-workspace--buffer-status buf)))))))
     (if (and status
              (fboundp 'decknix--header-status-icon)
              (fboundp 'decknix--header-status-face))

@@ -16,8 +16,11 @@
 ;;; Code:
 
 (defconst decknix-session-state-order
-  '(error needs-input review running idle done)
-  "Lifecycle states, most-attention-worthy first.")
+  '(error needs-input review running idle done closing)
+  "Lifecycle states, most-attention-worthy first.
+`closing' is last: a session counting down to auto-close after a successful
+turn wants the least attention (it is finishing itself), but stays visually
+distinct via its own glyph.")
 
 (defconst decknix-session-state-meta
   '((error      . ("✗" . "error"))
@@ -25,7 +28,8 @@
     (review     . ("◉" . "review"))
     (running    . ("●" . "running"))
     (idle       . ("○" . "idle"))
-    (done       . ("✓" . "done")))
+    (done       . ("✓" . "done"))
+    (closing    . ("⏻" . "closing")))
   "Alist of STATE -> (GLYPH . LABEL) for rendering.")
 
 (defun decknix-session-state-glyph (state)
@@ -44,16 +48,20 @@ SIGNALS is a plist; every key is optional and nil means absent:
   :error                the session is in an error / dead state
   :awaiting-permission  a permission prompt is pending your decision
   :attention            the agent flagged it needs you (e.g. asked a question)
+  :closing              armed to auto-close, counting down after a clean turn
   :done                 the work is complete (e.g. hub says the PR merged)
   :busy                 a turn is currently in progress
   :unread               completed output you have not yet viewed
 
 Precedence runs most-urgent first, so a single call collapses overlapping
-signals to one state.  Higher :score sorts the card nearer the top."
+signals to one state.  Higher :score sorts the card nearer the top.  `:closing'
+outranks `:busy'/`:unread' so the countdown status wins even though a just-
+finished turn also looks `unread' — but stays below anything needing you."
   (cond
    ((plist-get signals :error)               '(:state error       :score 90))
    ((plist-get signals :awaiting-permission) '(:state needs-input :score 80))
    ((plist-get signals :attention)           '(:state needs-input :score 70))
+   ((plist-get signals :closing)             '(:state closing     :score 5))
    ((plist-get signals :done)                '(:state done        :score 0))
    ((and (not (plist-get signals :busy))
          (plist-get signals :unread))        '(:state review      :score 60))
@@ -63,6 +71,7 @@ signals to one state.  Higher :score sorts the card nearer the top."
 (defconst decknix-session-status-signal-map
   '(("killed"       . (:error t))
     ("waiting"      . (:attention t))
+    ("closing"      . (:closing t))
     ("working"      . (:busy t))
     ("finished"     . (:unread t))
     ("ready"        . nil)

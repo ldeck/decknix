@@ -157,6 +157,28 @@
       (should (= (length specs) 1))
       (should (string= (alist-get 'workspace (car specs)) "/via/alias")))))
 
+(ert-deftest decknix-batch-parse--close-directive-arms-following-specs ()
+  "`close: yes' sets the `close' flag on later specs; `close: no' clears it."
+  (cl-letf (((symbol-function 'decknix--agent-parse-pr-url) (lambda (_) nil))
+            ((symbol-function 'decknix--agent-pr-detect-workspace)
+             (lambda (&rest _) nil)))
+    (decknix-test--with-parsed-buffer "before\nclose: yes\narmed1\narmed2\nclose: no\nafter\n"
+      (should (= (length specs) 4))
+      (should-not (alist-get 'close (nth 0 specs)))  ; before the directive
+      (should (alist-get 'close (nth 1 specs)))       ; armed1
+      (should (alist-get 'close (nth 2 specs)))       ; armed2
+      (should-not (alist-get 'close (nth 3 specs)))))) ; after close: no
+
+(ert-deftest decknix-batch-parse--close-applies-to-groups-too ()
+  "A `close: yes' directive also arms a following `---' group."
+  (cl-letf (((symbol-function 'decknix--agent-parse-pr-url) (lambda (_) nil))
+            ((symbol-function 'decknix--agent-pr-detect-workspace)
+             (lambda (&rest _) nil)))
+    (decknix-test--with-parsed-buffer "close: yes\n--- g1\nu1\nu2\n"
+      (should (= (length specs) 1))
+      (should (alist-get 'grouped (car specs)))
+      (should (alist-get 'close (car specs))))))
+
 (provide 'decknix-agent-batch-parse-test)
 
 ;;; decknix-agent-batch-parse-test.el ends here

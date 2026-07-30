@@ -39,6 +39,7 @@
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
 (declare-function agent-shell-buffers "ext:agent-shell")
 (declare-function agent-shell-workspace--buffer-status "ext:agent-shell-workspace")
+(declare-function decknix-agent-buffer-status "decknix-agent-auto-close" (buffer))
 (defvar decknix--hub-dir)
 (defvar agent-shell-workspace-sidebar--refresh-timer)
 
@@ -174,7 +175,10 @@ statuses -- the two things the blind 2 s timer existed to catch.  A few
               (fboundp 'agent-shell-workspace--buffer-status))
      (mapcar (lambda (b)
                (cons (buffer-name b)
-                     (ignore-errors (agent-shell-workspace--buffer-status b))))
+                     (ignore-errors
+                       (if (fboundp 'decknix-agent-buffer-status)
+                           (decknix-agent-buffer-status b)
+                         (agent-shell-workspace--buffer-status b)))))
              (agent-shell-buffers)))))
 
 (defun decknix--sidebar-idle-should-paint-p (fingerprint last-fingerprint
@@ -349,7 +353,10 @@ bucket so time-based sub-agent liveness fades still refresh."
            (when (buffer-live-p b)
              (with-current-buffer b
                (list (buffer-name b)
-                     (ignore-errors (agent-shell-workspace--buffer-status b))
+                     (ignore-errors
+                       (if (fboundp 'decknix-agent-buffer-status)
+                           (decknix-agent-buffer-status b)
+                         (agent-shell-workspace--buffer-status b)))
                      (let ((sid (or (bound-and-true-p decknix--agent-auggie-session-id)
                                     (bound-and-true-p decknix--agent-session-id)))
                            (pid (bound-and-true-p decknix--agent-provider-id)))
