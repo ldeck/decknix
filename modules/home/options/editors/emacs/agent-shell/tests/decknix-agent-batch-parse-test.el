@@ -121,6 +121,42 @@
       (should (alist-get 'grouped (nth 1 specs)))
       (should (equal (alist-get 'items (nth 1 specs)) '("in-group"))))))
 
+(ert-deftest decknix-batch-parse--workspace-directive-forces-ungrouped-ws ()
+  "`workspace: <path>' forces the ws of following ungrouped urls, one session each."
+  (cl-letf (((symbol-function 'decknix--agent-parse-pr-url)
+             (lambda (_)
+               '((owner . "octo") (repo . "myrepo") (number . "42"))))
+            ((symbol-function 'decknix--agent-pr-detect-workspace)
+             (lambda (&rest _) "/auto/ws")))
+    (decknix-test--with-parsed-buffer
+        "workspace: /forced/ws\nhttps://github.com/octo/myrepo/pull/42\nhttps://github.com/octo/myrepo/pull/43\n"
+      (should (= (length specs) 2))                              ; one session per url
+      (dolist (s specs)
+        (should (string= (alist-get 'workspace s) "/forced/ws")) ; override beats auto-detect
+        (should-not (alist-get 'grouped s))                      ; still individual, not merged
+        (should (= (length (alist-get 'items s)) 1))))))         ; each its own single item
+
+(ert-deftest decknix-batch-parse--workspace-directive-reset-to-auto ()
+  "`workspace:' with no path (or `auto') resumes per-url auto-detection."
+  (cl-letf (((symbol-function 'decknix--agent-parse-pr-url)
+             (lambda (_) '((owner . "o") (repo . "r") (number . "1"))))
+            ((symbol-function 'decknix--agent-pr-detect-workspace)
+             (lambda (&rest _) "/auto/ws")))
+    (decknix-test--with-parsed-buffer
+        "workspace: /forced/ws\nu1\nworkspace: auto\nu2\n"
+      (should (= (length specs) 2))
+      (should (string= (alist-get 'workspace (nth 0 specs)) "/forced/ws"))
+      (should (string= (alist-get 'workspace (nth 1 specs)) "/auto/ws")))))
+
+(ert-deftest decknix-batch-parse--ws-alias-directive ()
+  "`ws: <path>' is accepted as an alias for `workspace:'."
+  (cl-letf (((symbol-function 'decknix--agent-parse-pr-url) (lambda (_) nil))
+            ((symbol-function 'decknix--agent-pr-detect-workspace)
+             (lambda (&rest _) nil)))
+    (decknix-test--with-parsed-buffer "ws: /via/alias\nsomething\n"
+      (should (= (length specs) 1))
+      (should (string= (alist-get 'workspace (car specs)) "/via/alias")))))
+
 (provide 'decknix-agent-batch-parse-test)
 
 ;;; decknix-agent-batch-parse-test.el ends here

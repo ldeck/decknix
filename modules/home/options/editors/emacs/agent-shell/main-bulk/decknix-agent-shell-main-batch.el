@@ -246,10 +246,17 @@ Syntax:
   --- <another-group> [: ~/other/path]
   <url>
 
+  workspace: ~/Code/nurturecloud/foo   ← force ws for the individual urls below
+  <ungrouped-url>                       ← its own session, in ~/Code/…/foo
+  <ungrouped-url>                       ← its own session, in ~/Code/…/foo
+
   <ungrouped-url>
 
 Lines within a --- group share a single session.
 Ungrouped lines each get their own session.
+A `workspace: <path>' (or `ws:') directive forces the workspace of the following
+ungrouped urls without merging them into one session; `workspace: auto' resets
+to per-url auto-detection.
 Comments start with #."
   (interactive)
   (let* ((default-ws (decknix--agent-detect-workspace))
@@ -266,9 +273,11 @@ Comments start with #."
       ;; Insert template
       (insert (format "# Batch session launcher — workspace: %s\n"
                       default-ws)
-              "# Syntax: --- <name> [: <workspace>]\n"
+              "# Syntax: --- <name> [: <workspace>]   (one shared session)\n"
               "#         <url-per-line>\n"
               "# Ungrouped URLs get individual sessions.\n"
+              "# workspace: <path>   forces the ws of following individual\n"
+              "#         sessions (still one per URL); `workspace: auto' resets.\n"
               "# C-c C-c to launch, C-c C-k to cancel.\n\n")
       (set-buffer-modified-p nil))))
 
