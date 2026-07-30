@@ -182,6 +182,25 @@ ignored) so it never affects the notification handler's control flow."
            (plist-get s :label) (plist-get s :session) (plist-get s :detail))))))
   nil)
 
+(defun decknix--agent-acp-trace-on-request (&rest args)
+  "`:before' advice for `agent-shell--on-request': record incoming ACP requests.
+Requests (agent -> client) — notably `session/request_permission', the
+\"waiting for input\" signal — arrive as REQUESTS, not notifications, so they
+never reach `agent-shell--on-notification'.  Capturing them here is what makes a
+`working'-but-actually-waiting session visible in the timeline."
+  (when decknix-agent-acp-trace-enable
+    (ignore-errors
+      (let* ((request (plist-get args :request))
+             (method (alist-get 'method request))
+             (params (alist-get 'params request))
+             (session (alist-get 'sessionId params)))
+        (when method
+          (decknix--agent-acp-trace-record
+           (concat "REQ " method) session
+           (if (equal method "session/request_permission")
+               "AWAITING PERMISSION" ""))))))
+  nil)
+
 (defun decknix--agent-acp-trace-on-heartbeat-start (&rest _)
   "`:before' advice for `agent-shell-heartbeat-start': mark a turn beginning."
   (when decknix-agent-acp-trace-enable

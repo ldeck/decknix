@@ -4272,12 +4272,18 @@ the `&key' plist passed to `agent-shell--on-notification'."
         (require 'decknix-agent-acp-trace)
         (declare-function decknix--agent-acp-trace-on-notification
                           "decknix-agent-acp-trace" (&rest args))
+        (declare-function decknix--agent-acp-trace-on-request
+                          "decknix-agent-acp-trace" (&rest args))
         (declare-function decknix--agent-acp-trace-on-heartbeat-start
                           "decknix-agent-acp-trace" (&rest args))
         (declare-function decknix--agent-acp-trace-on-heartbeat-stop
                           "decknix-agent-acp-trace" (&rest args))
         (advice-add 'agent-shell--on-notification :before
                     #'decknix--agent-acp-trace-on-notification)
+        ;; Incoming ACP requests (session/request_permission = "waiting for
+        ;; input") arrive as requests, not notifications — capture them too.
+        (advice-add 'agent-shell--on-request :before
+                    #'decknix--agent-acp-trace-on-request)
         (with-eval-after-load 'agent-shell-heartbeat
           (advice-add 'agent-shell-heartbeat-start :before
                       #'decknix--agent-acp-trace-on-heartbeat-start)
