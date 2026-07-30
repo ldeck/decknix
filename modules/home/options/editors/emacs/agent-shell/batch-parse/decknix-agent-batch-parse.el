@@ -42,11 +42,19 @@
 
 (defun decknix--batch-parse-buffer ()
   "Parse the batch editor buffer into a list of session specs.
-Each spec is an alist with keys: name, workspace, items, grouped."
+Each spec is an alist with keys: name, workspace, items, grouped.
+
+A `workspace: <path>' (or `ws: <path>') directive line forces the workspace for
+every following UNGROUPED url — each still gets its OWN session, they just all
+launch into <path> instead of the per-url auto-detected root.  `workspace:' with
+no path (or `auto') resets to per-url auto-detection.  `---' groups are
+unaffected; they keep their own optional `: <workspace>'."
   (let ((specs nil)
         (current-items nil)
         (current-ws decknix--batch-default-workspace)
-        (current-name nil))
+        (current-name nil)
+        ;; Forced workspace for ungrouped urls (nil = per-url auto-detect).
+        (override-ws nil))
     (save-excursion
       (goto-char (point-min))
       (while (not (eobp))
@@ -55,6 +63,14 @@ Each spec is an alist with keys: name, workspace, items, grouped."
                       (line-beginning-position)
                       (line-end-position)))))
           (cond
+           ;; Workspace directive: workspace: <path> | ws: <path>
+           ((string-match "^\\(?:workspace\\|ws\\)\\s-*:\\s-*\\(.*\\)$" line)
+            (let ((path (string-trim (match-string 1 line))))
+              (setq override-ws
+                    (if (or (string-empty-p path)
+                            (member (downcase path) '("auto" "-" "nil")))
+                        nil
+                      (expand-file-name path)))))
            ;; Divider: --- <name> [: <workspace>]
            ((string-match "^---\\s-+\\(.+\\)" line)
             ;; Flush previous group if any
@@ -93,13 +109,16 @@ Each spec is an alist with keys: name, workspace, items, grouped."
                                           (substring
                                            (secure-hash 'sha256 line)
                                            0 8))))
-                     ;; Auto-detect workspace from PR URL
-                     (ws (if parsed
-                             (or (decknix--agent-pr-detect-workspace
-                                  (alist-get 'owner parsed)
-                                  (alist-get 'repo parsed))
-                                 decknix--batch-default-workspace)
-                           decknix--batch-default-workspace)))
+                     ;; Forced `workspace:' override wins; else auto-detect from
+                     ;; the PR URL; else the batch default.
+                     (ws (cond
+                          (override-ws override-ws)
+                          (parsed
+                           (or (decknix--agent-pr-detect-workspace
+                                (alist-get 'owner parsed)
+                                (alist-get 'repo parsed))
+                               decknix--batch-default-workspace))
+                          (t decknix--batch-default-workspace))))
                 (push (list (cons 'name auto-name)
                             (cons 'workspace ws)
                             (cons 'items (list line))
