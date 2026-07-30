@@ -51,6 +51,8 @@
 ;; Upstream agent-shell / shell-maker symbols touched at runtime.
 (declare-function agent-shell-workspace--buffer-status
                   "agent-shell-workspace" (buffer))
+;; decknix auto-close overlay (optional; fboundp-guarded at call sites).
+(declare-function decknix-agent-closing-p "decknix-agent-auto-close" (&optional buffer))
 (declare-function agent-shell--make-header "agent-shell" (state))
 (declare-function agent-shell--state "agent-shell")
 (defvar agent-shell-header-style)
@@ -93,8 +95,12 @@
 (defun decknix--header-detect-status ()
   "Return the current agent status as a string.
 Uses agent-shell-workspace's detection when available (richer states),
-otherwise falls back to shell-maker--busy."
+otherwise falls back to shell-maker--busy.  A session counting down to
+auto-close reports \"closing\" (decknix overlay) ahead of the upstream state."
   (cond
+   ;; decknix overlay: a session in its auto-close countdown.
+   ((and (fboundp 'decknix-agent-closing-p) (decknix-agent-closing-p))
+    "closing")
    ;; Rich detection from agent-shell-workspace
    ((fboundp 'agent-shell-workspace--buffer-status)
     (agent-shell-workspace--buffer-status (current-buffer)))
@@ -116,6 +122,7 @@ Uses the shape-family system: ○ = pre-active (initializing),
     ("finished"     "●")
     ("working"      "◐")
     ("waiting"      "◐")
+    ("closing"      "⏻")
     ("initializing" "○")
     ("killed"       "●")
     (_              "○")))
@@ -129,6 +136,7 @@ yellow = in-progress, red = blocked/killed, grey = idle/initializing."
     ("finished"     '(:foreground "cyan" :weight bold))
     ("working"      'warning)
     ("waiting"      'error)
+    ("closing"      '(:foreground "orange" :weight bold))
     ("initializing" 'shadow)
     ("killed"       'error)
     (_              'shadow)))

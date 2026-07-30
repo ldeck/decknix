@@ -67,6 +67,10 @@
                   (spec items default-ws parser-fn detect-fn))
 (declare-function decknix--batch-summary-rows
                   "decknix-agent-batch-build" (results))
+(declare-function decknix--agent-find-new-shell-buffer
+                  "decknix-agent-buffer-lookup" (before-buffers))
+(declare-function decknix--agent-auto-close-arm
+                  "decknix-agent-auto-close" (&optional buffer))
 
 
 ;; -- State --
@@ -110,9 +114,16 @@ and accumulates results."
                        #'decknix--agent-parse-pr-url
                        #'decknix--agent-pr-detect-workspace)))
       (condition-case err
-          (progn
+          (let ((before (buffer-list)))
             (decknix--agent-quickaction-start
              name tags workspace command model provider)
+            ;; `close: yes' in the batch arms the new session to auto-close once
+            ;; it finishes its review turn cleanly (unattended reviews).
+            (when (and (alist-get 'close spec)
+                       (fboundp 'decknix--agent-find-new-shell-buffer)
+                       (fboundp 'decknix--agent-auto-close-arm))
+              (when-let ((buf (decknix--agent-find-new-shell-buffer before)))
+                (decknix--agent-auto-close-arm buf)))
             (push (list name "launched" nil) decknix--batch-launch-results))
         (error
          (push (list name "failed" (error-message-string err))
@@ -278,6 +289,8 @@ Comments start with #."
               "# Ungrouped URLs get individual sessions.\n"
               "# workspace: <path>   forces the ws of following individual\n"
               "#         sessions (still one per URL); `workspace: auto' resets.\n"
+              "# close: yes   auto-close each following session after it finishes\n"
+              "#         its review turn cleanly (`close: no' turns it off).\n"
               "# C-c C-c to launch, C-c C-k to cancel.\n\n")
       (set-buffer-modified-p nil))))
 

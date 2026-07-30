@@ -1804,6 +1804,20 @@ let
     ];
   };
 
+  # Arm a session to auto-close after a clean turn (verdict posted).  Owns the
+  # per-buffer phase (armed/closing), the countdown lifecycle, and the "closing"
+  # status injection consumed by `C-c b' + the sidebar.  Pure countdown/status
+  # helpers ERT-tested; the advice onto shell-maker-finish-output / heartbeat is
+  # wired in the heredoc.
+  decknix-agent-auto-close-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-auto-close";
+    src = ./agent-shell/auto-close;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-auto-close-test.el"
+    ];
+  };
+
   decknix-agent-session-id-el = mkEmacsTestedPackage {
     pname = "decknix-agent-session-id";
     src = ./agent-shell/agent;
@@ -2731,6 +2745,7 @@ in
           decknix-agent-workspace-detect-el
           decknix-agent-command-discover-el
           decknix-session-state-el
+          decknix-agent-auto-close-el
           decknix-agent-session-id-el
           decknix-db-el
           decknix-agent-clipboard-el
@@ -4089,6 +4104,7 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c A o" "sidebar focus"
             "C-c A O" "sidebar toggle (this tab)"
             "C-c A q" "quit session"
+            "C-c A x" "arm auto-close"
             "C-c A R" "rename session"
             "C-c A r" "recent sessions"
             "C-c A P" "Progress (conv-key)"
@@ -4267,6 +4283,27 @@ the `&key' plist passed to `agent-shell--on-notification'."
                       #'decknix--agent-acp-trace-on-heartbeat-start)
           (advice-add 'agent-shell-heartbeat-stop :before
                       #'decknix--agent-acp-trace-on-heartbeat-stop))
+
+        ;; Session auto-close (C-c A x): arm a review session to close itself
+        ;; after it finishes a turn cleanly.  Advise the successful turn-end
+        ;; (`shell-maker-finish-output' with :success) to begin the countdown,
+        ;; and a new turn (`agent-shell-heartbeat-start') to cancel a pending
+        ;; close (you re-engaged).  Named fns keep the advice idempotent across
+        ;; `decknix switch' hot-reloads.  The "closing" status it surfaces is
+        ;; consumed by C-c b + the sidebar via `decknix-agent-buffer-status'.
+        (require 'decknix-agent-auto-close)
+        (declare-function decknix--agent-auto-close-on-finish
+                          "decknix-agent-auto-close" (&rest args))
+        (declare-function decknix--agent-auto-close-on-new-turn
+                          "decknix-agent-auto-close" (&rest args))
+        (declare-function decknix-agent-arm-auto-close "decknix-agent-auto-close")
+        (with-eval-after-load 'shell-maker
+          (advice-add 'shell-maker-finish-output :after
+                      #'decknix--agent-auto-close-on-finish))
+        (with-eval-after-load 'agent-shell-heartbeat
+          (advice-add 'agent-shell-heartbeat-start :before
+                      #'decknix--agent-auto-close-on-new-turn))
+        (define-key decknix-agent-prefix-map (kbd "x") 'decknix-agent-arm-auto-close)
 
         ;; Pre-fetch prompt search cache on daemon start
         (run-at-time 5 nil #'decknix--prompt-search-refresh-async)

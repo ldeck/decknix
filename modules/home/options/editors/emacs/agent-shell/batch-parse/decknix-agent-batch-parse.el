@@ -42,19 +42,25 @@
 
 (defun decknix--batch-parse-buffer ()
   "Parse the batch editor buffer into a list of session specs.
-Each spec is an alist with keys: name, workspace, items, grouped.
+Each spec is an alist with keys: name, workspace, items, grouped, close.
 
 A `workspace: <path>' (or `ws: <path>') directive line forces the workspace for
 every following UNGROUPED url — each still gets its OWN session, they just all
 launch into <path> instead of the per-url auto-detected root.  `workspace:' with
 no path (or `auto') resets to per-url auto-detection.  `---' groups are
-unaffected; they keep their own optional `: <workspace>'."
+unaffected; they keep their own optional `: <workspace>'.
+
+A `close: yes' directive arms every session launched after it to auto-close once
+it finishes its review turn cleanly (`close: no' turns it back off) — for
+unattended batch reviews that post their own verdict."
   (let ((specs nil)
         (current-items nil)
         (current-ws decknix--batch-default-workspace)
         (current-name nil)
         ;; Forced workspace for ungrouped urls (nil = per-url auto-detect).
-        (override-ws nil))
+        (override-ws nil)
+        ;; Arm auto-close on sessions created after a `close: yes' directive.
+        (override-close nil))
     (save-excursion
       (goto-char (point-min))
       (while (not (eobp))
@@ -71,6 +77,13 @@ unaffected; they keep their own optional `: <workspace>'."
                             (member (downcase path) '("auto" "-" "nil")))
                         nil
                       (expand-file-name path)))))
+           ;; Auto-close directive: close: yes|no  — arm sessions launched after
+           ;; it to close themselves once they finish their review turn cleanly.
+           ((string-match "^close\\s-*:\\s-*\\(.*\\)$" line)
+            (setq override-close
+                  (and (member (downcase (string-trim (match-string 1 line)))
+                               '("yes" "on" "true" "t" "1"))
+                       t)))
            ;; Divider: --- <name> [: <workspace>]
            ((string-match "^---\\s-+\\(.+\\)" line)
             ;; Flush previous group if any
@@ -78,7 +91,8 @@ unaffected; they keep their own optional `: <workspace>'."
               (push (list (cons 'name current-name)
                           (cons 'workspace current-ws)
                           (cons 'items (nreverse current-items))
-                          (cons 'grouped t))
+                          (cons 'grouped t)
+                          (cons 'close override-close))
                     specs))
             ;; Parse new group header
             (let ((header (match-string 1 line)))
@@ -122,7 +136,8 @@ unaffected; they keep their own optional `: <workspace>'."
                 (push (list (cons 'name auto-name)
                             (cons 'workspace ws)
                             (cons 'items (list line))
-                            (cons 'grouped nil))
+                            (cons 'grouped nil)
+                            (cons 'close override-close))
                       specs))))))
         (forward-line 1)))
     ;; Flush final group
@@ -130,7 +145,8 @@ unaffected; they keep their own optional `: <workspace>'."
       (push (list (cons 'name current-name)
                   (cons 'workspace current-ws)
                   (cons 'items (nreverse current-items))
-                  (cons 'grouped t))
+                  (cons 'grouped t)
+                  (cons 'close override-close))
             specs))
     (nreverse specs)))
 
