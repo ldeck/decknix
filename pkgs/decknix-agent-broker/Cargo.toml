@@ -1,0 +1,9 @@
+[package]
+name = "decknix-agent-broker"
+version = "0.1.0"
+edition = "2021"
+description = "Pipe-clean ACP broker — holds an agent bridge, relays to attaching clients over a unix socket (#151)"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "process", "sync", "signal", "fs"] }
