@@ -1252,6 +1252,19 @@ let
     ];
   };
 
+  # Brokered-session foundation (#151 M3b): the enable flag, pure argv-wrap +
+  # key-gen helpers, and a per-conversation broker-key store (mirrors
+  # session-mode) so a resumed session reattaches the same broker.  Inert until
+  # `programs.emacs.decknix.agentShell.broker.enable'.
+  decknix-agent-session-broker-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-session-broker";
+    src = ./agent-shell/session-broker;
+    packageRequires = [ decknix-agent-tags-store-el ];
+    testFiles = [
+      "decknix-agent-session-broker-test.el"
+    ];
+  };
+
   # PR B.49: clipboard URL DWIM helper carved out of
   # `decknix-agent-shell-main' (main-bulk).  Co-resident with the
   # rest of the agent/ cluster.  Owns the tiny kill-ring +
@@ -2460,6 +2473,20 @@ in
       '';
     };
 
+    broker.enable = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Run Claude agent sessions through the agent service broker (#151):
+        their ACP bridge is spawned by a daemonised broker outside Emacs'
+        process tree and Emacs attaches over a unix socket, so the bridge —
+        and its in-flight turn — survives Emacs dying, `decknix switch', and
+        crashes.  Off by default; sessions launch the bridge directly (exactly
+        as before) until you opt in.  Requires the broker tooling on PATH
+        (installed with the agent-shell module).
+      '';
+    };
+
     tableOverlay.enable = mkOption {
       type = types.bool;
       default = true;
@@ -2757,6 +2784,7 @@ in
           decknix-agent-conv-resolve-el
           decknix-agent-session-model-el
           decknix-agent-session-mode-el
+          decknix-agent-session-broker-el
           decknix-agent-session-workspace-el
           decknix-agent-conv-recency-el
           decknix-agent-tags-read-el
@@ -3253,6 +3281,14 @@ in
         (require 'decknix-agent-session-mode)
         (declare-function decknix--agent-session-mode-for-conv-key
                           "decknix-agent-session-mode" (conv-key))
+
+        ;; Brokered-session foundation (#151 M3b).  The enable flag is seeded
+        ;; from the module option; command-build wrapping + the new/resume
+        ;; lifecycle threading land in a follow-up.  Default off -> no change.
+        (require 'decknix-agent-session-broker)
+        (defvar decknix-agent-broker-enable)
+        (setq decknix-agent-broker-enable ${
+          if cfg.broker.enable then "t" else "nil"})
         (declare-function decknix--agent-session-save-mode-for-conv-key
                           "decknix-agent-session-mode" (conv-key mode-id))
 
