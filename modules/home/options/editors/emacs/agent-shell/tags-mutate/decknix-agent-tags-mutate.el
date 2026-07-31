@@ -38,12 +38,15 @@
                   "decknix-agent-tags-store" (store))
 (declare-function decknix--agent-conversation-key
                   "decknix-agent-conv-resolve" (first-message))
+(declare-function decknix--agent-broker-save-key-for-conv-key
+                  "decknix-agent-session-broker" (conv-key key))
 
 (defvar decknix--agent-conv-key)
 (defvar decknix--agent-auggie-session-id)
 (defvar decknix--agent-pending-tags)
 (defvar decknix--agent-pending-workspace)
 (defvar decknix--agent-workspace-persisted)
+(defvar decknix--agent-broker-key)
 
 (defun decknix--agent-store-metadata-by-conv-key (conv-key tags workspace)
   "Store TAGS and WORKSPACE directly under CONV-KEY in the tag store.
@@ -134,6 +137,12 @@ submission."
                                   ", ")))
           (setq-local decknix--agent-pending-tags nil)
           (setq-local decknix--agent-pending-workspace nil))
+        ;; Persist this brokered session's key against the now-known conv-key so
+        ;; resume reattaches the same broker (#151 M3b).  No-op unless brokered.
+        (when (and (bound-and-true-p decknix--agent-broker-key)
+                   (fboundp 'decknix--agent-broker-save-key-for-conv-key))
+          (decknix--agent-broker-save-key-for-conv-key
+           conv-key decknix--agent-broker-key))
         ;; One-shot: remove ourselves from the buffer-local hook.
         (remove-hook 'comint-input-filter-functions
                      #'decknix--agent-flush-pending-metadata
