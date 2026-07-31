@@ -438,6 +438,24 @@ struct GhAuthor {
     is_bot: Option<bool>,
 }
 
+/// Review/automation bots that post as GitHub **Organization** accounts, so
+/// `gh` reports neither `is_bot: true` nor the `[bot]` login suffix that App
+/// accounts carry.  Without this allowlist they classify as `Actor::Other`
+/// (a human colleague) and wrongly set `others_reviewed`, hiding PRs under the
+/// `hide-any' reviewed filter.  Matched case-insensitively against the bare
+/// login.
+const KNOWN_BOT_LOGINS: &[&str] = &["copilot-pull-request-reviewer", "augmentcode"];
+
+/// Whether an author LOGIN (with its optional `is_bot` flag) is a bot.  Three
+/// signals, any of which is sufficient: the `is_bot: true` flag GitHub sets on
+/// App accounts, the `[bot]` login suffix all Apps carry, or membership in
+/// `KNOWN_BOT_LOGINS` (Organization-account bots that carry neither).
+fn login_is_bot(login: &str, is_bot: Option<bool>) -> bool {
+    is_bot.unwrap_or(false)
+        || login.ends_with("[bot]")
+        || KNOWN_BOT_LOGINS.iter().any(|b| login.eq_ignore_ascii_case(b))
+}
+
 /// Classification of a comment/review author relative to the current user.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum Actor {
@@ -449,7 +467,7 @@ enum Actor {
 fn classify_author(author: Option<&GhAuthor>, my_login: &str) -> Actor {
     match author {
         Some(a) if a.login.eq_ignore_ascii_case(my_login) => Actor::Me,
-        Some(a) if a.is_bot.unwrap_or(false) || a.login.ends_with("[bot]") => Actor::Bot,
+        Some(a) if login_is_bot(&a.login, a.is_bot) => Actor::Bot,
         _ => Actor::Other,
     }
 }
@@ -460,9 +478,7 @@ fn classify_author(author: Option<&GhAuthor>, my_login: &str) -> Actor {
 /// GitHub linked it to a non-bot account.  Conservative on purpose — better
 /// to under-flag `bot_human' than to mislabel a pure-bot PR.
 fn commit_author_is_human(a: &GhAuthor) -> bool {
-    !a.login.is_empty()
-        && !a.login.ends_with("[bot]")
-        && !a.is_bot.unwrap_or(false)
+    !a.login.is_empty() && !login_is_bot(&a.login, a.is_bot)
 }
 
 /// Whether any commit in COMMITS was authored by a human (see
@@ -478,7 +494,7 @@ fn commits_have_human(commits: &[GhCommit]) -> bool {
 /// bot-opened PR.
 fn pr_author_kind(author: Option<&GhAuthor>, human_committed: bool) -> &'static str {
     let is_bot = author
-        .map(|a| a.is_bot.unwrap_or(false) || a.login.ends_with("[bot]"))
+        .map(|a| login_is_bot(&a.login, a.is_bot))
         .unwrap_or(false);
     if is_bot {
         if human_committed { "bot_human" } else { "bot" }
@@ -1871,6 +1887,12 @@ mod tests {
         assert!(!compute_others_reviewed(&[review("ldeck", false, "APPROVED")], Some("ldeck")));
         // A bot's review is not a human reviewer.
         assert!(!compute_others_reviewed(&[review("copilot[bot]", true, "COMMENTED")], Some("ldeck")));
+        // Org-account review bots carry neither `is_bot` nor a `[bot]` suffix,
+        // but the known-bot allowlist still excludes them (case-insensitive).
+        assert!(!compute_others_reviewed(
+            &[review("copilot-pull-request-reviewer", false, "COMMENTED")], Some("ldeck")));
+        assert!(!compute_others_reviewed(&[review("augmentcode", false, "COMMENTED")], Some("ldeck")));
+        assert!(!compute_others_reviewed(&[review("AugmentCode", false, "APPROVED")], Some("ldeck")));
         // A non-conclusive/pending state does not count.
         assert!(!compute_others_reviewed(&[review("alice", false, "PENDING")], Some("ldeck")));
         assert!(!compute_others_reviewed(&[], Some("ldeck")));
