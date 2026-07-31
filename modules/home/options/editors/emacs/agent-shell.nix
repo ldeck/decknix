@@ -3755,7 +3755,17 @@ ${optionalString cfg.tableOverlay.enable ''
         (require 'decknix-agent-heartbeat-watch)
         (declare-function decknix--agent-hb-watch-start
                           "decknix-agent-heartbeat-watch")
+        (declare-function decknix--agent-normalize-turn-end
+                          "decknix-agent-heartbeat-watch" (&rest args))
         (decknix--agent-hb-watch-start)
+        ;; Fix the stuck-`working' status after a failure-path Claude turn end
+        ;; (agent-shell's on-FAILURE stops the heartbeat without clearing
+        ;; :tool-calls / busy, unlike on-SUCCESS).  Normalise the terminal state
+        ;; on every turn end so status reliably leaves `working'.  Named fn keeps
+        ;; the advice idempotent across `decknix switch' hot-reloads.
+        (with-eval-after-load 'agent-shell-heartbeat
+          (advice-add 'agent-shell-heartbeat-stop :after
+                      #'decknix--agent-normalize-turn-end))
 
         ;; Quick-capture: `C-c A C' -> jot a feature/bug/investigation into a
         ;; GitHub issue/comment or taskwarrior, async, even while an agent is
