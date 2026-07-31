@@ -84,6 +84,16 @@ history; only the model-facing primer is suppressed)."
 (declare-function decknix-agent-provider-select "decknix-agent-provider")
 (declare-function decknix--agent-command-build "decknix-agent-provider")
 (declare-function decknix--agent-make-config "decknix-agent-provider")
+;; #151 M3b brokered-session helpers (session-broker; nil key -> no-op).
+(declare-function decknix--agent-broker-key-for-new
+                  "decknix-agent-session-broker" (provider-id))
+(declare-function decknix--agent-broker-key-for-resume
+                  "decknix-agent-session-broker" (provider-id conv-key))
+(declare-function decknix--agent-broker-wrap-command
+                  "decknix-agent-session-broker" (argv key))
+(declare-function decknix--agent-broker-save-key-for-conv-key
+                  "decknix-agent-session-broker" (conv-key key))
+(defvar decknix--agent-broker-key)
 (declare-function decknix--agent-model-replay-needed-p "decknix-agent-provider")
 (declare-function decknix-agent-purpose-resolve "decknix-agent-purposes")
 (defvar decknix-agent-default-provider)
@@ -939,9 +949,14 @@ dedupes against live buffers before calling here."
          ;; Falls back to `decknix-agent-default-provider' for old
          ;; cache entries that pre-date the Phase 1.3 stamp.
          (provider (decknix--agent-provider-for-session-id session-id))
+         ;; #151 M3b: reattach the same broker this conversation created (its
+         ;; key was persisted at first message); nil key -> no wrap.
+         (broker-key (decknix--agent-broker-key-for-resume provider conv-key))
          (augmented-cmd
-          (decknix--agent-command-build
-           provider validated-ws saved-model session-id))
+          (decknix--agent-broker-wrap-command
+           (decknix--agent-command-build
+            provider validated-ws saved-model session-id)
+           broker-key))
          ;; Re-apply the session/permission mode the conversation was
          ;; left in (persisted per conv-key by `decknix-agent-set-
          ;; session-mode'), falling back to the `new-session' purpose
@@ -1042,7 +1057,13 @@ dedupes against live buffers before calling here."
       ;; async timer below still re-sets it for defensive reasons.
       (when (and ck (buffer-live-p shell-buf))
         (with-current-buffer shell-buf
-          (setq-local decknix--agent-conv-key ck)))
+          (setq-local decknix--agent-conv-key ck)
+          ;; #151 M3b: stamp + persist this resume's broker key (records a
+          ;; fallback-generated key when none was saved before). No-op if unbrokered.
+          (when broker-key
+            (setq-local decknix--agent-broker-key broker-key)
+            (when (fboundp 'decknix--agent-broker-save-key-for-conv-key)
+              (decknix--agent-broker-save-key-for-conv-key ck broker-key)))))
       ;; Register new session-id under the conversation immediately
       ;; so it appears in the session picker even before the buffer
       ;; is fully set up.
@@ -2386,7 +2407,13 @@ workspace = project root, no tags; name is still derived automatically."
          ;; lambda is stored in agent-shell--state and called later
          ;; (when the first message is sent) — by which time a dynamic
          ;; let-binding would have expired.
-         (augmented-cmd (decknix--agent-command-build provider workspace))
+         ;; #151 M3b: when brokering is enabled, route the Claude bridge through
+         ;; the broker-attach wrapper under a fresh key (persisted at first
+         ;; message so resume reattaches the same broker).  nil key -> no wrap.
+         (broker-key (decknix--agent-broker-key-for-new provider))
+         (augmented-cmd (decknix--agent-broker-wrap-command
+                         (decknix--agent-command-build provider workspace)
+                         broker-key))
          ;; Seed the session/permission mode from the `new-session'
          ;; purpose (e.g. Claude "auto") so user-created sessions no
          ;; longer need a manual `C-c RET' each time.  Ignored by
@@ -2402,7 +2429,7 @@ workspace = project root, no tags; name is still derived automatically."
     (setq decknix--agent-session-cache-time 0)
     ;; Post-creation: rename buffer immediately, subscribe to prompt-ready for metadata
     (decknix--agent-session-new-post-create
-     before-buffers name tags workspace nil provider)
+     before-buffers name tags workspace nil provider broker-key)
     (message "Starting agent session \"%s\" in %s…" name workspace)))
 
 (defun decknix-agent-session-fork ()
@@ -2503,8 +2530,11 @@ calling `decknix-agent-session-new' interactively."
     (message "Forking session \"%s\" in %s…" name workspace)))
 
 (defun decknix--agent-session-new-post-create
-    (before-buffers name tags workspace &optional first-message provider-id)
+    (before-buffers name tags workspace &optional first-message provider-id broker-key)
   "Post-creation setup: rename buffer to NAME, apply TAGS, record WORKSPACE.
+BROKER-KEY, when non-nil, is the session's broker socket key (#151 M3b); it is
+stored buffer-locally so it can be persisted against the conv-key at the first
+message (see `decknix--agent-flush-pending-metadata').
 BEFORE-BUFFERS is the buffer snapshot taken before agent-shell-start.
 Finds the new buffer immediately (agent-shell-start creates it synchronously),
 renames it, and persists metadata.
@@ -2522,6 +2552,7 @@ batch launches."
       ;; (PR B.83).
       (with-current-buffer shell-buf
         (setq-local decknix--agent-provider-id (or provider-id decknix-agent-default-provider))
+        (when broker-key (setq-local decknix--agent-broker-key broker-key))
         ;; Provider-aware name so a Claude/Pi session is "*Claude: …*" /
         ;; "*Pi: …*" rather than a misleading "*Auggie: …*" (the label
         ;; is what `C-c b' / the switcher surface as the agent type).

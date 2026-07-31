@@ -44,6 +44,11 @@ sessions launch the bridge directly in Emacs' process tree, exactly as before.")
 brokering.  It spawns the daemonised broker (holding the real bridge) on the
 first attach and re-attaches on every reconnect.")
 
+(defvar-local decknix--agent-broker-key nil
+  "This brokered session's key (its broker socket name), or nil when not brokered.
+Set at launch; persisted against the conv-key once the first message establishes
+it, so resume reattaches the same broker.")
+
 (defun decknix--agent-broker-generate-key ()
   "Return a fresh, unique, filename-safe broker session key.
 Used to name the broker's unix socket; persisted against the conv-key so resume
@@ -79,6 +84,20 @@ Gated on `decknix-agent-broker-enable' and the provider being `claude-code'
            (entry (gethash conv-key convs)))
       (when (hash-table-p entry)
         (gethash "brokerKey" entry)))))
+
+(defun decknix--agent-broker-key-for-new (provider-id)
+  "Return a fresh broker key for a NEW PROVIDER-ID session.
+Nil when the session should not be brokered (toggle off / non-Claude)."
+  (when (decknix--agent-broker-should-wrap-p provider-id)
+    (decknix--agent-broker-generate-key)))
+
+(defun decknix--agent-broker-key-for-resume (provider-id conv-key)
+  "Return the broker key to reattach a resumed PROVIDER-ID session, or nil.
+Reuses the key persisted for CONV-KEY (so we reattach the same broker); falls
+back to a fresh key when none was recorded."
+  (when (decknix--agent-broker-should-wrap-p provider-id)
+    (or (decknix--agent-broker-key-for-conv-key conv-key)
+        (decknix--agent-broker-generate-key))))
 
 (defun decknix--agent-broker-save-key-for-conv-key (conv-key key)
   "Persist broker KEY for CONV-KEY in agent-sessions.json."
