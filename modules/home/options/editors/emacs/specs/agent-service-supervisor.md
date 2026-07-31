@@ -99,11 +99,26 @@ Revised after the M1 spike: build the broker first (raw dtach is closed).
   reattached client gets the LIVE stream only. Reviewing what streamed while
   detached is a separate "walk history" command over the transcript — so no ACP
   `session/resume` is needed in the broker itself.
-- **M3 — Emacs attach transport.** Register a Claude provider variant whose
-  `:acp-command` is `socat - UNIX-CONNECT:<sock>` (pipe-clean), plus a launcher
-  that starts the broker + writes the registry file. Open/close the buffer =
-  attach/detach; the bridge keeps running. Add `socat` (or use `nc -U`) to the
-  package set **when this lands**, not before.
+- **M3 — Attach transport + daemonisation. DONE (validated 2026-07-31).**
+  A transparent spawn-or-attach wrapper `decknix-agent-broker-attach KEY --
+  <bridge-cmd>` that acp.el points its `:command' at: it `pgrep'/pidfile-checks
+  whether a broker is holding `KEY''s socket, spawns one (with the real bridge)
+  if not, and `exec socat - UNIX-CONNECT:<sock>' either way — so the FIRST attach
+  starts the broker and every reconnect just re-attaches; no acp.el change.
+  Because macOS ships no `setsid' binary, the broker itself gained
+  `--daemonize' (fork + setsid + fork) so it reparents to pid 1, out of Emacs'
+  process tree; it writes `<socket>.pid' (liveness) + a per-session registry
+  JSON, both cleaned on exit.
+  Validation (wrapper + daemonised broker + mock bridge): attach → `reply:1`;
+  the attach (socat) exits (== Emacs closing the buffer / dying); the broker
+  **survives with ppid=1**; reattach → `reply:2` (state kept across "Emacs
+  death"). Packaged: broker + `socat` + the wrapper on PATH (inert until a
+  session opts in).
+  REMAINING (M3b, next): the Emacs opt-in — wrap `decknix--agent-command-build`
+  with the wrapper when brokering is enabled, using a stable per-session broker
+  KEY (generated at launch, persisted to conversation metadata at the sid↔conv
+  link, reused on resume), plus a live test against a real `claude-agent-acp`
+  (the reattach `initialize`/`session/load` handshake — risk 1).
 - **M4 — Registry + lazy-attach.** Sidebar/board list sessions from the registry
   (no live connection); attach the ACP client only when a session is opened.
   Non-attached rows get status from the registry + transcript, not a socket.

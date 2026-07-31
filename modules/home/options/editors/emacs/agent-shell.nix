@@ -2637,7 +2637,25 @@ in
     # while staying user-overridable (set copyRegion.pandoc.enable = false
     # or copyRegion.pdfEngine = null to opt out).
     home.packages = with pkgs;
-      (optional cfg.copyRegion.pandoc.enable pandoc)
+      [
+        # Agent service broker (#151 M3): the broker binary, its socat-based
+        # pipe-clean attach transport, and the spawn-or-attach wrapper that
+        # acp.el points its `:command' at.  Shipping these is inert until a
+        # session opts into brokering (the Claude provider variant), so it is
+        # safe to install now — nothing routes through them yet.
+        decknix-agent-broker
+        socat
+        (writeShellApplication {
+          name = "decknix-agent-broker-attach";
+          runtimeInputs = [ socat decknix-agent-broker coreutils ];
+          # Drop the file's own shebang line; writeShellApplication supplies its
+          # own shebang + `set -euo pipefail'.
+          text = lib.concatStringsSep "\n"
+            (lib.drop 1 (lib.splitString "\n"
+              (builtins.readFile ./agent-shell/scripts/decknix-agent-broker-attach.sh)));
+        })
+      ]
+      ++ (optional cfg.copyRegion.pandoc.enable pandoc)
       ++ (optional (cfg.copyRegion.pdfEngine != null)
             pdfEnginePackages.${cfg.copyRegion.pdfEngine});
 
