@@ -37,5 +37,15 @@
   "No recorded idle start -> cannot be stuck yet."
   (should-not (decknix--agent-hb-stuck-p t 42 42 nil 700.0 600)))
 
+(ert-deftest decknix-hb--normalize-turn-end-noop-outside-agent-shell ()
+  "Turn-end normalisation is a safe no-op outside an agent-shell buffer.
+It must never touch state in a non-agent buffer (the advice fires on every
+`agent-shell-heartbeat-stop', but the guard keeps it scoped)."
+  (with-temp-buffer
+    (setq-local shell-maker--busy t)
+    ;; not derived from agent-shell-mode -> the guard should skip everything
+    (decknix--agent-normalize-turn-end)
+    (should (eq shell-maker--busy t))))
+
 (provide 'decknix-agent-heartbeat-watch-test)
 ;;; decknix-agent-heartbeat-watch-test.el ends here

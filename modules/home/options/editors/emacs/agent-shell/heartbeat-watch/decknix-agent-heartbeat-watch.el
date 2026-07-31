@@ -43,6 +43,29 @@
 (declare-function agent-shell-buffers "ext:agent-shell")
 (declare-function agent-shell--state "ext:agent-shell")
 (declare-function agent-shell-heartbeat-stop "ext:agent-shell-heartbeat")
+(defvar shell-maker--busy)
+
+(defun decknix--agent-normalize-turn-end (&rest _)
+  "Clear a finished turn's residual state so status leaves \"working\".
+`agent-shell''s `session/prompt' ON-SUCCESS handler clears `:tool-calls' and the
+busy flag, but its ON-FAILURE handler (an errored / non-`end_turn' Claude turn)
+stops the heartbeat WITHOUT clearing them.  So after a failure-path turn end,
+`agent-shell-workspace--buffer-status' keeps returning \"working\" (tool-calls >
+0 and/or `shell-maker--busy' set) indefinitely — the session never shows ready
+after its output, and interrupt-submit can't help because there is no active
+turn to cancel (observed: sid b05da127 stuck `working tc=11' for ~30 min after a
+TURN-END).
+
+Run as `:after' advice on `agent-shell-heartbeat-stop' (= turn end, either
+path).  Safe: heartbeat-stop only fires when the turn is genuinely over — a turn
+paused on a permission prompt keeps its heartbeat running — and the SUCCESS path
+merely re-clears already-cleared state."
+  (when (derived-mode-p 'agent-shell-mode)
+    (ignore-errors
+      (when (agent-shell--state)
+        (map-put! (agent-shell--state) :tool-calls nil)))
+    (when (bound-and-true-p shell-maker--busy)
+      (setq shell-maker--busy nil))))
 
 (defcustom decknix-agent-heartbeat-stuck-seconds 600
   "Seconds of no buffer output after which a running heartbeat is stuck.
