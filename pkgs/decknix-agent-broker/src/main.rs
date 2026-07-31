@@ -43,6 +43,12 @@ struct Args {
     #[arg(long)]
     session_id: Option<String>,
 
+    /// Detach from the caller (fork + setsid + fork) so the broker — and the
+    /// agent turn it holds — survives Emacs dying / `decknix switch'.  Writes
+    /// `<socket>.pid' for liveness checks; removed on exit alongside the socket.
+    #[arg(long)]
+    daemonize: bool,
+
     /// Append-only raw ACP traffic log (bridge stdout, and stderr prefixed `!`).
     #[arg(long)]
     log: Option<PathBuf>,
@@ -72,10 +78,53 @@ fn mkparent(path: &PathBuf) {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn pidfile(socket: &PathBuf) -> PathBuf {
+    let mut p = socket.clone();
+    let name = format!("{}.pid", p.file_name().and_then(|n| n.to_str()).unwrap_or("broker"));
+    p.set_file_name(name);
+    p
+}
+
+/// Detach into our own session so signals to Emacs' process group don't reach
+/// us. Fork (parent exits so we are not a group leader), setsid (new session,
+/// drops the controlling terminal), fork again (can never re-acquire one).
+/// Must run BEFORE the tokio runtime starts — no threads may exist across fork.
+#[cfg(unix)]
+fn daemonize() {
+    unsafe {
+        match libc::fork() {
+            -1 => std::process::exit(1),
+            0 => {}
+            _ => std::process::exit(0),
+        }
+        if libc::setsid() == -1 {
+            std::process::exit(1);
+        }
+        match libc::fork() {
+            -1 => std::process::exit(1),
+            0 => {}
+            _ => std::process::exit(0),
+        }
+    }
+}
+
+fn main() {
     let args = Args::parse();
 
+    if args.daemonize {
+        #[cfg(unix)]
+        daemonize();
+    }
+
+    // Runtime is built AFTER any fork, so no tokio thread crosses the fork.
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime")
+        .block_on(run(args));
+}
+
+async fn run(args: Args) {
     mkparent(&args.socket);
     if let Some(l) = &args.log {
         mkparent(l);
@@ -111,6 +160,10 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    // Liveness marker for the attach wrapper: `<socket>.pid'.
+    let pid_path = pidfile(&args.socket);
+    let _ = std::fs::write(&pid_path, format!("{}\n", std::process::id()));
 
     log_write(
         &args.log,
@@ -226,5 +279,6 @@ async fn main() {
     };
     accept_task.abort();
     let _ = std::fs::remove_file(&args.socket);
+    let _ = std::fs::remove_file(&pid_path);
     std::process::exit(code);
 }
