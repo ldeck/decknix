@@ -76,6 +76,24 @@ off; a truly stuck heartbeat is reclaimed within this window regardless."
   :type 'integer
   :group 'decknix)
 
+(defcustom decknix-agent-heartbeat-hung-seconds 180
+  "Shorter stuck window for a turn that has made ZERO tool calls.
+A running turn with no tool calls AND no output is far more likely hung — an
+unresolved `session/prompt' request after an auth/API error or a wedged bridge —
+than slow-but-live work (a slow TOOL call keeps the generous
+`decknix-agent-heartbeat-stuck-seconds' window).  Still long enough to cover a
+Claude turn's silent extended-thinking gap before its first output, so a live
+turn is never cut off."
+  :type 'integer
+  :group 'decknix)
+
+(defun decknix--agent-hb-effective-threshold (tool-call-count stuck hung)
+  "Return the stuck window: HUNG when TOOL-CALL-COUNT is 0, else STUCK.
+Never longer than STUCK.  Pure, so the choice is ERT-testable."
+  (if (and (integerp tool-call-count) (= tool-call-count 0))
+      (min hung stuck)
+    stuck))
+
 (defvar-local decknix--agent-hb-last-tick nil
   "`buffer-chars-modified-tick' at the previous watchdog check.")
 
@@ -112,7 +130,13 @@ buffer's activity bookkeeping and, when the heartbeat is judged stuck by
     (with-current-buffer buf
       (let* ((state (ignore-errors (agent-shell--state)))
              (running (decknix--agent-hb-running-p state))
-             (tick (buffer-chars-modified-tick)))
+             (tick (buffer-chars-modified-tick))
+             ;; A running turn that has made no tool calls uses the shorter
+             ;; hung window (likely an unresolved request after an auth/API
+             ;; error); a turn with a tool in flight keeps the generous window.
+             (eff-threshold (decknix--agent-hb-effective-threshold
+                             (length (map-elt state :tool-calls))
+                             threshold decknix-agent-heartbeat-hung-seconds)))
         (cond
          ((not running)
           ;; No spinner: keep the baseline fresh so a future run starts clean.
@@ -127,7 +151,7 @@ buffer's activity bookkeeping and, when the heartbeat is judged stuck by
             (setq decknix--agent-hb-idle-since now))
           (when (decknix--agent-hb-stuck-p
                  running tick decknix--agent-hb-last-tick
-                 decknix--agent-hb-idle-since now threshold)
+                 decknix--agent-hb-idle-since now eff-threshold)
             (ignore-errors
               (agent-shell-heartbeat-stop :heartbeat (map-elt state :heartbeat)))
             (setq decknix--agent-hb-idle-since nil)

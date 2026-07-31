@@ -37,6 +37,15 @@
   "No recorded idle start -> cannot be stuck yet."
   (should-not (decknix--agent-hb-stuck-p t 42 42 nil 700.0 600)))
 
+(ert-deftest decknix-hb--effective-threshold ()
+  "Zero tool calls -> the shorter hung window; a tool in flight -> the stuck one."
+  ;; no tool calls: hung window (but never longer than stuck)
+  (should (= 180 (decknix--agent-hb-effective-threshold 0 600 180)))
+  (should (= 200 (decknix--agent-hb-effective-threshold 0 200 999))) ; capped at stuck
+  ;; tool(s) in flight: keep the generous stuck window
+  (should (= 600 (decknix--agent-hb-effective-threshold 3 600 180)))
+  (should (= 600 (decknix--agent-hb-effective-threshold 1 600 180))))
+
 (ert-deftest decknix-hb--normalize-turn-end-noop-outside-agent-shell ()
   "Turn-end normalisation is a safe no-op outside an agent-shell buffer.
 It must never touch state in a non-agent buffer (the advice fires on every
