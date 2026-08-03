@@ -151,14 +151,23 @@ Non-wrapper messages are returned unchanged."
 (defun decknix--agent-conversation-key-raw (first-message)
   "Derive the raw conversation key from FIRST-MESSAGE.
 Canonicalises slash-command wrapper messages (see
-`decknix--agent-canonicalize-command-message'), truncates the result
-to the first `decknix--agent-conv-key-canonical-length' characters,
-and returns SHA-256 of that prefix, itself truncated to 16 hex chars.
+`decknix--agent-canonicalize-command-message'), strips surrounding
+whitespace, truncates the result to the first
+`decknix--agent-conv-key-canonical-length' characters, and returns
+SHA-256 of that prefix, itself truncated to 16 hex chars.
 Does NOT resolve merges — use `decknix--agent-conversation-key' for
-the canonical key."
-  (when (and first-message (not (string-empty-p first-message)))
-    (let* ((normalized (decknix--agent-canonicalize-command-message
-                        first-message))
+the canonical key.
+
+The surrounding-whitespace strip is load-bearing: the live write path
+hashes raw comint input (which carries a trailing newline, e.g.
+\"hello\\n\") while every transcript-read path (picker, resume) hashes
+the stored first message (no trailing newline, \"hello\").  Without a
+common trim the two sides produce different keys, orphaning a
+conversation's tags / brokerKey / model / mode on resume."
+  (when (and first-message (not (string-empty-p (string-trim first-message))))
+    (let* ((normalized (string-trim
+                        (decknix--agent-canonicalize-command-message
+                         first-message)))
            (len (length normalized))
            (canonical (if (> len decknix--agent-conv-key-canonical-length)
                           (substring normalized 0

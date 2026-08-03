@@ -185,6 +185,33 @@ algorithm changes."
   (should (equal (decknix--agent-conversation-key-raw "hello")
                  "2cf24dba5fb0a30e")))
 
+;; -- surrounding-whitespace normalization --------------------------
+;;
+;; Regression: the live write path (flush hook) hashes raw comint
+;; input, which carries a trailing newline ("hello\n"), while the
+;; transcript-read paths (picker, resume) hash the stored first
+;; message with none ("hello").  Both must map to the SAME key or a
+;; resumed conversation loses its tags / brokerKey / model / mode.
+
+(ert-deftest decknix-agent-conversation-key-raw--ignores-trailing-newline ()
+  "\"hello\\n\" (raw comint input) keys the same as \"hello\" (transcript)."
+  (should (equal (decknix--agent-conversation-key-raw "hello\n")
+                 (decknix--agent-conversation-key-raw "hello")))
+  ;; ... and specifically the transcript-form key, not sha256("hello\n").
+  (should (equal (decknix--agent-conversation-key-raw "hello\n")
+                 "2cf24dba5fb0a30e")))
+
+(ert-deftest decknix-agent-conversation-key-raw--ignores-surrounding-ws ()
+  "Leading/trailing spaces, tabs and newlines do not change the key."
+  (let ((base (decknix--agent-conversation-key-raw "hello world")))
+    (dolist (variant '("  hello world" "hello world  " "\thello world\n"
+                       "\n hello world \t"))
+      (should (equal (decknix--agent-conversation-key-raw variant) base)))))
+
+(ert-deftest decknix-agent-conversation-key-raw--whitespace-only-nil ()
+  "A whitespace-only message is treated as 'no message' (nil key)."
+  (should (null (decknix--agent-conversation-key-raw "   \n\t"))))
+
 ;; -- canonical-length truncation -----------------------------------
 ;;
 ;; The jq filter that builds the read-side `firstUserMessage' field
