@@ -9,6 +9,7 @@ use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
 mod session;
+mod session_archive;
 
 // 1. Static Core Commands
 #[derive(Parser)]
@@ -1124,19 +1125,23 @@ fn is_orphan(path: &Path, branch: &str) -> bool {
 
 fn parse_duration(s: &str) -> anyhow::Result<Duration> {
     let s = s.trim().to_lowercase();
-    if s.ends_with('d') {
-        let days: u64 = s[..s.len() - 1].parse()?;
-        Ok(Duration::from_secs(days * 24 * 3600))
-    } else if s.ends_with('h') {
-        let hours: u64 = s[..s.len() - 1].parse()?;
-        Ok(Duration::from_secs(hours * 3600))
-    } else if s.ends_with('m') {
-        let mins: u64 = s[..s.len() - 1].parse()?;
-        Ok(Duration::from_secs(mins * 60))
-    } else {
-        let secs: u64 = s.parse()?;
-        Ok(Duration::from_secs(secs))
+    // Most-specific suffix first: "mo" (month) must be checked before "m" (minute).
+    // Month ≈ 30d, year ≈ 365d — coarse but fine for retention thresholds.
+    for (suffix, mult) in [
+        ("mo", 30 * 24 * 3600u64),
+        ("y", 365 * 24 * 3600),
+        ("w", 7 * 24 * 3600),
+        ("d", 24 * 3600),
+        ("h", 3600),
+        ("m", 60),
+        ("s", 1),
+    ] {
+        if let Some(n) = s.strip_suffix(suffix) {
+            let v: u64 = n.parse()?;
+            return Ok(Duration::from_secs(v * mult));
+        }
     }
+    Ok(Duration::from_secs(s.parse()?))
 }
 
 /// Compiled filter — regex + age threshold pre-parsed once per command.

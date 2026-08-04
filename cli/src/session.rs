@@ -29,6 +29,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::session_archive;
+
 /// conv-key canonicalisation length — matches `decknix--agent-conv-key-canonical-length`.
 const CONV_KEY_CANONICAL_LEN: usize = 200;
 /// conv-key algorithm version we implement — matches `decknix--agent-tags-canonical-key-version`.
@@ -69,7 +71,57 @@ pub enum SessionAction {
         /// Cap the number of rows
         #[arg(long)]
         limit: Option<usize>,
+        /// Show only archived sessions (from the compressed archive index)
+        #[arg(long)]
+        archived: bool,
+        /// Include archived sessions alongside active ones
+        #[arg(long)]
+        include_archived: bool,
         /// Emit JSON instead of aligned columns
+        #[arg(long)]
+        json: bool,
+    },
+    /// Archive matching sessions: compress + index, then remove the original
+    Archive {
+        /// Which agent(s): claude, auggie, pi, or all
+        #[arg(long, default_value = "all")]
+        agent: String,
+        /// Only sessions older than this (e.g. 4w, 3mo, 30d). Default: [session].archive_after
+        #[arg(long)]
+        older_than: Option<String>,
+        /// Only sessions larger than this (e.g. 50M, 500k)
+        #[arg(long)]
+        larger_than: Option<String>,
+        /// Only sessions carrying this tag (repeatable; all must match)
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        /// Only sessions in this workspace
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Ingest session files from this directory instead of the agent's live dir
+        #[arg(long)]
+        from: Option<String>,
+        /// Show what would be archived without doing it
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restore an archived session (decompress back to its original location)
+    Restore {
+        /// Session id or unique prefix
+        id: String,
+        /// Which agent(s) to search: claude, auggie, pi, or all
+        #[arg(long, default_value = "all")]
+        agent: String,
+    },
+    /// Apply the retention policy: archive stale sessions, trash very old archives
+    Gc {
+        /// Show the plan without changing anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit JSON
         #[arg(long)]
         json: bool,
     },
@@ -142,9 +194,14 @@ pub enum SessionAction {
 pub fn run(action: SessionAction) -> Result<()> {
     let paths = Paths::resolve()?;
     match action {
-        SessionAction::List { agent, workspace, all, tags, grep, since, limit, json } => {
-            cmd_list(&paths, &agent, workspace, all, tags, grep, since, limit, json)
+        SessionAction::List { agent, workspace, all, tags, grep, since, limit, archived, include_archived, json } => {
+            cmd_list(&paths, &agent, workspace, all, tags, grep, since, limit, archived, include_archived, json)
         }
+        SessionAction::Archive { agent, older_than, larger_than, tags, workspace, from, dry_run, json } => {
+            cmd_archive(&paths, &agent, older_than, larger_than, tags, workspace, from, dry_run, json)
+        }
+        SessionAction::Restore { id, agent } => cmd_restore(&agent, &id),
+        SessionAction::Gc { dry_run, json } => cmd_gc(&paths, dry_run, json),
         SessionAction::Resume { id, agent, tags, last, workspace, all, print } => {
             cmd_resume(&paths, &agent, id, tags, last, workspace, all, print)
         }
@@ -307,7 +364,6 @@ fn store_model_for(store: &Value, sid: &str) -> Option<String> {
 pub struct SessionMeta {
     id: String,
     provider: &'static str,
-    glyph: &'static str,
     workspace: Option<PathBuf>,
     first_message: String,
     mtime: SystemTime,
@@ -499,7 +555,6 @@ impl Provider for ClaudeProvider {
         SessionMeta {
             id: id.to_string(),
             provider: "claude",
-            glyph: "C",
             workspace: claude_cwd(path),
             first_message: claude_first_message_display(path).unwrap_or_else(|| "(no prompt)".into()),
             mtime: mtime_of(path),
@@ -725,7 +780,6 @@ impl Provider for AuggieProvider {
             rows.push(SessionMeta {
                 id,
                 provider: "auggie",
-                glyph: "A",
                 workspace: ws,
                 first_message: first,
                 mtime,
@@ -743,7 +797,6 @@ impl Provider for AuggieProvider {
         SessionMeta {
             id: id.to_string(),
             provider: "auggie",
-            glyph: "A",
             workspace: auggie_workspace(path),
             first_message: auggie_first_message(path).unwrap_or_else(|| "(no prompt)".into()),
             mtime: mtime_of(path),
@@ -834,6 +887,27 @@ fn tags_for(idx: &Map<String, Value>, id: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Parse an ISO-8601/RFC-3339 timestamp to `SystemTime` (epoch on failure).
+fn iso_to_systemtime(s: &str) -> SystemTime {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.into())
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+/// A unified display row for active + archived sessions.
+struct Row {
+    id: String,
+    agent: String,
+    workspace: Option<String>,
+    first_message: String,
+    mtime: SystemTime,
+    tags: Vec<String>,
+    archived: bool,
+    /// active-only: for content grep.
+    path: Option<PathBuf>,
+    provider: Option<&'static str>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn cmd_list(
     paths: &Paths,
@@ -844,11 +918,12 @@ fn cmd_list(
     grep: Option<String>,
     since: Option<String>,
     limit: Option<usize>,
+    archived: bool,
+    include_archived: bool,
     json: bool,
 ) -> Result<()> {
     let store = load_store(&paths.store)?;
     let idx = session_tag_index(&store);
-    let providers = select_providers(agent)?;
     let re = match &grep {
         Some(p) => Some(Regex::new(p).map_err(|e| anyhow!("invalid --grep {:?}: {}", p, e))?),
         None => None,
@@ -858,30 +933,86 @@ fn cmd_list(
         None => None,
     };
     let now = SystemTime::now();
-    let ws = if all { None } else { Some(resolve_workspace(&workspace)?) };
 
-    let mut rows: Vec<SessionMeta> = Vec::new();
-    for p in &providers {
-        let (r, truncated) = p.list(ws.as_deref());
-        if truncated {
-            eprintln!(
-                "note: {} has more than {} sessions; showing the newest {} (use --workspace to narrow)",
-                p.id(),
-                AUGGIE_SCAN_CAP,
-                AUGGIE_SCAN_CAP
-            );
+    // Active providers: lenient filter (unknown/archive-only agents like pi just
+    // contribute no active rows rather than erroring).
+    let providers: Vec<Box<dyn Provider>> = if archived {
+        Vec::new()
+    } else {
+        registry().into_iter().filter(|p| agent == "all" || p.id() == agent).collect()
+    };
+
+    let mut rows: Vec<Row> = Vec::new();
+
+    // -- active --
+    if !archived {
+        let ws = if all { None } else { Some(resolve_workspace(&workspace)?) };
+        for p in &providers {
+            let (r, truncated) = p.list(ws.as_deref());
+            if truncated {
+                eprintln!(
+                    "note: {} has more than {} sessions; showing the newest {} (use --workspace to narrow)",
+                    p.id(), AUGGIE_SCAN_CAP, AUGGIE_SCAN_CAP
+                );
+            }
+            for m in r {
+                rows.push(Row {
+                    tags: tags_for(&idx, &m.id),
+                    id: m.id,
+                    agent: m.provider.to_string(),
+                    workspace: m.workspace.map(|w| w.to_string_lossy().into_owned()),
+                    first_message: m.first_message,
+                    mtime: m.mtime,
+                    archived: false,
+                    path: Some(m.path),
+                    provider: Some(m.provider),
+                });
+            }
         }
-        rows.extend(r);
+    }
+
+    // -- archived (from the index; no decompression) --
+    if archived || include_archived {
+        let root = session_archive::archive_root();
+        let entries = if agent == "all" {
+            session_archive::read_all_indexes(&root)
+        } else {
+            session_archive::read_index(&root, agent)
+        };
+        for e in entries {
+            rows.push(Row {
+                id: e.id,
+                agent: e.provider,
+                workspace: e.workspace,
+                first_message: e.first_message.unwrap_or_else(|| "(no prompt)".into()),
+                mtime: iso_to_systemtime(&e.modified),
+                tags: e.tags,
+                archived: true,
+                path: None,
+                provider: None,
+            });
+        }
     }
 
     rows.retain(|r| {
-        let rtags = tags_for(&idx, &r.id);
-        if !tags.is_empty() && !tags.iter().all(|t| rtags.iter().any(|x| x == t)) {
+        if !tags.is_empty() && !tags.iter().all(|t| r.tags.iter().any(|x| x == t)) {
             return false;
         }
         if let Some(re) = &re {
-            let prov = providers.iter().find(|p| p.id() == r.provider);
-            if !prov.map(|p| p.grep(&r.path, re)).unwrap_or(false) {
+            let hit = if r.archived {
+                // archived files are compressed; best-effort match on the first message.
+                re.is_match(&r.first_message)
+            } else {
+                match (r.provider, &r.path) {
+                    (Some(pid), Some(path)) => providers
+                        .iter()
+                        .find(|p| p.id() == pid)
+                        .map(|p| p.grep(path, re))
+                        .unwrap_or(false),
+                    _ => false,
+                }
+            };
+            if !hit {
                 return false;
             }
         }
@@ -903,9 +1034,10 @@ fn cmd_list(
             .map(|r| {
                 json!({
                     "id": r.id,
-                    "agent": r.provider,
+                    "agent": r.agent,
+                    "archived": r.archived,
                     "workspace": r.workspace,
-                    "tags": tags_for(&idx, &r.id),
+                    "tags": r.tags,
                     "firstMessage": r.first_message,
                     "lastModified": fmt_mtime(r.mtime),
                 })
@@ -920,13 +1052,21 @@ fn cmd_list(
         return Ok(());
     }
     for r in &rows {
-        let rtags = tags_for(&idx, &r.id);
-        let tagstr = if rtags.is_empty() { String::new() } else { format!("[{}] ", rtags.join(",")) };
-        let prompt: String = r.first_message.chars().take(64).collect();
-        let prompt = prompt.replace('\n', " ");
+        let glyph = if r.archived {
+            "z"
+        } else {
+            match r.agent.as_str() {
+                "claude" => "C",
+                "auggie" => "A",
+                "pi" => "P",
+                _ => "?",
+            }
+        };
+        let tagstr = if r.tags.is_empty() { String::new() } else { format!("[{}] ", r.tags.join(",")) };
+        let prompt: String = r.first_message.chars().take(64).collect::<String>().replace('\n', " ");
         println!(
             "{} {}  {}  {}{}",
-            crate::styled_str(r.glyph, &[crate::Style::Dim]),
+            crate::styled_str(glyph, &[crate::Style::Dim]),
             crate::styled_str(&fmt_mtime(r.mtime), &[crate::Style::Dim]),
             crate::styled_str(short(&r.id), &[crate::Style::Cyan]),
             crate::styled_str(&tagstr, &[crate::Style::Yellow]),
@@ -1254,6 +1394,377 @@ fn shell_quote(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Session lifecycle: archive / restore / gc
+// ---------------------------------------------------------------------------
+
+/// A provider as seen by the archive lifecycle (file-based, format-agnostic).
+struct ArchProvider {
+    id: &'static str,
+    root: PathBuf,     // sessions root
+    ext: &'static str, // session file extension (no dot)
+    nested: bool,      // claude nests transcripts under <slug>/; auggie/pi are flat
+}
+
+fn arch_providers() -> Vec<ArchProvider> {
+    let h = home();
+    vec![
+        ArchProvider { id: "claude", root: h.join(".claude/projects"), ext: "jsonl", nested: true },
+        ArchProvider { id: "auggie", root: h.join(".augment/sessions"), ext: "json", nested: false },
+        ArchProvider { id: "pi", root: h.join(".pi/sessions"), ext: "json", nested: false },
+    ]
+}
+
+fn select_arch_providers(agent: &str) -> Result<Vec<ArchProvider>> {
+    let all = arch_providers();
+    if agent == "all" {
+        return Ok(all);
+    }
+    let picked: Vec<ArchProvider> = all.into_iter().filter(|p| p.id == agent).collect();
+    if picked.is_empty() {
+        bail!("unknown --agent '{}' (known: claude, auggie, pi, all)", agent);
+    }
+    Ok(picked)
+}
+
+/// A live session file eligible for archiving.
+struct ActiveFile {
+    id: String,
+    path: PathBuf,
+    rel: String, // path relative to the provider root (the restore target)
+    mtime: SystemTime,
+    size: u64,
+}
+
+/// Enumerate session files for `ap`, optionally from an override dir (`from`,
+/// treated as flat) instead of the live provider root.
+fn arch_enumerate(ap: &ArchProvider, from: Option<&Path>) -> Vec<ActiveFile> {
+    let mut out = Vec::new();
+    let base = from.unwrap_or(&ap.root);
+    let flat = from.is_some() || !ap.nested;
+    let dirs: Vec<PathBuf> = if flat {
+        vec![base.to_path_buf()]
+    } else {
+        fs::read_dir(base).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()
+    };
+    for dir in dirs {
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.extension().and_then(|x| x.to_str()) != Some(ap.ext) {
+                continue;
+            }
+            let id = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            let md = match e.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let rel = if flat {
+                format!("{}.{}", id, ap.ext)
+            } else {
+                path.strip_prefix(base).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| format!("{}.{}", id, ap.ext))
+            };
+            out.push(ActiveFile { id, path, rel, mtime: md.modified().unwrap_or(SystemTime::UNIX_EPOCH), size: md.len() });
+        }
+    }
+    out
+}
+
+fn arch_first_message(provider: &str, path: &Path) -> Option<String> {
+    match provider {
+        "claude" => claude_first_message_display(path),
+        "auggie" => auggie_first_message(path),
+        _ => None,
+    }
+}
+
+fn arch_workspace(provider: &str, path: &Path) -> Option<String> {
+    let ws = match provider {
+        "claude" => claude_cwd(path),
+        "auggie" => auggie_workspace(path),
+        _ => None,
+    };
+    ws.map(|p| p.to_string_lossy().into_owned())
+}
+
+fn iso_of(t: SystemTime) -> String {
+    let dt: chrono::DateTime<chrono::Utc> = t.into();
+    dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+struct SessionConfig {
+    archive_after: std::time::Duration,
+    trash_after: std::time::Duration,
+    compression_level: i32,
+}
+
+fn session_config() -> SessionConfig {
+    let mut cfg = SessionConfig {
+        archive_after: std::time::Duration::from_secs(4 * 7 * 24 * 3600), // 4w
+        trash_after: std::time::Duration::from_secs(90 * 24 * 3600),      // ~3mo
+        // 12 balances ratio (~5-7x on session JSON) against speed; the weekly gc
+        // archives small batches, so this is plenty. Raise via settings.toml for
+        // maximum ratio at the cost of a slower run.
+        compression_level: 12,
+    };
+    let path = home().join(".config/decknix/settings.toml");
+    if let Ok(s) = fs::read_to_string(&path) {
+        if let Ok(v) = s.parse::<toml::Value>() {
+            if let Some(sec) = v.get("session").and_then(|x| x.as_table()) {
+                if let Some(d) = sec.get("archive_after").and_then(|x| x.as_str()).and_then(|s| crate::parse_duration(s).ok()) {
+                    cfg.archive_after = d;
+                }
+                if let Some(d) = sec.get("trash_after").and_then(|x| x.as_str()).and_then(|s| crate::parse_duration(s).ok()) {
+                    cfg.trash_after = d;
+                }
+                if let Some(l) = sec.get("compression_level").and_then(|x| x.as_integer()) {
+                    cfg.compression_level = l as i32;
+                }
+            }
+        }
+    }
+    cfg
+}
+
+/// Parse a size like `50M`, `500k`, `2G`, `1024` (bytes) into bytes.
+fn parse_size(s: &str) -> Result<u64> {
+    let s = s.trim().to_lowercase();
+    let (num, mult) = if let Some(n) = s.strip_suffix('g') {
+        (n, 1u64 << 30)
+    } else if let Some(n) = s.strip_suffix('m') {
+        (n, 1u64 << 20)
+    } else if let Some(n) = s.strip_suffix('k') {
+        (n, 1u64 << 10)
+    } else if let Some(n) = s.strip_suffix('b') {
+        (n, 1u64)
+    } else {
+        (s.as_str(), 1u64)
+    };
+    Ok((num.trim().parse::<f64>()? * mult as f64) as u64)
+}
+
+fn resolve_dir(s: &str) -> PathBuf {
+    if let Some(rest) = s.strip_prefix("~/") {
+        home().join(rest)
+    } else {
+        PathBuf::from(s)
+    }
+}
+
+fn archive_one(
+    root: &Path,
+    ap: &ArchProvider,
+    af: &ActiveFile,
+    idx: &Map<String, Value>,
+    level: i32,
+    dry_run: bool,
+) -> Result<session_archive::ArchiveEntry> {
+    let mut entry = session_archive::ArchiveEntry {
+        id: af.id.clone(),
+        provider: ap.id.to_string(),
+        orig_rel_path: af.rel.clone(),
+        workspace: arch_workspace(ap.id, &af.path),
+        first_message: arch_first_message(ap.id, &af.path),
+        tags: tags_for(idx, &af.id),
+        created: None,
+        modified: iso_of(af.mtime),
+        archived_at: now_iso(),
+        orig_size: af.size,
+        compressed_size: 0,
+    };
+    if !dry_run {
+        let dst = session_archive::compressed_path(root, ap.id, &af.id, ap.ext);
+        let (_orig, comp) = session_archive::compress_file(&af.path, &dst, level)?;
+        entry.compressed_size = comp;
+        session_archive::append_entry(root, ap.id, &entry)?;
+        fs::remove_file(&af.path).with_context(|| format!("removing archived original {}", af.path.display()))?;
+    }
+    Ok(entry)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_archive(
+    paths: &Paths,
+    agent: &str,
+    older_than: Option<String>,
+    larger_than: Option<String>,
+    tags: Vec<String>,
+    workspace: Option<String>,
+    from: Option<String>,
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
+    let store = load_store(&paths.store)?;
+    let idx = session_tag_index(&store);
+    let cfg = session_config();
+    let root = session_archive::archive_root();
+    let providers = select_arch_providers(agent)?;
+    let from_dir = from.as_deref().map(resolve_dir);
+    if from_dir.is_some() && providers.len() > 1 {
+        bail!("--from requires a single --agent (which format the files are)");
+    }
+    // Manual archive still defaults to stale-only (archive_after) for safety.
+    let min_age = match &older_than {
+        Some(s) => Some(crate::parse_duration(s)?),
+        None => Some(cfg.archive_after),
+    };
+    let min_size = match &larger_than {
+        Some(s) => Some(parse_size(s)?),
+        None => None,
+    };
+    let ws_filter = match &workspace {
+        Some(_) => Some(resolve_workspace(&workspace)?),
+        None => None,
+    };
+    let now = SystemTime::now();
+
+    let mut count = 0usize;
+    let mut saved: u64 = 0;
+    for ap in &providers {
+        for af in arch_enumerate(ap, from_dir.as_deref()) {
+            if let Some(min) = min_age {
+                if now.duration_since(af.mtime).map(|d| d < min).unwrap_or(true) {
+                    continue;
+                }
+            }
+            if let Some(sz) = min_size {
+                if af.size < sz {
+                    continue;
+                }
+            }
+            if !tags.is_empty() {
+                let ft = tags_for(&idx, &af.id);
+                if !tags.iter().all(|t| ft.iter().any(|x| x == t)) {
+                    continue;
+                }
+            }
+            if let Some(wf) = &ws_filter {
+                let w = arch_workspace(ap.id, &af.path).map(|s| canonical(Path::new(&s)));
+                if w.as_deref() != Some(wf.as_path()) {
+                    continue;
+                }
+            }
+            let e = archive_one(&root, ap, &af, &idx, cfg.compression_level, dry_run)?;
+            count += 1;
+            saved += af.size;
+            if !json {
+                let verb = if dry_run { "would archive" } else { "archived" };
+                let msg: String = e.first_message.clone().unwrap_or_default().chars().take(48).collect::<String>().replace('\n', " ");
+                println!("  {} [{}] {}  {}KB  {}", verb, ap.id, short(&e.id), af.size / 1024, msg);
+            }
+        }
+    }
+    if json {
+        println!("{}", serde_json::to_string(&json!({"archived": count, "bytesFreed": saved, "dryRun": dry_run}))?);
+    } else {
+        eprintln!("{} {} session(s), {}MB{}", if dry_run { "would archive" } else { "archived" }, count, saved / 1_048_576, if dry_run { " (dry-run)" } else { "" });
+    }
+    Ok(())
+}
+
+fn cmd_restore(agent: &str, id: &str) -> Result<()> {
+    let root = session_archive::archive_root();
+    let providers = select_arch_providers(agent)?;
+    let mut cands: Vec<session_archive::ArchiveEntry> = Vec::new();
+    for ap in &providers {
+        for e in session_archive::read_index(&root, ap.id) {
+            if e.id == id || e.id.starts_with(id) {
+                cands.push(e);
+            }
+        }
+    }
+    let exact: Vec<_> = cands.iter().filter(|e| e.id == id).cloned().collect();
+    let entry = if exact.len() == 1 {
+        exact.into_iter().next().unwrap()
+    } else {
+        match cands.len() {
+            1 => cands.into_iter().next().unwrap(),
+            0 => bail!("no archived session matches '{}'", id),
+            _ => {
+                let mut msg = format!("ambiguous '{}' matches {} archived sessions:\n", id, cands.len());
+                for e in cands.iter().take(12) {
+                    msg.push_str(&format!("  [{}] {}\n", e.provider, e.id));
+                }
+                bail!(msg)
+            }
+        }
+    };
+    let ap = arch_providers().into_iter().find(|p| p.id == entry.provider).ok_or_else(|| anyhow!("unknown provider '{}' in archive", entry.provider))?;
+    let zst = session_archive::compressed_path(&root, &entry.provider, &entry.id, ap.ext);
+    let dst = ap.root.join(&entry.orig_rel_path);
+    session_archive::decompress_file(&zst, &dst)?;
+    let kept: Vec<_> = session_archive::read_index(&root, &entry.provider).into_iter().filter(|e| e.id != entry.id).collect();
+    session_archive::write_index(&root, &entry.provider, &kept)?;
+    let _ = fs::remove_file(&zst);
+    println!("restored [{}] {} -> {}", entry.provider, short(&entry.id), dst.display());
+    Ok(())
+}
+
+fn cmd_gc(paths: &Paths, dry_run: bool, json: bool) -> Result<()> {
+    let store = load_store(&paths.store)?;
+    let idx = session_tag_index(&store);
+    let cfg = session_config();
+    let root = session_archive::archive_root();
+    let now = SystemTime::now();
+    let mut n_archived = 0usize;
+    let mut n_trashed = 0usize;
+
+    // 1. archive active sessions inactive longer than archive_after.
+    for ap in arch_providers() {
+        for af in arch_enumerate(&ap, None) {
+            if now.duration_since(af.mtime).map(|d| d >= cfg.archive_after).unwrap_or(false) {
+                let e = archive_one(&root, &ap, &af, &idx, cfg.compression_level, dry_run)?;
+                n_archived += 1;
+                if !json {
+                    println!("  {} archive [{}] {}", if dry_run { "would" } else { "did" }, ap.id, short(&e.id));
+                }
+            }
+        }
+    }
+
+    // 2. trash archived sessions inactive longer than trash_after (recoverable).
+    let trash_base = home().join(".Trash/decknix-sessions");
+    for ap in arch_providers() {
+        let entries = session_archive::read_index(&root, ap.id);
+        let mut keep = Vec::new();
+        for e in entries {
+            let too_old = now.duration_since(iso_to_systemtime(&e.modified)).map(|d| d >= cfg.trash_after).unwrap_or(false);
+            if too_old {
+                n_trashed += 1;
+                if !json {
+                    println!("  {} trash [{}] {}", if dry_run { "would" } else { "did" }, ap.id, short(&e.id));
+                }
+                if !dry_run {
+                    let zst = session_archive::compressed_path(&root, ap.id, &e.id, ap.ext);
+                    let dstdir = trash_base.join(ap.id);
+                    let _ = fs::create_dir_all(&dstdir);
+                    if let Some(name) = zst.file_name() {
+                        let _ = fs::rename(&zst, dstdir.join(name));
+                    }
+                }
+            } else {
+                keep.push(e);
+            }
+        }
+        if !dry_run {
+            session_archive::write_index(&root, ap.id, &keep)?;
+        }
+    }
+
+    if json {
+        println!("{}", serde_json::to_string(&json!({"archived": n_archived, "trashed": n_trashed, "dryRun": dry_run}))?);
+    } else {
+        eprintln!("gc: {} archived, {} trashed{}", n_archived, n_trashed, if dry_run { " (dry-run)" } else { "" });
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1392,6 +1903,74 @@ mod tests {
         assert_eq!(shell_quote("/Users/x/repo"), "/Users/x/repo");
         assert_eq!(shell_quote("has space"), "'has space'");
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn parse_size_units() {
+        assert_eq!(parse_size("1024").unwrap(), 1024);
+        assert_eq!(parse_size("1k").unwrap(), 1024);
+        assert_eq!(parse_size("2M").unwrap(), 2 * 1024 * 1024);
+        assert_eq!(parse_size("1G").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_size("50m").unwrap(), 50 * 1024 * 1024);
+    }
+
+    #[test]
+    fn iso_roundtrips_through_systemtime() {
+        let t = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let iso = iso_of(t);
+        let back = iso_to_systemtime(&iso);
+        // second-precision agreement is enough (iso_of keeps ms)
+        let a = t.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+        let b = back.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn arch_enumerate_flat_provider_yields_id_rel_size() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("aaaa.json"), b"{}").unwrap();
+        fs::write(dir.path().join("bbbb.json"), b"{\"x\":1}").unwrap();
+        fs::write(dir.path().join("ignore.txt"), b"nope").unwrap();
+        let ap = ArchProvider { id: "auggie", root: dir.path().to_path_buf(), ext: "json", nested: false };
+        let mut files = arch_enumerate(&ap, None);
+        files.sort_by(|a, b| a.id.cmp(&b.id));
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].id, "aaaa");
+        assert_eq!(files[0].rel, "aaaa.json");
+        assert_eq!(files[1].size, 7);
+    }
+
+    #[test]
+    fn arch_enumerate_nested_provider_keeps_slug_in_rel() {
+        let dir = tempfile::tempdir().unwrap();
+        let slug = dir.path().join("-Users-x-repo");
+        fs::create_dir_all(&slug).unwrap();
+        fs::write(slug.join("cccc.jsonl"), b"{}").unwrap();
+        let ap = ArchProvider { id: "claude", root: dir.path().to_path_buf(), ext: "jsonl", nested: true };
+        let files = arch_enumerate(&ap, None);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].id, "cccc");
+        assert_eq!(files[0].rel, "-Users-x-repo/cccc.jsonl");
+    }
+
+    #[test]
+    fn archive_then_restore_roundtrip_via_lifecycle() {
+        // active file -> archive_one -> restore path yields identical bytes.
+        let store_root = tempfile::tempdir().unwrap();
+        let sess = tempfile::tempdir().unwrap();
+        let payload = b"{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}";
+        fs::write(sess.path().join("dead.json"), payload).unwrap();
+        let ap = ArchProvider { id: "auggie", root: sess.path().to_path_buf(), ext: "json", nested: false };
+        let af = arch_enumerate(&ap, None).into_iter().next().unwrap();
+        let idx = Map::new();
+        let entry = archive_one(store_root.path(), &ap, &af, &idx, 19, false).unwrap();
+        assert!(!sess.path().join("dead.json").exists(), "original removed after archive");
+        assert!(entry.compressed_size > 0);
+        // restore via primitives (cmd_restore uses real home; test the store path here)
+        let zst = session_archive::compressed_path(store_root.path(), "auggie", "dead", "json");
+        let dst = sess.path().join(&entry.orig_rel_path);
+        session_archive::decompress_file(&zst, &dst).unwrap();
+        assert_eq!(fs::read(&dst).unwrap(), payload);
     }
 
     #[test]
