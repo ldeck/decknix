@@ -148,6 +148,26 @@ Mirrors the `decknix-agent-broker-attach' wrapper:
       (insert-file-contents log-path)
       (split-string (buffer-string) "\n" t))))
 
+(defun decknix--agent-broker-pidfile-path (key)
+  "Return the broker pidfile path for KEY (`<dir>/<key>.sock.pid'), or nil."
+  (when-let* ((log (decknix--agent-broker-log-path key)))
+    (concat (file-name-sans-extension log) ".sock.pid")))
+
+(defun decknix--agent-broker-live-p (key)
+  "Non-nil when KEY's broker process is running, per its pidfile.
+Rehydrate is gated on this: a resumed session whose broker has died is
+historical — its transcript prepopulation already covers it, and
+replaying a stale in-flight tail would be wrong."
+  (when-let* ((pf (decknix--agent-broker-pidfile-path key))
+              ((file-readable-p pf))
+              (pid (ignore-errors
+                     (string-to-number
+                      (string-trim
+                       (with-temp-buffer (insert-file-contents pf)
+                                         (buffer-string)))))))
+    (and (integerp pid) (> pid 0)
+         (= 0 (call-process "kill" nil nil nil "-0" (number-to-string pid))))))
+
 (defun decknix--agent-broker-rehydrate-buffer (&optional buffer)
   "Replay BUFFER's brokered in-flight turn from the broker log.
 BUFFER defaults to the current buffer and must be a live agent-shell
@@ -158,6 +178,7 @@ notifications replayed."
   (with-current-buffer (or buffer (current-buffer))
     (when (and decknix-agent-broker-rehydrate-enable
                (bound-and-true-p decknix--agent-broker-key)
+               (decknix--agent-broker-live-p decknix--agent-broker-key)
                (fboundp 'agent-shell--on-notification)
                (fboundp 'agent-shell--state))
       (let* ((log   (decknix--agent-broker-log-path decknix--agent-broker-key))

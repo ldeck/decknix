@@ -1097,6 +1097,14 @@ dedupes against live buffers before calling here."
                        (setq-local shell-maker--buffer-name-override
                                    (buffer-name))))
                    (decknix--agent-session-prepopulate ,sid ,n)
+                   ;; #151 M6: after the transcript history is restored,
+                   ;; replay the broker's in-flight turn — the agent output
+                   ;; that streamed while Emacs was detached — so it lands
+                   ;; below the restored history and continues into the live
+                   ;; stream.  No-op unless reattaching to a LIVE broker with
+                   ;; an uncommitted turn (see decknix-agent-broker-rehydrate).
+                   (when (fboundp 'decknix--agent-broker-rehydrate-buffer)
+                     (decknix--agent-broker-rehydrate-buffer shell-buf))
                    ;; Seed `comint-input-ring' from the on-disk
                    ;; session so M-p / M-n in compose (and the
                    ;; agent buffer's own comint history nav) cycle

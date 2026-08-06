@@ -1265,6 +1265,19 @@ let
     ];
   };
 
+  # #151 M6: reattach replay.  Parses the broker's raw ACP log for the
+  # current in-flight turn and replays it through the live renderer so a
+  # reattached buffer shows the output that streamed while detached.  Pure
+  # parser is ERT-tested; the render helper calls agent-shell at runtime
+  # (declare-function, no build dep).
+  decknix-agent-broker-rehydrate-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-broker-rehydrate";
+    src = ./agent-shell/broker-rehydrate;
+    testFiles = [
+      "decknix-agent-broker-rehydrate-test.el"
+    ];
+  };
+
   # PR B.49: clipboard URL DWIM helper carved out of
   # `decknix-agent-shell-main' (main-bulk).  Co-resident with the
   # rest of the agent/ cluster.  Owns the tiny kill-ring +
@@ -2785,6 +2798,7 @@ in
           decknix-agent-session-model-el
           decknix-agent-session-mode-el
           decknix-agent-session-broker-el
+          decknix-agent-broker-rehydrate-el
           decknix-agent-session-workspace-el
           decknix-agent-conv-recency-el
           decknix-agent-tags-read-el
@@ -3286,6 +3300,7 @@ in
         ;; from the module option; command-build wrapping + the new/resume
         ;; lifecycle threading land in a follow-up.  Default off -> no change.
         (require 'decknix-agent-session-broker)
+        (require 'decknix-agent-broker-rehydrate)
         (defvar decknix-agent-broker-enable)
         (setq decknix-agent-broker-enable ${
           if cfg.broker.enable then "t" else "nil"})
