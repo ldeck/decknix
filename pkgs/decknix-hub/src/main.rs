@@ -32,6 +32,21 @@ use tokio::signal;
 // default 60s cadence) against worst-case staleness for conflict surfacing.
 const PR_CACHE_TTL: Duration = Duration::from_secs(300);
 
+// A dedicated, much shorter TTL for the lightweight per-repo `mergeable` sweep.
+//
+// The full PR-details blob (CI, threads, review decision) is expensive to
+// refetch, so `PR_CACHE_TTL` keeps it for 5 minutes.  But `mergeable` alone can
+// flip to CONFLICTING when a *sibling* branch merges to main — an event that
+// does NOT bump this PR's `updatedAt` — so a genuinely-conflicting PR can stay
+// visible in the sidebar for up to 5 minutes.
+//
+// To bound that conflict-leak window we sweep just `mergeable` /
+// `mergeStateStatus` on this shorter cadence via one cheap `gh pr list` call
+// per repo per sweep (NOT one call per PR), and override the cached blob's
+// `mergeable` with the fresh value.  60s trades a little API budget for a
+// worst-case conflict-surfacing latency of ~60s instead of ~300s.
+const MERGEABLE_SWEEP_TTL: Duration = Duration::from_secs(60);
+
 /// Pure freshness check shared by the WIP and Reviews caches.  Returns true
 /// when the caller can re-use the cached entry instead of refetching.
 fn cache_entry_fresh(
@@ -838,6 +853,88 @@ fn reviews_cache() -> &'static RwLock<HashMap<(String, u64), (String, Instant, R
     REVIEWS_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
+// ---------------------------------------------------------------------------
+// Per-repo mergeable sweep
+// ---------------------------------------------------------------------------
+//
+// A lightweight cache of repo -> (fetched_at, {pr number -> mergeable}).  It is
+// refreshed on the short `MERGEABLE_SWEEP_TTL` cadence via a single cheap
+// `gh pr list` per repo, independently of the expensive per-PR details blob, so
+// a newly-conflicting PR surfaces within ~60s rather than up to `PR_CACHE_TTL`.
+static MERGEABLE_CACHE: OnceLock<RwLock<HashMap<String, (Instant, HashMap<u64, String>)>>> = OnceLock::new();
+fn mergeable_cache() -> &'static RwLock<HashMap<String, (Instant, HashMap<u64, String>)>> {
+    MERGEABLE_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Fetch just the `mergeable` signal for every open PR in `repo` via one
+/// `gh pr list` call.  Returns a map of PR number -> mergeable string
+/// ("MERGEABLE" | "CONFLICTING" | "UNKNOWN").  Tolerates any error by returning
+/// an empty map — a failed sweep must never panic or drop the reviews poll.
+async fn fetch_repo_mergeable(repo: &str) -> HashMap<u64, String> {
+    let output = match gh_json(&[
+        "pr", "list",
+        "--repo", repo,
+        "--state", "open",
+        "--json", "number,mergeable,mergeStateStatus",
+        "--limit", "200",
+    ]).await {
+        Ok(o) => o,
+        Err(_) => return HashMap::new(),
+    };
+
+    #[derive(Deserialize)]
+    struct Row {
+        number: u64,
+        mergeable: Option<String>,
+    }
+
+    let rows: Vec<Row> = match serde_json::from_str(&output) {
+        Ok(r) => r,
+        Err(_) => return HashMap::new(),
+    };
+
+    rows.into_iter()
+        .filter_map(|r| r.mergeable.map(|m| (r.number, m)))
+        .collect()
+}
+
+/// Return the mergeable value for a PR in `repo`, using the per-repo sweep
+/// cache and refreshing it (one `gh pr list` call) when its entry is older than
+/// `MERGEABLE_SWEEP_TTL` or absent.  Returns `None` when the sweep has no value
+/// for the PR (e.g. the fetch failed), letting the caller fall back to the
+/// cached details blob.  Careful not to hold the async read lock across the
+/// await: we clone the map out first, then release before fetching.
+async fn sweep_mergeable(repo: &str, number: u64, now: Instant) -> Option<String> {
+    // Fast path: reuse a fresh sweep for this repo.
+    {
+        let cache = mergeable_cache().read().await;
+        if let Some((fetched, map)) = cache.get(repo) {
+            if now.saturating_duration_since(*fetched) < MERGEABLE_SWEEP_TTL {
+                return map.get(&number).cloned();
+            }
+        }
+    }
+    // Slow path: refresh this repo's sweep, then read the value.
+    let map = fetch_repo_mergeable(repo).await;
+    let value = map.get(&number).cloned();
+    {
+        let mut cache = mergeable_cache().write().await;
+        cache.insert(repo.to_string(), (Instant::now(), map));
+    }
+    value
+}
+
+/// Pure resolver: prefer a fresh sweep value over the cached details value when
+/// present, otherwise fall back to the cached value.  `UNKNOWN` from the sweep
+/// is a legitimate value and is preferred as-is — it is NOT treated as
+/// CONFLICTING (the sidebar filter only hides genuine CONFLICTING PRs).
+fn resolve_mergeable(sweep: Option<&String>, cached: Option<String>) -> Option<String> {
+    match sweep {
+        Some(s) => Some(s.clone()),
+        None => cached,
+    }
+}
+
 /// Fetch CI status, mergeable state, review state, mention, and reply status.
 /// `prefetched_threads` may be `Some` when the caller has already obtained
 /// thread stats via `batch_fetch_review_threads`; if `None` we fall back to
@@ -1171,6 +1268,13 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             d
         };
 
+        // Refresh JUST the mergeable signal on the short sweep cadence so a PR
+        // that became CONFLICTING via a sibling merge (no `updatedAt` bump)
+        // surfaces within ~MERGEABLE_SWEEP_TTL rather than up to PR_CACHE_TTL.
+        // Falls back to the cached details value when the sweep has none.
+        let swept = sweep_mergeable(&repo, pr.number, now).await;
+        let mergeable = resolve_mergeable(swept.as_ref(), details.mergeable.clone());
+
         items.push(ReviewRequest {
             id: format!("gh:{}#{}", repo, pr.number),
             repo: repo.clone(),
@@ -1187,7 +1291,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
                 Some(pr.labels.iter().map(|l| l.name.clone()).collect())
             },
             ci: details.ci,
-            mergeable: details.mergeable,
+            mergeable,
             my_review: details.my_review,
             mentioned: details.mentioned,
             re_requested: details.re_requested,
@@ -1864,6 +1968,55 @@ mod tests {
         let now = Instant::now();
         let inserted = now.checked_sub(Duration::from_secs(300)).unwrap();
         assert!(!cache_entry_fresh("t1", "t1", inserted, now, Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn resolve_mergeable_prefers_sweep_over_cached() {
+        // The motivating case: cache still holds MERGEABLE, but the fresh
+        // per-repo sweep reports CONFLICTING (a sibling merged to main).
+        let sweep = "CONFLICTING".to_string();
+        let cached = Some("MERGEABLE".to_string());
+        assert_eq!(
+            resolve_mergeable(Some(&sweep), cached),
+            Some("CONFLICTING".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_mergeable_falls_back_to_cached_when_sweep_absent() {
+        // Sweep has no value for this PR (e.g. the list call failed) — keep the
+        // cached details value instead of dropping the signal.
+        let cached = Some("MERGEABLE".to_string());
+        assert_eq!(
+            resolve_mergeable(None, cached),
+            Some("MERGEABLE".to_string())
+        );
+        // And when both are absent the result is None, not a panic.
+        assert_eq!(resolve_mergeable(None, None), None);
+    }
+
+    #[test]
+    fn resolve_mergeable_passes_unknown_through_unchanged() {
+        // UNKNOWN must NOT be coerced to CONFLICTING — the sidebar only hides
+        // genuine conflicts, so a swept UNKNOWN stays UNKNOWN (PR visible).
+        let sweep = "UNKNOWN".to_string();
+        let cached = Some("MERGEABLE".to_string());
+        assert_eq!(
+            resolve_mergeable(Some(&sweep), cached),
+            Some("UNKNOWN".to_string())
+        );
+    }
+
+    #[test]
+    fn mergeable_sweep_ttl_freshness_uses_cache_entry_fresh_logic() {
+        // The sweep reuses a per-repo entry only while within MERGEABLE_SWEEP_TTL.
+        // Model that freshness with the shared helper (updatedAt is irrelevant
+        // here, so hold it constant and vary only the age).
+        let now = Instant::now();
+        let fresh = now.checked_sub(Duration::from_secs(30)).unwrap();
+        let stale = now.checked_sub(Duration::from_secs(90)).unwrap();
+        assert!(cache_entry_fresh("x", "x", fresh, now, MERGEABLE_SWEEP_TTL));
+        assert!(!cache_entry_fresh("x", "x", stale, now, MERGEABLE_SWEEP_TTL));
     }
 
     fn review(login: &str, is_bot: bool, state: &str) -> GhReview {
