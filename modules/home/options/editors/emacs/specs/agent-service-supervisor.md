@@ -161,6 +161,43 @@ Revised after the M1 spike: build the broker first (raw dtach is closed).
 - **M6 — Reattach replay (rehydrate).** Turn reattach from "reopen and see the
   aftermath" into "reattach and watch it finish." See design below.
 
+## Progress — 2026-08-07 (dogfooding + follow-ups)
+
+Brokering ran in real daily use for ~2 days (9 concurrent live brokers spanning
+Aug 4-6) — strong evidence the transport is solid, de-risking default-on.
+
+- **M6 wiring landed (commit 202e1f5).** The rehydrate module (5eeb986) is now
+  called from the resume timer after `decknix--agent-session-prepopulate`, gated
+  on a LIVE broker (`decknix--agent-broker-live-p`, pidfile) and per-notification
+  `ignore-errors`. Parser is ERT-tested; the live render path + live-vs-replay
+  ordering still need an interactive streaming test (a backgrounded shell command
+  ends its ACP turn immediately, so it is NOT a valid M6 test — use a streaming
+  text turn detached mid-generation).
+- **Switch-breaking bug fixed (commit c41ce6f).** The broker put its
+  sockets/logs under `~/.config/decknix/agent-sockets` — inside the system
+  flake's own (non-git) source tree — so `nix` aborted every `decknix switch`
+  with "file … .sock has an unsupported type" whenever a session was live.
+  Relocated the runtime dir to `${XDG_STATE_HOME:-~/.local/state}/decknix/
+  agent-sockets` (wrapper + elisp in lockstep). One-time migration: clear the old
+  dir before the first switch that carries the fix. Full build verified green
+  from a socket-free flake copy.
+- **IO overhead measured.** Broker vs direct pipe: +~0.7ms per round-trip; one-way
+  throughput 53 MB/s vs 293 MB/s (5.5× lower but still ample for KB-scale ACP
+  traffic; a 100 KB response relays in ~2 ms). All overhead is on the broker's
+  core, off Emacs' main thread. Verdict: IO lag is a non-issue for real traffic.
+- **Output coalescing built, default-OFF (commit e74a5a0).** `--coalesce-ms N`
+  buffers bridge→client output and flushes every N ms (or 32 KiB) so the client
+  wakes less often → fewer Emacs process-filter/redisplay cycles under heavy
+  streaming. This is the responsiveness lever: brokering itself is resilience,
+  NOT a responsiveness win (Emacs still parses/renders every update on its main
+  thread regardless of transport); coalescing is what reduces that main-thread
+  churn. Default 0 = the byte-identical immediate relay; not yet plumbed through
+  the wrapper — enable + validate before making it live.
+
+Remaining before broker-default (`broker.enable = true`): confirm M6 replay
+interactively, then flip the default (deploys atomically with the socket
+relocation, so there is no old-location window), then plumb + tune coalescing.
+
 ## Reattach replay — rehydrate on attach (revises M2 no-replay)
 
 Target UX (user, 2026-08-04): reattaching to a live session opens a buffer that
