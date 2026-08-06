@@ -17,6 +17,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'decknix-agent-broker-rehydrate)
 
 ;; -- fixtures ------------------------------------------------------
@@ -147,6 +148,35 @@
                       (decknix-brk-test--update "agent_message_chunk" "live")))
          (notes (decknix--agent-broker-inflight-notifications lines)))
     (should (equal (decknix-brk-test--kinds notes) '("tool_call")))))
+
+;; -- runtime dir location (must NOT be under ~/.config/decknix) ----
+;;
+;; Regression guard for the switch-breaking bug: broker sockets under the
+;; system flake's source tree (`~/.config/decknix') abort `nix' with
+;; "file has an unsupported type".  The runtime dir must be a STATE dir.
+
+(ert-deftest decknix-brk/broker-dir-is-state-not-config ()
+  "The broker runtime dir honours XDG_STATE_HOME and is never under
+`~/.config/decknix' (the flake source tree)."
+  (let ((process-environment (cons "XDG_STATE_HOME=/tmp/xstate"
+                                   process-environment)))
+    (should (equal (decknix--agent-broker-dir)
+                   "/tmp/xstate/decknix/agent-sockets")))
+  (let ((process-environment
+         (cl-remove-if (lambda (v) (string-prefix-p "XDG_STATE_HOME=" v))
+                       process-environment)))
+    (let ((dir (decknix--agent-broker-dir)))
+      (should (string-suffix-p ".local/state/decknix/agent-sockets" dir))
+      (should-not (string-match-p "/\\.config/decknix/" dir)))))
+
+(ert-deftest decknix-brk/log-path-under-broker-dir ()
+  "The log path is `<broker-dir>/<key>.log'."
+  (let ((process-environment (cons "XDG_STATE_HOME=/tmp/xstate"
+                                   process-environment)))
+    (should (equal (decknix--agent-broker-log-path "s-abc")
+                   "/tmp/xstate/decknix/agent-sockets/s-abc.log"))
+    (should (null (decknix--agent-broker-log-path "")))
+    (should (null (decknix--agent-broker-log-path nil)))))
 
 (provide 'decknix-agent-broker-rehydrate-test)
 ;;; decknix-agent-broker-rehydrate-test.el ends here

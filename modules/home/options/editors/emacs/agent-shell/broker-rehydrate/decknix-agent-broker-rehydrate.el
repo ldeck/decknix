@@ -15,7 +15,7 @@
 ;; resolved result — never the in-flight progress.
 ;;
 ;; This module closes that gap on the READ side.  The broker's raw ACP log
-;; (`~/.config/decknix/agent-sockets/<key>.log') is a complete record of
+;; (`~/.local/state/decknix/agent-sockets/<key>.log') is a complete record of
 ;; every bridge->client byte since the broker spawned.  On reattach we parse
 ;; the log's IN-FLIGHT TAIL — the agent-side `session/update' notifications
 ;; after the last committed turn boundary (a result carrying `stopReason')
@@ -130,16 +130,21 @@ prepopulation, and everything since the attach is delivered live)."
 
 ;; ── log path + buffer replay ────────────────────────────────────────
 
+(defun decknix--agent-broker-dir ()
+  "Return the broker runtime dir for sockets/pidfiles/logs/registry.
+A STATE dir (`$XDG_STATE_HOME/decknix/agent-sockets', or
+`~/.local/state/…'), NOT under `~/.config/decknix' — that is the system
+flake's source tree, which nix copies on every `decknix switch', and a
+live unix-socket file there aborts the build.  MUST stay in sync with the
+`decknix-agent-broker-attach' wrapper's `reg_dir'."
+  (expand-file-name "decknix/agent-sockets"
+                    (or (getenv "XDG_STATE_HOME")
+                        (expand-file-name ".local/state" "~"))))
+
 (defun decknix--agent-broker-log-path (key)
-  "Return the broker log path for session KEY, or nil when KEY is blank.
-Mirrors the `decknix-agent-broker-attach' wrapper:
-`$XDG_CONFIG_HOME/decknix/agent-sockets/<key>.log' (or `~/.config/…')."
+  "Return the broker log path for session KEY, or nil when KEY is blank."
   (when (and key (stringp key) (not (string-empty-p key)))
-    (expand-file-name
-     (format "%s.log" key)
-     (expand-file-name "decknix/agent-sockets"
-                       (or (getenv "XDG_CONFIG_HOME")
-                           (expand-file-name ".config" "~"))))))
+    (expand-file-name (format "%s.log" key) (decknix--agent-broker-dir))))
 
 (defun decknix--agent-broker-read-log-lines (log-path)
   "Return LOG-PATH's contents as a list of lines, or nil when unreadable."

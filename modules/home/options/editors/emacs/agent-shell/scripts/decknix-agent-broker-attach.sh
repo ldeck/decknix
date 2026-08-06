@@ -25,7 +25,12 @@ if [ "$#" -lt 1 ]; then
   exit 2
 fi
 
-reg_dir="${XDG_CONFIG_HOME:-$HOME/.config}/decknix/agent-sockets"
+# Runtime dir for broker sockets/pidfiles/logs/registry.  MUST be a STATE dir,
+# NOT under `~/.config/decknix': that path is the system flake's source tree, and
+# nix copies it wholesale on every `decknix switch' — a live unix-socket file
+# there aborts the build ("file has an unsupported type").  Keep it out of the
+# flake.  Must stay in sync with `decknix--agent-broker-log-path' (elisp).
+reg_dir="${XDG_STATE_HOME:-$HOME/.local/state}/decknix/agent-sockets"
 mkdir -p "$reg_dir"
 sock="$reg_dir/$key.sock"
 pidf="$sock.pid"
