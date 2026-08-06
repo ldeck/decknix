@@ -29,6 +29,8 @@ use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::UnixListener;
 use tokio::process::Command;
 use tokio::sync::Mutex;
+use std::time::Duration;
+use tokio::time::Instant as TokioInstant;
 
 #[derive(Parser)]
 #[command(
@@ -53,6 +55,16 @@ struct Args {
     #[arg(long)]
     log: Option<PathBuf>,
 
+    /// Coalesce bridge->client output: buffer and flush at most every N ms (or
+    /// on a ~32 KiB threshold) instead of forwarding each read immediately.
+    /// Fewer, larger writes wake the attached client's reader less often — fewer
+    /// Emacs process-filter/redisplay cycles during heavy streaming.  The log
+    /// (source of truth) is still written immediately, so nothing is lost.
+    /// 0 = off: forward each read immediately (the default and current
+    /// behaviour, a byte-identical relay path).
+    #[arg(long, default_value_t = 0)]
+    coalesce_ms: u64,
+
     /// The bridge command and its args, after `--` (e.g. `-- claude-agent-acp`).
     #[arg(last = true, required = true, num_args = 1..)]
     command: Vec<String>,
@@ -70,6 +82,33 @@ async fn log_write(log: &Option<PathBuf>, prefix: &[u8], bytes: &[u8]) {
             let _ = f.write_all(bytes).await;
         }
     }
+}
+
+/// Write DATA to the currently-attached client, if any.  On any write/flush
+/// error the client vanished mid-write; drop it (a later attach replaces it)
+/// and keep draining the bridge.  Same semantics as the immediate relay path.
+async fn flush_to_client(client: &SharedClient, data: &[u8]) {
+    if data.is_empty() {
+        return;
+    }
+    let mut guard = client.lock().await;
+    if let Some(w) = guard.as_mut() {
+        if w.write_all(data).await.is_err() || w.flush().await.is_err() {
+            *guard = None;
+        }
+    }
+}
+
+/// Max bytes to buffer before forcing a coalesced flush regardless of the
+/// time budget — bounds worst-case latency under a continuous stream.
+const COALESCE_FLUSH_BYTES: usize = 32 * 1024;
+
+/// Pure decision: with coalescing on, flush now when the buffered byte count
+/// has reached the size threshold (the time-budget flush is handled by the
+/// select! timer, not this predicate).  Extracted so the threshold logic is
+/// unit-testable without a tokio runtime.
+fn coalesce_should_flush_on_size(pending_len: usize) -> bool {
+    pending_len >= COALESCE_FLUSH_BYTES
 }
 
 fn mkparent(path: &PathBuf) {
@@ -185,19 +224,70 @@ async fn run(args: Args) {
     let stdout_task = {
         let client = client.clone();
         let log = args.log.clone();
+        let coalesce_ms = args.coalesce_ms;
         tokio::spawn(async move {
             let mut buf = [0u8; 8192];
-            loop {
-                match bridge_stdout.read(&mut buf).await {
-                    Ok(0) | Err(_) => break, // bridge closed stdout -> exiting
-                    Ok(n) => {
-                        let chunk = &buf[..n];
-                        log_write(&log, b"", chunk).await;
-                        let mut guard = client.lock().await;
-                        if let Some(w) = guard.as_mut() {
-                            if w.write_all(chunk).await.is_err() || w.flush().await.is_err() {
-                                *guard = None; // client vanished mid-write; keep draining
+            if coalesce_ms == 0 {
+                // Immediate relay (default): forward each read straight away.
+                loop {
+                    match bridge_stdout.read(&mut buf).await {
+                        Ok(0) | Err(_) => break, // bridge closed stdout -> exiting
+                        Ok(n) => {
+                            let chunk = &buf[..n];
+                            log_write(&log, b"", chunk).await;
+                            let mut guard = client.lock().await;
+                            if let Some(w) = guard.as_mut() {
+                                if w.write_all(chunk).await.is_err() || w.flush().await.is_err() {
+                                    *guard = None; // client vanished mid-write; keep draining
+                                }
                             }
+                        }
+                    }
+                }
+            } else {
+                // Coalescing relay: still log every read immediately (source of
+                // truth), but buffer client output and flush at most every
+                // `coalesce_ms' (measured from the first buffered byte) or once
+                // the buffer reaches COALESCE_FLUSH_BYTES — whichever comes
+                // first.  Fewer, larger socket writes = fewer client wakeups.
+                let mut pending: Vec<u8> = Vec::with_capacity(COALESCE_FLUSH_BYTES);
+                let mut deadline: Option<TokioInstant> = None;
+                loop {
+                    tokio::select! {
+                        biased;
+                        r = bridge_stdout.read(&mut buf) => {
+                            match r {
+                                Ok(0) | Err(_) => {
+                                    // Bridge closed: flush the tail, then exit.
+                                    flush_to_client(&client, &pending).await;
+                                    break;
+                                }
+                                Ok(n) => {
+                                    let chunk = &buf[..n];
+                                    log_write(&log, b"", chunk).await;
+                                    pending.extend_from_slice(chunk);
+                                    if deadline.is_none() {
+                                        deadline = Some(TokioInstant::now()
+                                            + Duration::from_millis(coalesce_ms));
+                                    }
+                                    if coalesce_should_flush_on_size(pending.len()) {
+                                        flush_to_client(&client, &pending).await;
+                                        pending.clear();
+                                        deadline = None;
+                                    }
+                                }
+                            }
+                        }
+                        // Fires only when a deadline is armed (pending non-empty).
+                        _ = async {
+                            match deadline {
+                                Some(d) => tokio::time::sleep_until(d).await,
+                                None => std::future::pending::<()>().await,
+                            }
+                        } => {
+                            flush_to_client(&client, &pending).await;
+                            pending.clear();
+                            deadline = None;
                         }
                     }
                 }
@@ -281,4 +371,17 @@ async fn run(args: Args) {
     let _ = std::fs::remove_file(&args.socket);
     let _ = std::fs::remove_file(&pid_path);
     std::process::exit(code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coalesce_flush_on_size_at_threshold() {
+        assert!(!coalesce_should_flush_on_size(0));
+        assert!(!coalesce_should_flush_on_size(COALESCE_FLUSH_BYTES - 1));
+        assert!(coalesce_should_flush_on_size(COALESCE_FLUSH_BYTES));
+        assert!(coalesce_should_flush_on_size(COALESCE_FLUSH_BYTES + 1));
+    }
 }
