@@ -53,5 +53,55 @@
     (should (string-match-p "\\`s-[0-9]+-[0-9a-f]+\\'" k1)) ; no slashes/spaces
     (should-not (equal k1 k2))))
 
+
+;; -- session-id broker-key lookup (stable reattach link) ----------
+
+(defun decknix-broker-test--entry (sessions broker-key)
+  "Build a conversation ENTRY hash with SESSIONS list and BROKER-KEY."
+  (let ((h (make-hash-table :test 'equal)))
+    (puthash "sessions" sessions h)
+    (when broker-key (puthash "brokerKey" broker-key h))
+    h))
+
+(defun decknix-broker-test--convs (&rest pairs)
+  "Build a conversations hash from (CONV-KEY . ENTRY) PAIRS."
+  (let ((h (make-hash-table :test 'equal)))
+    (dolist (p pairs) (puthash (car p) (cdr p) h))
+    h))
+
+(ert-deftest decknix-broker/scan-session-id--found ()
+  "Returns the broker key of the entry listing the session id."
+  (let ((convs (decknix-broker-test--convs
+                (cons "ck1" (decknix-broker-test--entry '("sid-A") "s-1-aaa"))
+                (cons "ck2" (decknix-broker-test--entry '("sid-B") "s-2-bbb")))))
+    (should (equal (decknix--agent-broker-scan-key-for-session-id convs "sid-B")
+                   "s-2-bbb"))))
+
+(ert-deftest decknix-broker/scan-session-id--none ()
+  "Returns nil when no entry lists the session id, or entry has no broker key."
+  (let ((convs (decknix-broker-test--convs
+                (cons "ck1" (decknix-broker-test--entry '("sid-A") "s-1-aaa"))
+                (cons "ck2" (decknix-broker-test--entry '("sid-C") nil)))))
+    (should (null (decknix--agent-broker-scan-key-for-session-id convs "sid-Z")))
+    (should (null (decknix--agent-broker-scan-key-for-session-id convs "sid-C")))))
+
+(ert-deftest decknix-broker/scan-session-id--prefers-earliest ()
+  "The motivating case: a mis-keyed resume left TWO entries for one session.
+Prefer the earliest (timestamp-ordered) key — the ORIGINAL broker holding it."
+  (let ((convs (decknix-broker-test--convs
+                ;; original write-time entry
+                (cons "a55c" (decknix-broker-test--entry
+                              '("sid-X") "s-20260807171714-075a8b7c41"))
+                ;; entry left by the failed resume (later key)
+                (cons "7ae0" (decknix-broker-test--entry
+                              '("sid-X") "s-20260807172057-b848ec10a0")))))
+    (should (equal (decknix--agent-broker-scan-key-for-session-id convs "sid-X")
+                   "s-20260807171714-075a8b7c41"))))
+
+(ert-deftest decknix-broker/scan-session-id--nil-convs ()
+  "A nil/non-hash convs argument yields nil, not an error."
+  (should (null (decknix--agent-broker-scan-key-for-session-id nil "sid")))
+  (should (null (decknix--agent-broker-scan-key-for-session-id "x" "sid"))))
+
 (provide 'decknix-agent-session-broker-test)
 ;;; decknix-agent-session-broker-test.el ends here
