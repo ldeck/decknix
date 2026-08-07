@@ -88,7 +88,7 @@ history; only the model-facing primer is suppressed)."
 (declare-function decknix--agent-broker-key-for-new
                   "decknix-agent-session-broker" (provider-id))
 (declare-function decknix--agent-broker-key-for-resume
-                  "decknix-agent-session-broker" (provider-id conv-key))
+                  "decknix-agent-session-broker" (provider-id conv-key &optional session-id))
 (declare-function decknix--agent-broker-wrap-command
                   "decknix-agent-session-broker" (argv key))
 (declare-function decknix--agent-broker-save-key-for-conv-key
@@ -950,8 +950,12 @@ dedupes against live buffers before calling here."
          ;; cache entries that pre-date the Phase 1.3 stamp.
          (provider (decknix--agent-provider-for-session-id session-id))
          ;; #151 M3b: reattach the same broker this conversation created (its
-         ;; key was persisted at first message); nil key -> no wrap.
-         (broker-key (decknix--agent-broker-key-for-resume provider conv-key))
+         ;; key was persisted at first message); nil key -> no wrap.  Resolve
+         ;; by the STABLE session-id first (the conv-key can diverge between the
+         ;; write and transcript-read paths for long prompts, which would spawn
+         ;; a fresh broker and orphan the in-flight turn).
+         (broker-key (decknix--agent-broker-key-for-resume
+                      provider conv-key session-id))
          (augmented-cmd
           (decknix--agent-broker-wrap-command
            (decknix--agent-command-build

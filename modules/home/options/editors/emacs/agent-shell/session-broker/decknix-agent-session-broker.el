@@ -91,12 +91,46 @@ Nil when the session should not be brokered (toggle off / non-Claude)."
   (when (decknix--agent-broker-should-wrap-p provider-id)
     (decknix--agent-broker-generate-key)))
 
-(defun decknix--agent-broker-key-for-resume (provider-id conv-key)
+(defun decknix--agent-broker-scan-key-for-session-id (convs session-id)
+  "Pure: earliest broker key among CONVS entries that list SESSION-ID, or nil.
+CONVS is the conversations hash-table (conv-key -> entry hash-table).  When
+several entries match (a transient left by an earlier mis-keyed resume) the
+timestamp-ordered key name sorts the ORIGINAL broker first — the one still
+holding the session — so prefer the lexicographically smallest key."
+  (let ((keys nil))
+    (when (hash-table-p convs)
+      (maphash
+       (lambda (_ entry)
+         (when (and (hash-table-p entry)
+                    (member session-id (gethash "sessions" entry)))
+           (let ((bk (gethash "brokerKey" entry)))
+             (when (and bk (stringp bk) (not (string-empty-p bk)))
+               (push bk keys)))))
+       convs))
+    (car (sort keys #'string<))))
+
+(defun decknix--agent-broker-key-for-session-id (session-id)
+  "Return the saved broker key linked to SESSION-ID, or nil.
+The session id is stable across launch and resume, unlike the conv-key
+\(derived from the first message, which the live write path and the
+transcript-read path hash differently for long or edited prompts) — so
+this is the RELIABLE reattach link.  See
+`decknix--agent-broker-scan-key-for-session-id'."
+  (when (and session-id (stringp session-id) (not (string-empty-p session-id)))
+    (decknix--agent-broker-scan-key-for-session-id
+     (decknix--agent-tags-conversations (decknix--agent-tags-read))
+     session-id)))
+
+(defun decknix--agent-broker-key-for-resume (provider-id conv-key &optional session-id)
   "Return the broker key to reattach a resumed PROVIDER-ID session, or nil.
-Reuses the key persisted for CONV-KEY (so we reattach the same broker); falls
-back to a fresh key when none was recorded."
+Resolve by the stable SESSION-ID first (reliable across launch/resume),
+then fall back to CONV-KEY (fragile: the first-message hash can diverge
+between the live write path and the transcript-read path, e.g. long
+prompts truncated differently), and finally to a fresh key when nothing
+was recorded."
   (when (decknix--agent-broker-should-wrap-p provider-id)
-    (or (decknix--agent-broker-key-for-conv-key conv-key)
+    (or (and session-id (decknix--agent-broker-key-for-session-id session-id))
+        (decknix--agent-broker-key-for-conv-key conv-key)
         (decknix--agent-broker-generate-key))))
 
 (defun decknix--agent-broker-save-key-for-conv-key (conv-key key)
