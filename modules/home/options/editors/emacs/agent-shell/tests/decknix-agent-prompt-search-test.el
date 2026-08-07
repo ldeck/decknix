@@ -53,6 +53,24 @@
         (should (string-match-p "jq -c -f " cmd))
         (should (string-match-p "test-extract\\.jq" cmd))))))
 
+(ert-deftest decknix-agent-prompt-search/jq-cmd-skips-oversized-files ()
+  "A file-size guard prunes pathologically large sessions so the search
+cannot stall the (single-threaded) editor reading tens of GB."
+  (cl-letf (((symbol-function 'decknix--prompt-extract-ensure-jq-filter)
+             (lambda () "/tmp/test-extract.jq")))
+    ;; default guard present
+    (let ((decknix--agent-sessions-dir "/tmp/sessions")
+          (decknix--prompt-search-max-file-size "25M"))
+      (should (string-match-p "-size -25M" (decknix--prompt-search-jq-cmd))))
+    ;; nil disables it (old behaviour), and the guard sits before -print0
+    (let ((decknix--agent-sessions-dir "/tmp/sessions")
+          (decknix--prompt-search-max-file-size nil))
+      (should-not (string-match-p "-size" (decknix--prompt-search-jq-cmd))))
+    (let ((decknix--agent-sessions-dir "/tmp/sessions")
+          (decknix--prompt-search-max-file-size "10M"))
+      (let ((cmd (decknix--prompt-search-jq-cmd)))
+        (should (string-match-p "-size -10M -print0" cmd))))))
+
 (ert-deftest decknix-agent-prompt-search/jq-cmd-uses-sh-c-wrapper ()
   "Per-file invocation runs through `sh -c' with `|| true' so a
 single corrupt session file doesn't kill the whole xargs pipeline."

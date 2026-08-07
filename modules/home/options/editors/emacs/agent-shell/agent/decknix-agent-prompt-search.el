@@ -50,13 +50,29 @@
 ;; declared here so the byte-compiler knows it is a special variable.
 (defvar decknix--agent-sessions-dir)
 
+(defvar decknix--prompt-search-max-file-size "25M"
+  "Skip session files larger than this in the cross-session prompt search.
+Some agents (notably auggie) accumulate multi-hundred-MB session files -- a
+full sessions dir can reach tens of GB.  Reading those through jq during an
+`M-r' search spikes memory and I/O for minutes and, under memory pressure,
+is enough to make the single-threaded Emacs unresponsive.  The user prompts
+live near the top of each file, so a pathologically large session is not
+worth reading in full.  Value is a `find -size' argument (e.g. \"25M\",
+\"50M\"); nil disables the guard and scans every file (the old behaviour).")
+
 (defun decknix--prompt-search-jq-cmd ()
   "Shell command to extract all user prompts from all sessions.
-Outputs one JSON array per line (one per session file)."
+Outputs one JSON array per line (one per session file).
+Files larger than `decknix--prompt-search-max-file-size' are skipped so a
+few gigantic session files can't stall the search (and the editor with it)."
   (let ((jqf (decknix--prompt-extract-ensure-jq-filter)))
     (concat
      "find " (shell-quote-argument decknix--agent-sessions-dir)
-     " -maxdepth 1 -name '*.json' -print0 2>/dev/null"
+     " -maxdepth 1 -name '*.json'"
+     (if decknix--prompt-search-max-file-size
+         (concat " -size -" decknix--prompt-search-max-file-size)
+       "")
+     " -print0 2>/dev/null"
      " | xargs -0 -P8 -I{}"
      " sh -c 'jq -c -f \"$1\" \"$2\" 2>/dev/null || true' _ "
      (shell-quote-argument jqf) " {}")))
