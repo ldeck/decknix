@@ -528,7 +528,11 @@ This makes section headings visible immediately, not just when drilling in."
               (set-frame-parameter nil 'fullscreen (plist-get saved :fullscreen))
               (if (plist-get saved :tool-bar) (tool-bar-mode 1) (tool-bar-mode -1))
               (if (plist-get saved :menu-bar) (menu-bar-mode 1) (menu-bar-mode -1))
-              (scroll-bar-mode 1)
+              ;; Respect the saved state instead of force-on: forcing
+              ;; `scroll-bar-mode 1' reintroduces the macOS-26 NS
+              ;; `ns_judge_scroll_bars' abort (see ui.nix).  Global config
+              ;; keeps scroll bars off, so this restores them off.
+              (if (plist-get saved :scroll-bar) (scroll-bar-mode 1) (scroll-bar-mode -1))
               (fringe-mode nil)
               (when (plist-get saved :org-indent) (org-indent-mode 1))
               ;; Restore original theme if different

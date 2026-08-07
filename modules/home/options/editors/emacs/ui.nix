@@ -139,6 +139,30 @@ in
             (tool-bar-mode -1))
           (add-to-list 'default-frame-alist '(tool-bar-lines . 0)))
 
+        ;; == macOS scroll bars — DISABLED to prevent an NS-port crash ==
+        ;; Emacs 30's NS port aborts the WHOLE process (SIGABRT) inside
+        ;; `ns_judge_scroll_bars' during ordinary redisplay on macOS 26+: it
+        ;; messages a scroll-bar object with a selector the newer AppKit
+        ;; NSScroller no longer recognises (`doesNotRecognizeSelector:' ->
+        ;; `objc_exception_throw' -> `abort'), taking the daemon and every
+        ;; session down.  Captured 2026-08-07 (crash in a 4-day-old daemon,
+        ;; stack: redisplay_internal -> ns_judge_scroll_bars -> forwarding ->
+        ;; doesNotRecognizeSelector).  We can't patch Emacs' C from here; the
+        ;; reliable, reproducible mitigation is to carry NO native scroll bars
+        ;; so `ns_judge_scroll_bars' has nothing to message.  Two layers, like
+        ;; the toolbar above: mode off for frames that exist when this runs,
+        ;; `default-frame-alist' off for `emacsclient -c' frames.  Position is
+        ;; still visible via the mode line / fringe.  If a future Emacs or
+        ;; macOS fixes the port this is a one-line revert.  NOTE: `org.nix'
+        ;; must not force `scroll-bar-mode' back on (it previously did).
+        (when (eq system-type 'darwin)
+          (when (fboundp 'scroll-bar-mode)
+            (scroll-bar-mode -1))
+          (when (fboundp 'horizontal-scroll-bar-mode)
+            (horizontal-scroll-bar-mode -1))
+          (add-to-list 'default-frame-alist '(vertical-scroll-bars . nil))
+          (add-to-list 'default-frame-alist '(horizontal-scroll-bars . nil)))
+
         ;; == macOS Window menu ==
         ;; Emacs.app has no built-in Window menu (unlike Safari, Xcode,
         ;; Terminal, etc.).  This adds one listing every open frame with a
