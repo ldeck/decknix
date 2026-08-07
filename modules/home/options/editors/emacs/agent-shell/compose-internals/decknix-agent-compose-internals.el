@@ -129,11 +129,23 @@ Only triggers at line start or after whitespace."
       (completion-at-point)))))
 
 (defun decknix--compose-setup-completion ()
-  "Set up slash command and file completion in the compose buffer."
-  (add-hook 'completion-at-point-functions
-            #'decknix--compose-file-completion-at-point nil t)
-  (add-hook 'completion-at-point-functions
-            #'decknix--compose-command-completion-at-point nil t)
+  "Set up slash command and file completion in the compose buffer.
+
+Use ONLY the compose-local capfs; do NOT inherit the global
+`completion-at-point-functions'.  Globally `cape-dabbrev' and `cape-file'
+are registered, and in these buffers `cape-dabbrev' errors inside
+`cape--dabbrev-bounds' (\"setting-constant nil\"), which `corfu-auto'
+re-fires on a timer and spams *Messages*, while `cape-file' does
+synchronous filesystem scans that hitch typing.  The agent-shell
+transcript buffer strips the same two (see agent-shell.nix); the compose
+buffer was assumed to \"keep its own @-file / slash-command capfs\" but
+still inherited the global list via `add-hook's `t' tail.  Set an explicit
+buffer-local list (command first, then file — the effective order the two
+`add-hook' prepends produced) with no global tail, so neither cape capf
+runs here.  Order matches `decknix--compose-trigger-completion's `cond'."
+  (setq-local completion-at-point-functions
+              (list #'decknix--compose-command-completion-at-point
+                    #'decknix--compose-file-completion-at-point))
   (add-hook 'post-self-insert-hook
             #'decknix--compose-trigger-completion nil t))
 
