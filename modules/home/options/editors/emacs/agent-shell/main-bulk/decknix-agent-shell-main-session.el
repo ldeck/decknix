@@ -121,6 +121,8 @@ history; only the model-facing primer is suppressed)."
 (declare-function decknix--prompt-extract-from-file "decknix-agent-parse")
 (declare-function decknix--agent-conversation-key
                   "decknix-agent-conv-resolve" (first-message))
+(declare-function decknix--agent-store-field-for-session-id
+                  "decknix-agent-conv-resolve" (session-id field))
 (declare-function decknix--agent-conv-touch
                   "decknix-agent-conv-recency" (conv-key))
 (declare-function decknix--agent-session-list "decknix-agent-session-cache")
@@ -919,8 +921,12 @@ dedupes against live buffers before calling here."
          ;; Per-conversation model override (set mid-session
          ;; via C-c C-v).  When absent, omit --model so auggie
          ;; falls back to the global default in settings.json.
-         (saved-model (decknix--agent-session-model-for-conv-key
-                       conv-key))
+         ;; conv-key can be a fragment that lost the metadata; fall back
+         ;; to the stable session-id (heals conv-key scatter).
+         (saved-model (or (decknix--agent-session-model-for-conv-key conv-key)
+                          (and session-id
+                               (decknix--agent-store-field-for-session-id
+                                session-id "model"))))
          ;; Validate workspace once here (filesystem I/O); the
          ;; pure `decknix--resume-command-build' below treats a
          ;; non-empty string as "use it".
@@ -969,6 +975,9 @@ dedupes against live buffers before calling here."
          ;; provider default and re-enables per-command permission
          ;; prompts.  Ignored by providers without session modes.
          (mode (or (decknix--agent-session-mode-for-conv-key conv-key)
+                   (and session-id
+                        (decknix--agent-store-field-for-session-id
+                         session-id "mode"))
                    (plist-get (decknix-agent-purpose-resolve 'new-session)
                               :mode)))
          (config (decknix--agent-make-config provider augmented-cmd mode))
@@ -1033,8 +1042,11 @@ dedupes against live buffers before calling here."
              (primer (decknix--agent-resume-primer-message
                       (decknix-agent-provider-label provider)
                       session-id data-path
-                      (and conv-key
-                           (decknix--agent-tags-for-conv-key conv-key))
+                      (or (and conv-key
+                               (decknix--agent-tags-for-conv-key conv-key))
+                          (and session-id
+                               (decknix--agent-store-field-for-session-id
+                                session-id "tags")))
                       last-user)))
         (when primer
           (decknix--agent-resume-primer-on-ready shell-buf primer))))
