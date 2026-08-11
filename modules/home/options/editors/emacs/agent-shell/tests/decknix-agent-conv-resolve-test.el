@@ -254,5 +254,43 @@ tag store lists its session-id under the conv-key (wrapper-first sessions:
       (should (equal "hash-new"
                      (decknix--agent-latest-session-id-for-conv-key "k"))))))
 
+
+;; -- session-id metadata fallback (store-field-scan) ---------------
+
+(defun decknix-cr-test--entry (sessions &rest kv)
+  "Build a conv ENTRY hash with SESSIONS and KV plist of field/value."
+  (let ((h (make-hash-table :test 'equal)))
+    (puthash "sessions" sessions h)
+    (while kv (puthash (pop kv) (pop kv) h))
+    h))
+
+(defun decknix-cr-test--convs (&rest pairs)
+  (let ((h (make-hash-table :test 'equal)))
+    (dolist (p pairs) (puthash (car p) (cdr p) h))
+    h))
+
+(ert-deftest decknix-cr/field-scan--found ()
+  (let ((convs (decknix-cr-test--convs
+                (cons "ck1" (decknix-cr-test--entry '("sid-A") "tags" '("x")))
+                (cons "ck2" (decknix-cr-test--entry '("sid-B") "model" "opus")))))
+    (should (equal (decknix--agent-store-field-scan convs "sid-A" "tags") '("x")))
+    (should (equal (decknix--agent-store-field-scan convs "sid-B" "model") "opus"))))
+
+(ert-deftest decknix-cr/field-scan--skips-empty-fragment ()
+  "An untagged fragment must not shadow a tagged one for the same session."
+  (let ((convs (decknix-cr-test--convs
+                ;; empty fragment sorts first by conv-key
+                (cons "aaa" (decknix-cr-test--entry '("sid-X") "tags" nil))
+                (cons "bbb" (decknix-cr-test--entry '("sid-X") "tags" '("claude" "decknix"))))))
+    (should (equal (decknix--agent-store-field-scan convs "sid-X" "tags")
+                   '("claude" "decknix")))))
+
+(ert-deftest decknix-cr/field-scan--none ()
+  (let ((convs (decknix-cr-test--convs
+                (cons "ck1" (decknix-cr-test--entry '("sid-A") "tags" '("x"))))))
+    (should (null (decknix--agent-store-field-scan convs "sid-Z" "tags")))
+    (should (null (decknix--agent-store-field-scan convs "sid-A" "model")))
+    (should (null (decknix--agent-store-field-scan nil "sid-A" "tags")))))
+
 (provide 'decknix-agent-conv-resolve-test)
 ;;; decknix-agent-conv-resolve-test.el ends here

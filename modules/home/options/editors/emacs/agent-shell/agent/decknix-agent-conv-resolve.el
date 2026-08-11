@@ -142,5 +142,45 @@ falls through to \"Cannot restore: no session ID\")."
       (when sorted
         (alist-get 'sessionId (car sorted))))))
 
+;; ── session-id metadata fallback (heals conv-key fragmentation) ──────
+;;
+;; The conv-key is derived from the first message, which the live write path
+;; (comint input) and the transcript-read path hash differently for long or
+;; edited prompts — so one conversation scatters across many conv-key store
+;; entries and its tags/model/mode/workspace/brokerKey land on whichever key
+;; was current at write time.  The session-id is stable across launch and
+;; resume, so when a conv-key lookup misses we fall back to it: scan the conv
+;; entries listing the session-id and return the requested FIELD from one that
+;; carries it.  Mirrors `decknix--agent-broker-scan-key-for-session-id'.
+
+(defun decknix--agent-store-field-scan (convs session-id field)
+  "Pure: return non-empty FIELD from a CONVS entry listing SESSION-ID, or nil.
+CONVS is the conversations hash-table (conv-key -> entry hash-table); FIELD
+is a store key string (e.g. \"tags\", \"model\", \"sessionMode\").  Scans by
+sorted conv-key for deterministic tie-breaking; skips nil / empty-sequence
+values so an untagged fragment never shadows a tagged one."
+  (when (and (hash-table-p convs) session-id field)
+    (let ((keys nil))
+      (maphash (lambda (k _) (push k keys)) convs)
+      (catch 'hit
+        (dolist (k (sort keys #'string<))
+          (let ((entry (gethash k convs)))
+            (when (and (hash-table-p entry)
+                       (member session-id (gethash "sessions" entry)))
+              (let ((val (gethash field entry)))
+                (when (and val (or (not (sequencep val)) (> (length val) 0)))
+                  (throw 'hit val))))))
+        nil))))
+
+(defun decknix--agent-store-field-for-session-id (session-id field)
+  "Return store FIELD for SESSION-ID via the tag store, or nil.
+Stable fallback for when the conv-key lookup misses because the
+conversation fragmented across conv-keys (see
+`decknix--agent-store-field-scan')."
+  (when (and session-id (stringp session-id) (not (string-empty-p session-id)))
+    (decknix--agent-store-field-scan
+     (decknix--agent-tags-conversations (decknix--agent-tags-read))
+     session-id field)))
+
 (provide 'decknix-agent-conv-resolve)
 ;;; decknix-agent-conv-resolve.el ends here
