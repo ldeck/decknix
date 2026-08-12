@@ -292,5 +292,34 @@ tag store lists its session-id under the conv-key (wrapper-first sessions:
     (should (null (decknix--agent-store-field-scan convs "sid-A" "model")))
     (should (null (decknix--agent-store-field-scan nil "sid-A" "tags")))))
 
+
+;; -- conv-key-for-session-id (stable write key) -------------------
+
+(ert-deftest decknix-cr/conv-key-scan--prefers-entry-with-metadata ()
+  "Reuse the conversation's established (metadata-bearing) key, not a bare
+fragment, so a write consolidates instead of scattering."
+  (let ((convs (decknix-cr-test--convs
+                ;; a bare fragment (sorts first) listing the session
+                (cons "aaa" (decknix-cr-test--entry '("sid-X")))
+                ;; the real entry carrying metadata
+                (cons "bbb" (decknix-cr-test--entry '("sid-X") "brokerKey" "s-1")))))
+    (should (equal (decknix--agent-conv-key-scan-for-session-id convs "sid-X")
+                   "bbb"))))
+
+(ert-deftest decknix-cr/conv-key-scan--falls-back-to-any ()
+  "When no matching entry has metadata, return any entry listing the session."
+  (let ((convs (decknix-cr-test--convs
+                (cons "zzz" (decknix-cr-test--entry '("sid-Y")))
+                (cons "mmm" (decknix-cr-test--entry '("sid-Y"))))))
+    ;; deterministic: lexicographically smallest matching key
+    (should (equal (decknix--agent-conv-key-scan-for-session-id convs "sid-Y")
+                   "mmm"))))
+
+(ert-deftest decknix-cr/conv-key-scan--none ()
+  (let ((convs (decknix-cr-test--convs
+                (cons "ck1" (decknix-cr-test--entry '("sid-A") "tags" '("x"))))))
+    (should (null (decknix--agent-conv-key-scan-for-session-id convs "sid-Z")))
+    (should (null (decknix--agent-conv-key-scan-for-session-id nil "sid-A")))))
+
 (provide 'decknix-agent-conv-resolve-test)
 ;;; decknix-agent-conv-resolve-test.el ends here
