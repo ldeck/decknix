@@ -172,6 +172,35 @@ values so an untagged fragment never shadows a tagged one."
                   (throw 'hit val))))))
         nil))))
 
+(defun decknix--agent-conv-key-scan-for-session-id (convs session-id)
+  "Pure: a conv-key whose CONVS entry lists SESSION-ID, or nil.
+Prefers an entry that already carries metadata (brokerKey/tags/model/mode)
+so a WRITE reuses the conversation's established key instead of minting a
+fresh fragment; otherwise any entry listing the session; deterministic by
+sorted conv-key."
+  (when (and (hash-table-p convs) session-id)
+    (let ((keys nil) with-meta any)
+      (maphash (lambda (k _) (push k keys)) convs)
+      (dolist (k (sort keys #'string<))
+        (let ((e (gethash k convs)))
+          (when (and (hash-table-p e)
+                     (member session-id (gethash "sessions" e)))
+            (unless any (setq any k))
+            (when (and (null with-meta)
+                       (or (gethash "brokerKey" e) (gethash "tags" e)
+                           (gethash "model" e) (gethash "mode" e)))
+              (setq with-meta k)))))
+      (or with-meta any))))
+
+(defun decknix--agent-conv-key-for-session-id (session-id)
+  "Return an existing conv-key that owns SESSION-ID in the tag store, or nil.
+Lets the write path reuse a conversation's established key instead of
+minting a fresh fragment from a diverging first-message hash."
+  (when (and session-id (stringp session-id) (not (string-empty-p session-id)))
+    (decknix--agent-conv-key-scan-for-session-id
+     (decknix--agent-tags-conversations (decknix--agent-tags-read))
+     session-id)))
+
 (defun decknix--agent-store-field-for-session-id (session-id field)
   "Return store FIELD for SESSION-ID via the tag store, or nil.
 Stable fallback for when the conv-key lookup misses because the

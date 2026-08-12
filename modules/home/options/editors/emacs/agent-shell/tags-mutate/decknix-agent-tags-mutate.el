@@ -38,6 +38,8 @@
                   "decknix-agent-tags-store" (store))
 (declare-function decknix--agent-conversation-key
                   "decknix-agent-conv-resolve" (first-message))
+(declare-function decknix--agent-conv-key-for-session-id
+                  "decknix-agent-conv-resolve" (session-id))
 (declare-function decknix--agent-broker-save-key-for-conv-key
                   "decknix-agent-session-broker" (conv-key key))
 
@@ -112,7 +114,21 @@ or whitespace-only input leaves the hook in place for the next
 submission."
   (when (and input (stringp input)
              (not (string-empty-p (string-trim input))))
-    (let ((conv-key (decknix--agent-conversation-key input)))
+    ;; Resolve a STABLE key to persist under, so a resumed buffer (whose
+    ;; INPUT is the next message, not the conversation's first) and a
+    ;; diverging first-message hash cannot scatter this conversation across
+    ;; conv-keys: prefer the buffer-local conv-key (resumed buffers carry the
+    ;; resolved key), then an existing store entry for the stable session-id,
+    ;; and only then the input-derived key (a brand-new conversation).
+    (let ((conv-key
+           (or (and (bound-and-true-p decknix--agent-conv-key)
+                    decknix--agent-conv-key)
+               (and (bound-and-true-p decknix--agent-auggie-session-id)
+                    decknix--agent-auggie-session-id
+                    (fboundp 'decknix--agent-conv-key-for-session-id)
+                    (decknix--agent-conv-key-for-session-id
+                     decknix--agent-auggie-session-id))
+               (decknix--agent-conversation-key input))))
       (when conv-key
         ;; Stash conv-key buffer-locally for header-line lookups.
         (unless decknix--agent-conv-key
