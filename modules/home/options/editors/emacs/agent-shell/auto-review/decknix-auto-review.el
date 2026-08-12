@@ -41,10 +41,17 @@ See the Commentary for the meaning of each.")
 (defvar decknix-auto-review-mode 'off
   "Current auto-review state; one of `decknix-auto-review-states'.")
 
-(defvar decknix-auto-review-default-review-command "/review-service-pr-factory"
+(defvar decknix-auto-review-default-review-command "/review-service-pr"
   "Slash command sent for human-authored auto-review dispatch.
-Runs the background review-factory flow so the verdict is ready to
-inspect later; the session surfaces via the attention indicator.")
+Must be an EXECUTOR that actually reviews the PR, not a router.  Auto-
+review already targets one specific PR (it appends the PR URL), so it
+does not need `/review-service-pr-factory' — that command is a thin
+dispatcher that only inspects the announcing Slack message and PRINTS
+the command to re-run, which under unattended auto-review just prints a
+recommendation and stops instead of reviewing.  `/review-service-pr'
+does the analysis and composes the verdict (gated on confirmation before
+posting), so the session surfaces via the attention indicator with real
+work done.")
 
 (defvar decknix-auto-review-default-ship-command "/review-and-ship-bot-pr"
   "Slash command sent for bot-authored auto-review dispatch.")

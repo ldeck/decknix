@@ -82,9 +82,9 @@ visible on every active state."
 (ert-deftest decknix-auto-review/resolve-command-defaults ()
   "With no per-workspace overrides the global defaults are returned."
   (let ((decknix-auto-review-commands nil)
-        (decknix-auto-review-default-review-command "/review-service-pr-factory")
+        (decknix-auto-review-default-review-command "/review-service-pr")
         (decknix-auto-review-default-ship-command "/review-and-ship-bot-pr"))
-    (should (string= "/review-service-pr-factory"
+    (should (string= "/review-service-pr"
                      (decknix-auto-review-resolve-command 'review "/ws/a")))
     (should (string= "/review-and-ship-bot-pr"
                      (decknix-auto-review-resolve-command 'ship "/ws/a")))))
@@ -93,23 +93,23 @@ visible on every active state."
   "A matching workspace entry's :review / :ship overrides the default."
   (let ((decknix-auto-review-commands
          '(("/ws/proj" . (:review "/proj-review" :ship "/proj-ship"))))
-        (decknix-auto-review-default-review-command "/review-service-pr-factory")
+        (decknix-auto-review-default-review-command "/review-service-pr")
         (decknix-auto-review-default-ship-command "/review-and-ship-bot-pr"))
     (should (string= "/proj-review"
                      (decknix-auto-review-resolve-command 'review "/ws/proj")))
     (should (string= "/proj-ship"
                      (decknix-auto-review-resolve-command 'ship "/ws/proj")))
     ;; A non-matching workspace still falls back to the default.
-    (should (string= "/review-service-pr-factory"
+    (should (string= "/review-service-pr"
                      (decknix-auto-review-resolve-command 'review "/ws/other")))))
 
 (ert-deftest decknix-auto-review/resolve-command-partial-override-falls-back ()
   "An entry that sets only :ship still falls back to default :review."
   (let ((decknix-auto-review-commands
          '(("/ws/proj" . (:ship "/proj-ship"))))
-        (decknix-auto-review-default-review-command "/review-service-pr-factory")
+        (decknix-auto-review-default-review-command "/review-service-pr")
         (decknix-auto-review-default-ship-command "/review-and-ship-bot-pr"))
-    (should (string= "/review-service-pr-factory"
+    (should (string= "/review-service-pr"
                      (decknix-auto-review-resolve-command 'review "/ws/proj")))
     (should (string= "/proj-ship"
                      (decknix-auto-review-resolve-command 'ship "/ws/proj")))))
