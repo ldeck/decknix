@@ -196,6 +196,16 @@ struct ReviewRequest {
     review_decision: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"
     #[serde(skip_serializing_if = "Option::is_none")]
     author_kind: Option<String>, // author provenance: "bot" | "bot_human" | "human"
+    // People involved in the PR, for the sidebar's per-PR people display.
+    // All additive: empty vecs are omitted so old consumers are unaffected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    authors: Vec<String>, // distinct human logins: PR author first, then commit authors
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    requested_reviewers: Vec<String>, // pending requests: users as login, teams as "team:<name>"
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    approvers: Vec<String>, // distinct human logins whose latest review is APPROVED
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    blockers: Vec<String>, // distinct human logins whose latest review is CHANGES_REQUESTED
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -261,6 +271,16 @@ struct WipPr {
     unresolved_threads: Option<u32>, // unresolved threads where last comment author != me
     #[serde(skip_serializing_if = "Option::is_none")]
     merged_at: Option<DateTime<Utc>>, // when the PR was merged (None for open PRs)
+    // People involved in the PR (see ReviewRequest for semantics).  Additive:
+    // empty vecs are omitted.  For WIP the PR author is the viewer (--author=@me).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    authors: Vec<String>, // distinct human logins: PR author first, then commit authors
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    requested_reviewers: Vec<String>, // pending requests: users as login, teams as "team:<name>"
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    approvers: Vec<String>, // distinct human logins whose latest review is APPROVED
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    blockers: Vec<String>, // distinct human logins whose latest review is CHANGES_REQUESTED
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -612,6 +632,95 @@ struct GhReview {
     state: Option<String>,
 }
 
+/// A pending review-request entry from `reviewRequests` — either a User
+/// (carrying `login`) or a Team (carrying `name`).  Shared by the Requests and
+/// WIP paths.
+#[derive(Debug, Deserialize)]
+struct GhReviewRequestEntry {
+    #[serde(rename = "__typename")]
+    typename: Option<String>,
+    login: Option<String>, // present when typename == "User"
+    name: Option<String>,  // present when typename == "Team"
+}
+
+/// Split a PR's `latestReviews` into (approvers, blockers): distinct HUMAN
+/// logins whose latest review state is APPROVED / CHANGES_REQUESTED
+/// respectively.  Bots and empty logins are excluded; both lists are deduped
+/// case-insensitively, preserving the first-seen display form and order.
+fn partition_reviews(latest: &[GhReview]) -> (Vec<String>, Vec<String>) {
+    let mut approvers: Vec<String> = Vec::new();
+    let mut blockers: Vec<String> = Vec::new();
+    for r in latest {
+        let Some(a) = r.author.as_ref() else { continue };
+        if a.login.is_empty() || login_is_bot(&a.login, a.is_bot) {
+            continue;
+        }
+        let bucket = match r.state.as_deref() {
+            Some("APPROVED") => &mut approvers,
+            Some("CHANGES_REQUESTED") => &mut blockers,
+            _ => continue, // COMMENTED / PENDING / DISMISSED / unknown are not people-signals
+        };
+        if !bucket.iter().any(|e| e.eq_ignore_ascii_case(&a.login)) {
+            bucket.push(a.login.clone());
+        }
+    }
+    (approvers, blockers)
+}
+
+/// Map pending review requests to display strings: Users as their bare
+/// `login`, Teams as their `name` prefixed with `"team:"`.  Deduped
+/// case-insensitively, order-stable (first-seen form kept).
+fn collect_requested(reqs: &[GhReviewRequestEntry]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for rr in reqs {
+        let label = match rr.typename.as_deref() {
+            Some("User") => rr.login.clone().filter(|l| !l.is_empty()),
+            Some("Team") => rr
+                .name
+                .as_ref()
+                .filter(|n| !n.is_empty())
+                .map(|n| format!("team:{n}")),
+            _ => None,
+        };
+        if let Some(label) = label {
+            if !out.iter().any(|e| e.eq_ignore_ascii_case(&label)) {
+                out.push(label);
+            }
+        }
+    }
+    out
+}
+
+/// Build the distinct HUMAN author list for a PR: the PR author first, then
+/// distinct human commit authors.  Deduped case-insensitively (first-seen form
+/// kept, order-stable); bots and empty logins are dropped.
+fn collect_authors(pr_author: &str, commit_logins: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if !pr_author.is_empty() && !login_is_bot(pr_author, None) {
+        out.push(pr_author.to_string());
+    }
+    for login in commit_logins {
+        if login.is_empty() || login_is_bot(login, None) {
+            continue;
+        }
+        if !out.iter().any(|e| e.eq_ignore_ascii_case(login)) {
+            out.push(login.clone());
+        }
+    }
+    out
+}
+
+/// Extract distinct human commit-author logins from a PR's `commits` list, in
+/// first-seen order.  Bots and unlinked (empty-login) identities are dropped.
+fn human_commit_logins(commits: &[GhCommit]) -> Vec<String> {
+    commits
+        .iter()
+        .flat_map(|c| c.authors.iter())
+        .filter(|a| commit_author_is_human(a))
+        .map(|a| a.login.clone())
+        .collect()
+}
+
 /// A commit entry from `gh pr view --json commits`.  Only the commit
 /// timestamp is needed, to detect a push landing after the latest review
 /// (which invalidates the reviewed state — see `review_stale`).
@@ -830,6 +939,11 @@ struct ReviewPrDetails {
     /// True when a human has committed to this (bot-opened) PR.  Only
     /// meaningful for a bot author; consumed by `pr_author_kind`.
     human_committed: Option<bool>,
+    /// People involved, carried through to the emitted `ReviewRequest`.
+    authors: Vec<String>,
+    requested_reviewers: Vec<String>,
+    approvers: Vec<String>,
+    blockers: Vec<String>,
 }
 
 impl Default for ReviewPrDetails {
@@ -843,6 +957,8 @@ impl Default for ReviewPrDetails {
             i_replied_last: None, total_threads: None,
             unresolved_threads: None, review_decision: None,
             human_committed: None,
+            authors: Vec::new(), requested_reviewers: Vec::new(),
+            approvers: Vec::new(), blockers: Vec::new(),
         }
     }
 }
@@ -943,6 +1059,7 @@ fn resolve_mergeable(sweep: Option<&String>, cached: Option<String>) -> Option<S
 async fn fetch_pr_ci(
     repo: &str,
     number: u64,
+    pr_author: &str,
     my_login: Option<&str>,
     prefetched_threads: Option<ReviewThreadStats>,
 ) -> ReviewPrDetails {
@@ -982,16 +1099,6 @@ async fn fetch_pr_ci(
         review_requests: Option<Vec<GhReviewRequestEntry>>,
         review_decision: Option<String>,
         commits: Option<Vec<GhCommit>>,
-    }
-
-    /// A review request entry — can be a User or Team.
-    #[derive(Deserialize)]
-    struct GhReviewRequestEntry {
-        #[serde(rename = "__typename")]
-        typename: Option<String>,
-        login: Option<String>,  // present when typename == "User"
-        #[allow(dead_code)]
-        name: Option<String>,   // present when typename == "Team"
     }
 
     match serde_json::from_str::<PrView>(&output) {
@@ -1149,6 +1256,15 @@ async fn fetch_pr_ci(
             let review_stale = compute_review_stale(
                 latest_commit_ts.as_deref(), latest_review_ts.as_deref(),
                 view.review_decision.as_deref(), total_t, unresolved_t);
+            // People involved: authors (PR author + human committers),
+            // pending reviewers, approvers, and blockers.
+            let commit_logins = view.commits.as_deref()
+                .map(human_commit_logins).unwrap_or_default();
+            let authors = collect_authors(pr_author, &commit_logins);
+            let requested_reviewers = view.review_requests.as_deref()
+                .map(collect_requested).unwrap_or_default();
+            let (approvers, blockers) = view.latest_reviews.as_deref()
+                .map(partition_reviews).unwrap_or_default();
             ReviewPrDetails {
                 ci,
                 mergeable,
@@ -1169,6 +1285,10 @@ async fn fetch_pr_ci(
                 unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
                 review_decision: view.review_decision,
                 human_committed: Some(human_committed),
+                authors,
+                requested_reviewers,
+                approvers,
+                blockers,
             }
         }
         Err(_) => ReviewPrDetails {
@@ -1262,7 +1382,8 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         } else {
             let prefetched = batched_threads.get(&(repo.clone(), pr.number))
                 .map(|s| ReviewThreadStats { total: s.total, unresolved_to_me: s.unresolved_to_me });
-            let d = fetch_pr_ci(&repo, pr.number, my_login.as_deref(), prefetched).await;
+            let author_login = pr.author.as_ref().map(|a| a.login.as_str()).unwrap_or("");
+            let d = fetch_pr_ci(&repo, pr.number, author_login, my_login.as_deref(), prefetched).await;
             let mut cache = reviews_cache().write().await;
             cache.insert(cache_key, (updated_at, Instant::now(), d.clone()));
             d
@@ -1312,6 +1433,10 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
                 pr_author_kind(pr.author.as_ref(),
                                details.human_committed.unwrap_or(false))
                     .to_string()),
+            authors: details.authors,
+            requested_reviewers: details.requested_reviewers,
+            approvers: details.approvers,
+            blockers: details.blockers,
         });
     }
 
@@ -1347,6 +1472,11 @@ struct PrDetails {
     total_threads: Option<u32>,
     unresolved_threads: Option<u32>,
     merged_at: Option<String>,
+    /// People involved, carried through to the emitted `WipPr`.
+    authors: Vec<String>,
+    requested_reviewers: Vec<String>,
+    approvers: Vec<String>,
+    blockers: Vec<String>,
 }
 
 impl Default for PrDetails {
@@ -1357,6 +1487,8 @@ impl Default for PrDetails {
             bot_replies_to_me: None, i_replied_last: None,
             total_threads: None, unresolved_threads: None,
             merged_at: None,
+            authors: Vec::new(), requested_reviewers: Vec::new(),
+            approvers: Vec::new(), blockers: Vec::new(),
         }
     }
 }
@@ -1398,7 +1530,7 @@ async fn fetch_pr_details(
         "pr", "view",
         &number_s,
         "--repo", repo,
-        "--json", "headRefName,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision,comments,reviews,mergedAt",
+        "--json", "headRefName,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision,comments,reviews,mergedAt,latestReviews,reviewRequests,commits",
     ];
     let threads = match prefetched_threads {
         Some(t) => Some(t),
@@ -1425,6 +1557,9 @@ async fn fetch_pr_details(
         comments: Option<Vec<GhComment>>,
         reviews: Option<Vec<GhReviewEntry>>,
         merged_at: Option<String>,
+        latest_reviews: Option<Vec<GhReview>>,
+        review_requests: Option<Vec<GhReviewRequestEntry>>,
+        commits: Option<Vec<GhCommit>>,
     }
 
     match serde_json::from_str::<PrDetail>(&output) {
@@ -1476,6 +1611,15 @@ async fn fetch_pr_details(
                     .unwrap_or(false);
                 (Some(needs_reply), Some(bot_pending), Some(replies_to_me), Some(bot_replies_to_me), Some(i_replied_last))
             }).unwrap_or((None, None, None, None, None));
+            // People involved.  For WIP the PR author is the viewer
+            // (`--author=@me`), so seed `authors` with `my_login`.
+            let commit_logins = d.commits.as_deref()
+                .map(human_commit_logins).unwrap_or_default();
+            let authors = collect_authors(my_login.unwrap_or(""), &commit_logins);
+            let requested_reviewers = d.review_requests.as_deref()
+                .map(collect_requested).unwrap_or_default();
+            let (approvers, blockers) = d.latest_reviews.as_deref()
+                .map(partition_reviews).unwrap_or_default();
             PrDetails {
                 branch: d.head_ref_name,
                 ci: summarise_ci(&d.status_check_rollup),
@@ -1489,6 +1633,10 @@ async fn fetch_pr_details(
                 total_threads: threads.as_ref().map(|t| t.total),
                 unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
                 merged_at: d.merged_at,
+                authors,
+                requested_reviewers,
+                approvers,
+                blockers,
             }
         }
         Err(_) => PrDetails {
@@ -1662,6 +1810,10 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
             total_threads: details.total_threads,
             unresolved_threads: details.unresolved_threads,
             merged_at: merged_ts,
+            authors: details.authors,
+            requested_reviewers: details.requested_reviewers,
+            approvers: details.approvers,
+            blockers: details.blockers,
         });
     }
 
@@ -1935,6 +2087,74 @@ mod tests {
         assert_eq!(pr_author_kind(Some(&human), true), "human");
         // Missing author -> treated as human (no bot signal).
         assert_eq!(pr_author_kind(None, false), "human");
+    }
+
+    fn user_req(login: &str) -> GhReviewRequestEntry {
+        GhReviewRequestEntry {
+            typename: Some("User".into()),
+            login: Some(login.into()),
+            name: None,
+        }
+    }
+    fn team_req(name: &str) -> GhReviewRequestEntry {
+        GhReviewRequestEntry {
+            typename: Some("Team".into()),
+            login: None,
+            name: Some(name.into()),
+        }
+    }
+
+    #[test]
+    fn partition_reviews_splits_approved_and_changes_requested() {
+        let revs = vec![
+            review("alice", false, "APPROVED"),
+            review("bob", false, "CHANGES_REQUESTED"),
+            review("carol", false, "COMMENTED"),   // ignored
+            review("dave", false, "PENDING"),      // ignored
+            review("erin", false, "DISMISSED"),    // ignored
+            review("Alice", false, "APPROVED"),    // case-insensitive dup
+            review("hubot[bot]", false, "APPROVED"), // bot excluded (suffix)
+            review("renovate", true, "APPROVED"),  // bot excluded (is_bot flag)
+            review("copilot-pull-request-reviewer", false, "CHANGES_REQUESTED"), // known-bot excluded
+        ];
+        let (approvers, blockers) = partition_reviews(&revs);
+        assert_eq!(approvers, vec!["alice"]);   // first-seen form kept
+        assert_eq!(blockers, vec!["bob"]);
+    }
+
+    #[test]
+    fn collect_requested_maps_users_and_teams() {
+        let reqs = vec![
+            user_req("alice"),
+            team_req("nc-platform"),
+            user_req("Alice"),          // case-insensitive dup
+            team_req("nc-platform"),    // dup team
+        ];
+        assert_eq!(
+            collect_requested(&reqs),
+            vec!["alice".to_string(), "team:nc-platform".to_string()]
+        );
+    }
+
+    #[test]
+    fn collect_authors_pr_author_first_then_distinct_human_committers() {
+        let commit_logins = vec![
+            "alice".to_string(),
+            "Octocat".to_string(),        // case-insensitive dup of PR author
+            "dependabot[bot]".to_string(), // bot dropped
+            "bob".to_string(),
+            "".to_string(),                // empty dropped
+            "alice".to_string(),           // dup
+        ];
+        assert_eq!(
+            collect_authors("octocat", &commit_logins),
+            vec!["octocat".to_string(), "alice".to_string(), "bob".to_string()]
+        );
+        // A bot PR author is dropped; the human committer leads.
+        assert_eq!(
+            collect_authors("renovate[bot]", &["carol".to_string()]),
+            vec!["carol".to_string()]
+        );
     }
 
     #[test]
