@@ -182,13 +182,26 @@ Cycle the mode from the sidebar Toggles transient (`T` → Requests → `A`):
 |-------|-----------|
 | `off` | Disabled (default). |
 | `bot+@` | Auto-review bot-authored PRs that @-mention you, via `/review-and-ship-bot-pr`. |
-| `human+@` | Auto-review human-authored PRs that @-mention you, via the background `/review-service-pr-factory`. |
-| `any+@` | Both — bots ship, humans get the background review. |
+| `human+@` | Auto-review human-authored PRs that @-mention you, via `/review-service-pr`. |
+| `any+@` | Both — bots ship, humans get the review. |
 
 Every active state requires the @-mention: this is a deliberate safety
 guard so team-noise PRs (where you are not directly addressed) never spawn
-a session. Human reviews run as a background factory session whose verdict
-surfaces through the attention indicator (`AS:n/m`, jump with `C-c j`).
+a session. Reviews run as a background session whose verdict surfaces
+through the attention indicator (`AS:n/m`, jump with `C-c j`).
+
+**"Bot" means dependency bot.** Only automated version bumps
+(dependabot / renovate / greenkeeper) take the ship flow. A *coding
+agent* — augmentcode, the Copilot coding agent, cursor, devin, claude,
+codex, jules — opens PRs containing real code, so it is classified as
+human-equivalent and routed to `/review-service-pr` like any other
+authored change. See `decknix--hub-agent-author-patterns`.
+
+**Background dispatch:** an auto-dispatched session is created *without*
+being displayed — it never takes the window you are working in, never
+opens the placement prompt, and (even with focus-steal on) never raises
+the frame on creation. It appears in the sidebar and surfaces through
+the attention indicator when it actually wants you.
 
 **Incoming-only:** turning the toggle on seeds the current backlog as
 already-handled, so only genuinely *new* mentioned PRs dispatch — enabling
@@ -214,7 +227,7 @@ the footer `focus` label):
 |-------|-----------|
 | `off` | Never raise the frame (default). |
 | `attention` | Raise the frame when a backgrounded session enters a waiting / needs-input state. |
-| `both` | Also raise the frame when a new session is created (e.g. an auto-review dispatch). |
+| `both` | Also raise the frame when a new session is created — manual quick actions only; a background auto-review dispatch is exempt. |
 
 The attention raise is edge-triggered (once per transition into waiting)
 and skipped when you are already viewing that session. On the background

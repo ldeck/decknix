@@ -970,10 +970,18 @@ The `decknix--context-update-header` function delegates to the unified header
     Steal), `O` org filter, `W` width
   - **Requests**: `@` mention, `F` age, `A` auto-review (cycles
     `off → bot+@ → human+@ → any+@`; auto-dispatches a review session
-    for newly-arrived PRs that @-mention me — bot authors via
-    `/review-and-ship-bot-pr`, humans via the background
-    `/review-service-pr-factory` whose verdict surfaces through the
-    attention indicator.  Every active state requires the @-mention as
+    for newly-arrived PRs that @-mention me — dependency-bot authors via
+    `/review-and-ship-bot-pr`, everyone else via `/review-service-pr`
+    whose verdict surfaces through the attention indicator.  "Bot" here
+    means a *dependency* bot only: coding agents (augmentcode, the
+    Copilot coding agent, cursor, devin, claude, codex, jules) author
+    real code and are classified human-equivalent by
+    `decknix--hub-agent-author-p`, so they get the full review, never
+    the ship flow.  Dispatched sessions are created **in the
+    background** (the `BACKGROUND` arg of
+    `decknix--agent-quickaction-start`): no window is taken, no
+    placement prompt opens, and no focus steal fires on creation.
+    Every active state requires the @-mention as
     a safety guard so team-noise never spawns a paid session.
     Per-workspace command overrides live in `decknix-auto-review-commands`;
     the slash-command defaults are `decknix-auto-review-default-{review,ship}-command`.
@@ -1072,9 +1080,12 @@ workspace sidebar surface which sessions need attention.
   - `attention`: raise the frame when a backgrounded session enters a
     `waiting` / needs-input state. Edge-triggered (once per transition)
     and skipped when you are already looking at that session.
-  - `both`: also raise the frame when a new session is created (e.g. an
-    auto-review dispatch). Wired as `:after` advice on
-    `decknix--agent-quickaction-start`.
+  - `both`: also raise the frame when a new session is created. Wired as
+    `:after` advice on `decknix--agent-quickaction-start`. A
+    **background** spawn (auto-review dispatch — 8th arg non-nil) is
+    exempt: the whole point of a background dispatch is not to pull the
+    user out of what they are doing, and its attention raise still fires
+    later when the session actually wants input.
 - The attention transition is detected in `decknix--header-build` (the
   per-buffer header timer), which calls `decknix-focus-note-status`
   under an `fboundp` guard. On the background daemon

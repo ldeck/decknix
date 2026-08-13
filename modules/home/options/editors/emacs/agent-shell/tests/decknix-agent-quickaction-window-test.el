@@ -10,6 +10,23 @@
 (require 'ert)
 (require 'decknix-agent-quickaction-window)
 
+;; --- prompt-placement-p ---
+
+(ert-deftest decknix-quickaction-window--background-never-prompts ()
+  "An unattended spawn must not open the minibuffer placement prompt.
+Regression: auto-review dispatches from a file-notify tick, so a
+`completing-read' there hijacks whatever the user is typing."
+  (should-not (decknix--quickaction-prompt-placement-p t nil))
+  (should-not (decknix--quickaction-prompt-placement-p t t)))
+
+(ert-deftest decknix-quickaction-window--sidebar-never-prompts ()
+  "The sidebar path has a fixed target window, so it never prompts."
+  (should-not (decknix--quickaction-prompt-placement-p nil t)))
+
+(ert-deftest decknix-quickaction-window--foreground-window-prompts ()
+  "A foreground spawn from a normal window is prompt-eligible."
+  (should (decknix--quickaction-prompt-placement-p nil nil)))
+
 ;; --- is-sidebar-p ---
 
 (ert-deftest decknix-quickaction-window--side-param-detects ()

@@ -89,6 +89,9 @@
 (declare-function decknix--quickaction-window-candidates
                   "decknix-agent-quickaction-window"
                   (descriptors))
+(declare-function decknix--quickaction-prompt-placement-p
+                  "decknix-agent-quickaction-window"
+                  (background cur-is-sidebar))
 
 ;; Buffer lookup (PR B.66 — `buffer-lookup/decknix-agent-buffer-lookup').
 (declare-function decknix--agent-find-new-shell-buffer
@@ -136,6 +139,10 @@
 
 ;; Upstream agent-shell / shell-maker surfaces.
 (declare-function agent-shell-start "ext:agent-shell")
+;; Private, but the only background entry point: `agent-shell-start'
+;; hardcodes `:no-focus nil', so an unattended spawn has to go one
+;; level down to avoid taking a window.
+(declare-function agent-shell--start "ext:agent-shell")
 (declare-function agent-shell-subscribe-to "ext:agent-shell")
 (declare-function agent-shell--make-acp-client "ext:agent-shell")
 (declare-function agent-shell-workspace-sidebar-refresh
@@ -173,7 +180,8 @@ provider selection are handled by `decknix-agent-purpose-alist'
 ;; -- Quickaction primitive --
 
 (defun decknix--agent-quickaction-start (name tags workspace command
-                                              &optional model provider-id mode)
+                                              &optional model provider-id mode
+                                              background)
   "Start a quick-action session with NAME, TAGS, WORKSPACE, and auto-send COMMAND.
 Creates a new agent session, applies metadata, then subscribes to the
 `prompt-ready' event to send COMMAND as soon as the ACP session is
@@ -196,7 +204,15 @@ replacing the caller, preserving the sidebar.
 When the current frame has three or more non-sidebar windows the
 caller is prompted to pick a placement (Replace / Split right /
 Split below per pane); the default selection lands on
-\"Replace ‹current›\" so RET reproduces today's behaviour."
+\"Replace ‹current›\" so RET reproduces today's behaviour.
+Optional BACKGROUND spawns the session WITHOUT displaying it: no
+window is taken, no placement prompt is opened, and the buffer the
+user is currently working in is left alone.  This is the mode
+unattended dispatchers (auto-review) must use — they fire from a
+file-notify tick, so both stealing the selected window and opening
+a `completing-read' would interrupt whatever the user is doing.
+The session still appears in the sidebar / session picker and
+raises the usual attention indicator when it wants input."
   ;; PR B.80: window-classification + target-selection are pinned
   ;; by `decknix-agent-quickaction-window' (carved, +10 ERT).
   ;; Bulk evaluates the frame/window I/O signals and hands them
@@ -207,15 +223,20 @@ Split below per pane); the default selection lands on
          (sidebar-buf (or (bound-and-true-p
                            agent-shell-workspace-sidebar-buffer-name)
                           "*Agent Sidebar*"))
+         ;; A background spawn takes no window at all, so the whole
+         ;; window-classification step is skipped rather than computed
+         ;; and discarded.
          (cur-is-sidebar
-          (decknix--quickaction-window-is-sidebar-p
-           (window-parameter cur 'window-side)
-           (window-dedicated-p cur)
-           (buffer-name (window-buffer cur))
-           sidebar-buf))
+          (and (not background)
+               (decknix--quickaction-window-is-sidebar-p
+                (window-parameter cur 'window-side)
+                (window-dedicated-p cur)
+                (buffer-name (window-buffer cur))
+                sidebar-buf)))
          (target-win
-          (decknix--quickaction-target-window
-           cur-is-sidebar cur (window-main-window (selected-frame))))
+          (and (not background)
+               (decknix--quickaction-target-window
+                cur-is-sidebar cur (window-main-window (selected-frame)))))
          (before-buffers (buffer-list))
          (provider (or provider-id decknix-agent-default-provider))
          (augmented-cmd (decknix--agent-command-build provider workspace model))
@@ -226,7 +247,7 @@ Split below per pane); the default selection lands on
     ;; `decknix--quickaction-window-candidates' returns nil for
     ;; single-pane / 2-pane / sidebar layouts so the existing
     ;; target-win fast-path passes through untouched.
-    (unless cur-is-sidebar
+    (when (decknix--quickaction-prompt-placement-p background cur-is-sidebar)
       (let* ((descriptors
               (mapcar
                (lambda (w)
@@ -253,20 +274,30 @@ Split below per pane); the default selection lands on
                       (:split-right (split-window anchor nil 'right))
                       (:split-below (split-window anchor nil 'below))
                       (_ anchor))))))))
-    ;; Override display-action to target the selected window,
-    ;; preventing splits when called from sidebar or after
-    ;; minibuffer exit.
-    (let ((default-directory workspace)
-          (agent-shell-display-action
-           (eval `(cons (lambda (buffer alist)
-                          (let ((win ,target-win))
-                            (if (window-live-p win)
-                                (window--display-buffer
-                                 buffer win 'reuse alist)
-                              (display-buffer-same-window buffer alist))))
-                        nil)
-                 t)))
-      (agent-shell-start :config config))
+    (if background
+        ;; Unattended spawn: create the session buffer without
+        ;; displaying it.  `agent-shell--start' is the library's own
+        ;; background entry point (`agent-shell-start' hardcodes
+        ;; `:no-focus nil'), and it is the only safe route — binding
+        ;; `agent-shell-display-action' to `display-buffer-no-window'
+        ;; instead would make `agent-shell--display-buffer' call
+        ;; `select-window' on the resulting nil and signal.
+        (let ((default-directory workspace))
+          (agent-shell--start :config config :no-focus t :new-session t))
+      ;; Override display-action to target the selected window,
+      ;; preventing splits when called from sidebar or after
+      ;; minibuffer exit.
+      (let ((default-directory workspace)
+            (agent-shell-display-action
+             (eval `(cons (lambda (buffer alist)
+                            (let ((win ,target-win))
+                              (if (window-live-p win)
+                                  (window--display-buffer
+                                   buffer win 'reuse alist)
+                                (display-buffer-same-window buffer alist))))
+                          nil)
+                   t)))
+        (agent-shell-start :config config)))
     (setq decknix--agent-session-cache-time 0)
     (decknix--agent-session-new-post-create
      before-buffers name tags workspace command provider)
