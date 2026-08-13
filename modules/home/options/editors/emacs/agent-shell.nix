@@ -3489,9 +3489,14 @@ in
         (defvar decknix-focus-steal)
         (setq decknix-focus-steal '${config.programs.emacs.decknix.ui.focus.steal})
         (advice-add 'decknix--agent-quickaction-start :after
-                    (lambda (&rest _)
-                      "Raise the Emacs frame on new session (focus steal)."
-                      (decknix-focus-maybe-raise-on-new-session)))
+                    (lambda (&rest args)
+                      "Raise the Emacs frame on new session (focus steal).
+A BACKGROUND spawn (8th arg — auto-review) is exempt: it exists
+precisely so an unattended dispatch does not pull the user out of
+what they are doing.  Its attention indicator still fires normally
+once the session actually wants input."
+                      (unless (nth 7 args)
+                        (decknix-focus-maybe-raise-on-new-session))))
 
         ;; == Table formatting core (pure) ==
         ;; Parse + re-render GFM tables (aligned, or narrow bullet

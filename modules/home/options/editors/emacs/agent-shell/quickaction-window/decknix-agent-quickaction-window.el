@@ -31,6 +31,13 @@
 ;;        (falling back to CUR if MAIN-WIN is nil); otherwise just
 ;;        return CUR so the new buffer replaces the caller in place.
 ;;
+;;   (decknix--quickaction-prompt-placement-p BACKGROUND CUR-IS-SIDEBAR)
+;;     -> non-nil when the spawn should offer the placement prompt.
+;;        An unattended (background) spawn never prompts — a
+;;        `completing-read' fired from a file-notify tick would
+;;        hijack the user's minibuffer — and neither does the
+;;        sidebar path, which has a fixed target window.
+;;
 ;;   (decknix--quit-pick-replacement MRU-OTHER-BUFS VISIBLE-BUFS)
 ;;     -> the buffer to switch to after killing the current session.
 ;;        Prefers the first MRU candidate that is NOT already on
@@ -104,6 +111,24 @@ workspace tab keeps its layout."
   (if cur-is-sidebar
       (or main-win cur)
     cur))
+
+(defun decknix--quickaction-prompt-placement-p (background cur-is-sidebar)
+  "Return non-nil when the spawn should offer the placement prompt.
+
+BACKGROUND is non-nil for an unattended spawn (auto-review), where
+the session must never take a window nor block on the minibuffer —
+a `completing-read' fired from a file-notify tick would hijack
+whatever the user is typing into.  CUR-IS-SIDEBAR is the result of
+`decknix--quickaction-window-is-sidebar-p' for the selected window;
+the sidebar path already has its own fixed target (the frame's main
+window), so it never prompts either.
+
+Only a foreground spawn from a normal window is eligible; the
+caller still requires `decknix--quickaction-window-candidates' to
+return candidates before actually prompting."
+  (and (not background)
+       (not cur-is-sidebar)
+       t))
 
 (defun decknix--quit-pick-replacement (mru-other-bufs visible-bufs)
   "Pick the buffer to switch to after killing the current session.

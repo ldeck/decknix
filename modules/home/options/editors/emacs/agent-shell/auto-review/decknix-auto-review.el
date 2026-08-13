@@ -206,8 +206,14 @@ Emacs session (dedup guards the file-notify->buffer-appears window)."
             ;; Mark before launching so a second file-notify tick during
             ;; session startup can't double-dispatch.
             (decknix-auto-review-mark-dispatched key)
+            ;; BACKGROUND (last arg): an auto-dispatch fires from a
+            ;; file-notify tick, so it must never take the window the
+            ;; user is working in — nor open the placement prompt in
+            ;; the middle of their typing.  The session is created
+            ;; undisplayed and surfaces via the sidebar / attention
+            ;; indicator instead.
             (decknix--agent-quickaction-start
-             name tags workspace command model provider mode)
+             name tags workspace command model provider mode t)
             (message "[auto-review] %s %s/%s#%s via %s"
                      action owner repo number command-base)
             action))))))
