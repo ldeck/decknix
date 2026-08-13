@@ -1299,6 +1299,68 @@ ON-TOGGLE (which reopens/refreshes the picker with the new filter)."
                     (cons pid decknix--agent-picker-hidden-providers)))
             (funcall on-toggle)))))))
 
+;; -- Buffer-picker category (Requests/WIP/Other) + attention sort --
+;; Pure classifier + rank live in `decknix-agent-picker-category'; these
+;; read the buffer-local tags/status and drive the C-c b filter + order.
+
+(declare-function decknix--agent-picker-category-of "decknix-agent-picker-category" (tags))
+(declare-function decknix--agent-picker-category-label "decknix-agent-picker-category" (cat))
+(declare-function decknix--agent-picker-attention-rank "decknix-agent-picker-category" (status))
+(declare-function decknix--agent-picker-order-index "decknix-agent-picker-category" (rows))
+(declare-function decknix--agent-tags-for-conv-key "decknix-agent-tags-read" (conv-key))
+(declare-function decknix-agent-buffer-status "decknix-agent-auto-close" (buffer))
+(defvar decknix--agent-picker-categories)
+
+(defvar decknix--agent-picker-hidden-categories nil
+  "List of session categories (`requests'/`wip'/`other') to HIDE in the
+buffer picker.  Toggled in-picker by M-R / M-W / M-O; nil (default) shows
+every type.  Not persisted — resets on daemon restart.")
+
+(defun decknix--agent-picker-buffer-tags (buf)
+  "Return the tags for live agent buffer BUF (via its conv-key)."
+  (when (buffer-live-p buf)
+    (with-current-buffer buf
+      (and (bound-and-true-p decknix--agent-conv-key)
+           (fboundp 'decknix--agent-tags-for-conv-key)
+           (decknix--agent-tags-for-conv-key decknix--agent-conv-key)))))
+
+(defun decknix--agent-picker-buffer-category (buf)
+  "Classify live agent buffer BUF into `requests'/`wip'/`other'."
+  (decknix--agent-picker-category-of (decknix--agent-picker-buffer-tags buf)))
+
+(defun decknix--agent-picker-buffer-attention (buf)
+  "Return the attention sort rank for live agent buffer BUF (low = urgent)."
+  (decknix--agent-picker-attention-rank
+   (and (buffer-live-p buf)
+        (fboundp 'decknix-agent-buffer-status)
+        (ignore-errors (decknix-agent-buffer-status buf)))))
+
+(defun decknix--agent-picker-category-filter-suffix ()
+  "Return a \" [types: Req WIP]\" prompt suffix, or \"\" when all shown."
+  (if (null decknix--agent-picker-hidden-categories) ""
+    (let ((shown (seq-remove
+                  (lambda (c) (memq c decknix--agent-picker-hidden-categories))
+                  decknix--agent-picker-categories)))
+      (format " [types:%s]"
+              (mapconcat (lambda (c)
+                           (concat " " (decknix--agent-picker-category-label c)))
+                         shown "")))))
+
+(defun decknix--agent-picker-install-category-keys (on-toggle)
+  "Bind M-R/M-W/M-O in the minibuffer to toggle Requests/WIP/Other visibility.
+Flips the category's membership in `decknix--agent-picker-hidden-categories'
+then calls ON-TOGGLE to reopen the picker with the new filter."
+  (dolist (pair '(("M-R" . requests) ("M-W" . wip) ("M-O" . other)))
+    (let ((cat (cdr pair)))
+      (local-set-key (kbd (car pair))
+        (lambda ()
+          (interactive)
+          (setq decknix--agent-picker-hidden-categories
+                (if (memq cat decknix--agent-picker-hidden-categories)
+                    (delq cat decknix--agent-picker-hidden-categories)
+                  (cons cat decknix--agent-picker-hidden-categories)))
+          (funcall on-toggle))))))
+
 (defvar decknix--session-source-live
   (list :name     "Live Sessions"
         :narrow   ?l
@@ -2059,13 +2121,34 @@ buffers are shown; the picker reopens with the new filter."
          (t
           (let ((ht (make-hash-table :test 'equal))
                 (candidates nil))
-            (dolist (buf others)
-              (let ((label (decknix--agent-switch-buffer--decorated-label buf)))
-                (puthash label buf ht)
-                (push label candidates)))
+            ;; Classify each buffer (Requests/WIP/Other), drop hidden
+            ;; categories, and order by attention (needs-me first) with the
+            ;; MRU index as the tie-break (`others' is MRU order).  Each row
+            ;; is prefixed with its category label so types are visible and
+            ;; type-filterable by typing.
+            (let ((rows nil) (mru 0))
+              (dolist (buf others)
+                (let ((cat (decknix--agent-picker-buffer-category buf)))
+                  (unless (memq cat decknix--agent-picker-hidden-categories)
+                    (push (list (cons buf cat)
+                                (decknix--agent-picker-buffer-attention buf)
+                                mru)
+                          rows)))
+                (setq mru (1+ mru)))
+              (dolist (pair (decknix--agent-picker-order-index (nreverse rows)))
+                (let* ((buf (car pair)) (cat (cdr pair))
+                       (label
+                        (concat
+                         (propertize
+                          (format "[%s] "
+                                  (decknix--agent-picker-category-label cat))
+                          'face 'shadow)
+                         (decknix--agent-switch-buffer--decorated-label buf))))
+                  (puthash label buf ht)
+                  (push label candidates))))
             (setq candidates (nreverse candidates))
             ;; Filter hid everything: keep the picker open with a
-            ;; placeholder so M-<glyph> can un-hide a provider.
+            ;; placeholder so a toggle key can un-hide a provider/type.
             (unless candidates
               (setq candidates (list decknix--agent-switch-buffer-empty-label)))
             (setq decknix--agent-switch-buffer-reopen nil)
@@ -2080,13 +2163,16 @@ buffers are shown; the picker reopens with the new filter."
                    (chosen
                     (minibuffer-with-setup-hook
                         (lambda ()
-                          (decknix--agent-picker-install-provider-keys
-                           (lambda ()
-                             (setq decknix--agent-switch-buffer-reopen t)
-                             (exit-minibuffer))))
+                          (let ((reopen
+                                 (lambda ()
+                                   (setq decknix--agent-switch-buffer-reopen t)
+                                   (exit-minibuffer))))
+                            (decknix--agent-picker-install-provider-keys reopen)
+                            (decknix--agent-picker-install-category-keys reopen)))
                       (completing-read
-                       (format "Agent buffer%s (M-a/M-c/M-p: filter by agent): "
-                               (decknix--agent-picker-provider-filter-suffix))
+                       (format "Agent buffer%s%s (M-a/c/p agent · M-R/W/O type): "
+                               (decknix--agent-picker-provider-filter-suffix)
+                               (decknix--agent-picker-category-filter-suffix))
                        table nil t))))
               (if decknix--agent-switch-buffer-reopen
                   ;; Loop: reopen with the updated filter.
