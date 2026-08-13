@@ -2203,6 +2203,16 @@ let
   # deferred (FIXME(arch-debt)).  The 14 cross-feature `fboundp'
   # guards on hub symbols stay correct because the hub bulk module
   # is gated independently by cfg.hub.enable.
+  # People behind the sidebar `p' row action: pure lookup of a PR's raw hub
+  # item (across Reviews items + WIP repos) + a formatter for authors /
+  # requested reviewers / approvers / blockers.  ERT-tested; the transient
+  # suffix + display buffer live in workspace-bulk.
+  decknix-hub-people-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-people";
+    src = ./agent-shell/hub-people;
+    testFiles = [ "decknix-hub-people-test.el" ];
+  };
+
   decknix-agent-shell-workspace-el = mkEmacsTestedPackage {
     pname = "decknix-agent-shell-workspace";
     src = ./agent-shell/workspace-bulk;
@@ -2238,6 +2248,9 @@ let
       # Global Toggles transient suffix lives in this module; on the
       # load-path so the round-trip test can `(require 'decknix-focus)`.
       decknix-focus-el
+      # People row action (`p'): the pure lookup + formatter used by
+      # `decknix--sb-act-people' / `decknix--sidebar-show-people'.
+      decknix-hub-people-el
     ];
     extraSiteFiles = [ "decknix-worktree-picker.el" ];
     testFiles = [
@@ -4624,6 +4637,9 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         ;; here, immediately after the require.
         (require 'decknix-worktree-picker)
         (require 'decknix-agent-shell-workspace)
+        ;; Runtime dep of the sidebar `p' People row action (forward-declared
+        ;; in workspace.el so sibling packages compile without it).
+        (require 'decknix-hub-people)
 
         ;; == Workspace: dedicated tab-bar tab with sidebar ==
         (require 'agent-shell-workspace)
