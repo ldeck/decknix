@@ -2085,7 +2085,7 @@ buffers are shown; the picker reopens with the new filter."
                              (setq decknix--agent-switch-buffer-reopen t)
                              (exit-minibuffer))))
                       (completing-read
-                       (format "Agent buffer%s (M-<glyph> filter): "
+                       (format "Agent buffer%s (M-a/M-c/M-p: filter by agent): "
                                (decknix--agent-picker-provider-filter-suffix))
                        table nil t))))
               (if decknix--agent-switch-buffer-reopen
@@ -2265,7 +2265,7 @@ typed search term."
                              (mapcar #'car entries))
                          (error nil)))))
                    :min-input 2)
-                 :prompt (format "Grep sessions%s%s (M-<glyph> filter): "
+                 :prompt (format "Grep sessions%s%s (M-a/M-c/M-p: filter by agent): "
                                  (if thorough " (thorough)" "")
                                  (decknix--agent-picker-provider-filter-suffix))
                  :initial initial
