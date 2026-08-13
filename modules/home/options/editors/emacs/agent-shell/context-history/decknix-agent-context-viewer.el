@@ -31,8 +31,24 @@
 
 ;; Forward declarations — defined in context-history and main-bulk.
 (defvar decknix--agent-history-cache)
+(defvar decknix--agent-auggie-session-id)
 (declare-function decknix--agent-context-toggle
                   "decknix-agent-shell-main-session")
+(declare-function decknix--agent-session-extract-all-turns
+                  "decknix-agent-session-history" (session-id))
+
+(defun decknix--context-viewer-turns (src)
+  "Return the freshest (PROMPT . ANSWER) turns for source buffer SRC.
+Re-extracts from SRC's live session transcript via its session id so the
+CURRENT session's turns (and new ones since resume) show, not just the
+snapshot prepopulated at resume time; falls back to the prepopulated
+`decknix--agent-history-cache' when extraction is unavailable/empty."
+  (or (let ((sid (and (buffer-live-p src)
+                      (buffer-local-value 'decknix--agent-auggie-session-id src))))
+        (and sid (fboundp 'decknix--agent-session-extract-all-turns)
+             (ignore-errors (decknix--agent-session-extract-all-turns sid))))
+      (and (buffer-live-p src)
+           (buffer-local-value 'decknix--agent-history-cache src))))
 
 ;;; Buffer-local state -------------------------------------------------
 
@@ -158,8 +174,7 @@ Sets `decknix--context-viewer-turn-points' so navigation works."
   (interactive)
   (if (and decknix--context-viewer-source
            (buffer-live-p decknix--context-viewer-source))
-      (let ((cache (buffer-local-value
-                    'decknix--agent-history-cache
+      (let ((cache (decknix--context-viewer-turns
                     decknix--context-viewer-source)))
         (if cache
             (progn (decknix--context-viewer-render cache)
@@ -202,7 +217,7 @@ Sets `decknix--context-viewer-turn-points' so navigation works."
   "Open the context viewer for SOURCE-BUF (default: current buffer).
 Opens in a bottom window and positions point at the most recent turn."
   (let* ((src (or source-buf (current-buffer)))
-         (cache (buffer-local-value 'decknix--agent-history-cache src))
+         (cache (decknix--context-viewer-turns src))
          (bname (format "*Agent Context: %s*" (buffer-name src)))
          (viewer (get-buffer-create bname)))
     (if (null cache)
