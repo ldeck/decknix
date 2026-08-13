@@ -3949,7 +3949,8 @@ auggie review, etc.) are one tap from any PR row."
    ["Pipeline"
     ("C" decknix--sb-act-jump-ci)]
    ["Other"
-    ("L" decknix--sb-act-reveal)]]
+    ("L" decknix--sb-act-reveal)
+    ("p" decknix--sb-act-people)]]
   [("q" "Cancel" transient-quit-all)])
 
 (transient-define-prefix decknix-sidebar-wip-menu ()
@@ -3974,7 +3975,8 @@ the uppercase category keys `R Review…' / `W Worktree…'.
     ("D" decknix--sb-act-jump-deploy
      :inapt-if decknix--sb-act-deploy-absent-p)]
    ["Other"
-    ("L" decknix--sb-act-reveal)]]
+    ("L" decknix--sb-act-reveal)
+    ("p" decknix--sb-act-people)]]
   [("q" "Cancel" transient-quit-all)])
 
 (transient-define-prefix decknix-sidebar-task-menu ()
@@ -4025,7 +4027,8 @@ the canonical uppercase `W'."
     ("D" decknix--sb-act-jump-deploy
      :inapt-if decknix--sb-act-deploy-absent-p)]
    ["Other"
-    ("L" decknix--sb-act-reveal)]]
+    ("L" decknix--sb-act-reveal)
+    ("p" decknix--sb-act-people)]]
   [("q" "Cancel" transient-quit-all)])
 
 (transient-define-prefix decknix-sidebar-linked-repo-menu ()
@@ -4045,7 +4048,8 @@ Per spec §3.7, `i investigate' and `u unlink' graduated into
     ("D" decknix--sb-act-jump-deploy
      :inapt-if decknix--sb-act-deploy-absent-p)]
    ["Other"
-    ("L" decknix--sb-act-reveal)]]
+    ("L" decknix--sb-act-reveal)
+    ("p" decknix--sb-act-people)]]
   [("q" "Cancel" transient-quit-all)])
 
 ;; -- Worktree submenu (#129; spec §3.6.4) --
@@ -4594,6 +4598,51 @@ Press H to open the cross-repo hygiene transient (spec §3.6.11)."
   :inapt-if #'decknix--sb-act-wt-no-context-p
   (interactive)
   (decknix--sidebar-call-transient #'decknix-sidebar-worktree-menu))
+
+;; -- People: authors / requested reviewers / approvers / blockers --
+;; Forward-declared (not `require'd) so a sibling package sharing this src
+;; dir — e.g. decknix-worktree-picker — byte-compiles this file without
+;; pulling the dep.  The runtime `(require 'decknix-hub-people)' lives in
+;; the heredoc, where the workspace package's other requires live.
+(declare-function decknix--hub-people-find-item "decknix-hub-people"
+                  (repo number review-items wip-repos))
+(declare-function decknix--hub-people-lines "decknix-hub-people" (item))
+(defvar decknix--hub-reviews)
+(defvar decknix--hub-wip)
+
+(defun decknix--sidebar-show-people (repo number)
+  "Pop a buffer listing who is involved on REPO#NUMBER, from live hub data.
+Shows authors (a PR may have several), requested reviewers, approvers, and
+blockers — resolved from the Reviews items or the WIP repos, so it works
+for Requests, WIP, and worktree linked-PR rows alike."
+  (if (not (and repo number))
+      (message "No PR on this row")
+    (let* ((item (decknix--hub-people-find-item
+                  repo number
+                  (and (boundp 'decknix--hub-reviews)
+                       (alist-get 'items decknix--hub-reviews))
+                  (and (boundp 'decknix--hub-wip)
+                       (alist-get 'repos decknix--hub-wip))))
+           (lines (decknix--hub-people-lines item)))
+      (if (not lines)
+          (message
+           "No people data for %s#%s — refresh the hub (older cache may lack it)"
+           repo number)
+        (with-current-buffer (get-buffer-create "*PR People*")
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert (mapconcat #'identity lines "\n") "\n"))
+          (goto-char (point-min))
+          (special-mode)
+          (display-buffer (current-buffer)))))))
+
+(transient-define-suffix decknix--sb-act-people ()
+  "Show the people on the active PR row (authors, reviewers, approvers, blockers)."
+  :description "People"
+  (interactive)
+  (decknix--sidebar-show-people
+   (decknix--sidebar-action-prop 'decknix-hub-repo)
+   (decknix--sidebar-action-prop 'decknix-hub-number)))
 
 ;; -- Category submenus (Magit-inspired; spec §3.7) --
 ;;
