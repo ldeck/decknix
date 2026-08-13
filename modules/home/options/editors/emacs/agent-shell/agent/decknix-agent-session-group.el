@@ -49,6 +49,8 @@
                   "decknix-agent-conv-recency" (conv-key))
 (declare-function decknix--agent-tags-for-session
                   "decknix-agent-tags-read" (session-id))
+(declare-function decknix--agent-tags-for-conv-key
+                  "decknix-agent-tags-read" (conv-key))
 (declare-function decknix-agent-provider-glyph-for-buffer
                   "decknix-agent-provider" (buf))
 
@@ -57,6 +59,7 @@
 ;; read via `buffer-local-value' / `with-current-buffer'.
 (defvar decknix--agent-session-workspace)
 (defvar decknix--agent-auggie-session-id)
+(defvar decknix--agent-conv-key)
 
 (defun decknix--agent-session-group-by-conversation
     (sessions &optional include-hidden)
@@ -107,14 +110,27 @@ not just augment writing to the session file."
          (ws-short (when ws
                      (file-name-nondirectory
                       (directory-file-name ws))))
+         ;; Prefer the buffer-local conv-key for tags: it is the key tags
+         ;; are STORED under, so the lookup is reliable.  The session-id
+         ;; path (`-tags-for-session') resolves session-id -> conv-key ->
+         ;; tags and returns nil whenever that linkage is incomplete (e.g.
+         ;; auto-review-dispatched or freshly-resumed sessions), which left
+         ;; their rows tag-less in the picker.  Fall back to session-id.
          (tags (when (buffer-live-p buf)
                  (with-current-buffer buf
-                   (when (and (boundp 'decknix--agent-auggie-session-id)
-                              decknix--agent-auggie-session-id)
+                   (cond
+                    ((and (bound-and-true-p decknix--agent-conv-key)
+                          (fboundp 'decknix--agent-tags-for-conv-key))
+                     (decknix--agent-tags-for-conv-key decknix--agent-conv-key))
+                    ((and (boundp 'decknix--agent-auggie-session-id)
+                          decknix--agent-auggie-session-id)
                      (decknix--agent-tags-for-session
-                      decknix--agent-auggie-session-id)))))
+                      decknix--agent-auggie-session-id))))))
          (tag-str (when tags
-                    (mapconcat (lambda (tg) (format "#%s" tg))
+                    (mapconcat (lambda (tg)
+                                 ;; Don't double-hash tags already `#'-prefixed
+                                 ;; (e.g. the `#636' PR-number tag -> `##636').
+                                 (if (string-prefix-p "#" tg) tg (format "#%s" tg)))
                                tags " ")))
          (detail (string-join (delq nil (list ws-short tag-str)) "  ")))
     ;; Prefix the provider glyph (A/C/P) so the agent type is visible in
