@@ -2157,6 +2157,15 @@ let
   # `extraSiteFiles' lists the seven non-pname siblings so the narrowed
   # installPhase still ships every main-bulk file into the daemon's
   # load-path (matching plain trivialBuild's default *.el install).
+  # C-c b picker category (Requests/WIP/Other) + attention rank: pure
+  # classifier over a session's tags + a status->urgency rank + a stable
+  # attention/MRU sort.  ERT-tested; the picker wiring lives in main-bulk.
+  decknix-agent-picker-category-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-picker-category";
+    src = ./agent-shell/picker-category;
+    testFiles = [ "decknix-agent-picker-category-test.el" ];
+  };
+
   decknix-agent-shell-main-el = mkEmacsTestedPackage {
     pname = "decknix-agent-shell-main";
     src = ./agent-shell/main-bulk;
@@ -2177,7 +2186,8 @@ let
     packageRequires = [ decknix-picker-selections-el
                         decknix-agent-session-bulk-send-el
                         decknix-agent-provider-el
-                        decknix-agent-purposes-el ];
+                        decknix-agent-purposes-el
+                        decknix-agent-picker-category-el ];
     extraSiteFiles = [
       "decknix-agent-shell-main-batch.el"
       "decknix-agent-shell-main-compose.el"
@@ -3386,6 +3396,9 @@ in
         ;; complement) so it resolves at runtime via the heredoc's
         ;; surrounding scope.
         (require 'decknix-agent-session-group)
+        ;; C-c b picker category/attention classifier (forward-declared in
+        ;; main-session.el; required here for runtime).
+        (require 'decknix-agent-picker-category)
         (declare-function decknix--agent-session-group-by-conversation
                           "decknix-agent-session-group"
                           (sessions &optional include-hidden))
