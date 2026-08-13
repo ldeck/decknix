@@ -29,6 +29,8 @@
 ;;   `decknix--hub-show-bots-normalize'        (legacy boolean migration)
 ;;   `decknix--hub-show-bots-label'            (state -> short label)
 ;;   `decknix--hub-bot-patterns'               (defvar, regexp list)
+;;   `decknix--hub-agent-author-patterns'      (defvar, coding-agent allow-list)
+;;   `decknix--hub-agent-author-p'             (coding-agent predicate)
 ;;   `decknix--hub-bot-author-p'               (regexp predicate over author)
 ;;   `decknix--hub-item-others-requested-p'    (alist gate: other users tagged)
 ;;   `decknix--hub-item-bot-mentioned-p'       (me OR team-without-others)
@@ -190,14 +192,55 @@ Migrates legacy boolean state: `t' → `show', `nil' stays `nil'."
 
 (defvar decknix--hub-bot-patterns
   '("\\[bot\\]$" "^dependabot" "^renovate" "^greenkeeper")
-  "Regexps matched against the PR author to detect bot accounts.")
+  "Regexps matched against the PR author to detect bot accounts.
+
+Broad by design — the `\\[bot\\]$' catch-all sweeps in every GitHub
+App.  `decknix--hub-agent-author-patterns' carves the coding agents
+back out; see `decknix--hub-bot-author-p'.")
+
+(defvar decknix--hub-agent-author-patterns
+  '("^augmentcode" "^copilot$" "^copilot\\[bot\\]$" "^copilot-swe-agent"
+    "^cursoragent" "^devin-ai-integration" "^claude" "^codex"
+    "^google-labs-jules" "^jules\\[bot\\]$")
+  "Regexps matched against the PR author to detect *coding agents*.
+
+These accounts open PRs through a GitHub App — so their login carries
+the `\\[bot\\]$' suffix and they would otherwise match
+`decknix--hub-bot-patterns' — but what they open is hand-written-
+equivalent code: new source files, refactors, behavioural changes.
+They are NOT dependency bumps, so they must be reviewed exactly like a
+human-authored PR (`/review-service-pr'), never rubber-stamped through
+the dependabot ship flow.
+
+`^copilot$' / `^copilot\\[bot\\]$' are anchored deliberately: the
+Copilot *coding agent* authors PRs, whereas
+`copilot-pull-request-reviewer[bot]' only reviews them and stays a
+plain bot.  Matching is case-insensitive (GitHub renders the coding
+agent's login as `Copilot').")
+
+(defun decknix--hub-agent-author-p (author)
+  "Return non-nil if AUTHOR is a coding agent, not a dependency bot.
+See `decknix--hub-agent-author-patterns' for the rationale."
+  (and author
+       (let ((case-fold-search t))
+         (seq-some (lambda (pat)
+                     (string-match-p pat author))
+                   decknix--hub-agent-author-patterns))
+       t))
 
 (defun decknix--hub-bot-author-p (author)
-  "Return non-nil if AUTHOR matches a known bot pattern."
+  "Return non-nil if AUTHOR matches a known bot pattern.
+
+A coding agent (`decknix--hub-agent-author-p') is explicitly excluded:
+its PRs are real code changes and must be treated as human-authored
+for both sidebar visibility and review-command routing."
   (and author
-       (seq-some (lambda (pat)
-                   (string-match-p pat author))
-                 decknix--hub-bot-patterns)))
+       (not (decknix--hub-agent-author-p author))
+       (let ((case-fold-search t))
+         (seq-some (lambda (pat)
+                     (string-match-p pat author))
+                   decknix--hub-bot-patterns))
+       t))
 
 (defun decknix--hub-item-others-requested-p (item)
   "Return non-nil if ITEM has the `others_requested' flag set.

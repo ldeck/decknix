@@ -259,6 +259,64 @@
   (should-not (decknix--hub-bot-author-p ""))
   (should-not (decknix--hub-bot-author-p nil)))
 
+;; -- decknix--hub-agent-author-p -----------------------------------
+;;
+;; Coding agents author real code changes, so they must NOT be
+;; classified as dependency bots even though they are GitHub Apps
+;; carrying the `[bot]' suffix.
+
+(ert-deftest decknix-hub-agent/author-p-matches-known-coding-agents ()
+  (should (decknix--hub-agent-author-p "augmentcode[bot]"))
+  (should (decknix--hub-agent-author-p "augmentcode"))
+  (should (decknix--hub-agent-author-p "copilot-swe-agent[bot]"))
+  (should (decknix--hub-agent-author-p "cursoragent"))
+  (should (decknix--hub-agent-author-p "devin-ai-integration[bot]"))
+  (should (decknix--hub-agent-author-p "claude[bot]"))
+  (should (decknix--hub-agent-author-p "codex[bot]"))
+  (should (decknix--hub-agent-author-p "google-labs-jules[bot]")))
+
+(ert-deftest decknix-hub-agent/author-p-is-case-insensitive ()
+  ;; GitHub renders the Copilot coding agent's login as `Copilot'.
+  (should (decknix--hub-agent-author-p "Copilot"))
+  (should (decknix--hub-agent-author-p "AugmentCode[bot]")))
+
+(ert-deftest decknix-hub-agent/author-p-prefix-anchored ()
+  (should-not (decknix--hub-agent-author-p "my-augmentcode"))
+  (should-not (decknix--hub-agent-author-p "x-cursoragent"))
+  ;; The Copilot *review* bot is a reviewer, not a PR author — it must
+  ;; not be swept into the coding-agent allow-list by the `copilot'
+  ;; stem alone.
+  (should-not (decknix--hub-agent-author-p
+               "copilot-pull-request-reviewer[bot]")))
+
+(ert-deftest decknix-hub-agent/author-p-rejects-humans-bots-and-nil ()
+  (should-not (decknix--hub-agent-author-p "alice"))
+  (should-not (decknix--hub-agent-author-p "dependabot[bot]"))
+  (should-not (decknix--hub-agent-author-p ""))
+  (should-not (decknix--hub-agent-author-p nil)))
+
+;; -- coding agents are NOT dependency bots -------------------------
+
+(ert-deftest decknix-hub-bot/author-p-excludes-coding-agents ()
+  "A coding-agent author is human-equivalent, never a dependency bot.
+Regression: `augmentcode[bot]' matched the `\\[bot\\]$' pattern and so
+routed Augment-authored code PRs into the dependabot ship flow."
+  (should-not (decknix--hub-bot-author-p "augmentcode[bot]"))
+  (should-not (decknix--hub-bot-author-p "copilot-swe-agent[bot]"))
+  (should-not (decknix--hub-bot-author-p "devin-ai-integration[bot]"))
+  (should-not (decknix--hub-bot-author-p "Copilot"))
+  ;; ...while genuine dependency bots keep matching.
+  (should (decknix--hub-bot-author-p "dependabot[bot]"))
+  (should (decknix--hub-bot-author-p "renovate[bot]")))
+
+(ert-deftest decknix-hub-bot/visible-p-shows-coding-agents-when-bots-hidden ()
+  "Agent-authored PRs stay visible under the default hide-bots state."
+  (let ((decknix--hub-show-bots nil))
+    (should (decknix--hub-bot-visible-p
+             (decknix-test--make-hub-item :author "augmentcode[bot]")))
+    (should-not (decknix--hub-bot-visible-p
+                 (decknix-test--make-hub-item :author "dependabot[bot]")))))
+
 ;; -- decknix--hub-show-bots-normalize -----------------------------
 
 (ert-deftest decknix-hub-bot/normalize-passes-valid-symbols ()
