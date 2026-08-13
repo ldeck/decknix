@@ -1426,6 +1426,9 @@ let
     src = ./agent-shell/context-history;
     packageRequires = [
       decknix-agent-context-history-el
+      # `decknix--agent-session-extract-all-turns' — the viewer re-extracts
+      # the live transcript on open/refresh (not just the resume snapshot).
+      decknix-agent-session-history-el
     ];
     testFiles = [
       "decknix-agent-context-viewer-test.el"
