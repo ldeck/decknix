@@ -4268,6 +4268,24 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; Wire C-c A R globally
         (define-key decknix-agent-prefix-map (kbd "R") 'decknix-agent-session-rename)
 
+        ;; Compat: the bumped `agent-shell-workspace--buffer-config' calls
+        ;; (map-elt config :buffer-name) over each element of
+        ;; `agent-shell-agent-configs', but the core package populates that list
+        ;; with config MAKER symbols (nullary fns), not called config values.
+        ;; `map-elt' on a symbol throws "No applicable method: map-elt,
+        ;; <maker>, :buffer-name", so the sidebar agent-icon lookup errors on
+        ;; every live buffer and ALL Live-session rows vanish (the header still
+        ;; shows the count).  Normalize makers -> called configs for the
+        ;; duration of the lookup only.  Named advice -> idempotent on re-eval.
+        (advice-add 'agent-shell-workspace--buffer-config :around
+          (lambda (orig buffer)
+            (let ((agent-shell-agent-configs
+                   (mapcar (lambda (c)
+                             (if (functionp c) (ignore-errors (funcall c)) c))
+                           agent-shell-agent-configs)))
+              (funcall orig buffer)))
+          '((name . decknix--buffer-config-normalize-makers)))
+
         ;; Advise sidebar R to handle saved (non-live) sessions:
         ;; For saved sessions, resume first then rename.
         (advice-add 'agent-shell-workspace-sidebar-rename :around
