@@ -52,25 +52,44 @@
     (should (equal (alist-get 'workspace res) "/w"))))
 
 (ert-deftest decknix-agent-archived-candidate-label-shape ()
-  "The label carries the agent tag, message snippet, tags, and workspace name."
-  (let* ((entry (list (cons 'agent "claude")
+  "The label carries date, agent tag, message snippet, tags, workspace, short id."
+  (let* ((entry (list (cons 'id "abcd1234-5678")
+                      (cons 'agent "claude")
                       (cons 'first-message "fix the thing\nmore")
                       (cons 'tags '("decknix" "cli"))
-                      (cons 'workspace "/Users/x/tools/decknix")))
+                      (cons 'workspace "/Users/x/tools/decknix")
+                      (cons 'last-modified "2026-08-01T12:00:00Z")))
          (label (decknix-agent-archived--candidate-label entry)))
-    (should (string-prefix-p "[claude]" (string-trim-left label)))
+    (should (string-prefix-p "2026-08-01 " label))
+    (should (string-match-p "\\[claude\\]" label))
     (should (string-match-p "fix the thing" label))
     (should (string-match-p "#decknix,cli" label))
     (should (string-match-p "decknix" label))
+    (should (string-suffix-p "(abcd1234)" label))
     ;; single line
     (should-not (string-match-p "\n" label))))
 
 (ert-deftest decknix-agent-archived-candidate-label-handles-missing-fields ()
-  "Absent tags/workspace/message degrade gracefully."
+  "Absent tags/workspace/message/date degrade gracefully."
   (let ((label (decknix-agent-archived--candidate-label
-                (list (cons 'agent "pi")))))
-    (should (string-prefix-p "[pi]" (string-trim-left label)))
-    (should-not (string-match-p "#" label))))
+                (list (cons 'agent "pi") (cons 'id "zz")))))
+    (should (string-match-p "\\[pi\\]" label))
+    (should (string-prefix-p "----------" label)) ; placeholder date
+    (should-not (string-match-p "#" label))
+    (should (string-suffix-p "(zz)" label))))
+
+(ert-deftest decknix-agent-archived-labels-unique-despite-identical-content ()
+  "Entries identical except for id must produce DISTINCT labels, so `assoc'
+in the picker can reach each one (the 48-resume thread failure mode)."
+  (let* ((base (list (cons 'agent "auggie")
+                     (cons 'first-message "We currently have a fairly stable installation")
+                     (cons 'tags nil)
+                     (cons 'workspace "/Users/x")
+                     (cons 'last-modified "2026-06-01T00:00:00Z")))
+         (a (cons (cons 'id "aaaaaaaa-1") base))
+         (b (cons (cons 'id "bbbbbbbb-2") base)))
+    (should-not (equal (decknix-agent-archived--candidate-label a)
+                       (decknix-agent-archived--candidate-label b)))))
 
 (ert-deftest decknix-agent-archived-sort-most-recent-first ()
   "Entries sort by last-modified descending, without mutating the input."
