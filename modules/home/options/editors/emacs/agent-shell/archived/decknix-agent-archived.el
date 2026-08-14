@@ -87,17 +87,27 @@ keyed: id provider restored-path workspace.  Malformed input yields nil."
             (cons 'workspace (alist-get 'workspace o))))))
 
 (defun decknix-agent-archived--candidate-label (entry)
-  "A single-line `completing-read' label for ENTRY."
-  (let* ((agent (or (alist-get 'agent entry) "?"))
+  "A single-line, UNIQUE `completing-read' label for ENTRY.
+The short id is appended so labels never collide even when many archived
+sessions share the same agent/first-line/workspace (e.g. a long thread
+resumed dozens of times), which would otherwise make `assoc' unreachable
+for all but the first.  The date is prefixed for at-a-glance recency."
+  (let* ((id (or (alist-get 'id entry) ""))
+         (short (if (>= (length id) 8) (substring id 0 8) id))
+         (date (let ((lm (alist-get 'last-modified entry)))
+                 (if (and lm (>= (length lm) 10)) (substring lm 0 10) "----------")))
+         (agent (or (alist-get 'agent entry) "?"))
          (tags (alist-get 'tags entry))
          (ws (decknix-agent-archived--workspace-name (alist-get 'workspace entry)))
-         (msg (decknix-agent-archived--first-line (alist-get 'first-message entry) 70)))
-    (format "%-8s %s%s%s"
+         (msg (decknix-agent-archived--first-line (alist-get 'first-message entry) 60)))
+    (format "%s %-8s %s%s%s  (%s)"
+            date
             (concat "[" agent "]")
             msg
             (if (and tags (> (length tags) 0))
                 (concat "  #" (string-join tags ",")) "")
-            (if (string-empty-p ws) "" (concat "  " ws)))))
+            (if (string-empty-p ws) "" (concat "  " ws))
+            short)))
 
 (defun decknix-agent-archived--sort (entries)
   "ENTRIES sorted by last-modified descending (most recent first).
