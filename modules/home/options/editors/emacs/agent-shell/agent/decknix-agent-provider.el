@@ -204,6 +204,27 @@ must be a non-empty string for replay to apply."
        (not (string-empty-p model))
        (not (decknix-agent-provider-model-launch-flag provider-id))))
 
+(defun decknix--agent-model-replay-reconcile (saved current advertised)
+  "Return the model-id to replay on resume, or nil to SKIP the `set_model'.
+Guards against a stalling ACP `session/set_model' on resume (the cause of
+a session stuck at \"Setting model\" / read-only).
+
+SAVED is the per-conversation saved model; CURRENT is the session's loaded
+`:model-id' (nil when unknown); ADVERTISED is the list of model-ids the
+session offers (nil/empty when unknown).
+
+Only replay when the saved model is a genuine, resolvable change: return
+SAVED when it is a non-empty string that differs from CURRENT and is a
+member of a non-empty ADVERTISED list.  Otherwise return nil -- skip the
+replay and keep the loaded model -- which covers: nothing saved, already
+on the saved model, and a saved model the session does not advertise
+(whose `set_model' has nothing to resolve to and can stall indefinitely)."
+  (cond
+   ((not (and (stringp saved) (not (string-empty-p saved)))) nil)
+   ((and (stringp current) (string= saved current)) nil)
+   ((and (listp advertised) (member saved advertised)) saved)
+   (t nil)))
+
 ;; -- High-level builders -----------------------------------------
 
 (declare-function agent-shell--make-acp-client "agent-shell")

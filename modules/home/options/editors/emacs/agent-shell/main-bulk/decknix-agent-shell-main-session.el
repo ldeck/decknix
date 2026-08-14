@@ -785,6 +785,32 @@ was found (in either pass), nil otherwise."
                         term
                         decknix-agent-session-history-count))))))))))
 
+(declare-function decknix--agent-model-replay-reconcile "decknix-agent-provider"
+                  (saved current advertised))
+(declare-function agent-shell--state "agent-shell")
+
+(defvar decknix--agent-model-replay-timeout-seconds 12
+  "Seconds to wait for a resume `set_model' to settle before warning.
+A stalled `session/set_model' otherwise leaves the buffer read-only
+indefinitely (a session stuck at \"Setting model\"); this bounds the
+wait to an actionable warning.")
+
+(defun decknix--agent-model-replay-watchdog (shell-buf target)
+  "Warn if TARGET's `set_model' has not settled SHELL-BUF within the timeout.
+Deliberately does NOT force session state (that would desync from the
+bridge); it only converts a silent forever-stall into a message the user
+can act on.  See `decknix--agent-model-replay-timeout-seconds'."
+  (run-at-time
+   decknix--agent-model-replay-timeout-seconds nil
+   (lambda ()
+     (when (buffer-live-p shell-buf)
+       (with-current-buffer shell-buf
+         (let ((cur (map-nested-elt (ignore-errors (agent-shell--state))
+                                    '(:session :model-id))))
+           (unless (and (stringp cur) (string= cur target))
+             (message "decknix: setting model %s has not completed after %ds; the session may be stuck read-only -- reopen it (or `claude --resume <id>' in a terminal) to recover"
+                      target decknix--agent-model-replay-timeout-seconds))))))))
+
 (defun decknix--agent-model-replay-on-ready (shell-buf model-id)
   "Replay MODEL-ID over ACP in SHELL-BUF once the session reports ready.
 The fallback model-persistence path for providers that cannot pin a
@@ -793,6 +819,13 @@ to the one-shot `prompt-ready' event and then issues an ACP
 `session/set_model' request (via `agent-shell--set-default-model'),
 so the resumed conversation continues on the saved per-conversation
 model just like auggie's `--model' launch flag.
+
+The replay is reconciled first (`decknix--agent-model-replay-reconcile')
+so a redundant or unresolvable model is NOT sent: a `set_model' for a
+model the resumed session does not advertise can stall indefinitely and
+strand the buffer read-only.  When a `set_model' IS issued, a watchdog
+warns if it does not settle within
+`decknix--agent-model-replay-timeout-seconds'.
 
 Auggie and any other provider with a launch flag never reach here --
 their model is already on the command line (see
@@ -813,11 +846,29 @@ their model is already on the command line (see
                  (agent-shell-unsubscribe :subscription token))
                (when (buffer-live-p shell-buf)
                  (with-current-buffer shell-buf
-                   ;; `agent-shell--set-default-model' no-ops safely
-                   ;; if the ACP session-id isn't established yet.
-                   (agent-shell--set-default-model
-                    :shell-buffer shell-buf
-                    :model-id model-id)))))))
+                   (let* ((state (ignore-errors (agent-shell--state)))
+                          (current (map-nested-elt state '(:session :model-id)))
+                          (advertised
+                           (mapcar (lambda (m) (map-elt m :model-id))
+                                   (map-nested-elt state '(:session :models))))
+                          (target (decknix--agent-model-replay-reconcile
+                                   model-id current advertised)))
+                     (if (not target)
+                         ;; Skip: already correct, or the saved model isn't
+                         ;; offered by the resumed session (would stall).
+                         (when (and (stringp model-id)
+                                    (not (string-empty-p model-id))
+                                    (not (equal model-id current)))
+                           (message "decknix: kept loaded model%s; saved %s not re-applied (not offered by the resumed session)"
+                                    (if current (format " %s" current) "")
+                                    model-id))
+                       ;; `agent-shell--set-default-model' no-ops safely
+                       ;; if the ACP session-id isn't established yet.
+                       (agent-shell--set-default-model
+                        :shell-buffer shell-buf
+                        :model-id target)
+                       (decknix--agent-model-replay-watchdog
+                        shell-buf target)))))))))
     token))
 
 (defun decknix--agent-resume-primer-on-ready (shell-buf primer)
