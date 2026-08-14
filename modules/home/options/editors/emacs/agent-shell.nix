@@ -936,6 +936,20 @@ let
     testInputs = [ pkgs.jq ];
   };
 
+  # Archived-session picker: a thin `completing-read' front end over the
+  # `decknix session' archive store (list --archived / restore).  Pure helpers
+  # (parse/label/sort) carry the logic and are ERT-covered; the interactive
+  # `decknix-agent-archived-open' is glue that shells out to the CLI.  No deps
+  # beyond built-in json/subr-x, so it stands alone.
+  decknix-agent-archived-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-archived";
+    src = ./agent-shell/archived;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-archived-test.el"
+    ];
+  };
+
   # PR B.52: local session JSON path builder + pure history
   # extractor carved out of `decknix-agent-shell-main' (main-bulk).
   # Co-resident with the rest of the agent/ persistence cluster.
@@ -2808,6 +2822,7 @@ in
           decknix-agent-format-el
           decknix-agent-parse-el
           decknix-agent-session-cache-el
+          decknix-agent-archived-el
           decknix-agent-session-history-el
           decknix-agent-prompt-extract-el
           decknix-agent-prompt-search-el
@@ -3191,6 +3206,12 @@ in
         (declare-function decknix--agent-session-parse "decknix-agent-parse")
         (declare-function decknix--prompt-search-parse "decknix-agent-parse")
         (declare-function decknix--agent-conversation-key-raw "decknix-agent-parse")
+        ;; Archived-session picker: `M-x decknix-agent-archived-open' browses the
+        ;; `decknix session' archive store and restores a chosen session back to
+        ;; its provider dir (from where the normal saved-session picker resumes
+        ;; it).  Standalone (built-in json/subr-x only); bind to a key of choice.
+        (require 'decknix-agent-archived)
+        (declare-function decknix-agent-archived-open "decknix-agent-archived")
         ;; Session list cache (PR B.22) — depends on `decknix-agent-parse'
         ;; for the parser, so loaded immediately after it.
         (require 'decknix-agent-session-cache)
