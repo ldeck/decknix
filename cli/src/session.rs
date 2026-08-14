@@ -115,6 +115,10 @@ pub enum SessionAction {
         /// Which agent(s) to search: claude, auggie, pi, or all
         #[arg(long, default_value = "all")]
         agent: String,
+        /// Emit the restored session as JSON (id, provider, restoredPath,
+        /// workspace, tags) so callers (e.g. the Emacs picker) can act on it.
+        #[arg(long)]
+        json: bool,
     },
     /// Apply the retention policy: archive stale sessions, trash very old archives
     Gc {
@@ -200,7 +204,7 @@ pub fn run(action: SessionAction) -> Result<()> {
         SessionAction::Archive { agent, older_than, larger_than, tags, workspace, from, dry_run, json } => {
             cmd_archive(&paths, &agent, older_than, larger_than, tags, workspace, from, dry_run, json)
         }
-        SessionAction::Restore { id, agent } => cmd_restore(&agent, &id),
+        SessionAction::Restore { id, agent, json } => cmd_restore(&agent, &id, json),
         SessionAction::Gc { dry_run, json } => cmd_gc(&paths, dry_run, json),
         SessionAction::Resume { id, agent, tags, last, workspace, all, print } => {
             cmd_resume(&paths, &agent, id, tags, last, workspace, all, print)
@@ -1667,7 +1671,7 @@ fn cmd_archive(
     Ok(())
 }
 
-fn cmd_restore(agent: &str, id: &str) -> Result<()> {
+fn cmd_restore(agent: &str, id: &str, json: bool) -> Result<()> {
     let root = session_archive::archive_root();
     let providers = select_arch_providers(agent)?;
     let mut cands: Vec<session_archive::ArchiveEntry> = Vec::new();
@@ -1701,7 +1705,18 @@ fn cmd_restore(agent: &str, id: &str) -> Result<()> {
     let kept: Vec<_> = session_archive::read_index(&root, &entry.provider).into_iter().filter(|e| e.id != entry.id).collect();
     session_archive::write_index(&root, &entry.provider, &kept)?;
     let _ = fs::remove_file(&zst);
-    println!("restored [{}] {} -> {}", entry.provider, short(&entry.id), dst.display());
+    if json {
+        let out = serde_json::json!({
+            "id": entry.id,
+            "provider": entry.provider,
+            "restoredPath": dst.to_string_lossy(),
+            "workspace": entry.workspace,
+            "tags": entry.tags,
+        });
+        println!("{}", serde_json::to_string(&out)?);
+    } else {
+        println!("restored [{}] {} -> {}", entry.provider, short(&entry.id), dst.display());
+    }
     Ok(())
 }
 
