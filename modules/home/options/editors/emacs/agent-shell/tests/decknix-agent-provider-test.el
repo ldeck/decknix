@@ -138,6 +138,28 @@ bridge ignores it in argv, so they resume over ACP instead (see
     (should-not (decknix--agent-model-replay-needed-p 'test-claude nil))
     (should-not (decknix--agent-model-replay-needed-p 'test-claude ""))))
 
+(ert-deftest decknix-agent-model-replay-reconcile-test ()
+  "Reconcile only replays a genuine, advertised model change; else skips."
+  (let ((adv '("claude-opus-5" "claude-opus-4-8" "claude-sonnet-5")))
+    ;; Nothing saved -> skip.
+    (should (null (decknix--agent-model-replay-reconcile nil "claude-opus-4-8" adv)))
+    (should (null (decknix--agent-model-replay-reconcile "" "claude-opus-4-8" adv)))
+    ;; Already on the saved model -> skip (no redundant set_model).
+    (should (null (decknix--agent-model-replay-reconcile
+                   "claude-opus-4-8" "claude-opus-4-8" adv)))
+    ;; Saved differs AND is advertised -> replay it.
+    (should (equal "claude-opus-5"
+                   (decknix--agent-model-replay-reconcile
+                    "claude-opus-5" "claude-opus-4-8" adv)))
+    ;; Saved is an alias the session does not advertise -> skip (would stall).
+    (should (null (decknix--agent-model-replay-reconcile "opus" "claude-opus-4-8" adv)))
+    ;; Saved differs but advertised set is empty/unknown -> skip (cannot verify).
+    (should (null (decknix--agent-model-replay-reconcile "claude-opus-5" "claude-opus-4-8" nil)))
+    (should (null (decknix--agent-model-replay-reconcile "claude-opus-5" "claude-opus-4-8" '())))
+    ;; Current unknown but saved advertised -> replay (best-effort restore).
+    (should (equal "claude-sonnet-5"
+                   (decknix--agent-model-replay-reconcile "claude-sonnet-5" nil adv)))))
+
 (ert-deftest decknix-agent-provider-resume-needs-primer-test ()
   "Accessor returns the declared `:resume-needs-primer', nil when absent."
   (let ((decknix-agent-provider-registry nil))
