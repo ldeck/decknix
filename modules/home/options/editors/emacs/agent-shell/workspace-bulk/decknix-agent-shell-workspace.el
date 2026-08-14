@@ -1043,20 +1043,42 @@ and again once the registry write completes."
        (agent-shell-workspace-sidebar-refresh)))))
 
 (transient-define-prefix decknix-sidebar-transient ()
-  "Sidebar actions and toggles."
+  "Sidebar actions and toggles — the `?' / `h' keybinding reference.
+
+Every key shown here is bound in the live
+`agent-shell-workspace-sidebar-mode-map' and does the same thing when
+pressed directly in the sidebar, so this popup doubles as the complete
+key reference.  Keep it faithful to that keymap: when a key is added to
+the sidebar map, document it here too (the row-action menus `W'/`R'/`S',
+`H' hygiene, `v' review, `D' layout and `P' restore used to be missing).
+
+Note the two on-rotation Support tools live under the `z' prefix
+(`z d' / `z w') precisely so the single keys `D' and `W' can mean what
+they mean in the sidebar itself (cycle layout / worktree menu)."
   ["Navigate"
    ("r"   "Requests"      decknix-sidebar-goto-requests)
    ("w"   "WIP"           decknix-sidebar-goto-wip)
    ("l"   "Live"          decknix-sidebar-goto-live)
    ("p"   "Previous"      decknix-sidebar-goto-previous)
+   ("P"   "Restore previous" decknix--sidebar-restore-all-previous)
    ("s"   "Sessions…"     decknix-sidebar-sessions)]
   ["Quick"
    ;; Sorted alphabetically by description (case-insensitive).
-   ("c"   "New session"   agent-shell-workspace-sidebar-new)
-   ("RET" "Open / goto"   agent-shell-workspace-sidebar-goto)
+   ("c"     "New session"        agent-shell-workspace-sidebar-new)
+   ("RET"   "Open / goto"        agent-shell-workspace-sidebar-goto)
+   ("M-RET" "Open primary / URL" decknix-sidebar-primary-action)
    (decknix-sidebar-transient--pin-keys)
-   ("q"   "Quit sidebar"  quit-window)
-   ("g"   "Refresh"       decknix-sidebar-refresh)]
+   ("g"   "Refresh"       decknix-sidebar-refresh)
+   ("q"   "Quit sidebar"  quit-window)]
+  ["On the current row"
+   ;; Row-action menus + worktree verbs bound directly in the sidebar
+   ;; keymap; surfaced here so they are discoverable from `?'.
+   ("W" "Worktree menu…"  decknix-sidebar-open-worktree-menu)
+   ("R" "Review menu…"    decknix-sidebar-open-review-menu)
+   ("S" "Session menu…"   decknix-sidebar-open-session-menu)
+   ("v" "Review at point" decknix-sidebar-review-at-point)
+   ("H" "Worktree hygiene (cross-repo)" decknix-worktree-hygiene)
+   ("D" "Cycle layout"    decknix-sidebar-toggle-hub-display-mode)]
   ["Actions (a …)"
    ("a r" "Restart"       agent-shell-workspace-sidebar-restart)
    ("a R" "Rename"        agent-shell-workspace-sidebar-rename)
@@ -1069,9 +1091,9 @@ and again once the registry write completes."
    ("a m" "Set mode"      agent-shell-workspace-sidebar-set-mode)
    ("a a" "Add tile"      agent-shell-workspace-tile-add)
    ("a x" "Remove tile"   agent-shell-workspace-tile-remove)]
-  ["Support (on-rotation)"
-   ("D" "Dashboard (DoS + alerts)" decknix-support-dashboard)
-   ("W" "Workflow (what to do, when)" decknix-support-workflow)]
+  ["Support (on-rotation, z …)"
+   ("z d" "Dashboard (DoS + alerts)"    decknix-support-dashboard)
+   ("z w" "Workflow (what to do, when)" decknix-support-workflow)]
   ["" ("T" "Toggles…"     decknix-sidebar-toggles-transient)])
 
 ;; -- Enhanced sidebar render: live + saved sessions + key footer --
