@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
 mod session;
 mod session_archive;
+mod repo_sync;
 
 // 1. Static Core Commands
 #[derive(Parser)]
@@ -61,6 +62,12 @@ enum Commands {
     Session {
         #[command(subcommand)]
         action: session::SessionAction,
+    },
+    /// Keep local clones fresh: fetch + fast-forward each repo's default branch
+    #[command(alias = "repo")]
+    Repos {
+        #[command(subcommand)]
+        action: repo_sync::RepoAction,
     },
     /// Pull local changes to agent skills/commands back into repositories
     PullLocalChanges {
@@ -1961,6 +1968,9 @@ fn main() -> anyhow::Result<()> {
         }
         Some(Commands::Session { action }) => {
             session::run(action)?;
+        }
+        Some(Commands::Repos { action }) => {
+            repo_sync::run(action)?;
         }
         Some(Commands::External(args)) => {
             let cmd_name = &args[0];
