@@ -711,10 +711,25 @@ let
   # (`decknix--hub-bot-author-p', `decknix--hub-item-mentioned-p')
   # that supply the bot/mention booleans, and the dispatch glue that
   # spawns sessions, live in the heredoc side-effect block.
+  # Paces bursty session spawns (auto-review dispatching one per eligible PR
+  # on a single hub refresh) so a burst doesn't cold-start N node+claude
+  # processes at once — which thrashed the machine and froze Emacs's main
+  # thread.  Pure queue logic, ERT-covered.
+  decknix-agent-spawn-queue-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-spawn-queue";
+    src = ./agent-shell/spawn-queue;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-spawn-queue-test.el"
+    ];
+  };
+
   decknix-auto-review-el = mkEmacsTestedPackage {
     pname = "decknix-auto-review";
     src = ./agent-shell/auto-review;
-    packageRequires = [ ];
+    # Top-level `(require 'decknix-agent-spawn-queue)`: dispatch enqueues
+    # spawns through the throttle instead of firing them all at once.
+    packageRequires = [ decknix-agent-spawn-queue-el ];
     testFiles = [
       "decknix-auto-review-test.el"
     ];
@@ -2911,6 +2926,7 @@ in
         ++ (optional cfg.hub.enable decknix-hub-wip-link-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-wip-terminal-filter-el)
         ++ (optional cfg.hub.enable decknix-hub-mention-bot-el)
+        ++ (optional cfg.hub.enable decknix-agent-spawn-queue-el)
         ++ (optional cfg.hub.enable decknix-auto-review-el)
         ++ (optional cfg.hub.enable decknix-priority-el)
         ++ (optional cfg.hub.enable decknix-hub-worktree-parse-el)

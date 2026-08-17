@@ -33,6 +33,10 @@
 
 (require 'cl-lib)
 (require 'seq)
+;; Throttle bursty dispatch: many eligible PRs on one hub refresh would
+;; otherwise cold-start that many node+claude processes at once, thrashing
+;; the machine and freezing Emacs.  `decknix-agent-spawn-enqueue' paces them.
+(require 'decknix-agent-spawn-queue)
 
 (defconst decknix-auto-review-states '(off bot human any)
   "Ordered cycle of auto-review states.
@@ -212,10 +216,18 @@ Emacs session (dedup guards the file-notify->buffer-appears window)."
             ;; the middle of their typing.  The session is created
             ;; undisplayed and surfaces via the sidebar / attention
             ;; indicator instead.
-            (decknix--agent-quickaction-start
-             name tags workspace command model provider mode t)
-            (message "[auto-review] %s %s/%s#%s via %s"
-                     action owner repo number command-base)
+            ;;
+            ;; THROTTLED: when a hub refresh makes several PRs eligible at
+            ;; once, enqueue rather than cold-starting them all in this one
+            ;; synchronous loop.  The first launches immediately; the rest
+            ;; drip out one per `decknix-agent-spawn-stagger' seconds, so the
+            ;; machine is not thrashed and Emacs stays responsive.
+            (decknix-agent-spawn-enqueue
+             (lambda ()
+               (decknix--agent-quickaction-start
+                name tags workspace command model provider mode t)
+               (message "[auto-review] %s %s/%s#%s via %s"
+                        action owner repo number command-base)))
             action))))))
 
 (defun decknix-auto-review--maybe-dispatch (&rest _)
