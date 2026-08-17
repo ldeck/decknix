@@ -130,9 +130,13 @@ bridge ignores it in argv, so they resume over ACP instead (see
     (decknix-agent-register-provider 'test-auggie
       '(:model-launch-flag "--model"))
     (decknix-agent-register-provider 'test-claude '(:glyph "C"))
+    (decknix-agent-register-provider 'test-claude-env
+      '(:model-launch-env "ANTHROPIC_MODEL"))
     ;; Launch-flag provider pins via the command line -> never replays.
     (should-not (decknix--agent-model-replay-needed-p 'test-auggie "gpt-4"))
-    ;; Flagless provider with a real model -> replay.
+    ;; Launch-env provider pins via the environment -> never replays.
+    (should-not (decknix--agent-model-replay-needed-p 'test-claude-env "claude-opus-4-8"))
+    ;; Flagless provider with a real model and no launch pin -> replay.
     (should (decknix--agent-model-replay-needed-p 'test-claude "claude-3"))
     ;; Flagless provider but no/empty model -> nothing to replay.
     (should-not (decknix--agent-model-replay-needed-p 'test-claude nil))

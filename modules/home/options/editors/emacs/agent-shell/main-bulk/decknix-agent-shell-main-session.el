@@ -1031,7 +1031,11 @@ dedupes against live buffers before calling here."
                          session-id "mode"))
                    (plist-get (decknix-agent-purpose-resolve 'new-session)
                               :mode)))
-         (config (decknix--agent-make-config provider augmented-cmd mode))
+         ;; Pass SAVED-MODEL so a launch-env provider (Claude) pins it via
+         ;; ANTHROPIC_MODEL at launch instead of a post-load `set_model' replay
+         ;; that can stall the buffer read-only on resume (#163).  Flagless
+         ;; providers without a launch-env (Pi) ignore it here and still replay.
+         (config (decknix--agent-make-config provider augmented-cmd mode saved-model))
          (agent-shell-display-action
           (eval `(cons (lambda (buffer alist)
                          (let ((win ,target-win))
