@@ -107,19 +107,27 @@ user staring at a dead shell."
        (agent-shell-buffers)))))
 
 (defun decknix--agent-current-conv-key ()
-  "Get the conversation key for the current agent-shell buffer."
+  "Get the conversation key for the current agent-shell buffer.
+Prefer the buffer-local `decknix--agent-conv-key' — the key THIS session
+was filed under.  A session-id can be listed in more than one conversation
+after store scatter/pollution (e.g. a stale container conversation that
+wrongly accumulated many dispatched review session-ids); the session-id
+scan below returns whichever such conversation `maphash' visits first,
+which mislabelled every affected Live sidebar row with that container's
+merged tags.  Fall back to the scan only when the buffer has no local key."
   (when (derived-mode-p 'agent-shell-mode)
-    (when-let ((sid decknix--agent-auggie-session-id))
-      (let* ((store (decknix--agent-tags-read))
-             (convs (decknix--agent-tags-conversations store)))
-        (catch 'found
-          (maphash
-           (lambda (key entry)
-             (when (hash-table-p entry)
-               (when (member sid (gethash "sessions" entry))
-                 (throw 'found key))))
-           convs)
-          nil)))))
+    (or (and (boundp 'decknix--agent-conv-key) decknix--agent-conv-key)
+        (when-let ((sid decknix--agent-auggie-session-id))
+          (let* ((store (decknix--agent-tags-read))
+                 (convs (decknix--agent-tags-conversations store)))
+            (catch 'found
+              (maphash
+               (lambda (key entry)
+                 (when (hash-table-p entry)
+                   (when (member sid (gethash "sessions" entry))
+                     (throw 'found key))))
+               convs)
+              nil))))))
 
 (provide 'decknix-agent-buffer-lookup)
 ;;; decknix-agent-buffer-lookup.el ends here

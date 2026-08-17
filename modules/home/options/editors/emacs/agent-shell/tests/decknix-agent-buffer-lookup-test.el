@@ -171,5 +171,19 @@ list contains the buffer-local auggie session ID."
       (setq-local decknix--agent-auggie-session-id nil)
       (should (null (decknix--agent-current-conv-key))))))
 
+(ert-deftest decknix-current-conv-key--prefers-buffer-local-key ()
+  "When the buffer carries its own conv-key, return it verbatim and do NOT
+consult the store — immune to a session-id being wrongly listed in a
+polluted container conversation (the Live-sidebar mislabel bug)."
+  (cl-letf (((symbol-function 'derived-mode-p) (lambda (_) t))
+            ((symbol-function 'decknix--agent-tags-read)
+             (lambda () (error "store must not be consulted with a local key")))
+            ((symbol-function 'decknix--agent-tags-conversations)
+             (lambda (_) (error "store must not be consulted with a local key"))))
+    (with-temp-buffer
+      (setq-local decknix--agent-auggie-session-id "sid-shared")
+      (setq-local decknix--agent-conv-key "ck-own")
+      (should (equal (decknix--agent-current-conv-key) "ck-own")))))
+
 (provide 'decknix-agent-buffer-lookup-test)
 ;;; decknix-agent-buffer-lookup-test.el ends here
