@@ -269,12 +269,11 @@ Common back-end for `decknix--session-list-files' and
 and share the single sort pass."
   (let* ((dir (decknix-agent-provider-sessions-dir provider-id))
          (ext (decknix-agent-provider-session-file-extension provider-id))
-         (hist (decknix-agent-provider-history-file provider-id))
-         ;; Multi-project providers (claude, :history-file set) live at
-         ;; `<sessions-dir>/<project-hash>/<sid>.jsonl' -- depth 2.
-         ;; Single-dir providers (auggie) at `<sessions-dir>/<sid>.json' -- depth 1.
+         ;; Multi-project providers (claude at <dir>/<slug>/<sid>.jsonl,
+         ;; pi at <dir>/<cwd>/<sid>.jsonl) live at depth 2.  Single-dir
+         ;; providers (auggie) at `<sessions-dir>/<sid>.json' -- depth 1.
          (pairs (decknix--session-collect-files-and-mtimes-depth
-                 dir ext (if hist 2 1))))
+                 dir ext (if (decknix-agent-provider-multi-project-p provider-id) 2 1))))
     (when pairs
       (let* ((count (length pairs))
              (max-mtime (apply #'max (mapcar #'car pairs)))
@@ -564,19 +563,19 @@ PROVIDER-ID is the agent backend.
 Each alist should carry a (filePath . PATH) entry — stamped by
 `decknix--session-parse-file' for sequential parses, or by
 `decknix--session-stamp-file-paths' after a bulk jq parse.
-Without filePath, multi-project providers (claude-code, :history-file set)
-are silently skipped; single-directory providers (auggie) fall back to
-reconstructing path from sessionId + dir."
+Without filePath, multi-project providers (claude-code, pi) are silently
+skipped; single-directory providers (auggie) fall back to reconstructing
+path from sessionId + dir."
   (let ((dir (decknix-agent-provider-sessions-dir provider-id))
         (ext (decknix-agent-provider-session-file-extension provider-id))
-        (hist (decknix-agent-provider-history-file provider-id)))
+        (multi (decknix-agent-provider-multi-project-p provider-id)))
     (dolist (data alist-list)
       (let* ((sid  (alist-get 'sessionId data))
              ;; Prefer filePath stamped by decknix--session-parse-file or
              ;; decknix--session-stamp-file-paths.  Fall back to the
-             ;; single-directory layout for providers without :history-file.
+             ;; single-directory layout for non-multi-project providers.
              (path (or (alist-get 'filePath data)
-                       (unless hist
+                       (unless multi
                          (expand-file-name (concat sid ext) dir))))
              (mtime (and path (decknix--session-file-mtime path))))
         (when (and path mtime)

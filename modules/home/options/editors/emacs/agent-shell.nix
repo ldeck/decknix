@@ -3055,7 +3055,23 @@ in
             :acp-command-var agent-shell-pi-acp-command
             :auth-var nil
             :env-var agent-shell-pi-environment
-            :sessions-dir "~/.pi/sessions"
+            ;; Pi stores resumable transcripts under ~/.pi/agent/sessions
+            ;; (per-cwd subdirs of <ts>_<uuid>.jsonl), NOT ~/.pi/sessions —
+            ;; verified against pi-coding-agent 0.83.0.  Same on-disk shape
+            ;; as Claude's ~/.claude/projects, incl. per-session
+            ;; `model_change' records the resume model-replay reads.
+            :sessions-dir "~/.pi/agent/sessions"
+            :session-file-extension ".jsonl"
+            ;; Pi's per-cwd store is a depth-2 layout like Claude's
+            ;; ~/.claude/projects, but Pi keeps no global history log, so
+            ;; flag multi-project explicitly rather than via `:history-file'.
+            :multi-project t
+            ;; Metadata for the sidebar/picker, extracted from Pi's JSONL
+            ;; (slurped as an array via `jq -Mcs').  Pi's schema differs from
+            ;; Claude's: the id/cwd/created live in a `{type:session}' header
+            ;; record, and user turns are `{type:message, message:{role,content}}'
+            ;; where content is a string or an array of `{type:text,text}' parts.
+            :session-jq-filter "{sessionId: ([ .[] | select(.type == \"session\") | .id ] | first), created: ([ .[] | select(.type == \"session\") | .timestamp ] | first), modified: ([ .[] | .timestamp? // empty ] | last), exchangeCount: ([ .[] | select(.type == \"message\" and .message.role == \"user\") ] | length), firstUserMessage: ([ .[] | select(.type == \"message\" and .message.role == \"user\") | .message.content | if type == \"string\" then . elif type == \"array\" then (map(select(.type == \"text\") | .text) | join(\" \")) else \"\" end | select(type == \"string\" and length > 0) ] | (first // \"\"))[:200]}"
             :label "Pi"
             :glyph "P"
             :supports-workspace-root nil

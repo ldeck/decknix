@@ -129,6 +129,19 @@ ID is a symbol (e.g. `auggie').  PROPS is a property list."
   (let ((file (plist-get (decknix-agent-require-provider id) :history-file)))
     (when file (expand-file-name file))))
 
+(defun decknix-agent-provider-multi-project-p (id)
+  "Return non-nil when provider ID stores sessions under per-project subdirs.
+Such providers (Claude at ~/.claude/projects/<slug>/, Pi at
+~/.pi/agent/sessions/<cwd>/) need a depth-2 walk and `find'-based path
+reconstruction rather than the flat depth-1 layout single-dir providers
+(auggie) use.  A provider opts in with `:multi-project t'.  For
+back-compat, a set `:history-file' also implies multi-project (Claude
+predates the flag and relied on the history log as the signal), so
+providers that already declare `:history-file' need not add `:multi-project'."
+  (let ((provider (decknix-agent-require-provider id)))
+    (or (plist-get provider :multi-project)
+        (plist-get provider :history-file))))
+
 (defun decknix-agent-provider-session-modes-p (id)
   "Return non-nil when provider ID uses Claude-style session/permission modes.
 Only such providers (flagged `:session-modes t' in the registry -- today
