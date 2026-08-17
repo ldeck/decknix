@@ -160,6 +160,17 @@ line; the saved per-conversation model is instead replayed over ACP
 \(`session/set_model') after a resumed session reports ready."
   (plist-get (decknix-agent-require-provider id) :model-launch-flag))
 
+(defun decknix-agent-provider-model-launch-env (id)
+  "Return the env var provider ID uses to pin a model at launch, or nil.
+When non-nil (e.g. \"ANTHROPIC_MODEL\" for claude-code) the saved
+per-conversation model is injected into the launch environment, so the
+session comes up already on that model with no post-load `set_model'
+replay.  This is the preferred launch pin for a separate-bridge provider
+(Claude) whose SDK reads such an env var: it avoids the replay entirely,
+and an ACP `set_model' on resume can otherwise stall the buffer read-only
+\(see #163)."
+  (plist-get (decknix-agent-require-provider id) :model-launch-env))
+
 (defun decknix-agent-provider-resume-needs-primer (id)
   "Return non-nil when provider ID needs a continuation primer on resume.
 True for providers whose resume does not restore prior conversation
@@ -194,15 +205,17 @@ empty context window."
 
 (defun decknix--agent-model-replay-needed-p (provider-id model)
   "Return non-nil when MODEL must be replayed over ACP for PROVIDER-ID.
-Replay (an ACP `session/set_model' after the resumed session
-reports ready) is the fallback for providers that cannot pin a
-model at launch -- i.e. those WITHOUT a `:model-launch-flag' (Claude,
-Pi).  Auggie and any other provider that declares a launch flag pin
-the model on the command line instead, so they never replay.  MODEL
-must be a non-empty string for replay to apply."
+Replay (an ACP `session/set_model' after the resumed session reports
+ready) is the LAST-RESORT fallback: only for a provider that can pin the
+model neither on the command line (`:model-launch-flag', auggie) NOR via
+the launch environment (`:model-launch-env', claude-code -- ANTHROPIC_MODEL).
+A provider with either pin comes up already on the saved model, so it never
+replays -- which avoids the `set_model'-on-resume stall (#163).  MODEL must
+be a non-empty string for replay to apply."
   (and (stringp model)
        (not (string-empty-p model))
-       (not (decknix-agent-provider-model-launch-flag provider-id))))
+       (not (decknix-agent-provider-model-launch-flag provider-id))
+       (not (decknix-agent-provider-model-launch-env provider-id))))
 
 (defun decknix--agent-model-replay-reconcile (saved current advertised)
   "Return the model-id to replay on resume, or nil to SKIP the `set_model'.
@@ -262,10 +275,15 @@ via `session/resume' (`decknix-agent-resume-native.el')."
                         (list resume-flag session-id))))
     (append base-cmd ws-args model-args resume-args)))
 
-(defun decknix--agent-make-config (provider-id augmented-cmd &optional mode)
+(defun decknix--agent-make-config (provider-id augmented-cmd &optional mode model)
   "Return an agent-shell config for PROVIDER-ID with AUGMENTED-CMD.
 The config includes a `:client-maker' closure that encapsulates the
 command, parameters, and environment variables.
+
+Optional MODEL, for a provider that declares `:model-launch-env', is
+pinned into the launch environment (e.g. ANTHROPIC_MODEL=<model>) so the
+session comes up already on that model -- no post-load `set_model' replay,
+which can stall the buffer read-only on resume (#163).
 
 Optional MODE is a session/permission mode id (e.g. Claude's \"auto\").
 It is baked into this session's config -- overriding the provider's
@@ -285,7 +303,13 @@ So a stray mode can never break a mode-less provider, and a Claude session
 always opens in the requested mode.  agent-shell applies the baked mode
 after the session reports ready."
   (let* ((make-fn (decknix-agent-provider-make-config-fn provider-id))
-         (base (funcall make-fn)))
+         (base (funcall make-fn))
+         ;; Launch-env model pin ("<VAR>=<model>"), or nil unless the provider
+         ;; declares `:model-launch-env' and a non-empty MODEL is supplied.
+         (model-env
+          (let ((var (and (stringp model) (not (string-empty-p model))
+                          (decknix-agent-provider-model-launch-env provider-id))))
+            (and (stringp var) (format "%s=%s" var model)))))
     (when (and (stringp mode)
                (not (string-empty-p mode))
                (decknix-agent-provider-session-modes-p provider-id))
@@ -301,7 +325,9 @@ after the session reports ready."
                           (env  (decknix-agent-provider-env ',provider-id)))
                       ;; Current decknix logic: if auth exists and is not :none, use env.
                       ;; This matches auggie's :login pattern and handles nil env safely.
-                      env)
+                      ;; A launch-env model pin (e.g. ANTHROPIC_MODEL=<model>) is
+                      ;; prepended so `getenv' finds it first.
+                      ,(if model-env `(cons ,model-env env) 'env))
                     :context-buffer buffer)) t))
     base))
 

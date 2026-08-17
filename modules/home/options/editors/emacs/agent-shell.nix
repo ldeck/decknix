@@ -3016,6 +3016,13 @@ in
             :acp-command-var agent-shell-anthropic-claude-acp-command
             :auth-var agent-shell-anthropic-authentication
             :env-var agent-shell-anthropic-claude-environment
+            ;; Pin the per-conversation model at launch via ANTHROPIC_MODEL
+            ;; (the Claude SDK's highest-priority model signal) instead of a
+            ;; post-load `session/set_model' replay, which can stall the buffer
+            ;; read-only on resume (#163).  `decknix--agent-make-config' injects
+            ;; ANTHROPIC_MODEL=<model> into the launch env, and
+            ;; `decknix--agent-model-replay-needed-p' then skips the replay.
+            :model-launch-env "ANTHROPIC_MODEL"
             :sessions-dir "~/.claude/projects"
             :session-file-extension ".jsonl"
             :session-jq-filter "(map(select(.type == \"user\" or .type == \"assistant\")) | {sessionId: (first | .sessionId), created: (first | .timestamp), modified: (last | .timestamp), exchangeCount: (map(select(.type == \"user\")) | length), firstUserMessage: ([ .[] | select(.type == \"user\") | .message.content | if type == \"array\" then (.[] | select(.type == \"text\") | .text) else . end | select(type == \"string\" and length > 0) ] | (first // \"\"))[:200]})"
