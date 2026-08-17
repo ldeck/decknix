@@ -111,9 +111,9 @@ transcripts live under dir/<slug>/sid.ext) the first lookup runs a
   (let* ((p-id (or provider-id decknix-agent-default-provider))
          (dir  (decknix-agent-provider-sessions-dir p-id))
          (ext  (decknix-agent-provider-session-file-extension p-id))
-         (hist (decknix-agent-provider-history-file p-id)))
-    (if hist
-        ;; Multi-project structure (e.g. Claude): session file is in
+         (multi (decknix-agent-provider-multi-project-p p-id)))
+    (if multi
+        ;; Multi-project structure (e.g. Claude, Pi): session file is in
         ;; dir/<slug>/sid.ext.  Memoise the scan result; a still-present
         ;; cached path skips the subprocess entirely.
         (let* ((key (cons p-id session-id))

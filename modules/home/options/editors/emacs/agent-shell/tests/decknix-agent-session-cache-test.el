@@ -153,6 +153,96 @@ tool_result turn (regression: `content[0]' only saw the lead block)."
       (let ((obj (json-parse-string (plist-get res :out) :object-type 'alist)))
         (should (equal (alist-get 'firstUserMessage obj) "bare string prompt"))))))
 
+;; ---------------------------------------------------------------------------
+;; Pi provider :session-jq-filter.
+;;
+;; Pi's JSONL schema differs from Claude's: id/cwd/created live in a
+;; `{type:session}' header record (not on every turn), and user turns are
+;; `{type:message, message:{role,content}}' where content is a plain string
+;; or an array of `{type:text,text}' parts.  KEEP THE FILTER STRING BELOW IN
+;; SYNC with the `pi' `:session-jq-filter' in `agent-shell.nix'.
+;; ---------------------------------------------------------------------------
+
+(defconst decknix-agent-session-cache-test--pi-jq-filter
+  "{sessionId: ([ .[] | select(.type == \"session\") | .id ] | first), created: ([ .[] | select(.type == \"session\") | .timestamp ] | first), modified: ([ .[] | .timestamp? // empty ] | last), exchangeCount: ([ .[] | select(.type == \"message\" and .message.role == \"user\") ] | length), firstUserMessage: ([ .[] | select(.type == \"message\" and .message.role == \"user\") | .message.content | if type == \"string\" then . elif type == \"array\" then (map(select(.type == \"text\") | .text) | join(\" \")) else \"\" end | select(type == \"string\" and length > 0) ] | (first // \"\"))[:200]}"
+  "Mirror of the pi provider `:session-jq-filter' (agent-shell.nix).
+Kept here so the ERT cases exercise the real filter.  Update both together.")
+
+(defmacro decknix-agent-session-cache-test--with-pi-filter (&rest body)
+  "Register a pi-shaped provider carrying the real filter; run BODY."
+  `(let ((decknix-agent-provider-registry nil)
+         (decknix--agent-session-jq-filter-map (make-hash-table :test 'eq)))
+     (decknix-agent-register-provider 'test-pi-filter
+       (list :sessions-dir "/tmp/test-pi-filter"
+             :session-file-extension ".jsonl"
+             :multi-project t
+             :session-jq-filter decknix-agent-session-cache-test--pi-jq-filter
+             :label "Test Pi" :glyph "P"))
+     ,@body))
+
+(defun decknix-agent-session-cache-test--run-pi-filter (jsonl)
+  "Write JSONL to a tmp file, run the real pi filter via slurped `jq'.
+Returns a plist (:exit CODE :out STRING), mirroring the production
+invocation shape (`jq -Mcs -f FILTER FILE')."
+  (let ((fixture (make-temp-file "decknix-pi-" nil ".jsonl"))
+        (filter (decknix--agent-session-ensure-jq-filter 'test-pi-filter)))
+    (unwind-protect
+        (progn
+          (with-temp-file fixture (insert jsonl))
+          (with-temp-buffer
+            (let ((code (call-process "jq" nil t nil "-Mcs" "-f" filter fixture)))
+              (list :exit code :out (buffer-string)))))
+      (when (file-exists-p fixture) (delete-file fixture))
+      (when (and filter (file-exists-p filter)) (delete-file filter)))))
+
+(ert-deftest decknix-pi-jq-filter--extracts-header-and-turns ()
+  "Pull sessionId/created from the `session' header, title from the first
+user text turn, and count user turns; content may be array or string."
+  (skip-unless (decknix-agent-session-cache-test--jq-available-p))
+  (decknix-agent-session-cache-test--with-pi-filter
+    (let* ((jsonl (concat
+                   "{\"type\":\"session\",\"version\":3,\"id\":\"cba585c5\",\"timestamp\":\"2026-07-13T18:57:10.843Z\",\"cwd\":\"/x\"}\n"
+                   "{\"type\":\"model_change\",\"modelId\":\"claude-opus-4-6\",\"timestamp\":\"t1\"}\n"
+                   "{\"type\":\"message\",\"timestamp\":\"t2\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"HELLO PI\"}]}}\n"
+                   "{\"type\":\"message\",\"timestamp\":\"t3\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n"
+                   "{\"type\":\"message\",\"timestamp\":\"t4\",\"message\":{\"role\":\"user\",\"content\":\"a plain string turn\"}}\n"))
+           (res (decknix-agent-session-cache-test--run-pi-filter jsonl)))
+      (should (= (plist-get res :exit) 0))
+      (let ((obj (json-parse-string (plist-get res :out) :object-type 'alist)))
+        (should (equal (alist-get 'sessionId obj) "cba585c5"))
+        (should (equal (alist-get 'created obj) "2026-07-13T18:57:10.843Z"))
+        (should (equal (alist-get 'modified obj) "t4"))
+        (should (equal (alist-get 'firstUserMessage obj) "HELLO PI"))
+        (should (= (alist-get 'exchangeCount obj) 2))))))
+
+(ert-deftest decknix-pi-jq-filter--string-first-turn-used-verbatim ()
+  "When the first user turn's content is a bare string, it is the title."
+  (skip-unless (decknix-agent-session-cache-test--jq-available-p))
+  (decknix-agent-session-cache-test--with-pi-filter
+    (let* ((jsonl (concat
+                   "{\"type\":\"session\",\"id\":\"sid-9\",\"timestamp\":\"t0\",\"cwd\":\"/x\"}\n"
+                   "{\"type\":\"message\",\"timestamp\":\"t1\",\"message\":{\"role\":\"user\",\"content\":\"bare pi prompt\"}}\n"))
+           (res (decknix-agent-session-cache-test--run-pi-filter jsonl)))
+      (should (= (plist-get res :exit) 0))
+      (let ((obj (json-parse-string (plist-get res :out) :object-type 'alist)))
+        (should (equal (alist-get 'sessionId obj) "sid-9"))
+        (should (equal (alist-get 'firstUserMessage obj) "bare pi prompt"))))))
+
+(ert-deftest decknix-provider-multi-project-p--flag-and-backcompat ()
+  "`:multi-project t' opts in; a set `:history-file' implies it (Claude
+back-compat); a flat single-dir provider is nil."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-mp-flag
+      (list :sessions-dir "/tmp/a" :multi-project t :label "F" :glyph "F"))
+    (decknix-agent-register-provider 'test-mp-hist
+      (list :sessions-dir "/tmp/b" :history-file "/tmp/b/history.jsonl"
+            :label "H" :glyph "H"))
+    (decknix-agent-register-provider 'test-mp-flat
+      (list :sessions-dir "/tmp/c" :label "L" :glyph "L"))
+    (should (decknix-agent-provider-multi-project-p 'test-mp-flag))
+    (should (decknix-agent-provider-multi-project-p 'test-mp-hist))
+    (should-not (decknix-agent-provider-multi-project-p 'test-mp-flat))))
+
 (ert-deftest decknix-session-meta--cache-hit ()
   (let ((decknix--session-meta-cache (make-hash-table :test 'equal))
         (parse-called 0))
