@@ -1,7 +1,10 @@
 # Configuration for Pi agent (managed via agent-sync).
 #
-# This module ensures ~/.pi.json and ~/.pi/ are managed via the
-# 3-way reconciliation sync, allowing for local edits to skills/commands.
+# This module ensures ~/.pi/ is managed via the 3-way reconciliation
+# sync, allowing for local edits to skills/commands.  Pi's canonical
+# global config lives at ~/.pi/agent/settings.json (verified against
+# pi-coding-agent 0.83.0 — it does not read ~/.pi.json at all), so any
+# declarative `settings' seed must target that file to have effect.
 
 { config, lib, pkgs, ... }:
 
@@ -16,7 +19,12 @@ in {
     settings = mkOption {
       type = types.attrs;
       default = {};
-      description = "Declarative settings for ~/.pi.json";
+      description = ''
+        Declarative seed for Pi's global settings
+        (~/.pi/agent/settings.json).  Reconciled 3-way, so Pi's own
+        edits (e.g. changing the default model in `pi config') coexist.
+        Example: { defaultProvider = "anthropic"; defaultModel = "claude-opus-5"; }.
+      '';
     };
   };
 
@@ -31,7 +39,7 @@ in {
     # If we have settings, generate the file and sync it
     decknix.cli.agentSync.enable = true;
     decknix.cli.agentSync.files = mkIf (cfg.settings != {}) {
-      "~/.pi.json" = {
+      "~/.pi/agent/settings.json" = {
         source = pkgs.writeText "pi-settings.json" (builtins.toJSON cfg.settings);
         repo = "decknix";
         repoPath = "modules/home/options/ai/pi.nix";
