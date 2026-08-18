@@ -279,6 +279,17 @@ let
     ];
   };
 
+  # Session demo recording (#158): GUI screen-region capture via macOS
+  # `screencapture' (target = window / frame / display) with optional
+  # ffmpeg transcode to mp4/gif, plus a terminal `asciinema' → `agg' GIF
+  # path.  Pure-Emacs commands; the CLIs (screencapture/asciinema/agg/
+  # ffmpeg) come from home.packages.
+  decknix-record-el = mkEmacsTestedPackage {
+    pname = "decknix-record";
+    src = ./agent-shell/record;
+    packageRequires = [ ];
+  };
+
   # Quick-capture: jot a feature/bug/investigation/discussion into a GitHub
   # issue/comment or taskwarrior without leaving Emacs or waiting on a busy
   # agent.  Tool-agnostic (gh + task CLIs), hexagonal (pluggable
@@ -2898,6 +2909,7 @@ in
           decknix-agent-resume-native-el
           decknix-agent-heartbeat-watch-el
           decknix-agent-acp-trace-el
+          decknix-record-el
           decknix-perf-hitch-el
           decknix-perf-hitch-autofile-el
           decknix-capture-el
@@ -3921,6 +3933,11 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; of the agent prefix map.
         (require 'decknix-capture)
         (declare-function decknix-capture "decknix-capture" (&optional with-body))
+
+        ;; Session demo recording (#158): M-x decknix-record-start /
+        ;; -toggle / -stop.  GUI (screencapture) + terminal (asciinema)
+        ;; backends; capture target = window / frame / display.
+        (require 'decknix-record)
 
         ;; DB connect: `M-x decknix-db' -> magit-style transient to reach a
         ;; managed database over its jumpbox tunnel, least-privilege first.
