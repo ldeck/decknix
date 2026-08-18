@@ -2429,12 +2429,16 @@ Calls `decknix--sidebar-restore-previous-session' for each selection."
 ;; Uses read-char-choice after a short delay to avoid conflicts
 ;; with the transient exit hook / sidebar restore.
 
-(defun decknix--nav-hub-start-review (url)
+(defun decknix--nav-hub-start-review (url &optional background)
   "Start a PR review session for URL without prompting.
 Auto-detects workspace and generates session name from the URL.
 Prompts for workspace if auto-detection fails.
 Overrides `agent-shell-display-action' to target the main window,
-preventing extra splits when called from the sidebar."
+preventing extra splits when called from the sidebar.
+When BACKGROUND is non-nil the session is spawned undisplayed: no
+window is taken and the current layout is left untouched (the same
+path unattended auto-review uses).  It surfaces via the sidebar /
+attention indicator once ready."
   (let ((parsed (decknix--agent-parse-pr-url url)))
     (if (not parsed)
         (message "Not a valid PR URL: %s" url)
@@ -2454,13 +2458,15 @@ preventing extra splits when called from the sidebar."
              (command (format "%s %s" (nth 1 params) url))
              (provider (nth 2 params))
              (mode (nth 3 params))
-             ;; Target main window to avoid sidebar splits
+             ;; Target main window to avoid sidebar splits (foreground only)
              (main (window-main-window (selected-frame))))
-        (when (and main (window-live-p main))
-          (select-window main))
+        (unless background
+          (when (and main (window-live-p main))
+            (select-window main)))
         (decknix--agent-quickaction-start
-         name tags workspace command model provider mode)
-        (message "Starting review: %s/%s#%s" owner repo number)))))
+         name tags workspace command model provider mode background)
+        (message "Starting review%s: %s/%s#%s"
+                 (if background " [background]" "") owner repo number)))))
 
 ;; PR B.51: `decknix--hub-review-ready-requests' and
 ;; `decknix--hub-review-entries' carved into
@@ -2470,22 +2476,43 @@ preventing extra splits when called from the sidebar."
 ;; that subset into the `(LABEL . ITEM)' cons cells the `r' picker
 ;; consumes.  Both forward-declared at the top of this file.
 
-(defun decknix--hub-launch-review-items (items split-p)
-  "Launch review sessions for ITEMS.
-When SPLIT-P is non-nil, tile subsequent reviews side-by-side."
+(defun decknix--hub-review-placement-from-char (choice)
+  "Map a read-char CHOICE from the launch prompt to a placement symbol.
+Returns `:split', `:replace', or `:background', or nil for quit (?q) or
+any unrecognised key."
+  (pcase choice
+    (?s :split)
+    (?r :replace)
+    (?b :background)
+    (_ nil)))
+
+(defun decknix--hub-launch-review-items (items placement)
+  "Launch review sessions for ITEMS with PLACEMENT.
+PLACEMENT is one of:
+  `:split'      — tile subsequent reviews side-by-side (first reuses the
+                  main window),
+  `:replace'    — reuse the main window for each,
+  `:background' — spawn each session undisplayed (no window taken, the
+                  current layout untouched); they surface via the sidebar."
   (let ((launched 0)
         (count (length items)))
     (dolist (item items)
       (let ((url (alist-get 'url item)))
         (when url
-          (if (and split-p (> launched 0))
-              (decknix--nav-hub-start-review-split url)
-            (decknix--nav-hub-start-review url))
+          (pcase placement
+            (:background (decknix--nav-hub-start-review url t))
+            (:split (if (> launched 0)
+                        (decknix--nav-hub-start-review-split url)
+                      (decknix--nav-hub-start-review url)))
+            (_ (decknix--nav-hub-start-review url)))
           (setq launched (1+ launched))
+          ;; A background burst needs no inter-spawn settle for window
+          ;; placement, but keep the light stagger so several ACP bridges
+          ;; don't cold-start in the same tick.
           (when (> count 1) (sit-for 0.3)))))
-    (message "Launched %d review%s%s"
+    (message "Launched %d review%s [%s]"
              launched (if (= launched 1) "" "s")
-             (if split-p " [split]" ""))))
+             (substring (symbol-name (or placement :replace)) 1))))
 
 (defun decknix-hub-launch-reviews (arg)
   "Launch review sessions for ready PRs.
@@ -2521,13 +2548,14 @@ reverses sort direction.  All three are scoped to the picker."
              ;; C-u: launch all
              ((equal arg '(4))
               (let* ((count (length entries))
-                     (choice (read-char-choice
-                              (format "Launch all %d review%s: [s]plit  [r]eplace  [q]uit "
-                                      count (if (= count 1) "" "s"))
-                              '(?s ?r ?q))))
-                (unless (eq choice ?q)
+                     (placement (decknix--hub-review-placement-from-char
+                                 (read-char-choice
+                                  (format "Launch all %d review%s: [s]plit  [r]eplace  [b]ackground  [q]uit "
+                                          count (if (= count 1) "" "s"))
+                                  '(?s ?r ?b ?q)))))
+                (when placement
                   (decknix--hub-launch-review-items
-                   (mapcar #'cdr entries) (eq choice ?s))))
+                   (mapcar #'cdr entries) placement)))
               (throw 'decknix--rev-done nil))
              ;; Numeric prefix (C-u N): multi-select via embark
              ((and (integerp arg) (> arg 1))
@@ -2547,13 +2575,14 @@ reverses sort direction.  All three are scoped to the picker."
                 (setq selected (nreverse selected))
                 (when selected
                   (let* ((count (length selected))
-                         (choice (read-char-choice
-                                  (format "%d review%s: [s]plit  [r]eplace  [q]uit "
-                                          count (if (= count 1) "" "s"))
-                                  '(?s ?r ?q))))
-                    (unless (eq choice ?q)
+                         (placement (decknix--hub-review-placement-from-char
+                                     (read-char-choice
+                                      (format "%d review%s: [s]plit  [r]eplace  [b]ackground  [q]uit "
+                                              count (if (= count 1) "" "s"))
+                                      '(?s ?r ?b ?q)))))
+                    (when placement
                       (decknix--hub-launch-review-items
-                       selected (eq choice ?s))))))
+                       selected placement)))))
               (throw 'decknix--rev-done nil))
              ;; No prefix (or C-u C-u): single pick with M-m / M-b toggles
              (t
@@ -2578,15 +2607,16 @@ reverses sort direction.  All three are scoped to the picker."
                                          (cdr (assoc lbl entries)))
                                        labels)))
                          (count (length items))
-                         (choice (and (> count 0)
-                                      (read-char-choice
-                                       (format "Launch %d review%s: [s]plit  [r]eplace  [q]uit "
-                                               count
-                                               (if (= count 1) "" "s"))
-                                       '(?s ?r ?q)))))
-                    (when (and choice (not (eq choice ?q)))
+                         (placement (and (> count 0)
+                                         (decknix--hub-review-placement-from-char
+                                          (read-char-choice
+                                           (format "Launch %d review%s: [s]plit  [r]eplace  [b]ackground  [q]uit "
+                                                   count
+                                                   (if (= count 1) "" "s"))
+                                           '(?s ?r ?b ?q))))))
+                    (when placement
                       (decknix--hub-launch-review-items
-                       items (eq choice ?s))))
+                       items placement)))
                   (throw 'decknix--rev-done nil))
                  ;; RET: hand off to the rich action transient so
                  ;; Review / Review (split) / Open / Browser /
@@ -3303,15 +3333,16 @@ Interactively: \\[universal-argument] N r limits to N items;
                                              base)))))
                                labels)))
                        (count (length items))
-                       (choice (and (> count 0)
-                                    (read-char-choice
-                                     (format "Launch %d review%s: [s]plit  [r]eplace  [q]uit "
-                                             count
-                                             (if (= count 1) "" "s"))
-                                     '(?s ?r ?q)))))
-                  (when (and choice (not (eq choice ?q)))
+                       (placement (and (> count 0)
+                                       (decknix--hub-review-placement-from-char
+                                        (read-char-choice
+                                         (format "Launch %d review%s: [s]plit  [r]eplace  [b]ackground  [q]uit "
+                                                 count
+                                                 (if (= count 1) "" "s"))
+                                         '(?s ?r ?b ?q))))))
+                  (when placement
                     (decknix--hub-launch-review-items
-                     items (eq choice ?s))))
+                     items placement)))
                 (throw 'decknix--req-done nil))
                ;; RET: hand off to the rich action transient.  When the
                ;; typed text matches no candidate (REQUIRE-MATCH is nil),
