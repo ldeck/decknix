@@ -50,6 +50,71 @@
 (defvar decknix--agent-workspace-persisted)
 (defvar decknix--agent-broker-key)
 
+;; ---------------------------------------------------------------------------
+;; Store-scatter diagnostic (temporary).  A session-id should live in exactly
+;; ONE conversation.  When it gets registered into a second one, it scatters
+;; across the store — the root of the "container conversation" pollution that
+;; mislabelled the Live sidebar.  Static tracing could not pin WHICH caller
+;; passes the wrong conv-key, so this logs the moment (with a compact caller
+;; backtrace) the next time it happens.  Log-only: no behaviour change.
+;; ---------------------------------------------------------------------------
+
+(defvar decknix--agent-register-scatter-log
+  (expand-file-name "~/.config/decknix/agent-scatter.log")
+  "File appended to when a session-id is registered into a conversation while
+it already lives in another (the store-scatter signature).  Set to nil to
+disable.  A diagnostic aid, not load-bearing.")
+
+(defun decknix--agent-register-scatter-others (conv-key session-id convs)
+  "Pure: sorted conv-keys in CONVS other than CONV-KEY whose `sessions' already
+list SESSION-ID.  Non-empty means registering SESSION-ID under CONV-KEY would
+scatter it across conversations."
+  (let (others)
+    (when (hash-table-p convs)
+      (maphash (lambda (k e)
+                 (when (and (not (equal k conv-key))
+                            (hash-table-p e)
+                            (member session-id (gethash "sessions" e)))
+                   (push k others)))
+               convs))
+    (sort others #'string<)))
+
+(defun decknix--agent-register-caller-trace ()
+  "Compact innermost-first chain of `decknix' frames on the call stack, for
+the scatter diagnostic."
+  (let (names)
+    (dolist (frame (backtrace-frames))
+      (let ((fn (nth 1 frame)))
+        (when (symbolp fn)
+          (let ((n (symbol-name fn)))
+            (when (and (string-prefix-p "decknix" n)
+                       (not (string-match-p "register-\\(scatter\\|caller\\|log\\)" n)))
+              (push n names))))))
+    (string-join (seq-take (delete-dups (nreverse names)) 8) " <- ")))
+
+(defun decknix--agent-register-log-scatter (conv-key session-id convs)
+  "Append a scatter diagnostic line when registering SESSION-ID under CONV-KEY
+would duplicate it across conversations.  No-op when the log is disabled or
+there is no scatter.  Never signals (diagnostics must not break a write)."
+  (when decknix--agent-register-scatter-log
+    (let ((others (decknix--agent-register-scatter-others conv-key session-id convs)))
+      (when others
+        (ignore-errors
+          (let* ((target (gethash conv-key convs))
+                 (tsize (if (hash-table-p target)
+                            (length (gethash "sessions" target)) 0))
+                 (ttags (and (hash-table-p target) (gethash "tags" target)))
+                 (line (format "%s sid=%s target=%s(n=%d tags=%s) already-in=%s via %s\n"
+                               (format-time-string "%FT%T%z")
+                               session-id conv-key tsize
+                               (if ttags (string-join ttags ",") "-")
+                               (string-join others ",")
+                               (decknix--agent-register-caller-trace))))
+            (with-temp-buffer
+              (insert line)
+              (append-to-file (point-min) (point-max)
+                              decknix--agent-register-scatter-log))))))))
+
 (defun decknix--agent-store-metadata-by-conv-key (conv-key tags workspace)
   "Store TAGS and WORKSPACE directly under CONV-KEY in the tag store.
 Use this when the conversation key is known at creation time (e.g., quickactions
@@ -94,6 +159,9 @@ which is how a resumed conversation could freeze on an older snapshot."
                         h)))
            (sids (gethash "sessions" entry)))
       (unless (and sids (member session-id sids))
+        ;; Diagnostic (log-only): flag if this registration scatters the
+        ;; session-id across conversations, capturing the caller.
+        (decknix--agent-register-log-scatter conv-key session-id convs)
         (puthash "sessions"
                  (cons session-id (or sids '()))
                  entry)

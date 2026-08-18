@@ -171,6 +171,31 @@ restore time -- previously this no-opped and the session was orphaned."
   (should-not (decknix--agent-tags-backfill-review-tags "just a chat message"))
   (should-not (decknix--agent-tags-backfill-review-tags nil)))
 
+(ert-deftest decknix-register-scatter-others--detects-cross-conversation ()
+  "Returns the OTHER conversations that already list the session-id, sorted;
+empty when the target is the session's only home."
+  (let ((convs (make-hash-table :test 'equal))
+        (own (make-hash-table :test 'equal))
+        (container (make-hash-table :test 'equal))
+        (foreign (make-hash-table :test 'equal)))
+    (puthash "sessions" '("sid-1") own)
+    (puthash "sessions" '("sid-1" "sid-2") container)
+    (puthash "sessions" '("sid-2") foreign)
+    (puthash "a707" own convs)
+    (puthash "e06099" container convs)
+    (puthash "zzz" foreign convs)
+    ;; Registering sid-1 under its own key a707 -> it also lives in e06099 -> scatter.
+    (should (equal (decknix--agent-register-scatter-others "a707" "sid-1" convs)
+                   '("e06099")))
+    ;; Registering sid-1 under e06099 -> it also lives in a707 -> scatter.
+    (should (equal (decknix--agent-register-scatter-others "e06099" "sid-1" convs)
+                   '("a707")))
+    ;; sid-2 lives in e06099 and zzz; from e06099 the other home is zzz.
+    (should (equal (decknix--agent-register-scatter-others "e06099" "sid-2" convs)
+                   '("zzz")))
+    ;; A session-id with a single home reports no scatter.
+    (should (null (decknix--agent-register-scatter-others "a707" "sid-unique" convs)))))
+
 (provide 'decknix-agent-tags-mutate-test)
 
 ;;; decknix-agent-tags-mutate-test.el ends here
