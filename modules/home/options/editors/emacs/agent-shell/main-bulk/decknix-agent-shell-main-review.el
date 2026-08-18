@@ -28,6 +28,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'transient)
 
 ;; Forward declarations for symbols defined in carved review/
 ;; packages, in `decknix-agent-shell-main', or in external Emacs
@@ -395,6 +396,85 @@ Selecting `new…' prompts for a fresh name and adds it to the list."
                     :test #'string=)
         (decknix--agent-review-save-collaborators))
       choice))))
+
+;; -- Review-session menu (#166) --
+;;
+;; A transient of the actions you take while reviewing a PR in an
+;; agent-shell session: open the PR online, copy its URL, open the
+;; annotation buffer, or review the diff in Emacs (magit).  Bound to
+;; `C-c A V' so it is one chord away from any review buffer.  It reads
+;; the PR from the current session's linked-PR set, so it works from the
+;; `*Claude: pr-…*' session buffer or its `*agent-review: …*' annotation
+;; buffer.
+
+(declare-function decknix--agent-current-conv-key "decknix-agent-buffer-lookup")
+(declare-function decknix--agent-linked-prs "decknix-agent-link-store" (conv-key))
+(declare-function decknix--agent-pr-url-accessor "decknix-agent-url-parse" (pr field))
+(declare-function magit-status-setup-buffer "ext:magit-status")
+(declare-function magit-status "ext:magit-status")
+
+(defun decknix--agent-review-session-pr-url ()
+  "Return the PR URL for the current review session, or nil.
+Resolves the current buffer's conversation key (falling back to the
+annotation buffer's source buffer) and returns the first linked PR's
+URL."
+  (let* ((ck (or (and (fboundp 'decknix--agent-current-conv-key)
+                      (decknix--agent-current-conv-key))
+                 (and (bound-and-true-p decknix--agent-review-source-buffer)
+                      (buffer-live-p decknix--agent-review-source-buffer)
+                      (with-current-buffer decknix--agent-review-source-buffer
+                        (and (fboundp 'decknix--agent-current-conv-key)
+                             (decknix--agent-current-conv-key))))))
+         (prs (and ck (fboundp 'decknix--agent-linked-prs)
+                   (decknix--agent-linked-prs ck))))
+    (when prs
+      (decknix--agent-pr-url-accessor (car prs) "url"))))
+
+(defun decknix--agent-review-session-workspace ()
+  "Return the workspace directory for the current review session."
+  (or (and (bound-and-true-p decknix--agent-review-workspace)
+           decknix--agent-review-workspace)
+      (and (bound-and-true-p decknix--agent-session-workspace)
+           decknix--agent-session-workspace)
+      default-directory))
+
+(defun decknix-agent-review-open-online ()
+  "Open the current review session's PR in the browser."
+  (interactive)
+  (let ((url (decknix--agent-review-session-pr-url)))
+    (if url (browse-url url)
+      (user-error "No linked PR for this session"))))
+
+(defun decknix-agent-review-copy-url ()
+  "Copy the current review session's PR URL to the kill ring."
+  (interactive)
+  (let ((url (decknix--agent-review-session-pr-url)))
+    (if url (progn (kill-new url) (message "Copied: %s" url))
+      (user-error "No linked PR for this session"))))
+
+(defun decknix-agent-review-in-emacs ()
+  "Review the PR's changes in Emacs via `magit-status' on the workspace.
+This opens magit on the review session's checkout so you can read the
+diff and stage/navigate hunks in Emacs instead of the GitHub URL.  A
+dedicated PR worktree + inline PR comments is tracked in #165; until
+then this targets the session's workspace directory."
+  (interactive)
+  (let ((ws (decknix--agent-review-session-workspace)))
+    (cond
+     ((not (fboundp 'magit-status))
+      (user-error "magit is not available — install/enable magit to review in Emacs"))
+     ((not (and ws (file-directory-p ws)))
+      (user-error "No workspace directory for this session"))
+     (t (let ((default-directory ws)) (magit-status))))))
+
+(transient-define-prefix decknix-agent-review-menu ()
+  "Actions for reviewing the current session's PR."
+  ["Review this PR"
+   ("o" "Open PR online"     decknix-agent-review-open-online)
+   ("w" "Copy PR URL"        decknix-agent-review-copy-url)
+   ("e" "Review in Emacs (magit)" decknix-agent-review-in-emacs)
+   ("a" "Annotate (review buffer)" decknix-agent-review)]
+  ["" ("q" "Quit" transient-quit-all)])
 
 (provide 'decknix-agent-shell-main-review)
 ;;; decknix-agent-shell-main-review.el ends here
