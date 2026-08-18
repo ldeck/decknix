@@ -72,6 +72,14 @@ is not yet elsewhere.  This catches the FIRST registration into a pollution
 sink (which the cross-conversation check alone stays silent on, since the
 session has no other home yet).")
 
+(defvar decknix--agent-container-drain-threshold 15
+  "When a session is registered into a conversation SMALLER than this, it is
+removed from any OTHER conversation at or above this size — an oversized
+`container' that has accumulated unrelated sessions.  Set high enough that it
+only ever drains a clear pollution sink (the 20+-session gemini container that
+mislabelled the sidebar), never a normal thread's handful of resume snapshots
+or a small curated grouping.")
+
 (defun decknix--agent-register-scatter-others (conv-key session-id convs)
   "Pure: sorted conv-keys in CONVS other than CONV-KEY whose `sessions' already
 list SESSION-ID.  Non-empty means registering SESSION-ID under CONV-KEY would
@@ -85,6 +93,21 @@ scatter it across conversations."
                    (push k others)))
                convs))
     (sort others #'string<)))
+
+(defun decknix--agent-container-homes (conv-key session-id convs threshold)
+  "Pure: sorted conv-keys in CONVS other than CONV-KEY that list SESSION-ID and
+hold at least THRESHOLD sessions.  These are the oversized containers a
+single-home registration should drain SESSION-ID out of."
+  (let (hits)
+    (when (hash-table-p convs)
+      (maphash (lambda (k e)
+                 (when (and (not (equal k conv-key))
+                            (hash-table-p e)
+                            (>= (length (gethash "sessions" e)) threshold)
+                            (member session-id (gethash "sessions" e)))
+                   (push k hits)))
+               convs))
+    (sort hits #'string<)))
 
 (defun decknix--agent-register-caller-trace ()
   "Compact innermost-first chain of `decknix' frames on the call stack, for
@@ -163,7 +186,18 @@ no-opping: a brand-new (untagged) session must still be linked so it
 is discoverable at restore time.  Previously such sessions were left
 unregistered and became orphans -- absent from the store entirely and
 thus invisible to `decknix--agent-latest-session-id-for-conv-key',
-which is how a resumed conversation could freeze on an older snapshot."
+which is how a resumed conversation could freeze on an older snapshot.
+
+Single-home drain: a session-id belongs to exactly ONE conversation, but a
+resolver occasionally homed it in an oversized `container' entry (a stale
+conversation that accumulated many unrelated sessions + a union of their
+tags), which mislabelled the Live sidebar.  So when SESSION-ID is registered
+into a SPECIFIC conversation (one below
+`decknix--agent-container-drain-threshold' sessions), it is removed from any
+such container it also sits in.  The sink therefore empties organically — each
+member leaves the next time it is registered under its real key — with no
+risky bulk migration, and small / curated groupings are never touched (the
+drain only fires when CONV-KEY itself is specific)."
   (when (and conv-key session-id)
     (let* ((store (decknix--agent-tags-read))
            (convs (decknix--agent-tags-conversations store))
@@ -171,7 +205,8 @@ which is how a resumed conversation could freeze on an older snapshot."
                       (let ((h (make-hash-table :test 'equal)))
                         (puthash "sessions" nil h)
                         h)))
-           (sids (gethash "sessions" entry)))
+           (sids (gethash "sessions" entry))
+           (dirty nil))
       (unless (and sids (member session-id sids))
         ;; Diagnostic (log-only): flag if this registration scatters the
         ;; session-id across conversations, capturing the caller.
@@ -180,6 +215,21 @@ which is how a resumed conversation could freeze on an older snapshot."
                  (cons session-id (or sids '()))
                  entry)
         (puthash conv-key entry convs)
+        (setq dirty t))
+      ;; Drain the session-id out of any oversized container it also lives in,
+      ;; but only when homing it into a specific (small) conversation — never
+      ;; when CONV-KEY is itself large, so we can't fragment a real long thread.
+      (when (< (length (gethash "sessions" entry))
+               decknix--agent-container-drain-threshold)
+        (dolist (ck (decknix--agent-container-homes
+                     conv-key session-id convs
+                     decknix--agent-container-drain-threshold))
+          (let ((ce (gethash ck convs)))
+            (puthash "sessions"
+                     (delete session-id (copy-sequence (gethash "sessions" ce)))
+                     ce)
+            (setq dirty t))))
+      (when dirty
         (decknix--agent-tags-write store)))))
 
 (defun decknix--agent-flush-pending-metadata (input)
