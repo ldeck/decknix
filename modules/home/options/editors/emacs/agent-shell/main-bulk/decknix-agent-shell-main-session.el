@@ -1932,16 +1932,96 @@ bulk send requires a running agent process to dispatch to."
         (message "No live sessions selected — C-SPC mark live sessions, then C-s")
       (decknix--session-bulk-send-open-compose live-bufs))))
 
+;; == Tile action: C-t in the session picker (#168) ==
+;;
+;; Replaces the current window layout with the selected live sessions,
+;; tiled side-by-side.  Marked (C-SPC) sessions win; without marks the
+;; highlighted candidate is used.  The agent sidebar (a side window)
+;; survives because we split the frame's *main* window, which excludes
+;; side windows.
+
+(defun decknix--agent-tile-buffers-as-splits (buffers)
+  "Replace the current window layout with BUFFERS tiled as balanced splits.
+Keeps the agent sidebar (a side window) intact.  With one BUFFER this is
+just a switch in the main window.  Splits the main window into
+side-by-side columns — one BUFFER per pane — then balances them.  Dead
+buffers in BUFFERS are ignored."
+  (let ((buffers (seq-filter #'buffer-live-p buffers)))
+    (when buffers
+      (let* ((frame (selected-frame))
+             (main (window-main-window frame)))
+        (when (window-live-p main)
+          (select-window main))
+        ;; delete-other-windows on the main window preserves side windows
+        ;; (the sidebar), clearing only the main area we are about to tile.
+        (delete-other-windows (selected-window))
+        (switch-to-buffer (car buffers))
+        ;; Remember the first tiled pane so we can refocus it at the end
+        ;; (frame-first-window could be the sidebar).
+        (let ((first-pane (selected-window)))
+          (cl-dolist (buf (cdr buffers))
+            ;; Guard against a too-narrow split when many are selected: prefer
+            ;; a vertical (side-by-side) split, fall back to horizontal, and
+            ;; stop once neither fits so the remaining sessions stay reachable
+            ;; via the picker / Live section rather than erroring.
+            (let* ((horiz (window-splittable-p (selected-window) t))
+                   (new (ignore-errors
+                          (split-window (selected-window) nil
+                                        (if horiz 'right 'below)))))
+              (if (window-live-p new)
+                  (progn (select-window new)
+                         (switch-to-buffer buf))
+                (cl-return))))
+          (balance-windows (window-main-window frame))
+          (when (window-live-p first-pane)
+            (select-window first-pane)))))))
+
+(defun decknix--session-picker-tile-cands (cands)
+  "Tile live session buffer(s) for CANDS as splits, replacing the layout.
+Resolves each candidate against `decknix--session-picker-live-map';
+non-live selections (saved/previous) are skipped since only live buffers
+can be displayed — open them first."
+  (let* ((bufs (delq nil
+                     (mapcar
+                      (lambda (cand)
+                        (let ((key (decknix-picker-selections-cand-key cand)))
+                          (and decknix--session-picker-live-map
+                               (gethash key decknix--session-picker-live-map))))
+                      cands)))
+         (live (seq-filter #'buffer-live-p bufs))
+         (n (length live)))
+    (if (null live)
+        (message "No live sessions in selection to tile — C-SPC mark live sessions, then C-t")
+      (decknix--agent-tile-buffers-as-splits live)
+      (message "Tiled %d session%s as splits" n (if (= 1 n) "" "s")))))
+
+(defun decknix-agent-tile-visible-sessions ()
+  "Tile every currently-visible agent-shell session as balanced splits.
+The \"all visible\" companion to the picker's C-t tile: replaces the
+main-area layout with the sessions already on screen (order preserved by
+`agent-shell-buffers')."
+  (interactive)
+  (let ((bufs (seq-filter
+               (lambda (b) (and (buffer-live-p b) (get-buffer-window b t)))
+               (and (fboundp 'agent-shell-buffers) (agent-shell-buffers)))))
+    (if (null bufs)
+        (message "No visible agent-shell sessions to tile")
+      (decknix--agent-tile-buffers-as-splits bufs)
+      (message "Tiled %d visible session%s" (length bufs)
+               (if (= 1 (length bufs)) "" "s")))))
+
 (defun decknix--session-picker-do-action (action cands)
   "Perform ACTION on CANDS from the session picker.
 ACTION is one of `kill' (kill live buffers), `delete' (permanently
-remove saved/previous sessions from disk and metadata), or `send'
-(bulk-send a prompt to the selected live sessions).  CANDS is the
-list of candidate strings captured by the picker's minibuffer-exit-hook."
+remove saved/previous sessions from disk and metadata), `send'
+(bulk-send a prompt to the selected live sessions), or `tile' (replace
+the window layout with the selected live sessions as splits).  CANDS is
+the list of candidate strings captured by the picker's minibuffer-exit-hook."
   (pcase action
     ('kill   (decknix--session-picker-kill-cands cands))
     ('delete (decknix--session-picker-delete-cands cands))
     ('send   (decknix--session-picker-send-cands cands))
+    ('tile   (decknix--session-picker-tile-cands cands))
     (_ (message "Unknown session-picker action: %s" action))))
 
 (defun decknix-agent-session-picker (arg)
@@ -2035,6 +2115,13 @@ With \\[universal-argument], shows all individual session snapshots."
                (setq decknix--session-picker-action 'send)
                (setq decknix--session-picker-multi-mode t)
                (exit-minibuffer)))
+           ;; C-t → tile the marked (or highlighted) live sessions as splits,
+           ;; replacing the current layout (#168).
+           (local-set-key (kbd "C-t")
+             (lambda () (interactive)
+               (setq decknix--session-picker-action 'tile)
+               (setq decknix--session-picker-multi-mode t)
+               (exit-minibuffer)))
            ;; Capture selections BEFORE completing-read unwinds.
            ;; Embark returns `(TYPE . CANDS)' — the coerce helper strips the
            ;; leading symbol.  When an action key (C-k/C-d) was used without
@@ -2063,7 +2150,7 @@ With \\[universal-argument], shows all individual session snapshots."
                             decknix--session-source-previous
                             decknix--session-source-saved
                             decknix--session-source-new)
-                      :prompt (format "Agent session%s%s%s (M-w ws; M-<glyph> type; C-SPC mark; C-k kill, C-d del, C-s send): "
+                      :prompt (format "Agent session%s%s%s (M-w ws; M-<glyph> type; C-SPC mark; C-k kill, C-d del, C-s send, C-t tile): "
                                       (if arg " (all snapshots)" "")
                                       (if decknix--session-picker-workspace-filter
                                           (format " [%s]"
