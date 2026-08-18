@@ -38,6 +38,8 @@
 ;; called through the advice, so a forward declaration is enough.
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
 (declare-function agent-shell-buffers "ext:agent-shell")
+(declare-function decknix--hub-request-session-needles "decknix-agent-shell-hub")
+(declare-function decknix--hub-buffer-request-linked-p "decknix-agent-shell-hub" (buf needles))
 (declare-function agent-shell-workspace--buffer-status "ext:agent-shell-workspace")
 (declare-function decknix-agent-buffer-status "decknix-agent-auto-close" (buffer))
 (defvar decknix--hub-dir)
@@ -366,11 +368,28 @@ bucket so time-based sub-agent liveness fades still refresh."
                                    (decknix--agent-session-subagents sid pid)))))))))
          buffers)))
 
+(defvar decknix--sidebar-hide-request-linked-live nil
+  "When non-nil, hide Live-section sessions that back a hub Request (#164).
+Such sessions already show inline on their Request row (the active
+tint / dot), so listing them again in Live is a double-indication.
+Toggle with `decknix-sidebar-toggle-hide-request-linked-live'.")
+
 (defun decknix--sidebar-render-live-cached (orig line-num buffers selected tiled max-name-width)
   "Caching :around advice for `decknix--sidebar-render-live-sessions'.
 Re-insert the previously rendered Live-section text when its fingerprint
 is unchanged, avoiding the ~350ms recompute on every paint.  ORIG renders
 into the current buffer and returns the next line number."
+  ;; #164: optionally drop request-linked sessions BEFORE the fingerprint so
+  ;; the cache key reflects the filtered set (flipping the toggle changes the
+  ;; buffer list → the fingerprint changes → the cache correctly invalidates).
+  (when (and decknix--sidebar-hide-request-linked-live
+             (fboundp 'decknix--hub-request-session-needles))
+    (let ((needles (decknix--hub-request-session-needles)))
+      (when needles
+        (setq buffers
+              (seq-remove
+               (lambda (b) (decknix--hub-buffer-request-linked-p b needles))
+               buffers)))))
   (let ((fp (ignore-errors
               (decknix--sidebar-live-render-fingerprint
                buffers selected tiled max-name-width))))

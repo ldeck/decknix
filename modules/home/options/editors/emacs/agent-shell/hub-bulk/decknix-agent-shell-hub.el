@@ -995,6 +995,29 @@ Checks buffer names for the pattern `pr-<repo>-<number>'."
                                      (buffer-name buf)))
                    (agent-shell-buffers)))))
 
+(defun decknix--hub-request-session-needles ()
+  "Return `pr-<repo>-<number>' needles for every current hub review request.
+These name the live buffers that back a Request row — the sessions that
+would otherwise double-show (once inline on the Request row, once in the
+Live section).  Used by the #164 Live-section filter."
+  (let ((items (and (boundp 'decknix--hub-reviews)
+                    (alist-get 'items decknix--hub-reviews)))
+        needles)
+    (dolist (item items)
+      (let* ((repo-full (or (alist-get 'repo item) ""))
+             (repo (car (last (split-string repo-full "/"))))
+             (number (alist-get 'number item)))
+        (when (and repo number (not (string-empty-p repo)))
+          (push (format "pr-%s-%s" repo number) needles))))
+    needles))
+
+(defun decknix--hub-buffer-request-linked-p (buf needles)
+  "Return non-nil when BUF's name matches any request needle in NEEDLES."
+  (let ((name (buffer-name buf)))
+    (and name
+         (seq-some (lambda (needle) (string-match-p (regexp-quote needle) name))
+                   needles))))
+
 (defvar decknix--hub-request-active-face
   '(:foreground "#d7af5f")
   "Face spec applied to Request rows / picker labels under
