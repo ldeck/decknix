@@ -2486,6 +2486,33 @@ any unrecognised key."
     (?b :background)
     (_ nil)))
 
+(defun decknix--hub-review-splits-present-p ()
+  "Return non-nil when the selected frame already has splits.
+Counts windows other than the minibuffer and the agent sidebar; two or
+more means a foreground launch would land amid an existing layout."
+  (let ((sidebar (or (bound-and-true-p agent-shell-workspace-sidebar-buffer-name)
+                     "*Agent Sidebar*")))
+    (>= (seq-count
+         (lambda (w) (not (equal (buffer-name (window-buffer w)) sidebar)))
+         (window-list nil 'no-minibuffer))
+        2)))
+
+(defun decknix--hub-review-read-placement (count &optional verb)
+  "Read a review-launch placement for COUNT sessions; return a symbol or nil.
+VERB labels the prompt (default \"Launch\").  When the frame already has
+splits the default (RET) is `:background' so the launch does not disturb
+the current layout; with a single window the default is `:split'.
+Returns nil when the user quits (?q)."
+  (let* ((splits (decknix--hub-review-splits-present-p))
+         (default (if splits :background :split))
+         (prompt (format "%s %d review%s: [s]plit [r]eplace [b]ackground [q]uit (RET=%s) "
+                         (or verb "Launch") count (if (= count 1) "" "s")
+                         (if splits "background" "split")))
+         (choice (read-char-choice prompt '(?s ?r ?b ?q ?\r ?\n))))
+    (pcase choice
+      ((or ?\r ?\n) default)
+      (_ (decknix--hub-review-placement-from-char choice)))))
+
 (defun decknix--hub-launch-review-items (items placement)
   "Launch review sessions for ITEMS with PLACEMENT.
 PLACEMENT is one of:
@@ -2547,12 +2574,8 @@ reverses sort direction.  All three are scoped to the picker."
             (cond
              ;; C-u: launch all
              ((equal arg '(4))
-              (let* ((count (length entries))
-                     (placement (decknix--hub-review-placement-from-char
-                                 (read-char-choice
-                                  (format "Launch all %d review%s: [s]plit  [r]eplace  [b]ackground  [q]uit "
-                                          count (if (= count 1) "" "s"))
-                                  '(?s ?r ?b ?q)))))
+              (let ((placement (decknix--hub-review-read-placement
+                                (length entries) "Launch all")))
                 (when placement
                   (decknix--hub-launch-review-items
                    (mapcar #'cdr entries) placement)))
@@ -2574,12 +2597,8 @@ reverses sort direction.  All three are scoped to the picker."
                           (setq remaining (delete choice remaining)))))))
                 (setq selected (nreverse selected))
                 (when selected
-                  (let* ((count (length selected))
-                         (placement (decknix--hub-review-placement-from-char
-                                     (read-char-choice
-                                      (format "%d review%s: [s]plit  [r]eplace  [b]ackground  [q]uit "
-                                              count (if (= count 1) "" "s"))
-                                      '(?s ?r ?b ?q)))))
+                  (let ((placement (decknix--hub-review-read-placement
+                                    (length selected))))
                     (when placement
                       (decknix--hub-launch-review-items
                        selected placement)))))
@@ -2608,12 +2627,7 @@ reverses sort direction.  All three are scoped to the picker."
                                        labels)))
                          (count (length items))
                          (placement (and (> count 0)
-                                         (decknix--hub-review-placement-from-char
-                                          (read-char-choice
-                                           (format "Launch %d review%s: [s]plit  [r]eplace  [b]ackground  [q]uit "
-                                                   count
-                                                   (if (= count 1) "" "s"))
-                                           '(?s ?r ?b ?q))))))
+                                         (decknix--hub-review-read-placement count))))
                     (when placement
                       (decknix--hub-launch-review-items
                        items placement)))
@@ -3334,12 +3348,7 @@ Interactively: \\[universal-argument] N r limits to N items;
                                labels)))
                        (count (length items))
                        (placement (and (> count 0)
-                                       (decknix--hub-review-placement-from-char
-                                        (read-char-choice
-                                         (format "Launch %d review%s: [s]plit  [r]eplace  [b]ackground  [q]uit "
-                                                 count
-                                                 (if (= count 1) "" "s"))
-                                         '(?s ?r ?b ?q))))))
+                                       (decknix--hub-review-read-placement count))))
                   (when placement
                     (decknix--hub-launch-review-items
                      items placement)))
