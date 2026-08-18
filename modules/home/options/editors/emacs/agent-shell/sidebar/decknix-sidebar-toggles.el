@@ -29,6 +29,9 @@
 ;; Declared with nil initialiser so `decknix--sidebar-refresh-now' can
 ;; let-bind it dynamically even in lexical-binding files (AGENTS.md rule).
 (defvar decknix--sidebar-refresh-suspended nil)
+;; Owned by decknix-hub-sidebar-paint.el (co-located with the Live-section
+;; filter it drives); forward-declared here for the toggle command (#164).
+(defvar decknix--sidebar-hide-request-linked-live)
 
 (defvar decknix--sidebar-show-keys t
   "When non-nil, show categorised key listing in the sidebar footer.
@@ -305,6 +308,21 @@ Live section above is then the only place they appear)."
   (decknix--sidebar-refresh-now)
   (message "Sessions: live-backed rows %s"
            (if decknix--sidebar-sessions-hide-live "hidden" "dimmed")))
+
+(defun decknix-sidebar-toggle-hide-request-linked-live ()
+  "Toggle hiding request-linked sessions from the Live section (#164).
+A review session spawned for a hub Request already shows inline on its
+Request row (the active tint / dot).  When this is on, that session is
+dropped from the Live section so it is not indicated twice; when off
+\(default), it appears in both places."
+  (interactive)
+  (setq decknix--sidebar-hide-request-linked-live
+        (not (bound-and-true-p decknix--sidebar-hide-request-linked-live)))
+  (decknix--sidebar-refresh-now)
+  (message "Live: request-linked sessions %s"
+           (if decknix--sidebar-hide-request-linked-live
+               "hidden (shown inline on Request row only)"
+             "shown")))
 
 (defun decknix--sidebar-session-workspace-visible-p (workspace)
   "Return non-nil if WORKSPACE passes the unknown-ws filter (#139).

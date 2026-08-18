@@ -169,6 +169,7 @@
 (declare-function decknix--sidebar-session-workspace-visible-p
                   "decknix-sidebar-toggles" (workspace))
 (declare-function decknix-sidebar-toggle-sessions-hide-live "decknix-sidebar-toggles")
+(declare-function decknix-sidebar-toggle-hide-request-linked-live "decknix-sidebar-toggles")
 (declare-function decknix-sidebar-toggle-hidden "decknix-sidebar-toggles")
 (declare-function decknix--live-sessions-snapshot-and-truncate "decknix-agent-live-sessions")
 (declare-function decknix--live-sessions-dismissed-read "decknix-agent-live-sessions")
@@ -731,6 +732,21 @@ Accessible only via the `?' transient; no standalone key binding."
   (interactive)
   (call-interactively #'decknix-sidebar-toggle-sessions-hide-live))
 
+(transient-define-suffix decknix-sidebar-transient--hide-request-linked-live ()
+  :key "X"
+  :description
+  (lambda ()
+    (format "request-linked %s"
+            (propertize
+             (if (bound-and-true-p decknix--sidebar-hide-request-linked-live)
+                 "[hidden]" "[shown]")
+             'face (if (bound-and-true-p decknix--sidebar-hide-request-linked-live)
+                       'font-lock-constant-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-sidebar-toggle-hide-request-linked-live))
+
 (transient-define-suffix decknix-sidebar-transient--sessions-hide-unknown ()
   :key "U"
   :description
@@ -1005,6 +1021,7 @@ WIP / Sessions / Worktrees."
     (decknix-sidebar-transient--expand-prs)       ;; session PRs (E)
     (decknix-sidebar-transient--symbol-style)     ;; symbols (y)
     (decknix-sidebar-transient--tile-cycle)       ;; Tile cycle (t)
+    (decknix-sidebar-transient--hide-request-linked-live) ;; request-linked (X)
     (decknix-sidebar-transient--live-view-mode)]] ;; view (z)
   [["WIP"
     (decknix-sidebar-transient--wip-bot-pending)  ;; bot review (u)
