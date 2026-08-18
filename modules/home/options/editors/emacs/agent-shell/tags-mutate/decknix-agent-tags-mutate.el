@@ -65,6 +65,13 @@
 it already lives in another (the store-scatter signature).  Set to nil to
 disable.  A diagnostic aid, not load-bearing.")
 
+(defvar decknix--agent-register-container-threshold 10
+  "Registering a session into a conversation that already lists at least this
+many sessions is logged as a possible container-seed — even when the session
+is not yet elsewhere.  This catches the FIRST registration into a pollution
+sink (which the cross-conversation check alone stays silent on, since the
+session has no other home yet).")
+
 (defun decknix--agent-register-scatter-others (conv-key session-id convs)
   "Pure: sorted conv-keys in CONVS other than CONV-KEY whose `sessions' already
 list SESSION-ID.  Non-empty means registering SESSION-ID under CONV-KEY would
@@ -93,22 +100,29 @@ the scatter diagnostic."
     (string-join (seq-take (delete-dups (nreverse names)) 8) " <- ")))
 
 (defun decknix--agent-register-log-scatter (conv-key session-id convs)
-  "Append a scatter diagnostic line when registering SESSION-ID under CONV-KEY
-would duplicate it across conversations.  No-op when the log is disabled or
-there is no scatter.  Never signals (diagnostics must not break a write)."
+  "Append a diagnostic line when registering SESSION-ID under CONV-KEY looks
+like store scatter.  Two triggers: `scatter' — the id already lives in another
+conversation; `big-target' — the target already lists at least
+`decknix--agent-register-container-threshold' sessions (a likely pollution
+sink), which catches the FIRST registration into it before any duplication
+exists.  No-op when disabled or neither trigger fires.  Never signals."
   (when decknix--agent-register-scatter-log
-    (let ((others (decknix--agent-register-scatter-others conv-key session-id convs)))
-      (when others
-        (ignore-errors
-          (let* ((target (gethash conv-key convs))
-                 (tsize (if (hash-table-p target)
-                            (length (gethash "sessions" target)) 0))
-                 (ttags (and (hash-table-p target) (gethash "tags" target)))
-                 (line (format "%s sid=%s target=%s(n=%d tags=%s) already-in=%s via %s\n"
-                               (format-time-string "%FT%T%z")
+    (ignore-errors
+      (let* ((others (decknix--agent-register-scatter-others conv-key session-id convs))
+             (target (gethash conv-key convs))
+             (tsize (if (hash-table-p target)
+                        (length (gethash "sessions" target)) 0))
+             (big (>= tsize decknix--agent-register-container-threshold))
+             (reason (cond ((and others big) "scatter+big")
+                           (others "scatter")
+                           (big "big-target"))))
+        (when reason
+          (let* ((ttags (and (hash-table-p target) (gethash "tags" target)))
+                 (line (format "%s [%s] sid=%s target=%s(n=%d tags=%s) already-in=%s via %s\n"
+                               (format-time-string "%FT%T%z") reason
                                session-id conv-key tsize
                                (if ttags (string-join ttags ",") "-")
-                               (string-join others ",")
+                               (if others (string-join others ",") "-")
                                (decknix--agent-register-caller-trace))))
             (with-temp-buffer
               (insert line)
