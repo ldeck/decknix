@@ -714,7 +714,8 @@ let
   # Paces bursty session spawns (auto-review dispatching one per eligible PR
   # on a single hub refresh) so a burst doesn't cold-start N node+claude
   # processes at once — which thrashed the machine and froze Emacs's main
-  # thread.  Pure queue logic, ERT-covered.
+  # thread.  Pure queue logic, ERT-covered.  Tests live under
+  # `agent-shell/tests/' so the package source dir stays compile-clean.
   decknix-agent-spawn-queue-el = mkEmacsTestedPackage {
     pname = "decknix-agent-spawn-queue";
     src = ./agent-shell/spawn-queue;
@@ -954,8 +955,10 @@ let
   # Archived-session picker: a thin `completing-read' front end over the
   # `decknix session' archive store (list --archived / restore).  Pure helpers
   # (parse/label/sort) carry the logic and are ERT-covered; the interactive
-  # `decknix-agent-archived-open' is glue that shells out to the CLI.  No deps
-  # beyond built-in json/subr-x, so it stands alone.
+  # `decknix-agent-archived-open' is glue that shells out to the CLI.  Tests
+  # live under `agent-shell/tests/' so the package source dir stays compile-clean
+  # (otherwise trivialBuild would byte-compile the `*-test.el' file too).
+  # No deps beyond built-in json/subr-x, so it stands alone.
   decknix-agent-archived-el = mkEmacsTestedPackage {
     pname = "decknix-agent-archived";
     src = ./agent-shell/archived;
@@ -4691,6 +4694,7 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         (define-key decknix-agent-prefix-map (kbd "E") 'decknix-agent-compose-interrupt)
 
         (define-key decknix-agent-prefix-map (kbd "v") 'decknix-agent-review)
+        (define-key decknix-agent-prefix-map (kbd "V") 'decknix-agent-review-menu) ; Review-session menu (#166)
 
         ;; C-c A c — commands sub-prefix ("Commands")
         (define-prefix-command 'decknix-agent-command-map)
