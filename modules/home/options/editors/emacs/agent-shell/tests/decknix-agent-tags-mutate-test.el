@@ -196,6 +196,67 @@ empty when the target is the session's only home."
     ;; A session-id with a single home reports no scatter.
     (should (null (decknix--agent-register-scatter-others "a707" "sid-unique" convs)))))
 
+(ert-deftest decknix-container-homes--only-oversized-others ()
+  "Returns other conversations that list the id AND are at/above threshold."
+  (let ((convs (make-hash-table :test 'equal))
+        (small (make-hash-table :test 'equal))
+        (container (make-hash-table :test 'equal))
+        (other-small (make-hash-table :test 'equal)))
+    (puthash "sessions" '("sid-a") small)
+    ;; container: 16 sessions incl sid-a
+    (puthash "sessions" (cons "sid-a" (mapcar (lambda (i) (format "s%d" i))
+                                              (number-sequence 1 15)))
+             container)
+    (puthash "sessions" '("sid-a") other-small)
+    (puthash "a707" small convs)
+    (puthash "e06099" container convs)
+    (puthash "other" other-small convs)
+    ;; From the specific home a707: only the oversized container qualifies.
+    (should (equal (decknix--agent-container-homes "a707" "sid-a" convs 15)
+                   '("e06099")))
+    ;; A high threshold spares even the container.
+    (should (null (decknix--agent-container-homes "a707" "sid-a" convs 99)))))
+
+(ert-deftest decknix-register-session-id--drains-container-on-specific-home ()
+  "Registering into a small conversation removes the id from an oversized
+container it also sits in (the pollution-sink heal)."
+  (let ((convs (make-hash-table :test 'equal))
+        (home (make-hash-table :test 'equal))
+        (container (make-hash-table :test 'equal)))
+    (puthash "sessions" nil home)
+    (puthash "sessions" (cons "sid-x" (mapcar (lambda (i) (format "s%d" i))
+                                              (number-sequence 1 20)))
+             container)
+    (puthash "a707" home convs)
+    (puthash "e06099" container convs)
+    (decknix-test--with-store convs
+      (decknix--agent-register-session-id "a707" "sid-x")
+      (should last-store)
+      ;; homed under the specific key...
+      (should (member "sid-x" (gethash "sessions" (gethash "a707" convs))))
+      ;; ...and drained out of the container.
+      (should-not (member "sid-x" (gethash "sessions" (gethash "e06099" convs))))
+      ;; container's other members are untouched.
+      (should (member "s1" (gethash "sessions" (gethash "e06099" convs)))))))
+
+(ert-deftest decknix-register-session-id--no-drain-when-homing-into-container ()
+  "Registering INTO a large conversation does not drain from siblings — we must
+not fragment a genuinely long thread."
+  (let ((convs (make-hash-table :test 'equal))
+        (big1 (make-hash-table :test 'equal))
+        (big2 (make-hash-table :test 'equal)))
+    (puthash "sessions" (mapcar (lambda (i) (format "a%d" i)) (number-sequence 1 20)) big1)
+    (puthash "sessions" (cons "sid-y" (mapcar (lambda (i) (format "b%d" i))
+                                              (number-sequence 1 20)))
+             big2)
+    (puthash "big1" big1 convs)
+    (puthash "big2" big2 convs)
+    (decknix-test--with-store convs
+      (decknix--agent-register-session-id "big1" "sid-y")
+      ;; sid-y added to big1 but NOT drained from big2 (big1 is itself large).
+      (should (member "sid-y" (gethash "sessions" (gethash "big1" convs))))
+      (should (member "sid-y" (gethash "sessions" (gethash "big2" convs)))))))
+
 (provide 'decknix-agent-tags-mutate-test)
 
 ;;; decknix-agent-tags-mutate-test.el ends here
