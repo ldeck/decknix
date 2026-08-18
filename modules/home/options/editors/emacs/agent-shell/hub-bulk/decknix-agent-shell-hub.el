@@ -157,6 +157,8 @@
 (declare-function decknix--hub-item-reviewed-by-me-p "decknix-hub-mention-bot")
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
 (declare-function agent-shell-workspace-sidebar-mode-map "ext:agent-shell-workspace")
+(declare-function decknix--sidebar-schedule-paint "decknix-hub-sidebar-paint")
+(declare-function decknix--sidebar-paint-tick "decknix-hub-sidebar-paint")
 (declare-function decknix-sidebar-toggle-hub-display-mode "decknix-sidebar-toggles")
 (declare-function decknix--hub-format-row-label "decknix-hub-icons")
 
@@ -291,10 +293,22 @@ backend surfaces first."
         ("teamcity-builds.json" (decknix--hub-refresh-teamcity))
         ("teamcity-deploys.json" (decknix--hub-refresh-deploys))
         (_ nil))
-      ;; Refresh the sidebar if it exists
-      (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
-                 (get-buffer agent-shell-workspace-sidebar-buffer-name))
-        (agent-shell-workspace-sidebar-refresh)))))
+      ;; Refresh the sidebar (COALESCED) if it exists.  The hub daemon
+      ;; writes its JSON files in bursts -- a single poll can rewrite
+      ;; github-reviews / github-wip / teamcity-* / jira / meta together --
+      ;; and every write lands here.  A synchronous
+      ;; `agent-shell-workspace-sidebar-refresh' is a full erase+rebuild that
+      ;; runs into SECONDS with many live sessions, so firing it once per
+      ;; file, undebounced and possibly mid-typing, stacked multi-second
+      ;; stalls (#146 fix #2).  Route through the shared coalescer instead:
+      ;; a burst collapses to a single idle paint that also defers while
+      ;; typing / a picker is open.  Fall back to the direct refresh only if
+      ;; the paint module is somehow unloaded.
+      (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
+        (if (fboundp 'decknix--sidebar-schedule-paint)
+            (decknix--sidebar-schedule-paint #'decknix--sidebar-paint-tick)
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (agent-shell-workspace-sidebar-refresh)))))))
 
 (defun decknix--hub-start-watcher ()
   "Start watching the hub directory for changes."
