@@ -283,11 +283,14 @@ let
   # `screencapture' (target = window / frame / display) with optional
   # ffmpeg transcode to mp4/gif, plus a terminal `asciinema' → `agg' GIF
   # path.  Pure-Emacs commands; the CLIs (screencapture/asciinema/agg/
-  # ffmpeg) come from home.packages.
+  # ffmpeg) come from home.packages.  Tests are pending (Planned), so we
+  # keep the package source dir compile-clean with an empty `testFiles' list
+  # for now.
   decknix-record-el = mkEmacsTestedPackage {
     pname = "decknix-record";
     src = ./agent-shell/record;
     packageRequires = [ ];
+    testFiles = [ ];
   };
 
   # Quick-capture: jot a feature/bug/investigation/discussion into a GitHub
@@ -5903,6 +5906,18 @@ duration -- the most important number on this branch."
         (add-hook 'emacs-startup-hook
                   #'decknix--sidebar-previous-sessions-restore
                   90)
+        ;; Reap orphaned ACP bridge processes left by prior daemons (#3):
+        ;; a `decknix switch' kills the old daemon, but its node bridges
+        ;; re-parent to init (ppid 1) and pile up across switches, burning
+        ;; CPU/RAM.  Run once, a few seconds after this fresh daemon is up
+        ;; (idle-deferred so it never blocks startup); it only ever sees
+        ;; TRULY orphaned (ppid=1) bridges, never a live daemon's children.
+        (declare-function decknix-agent-reap-orphaned-bridges
+                          "decknix-agent-shell-main-session" (&optional verbose))
+        (add-hook 'emacs-startup-hook
+                  (lambda ()
+                    (run-with-idle-timer
+                     8 nil #'decknix-agent-reap-orphaned-bridges)))
         ;; Restore the worktree clone map early (priority 70) to avoid
         ;; blocking the first sidebar render with git process calls.
         (add-hook 'emacs-startup-hook
