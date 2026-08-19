@@ -4351,6 +4351,47 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; Wire C-c A R globally
         (define-key decknix-agent-prefix-map (kbd "R") 'decknix-agent-session-rename)
 
+        ;; == Session prefix map: C-c s → "Session" (#4) ==
+        ;; C-c A is for GLOBAL agent/sidebar/dashboard actions; session-
+        ;; scoped commands live under C-c s.  Added ADDITIVELY: each session
+        ;; command is still reachable under its historical C-c A key during
+        ;; the transition, so no muscle memory breaks.  (The review menu is
+        ;; new this session, so it moves outright to `C-c s V' with no C-c A
+        ;; duplicate.)  Once C-c s is habitual, the C-c A duplicates can be
+        ;; unbound for the clean move.
+        (define-prefix-command 'decknix-session-prefix-map)
+        (global-set-key (kbd "C-c s") 'decknix-session-prefix-map)
+        (dolist (b '(("n" . decknix-agent-session-new)
+                     ("f" . decknix-agent-session-fork)
+                     ("q" . decknix-agent-session-quit)
+                     ("R" . decknix-agent-session-rename)
+                     ("r" . decknix-agent-session-recent)
+                     ("s" . decknix-agent-session-picker)
+                     ("b" . decknix-agent-switch-buffer)
+                     ("g" . decknix-agent-session-grep)
+                     ("h" . decknix-agent-session-history)
+                     ("x" . decknix-agent-arm-auto-close)
+                     ("e" . decknix-agent-compose)
+                     ("v" . decknix-agent-review)
+                     ("V" . decknix-agent-review-menu)))
+          (define-key decknix-session-prefix-map (kbd (car b)) (cdr b)))
+        (with-eval-after-load 'which-key
+          (which-key-add-key-based-replacements
+            "C-c s"   "Session"
+            "C-c s n" "new session"
+            "C-c s f" "fork session"
+            "C-c s q" "quit session"
+            "C-c s R" "rename session"
+            "C-c s r" "recent sessions"
+            "C-c s s" "session picker"
+            "C-c s b" "buffer switch"
+            "C-c s g" "grep sessions"
+            "C-c s h" "history"
+            "C-c s x" "arm auto-close"
+            "C-c s e" "compose"
+            "C-c s v" "review last exchange"
+            "C-c s V" "review menu"))
+
         ;; Compat: the bumped `agent-shell-workspace--buffer-config' calls
         ;; (map-elt config :buffer-name) over each element of
         ;; `agent-shell-agent-configs', but the core package populates that list
@@ -4714,7 +4755,7 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         (define-key decknix-agent-prefix-map (kbd "E") 'decknix-agent-compose-interrupt)
 
         (define-key decknix-agent-prefix-map (kbd "v") 'decknix-agent-review)
-        (define-key decknix-agent-prefix-map (kbd "V") 'decknix-agent-review-menu) ; Review-session menu (#166)
+        ;; Review-session menu (#166) now lives on `C-c s V' (session prefix, #4).
 
         ;; C-c A c — commands sub-prefix ("Commands")
         (define-prefix-command 'decknix-agent-command-map)
