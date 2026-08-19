@@ -2905,6 +2905,41 @@ batch launches."
                       (error nil))))
                t))))))
 
+(defconst decknix-agent--bridge-command-regexp
+  "claude-agent-acp\\|pi-acp"
+  "Regexp matching an agent-shell ACP bridge process command line.")
+
+(defun decknix-agent-reap-orphaned-bridges (&optional verbose)
+  "Kill orphaned (ppid=1) agent-shell ACP bridge processes; return the count.
+These accumulate when an Emacs daemon dies without reaping its bridge
+subprocesses -- notably on `decknix switch', where the outgoing daemon's
+node bridges re-parent to init (ppid 1).  Left unchecked they pile up and
+burn CPU/RAM across switches.
+
+Only PID-1-parented (truly orphaned) processes are killed, so bridges
+owned by ANY live Emacs daemon -- this one or another -- are never
+touched (their ppid is that daemon, not 1).  A process still serving a
+live session cannot be a ppid=1 orphan, so this is safe to run at will."
+  (interactive (list t))
+  (let ((killed 0)
+        (self (emacs-pid)))
+    (dolist (line (ignore-errors
+                    (process-lines "ps" "-axo" "pid=,ppid=,command=")))
+      (when (string-match
+             "\\`[ \t]*\\([0-9]+\\)[ \t]+\\([0-9]+\\)[ \t]+\\(.*\\)\\'" line)
+        (let ((pid  (string-to-number (match-string 1 line)))
+              (ppid (match-string 2 line))
+              (cmd  (match-string 3 line)))
+          (when (and (string= ppid "1")
+                     (/= pid self)
+                     (string-match-p decknix-agent--bridge-command-regexp cmd))
+            (ignore-errors (signal-process pid 'TERM))
+            (setq killed (1+ killed))))))
+    (when verbose
+      (message "decknix: reaped %d orphaned agent bridge%s"
+               killed (if (= killed 1) "" "s")))
+    killed))
+
 (defun decknix-agent-session-quit ()
   "Cleanly quit the current agent-shell session.
 Kills the buffer (which sends SIGHUP to auggie, saving the session).
