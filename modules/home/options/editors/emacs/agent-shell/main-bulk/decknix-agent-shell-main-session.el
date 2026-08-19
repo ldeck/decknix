@@ -2853,7 +2853,16 @@ batch launches."
              (add-hook 'comint-input-filter-functions
                        #'decknix--agent-flush-pending-metadata
                        nil t)))
-          ('deferred-no-metadata nil))
+          ('deferred-no-metadata
+           ;; No tags/workspace to persist, but still wire the input filter so
+           ;; the session registers under the conv-key derived from its OWN
+           ;; first message.  Without this (now that the prompt-ready path no
+           ;; longer registers from the shared ring) an untagged new session
+           ;; would never join the store and would become an unresumable orphan.
+           (with-current-buffer shell-buf
+             (add-hook 'comint-input-filter-functions
+                       #'decknix--agent-flush-pending-metadata
+                       nil t))))
         ;; ALWAYS subscribe to prompt-ready to set session-id.
         ;; The session-id is only available after ACP bootstrapping,
         ;; which is async.  We also opportunistically register the
@@ -2878,23 +2887,21 @@ batch launches."
                             (when (and sid (stringp sid)
                                       (not (string-empty-p sid)))
                               (setq-local decknix--agent-auggie-session-id sid)
-                              (let* ((ring (and (boundp 'comint-input-ring)
-                                               comint-input-ring))
-                                     (first-msg (when (and ring
-                                                           (ring-p ring)
-                                                           (> (ring-length ring) 0))
-                                                  (ring-ref ring
-                                                            (1- (ring-length ring)))))
-                                     (conv-key (when (and first-msg
-                                                          (not (string-empty-p first-msg)))
-                                                 (decknix--agent-conversation-key
-                                                  first-msg))))
-                                (unless decknix--agent-conv-key
-                                  (when conv-key
-                                    (setq-local decknix--agent-conv-key conv-key)))
-                                (when conv-key
-                                  (decknix--agent-register-session-id
-                                   conv-key sid))))))
+                              ;; Register under this buffer's OWN conv-key when
+                              ;; it is already known (immediate mode set it from
+                              ;; the real first message).  Do NOT derive a
+                              ;; conv-key from the comint ring: a NEW session's
+                              ;; ring is the SHARED agent input history, so its
+                              ;; oldest entry is a foreign command (e.g. an old
+                              ;; `/review-service-pr …#31') whose hash mis-files
+                              ;; the session into that unrelated conversation —
+                              ;; the e06099 container bug, where every new
+                              ;; session inherited another PR's tag union.
+                              ;; Deferred sessions register via the input-filter
+                              ;; flush on their OWN first message instead.
+                              (when decknix--agent-conv-key
+                                (decknix--agent-register-session-id
+                                 decknix--agent-conv-key sid)))))
                       (error nil))))
                t))))))
 
