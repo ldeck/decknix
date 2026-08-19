@@ -77,6 +77,34 @@ Gates the continuation primer: when `session/resume' loaded real context
 into the model there is nothing to prime, so the primer is suppressed
 \(see `decknix--agent-resume-primer-on-ready').")
 
+(defcustom decknix-agent-resume-load-full-context nil
+  "When non-nil, resuming a session re-ingests its full prior context.
+Resume then uses native ACP `session/resume', which reloads the whole
+transcript into the model — accurate but SLOWER (the model re-processes
+the entire history before it is ready).
+
+When nil (the default) resume is FAST: it starts a fresh session and
+drops in a lightweight continuation primer, so a resumed session is ready
+as quickly as a new one and you can prompt immediately.  The agent does
+not have the prior context pre-loaded, but the primer points it at the
+transcript file, and you can flip this on when a task genuinely needs the
+full history re-ingested.
+
+Toggle from the sidebar session menu or via
+`decknix-agent-toggle-resume-full-context'."
+  :type 'boolean
+  :group 'decknix)
+
+(defun decknix-agent-toggle-resume-full-context ()
+  "Toggle whether resume re-ingests full prior context (slow) or is fast."
+  (interactive)
+  (setq decknix-agent-resume-load-full-context
+        (not decknix-agent-resume-load-full-context))
+  (message "Resume: %s"
+           (if decknix-agent-resume-load-full-context
+               "load FULL context (native session/resume — slower)"
+             "FAST (continuation primer only, no context re-ingestion)")))
+
 (defun decknix--agent-resume-native-p (session-id supports-resume)
   "Return non-nil when SESSION-ID should be resumed natively over ACP.
 True only when a resume target SESSION-ID is pending AND the connected
@@ -164,7 +192,12 @@ ORIG-FN unchanged.  ARGS is ORIG-FN's `&key' plist."
          (sid (and (buffer-live-p buf)
                    (buffer-local-value 'decknix--agent-resume-target-sid buf)))
          (supports-resume (map-elt state :supports-session-resume)))
-    (if (decknix--agent-resume-native-p sid supports-resume)
+    ;; Fast-resume (#1): only re-ingest full context via native
+    ;; `session/resume' when the user opted in.  Off by default → fall
+    ;; through to `session/new' + the continuation primer, so a resumed
+    ;; session is ready as fast as a new one.
+    (if (and decknix-agent-resume-load-full-context
+             (decknix--agent-resume-native-p sid supports-resume))
         (decknix--agent-resume-native-send sid args orig-fn)
       (apply orig-fn args))))
 

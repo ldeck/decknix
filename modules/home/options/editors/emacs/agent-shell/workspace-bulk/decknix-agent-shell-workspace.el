@@ -4788,6 +4788,25 @@ route here."
   (interactive)
   (decknix--sidebar-call-transient #'decknix-sidebar-review-menu))
 
+(declare-function decknix-agent-toggle-resume-full-context
+                  "decknix-agent-resume-native")
+(defvar decknix-agent-resume-load-full-context)
+
+(transient-define-suffix decknix-sidebar-transient--resume-full-context ()
+  "Toggle whether resume re-ingests full prior context (#1)."
+  :key "c"
+  :description
+  (lambda ()
+    (format "resume context %s"
+            (propertize
+             (if (bound-and-true-p decknix-agent-resume-load-full-context)
+                 "[full — slower]" "[fast — primer]")
+             'face (if (bound-and-true-p decknix-agent-resume-load-full-context)
+                       'font-lock-constant-face 'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-agent-toggle-resume-full-context))
+
 (transient-define-prefix decknix-sidebar-session-menu ()
   "Session submenu (spec §3.7).
 Stable-shape skeleton — Phase 1 hosts the verbs that graduated from
@@ -4797,7 +4816,9 @@ in-menu `S Session…' entry both route here."
   [:description decknix--sidebar-action-description
    ["Session"
     ("u" decknix--sb-act-unlink :inapt-if decknix--sb-act-not-linked-p)
-    ("i" decknix--sb-act-investigate :inapt-if decknix--sb-act-not-task-p)]]
+    ("i" decknix--sb-act-investigate :inapt-if decknix--sb-act-not-task-p)]
+   ["Resume"
+    (decknix-sidebar-transient--resume-full-context)]]
   [("q" "Cancel" transient-quit-all)])
 
 (transient-define-suffix decknix--sb-act-session-submenu ()
