@@ -110,17 +110,23 @@ single-home registration should drain SESSION-ID out of."
     (sort hits #'string<)))
 
 (defun decknix--agent-register-caller-trace ()
-  "Compact innermost-first chain of `decknix' frames on the call stack, for
-the scatter diagnostic."
+  "Compact innermost-first chain of the call stack, for the scatter diagnostic.
+Captures ALL named-function frames (not just `decknix' ones): a container seed
+is timer-driven, so the culprit sits in a non-decknix frame (a timer callback /
+subscription lambda) between `timer-event-handler' and the register call — a
+decknix-only filter hides exactly the frame we need.  Byte-compiled closures
+print as `closure'/`lambda', still useful for locating the path."
   (let (names)
     (dolist (frame (backtrace-frames))
-      (let ((fn (nth 1 frame)))
-        (when (symbolp fn)
-          (let ((n (symbol-name fn)))
-            (when (and (string-prefix-p "decknix" n)
-                       (not (string-match-p "register-\\(scatter\\|caller\\|log\\)" n)))
-              (push n names))))))
-    (string-join (seq-take (delete-dups (nreverse names)) 8) " <- ")))
+      (let* ((fn (nth 1 frame))
+             (n (cond ((symbolp fn) (symbol-name fn))
+                      ((byte-code-function-p fn) "<bytecode>")
+                      ((and (consp fn) (eq (car fn) 'lambda)) "<lambda>")
+                      ((and (consp fn) (eq (car fn) 'closure)) "<closure>")
+                      (t nil))))
+        (when (and n (not (string-match-p "register-\\(scatter\\|caller\\|log\\)" n)))
+          (push n names))))
+    (string-join (seq-take (delete-dups (nreverse names)) 14) " <- ")))
 
 (defun decknix--agent-register-log-scatter (conv-key session-id convs)
   "Append a diagnostic line when registering SESSION-ID under CONV-KEY looks
