@@ -2142,6 +2142,24 @@ let
     ];
   };
 
+  # Re-review routing: when the author presses GitHub's "re-request
+  # review", the hub already resurfaces the row (`re_requested' ->
+  # `decknix--hub-requests-reviewed-visible-p').  This decides where
+  # opening it lands -- reusing the live review buffer, else resuming
+  # the saved session, else a fresh review -- so the agent's prior
+  # review is carried forward instead of re-derived.  The pure routing
+  # is ERT-covered; the hub row's tint/glyph consume
+  # `decknix-agent-re-review-item-p' via `fboundp' guards, so the
+  # sidebar degrades gracefully if this package is absent.
+  decknix-agent-re-review-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-re-review";
+    src = ./agent-shell/review;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-re-review-test.el"
+    ];
+  };
+
   # PR B-Bulk.1: bulk extraction of the context-panel sub-heredoc.
   # Verbatim move of 35 declarations (576 lines of forms + commentary)
   # from the four `+ optionalString cfg.context.enable ''..''` sub-heredocs
@@ -2967,6 +2985,7 @@ in
           decknix-agent-review-followup-format-el
           decknix-agent-review-followup-io-el
           decknix-agent-review-submit-el
+          decknix-agent-re-review-el
         ]
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
@@ -4256,6 +4275,12 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; review-mode) stays in main-bulk and dispatches into
         ;; this module by symbol.
         (require 'decknix-agent-review-submit)
+        ;; Re-review routing (live > saved > fresh) + the prompt sent
+        ;; into a reused session.  Required eagerly so the hub row
+        ;; painter's `fboundp' guard on
+        ;; `decknix-agent-re-review-item-p' resolves on the first
+        ;; sidebar render rather than only after a lazy load.
+        (require 'decknix-agent-re-review)
         (declare-function decknix--agent-review-content-for-route
                           "decknix-agent-review-submit" (route))
         (declare-function decknix--agent-review-submit-to-agent
