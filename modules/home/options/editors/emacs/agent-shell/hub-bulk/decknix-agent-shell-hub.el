@@ -1043,6 +1043,48 @@ live session exists, so callers can wrap unconditionally."
                             'append str))
   str)
 
+(defvar decknix--hub-request-re-review-face
+  '(:foreground "#c678dd" :weight bold)
+  "Face spec applied to Request rows the author has re-requested.
+
+A re-review is a different ask from a first-time review -- there is
+prior work to build on -- so it gets its own colour rather than
+reusing the gold `decknix--hub-request-active-face' (live session)
+or the blue/gold @-mention badges.  Bold as well as tinted because
+the row's whole point is that it came BACK: colour alone reads as
+just another Request when the section is busy.
+
+Composed with `append' like the active tint, so per-column faces
+keep their semantic colours.  A row can be both re-requested and
+under live review; the two tints compose, and the bold weight
+survives either way.")
+
+(defun decknix--hub-request-tint-re-review (str item)
+  "Tint STR when ITEM is a PR whose review the author re-requested.
+Mutates STR in place via `add-face-text-property' (`append' merge
+order) and returns it, mirroring `decknix--hub-request-tint-active'
+so both cues can be applied unconditionally at the call site."
+  (when (and (stringp str)
+             (> (length str) 0)
+             (fboundp 'decknix-agent-re-review-item-p)
+             (decknix-agent-re-review-item-p item))
+    (add-face-text-property 0 (length str)
+                            decknix--hub-request-re-review-face
+                            'append str))
+  str)
+
+(defun decknix--hub-re-review-icon (item)
+  "Return the re-review glyph for ITEM, or an empty string.
+
+Paired with the row tint: the glyph says WHICH signal fired (this
+came back for another look) where the tint only says the row is
+special, and it survives the display modes that drop the tinted
+title column."
+  (if (and (fboundp 'decknix-agent-re-review-item-p)
+           (decknix-agent-re-review-item-p item))
+      (decknix--hub-icon "↻" decknix--hub-request-re-review-face)
+    ""))
+
 ;; -- Hub: live-linked PR set --
 ;; Build a hash table of "owner/repo#number" keys for every PR
 ;; linked to any live agent-shell session. Used to hide WIP PRs
@@ -3063,6 +3105,13 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                (status-str (if (string-empty-p active-str)
                                status-str
                              (concat status-str active-str)))
+               ;; Re-review indicator — the author has asked me back on a
+               ;; PR I already reviewed.  Sits with the other state glyphs
+               ;; so it survives the display modes that drop the title.
+               (re-review-str (decknix--hub-re-review-icon item))
+               (status-str (if (string-empty-p re-review-str)
+                               status-str
+                             (concat status-str re-review-str)))
                ;; @ indicator — now moved to the badge slot (preceding age).
                ;; Yellow when the PR is personally mine: I am directly
                ;; requested / @-mentioned, OR I have already submitted a
@@ -3144,6 +3193,9 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
           ;; Tint the row yellow when a live session is already
           ;; reviewing this PR (composes with per-column faces).
           (decknix--hub-request-tint-active line item)
+          ;; ...and purple+bold when the author re-requested the review,
+          ;; so a returning PR is not just another row in the section.
+          (decknix--hub-request-tint-re-review line item)
           (insert (propertize line
                              'decknix-hub-url url
                              'decknix-hub-type 'review

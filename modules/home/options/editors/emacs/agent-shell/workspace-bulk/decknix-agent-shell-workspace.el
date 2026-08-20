@@ -58,6 +58,11 @@
 (declare-function agent-shell-rename-buffer "ext:agent-shell")
 (declare-function shell-maker--busy "ext:shell-maker")
 ;; Helpers in already-extracted modules.
+(declare-function decknix-agent-re-review-pr "decknix-agent-re-review" (url))
+(declare-function decknix-agent-re-review-needle
+                  "decknix-agent-re-review" (repo number))
+(declare-function decknix-agent-re-review-target
+                  "decknix-agent-re-review" (needle number buffers entries))
 (declare-function decknix--agent-pr-parse-url "decknix-agent-url-parse")
 (declare-function decknix--agent-parse-pr-url "decknix-agent-url-parse")
 (declare-function decknix--agent-repo-parse-url "decknix-agent-url-parse")
@@ -2455,8 +2460,43 @@ preventing extra splits when called from the sidebar.
 When BACKGROUND is non-nil the session is spawned undisplayed: no
 window is taken and the current layout is left untouched (the same
 path unattended auto-review uses).  It surfaces via the sidebar /
-attention indicator once ready."
+attention indicator once ready.
+
+When a review session for this PR already exists -- still open, or
+snapshotted from a previous Emacs -- the interactive path hands off
+to `decknix-agent-re-review-pr' instead of spawning a second one.
+That is what makes GitHub's \"re-request review\" land back in the
+session that did the first review, carrying its context, rather
+than starting the PR over from scratch.  BACKGROUND keeps the old
+behaviour unconditionally: unattended auto-review must not steal a
+window via the re-review path's `pop-to-buffer'."
   (let ((parsed (decknix--agent-parse-pr-url url)))
+    (cond
+     ((not parsed) (message "Not a valid PR URL: %s" url))
+     ((and (not background)
+           (fboundp 'decknix-agent-re-review-pr)
+           (fboundp 'decknix-agent-re-review-target)
+           (let* ((needle (decknix-agent-re-review-needle
+                           (alist-get 'repo parsed)
+                           (alist-get 'number parsed)))
+                  (route (decknix-agent-re-review-target
+                          needle (alist-get 'number parsed)
+                          (and (fboundp 'agent-shell-buffers)
+                               (agent-shell-buffers))
+                          (and (boundp 'decknix--sidebar-previous-sessions)
+                               decknix--sidebar-previous-sessions))))
+             (memq (car route) '(live saved))))
+      (decknix-agent-re-review-pr url))
+     (t
+      (decknix--nav-hub-start-review-fresh url background parsed)))))
+
+(defun decknix--nav-hub-start-review-fresh (url background parsed)
+  "Spawn a brand-new review session for URL.
+The original body of `decknix--nav-hub-start-review', split out so the
+reuse check above reads as a routing decision rather than a guard
+wrapped around 200 lines.  PARSED is the pre-parsed PR URL alist;
+BACKGROUND is as documented on the caller."
+  (let ((parsed parsed))
     (if (not parsed)
         (message "Not a valid PR URL: %s" url)
       (let* ((owner (alist-get 'owner parsed))
