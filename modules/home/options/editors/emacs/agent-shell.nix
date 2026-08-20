@@ -8,33 +8,72 @@ let
   # == Tiered package sourcing ==
   # Priority: stable nixpkgs > unstable nixpkgs > custom derivations
   #
-  # From unstable (not yet in stable, or stable version too old):
+  # Pinned to upstream release tags (ahead of nixpkgs):
   #   shell-maker, acp, agent-shell
   # Custom derivations (not in any nixpkgs channel):
   #   agent-shell-manager, agent-shell-workspace, agent-shell-attention
   #
-  # IMPORTANT: We take the source/recipe from unstable but rebuild using the
+  # IMPORTANT: We take the source from upstream but rebuild using the
   # local emacsPackages (which uses the same Emacs as the daemon). This ensures
   # native-compiled .eln files match the running Emacs build hash, avoiding
   # JIT recompilation at startup.
-
+  #
+  # == Why these three are pinned to tags rather than tracked from unstable ==
+  # These used to read `.version'/`.src' off `pkgs.unstable.emacsPackages'.
+  # That channel carries a MELPA *snapshot*, which lags upstream by weeks: at
+  # the time of this pin, nixpkgs-unstable's newest agent-shell snapshot
+  # (20260807.941) was upstream v0.70.4, while the streaming-render fixes we
+  # need landed in v0.72.1 and v0.74.2.  Bumping the flake input therefore
+  # could not deliver them at any lock revision.
+  #
+  # The fix being chased: agent output showed raw `**bold**' markers, or a bold
+  # run wearing `agent-shell-markdown-link'.  agent-shell renders markdown
+  # incrementally, and a chunk boundary landing mid-span left the partial run
+  # mis-faced with no later re-render.  Upstream reworked exactly this path --
+  # v0.72.1 "Fix inline code rendered as links" (same root cause: deleting and
+  # re-inserting each span collapsed the range markers) and v0.74.2 "Extend
+  # link-recognising logic and ensure links survive streaming" (#782), which
+  # adds `agent-shell-markdown--add-link-face' to stop a re-applied link face
+  # composing a second copy over `(link bold)' text, plus
+  # `agent-shell-markdown--outgrown-link-p' so a span still streaming in is
+  # re-linkified as it grows.
+  #
+  # Do NOT "simplify" these back to `pkgs.unstable.emacsPackages.*' until that
+  # channel's snapshot is >= the versions below -- doing so silently reverts
+  # the render fix.  The three move together: agent-shell 0.74.2 declares
+  # Package-Requires (shell-maker "0.97.2") (acp "0.13.1").
   shell-maker = pkgs.emacsPackages.trivialBuild {
     pname = "shell-maker";
-    version = pkgs.unstable.emacsPackages.shell-maker.version;
-    src = pkgs.unstable.emacsPackages.shell-maker.src;
+    version = "0.97.2";
+    src = pkgs.fetchFromGitHub {
+      owner = "xenodium";
+      repo = "shell-maker";
+      rev = "a92260d92ef61274e3a7bc3b00b28588784ba6b9"; # v0.97.2
+      hash = "sha256-+bqe2Ss879Dj5iypzL4jRH+UEGQ/9HVxU7qIUAG8NI8=";
+    };
     packageRequires = with pkgs.emacsPackages; [ markdown-mode ];
   };
 
   acp = pkgs.emacsPackages.trivialBuild {
     pname = "acp";
-    version = pkgs.unstable.emacsPackages.acp.version;
-    src = pkgs.unstable.emacsPackages.acp.src;
+    version = "0.14.1";
+    src = pkgs.fetchFromGitHub {
+      owner = "xenodium";
+      repo = "acp.el";
+      rev = "2c68f25dfe138ab5ec8f8decd23ea1426e349e7e"; # v0.14.1
+      hash = "sha256-1R4aiGoB7AI46d/wfoQ8EeNph272sFH2hcazzYv46Ng=";
+    };
   };
 
   agent-shell = pkgs.emacsPackages.trivialBuild {
     pname = "agent-shell";
-    version = pkgs.unstable.emacsPackages.agent-shell.version;
-    src = pkgs.unstable.emacsPackages.agent-shell.src;
+    version = "0.74.2";
+    src = pkgs.fetchFromGitHub {
+      owner = "xenodium";
+      repo = "agent-shell";
+      rev = "26969ef21808218a439d6bb86face1333ae76169"; # v0.74.2
+      hash = "sha256-K/+W2N7Q5IjhcM3Q2+2OVhgqaXwDjbQrCb1f8mF109A=";
+    };
     packageRequires = [ shell-maker acp ] ++ (with pkgs.emacsPackages; [ markdown-mode ]);
   };
 
