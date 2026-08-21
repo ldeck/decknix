@@ -4006,6 +4006,20 @@ ${optionalString cfg.tableOverlay.enable ''
         (with-eval-after-load 'agent-shell-heartbeat
           (advice-add 'agent-shell-heartbeat-stop :after
                       #'decknix--agent-normalize-turn-end))
+        ;; Backstop for the same symptom.  Clearing residue at turn end (above)
+        ;; is the primary fix, but `agent-shell-workspace--buffer-status'
+        ;; decides "working" from a non-empty `:tool-calls' list BEFORE it
+        ;; consults the busy flag -- so ANY residue arriving by another path
+        ;; strands the session on "working" again.  This downgrades a "working"
+        ;; report to "ready" only when the shell is neither busy nor running a
+        ;; heartbeat, i.e. two independent signals agree the turn is over.
+        ;; "waiting" (pending permission request) is never rewritten: that is a
+        ;; real state the user has to act on.
+        (declare-function decknix--agent-buffer-status-harden
+                          "decknix-agent-heartbeat-watch" (orig buffer &rest args))
+        (with-eval-after-load 'agent-shell-workspace
+          (advice-add 'agent-shell-workspace--buffer-status :around
+                      #'decknix--agent-buffer-status-harden))
 
         ;; Quick-capture: `C-c A C' -> jot a feature/bug/investigation into a
         ;; GitHub issue/comment or taskwarrior, async, even while an agent is

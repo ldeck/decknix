@@ -45,6 +45,55 @@
 (declare-function agent-shell-heartbeat-stop "ext:agent-shell-heartbeat")
 (defvar shell-maker--busy)
 
+(defun decknix--agent-status-settled-p (busy heartbeat-live session-id)
+  "Return non-nil when a \"working\" report is stale residue, not live work.
+
+`agent-shell-workspace--buffer-status' decides \"working\" from a
+non-empty `:tool-calls' list BEFORE it consults the busy flag, so any
+tool-call residue outlives the turn that produced it and the session
+never leaves \"working\".  Clearing the residue at turn end is the
+primary fix (`decknix--agent-normalize-turn-end'); this is the backstop
+for residue arriving by some other path.
+
+Deliberately demands TWO independent negatives -- BUSY is nil AND
+HEARTBEAT-LIVE is nil -- before contradicting the reported status.
+Either alone is ambiguous: a turn is briefly busy before its heartbeat
+starts, and the watchdog may stop a leaked heartbeat while a request is
+genuinely still outstanding.  Requiring both means a live turn is never
+mislabelled idle, which is the failure that would actually cost the user
+something.
+
+SESSION-ID mirrors upstream's own precondition for reporting \"ready\";
+without it there is no session to be ready, so the report is left alone.
+Pure, so the decision is ERT-testable."
+  (and (not busy)
+       (not heartbeat-live)
+       session-id
+       t))
+
+(defun decknix--agent-buffer-status-harden (orig buffer &rest args)
+  "Return BUFFER's status from ORIG, downgrading stale \"working\" to \"ready\".
+
+`:around' advice for `agent-shell-workspace--buffer-status'.  Only a
+\"working\" result is ever reconsidered -- \"waiting\" (a pending
+permission request), \"killed\", \"initializing\" and \"ready\" pass
+through untouched -- and only when `decknix--agent-status-settled-p'
+agrees the turn is demonstrably over."
+  (let ((status (apply orig buffer args)))
+    (if (and (equal status "working")
+             (bufferp buffer)
+             (buffer-live-p buffer))
+        (with-current-buffer buffer
+          (let* ((state (ignore-errors (agent-shell--state)))
+                 (heartbeat (map-elt state :heartbeat)))
+            (if (decknix--agent-status-settled-p
+                 (bound-and-true-p shell-maker--busy)
+                 (and (timerp (map-elt heartbeat :heartbeat-timer)) t)
+                 (map-nested-elt state '(:session :id)))
+                "ready"
+              status)))
+      status)))
+
 (defun decknix--agent-heartbeat-owner (heartbeat buffers state-fn)
   "Return the buffer in BUFFERS whose agent-shell state owns HEARTBEAT.
 

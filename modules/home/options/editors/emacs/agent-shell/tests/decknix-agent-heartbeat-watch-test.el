@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)                       ; `cl-letf' in the status-harden tests
 (require 'decknix-agent-heartbeat-watch)
 
 (ert-deftest decknix-hb-watch--stuck-when-running-idle-past-threshold ()
@@ -55,6 +56,60 @@ It must never touch state in a non-agent buffer (the advice fires on every
     ;; not derived from agent-shell-mode -> the guard should skip everything
     (decknix--agent-normalize-turn-end)
     (should (eq shell-maker--busy t))))
+
+;; -- Status hardening (stale "working" must not outlive its turn) --
+
+(ert-deftest decknix-hb--status-settled-when-idle-and-heartbeat-ended ()
+  "Not busy + no live heartbeat + a session -> the turn is over."
+  (should (decknix--agent-status-settled-p nil nil "sid-1")))
+
+(ert-deftest decknix-hb--status-not-settled-while-busy ()
+  "A busy shell is working even with no heartbeat timer yet."
+  (should-not (decknix--agent-status-settled-p t nil "sid-1")))
+
+(ert-deftest decknix-hb--status-not-settled-while-heartbeat-live ()
+  "A live heartbeat means a turn is in flight even if busy is unset.
+The watchdog can stop a leaked heartbeat while a request is genuinely
+outstanding, so neither signal alone may contradict the status."
+  (should-not (decknix--agent-status-settled-p nil t "sid-1")))
+
+(ert-deftest decknix-hb--status-not-settled-without-session ()
+  "No session id -> nothing to be ready; upstream's own precondition."
+  (should-not (decknix--agent-status-settled-p nil nil nil)))
+
+(ert-deftest decknix-hb--status-harden-downgrades-stale-working ()
+  "A stale \"working\" becomes \"ready\" once the turn is demonstrably over."
+  (with-temp-buffer
+    (let* ((buf (current-buffer))
+           (state (list (cons :heartbeat (list (cons :heartbeat-timer nil)))
+                        (cons :session (list (cons :id "sid-1")))))
+           (orig (lambda (_b) "working")))
+      (setq-local shell-maker--busy nil)
+      (cl-letf (((symbol-function 'agent-shell--state) (lambda () state)))
+        (should (equal (decknix--agent-buffer-status-harden orig buf) "ready"))))))
+
+(ert-deftest decknix-hb--status-harden-leaves-live-working-alone ()
+  "A genuinely busy shell keeps reporting \"working\"."
+  (with-temp-buffer
+    (let* ((buf (current-buffer))
+           (state (list (cons :heartbeat (list (cons :heartbeat-timer nil)))
+                        (cons :session (list (cons :id "sid-1")))))
+           (orig (lambda (_b) "working")))
+      (setq-local shell-maker--busy t)
+      (cl-letf (((symbol-function 'agent-shell--state) (lambda () state)))
+        (should (equal (decknix--agent-buffer-status-harden orig buf) "working"))))))
+
+(ert-deftest decknix-hb--status-harden-passes-other-statuses-through ()
+  "Only \"working\" is ever reconsidered -- notably \"waiting\" is not.
+A pending permission request is a real state the user must act on;
+rewriting it to \"ready\" would hide the prompt."
+  (with-temp-buffer
+    (let ((buf (current-buffer)))
+      (setq-local shell-maker--busy nil)
+      (dolist (s '("waiting" "ready" "killed" "initializing" "unknown"))
+        (should (equal (decknix--agent-buffer-status-harden
+                        (lambda (_b) s) buf)
+                       s))))))
 
 ;; -- Heartbeat owner resolution (turn-end targets the RIGHT buffer) --
 
