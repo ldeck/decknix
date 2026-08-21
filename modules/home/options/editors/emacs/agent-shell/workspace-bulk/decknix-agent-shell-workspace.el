@@ -122,6 +122,9 @@
 (declare-function decknix--agent-conversation-key-for-session "decknix-agent-conv-resolve")
 (declare-function decknix--agent-tags-for-conv-key "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-find-live-buffer-for-conv-key "ext:decknix-agent-shell-main")
+(declare-function decknix-agent-turn-facts "decknix-agent-turn-signals" (&optional buffer))
+(declare-function decknix--agent-plan-label "decknix-agent-turn-signals" (progress))
+(declare-function decknix--agent-stop-reason-signals "decknix-agent-turn-signals" (stop-reason))
 (declare-function decknix--agent-workspace-for-conv-key "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-session-display-name "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-session-group-by-conversation "ext:decknix-agent-shell-main")
@@ -1287,6 +1290,35 @@ MAX-NAME-WIDTH is the cap for repo name display."
                         (when first-tag (list first-tag)))))))))))
     line-num))
 
+(defun decknix--sidebar-turn-badge (buf)
+  "Return a turn-end badge for BUF: plan progress and/or an abnormal stop.
+
+Surfaces the two facts `decknix-agent-turn-signals' captures that the
+status string alone cannot carry:
+
+  \"4/7\"  the agent's own plan, so a session that stopped with work
+          outstanding is distinguishable from one that finished it;
+  \"!\"    the last turn ended on something other than `end_turn'
+          (truncated, refused, request-capped).  agent-shell renders
+          those into a buffer fragment and nowhere else, so a turn that
+          DIED looked exactly like one that completed.
+
+Empty string when neither applies, so the row is unchanged for the
+common case.  Soft-depends on the turn-signals package."
+  (if (not (and (buffer-live-p buf) (fboundp 'decknix-agent-turn-facts)))
+      ""
+    (let* ((facts (decknix-agent-turn-facts buf))
+           (plan (decknix--agent-plan-label (plist-get facts :plan)))
+           (stop (plist-get facts :stop-reason))
+           (abnormal (plist-get (decknix--agent-stop-reason-signals stop) :attention)))
+      (concat
+       (if plan (propertize (concat " " plan) 'face 'shadow
+                            'help-echo "Agent plan: completed/total")
+         "")
+       (if abnormal (propertize " !" 'face 'warning
+                                'help-echo (format "Last turn stopped: %s" stop))
+         "")))))
+
 (defun decknix--sidebar-render-live-buffer (line-num buf selected is-tiled max-name-width
                                             &optional strip-tags)
   "Render a single live buffer row. Returns updated LINE-NUM.
@@ -1347,9 +1379,17 @@ basename) or a list of tag strings to suppress from the displayed name."
          (name-box (agent-shell-workspace--make-name-box
                     name display-face max-name-width))
          (name-box-styled
-          (if (string= status "waiting")
-              (propertize name-box 'face '(:background "#3a1515"))
-            name-box))
+          (cond
+           ;; Blocked mid-turn on a permission dialog — the loudest.
+           ((string= status "waiting")
+            (propertize name-box 'face '(:background "#3a1515")))
+           ;; Turn finished but ended on a question: still blocked on you,
+           ;; just not blocking a request.  Distinct, quieter tint so the
+           ;; two are not confusable at a glance.
+           ((string= status "asking")
+            (propertize name-box 'face '(:background "#3a2410")))
+           (t name-box)))
+         (turn-badge (decknix--sidebar-turn-badge buf))
          (selection-indicator (if (eq buf selected) ">" " "))
          (pr-badge (if buf-conv-key
                        (decknix--hub-pr-badge buf-conv-key)
@@ -1380,15 +1420,15 @@ basename) or a list of tag strings to suppress from the displayed name."
                                                   display-face
                                                 `(:foreground ,display-face)))))
                     (concat selection-indicator " " status-label name-box-styled)))
-                 ('B  ;; Scoped: provider + name + pr-badge + attention (no logo/progress)
+                 ('B  ;; Scoped: provider + name + turn + pr-badge + attention (no logo/progress)
                   (concat selection-indicator " "
                           provider-glyph-str " "
-                          name-box-styled tile-indicator
+                          name-box-styled tile-indicator turn-badge
                           pr-badge attention-icons))
-                 (_   ;; A (Full): all elements — provider logo name tile badge attention progress
+                 (_   ;; A (Full): all elements — provider logo name tile turn badge attention progress
                   (concat selection-indicator " "
                           provider-glyph-str " "
-                          logo-box name-box-styled tile-indicator
+                          logo-box name-box-styled tile-indicator turn-badge
                           pr-badge attention-icons progress-badge)))))
     (when (eq buf selected)
       (setq target-line line-num))
