@@ -4311,6 +4311,27 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; Show session ID in header and session selection prompt
         (setq agent-shell-show-session-id t)
 
+        ;; Keep-awake probing off unless the library can actually exist.
+        ;;
+        ;; `agent-shell-inhibit-system-sleep' drives a probe for the
+        ;; `system-sleep' library, which ships with Emacs 31.1+.  On an
+        ;; older Emacs the feature can never load, and agent-shell before
+        ;; v0.67.1 retried `(require 'system-sleep nil t)' on EVERY emitted
+        ;; event -- and a failed `require' is not cached, so each attempt
+        ;; re-walked the whole `load-path'.  Measured here at ~344ms per
+        ;; call against our 322-entry load-path, run once per streamed ACP
+        ;; notification: enough to wedge the main thread outright
+        ;; ("Server not responding" from emacsclient).
+        ;;
+        ;; The pinned agent-shell (0.74.2) fixes the retry -- it attempts
+        ;; the load once and gates it behind this very defcustom -- so this
+        ;; is belt-and-braces: on an Emacs that cannot supply the library,
+        ;; skip even the single attempt, and make the reason explicit so a
+        ;; future version bump cannot quietly reintroduce the probe.
+        ;; Re-enable by simply removing this form once on Emacs 31.1+.
+        (when (version< emacs-version "31.1")
+          (setq agent-shell-inhibit-system-sleep nil))
+
         ;; Swap the :welcome-function in the agent config to use our
         ;; enhanced version.  We advise make-agent-config because the
         ;; welcome function is stored as a direct function reference
