@@ -537,9 +537,17 @@ The largest module (~4400 lines). Key subsystems:
   `decknix--agent-resume-native-p` carved + ERT-tested; the advice registration
   (a named `decknix--` function, so hot-reload's stale-advice strip handles it)
   lives in the heredoc per Rule 2.
+  Gated by `decknix-agent-resume-load-full-context` (default **`t`**; toggle
+  `c` in the sidebar session menu). Setting it nil deliberately resumes with an
+  empty context window and falls through to the primer — that path was once
+  labelled the "fast" one, which was wrong in the way that matters: its
+  handshake settles marginally sooner, but the primer is submitted the instant
+  the session reports ready and instructs the model to re-read the transcript,
+  so a whole model turn plus its tool calls elapses before you can type.
 - **Resume continuation primer** (fallback): when a bridge does **not** advertise
-  the resume capability (native resume unavailable, or the `session/resume`
-  request fails), we fall back to `session/new` and
+  the resume capability (native resume unavailable, the `session/resume`
+  request fails, or `decknix-agent-resume-load-full-context` is nil), we fall
+  back to `session/new` and
   `decknix--agent-session-resume--new` auto-sends a lightweight **primer** as the
   first user message once the resumed session reports ready — mirroring the fork
   hand-off (`decknix--agent-resume-primer-on-ready` → `shell-maker-submit`). The
@@ -1063,6 +1071,45 @@ The `decknix--context-update-header` function delegates to the unified header
 - `C-u C-u C-c j` opens a tabulated dashboard of all agent-shell buffers.
 - Tracks status via advice on `agent-shell--send-command` and
   `agent-shell--on-request` — no custom process sentinels needed.
+
+### Turn-end signals (`agent-shell/turn-signals/`)
+
+`decknix-session-state.el` classifies a session from a **signals plist**, but
+two of the signals it documents had no feeder from the agent side:
+`:attention` ("asked a question") and `:done` ("work complete"). `:attention`
+was only ever set by a permission prompt, so a session that ended its turn on a
+**question** reported plain `ready` — visually identical to one with nothing
+left to say. Meanwhile agent-shell renders and then *discards* the evidence:
+plan entry statuses, the ACP `stopReason`, and the closing message.
+
+Three seams capture it (all registered in the heredoc per Rule 2):
+
+| Seam | Advice | Captures |
+|------|--------|----------|
+| `agent-shell--on-notification` | `:before` | closing-message tail, latest `plan` progress |
+| `agent-shell--emit-event` | `:before` | `stopReason`; settles the question flag on `turn-complete` |
+| `agent-shell-workspace--buffer-status` | `:around` | refines `ready`/`finished` → `asking` |
+
+Notes:
+
+- The notification observer runs on **every streamed chunk**, so it does no more
+  than a bounded string append (`decknix-agent-turn-signals-tail-chars`, keeping
+  the tail — the question is at the end).
+- Buffer resolution comes from the ACP `state`'s `:buffer`, never
+  `current-buffer` — notification handlers run from a process filter. The
+  `emit-event` seam is the one exception, and is safe because
+  `agent-shell--emit-event` itself calls `(agent-shell--state)` with no buffer
+  argument, so the shell buffer is current by construction.
+- **Question detection is a heuristic** — ACP has no such flag. Markers: a
+  `CHOOSE ONE` block (mandated by the workspace `AGENTS.md`, so an exact marker
+  rather than a guess), a closing `Reply with …`, a line ending in `?`, or a
+  restated pending choice. Biased to over-report: a false positive costs a
+  glance, a miss costs however long the session sits there unnoticed. Validated
+  12/12 against real transcripts.
+- `waiting` feeds `:awaiting-permission` (score 80) and `asking` feeds
+  `:attention` (70), so a turn blocked mid-flight on a permission dialog
+  outranks one that merely wants an answer. (`waiting` fed `:attention` until
+  `asking` arrived, which had left `:awaiting-permission` unfed entirely.)
 
 ### Multi-Session Concurrency
 Multiple agent-shell sessions run **independently and concurrently**. Each

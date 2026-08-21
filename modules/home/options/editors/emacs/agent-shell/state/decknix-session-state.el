@@ -70,7 +70,8 @@ finished turn also looks `unread' — but stays below anything needing you."
 
 (defconst decknix-session-status-signal-map
   '(("killed"       . (:error t))
-    ("waiting"      . (:attention t))
+    ("waiting"      . (:awaiting-permission t))
+    ("asking"       . (:attention t))
     ("closing"      . (:closing t))
     ("working"      . (:busy t))
     ("finished"     . (:unread t))
@@ -79,7 +80,19 @@ finished turn also looks `unread' — but stays below anything needing you."
   "Map an agent-shell status string to `decknix-session-classify' signals.
 The status strings are those produced by `agent-shell-workspace--buffer-status'
 / `decknix--header-detect-status'.  Unmapped / \"ready\" / \"initializing\"
-statuses carry no signals, classifying as `idle'.")
+statuses carry no signals, classifying as `idle'.
+
+\"asking\" is decknix-derived rather than upstream (see
+`decknix-agent-turn-status'): a settled turn whose closing message put a
+question to you.  Both it and \"waiting\" classify as `needs-input', but
+they use different signals so they rank apart: \"waiting\" blocks a turn
+mid-flight on a permission dialog (`:awaiting-permission', score 80),
+while \"asking\" has already finished its turn and merely wants an answer
+\(`:attention', score 70).  Answer the blocked one first.
+
+\(\"waiting\" fed the generic `:attention' until the `asking' status
+arrived, which left `:awaiting-permission' with no feeder at all and
+collapsed the classifier's top two non-error bands into one.)")
 
 (defun decknix-session-signals-from-status (status)
   "Return classifier signals (a plist) for agent-shell STATUS string."

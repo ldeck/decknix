@@ -76,6 +76,14 @@ marker), so the window count stays accurate."
   (should (null (decknix-agent-tab-status-background "bogus")))
   (should (null (decknix-agent-tab-status-background nil))))
 
+(ert-deftest decknix-tab-status/default-palette-covers-every-status ()
+  "Every status the sidebar can report has a tint.
+A status with no entry silently renders as an untinted tab, which reads
+as \"nothing to see here\" — the exact wrong signal for `asking'."
+  (dolist (status '("working" "waiting" "asking" "ready"
+                    "finished" "initializing" "killed"))
+    (should (decknix-agent-tab-status-background status))))
+
 (ert-deftest decknix-tab-status/background-honours-override ()
   "The colour alist is overridable; a nil value disables that status' tint."
   (let ((decknix-agent-tab-status-colors '(("working" . "#010203")
