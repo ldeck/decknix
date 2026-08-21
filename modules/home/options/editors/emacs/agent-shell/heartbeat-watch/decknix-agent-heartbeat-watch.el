@@ -45,7 +45,36 @@
 (declare-function agent-shell-heartbeat-stop "ext:agent-shell-heartbeat")
 (defvar shell-maker--busy)
 
-(defun decknix--agent-normalize-turn-end (&rest _)
+(defun decknix--agent-heartbeat-owner (heartbeat buffers state-fn)
+  "Return the buffer in BUFFERS whose agent-shell state owns HEARTBEAT.
+
+STATE-FN maps a buffer to its `agent-shell--state' (injected so the
+lookup is ERT-testable without a live shell).  Matched by identity
+\(`eq'): the heartbeat alist handed to `agent-shell-heartbeat-stop' is
+the very object stored under the owning shell's `:heartbeat', so nothing
+else can be `eq' to it.
+
+Needed because `agent-shell-heartbeat-stop' takes only the heartbeat --
+it carries no buffer, and the current buffer at call time is merely
+whatever the process filter or timer left selected."
+  (when heartbeat
+    (seq-find (lambda (buf)
+                (and (buffer-live-p buf)
+                     (eq (map-elt (funcall state-fn buf) :heartbeat) heartbeat)))
+              buffers)))
+
+(defun decknix--agent-normalize-turn-end-in-buffer (buffer)
+  "Clear BUFFER's residual turn state (`:tool-calls' and the busy flag)."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (derived-mode-p 'agent-shell-mode)
+        (ignore-errors
+          (when (agent-shell--state)
+            (map-put! (agent-shell--state) :tool-calls nil)))
+        (when (bound-and-true-p shell-maker--busy)
+          (setq shell-maker--busy nil))))))
+
+(defun decknix--agent-normalize-turn-end (&rest args)
   "Clear a finished turn's residual state so status leaves \"working\".
 `agent-shell''s `session/prompt' ON-SUCCESS handler clears `:tool-calls' and the
 busy flag, but its ON-FAILURE handler (an errored / non-`end_turn' Claude turn)
@@ -59,13 +88,27 @@ TURN-END).
 Run as `:after' advice on `agent-shell-heartbeat-stop' (= turn end, either
 path).  Safe: heartbeat-stop only fires when the turn is genuinely over — a turn
 paused on a permission prompt keeps its heartbeat running — and the SUCCESS path
-merely re-clears already-cleared state."
-  (when (derived-mode-p 'agent-shell-mode)
-    (ignore-errors
-      (when (agent-shell--state)
-        (map-put! (agent-shell--state) :tool-calls nil)))
-    (when (bound-and-true-p shell-maker--busy)
-      (setq shell-maker--busy nil))))
+merely re-clears already-cleared state.
+
+The buffer is resolved from ARGS' `:heartbeat' rather than assumed to be
+`current-buffer'.  Trusting the current buffer made this a silent no-op
+whenever heartbeat-stop ran with a non-shell buffer selected, leaving the
+state dirty indefinitely (observed: sid a93a0f99 reporting \"working\" on 95
+residual tool-calls while `agent-shell-status' said `ready' and the heartbeat
+had already ended).  Worse, when some OTHER agent-shell buffer happened to be
+current it would clear that innocent session's state instead — the
+`derived-mode-p' guard only checks that some shell is selected, not the right
+one.  Falls back to the current buffer when the owner cannot be resolved, so a
+heartbeat already detached from any live shell behaves as it used to."
+  (let* ((heartbeat (plist-get args :heartbeat))
+         (owner (and (fboundp 'agent-shell-buffers)
+                     (decknix--agent-heartbeat-owner
+                      heartbeat (agent-shell-buffers)
+                      (lambda (buf)
+                        (with-current-buffer buf
+                          (ignore-errors (agent-shell--state))))))))
+    (decknix--agent-normalize-turn-end-in-buffer
+     (or owner (current-buffer)))))
 
 (defcustom decknix-agent-heartbeat-stuck-seconds 600
   "Seconds of no buffer output after which a running heartbeat is stuck.
