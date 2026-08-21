@@ -1406,7 +1406,7 @@ struct ArchProvider {
     id: &'static str,
     root: PathBuf,     // sessions root
     ext: &'static str, // session file extension (no dot)
-    nested: bool,      // claude nests transcripts under <slug>/; auggie/pi are flat
+    nested: bool,      // claude and pi nest transcripts under <slug>/; auggie is flat
 }
 
 fn arch_providers() -> Vec<ArchProvider> {
@@ -1414,8 +1414,81 @@ fn arch_providers() -> Vec<ArchProvider> {
     vec![
         ArchProvider { id: "claude", root: h.join(".claude/projects"), ext: "jsonl", nested: true },
         ArchProvider { id: "auggie", root: h.join(".augment/sessions"), ext: "json", nested: false },
-        ArchProvider { id: "pi", root: h.join(".pi/sessions"), ext: "json", nested: false },
+        // pi writes `~/.pi/agent/sessions/<slug>/<timestamp>_<uuid>.jsonl` --
+        // per-cwd like claude, not flat, and jsonl not json.  This pointed at
+        // `~/.pi/sessions` (flat, json), a path pi has never written: the
+        // directory does not exist, so `arch_enumerate' found nothing and
+        // every pi session stayed invisible to both archive and gc.
+        ArchProvider { id: "pi", root: h.join(".pi/agent/sessions"), ext: "jsonl", nested: true },
     ]
+}
+
+/// Session id for a transcript file stem.
+///
+/// claude and auggie name a file for its session id, so the stem IS the id.
+/// pi prefixes an ISO timestamp (`2026-08-17T00-23-23-578Z_<uuid>`) to keep
+/// its per-cwd directories sorted; the id is what follows the first `_`.
+/// Splitting on the FIRST underscore (not the last) is deliberate: neither
+/// the timestamp nor a uuid contains one, so this stays correct even if pi
+/// lengthens the prefix.
+fn arch_session_id(provider: &str, stem: &str) -> String {
+    match provider {
+        "pi" => stem.split_once('_').map(|(_, id)| id).unwrap_or(stem).to_string(),
+        _ => stem.to_string(),
+    }
+}
+
+/// First user message of a pi transcript, as pi's `:session-jq-filter`
+/// derives it: the first non-empty user message, with an array content's
+/// text blocks JOINED by a space.  Claude's key path takes only the first
+/// block -- the two providers genuinely differ, so this is not shareable.
+fn pi_first_message(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    for line in content.lines() {
+        let v: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if v.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+        let msg = match v.get("message") {
+            Some(m) => m,
+            None => continue,
+        };
+        if msg.get("role").and_then(Value::as_str) != Some("user") {
+            continue;
+        }
+        let text = match msg.get("content") {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Array(parts)) => parts
+                .iter()
+                .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|p| p.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => continue,
+        };
+        if !text.is_empty() {
+            return Some(text);
+        }
+    }
+    None
+}
+
+/// Launch cwd a pi transcript recorded, from its opening `session` record.
+fn pi_cwd(path: &Path) -> Option<PathBuf> {
+    let content = fs::read_to_string(path).ok()?;
+    for line in content.lines() {
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            if v.get("type").and_then(Value::as_str) == Some("session") {
+                if let Some(cwd) = v.get("cwd").and_then(Value::as_str) {
+                    return Some(PathBuf::from(cwd));
+                }
+            }
+        }
+    }
+    None
 }
 
 fn select_arch_providers(agent: &str) -> Result<Vec<ArchProvider>> {
@@ -1460,18 +1533,24 @@ fn arch_enumerate(ap: &ArchProvider, from: Option<&Path>) -> Vec<ActiveFile> {
             if path.extension().and_then(|x| x.to_str()) != Some(ap.ext) {
                 continue;
             }
-            let id = match path.file_stem().and_then(|s| s.to_str()) {
+            let stem = match path.file_stem().and_then(|s| s.to_str()) {
                 Some(s) => s.to_string(),
                 None => continue,
             };
+            // pi's filename carries a sort prefix; `rel' below must keep the
+            // full stem (it is the restore target) while `id' is the bare
+            // session id users type at `restore' / `resume'.
+            let id = arch_session_id(ap.id, &stem);
             let md = match e.metadata() {
                 Ok(m) => m,
                 Err(_) => continue,
             };
+            // Built from `stem', not `id': the restore target must be the
+            // file's real name, which for pi still carries its sort prefix.
             let rel = if flat {
-                format!("{}.{}", id, ap.ext)
+                format!("{}.{}", stem, ap.ext)
             } else {
-                path.strip_prefix(base).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| format!("{}.{}", id, ap.ext))
+                path.strip_prefix(base).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| format!("{}.{}", stem, ap.ext))
             };
             out.push(ActiveFile { id, path, rel, mtime: md.modified().unwrap_or(SystemTime::UNIX_EPOCH), size: md.len() });
         }
@@ -1483,6 +1562,7 @@ fn arch_first_message(provider: &str, path: &Path) -> Option<String> {
     match provider {
         "claude" => claude_first_message_display(path),
         "auggie" => auggie_first_message(path),
+        "pi" => pi_first_message(path),
         _ => None,
     }
 }
@@ -1491,6 +1571,7 @@ fn arch_workspace(provider: &str, path: &Path) -> Option<String> {
     let ws = match provider {
         "claude" => claude_cwd(path),
         "auggie" => auggie_workspace(path),
+        "pi" => pi_cwd(path),
         _ => None,
     };
     ws.map(|p| p.to_string_lossy().into_owned())
@@ -1966,6 +2047,73 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].id, "cccc");
         assert_eq!(files[0].rel, "-Users-x-repo/cccc.jsonl");
+    }
+
+    #[test]
+    fn arch_providers_point_pi_at_its_real_per_cwd_root() {
+        // Regression: pi was pointed at a flat `~/.pi/sessions` (json) that it
+        // has never written, so every pi session was invisible to archive/gc.
+        let pi = arch_providers().into_iter().find(|p| p.id == "pi").unwrap();
+        assert!(pi.root.ends_with(".pi/agent/sessions"), "root was {:?}", pi.root);
+        assert_eq!(pi.ext, "jsonl");
+        assert!(pi.nested, "pi nests transcripts under a per-cwd slug dir");
+    }
+
+    #[test]
+    fn arch_session_id_strips_pi_timestamp_prefix() {
+        assert_eq!(
+            arch_session_id("pi", "2026-08-17T00-23-23-578Z_01a00d1a-02ba-78c4-84ed-19c59be08f03"),
+            "01a00d1a-02ba-78c4-84ed-19c59be08f03"
+        );
+        // Other providers name the file for the id itself.
+        assert_eq!(arch_session_id("claude", "cccc-dddd"), "cccc-dddd");
+        assert_eq!(arch_session_id("auggie", "dead"), "dead");
+        // A pi stem without a prefix degrades to the whole stem.
+        assert_eq!(arch_session_id("pi", "bare-uuid"), "bare-uuid");
+    }
+
+    #[test]
+    fn arch_enumerate_pi_reports_bare_id_but_full_rel() {
+        // `id' is what a user types at restore/resume; `rel' must stay the
+        // real filename or the restore would write to the wrong path.
+        let dir = tempfile::tempdir().unwrap();
+        let slug = dir.path().join("--Users-x-repo--");
+        fs::create_dir_all(&slug).unwrap();
+        let name = "2026-08-17T00-23-23-578Z_01a00d1a-02ba-78c4-84ed-19c59be08f03.jsonl";
+        fs::write(slug.join(name), b"{}").unwrap();
+        let ap = ArchProvider {
+            id: "pi",
+            root: dir.path().to_path_buf(),
+            ext: "jsonl",
+            nested: true,
+        };
+        let files = arch_enumerate(&ap, None);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].id, "01a00d1a-02ba-78c4-84ed-19c59be08f03");
+        assert_eq!(files[0].rel, format!("--Users-x-repo--/{}", name));
+    }
+
+    #[test]
+    fn pi_first_message_joins_text_blocks_and_reads_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("s.jsonl");
+        fs::write(
+            &p,
+            concat!(
+                "{\"type\":\"session\",\"id\":\"x\",\"cwd\":\"/Users/x/repo\"}\n",
+                "{\"type\":\"model_change\",\"modelId\":\"gemini\"}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":\"ignored\"}}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":",
+                "[{\"type\":\"text\",\"text\":\"hello\"},{\"type\":\"text\",\"text\":\"world\"}]}}\n",
+            ),
+        )
+        .unwrap();
+        // Joined with a space, matching pi's session-jq-filter (claude's key
+        // path would take only the first block).
+        assert_eq!(pi_first_message(&p).as_deref(), Some("hello world"));
+        assert_eq!(pi_cwd(&p), Some(PathBuf::from("/Users/x/repo")));
+        assert_eq!(arch_first_message("pi", &p).as_deref(), Some("hello world"));
+        assert_eq!(arch_workspace("pi", &p).as_deref(), Some("/Users/x/repo"));
     }
 
     #[test]
