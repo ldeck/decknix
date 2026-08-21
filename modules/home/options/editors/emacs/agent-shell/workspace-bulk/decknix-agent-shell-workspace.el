@@ -4867,14 +4867,14 @@ route here."
 (defvar decknix-agent-resume-load-full-context)
 
 (transient-define-suffix decknix-sidebar-transient--resume-full-context ()
-  "Toggle whether resume re-ingests full prior context (#1)."
+  "Toggle whether resume restores prior context natively (#1)."
   :key "c"
   :description
   (lambda ()
     (format "resume context %s"
             (propertize
              (if (bound-and-true-p decknix-agent-resume-load-full-context)
-                 "[full — slower]" "[fast — primer]")
+                 "[restored]" "[empty — primer]")
              'face (if (bound-and-true-p decknix-agent-resume-load-full-context)
                        'font-lock-constant-face 'font-lock-comment-face))))
   :transient t
