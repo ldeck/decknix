@@ -2142,6 +2142,24 @@ let
     ];
   };
 
+  # Per-directory CWD cache.  `agent-shell-cwd' asks `project-current'
+  # for a VC root once per tool-call label while a response streams.
+  # Our agents mostly run at the workspace root (~/Code/nurturecloud/),
+  # which is not itself a repo -- nor are ~/Code or ~ -- so the lookup
+  # walks to `/', finds nothing, and project.el does not cache that
+  # negative answer: 2.61ms per call there versus 0.02ms inside a repo.
+  # Held 12% of main-thread samples in the wedged-daemon profile.
+  # Installed via the upstream `agent-shell-cwd-function' hook, so no
+  # advice is needed.
+  decknix-agent-cwd-cache-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-cwd-cache";
+    src = ./agent-shell/cwd-cache;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-cwd-cache-test.el"
+    ];
+  };
+
   # Re-review routing: when the author presses GitHub's "re-request
   # review", the hub already resurfaces the row (`re_requested' ->
   # `decknix--hub-requests-reviewed-visible-p').  This decides where
@@ -2986,6 +3004,7 @@ in
           decknix-agent-review-followup-io-el
           decknix-agent-review-submit-el
           decknix-agent-re-review-el
+          decknix-agent-cwd-cache-el
         ]
         ++ (optional cfg.hub.enable decknix-progress-el)
         ++ (optional cfg.hub.enable decknix-hub-age-presets-el)
@@ -4310,6 +4329,18 @@ ${optionalString cfg.tableOverlay.enable ''
 
         ;; Show session ID in header and session selection prompt
         (setq agent-shell-show-session-id t)
+
+        ;; Resolve each shell's CWD at most once per directory.
+        ;;
+        ;; `agent-shell-cwd-function' is consulted BEFORE upstream's own
+        ;; projectile / project.el probes, so installing our cached
+        ;; resolver removes the `project-current' walk that otherwise runs
+        ;; once per tool-call label during streaming.  The resolver keeps
+        ;; upstream's precedence, so only the timing changes, not the
+        ;; answer.  Call `decknix-agent-cwd-cache-clear' after creating a
+        ;; worktree or `git init' in a directory agents already resolved.
+        (require 'decknix-agent-cwd-cache)
+        (setq agent-shell-cwd-function #'decknix-agent-cwd-resolve)
 
         ;; Keep-awake probing off unless the library can actually exist.
         ;;
