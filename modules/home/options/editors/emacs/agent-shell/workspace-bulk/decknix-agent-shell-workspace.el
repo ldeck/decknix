@@ -4729,8 +4729,28 @@ Press H to open the cross-repo hygiene transient (spec §3.6.11)."
 (defvar decknix--hub-reviews)
 (defvar decknix--hub-wip)
 
+(defvar decknix--sidebar-people-lines nil
+  "Display lines for `decknix-sidebar-people-menu'.
+Set by `decknix--sidebar-show-people' immediately before the transient
+is raised; the transient reads it to build its description.")
+
+(defun decknix--sidebar-people-description ()
+  "Return the people block for the People transient's heading."
+  (if decknix--sidebar-people-lines
+      (concat (mapconcat #'identity decknix--sidebar-people-lines "\n")
+              "\n\n(copied to kill-ring)")
+    "No people data"))
+
+(transient-define-prefix decknix-sidebar-people-menu ()
+  "Who is involved on the active PR row.
+Read-only: the heading carries the information and the only verb is
+dismissal, so this never steals the window the way the previous
+`display-buffer' presentation did."
+  [:description decknix--sidebar-people-description
+   [("q" "Close" transient-quit-all)]])
+
 (defun decknix--sidebar-show-people (repo number)
-  "Pop a buffer listing who is involved on REPO#NUMBER, from live hub data.
+  "Show who is involved on REPO#NUMBER, from live hub data.
 Shows authors (a PR may have several), requested reviewers, approvers, and
 blockers — resolved from the Reviews items or the WIP repos, so it works
 for Requests, WIP, and worktree linked-PR rows alike."
@@ -4747,13 +4767,27 @@ for Requests, WIP, and worktree linked-PR rows alike."
           (message
            "No people data for %s#%s — refresh the hub (older cache may lack it)"
            repo number)
-        (with-current-buffer (get-buffer-create "*PR People*")
-          (let ((inhibit-read-only t))
-            (erase-buffer)
-            (insert (mapconcat #'identity lines "\n") "\n"))
-          (goto-char (point-min))
-          (special-mode)
-          (display-buffer (current-buffer)))))))
+        ;; Shown as a transient rather than a buffer.  `display-buffer'
+        ;; hands the window off to `display-buffer-alist', which under
+        ;; tab-bar happily reuses a window on ANOTHER TAB -- so asking who
+        ;; is on a PR could yank you out of the tab you were working in.
+        ;; A transient draws in its own popup, leaves the window
+        ;; configuration and the selected window alone, and dismisses on
+        ;; `q' -- the same "tell me, don't move me" behaviour as
+        ;; `decknix-agent-session-info' (C-c s i).
+        ;;
+        ;; The full text also goes to the kill-ring, again mirroring
+        ;; C-c s i: a popup cannot be selected from, and handles are the
+        ;; part you actually want to paste into Slack or a review.
+        ;; Called directly rather than through
+        ;; `decknix--sidebar-call-transient': that helper selects the main
+        ;; window so a verb's buffer changes land outside the dedicated
+        ;; sidebar, but this menu has no verbs -- selecting another window
+        ;; would be the very focus change we are removing.  Point stays
+        ;; exactly where it was; the popup draws over the bottom.
+        (setq decknix--sidebar-people-lines lines)
+        (kill-new (mapconcat #'identity lines "\n"))
+        (decknix-sidebar-people-menu)))))
 
 (transient-define-suffix decknix--sb-act-people ()
   "Show the people on the active PR row (authors, reviewers, approvers, blockers)."
