@@ -40,5 +40,26 @@
   (should (eq t (decknix--agent-resume-native-p "sid" t)))
   (should (eq nil (decknix--agent-resume-native-p "sid" nil))))
 
+;; --- the default is ON (pins a deliberate decision) ---
+
+(ert-deftest decknix-resume-native--enabled-by-default ()
+  "Resume restores context natively unless explicitly opted out.
+Pinned because the opposite default shipped once, on the belief that the
+`session/new' + continuation-primer path was faster.  It is not: the
+primer is submitted the instant the session reports ready and tells the
+model to re-read the transcript, so a whole model turn (and its tool
+calls) elapses before the user can type.  Native resume costs one request
+and no generation.  A future edit flipping this back should have to
+delete this test and argue with the docstring first."
+  (should (eq t (default-value 'decknix-agent-resume-load-full-context))))
+
+(ert-deftest decknix-resume-native--toggle-flips-and-restores ()
+  "Toggling is a pure inversion, so the sidebar label can trust it."
+  (let ((decknix-agent-resume-load-full-context t))
+    (decknix-agent-toggle-resume-full-context)
+    (should-not decknix-agent-resume-load-full-context)
+    (decknix-agent-toggle-resume-full-context)
+    (should (eq t decknix-agent-resume-load-full-context))))
+
 (provide 'decknix-agent-resume-native-test)
 ;;; decknix-agent-resume-native-test.el ends here

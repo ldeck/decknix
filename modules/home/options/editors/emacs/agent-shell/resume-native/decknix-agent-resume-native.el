@@ -77,18 +77,30 @@ Gates the continuation primer: when `session/resume' loaded real context
 into the model there is nothing to prime, so the primer is suppressed
 \(see `decknix--agent-resume-primer-on-ready').")
 
-(defcustom decknix-agent-resume-load-full-context nil
-  "When non-nil, resuming a session re-ingests its full prior context.
-Resume then uses native ACP `session/resume', which reloads the whole
-transcript into the model — accurate but SLOWER (the model re-processes
-the entire history before it is ready).
+(defcustom decknix-agent-resume-load-full-context t
+  "When non-nil (the default), resume restores prior context natively.
+Resume then uses ACP `session/resume': the bridge reloads the
+conversation into the model's context server-side, so the resumed agent
+genuinely continues the thread.  Costs one request and NO model
+generation, and degrades automatically to the nil path when the bridge
+does not advertise the capability.
 
-When nil (the default) resume is FAST: it starts a fresh session and
-drops in a lightweight continuation primer, so a resumed session is ready
-as quickly as a new one and you can prompt immediately.  The agent does
-not have the prior context pre-loaded, but the primer points it at the
-transcript file, and you can flip this on when a task genuinely needs the
-full history re-ingested.
+When nil, resume instead starts a fresh `session/new' and auto-sends the
+lightweight continuation primer (`decknix-agent-resume-primer.el') as the
+first user message.
+
+The nil path was once labelled the \"fast\" one; that framing was wrong in
+the way that matters.  Its session handshake does complete marginally
+sooner, but the primer is submitted the instant the session reports
+ready, so the shell flips straight from ready to busy — and the primer
+instructs the model to go and read the prior transcript.  You therefore
+wait out a full model turn, plus however many tool calls that re-read
+costs, before you can type.  Native resume has no such turn.  It is also
+lossy: the model reconstructs a summary of the conversation rather than
+holding the conversation.
+
+Keep nil only to deliberately resume with an empty context window (e.g.
+a very long transcript you would rather the model did not carry).
 
 Toggle from the sidebar session menu or via
 `decknix-agent-toggle-resume-full-context'."
@@ -96,14 +108,14 @@ Toggle from the sidebar session menu or via
   :group 'decknix)
 
 (defun decknix-agent-toggle-resume-full-context ()
-  "Toggle whether resume re-ingests full prior context (slow) or is fast."
+  "Toggle whether resume restores prior context natively or starts fresh."
   (interactive)
   (setq decknix-agent-resume-load-full-context
         (not decknix-agent-resume-load-full-context))
   (message "Resume: %s"
            (if decknix-agent-resume-load-full-context
-               "load FULL context (native session/resume — slower)"
-             "FAST (continuation primer only, no context re-ingestion)")))
+               "native session/resume — context restored, no primer turn"
+             "fresh session + continuation primer (empty context window)")))
 
 (defun decknix--agent-resume-native-p (session-id supports-resume)
   "Return non-nil when SESSION-ID should be resumed natively over ACP.
@@ -192,10 +204,11 @@ ORIG-FN unchanged.  ARGS is ORIG-FN's `&key' plist."
          (sid (and (buffer-live-p buf)
                    (buffer-local-value 'decknix--agent-resume-target-sid buf)))
          (supports-resume (map-elt state :supports-session-resume)))
-    ;; Fast-resume (#1): only re-ingest full context via native
-    ;; `session/resume' when the user opted in.  Off by default → fall
-    ;; through to `session/new' + the continuation primer, so a resumed
-    ;; session is ready as fast as a new one.
+    ;; Restore context natively whenever the bridge can (the default).
+    ;; Opting out, or a bridge that never advertised the capability,
+    ;; falls through to `session/new' + the continuation primer — which
+    ;; costs a whole model turn to re-read the transcript, so it is the
+    ;; degradation path rather than the fast one.
     (if (and decknix-agent-resume-load-full-context
              (decknix--agent-resume-native-p sid supports-resume))
         (decknix--agent-resume-native-send sid args orig-fn)
