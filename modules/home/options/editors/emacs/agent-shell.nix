@@ -1839,6 +1839,24 @@ let
     ];
   };
 
+  # Turn-end signal sensing.  `decknix-session-state' classifies a
+  # session from a signals plist, but two of the signals it documents
+  # (`:attention' "asked a question", `:done' "work complete") had no
+  # feeder from the agent side -- so a session blocked on your answer
+  # reported plain "ready" and looked idle.  This package reads the
+  # evidence agent-shell renders and then discards (plan entry statuses,
+  # ACP stopReason, the closing message) and turns it into those signals
+  # plus an `asking' status.  Pure judgement + buffer-local capture here;
+  # the advice/subscription wiring stays in the heredoc per Rule 2.
+  decknix-agent-turn-signals-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-turn-signals";
+    src = ./agent-shell/turn-signals;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-turn-signals-test.el"
+    ];
+  };
+
   # Sub-agent liveness state derivation (#144, agent resourcing
   # Feature 1).  Pure ladder over transcript mtime + parent liveness
   # (running / active / done) so the sidebar can colourise sub-agent
@@ -2985,6 +3003,7 @@ in
           decknix-agent-fork-el
           decknix-agent-resume-primer-el
           decknix-agent-resume-native-el
+          decknix-agent-turn-signals-el
           decknix-agent-heartbeat-watch-el
           decknix-agent-acp-trace-el
           decknix-record-el
@@ -3987,6 +4006,39 @@ ${optionalString cfg.tableOverlay.enable ''
         (defvar decknix--agent-resume-native-done)
         (advice-add 'agent-shell--initiate-session :around
                     #'decknix--agent-resume-native-initiate-session)
+
+        ;; Turn-end signal sensing.  agent-shell renders plan entries, the
+        ;; ACP stopReason and the agent's closing message, then throws all
+        ;; three away -- so a session that ENDED ON A QUESTION reported
+        ;; plain `ready' and looked identical to one with nothing left to
+        ;; say.  These three seams capture that evidence and feed the
+        ;; long-unfed `:attention' / `:done' signals in
+        ;; `decknix-session-state', plus the derived `asking' status.
+        ;; Named functions
+        ;; keep every `advice-add' idempotent across `decknix switch'
+        ;; hot-reloads.
+        (require 'decknix-agent-turn-signals)
+        (declare-function decknix--agent-turn-observe-notification
+                          "decknix-agent-turn-signals" (&rest args))
+        (declare-function decknix--agent-turn-observe-event
+                          "decknix-agent-turn-signals" (&rest args))
+        (declare-function decknix--agent-turn-status-advice
+                          "decknix-agent-turn-signals" (orig-fn buffer))
+        ;; Streams: accumulate the closing message + latest plan.  Runs on
+        ;; EVERY chunk, so the observer does nothing but a bounded string
+        ;; append (see `decknix-agent-turn-signals-tail-chars').
+        (advice-add 'agent-shell--on-notification :before
+                    #'decknix--agent-turn-observe-notification)
+        ;; Turn end: settle the stop reason and the question flag.
+        (advice-add 'agent-shell--emit-event :before
+                    #'decknix--agent-turn-observe-event)
+        ;; Display: refine `ready'/`finished' to `asking'.  Composes with
+        ;; the heartbeat-watch backstop below -- that one only ever
+        ;; downgrades a stale `working', this one only ever refines a
+        ;; settled idle status, so they cannot fight over a result.
+        (with-eval-after-load 'agent-shell-workspace
+          (advice-add 'agent-shell-workspace--buffer-status :around
+                      #'decknix--agent-turn-status-advice))
 
         ;; Stuck-heartbeat watchdog: reclaim a busy spinner whose prompt
         ;; request never responded (dead/orphaned bridge) so it stops

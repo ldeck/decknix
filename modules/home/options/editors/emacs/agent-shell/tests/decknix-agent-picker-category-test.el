@@ -53,6 +53,15 @@
   (should (= (decknix--agent-picker-attention-rank "finished")
              (decknix--agent-picker-attention-rank "ready"))))
 
+(ert-deftest decknix-picker-cat/asking-ranks-with-waiting ()
+  "A session that ended on a question is blocked on you, like a permission
+prompt -- so it sorts into the same top band, above a turn that merely
+finished and wants reading."
+  (should (= (decknix--agent-picker-attention-rank "asking")
+             (decknix--agent-picker-attention-rank "waiting")))
+  (should (< (decknix--agent-picker-attention-rank "asking")
+             (decknix--agent-picker-attention-rank "ready"))))
+
 ;; -- stable attention + MRU sort -----------------------------------
 
 (ert-deftest decknix-picker-cat/sort-attention-then-mru ()

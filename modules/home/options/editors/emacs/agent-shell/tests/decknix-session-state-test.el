@@ -82,6 +82,32 @@
   (should (eq (decknix-session-state (decknix-session-classify-status "ready"))    'idle))
   (should (eq (decknix-session-state (decknix-session-classify-status "initializing")) 'idle)))
 
+(ert-deftest decknix-session-classify-status--waiting-is-a-permission-block ()
+  "\"waiting\" feeds `:awaiting-permission', not the generic `:attention'.
+It had fed `:attention' — leaving `:awaiting-permission' with no feeder
+at all and collapsing the classifier's top two non-error bands, so a
+permission dialog blocking a live turn could not outrank anything else."
+  (should (equal '(:awaiting-permission t)
+                 (decknix-session-signals-from-status "waiting")))
+  (should (eq 'needs-input (decknix-session-state
+                            (decknix-session-classify-status "waiting")))))
+
+(ert-deftest decknix-session-classify-status--asking ()
+  "\"asking\" feeds the `:attention' signal the classifier always documented.
+Before this existed, `:attention' was only ever set by a permission
+prompt, so a session that ended its turn on a QUESTION reported plain
+`ready' and sat there looking idle."
+  (should (equal '(:attention t) (decknix-session-signals-from-status "asking")))
+  (should (eq 'needs-input (decknix-session-state
+                            (decknix-session-classify-status "asking"))))
+  ;; Ranks above a merely-unread finished turn: one wants an answer, the
+  ;; other only wants a glance.
+  (should (> (decknix-session-score (decknix-session-classify-status "asking"))
+             (decknix-session-score (decknix-session-classify-status "finished"))))
+  ;; ...but below a permission prompt, which blocks the turn outright.
+  (should (< (decknix-session-score (decknix-session-classify-status "asking"))
+             (decknix-session-score (decknix-session-classify-status "waiting")))))
+
 (ert-deftest decknix-session-classify-status--unknown-is-idle ()
   "An unrecognised status carries no signals and classifies as idle."
   (should (null (decknix-session-signals-from-status "wat")))

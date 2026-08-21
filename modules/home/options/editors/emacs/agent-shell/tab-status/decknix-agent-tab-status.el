@@ -45,6 +45,7 @@ Applied by `decknix-agent-tab-status-install'."
 (defcustom decknix-agent-tab-status-colors
   '(("working"      . "#3a330a")   ; amber — in progress
     ("waiting"      . "#3a1418")   ; red   — needs YOU (permission/input)
+    ("asking"       . "#3a2410")   ; orange — needs YOU (ended on a question)
     ("ready"        . "#123010")   ; green — idle, ready for a prompt
     ("finished"     . "#0f2e30")   ; cyan  — just completed
     ("initializing" . "#262626")   ; grey  — starting up
