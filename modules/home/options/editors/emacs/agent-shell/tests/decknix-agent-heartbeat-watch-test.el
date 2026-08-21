@@ -56,5 +56,64 @@ It must never touch state in a non-agent buffer (the advice fires on every
     (decknix--agent-normalize-turn-end)
     (should (eq shell-maker--busy t))))
 
+;; -- Heartbeat owner resolution (turn-end targets the RIGHT buffer) --
+
+(ert-deftest decknix-hb--owner-matches-by-identity ()
+  "The owning buffer is the one whose state holds this very heartbeat object.
+Identity, not equality: two heartbeats can be `equal' in content while
+belonging to different sessions, and clearing the wrong one would wipe an
+innocent session's turn state."
+  (let* ((hb-a (list (cons :status 'started)))
+         (hb-b (list (cons :status 'started)))  ; `equal' to hb-a, not `eq'
+         (buf-a (generate-new-buffer " *hb-a*"))
+         (buf-b (generate-new-buffer " *hb-b*"))
+         (states (list (cons buf-a (list (cons :heartbeat hb-a)))
+                       (cons buf-b (list (cons :heartbeat hb-b)))))
+         (state-fn (lambda (b) (alist-get b states))))
+    (unwind-protect
+        (progn
+          (should (equal hb-a hb-b))
+          (should (eq (decknix--agent-heartbeat-owner
+                       hb-a (list buf-a buf-b) state-fn)
+                      buf-a))
+          (should (eq (decknix--agent-heartbeat-owner
+                       hb-b (list buf-a buf-b) state-fn)
+                      buf-b)))
+      (kill-buffer buf-a)
+      (kill-buffer buf-b))))
+
+(ert-deftest decknix-hb--owner-nil-when-unowned-or-missing ()
+  "An unowned heartbeat, or none at all, resolves to nil (caller falls back)."
+  (let* ((buf (generate-new-buffer " *hb*"))
+         (states (list (cons buf (list (cons :heartbeat (list (cons :s 1)))))))
+         (state-fn (lambda (b) (alist-get b states))))
+    (unwind-protect
+        (progn
+          (should-not (decknix--agent-heartbeat-owner
+                       (list (cons :s 2)) (list buf) state-fn))
+          (should-not (decknix--agent-heartbeat-owner nil (list buf) state-fn)))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-hb--owner-skips-dead-buffers ()
+  "A killed buffer is never returned as the owner."
+  (let* ((hb (list (cons :status 'started)))
+         (dead (generate-new-buffer " *hb-dead*"))
+         (state-fn (lambda (_b) (list (cons :heartbeat hb)))))
+    (kill-buffer dead)
+    (should-not (decknix--agent-heartbeat-owner hb (list dead) state-fn))))
+
+(ert-deftest decknix-hb--normalize-in-buffer-noop-outside-agent-shell ()
+  "The per-buffer clear is scoped to agent-shell buffers."
+  (with-temp-buffer
+    (setq-local shell-maker--busy t)
+    (decknix--agent-normalize-turn-end-in-buffer (current-buffer))
+    (should (eq shell-maker--busy t))))
+
+(ert-deftest decknix-hb--normalize-in-buffer-tolerates-dead-buffer ()
+  "Clearing a killed buffer is a no-op rather than an error."
+  (let ((dead (generate-new-buffer " *hb-dead2*")))
+    (kill-buffer dead)
+    (should-not (decknix--agent-normalize-turn-end-in-buffer dead))))
+
 (provide 'decknix-agent-heartbeat-watch-test)
 ;;; decknix-agent-heartbeat-watch-test.el ends here
