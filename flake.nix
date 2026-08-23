@@ -58,6 +58,8 @@
           # ACP bridges for agent-shell providers (not yet in nixpkgs)
           claude-agent-acp = final.callPackage ./pkgs/claude-agent-acp/default.nix { };
           pi-acp = final.callPackage ./pkgs/pi-acp/default.nix { };
+          # Code-intelligence graph served to agents over MCP (not in nixpkgs)
+          gortex = final.callPackage ./pkgs/gortex/default.nix { };
         };
 
       perSystem = { config, self', inputs', pkgs, system, ... }:
@@ -79,6 +81,7 @@
         packages.nix-open = pkgs.callPackage ./pkgs/nix-open/default.nix rustArgs;
         packages.claude-agent-acp = pkgs.callPackage ./pkgs/claude-agent-acp/default.nix { };
         packages.pi-acp = pkgs.callPackage ./pkgs/pi-acp/default.nix { };
+        packages.gortex = pkgs.callPackage ./pkgs/gortex/default.nix { };
 
         # Set it as the default so 'nix run' works without arguments
         packages.default = config.packages.decknix-cli;
