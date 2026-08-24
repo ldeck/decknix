@@ -16,3 +16,7 @@ docs/src/data/
 
 # Ignore Emacs compiled files
 *.elc
+
+# Python bytecode from the repo-jdk module's stdlib unittest runs
+__pycache__/
+*.pyc
