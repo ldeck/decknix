@@ -126,6 +126,12 @@ let
     ''}
 
     ${optionalString (cfg.workspaceSlugs != { }) ''
+      # `workspace set` consults the daemon's current tracked-set, so we must
+      # reload after any new `track`/`untrack` changes before assigning slugs.
+      # Otherwise a freshly tracked repo can still look unknown until the next
+      # daemon refresh and the activation emits noisy but harmless errors.
+      "$GORTEX" daemon reload >/dev/null 2>&1 || true
+
       # Slugs recorded globally so no `.gortex.yaml` lands in a shared repo.
       ${concatStringsSep "\n" (mapAttrsToList (repo: slug: ''
         "$GORTEX" workspace set ${escapeShellArg repo} ${escapeShellArg slug} --global || true
