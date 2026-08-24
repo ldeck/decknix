@@ -386,4 +386,5 @@ gortex's precedence chain prefers it.
 Note that `~/.gortex/config.yaml` is owned by **gortex**, not by Nix: `track`,
 `untrack` and `workspace set` all mutate it. decknix drives it through the CLI
 from an activation script rather than generating the file, which would fight
-the daemon for ownership.
+the daemon for ownership. The activation reloads the daemon before assigning
+workspace slugs so freshly tracked repos are visible to `workspace set`.
