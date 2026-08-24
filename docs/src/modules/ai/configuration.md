@@ -335,6 +335,11 @@ decknix.ai.gortex = {
 The launchd service defaults on only once the roster is non-empty — a daemon
 holding an empty graph is a resident process answering nothing.
 
+If CPU is the concern, the daemon process itself is not the expensive part;
+the indexer work is. Keep `roster.roots` narrow, prefer `canonical` worktrees,
+and leave `daemon.enable = false` if you only want the CLI and not a live MCP
+service.
+
 ### Worktrees
 
 Repositories with many linked worktrees are the interesting case. Gortex
@@ -380,6 +385,8 @@ like orphans to cross-repo analysis. `workspaceSlugs` pins them together.
 
 Slugs are recorded in `~/.gortex/config.yaml` rather than a `.gortex.yaml`
 inside each repo, so nothing lands in a checkout you share with other people.
+Decknix normalises the configured repo keys to absolute paths before handing
+them to gortex, so writing `"~/Code/..."` in Nix is fine.
 A repo that genuinely wants an in-tree `.gortex.yaml` can still commit one —
 gortex's precedence chain prefers it.
 

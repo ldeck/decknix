@@ -133,8 +133,10 @@ let
       "$GORTEX" daemon reload >/dev/null 2>&1 || true
 
       # Slugs recorded globally so no `.gortex.yaml` lands in a shared repo.
+      # Normalize repo keys to absolute paths first; gortex matches against the
+      # tracked absolute path, not the user-facing `~/...` spelling.
       ${concatStringsSep "\n" (mapAttrsToList (repo: slug: ''
-        "$GORTEX" workspace set ${escapeShellArg repo} ${escapeShellArg slug} --global || true
+        "$GORTEX" workspace set ${escapeShellArg (expandTilde repo)} ${escapeShellArg slug} --global || true
       '') cfg.workspaceSlugs)}
     ''}
 
