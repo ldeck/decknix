@@ -55,6 +55,7 @@ Decknix ships with several extensions:
 |---------|-------------|
 | `decknix board` | Issue dashboard across GitHub repos |
 | `decknix cheatsheet` | Show window manager keybinding cheatsheet |
+| `decknix repo-jdk` | Resolve the JDK a repository declares |
 | `decknix space` | Space picker (GUI) |
 | `decknix verify` | Verify system integration |
 
@@ -78,6 +79,63 @@ decknix board --search "sidebar in:title"
 
 Requires an authenticated `gh` (`gh auth status`). The repo set comes from the
 extension's own configuration.
+
+### `decknix repo-jdk` — per-repository JDK resolution
+
+On a machine running both Nix and SDKMAN, the `java` that wins on `PATH` is an
+accident of shell-init ordering: SDKMAN sources late and prepends its `current`
+candidate, shadowing the Nix JDK. A build then runs on a JDK its own build files
+never asked for, and it surfaces as something unhelpful — an annotation
+processor rejecting a class file version, say — rather than as "wrong Java".
+
+Pinning a different default does not fix it, because different repositories
+legitimately need different JDKs. `repo-jdk` reads what the repository itself
+declares and resolves that to an installed JDK:
+
+```bash
+repo-jdk                        # what is declared here, and what is installed
+repo-jdk version                # 25
+repo-jdk home                   # /nix/store/...-zulu-ca-jdk-25.0.0
+eval "$(repo-jdk env)"          # export JAVA_HOME/PATH into the current shell
+repo-jdk exec -- ./gradlew build
+repo-jdk --dir ~/src/other-repo version
+```
+
+Detection walks up from the working directory to the repository root and takes
+the first declaration it finds. Within a directory, an explicit toolchain pin
+beats a build file's language level, because the pin states an *install* while
+the build file states a *language level*:
+
+| Priority | Source | Example |
+|----------|--------|---------|
+| 1 | `.sdkmanrc` | `java=25.0.1-zulu` |
+| 2 | `.tool-versions` | `java temurin-21.0.9` |
+| 3 | `.java-version` | `25` |
+| 4 | `.mise.toml` | `java = "17"` |
+| 5 | `build.gradle.kts` / `build.gradle` | `jvmToolchain(25)`, `JavaLanguageVersion.of(21)`, `JavaVersion.VERSION_17` |
+| 6 | `pom.xml` | `<maven.compiler.release>21</maven.compiler.release>` |
+
+Resolution never downloads anything — it selects from JDKs already on the
+machine (the Nix installs listed in `org.gradle.java.installations.paths`,
+SDKMAN candidates, Gradle's auto-provisioned downloads, and
+`/Library/Java/JavaVirtualMachines`), reading each one's `release` file rather
+than starting a JVM. Among JDKs matching the declared major it prefers the
+Nix-provided one, since that is the only origin that reproduces on a fresh
+machine, then the newest patch within that origin. A version named exactly in
+`.sdkmanrc` is honoured verbatim.
+
+It never substitutes a different major: a repo asking for 25 will not silently
+build on 26.
+
+Exit codes: `3` when nothing is declared, `4` when the declared JDK is not
+installed (the message lists which majors are).
+
+Tests live beside the script and are plain stdlib `unittest`:
+
+```bash
+cd modules/home/options/cli/repo-jdk
+python3 -m unittest discover -s . -p 'test_*.py'
+```
 
 ## Zsh Completion
 
