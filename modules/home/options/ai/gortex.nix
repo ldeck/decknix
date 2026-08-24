@@ -338,7 +338,20 @@ in
       pi = mkOption {
         type = types.bool;
         default = true;
-        description = "Wire the gortex MCP server into Pi (~/.pi/agent/settings.json).";
+        description = ''
+          Wire gortex into Pi.
+
+          Unlike the others this is NOT an MCP entry: Pi does not speak MCP at
+          all (its help mentions it nowhere, and its settings carry no
+          `mcpServers` key) — it loads *extensions*.  So gortex's Pi adapter
+          installs `~/.pi/agent/extensions/gortex/index.ts` instead, which we
+          drive with a tightly-scoped `gortex install --agents=pi`.
+
+          `--no-claude-md --no-hooks` keep that invocation to the single Pi
+          file; without them the same command would also merge a rule block
+          into ~/.claude/CLAUDE.md and install user-level hooks, both of which
+          are agentSync's to own.
+        '';
       };
     };
   };
@@ -395,8 +408,12 @@ in
     })
 
     # --- MCP wiring: contribute to each agent's own settings surface --------
+    # `mcpServers`, not `settings`: ~/.claude.json is mutated by Claude at
+    # runtime (OAuth tokens, skillUsage, caches), and that option jq-merges
+    # only the `.mcpServers` key while leaving every other one alone.  Going
+    # through `settings` would hand the whole file to a second writer.
     (mkIf cfg.agents.claude {
-      decknix.ai.claude.settings.mcpServers.gortex = mcpServerEntry;
+      decknix.ai.claude.mcpServers.gortex = mcpServerEntry;
     })
 
     (mkIf cfg.agents.augment {
@@ -404,7 +421,11 @@ in
     })
 
     (mkIf cfg.agents.pi {
-      decknix.ai.pi.settings.mcpServers.gortex = mcpServerEntry;
+      home.activation.gortexPiExtension =
+        config.lib.dag.entryAfter [ "writeBoundary" ] ''
+          $DRY_RUN_CMD ${gortexBin} install --agents=pi \
+            --no-claude-md --no-hooks >/dev/null 2>&1 || true
+        '';
     })
   ]);
 }
