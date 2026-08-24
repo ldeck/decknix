@@ -308,3 +308,82 @@ Reach for a workspace-local `.mcp.json` only when a server should be strictly
 project-local (e.g. a repo-scoped test harness). Global config here keeps
 personal + org tooling consistent across every project you open.
 
+
+## Gortex (shared code-intelligence graph)
+
+`decknix.ai.gortex` indexes your repositories into a knowledge graph and serves
+it to every configured agent, so a question is answered by one graph query
+instead of a fan-out of greps and file reads.
+
+One long-living daemon holds the graph for **all** tracked repos; each agent
+connects through a thin `gortex mcp` stdio proxy. Memory therefore scales with
+the size of your workspace, not with how many agent sessions are open — which
+is what makes it practical with a dozen sessions live.
+
+```nix
+decknix.ai.gortex = {
+  enable = true;                       # default
+  roster.roots = [ "~/Code" ];         # scan here for repositories
+  roster.worktrees = "canonical";      # default; see below
+  workspaceSlugs = {
+    "~/Code/service" = "my-project";   # pin repos into one workspace
+    "~/Code/client"  = "my-project";
+  };
+};
+```
+
+The launchd service defaults on only once the roster is non-empty — a daemon
+holding an empty graph is a resident process answering nothing.
+
+### Worktrees
+
+Repositories with many linked worktrees are the interesting case. Gortex
+resolves a worktree back to its canonical repo by reading the `commondir` file
+that a worktree's gitdir carries and a submodule's does not.
+
+- `canonical` (default) — one graph per repository, covering every checkout.
+  With a worktree-per-branch workflow this is the difference between indexing
+  a repo once and indexing it dozens of times for branches that differ by a
+  handful of files.
+- `independent` — each worktree tracked as its own instance, indexed from its
+  own branch. Worth the memory only when you need to query two branches side
+  by side.
+
+Discovery keys on `.git` being a *directory*, which is exactly the
+primary-vs-linked distinction, so worktrees are skipped structurally rather
+than by guessing at a path convention.
+
+### Agent wiring
+
+decknix deliberately does **not** run `gortex init` inside a repository. That
+command writes `CLAUDE.md`, `.claude/skills/generated/`, `.claude/settings.json`
+hooks and `.mcp.json` — all of which `decknix.cli.agentSync` already owns.
+Putting two writers on those files is how you get drift. Instead each agent is
+wired through the seam decknix already manages for it:
+
+| Agent | How | Why |
+|-------|-----|-----|
+| Claude Code | `decknix.ai.claude.mcpServers` | jq-merges only `.mcpServers`, leaving runtime keys alone |
+| Augment | `decknix.cli.auggie.mcpServers` | hand-written: gortex ships no Augment adapter, but Augment speaks MCP |
+| Pi | `gortex install --agents=pi` | Pi does **not** speak MCP — it loads extensions |
+
+Pi is the one that surprises people: its help mentions MCP nowhere and its
+settings carry no `mcpServers` key, which is why gortex's Pi adapter installs
+`~/.pi/agent/extensions/gortex/index.ts` instead. Declaring an MCP entry for
+Pi looks right in Nix and does nothing.
+
+### Workspace slugs
+
+By default every tracked repo is its own isolated workspace — a hard graph
+boundary — so a server in one repo and the client calling it in another look
+like orphans to cross-repo analysis. `workspaceSlugs` pins them together.
+
+Slugs are recorded in `~/.gortex/config.yaml` rather than a `.gortex.yaml`
+inside each repo, so nothing lands in a checkout you share with other people.
+A repo that genuinely wants an in-tree `.gortex.yaml` can still commit one —
+gortex's precedence chain prefers it.
+
+Note that `~/.gortex/config.yaml` is owned by **gortex**, not by Nix: `track`,
+`untrack` and `workspace set` all mutate it. decknix drives it through the CLI
+from an activation script rather than generating the file, which would fight
+the daemon for ownership.
