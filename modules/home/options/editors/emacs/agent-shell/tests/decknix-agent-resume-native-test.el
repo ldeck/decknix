@@ -150,6 +150,54 @@ entire remaining bootstrap below the prompt with it."
       (should (member "resumed_session" (car captured)))
       (should-not (cdr captured)))))
 
+(ert-deftest decknix-resume-native--resumed-fragment-written-after-finalize ()
+  "The `✓ Resuming session' marker is written AFTER session-init finalizes.
+
+Ordering is load-bearing, not cosmetic.  `agent-shell--finalize-session-init'
+is what writes the setup sections (config options, models, modes,
+commands), and those are folded into the collapsed `Agent shell setup'
+group.  `agent-shell-ui' groups only fragments that follow the header
+CONTIGUOUSLY, so writing this marker BEFORE finalize drops it into the
+middle of that run: it then has to join the group, or split it in two.
+
+Deferring the write past finalize puts the marker below the whole run,
+which is what lets it stay visible at top level -- the thing the user
+asked for.  A future edit that moves it back above finalize must fail
+here rather than silently swallowing the marker into the group."
+  (with-temp-buffer
+    (let* ((buf (current-buffer))
+           (order nil)
+           (on-success nil))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () (list (cons :buffer buf) (cons :client 'c))))
+                ((symbol-function 'agent-shell--update-bootstrapping-fragment)
+                 (lambda (&rest args) (push (plist-get args :block-id) order)))
+                ((symbol-function 'agent-shell--update-fragment)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'agent-shell--make-status-kind-label)
+                 (lambda (&rest _) "OK"))
+                ((symbol-function 'agent-shell--set-session-from-response)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'agent-shell--finalize-session-init)
+                 (lambda (&rest _) (push 'FINALIZE order)))
+                ((symbol-function 'agent-shell--resolve-path) #'identity)
+                ((symbol-function 'agent-shell-cwd) (lambda () "/tmp"))
+                ((symbol-function 'agent-shell--mcp-servers) (lambda () nil))
+                ((symbol-function 'acp-make-session-resume-request)
+                 (lambda (&rest _) 'request))
+                ((symbol-function 'agent-shell-subscribe-to) (lambda (&rest _) 'token))
+                ((symbol-function 'agent-shell-unsubscribe) (lambda (&rest _) nil))
+                ((symbol-function 'acp-send-request)
+                 (lambda (&rest args) (setq on-success (plist-get args :on-success)))))
+        (decknix--agent-resume-native-send "sid-1" nil #'ignore)
+        (funcall on-success 'response))
+      (let* ((seq (nreverse order))
+             (finalize-at (seq-position seq 'FINALIZE))
+             (marker-at (seq-position seq "resumed_session")))
+        (should finalize-at)
+        (should marker-at)
+        (should (> marker-at finalize-at))))))
+
 (ert-deftest decknix-resume-native--failure-fragment-goes-above-prompt ()
   "The resume-failure notice routes through the helper too."
   (with-temp-buffer

@@ -82,14 +82,24 @@ catch a regrowth, not to pin whitespace."
                 "available_commands_update"))
     (should (decknix--agent-setup-group-block-p id))))
 
-(ert-deftest decknix-agent-setup-group--includes-interleaved-session-markers ()
-  "`resumed_session' / `forked_session' must be in the group too.
+(ert-deftest decknix-agent-setup-group--excludes-resumed-session ()
+  "`✓ Resuming session' stays visible at top level, outside the group.
 
-Not cosmetic: `agent-shell-ui' groups only fragments that follow the
-header CONTIGUOUSLY, and `✓ Resuming session' renders between
-`Agent capabilities' and `Available config options'.  Leaving it out
-would split the group in two."
-  (should (decknix--agent-setup-group-block-p "resumed_session"))
+Possible only because decknix owns that write and defers it until after
+`agent-shell--finalize-session-init', so the marker lands BELOW the
+setup run instead of splitting it -- see
+`decknix--agent-resume-native-send'.  `agent-shell-ui' groups only a
+contiguous run, so excluding a block that still renders mid-run would
+break the group in half rather than move the block out of it."
+  (should-not (decknix--agent-setup-group-block-p "resumed_session")))
+
+(ert-deftest decknix-agent-setup-group--keeps-forked-session ()
+  "`forked_session' stays IN the group, unlike `resumed_session'.
+
+Not an inconsistency: upstream writes that fragment mid-run, before
+`agent-shell--finalize-session-init', and we do not own the call site.
+Excluding it would split the fork flow's group into two headers, which
+is worse than folding one extra line."
   (should (decknix--agent-setup-group-block-p "forked_session")))
 
 (ert-deftest decknix-agent-setup-group--excludes-progress-and-content ()

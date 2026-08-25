@@ -184,6 +184,16 @@ and permission mode just as for a fresh session."
          ;; up far below wherever point was left.  Follow it down once
          ;; the last bootstrapping fragment has been written.
          (decknix--agent-resume-focus-prompt-on-init shell-buffer))
+       ;; Finalize FIRST, then write the marker.  `finalize-session-init'
+       ;; is what emits the setup sections (config options, models,
+       ;; modes, commands), and those fold into the collapsed
+       ;; `Agent shell setup' group.  `agent-shell-ui' groups only a
+       ;; CONTIGUOUS run, so writing the marker before finalize drops it
+       ;; into the middle of that run -- where it must either join the
+       ;; group or split it in two.  Written afterwards it lands below
+       ;; the whole run and stays visible at top level, which is where a
+       ;; "✓ Resuming session" confirmation belongs.
+       (agent-shell--finalize-session-init :on-session-init on-session-init)
        (agent-shell--update-bootstrapping-fragment
         :state (agent-shell--state)
         :block-id "resumed_session"
@@ -192,8 +202,7 @@ and permission mode just as for a fresh session."
                             (propertize "Resuming session" 'font-lock-face
                                         'font-lock-doc-markup-face))
         :expanded t
-        :body "")
-       (agent-shell--finalize-session-init :on-session-init on-session-init))
+        :body ""))
      :on-failure
      (lambda (_error _raw-message)
        (with-current-buffer shell-buffer
