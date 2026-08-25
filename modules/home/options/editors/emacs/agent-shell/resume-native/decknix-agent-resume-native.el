@@ -55,7 +55,7 @@
 ;; keep the byte-compiler warning-clean; this module is loaded after
 ;; agent-shell in the heredoc).
 (declare-function agent-shell--state "agent-shell")
-(declare-function agent-shell--update-fragment "agent-shell")
+(declare-function agent-shell--update-bootstrapping-fragment "agent-shell")
 (declare-function agent-shell--make-status-kind-label "agent-shell")
 (declare-function agent-shell--set-session-from-response "agent-shell")
 (declare-function agent-shell--finalize-session-init "agent-shell")
@@ -149,9 +149,17 @@ and permission mode just as for a fresh session."
          (cwd (agent-shell--resolve-path (agent-shell-cwd)))
          (mcp-servers (agent-shell--mcp-servers)))
     (with-current-buffer shell-buffer
-      (agent-shell--update-fragment
+      ;; Every fragment this module writes MUST go through the
+      ;; `bootstrapping' helper, which pins `:above-last-prompt t'.
+      ;; Calling `agent-shell--update-fragment' directly (as this did)
+      ;; defaults that to nil and lands the fragment inline at
+      ;; `point-max' -- i.e. BELOW the live prompt, tagged `field
+      ;; output'.  That one misplaced fragment makes
+      ;; `agent-shell--live-input-prompt-p' false from then on, so every
+      ;; later bootstrapping fragment cascades below the prompt too and
+      ;; the buffer ends in read-only output with no prompt to type at.
+      (agent-shell--update-bootstrapping-fragment
        :state (agent-shell--state)
-       :namespace-id "bootstrapping"
        :block-id "starting"
        :body (format "\n\nResuming session %s..." session-id)
        :append t))
@@ -170,9 +178,8 @@ and permission mode just as for a fresh session."
        (when (buffer-live-p shell-buffer)
          (with-current-buffer shell-buffer
            (setq decknix--agent-resume-native-done t)))
-       (agent-shell--update-fragment
+       (agent-shell--update-bootstrapping-fragment
         :state (agent-shell--state)
-        :namespace-id "bootstrapping"
         :block-id "resumed_session"
         :label-left (format "%s %s"
                             (agent-shell--make-status-kind-label :status "completed")
@@ -184,9 +191,8 @@ and permission mode just as for a fresh session."
      :on-failure
      (lambda (_error _raw-message)
        (with-current-buffer shell-buffer
-         (agent-shell--update-fragment
+         (agent-shell--update-bootstrapping-fragment
           :state (agent-shell--state)
-          :namespace-id "bootstrapping"
           :block-id "starting"
           :body (concat "\n\nCould not resume session over ACP; "
                         "starting fresh with a continuation primer...")
