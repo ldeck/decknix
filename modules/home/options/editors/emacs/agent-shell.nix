@@ -6960,6 +6960,14 @@ mutated."
         (define-key decknix-agent-template-map (kbd "t") 'yas-insert-snippet)       ; Insert
         (define-key decknix-agent-template-map (kbd "n") 'yas-new-snippet)          ; New
         (define-key decknix-agent-template-map (kbd "e") 'yas-visit-snippet-file)   ; Edit
+
+        ;; #5: complete the C-c A → C-c s move.  Now that C-c s hosts the
+        ;; session commands, unbind their C-c A duplicates so C-c A is
+        ;; purely global.  Placed after ALL C-c A define-keys so nothing
+        ;; re-binds them.  Reversible: delete this dolist to restore the
+        ;; dual bindings.
+        (dolist (k '("n" "f" "q" "R" "r" "s" "b" "g" "h" "x" "e" "v"))
+          (define-key decknix-agent-prefix-map (kbd k) nil))
       ''
       + ''
 
