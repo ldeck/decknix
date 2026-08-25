@@ -180,13 +180,20 @@ rather than the prompt being sent somewhere unintended."
   :type 'integer
   :group 'decknix)
 
-(defun decknix-agent-re-review-send (target content)
+(defun decknix-agent-re-review-send (target content &optional no-display)
   "Submit CONTENT into TARGET, queueing when the agent is busy.
 
 Mirrors `decknix--agent-review-submit-to-agent' but without its
 interactive busy prompt: a re-review is dispatched from a sidebar
 row, where a `read-char-choice' would be a surprise.  A busy agent
-gets the prompt queued instead, so the ask is never silently lost."
+gets the prompt queued instead, so the ask is never silently lost.
+
+With NO-DISPLAY the prompt is delivered but no window is taken.  That
+is what lets a BACKGROUND review still route through re-review: the
+unconditional `pop-to-buffer' below was the only reason the background
+path skipped re-review routing altogether, which meant a PR that
+already had a review session got a second one -- discarding exactly
+the context re-review exists to preserve."
   (when (buffer-live-p target)
     (if (and (with-current-buffer target (bound-and-true-p shell-maker--busy))
              (fboundp 'decknix--compose-enqueue-prompt))
@@ -197,27 +204,35 @@ gets the prompt queued instead, so the ask is never silently lost."
         (goto-char (point-max))
         (shell-maker-submit :input content))
       (message "Re-review sent to %s" (buffer-name target)))
-    (pop-to-buffer target)
+    (unless no-display
+      (pop-to-buffer target))
     target))
 
-(defun decknix-agent-re-review--send-when-ready (needle content &optional tries)
+(defun decknix-agent-re-review--send-when-ready (needle content &optional tries
+                                                        no-display)
   "Poll for NEEDLE's buffer, then send CONTENT into it.
 
 A resume creates its buffer asynchronously, so the buffer does not
 exist at the moment `decknix--sidebar-restore-previous-session'
 returns.  Rather than guess a fixed delay, poll on a timer and send
-as soon as the buffer shows up."
+as soon as the buffer shows up.
+
+NO-DISPLAY is threaded through to `decknix-agent-re-review-send' and
+must survive the timer recursion.  Dropping it would be worse here than
+in the synchronous path: the window would be stolen seconds later, from
+whatever the user had moved on to, with no action of theirs to explain
+it."
   (let ((tries (or tries decknix-agent-re-review-resume-poll-tries)))
     (if-let ((buf (decknix-agent-re-review-find-live
                    needle (and (fboundp 'agent-shell-buffers)
                                (agent-shell-buffers)))))
-        (decknix-agent-re-review-send buf content)
+        (decknix-agent-re-review-send buf content no-display)
       (if (<= tries 0)
           (message "decknix: resumed session for %s did not appear; not prompting"
                    needle)
         (run-at-time decknix-agent-re-review-resume-poll-interval nil
                      #'decknix-agent-re-review--send-when-ready
-                     needle content (1- tries))))))
+                     needle content (1- tries) no-display)))))
 
 ;;;###autoload
 (defun decknix-agent-re-review-pr (url)
