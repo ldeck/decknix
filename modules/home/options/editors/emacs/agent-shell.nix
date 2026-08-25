@@ -1840,6 +1840,22 @@ let
     ];
   };
 
+  # Reclaims the top of every agent-shell buffer: the ~14-line ASCII-art
+  # banner becomes a one-line greeting that names the provider, and the
+  # five bootstrapping setup sections fold into one collapsed group.  On a
+  # resumed session those two together were the whole first screenful.
+  # Pure string/plist layers here; the `:override' on each provider
+  # `--welcome-message' and the `:filter-args' on the bootstrapping
+  # fragment writer live in the heredoc per Rule 2.
+  decknix-agent-welcome-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-welcome";
+    src = ./agent-shell/welcome;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-welcome-test.el"
+    ];
+  };
+
   # Turn-end signal sensing.  `decknix-session-state' classifies a
   # session from a signals plist, but two of the signals it documents
   # (`:attention' "asked a question", `:done' "work complete") had no
@@ -3004,6 +3020,7 @@ in
           decknix-agent-fork-el
           decknix-agent-resume-primer-el
           decknix-agent-resume-native-el
+          decknix-agent-welcome-el
           decknix-agent-turn-signals-el
           decknix-agent-heartbeat-watch-el
           decknix-agent-acp-trace-el
@@ -4009,6 +4026,74 @@ ${optionalString cfg.tableOverlay.enable ''
         (defvar decknix--agent-resume-native-done)
         (advice-add 'agent-shell--initiate-session :around
                     #'decknix--agent-resume-native-initiate-session)
+
+        ;; Compact welcome + folded setup sections
+        ;; (`decknix-agent-welcome.el').  Two trims to the top of every
+        ;; agent-shell buffer, which together were the entire first
+        ;; screenful of a resumed session.
+        (require 'decknix-agent-welcome)
+        (declare-function decknix--agent-welcome-name
+                          "decknix-agent-welcome" (agent-config))
+        (declare-function decknix--agent-welcome-format
+                          "decknix-agent-welcome" (name key sponsor))
+        (declare-function decknix--agent-setup-group-args
+                          "decknix-agent-welcome" (args))
+
+        ;; 1. Drop the ASCII art. Every provider's `:welcome-function'
+        ;;    returns art ++ `shell-maker-welcome-message'; overriding
+        ;;    each one with a single named function keeps the greeting
+        ;;    (help hint + sponsor button, both upstream's to offer) and
+        ;;    names the provider in the sentence instead.  Named, so
+        ;;    re-running this across a `decknix switch' hot-reload is
+        ;;    idempotent rather than stacking advice.
+        (defun decknix--agent-welcome-message (config)
+          "Compact replacement for a provider's ASCII-art welcome CONFIG."
+          (decknix--agent-welcome-format
+           (decknix--agent-welcome-name
+            (and (boundp 'agent-shell--state)
+                 agent-shell--state
+                 (map-elt agent-shell--state :agent-config)))
+           (shell-maker--propertize-key-binding "-shell-submit" config)
+           (shell-maker-make-button-text
+            "sponsoring"
+            (lambda ()
+              (browse-url "https://github.com/sponsors/xenodium")
+              (message "Thank you!")))))
+        ;; Applied to whichever provider welcome functions this build of
+        ;; agent-shell actually ships -- `fboundp'-gated so a package set
+        ;; without, say, `agent-shell-kimi' does not error on load.
+        (dolist (fn '(agent-shell-anthropic--claude-code-welcome-message
+                      agent-shell-pi--welcome-message
+                      agent-shell-google--gemini-welcome-message
+                      agent-shell-openai--codex-welcome-message
+                      agent-shell-auggie--welcome-message
+                      agent-shell-cline--welcome-message
+                      agent-shell-codebuddy--welcome-message
+                      agent-shell-cursor--welcome-message
+                      agent-shell-droid--welcome-message
+                      agent-shell-github--welcome-message
+                      agent-shell-goose--welcome-message
+                      agent-shell-hermes--welcome-message
+                      agent-shell-kimi--welcome-message
+                      agent-shell-kiro--welcome-message
+                      agent-shell-mistral--welcome-message
+                      agent-shell-omp--welcome-message
+                      agent-shell-opencode--welcome-message
+                      agent-shell-qwen--welcome-message
+                      agent-shell-xai--welcome-message))
+          (when (fboundp fn)
+            (advice-add fn :override #'decknix--agent-welcome-message)))
+
+        ;; 2. Fold the setup sections into one collapsed group.  Every
+        ;;    bootstrapping fragment goes through this one writer, so a
+        ;;    `:filter-args' here reaches all of them; the module decides
+        ;;    which block-ids qualify and returns the plist untouched for
+        ;;    the rest.
+        (defun decknix--agent-bootstrapping-group-args (args)
+          "Fold setup-section ARGS under the collapsed `Agent shell setup' group."
+          (decknix--agent-setup-group-args args))
+        (advice-add 'agent-shell--update-bootstrapping-fragment :filter-args
+                    #'decknix--agent-bootstrapping-group-args)
 
         ;; Turn-end signal sensing.  agent-shell renders plan entries, the
         ;; ACP stopReason and the agent's closing message, then throws all
