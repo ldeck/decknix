@@ -102,7 +102,14 @@ through the bare `agent-shell--update-fragment' (which must stay empty)."
               ((symbol-function 'agent-shell-cwd) (lambda () "/tmp"))
               ((symbol-function 'agent-shell--mcp-servers) (lambda () nil))
               ((symbol-function 'acp-make-session-resume-request)
-               (lambda (&rest _) 'request)))
+               (lambda (&rest _) 'request))
+              ;; The success path also arms the prompt-focus
+              ;; subscription; stub it so these tests stay about
+              ;; fragment routing alone.
+              ((symbol-function 'agent-shell-subscribe-to)
+               (lambda (&rest _) 'token))
+              ((symbol-function 'agent-shell-unsubscribe)
+               (lambda (&rest _) nil)))
       (funcall thunk))
     (cons (nreverse bootstrap) (nreverse raw))))
 
@@ -164,6 +171,78 @@ entire remaining bootstrap below the prompt with it."
       (should (member "starting" (car captured)))
       (should fell-back)
       (should-not (cdr captured)))))
+
+;; --- point lands ON the live prompt after a resume -----------------
+;;
+;; Upstream moves point to the prompt only when it had to CREATE one:
+;;
+;;   (unless comint-last-prompt
+;;     (shell-maker-finish-output ...)
+;;     (goto-char (point-max)))        ; <- inside the `unless'
+;;   (agent-shell--emit-event :event 'prompt-ready)
+;;
+;; A resumed buffer already carries the early prompt emitted at shell
+;; creation, so the branch is skipped and point is never moved.  On a
+;; fresh session that is invisible -- the buffer is one screenful, so
+;; wherever point sits, the prompt is right there.  On a resumed session
+;; the transcript and the whole bootstrap sit between them: point stays
+;; parked at the stale `<shell-maker-failed-command>' marker near the top
+;; while the live prompt is tens of kB below.
+;;
+;; Observed: session 575e74dd, marker at 735, live prompt at 35010-35020.
+;; The cursor sits in read-only output, so typing raises "Buffer is
+;; read-only" and the session reads as ready-but-with-no-prompt.
+;;
+;; Point is the contract here, not scrolling. Emacs scrolls a window to
+;; follow its point on the next redisplay, so putting point right is both
+;; necessary and sufficient; forcing `window-start' as well would fight
+;; the display engine.
+
+(ert-deftest decknix-resume-focus--moves-point-to-the-prompt ()
+  "Point lands at the live prompt, not wherever the resume left it."
+  (with-temp-buffer
+    (insert "banner\n<shell-maker-failed-command>\ntranscript\nClaude> ")
+    (goto-char 3)
+    (decknix--agent-resume-focus-prompt (current-buffer))
+    (should (= (point) (point-max)))))
+
+(ert-deftest decknix-resume-focus--tolerates-a-killed-buffer ()
+  "A session closed mid-bootstrap must not error out of event dispatch."
+  (let ((buf (generate-new-buffer " *decknix-focus-test*")))
+    (kill-buffer buf)
+    (should (progn (decknix--agent-resume-focus-prompt buf) t))))
+
+(ert-deftest decknix-resume-focus--subscribes-to-init-finished ()
+  "Focus waits for `init-finished', the LAST init event.
+`prompt-ready' fires with set-model and set-session-mode still to come,
+and each of those writes another fragment."
+  (with-temp-buffer
+    (let ((subscribed nil))
+      (cl-letf (((symbol-function 'agent-shell-subscribe-to)
+                 (lambda (&rest args)
+                   (setq subscribed (plist-get args :event))
+                   'token)))
+        (decknix--agent-resume-focus-prompt-on-init (current-buffer)))
+      (should (eq 'init-finished subscribed)))))
+
+(ert-deftest decknix-resume-focus--fires-once-then-unsubscribes ()
+  "One focus per session; a later `init-finished' must not yank point back."
+  (with-temp-buffer
+    (let ((handler nil) (unsubscribed nil) (focused 0))
+      (cl-letf (((symbol-function 'agent-shell-subscribe-to)
+                 (lambda (&rest args)
+                   (setq handler (plist-get args :on-event))
+                   'token))
+                ((symbol-function 'agent-shell-unsubscribe)
+                 (lambda (&rest _) (setq unsubscribed t)))
+                ((symbol-function 'decknix--agent-resume-focus-prompt)
+                 (lambda (&rest _) (cl-incf focused))))
+        (decknix--agent-resume-focus-prompt-on-init (current-buffer))
+        (should handler)
+        (funcall handler '((:event . init-finished)))
+        (funcall handler '((:event . init-finished)))
+        (should (= 1 focused))
+        (should unsubscribed)))))
 
 (provide 'decknix-agent-resume-native-test)
 ;;; decknix-agent-resume-native-test.el ends here
