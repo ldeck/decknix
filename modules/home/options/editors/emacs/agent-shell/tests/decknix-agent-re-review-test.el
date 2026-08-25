@@ -154,5 +154,71 @@
                  "The pr has been updated; please re-review"))
   (should-not (string-prefix-p "/" decknix-agent-re-review-prompt)))
 
+;; -- NO-DISPLAY: a backgrounded re-review must not steal a window ----
+;;
+;; `decknix-agent-re-review-send' ended unconditionally in
+;; `pop-to-buffer', which is exactly why the background launch path
+;; SKIPPED re-review routing altogether.  That was tolerable while
+;; background meant "unattended auto-review", but the sidebar now offers
+;; a background review on a single row, and without this the common case
+;; -- a PR whose review session already exists -- would silently spawn a
+;; SECOND session and discard the context the first one holds.
+
+(ert-deftest decknix-re-review-send--displays-by-default ()
+  "The interactive path still surfaces the buffer it prompted."
+  (let ((popped nil))
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'pop-to-buffer)
+                 (lambda (buf &rest _) (setq popped buf)))
+                ((symbol-function 'shell-maker-submit) (lambda (&rest _) nil)))
+        (decknix-agent-re-review-send (current-buffer) "please re-review")
+        (should (eq popped (current-buffer)))))))
+
+(ert-deftest decknix-re-review-send--no-display-keeps-the-layout ()
+  "With NO-DISPLAY the prompt is still submitted, but no window is taken."
+  (let ((popped nil)
+        (submitted nil))
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'pop-to-buffer)
+                 (lambda (buf &rest _) (setq popped buf)))
+                ((symbol-function 'shell-maker-submit)
+                 (lambda (&rest args) (setq submitted (plist-get args :input)))))
+        (decknix-agent-re-review-send (current-buffer) "please re-review" t)
+        (should (equal submitted "please re-review"))
+        (should-not popped)))))
+
+(ert-deftest decknix-re-review-send--no-display-still-queues-when-busy ()
+  "A busy agent queues the ask rather than losing it, display or not."
+  (let ((queued nil)
+        (popped nil))
+    (with-temp-buffer
+      (setq-local shell-maker--busy t)
+      (cl-letf (((symbol-function 'pop-to-buffer)
+                 (lambda (buf &rest _) (setq popped buf)))
+                ((symbol-function 'decknix--compose-enqueue-prompt)
+                 (lambda (_target content) (setq queued content))))
+        (decknix-agent-re-review-send (current-buffer) "please re-review" t)
+        (should (equal queued "please re-review"))
+        (should-not popped)))))
+
+(ert-deftest decknix-re-review-send-when-ready--threads-no-display ()
+  "NO-DISPLAY survives the poll and reaches the send.
+The async path is the one that matters most: dropping the flag here
+steals a window SECONDS later, from whatever the user moved on to, with
+no action of theirs to explain it."
+  (let ((seen 'unset))
+    (with-temp-buffer
+      (let ((buf (current-buffer)))
+        (cl-letf (((symbol-function 'decknix-agent-re-review-find-live)
+                   (lambda (&rest _) buf))
+                  ((symbol-function 'agent-shell-buffers) (lambda () (list buf)))
+                  ((symbol-function 'decknix-agent-re-review-send)
+                   (lambda (_target _content &optional no-display)
+                     (setq seen no-display))))
+          (decknix-agent-re-review--send-when-ready "repo#1" "go" 3 t)
+          (should (eq seen t))
+          (decknix-agent-re-review--send-when-ready "repo#1" "go" 3)
+          (should (eq seen nil)))))))
+
 (provide 'decknix-agent-re-review-test)
 ;;; decknix-agent-re-review-test.el ends here

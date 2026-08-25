@@ -63,6 +63,11 @@
                   "decknix-agent-re-review" (repo number))
 (declare-function decknix-agent-re-review-target
                   "decknix-agent-re-review" (needle number buffers entries))
+(declare-function decknix-agent-re-review-send
+                  "decknix-agent-re-review" (target content &optional no-display))
+(declare-function decknix-agent-re-review--send-when-ready
+                  "decknix-agent-re-review" (needle content &optional tries no-display))
+(defvar decknix-agent-re-review-prompt)
 (declare-function decknix--agent-pr-parse-url "decknix-agent-url-parse")
 (declare-function decknix--agent-parse-pr-url "decknix-agent-url-parse")
 (declare-function decknix--agent-repo-parse-url "decknix-agent-url-parse")
@@ -2743,6 +2748,51 @@ reverses sort direction.  All three are scoped to the picker."
                       (decknix--nav-hub-item-actions item))
                     (throw 'decknix--rev-done nil)))))))))))))
 
+(defun decknix--nav-hub-start-review-background (url)
+  "Start a review for URL undisplayed, reusing an earlier session if any.
+
+The INTERACTIVE background counterpart to `decknix--nav-hub-start-review'
+with BACKGROUND set.  That function deliberately bypasses re-review
+routing, because it was written for UNATTENDED auto-review, where the
+re-review path's `pop-to-buffer' would steal a window from whatever the
+user was doing.
+
+A background review chosen from the sidebar is a different thing: the
+user asked for it, and the reason re-review exists -- the earlier agent
+still holds the PR's context and the bot argument -- applies just as
+much when the session is not on screen.  Bypassing it here would spawn a
+second session for exactly the case re-review was built for (GitHub's
+\"re-request review\" landing back on an already-reviewed PR).
+
+So this routes the same way the foreground path does, and simply asks
+each target not to display."
+  (let ((parsed (decknix--agent-parse-pr-url url)))
+    (cond
+     ((not parsed) (message "Not a valid PR URL: %s" url))
+     ((not (and (fboundp 'decknix-agent-re-review-target)
+                (fboundp 'decknix-agent-re-review-send)))
+      (decknix--nav-hub-start-review url t))
+     (t
+      (let* ((needle (decknix-agent-re-review-needle
+                      (alist-get 'repo parsed) (alist-get 'number parsed)))
+             (route (decknix-agent-re-review-target
+                     needle (alist-get 'number parsed)
+                     (and (fboundp 'agent-shell-buffers) (agent-shell-buffers))
+                     (and (boundp 'decknix--sidebar-previous-sessions)
+                          decknix--sidebar-previous-sessions))))
+        (pcase (car route)
+          ('live
+           (decknix-agent-re-review-send
+            (cdr route) decknix-agent-re-review-prompt t))
+          ('saved
+           ;; FOCUS nil: restore the snapshot without pulling it on screen.
+           (decknix--sidebar-restore-previous-session (cdr route) nil)
+           (decknix-agent-re-review--send-when-ready
+            needle decknix-agent-re-review-prompt nil t)
+           (message "Resuming saved review session for %s in the background…"
+                    needle))
+          (_ (decknix--nav-hub-start-review url t))))))))
+
 (defun decknix--nav-hub-start-review-split (url)
   "Start a PR review session for URL in a new split window.
 Like `decknix--nav-hub-start-review' but splits the main window so
@@ -2850,6 +2900,16 @@ the review appears side-by-side with the current buffer."
   (when-let ((url (alist-get 'url decknix--hub-action-item)))
     (decknix--nav-hub-start-review-split url)))
 
+(transient-define-suffix decknix--hub-action-review-background ()
+  "Start a PR review session undisplayed, leaving the layout alone.
+Bound to `B' rather than `b' only because this menu already spends `b'
+on Open-in-browser; the sidebar review submenu, whose key space is free,
+uses the `b' that matches the multi-select prompt."
+  :description "Start review (background)"
+  (interactive)
+  (when-let ((url (alist-get 'url decknix--hub-action-item)))
+    (decknix--nav-hub-start-review-background url)))
+
 (transient-define-suffix decknix--hub-action-merge ()
   "Merge the current WIP PR via gh CLI."
   :description "Merge"
@@ -2883,7 +2943,8 @@ the review appears side-by-side with the current buffer."
     ("c" decknix--hub-action-copy-url)]
    ["Review"
     ("r" decknix--hub-action-review)
-    ("s" decknix--hub-action-review-split)]
+    ("s" decknix--hub-action-review-split)
+    ("B" decknix--hub-action-review-background)]
    ["WIP"
     :if decknix--hub-action-wip-p
     ("m" decknix--hub-action-merge)
@@ -3993,6 +4054,20 @@ section header, or workspace sub-header)."
         (decknix--nav-hub-start-review-split url)
       (message "No URL"))))
 
+(transient-define-suffix decknix--sb-act-review-background ()
+  "Start a review session undisplayed, leaving the current layout alone.
+The multi-select launcher (`decknix-hub-launch-reviews') has offered
+`[b]ackground' since it existed, but reviewing ONE PR -- the far more
+common case -- could only replace the main window or split it.  Same
+underlying spawn as the `:background' placement there; it surfaces in
+the sidebar when it is ready."
+  :description "Start review (background)"
+  (interactive)
+  (let ((url (decknix--sidebar-action-prop 'decknix-hub-url)))
+    (if (and url (fboundp 'decknix--nav-hub-start-review-background))
+        (decknix--nav-hub-start-review-background url)
+      (message "No URL"))))
+
 (transient-define-suffix decknix--sb-act-merge ()
   "Merge the active PR via gh CLI."
   :description "Merge"
@@ -4883,14 +4958,19 @@ review/wip rows; until then those rows have no session verbs."
 
 (transient-define-prefix decknix-sidebar-review-menu ()
   "Review submenu (spec §3.7).
-Four verbs with stable layout; the whole menu is meaningful only
+Five verbs with stable layout; the whole menu is meaningful only
 on rows that carry a PR URL (Request, WIP, WIP-placeholder, Linked
 PR).  Sidebar-global `R' and the in-menu `R Review…' entry both
-route here."
+route here.
+
+`b' mirrors the `[b]ackground' placement the multi-select launcher
+offers, so reviewing one PR and reviewing five have the same set of
+placements available."
   [:description decknix--sidebar-action-description
    ["Review"
     ("r" decknix--sb-act-review)
     ("s" decknix--sb-act-review-split)
+    ("b" decknix--sb-act-review-background)
     ("c" decknix--sb-act-comment)
     ("R" decknix--sb-act-review-comment)]]
   [("q" "Cancel" transient-quit-all)])
