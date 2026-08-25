@@ -67,7 +67,6 @@ glance, now that the ASCII art no longer does."
 
 (defconst decknix-agent-setup-group-blocks
   '("agent_capabilities"
-    "resumed_session"
     "forked_session"
     "available_config_options"
     "available_models"
@@ -75,11 +74,19 @@ glance, now that the ASCII art no longer does."
     "available_commands_update")
   "Bootstrapping `:block-id's folded under `decknix-agent-setup-group-label'.
 
-The five the user reads as setup noise, plus `resumed_session' and
-`forked_session'.  Those two are not noise-by-choice: they render
-*between* `agent_capabilities' and `available_config_options', and
-`agent-shell-ui' only groups a contiguous run, so omitting them would
-break the group in half.")
+The five setup sections, plus `forked_session'.
+
+`resumed_session' is deliberately absent: \"✓ Resuming session\" stays
+visible at top level.  That is only safe because decknix owns that write
+and defers it until after `agent-shell--finalize-session-init', so the
+marker lands BELOW the setup run (see
+`decknix--agent-resume-native-send').  `agent-shell-ui' groups only a
+contiguous run, so excluding a block that still rendered mid-run would
+split the group in two rather than move the block out of it.
+
+`forked_session' stays IN for exactly that reason: upstream writes it
+mid-run, before finalize, and we do not own the call site.  Folding one
+extra line on the fork path beats splitting its group into two headers.")
 
 (defun decknix--agent-welcome-name (agent-config)
   "Return the display name for AGENT-CONFIG, e.g. \"Claude\".
