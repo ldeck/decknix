@@ -62,6 +62,8 @@
 (declare-function agent-shell--resolve-path "agent-shell")
 (declare-function agent-shell-cwd "agent-shell")
 (declare-function agent-shell--mcp-servers "agent-shell")
+(declare-function agent-shell-subscribe-to "agent-shell")
+(declare-function agent-shell-unsubscribe "agent-shell")
 (declare-function acp-send-request "acp")
 (declare-function acp-make-session-resume-request "acp")
 
@@ -177,7 +179,11 @@ and permission mode just as for a fresh session."
         :acp-session-id session-id)
        (when (buffer-live-p shell-buffer)
          (with-current-buffer shell-buffer
-           (setq decknix--agent-resume-native-done t)))
+           (setq decknix--agent-resume-native-done t))
+         ;; The transcript is already rendered, so the live prompt ends
+         ;; up far below wherever point was left.  Follow it down once
+         ;; the last bootstrapping fragment has been written.
+         (decknix--agent-resume-focus-prompt-on-init shell-buffer))
        (agent-shell--update-bootstrapping-fragment
         :state (agent-shell--state)
         :block-id "resumed_session"
@@ -198,6 +204,61 @@ and permission mode just as for a fresh session."
                         "starting fresh with a continuation primer...")
           :append t))
        (apply orig-fn args)))))
+
+(defun decknix--agent-resume-focus-prompt (shell-buf)
+  "Put point on SHELL-BUF's live prompt at `point-max'.
+No-op on a dead buffer.
+
+Also moves the point of every window showing SHELL-BUF: a buffer's own
+point is not what a displayed window scrolls to, so setting only the
+former leaves the cursor visibly parked where it was.  Scrolling is
+deliberately NOT forced -- redisplay moves a window to follow its point,
+and setting `window-start' by hand only fights the display engine."
+  (when (buffer-live-p shell-buf)
+    (with-current-buffer shell-buf
+      (goto-char (point-max))
+      (dolist (window (get-buffer-window-list shell-buf nil t))
+        (set-window-point window (point-max))))))
+
+(defun decknix--agent-resume-focus-prompt-on-init (shell-buf)
+  "Focus SHELL-BUF's prompt once ACP initialization has fully finished.
+
+Upstream only moves point to the prompt when it had to CREATE one:
+
+    (unless comint-last-prompt
+      (shell-maker-finish-output ...)
+      (goto-char (point-max)))
+
+A resumed buffer already carries the early prompt emitted at shell
+creation, so that branch is skipped and point is never moved.  On a fresh
+session it makes no difference -- the buffer is one screenful.  On a
+resumed session the replayed transcript and the whole bootstrap handshake
+sit between them, so point stays parked at the stale
+`<shell-maker-failed-command>' marker near the top while the live prompt
+is tens of kB below.  The cursor is then sitting in read-only output:
+typing raises \"Buffer is read-only\" and the session reads as ready but
+with nowhere to type.
+
+Waits for `init-finished' rather than `prompt-ready': the latter fires
+with the set-model and set-session-mode fragments still to come, and each
+of those writes more text above the prompt.
+
+Fires exactly once, then unsubscribes, so a later `init-finished' cannot
+yank point away from something the user has since typed."
+  (let ((done nil)
+        (token nil))
+    (setq token
+          (agent-shell-subscribe-to
+           :shell-buffer shell-buf
+           :event 'init-finished
+           :on-event
+           (lambda (_event)
+             (unless done
+               (setq done t)
+               (when token
+                 (agent-shell-unsubscribe :subscription token))
+               (decknix--agent-resume-focus-prompt shell-buf)))))
+    token))
 
 (defun decknix--agent-resume-native-initiate-session (orig-fn &rest args)
   "Around-advice for `agent-shell--initiate-session': native ACP resume.
