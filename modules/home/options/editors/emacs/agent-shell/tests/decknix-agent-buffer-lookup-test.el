@@ -133,6 +133,95 @@
                            "ck")))))
       (kill-buffer buf))))
 
+;; -- find-live-buffer-for-session-id -----------------------------
+;;
+;; Dedupe by conv-key alone is not sufficient. A conv-key is derived
+;; from conversation content and demonstrably scatters (#151): the SAME
+;; session id ends up registered under two different keys. When that
+;; happens, resuming the session finds no live buffer for the new key
+;; and spawns a second agent-shell -- a second ACP bridge process
+;; resuming the SAME session id as the buffer already open.
+;;
+;; Observed live: session a6f88415-b1f0-40b0-b8ff-7ff5e926a712 held by
+;; both `*Claude: fix*' (conv-key 2a94df56ec2eae48, bridge -39) and
+;; `*Claude: nurturecloud/decknix/claude*' (conv-key ba8c08cbdb08559f,
+;; bridge -36). Two writers on one transcript.
+;;
+;; The session id is the identity that cannot scatter, so it is the
+;; backstop the dedupe needs.
+
+(ert-deftest decknix-find-live-buffer-for-session-id--nil-on-nil-id ()
+  "Short-circuits to nil for a nil session id without touching buffers."
+  (cl-letf (((symbol-function 'agent-shell-buffers)
+             (lambda () (error "Should not be called"))))
+    (should (null (decknix--agent-find-live-buffer-for-session-id nil)))
+    (should (null (decknix--agent-find-live-buffer-for-session-id "")))))
+
+(ert-deftest decknix-find-live-buffer-for-session-id--matches-across-conv-keys ()
+  "Finds the live buffer holding SESSION-ID even under a different conv-key.
+This is the whole point: the conv-key has scattered, so only the
+session id can still identify the conversation."
+  (let* ((target (generate-new-buffer "*test-sid-target*"))
+         (other (generate-new-buffer "*test-sid-other*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer target
+            (setq-local major-mode 'agent-shell-mode)
+            (setq-local decknix--agent-conv-key "ba8c08cbdb08559f")
+            (setq-local decknix--agent-auggie-session-id "a6f88415"))
+          (with-current-buffer other
+            (setq-local major-mode 'agent-shell-mode)
+            (setq-local decknix--agent-conv-key "other-key")
+            (setq-local decknix--agent-auggie-session-id "different-sid"))
+          (cl-letf (((symbol-function 'agent-shell-buffers)
+                     (lambda () (list other target)))
+                    ((symbol-function 'process-live-p) (lambda (_p) t))
+                    ((symbol-function 'get-buffer-process) (lambda (_b) 'fake-proc))
+                    ((symbol-function 'derived-mode-p)
+                     (lambda (mode) (eq major-mode mode))))
+            (should (eq (decknix--agent-find-live-buffer-for-session-id "a6f88415")
+                        target))))
+      (kill-buffer target)
+      (kill-buffer other))))
+
+(ert-deftest decknix-find-live-buffer-for-session-id--skips-dead-process ()
+  "A process-less corpse must not short-circuit resume.
+Same rule as the conv-key lookup: switching to a dead shell is worse
+than spawning a live one."
+  (let ((buf (generate-new-buffer "*test-sid-dead*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local major-mode 'agent-shell-mode)
+            (setq-local decknix--agent-auggie-session-id "sid"))
+          (cl-letf (((symbol-function 'agent-shell-buffers) (lambda () (list buf)))
+                    ((symbol-function 'process-live-p) (lambda (_p) nil))
+                    ((symbol-function 'get-buffer-process) (lambda (_b) 'fake-dead))
+                    ((symbol-function 'derived-mode-p)
+                     (lambda (mode) (eq major-mode mode))))
+            (should (null (decknix--agent-find-live-buffer-for-session-id "sid")))))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-find-live-buffer-for-session-id--falls-back-to-acp-id ()
+  "Matches the ACP session id when the auggie-side id is not set yet.
+`decknix--agent-buffer-session-id' already defines that precedence;
+the lookup must honour it rather than reading one field directly."
+  (let ((buf (generate-new-buffer "*test-sid-acp*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local major-mode 'agent-shell-mode)
+            (setq-local decknix--agent-auggie-session-id nil)
+            (setq-local agent-shell--state '((:session . ((:id . "acp-sid"))))))
+          (cl-letf (((symbol-function 'agent-shell-buffers) (lambda () (list buf)))
+                    ((symbol-function 'process-live-p) (lambda (_p) t))
+                    ((symbol-function 'get-buffer-process) (lambda (_b) 'fake-proc))
+                    ((symbol-function 'derived-mode-p)
+                     (lambda (mode) (eq major-mode mode))))
+            (should (eq (decknix--agent-find-live-buffer-for-session-id "acp-sid")
+                        buf))))
+      (kill-buffer buf))))
+
 ;; -- current-conv-key --------------------------------------------
 
 (ert-deftest decknix-current-conv-key--finds-key-by-session-id ()

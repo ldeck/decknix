@@ -165,6 +165,8 @@ history; only the model-facing primer is suppressed)."
                   "decknix-agent-buffer-lookup" (before))
 (declare-function decknix--agent-find-live-buffer-for-conv-key
                   "decknix-agent-buffer-lookup" (conv-key))
+(declare-function decknix--agent-find-live-buffer-for-session-id
+                  "decknix-agent-buffer-lookup" (session-id))
 (declare-function decknix--session-conv-id "decknix-agent-buffer-lookup")
 (declare-function decknix--agent-workspace-for-conv-key
                   "decknix-agent-session-workspace" (conv-key))
@@ -681,7 +683,16 @@ one is current."
   ;; Dedupe: if this conversation is already live, return the
   ;; existing buffer (and reuse the target window) instead of
   ;; starting a second agent-shell.
-  (let ((existing (decknix--agent-find-live-buffer-for-conv-key conv-key)))
+  (let ((existing (or (decknix--agent-find-live-buffer-for-conv-key conv-key)
+                      ;; Session-id backstop.  A conv-key scatters
+                      ;; (#151), and when it does the lookup above finds
+                      ;; nothing live for the NEW key even though this
+                      ;; very session is already open under the old one.
+                      ;; Resume then spawns a second agent-shell whose
+                      ;; ACP bridge resumes the SAME session id -- two
+                      ;; bridge processes writing one transcript.
+                      (decknix--agent-find-live-buffer-for-session-id
+                       session-id))))
     (if existing
         (let ((target-win (selected-window)))
           (when (window-live-p target-win)

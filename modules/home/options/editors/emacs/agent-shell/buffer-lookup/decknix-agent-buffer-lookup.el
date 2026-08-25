@@ -106,6 +106,36 @@ user staring at a dead shell."
      (when (fboundp 'agent-shell-buffers)
        (agent-shell-buffers)))))
 
+(defun decknix--agent-find-live-buffer-for-session-id (session-id)
+  "Return the first live agent-shell buffer already holding SESSION-ID.
+Returns nil when SESSION-ID is nil/empty or no live buffer holds it.
+
+The session-id backstop to `decknix--agent-find-live-buffer-for-conv-key'.
+A conv-key is derived from conversation content and scatters (#151) --
+the same session can end up registered under two different keys.  When
+it does, a conv-key-only dedupe finds nothing live for the new key and
+resume spawns a second agent-shell: a second ACP bridge process
+resuming the SAME session id that another buffer already has open, so
+two bridges write one transcript.  The session id cannot scatter, which
+is exactly why it is the right identity to fall back on.
+
+Reads the id through `decknix--agent-buffer-session-id' so the
+auggie-id-then-ACP-id precedence stays defined in one place.  Same
+liveness rule as the conv-key lookup: a process-less buffer corpse does
+not qualify, since short-circuiting resume onto a dead shell is worse
+than spawning a live one."
+  (when (and (stringp session-id)
+             (not (string-empty-p session-id)))
+    (seq-find
+     (lambda (buf)
+       (and (buffer-live-p buf)
+            (process-live-p (get-buffer-process buf))
+            (with-current-buffer buf
+              (and (derived-mode-p 'agent-shell-mode)
+                   (equal (decknix--agent-buffer-session-id buf) session-id)))))
+     (when (fboundp 'agent-shell-buffers)
+       (agent-shell-buffers)))))
+
 (defun decknix--agent-current-conv-key ()
   "Get the conversation key for the current agent-shell buffer.
 Prefer the buffer-local `decknix--agent-conv-key' — the key THIS session

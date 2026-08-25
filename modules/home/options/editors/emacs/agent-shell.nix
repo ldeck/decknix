@@ -1440,6 +1440,7 @@ let
   #   `-buffer-session-id'                auggie-id with ACP fallback
   #   `-find-new-shell-buffer'            snapshot diff
   #   `-find-live-buffer-for-conv-key'    dedupe lookup
+  #   `-find-live-buffer-for-session-id'  dedupe backstop (scattered key)
   #   `-current-conv-key'                 reverse-resolve sid -> key
   # All four are pure with respect to their inputs (the tag store
   # accessor is stubbed in the test suite via cl-letf), so they
@@ -3779,6 +3780,8 @@ ${optionalString cfg.tableOverlay.enable ''
                           "decknix-agent-buffer-lookup" (before-buffers))
         (declare-function decknix--agent-find-live-buffer-for-conv-key
                           "decknix-agent-buffer-lookup" (conv-key))
+        (declare-function decknix--agent-find-live-buffer-for-session-id
+                          "decknix-agent-buffer-lookup" (session-id))
         (declare-function decknix--agent-current-conv-key
                           "decknix-agent-buffer-lookup")
 
