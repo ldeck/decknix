@@ -30,6 +30,16 @@ in
       description = "Enable Java LSP support via eglot-java (uses jdt-language-server).";
     };
 
+    nix.enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Install nixd and wire it as the Eglot server for Nix files, so
+        flake/home-manager configs get completion, go-to-definition, and
+        diagnostics.  nixd resolves flake attrs (unlike the lighter `nil').
+      '';
+    };
+
     # === Debug Adapter Protocol ===
     dap.enable = mkOption {
       type = types.bool;
@@ -49,7 +59,8 @@ in
     # Install language servers via Nix
     home.packages = with pkgs;
       (optionals cfg.kotlin.enable [ kotlin-language-server ])
-      ++ (optionals cfg.java.enable [ jdt-language-server ]);
+      ++ (optionals cfg.java.enable [ jdt-language-server ])
+      ++ (optionals cfg.nix.enable [ nixd ]);
 
     programs.emacs = {
       extraPackages = epkgs: with epkgs;
@@ -69,7 +80,9 @@ in
           :hook ((kotlin-mode . eglot-ensure)
                  (kotlin-ts-mode . eglot-ensure)
                  (java-mode . eglot-ensure)
-                 (java-ts-mode . eglot-ensure))
+                 (java-ts-mode . eglot-ensure)
+                 (nix-mode . eglot-ensure)
+                 (nix-ts-mode . eglot-ensure))
           :config
           ;; Performance tuning
           (setq eglot-events-buffer-size 0           ; Disable events buffer for performance
@@ -94,6 +107,13 @@ in
         (with-eval-after-load 'eglot
           (add-to-list 'eglot-server-programs
                        '((kotlin-mode kotlin-ts-mode) . ("kotlin-language-server"))))
+
+      '' + optionalString cfg.nix.enable ''
+        ;; == Nix Language Server (nixd) ==
+        ;; nixd is installed via Nix; resolves flake attrs (unlike `nil').
+        (with-eval-after-load 'eglot
+          (add-to-list 'eglot-server-programs
+                       '((nix-mode nix-ts-mode) . ("nixd"))))
 
       '' + optionalString cfg.java.enable ''
         ;; == Java Language Server (via eglot-java) ==
