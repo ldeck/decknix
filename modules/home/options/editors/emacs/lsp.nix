@@ -64,9 +64,9 @@ in
 
     programs.emacs = {
       extraPackages = epkgs: with epkgs;
-        # Eglot is built-in to Emacs 29+, but we ensure it's available
+        # Eglot is built-in to Emacs 29+, but we ensure it's available.
+        # (eglot-java dropped — Java is driven directly via jdtls, see below.)
         [ eglot ]
-        ++ (optionals cfg.java.enable [ eglot-java ])
         ++ (optionals cfg.eldocBox.enable [ eldoc-box ])
         ++ (optionals cfg.dap.enable [ dape ]);
 
@@ -116,15 +116,18 @@ in
                        '((nix-mode nix-ts-mode) . ("nixd"))))
 
       '' + optionalString cfg.java.enable ''
-        ;; == Java Language Server (via eglot-java) ==
-        ;; jdt-language-server is installed via Nix, eglot-java configures it
-        (use-package eglot-java
-          :after eglot
-          :hook ((java-mode . eglot-java-mode)
-                 (java-ts-mode . eglot-java-mode))
-          :config
-          ;; Use the Nix-installed jdt-language-server
-          (setq eglot-java-eclipse-jdt-args nil))  ; Use defaults from nix package
+        ;; == Java Language Server (jdtls, driven directly) ==
+        ;; The nix `jdtls' is a Python launcher for eclipse.jdt.ls that speaks
+        ;; LSP over stdio and manages its own -data dir, so Eglot drives it
+        ;; directly — mirroring the Kotlin setup.  We deliberately do NOT use
+        ;; `eglot-java': it expects to locate/download its own jdt.ls bundle
+        ;; and never wires the nix `jdtls' into `eglot-server-programs', so
+        ;; Eglot silently failed to connect on java-mode buffers (verified on
+        ;; the upside monolith).  jdtls imports the Gradle project itself; the
+        ;; java-mode `eglot-ensure' hook above starts it.
+        (with-eval-after-load 'eglot
+          (add-to-list 'eglot-server-programs
+                       '((java-mode java-ts-mode) . ("jdtls"))))
 
       '' + optionalString cfg.eldocBox.enable ''
         ;; == Eldoc-box: Enhanced documentation popups ==
