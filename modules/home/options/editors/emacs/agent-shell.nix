@@ -332,6 +332,16 @@ let
     testFiles = [ ];
   };
 
+  # Named window-layout groups (#169): winner-mode-style switching between
+  # saved tiled window arrangements (window-state, not tab-bar), with an
+  # attention-sorted switcher.  Composes with the #168 tiling primitive.
+  decknix-layout-groups-el = mkEmacsTestedPackage {
+    pname = "decknix-layout-groups";
+    src = ./agent-shell/layout-groups;
+    packageRequires = [ ];
+    testFiles = [ ];
+  };
+
   # Quick-capture: jot a feature/bug/investigation/discussion into a GitHub
   # issue/comment or taskwarrior without leaving Emacs or waiting on a busy
   # agent.  Tool-agnostic (gh + task CLIs), hexagonal (pluggable
@@ -3025,6 +3035,7 @@ in
           decknix-agent-heartbeat-watch-el
           decknix-agent-acp-trace-el
           decknix-record-el
+          decknix-layout-groups-el
           decknix-perf-hitch-el
           decknix-perf-hitch-autofile-el
           decknix-capture-el
@@ -4173,6 +4184,13 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; backends; capture target = window / frame / display.
         (require 'decknix-record)
 
+        ;; Named window-layout groups (#169).  Bindings are added in the
+        ;; C-c s session-prefix block below (which owns that map); here we
+        ;; just load the module and restore persisted groups on startup.
+        (require 'decknix-layout-groups)
+        (declare-function decknix-layout-groups-restore "decknix-layout-groups")
+        (add-hook 'emacs-startup-hook #'decknix-layout-groups-restore)
+
         ;; DB connect: `M-x decknix-db' -> magit-style transient to reach a
         ;; managed database over its jumpbox tunnel, least-privilege first.
         ;; Services come from `decknix-db-services' (set by the NurtureCloud
@@ -4645,6 +4663,11 @@ ${optionalString cfg.tableOverlay.enable ''
                      ("v" . decknix-agent-review)
                      ("V" . decknix-agent-review-menu)))
           (define-key decknix-session-prefix-map (kbd (car b)) (cdr b)))
+        ;; Named window-layout groups (#169) on the session prefix.
+        (when (fboundp 'decknix-layout-group-switch)
+          (define-key decknix-session-prefix-map (kbd "l") 'decknix-layout-group-switch)
+          (define-key decknix-session-prefix-map (kbd "L") 'decknix-layout-group-save)
+          (define-key decknix-session-prefix-map (kbd "C-l") 'decknix-layout-group-delete))
         (with-eval-after-load 'which-key
           (which-key-add-key-based-replacements
             "C-c s"   "Session"
@@ -4660,7 +4683,10 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c s x" "arm auto-close"
             "C-c s e" "compose"
             "C-c s v" "review last exchange"
-            "C-c s V" "review menu"))
+            "C-c s V" "review menu"
+            "C-c s l" "layout switch"
+            "C-c s L" "layout save"
+            "C-c s C-l" "layout delete"))
 
         ;; Compat: the bumped `agent-shell-workspace--buffer-config' calls
         ;; (map-elt config :buffer-name) over each element of
