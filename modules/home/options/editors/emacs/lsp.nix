@@ -1,9 +1,25 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, inputs, ... }:
 
 with lib;
 
 let
   cfg = config.programs.emacs.decknix.lsp;
+
+  # Kotlin LSP choice.  JetBrains' official kotlin-lsp (via nix-casks) is the
+  # only server that resolves modern Gradle monorepos — centralised repos,
+  # Google Artifact Registry, JDK 25, Kotlin 2.3 (fwcd/kotlin-language-server
+  # 1.3.13 cannot; verified on the upside monolith, see #170).  The cask is
+  # macOS-only, so fall back to fwcd elsewhere / if unavailable.
+  jetbrainsKotlinLsp =
+    inputs.nix-casks.packages.${pkgs.stdenv.hostPlatform.system}.kotlin-lsp or null;
+  useJetBrainsKotlin =
+    cfg.kotlin.enable && cfg.kotlin.useJetBrainsLsp && jetbrainsKotlinLsp != null;
+  kotlinPkg = if useJetBrainsKotlin then jetbrainsKotlinLsp else pkgs.kotlin-language-server;
+  # Eglot server-programs command for Kotlin (elisp list literal).  JetBrains
+  # kotlin-lsp speaks LSP over stdio with `--stdio' (verify with
+  # `kotlin-lsp --help' after switch if this ever changes).
+  kotlinServerElisp =
+    if useJetBrainsKotlin then ''("kotlin-lsp" "--stdio")'' else ''("kotlin-language-server")'';
 in
 {
   options.programs.emacs.decknix.lsp = {
@@ -21,7 +37,20 @@ in
     kotlin.enable = mkOption {
       type = types.bool;
       default = true;
-      description = "Install kotlin-language-server for Kotlin LSP support.";
+      description = "Enable Kotlin LSP support.";
+    };
+
+    kotlin.useJetBrainsLsp = mkOption {
+      type = types.bool;
+      default = pkgs.stdenv.hostPlatform.isDarwin;
+      description = ''
+        Use JetBrains' official kotlin-lsp (via nix-casks) instead of
+        fwcd/kotlin-language-server.  The JetBrains server is IntelliJ-powered
+        and resolves modern Gradle monorepos (centralised repositories, Google
+        Artifact Registry, JDK 25+, Kotlin 2.3+) that fwcd's 1.3.13 cannot
+        (#170).  The cask is macOS-only; where unavailable this silently falls
+        back to fwcd/kotlin-language-server.
+      '';
     };
 
     java.enable = mkOption {
@@ -57,10 +86,10 @@ in
 
   config = mkIf cfg.enable {
     # Install language servers via Nix
-    home.packages = with pkgs;
-      (optionals cfg.kotlin.enable [ kotlin-language-server ])
-      ++ (optionals cfg.java.enable [ jdt-language-server ])
-      ++ (optionals cfg.nix.enable [ nixd ]);
+    home.packages =
+      (optionals cfg.kotlin.enable [ kotlinPkg ])
+      ++ (optionals cfg.java.enable [ pkgs.jdt-language-server ])
+      ++ (optionals cfg.nix.enable [ pkgs.nixd ]);
 
     programs.emacs = {
       extraPackages = epkgs: with epkgs;
@@ -110,10 +139,11 @@ in
 
       '' + optionalString cfg.kotlin.enable ''
         ;; == Kotlin Language Server ==
-        ;; kotlin-language-server is installed via Nix
+        ;; JetBrains kotlin-lsp (nix-casks) where available, else fwcd — the
+        ;; command is chosen in lsp.nix (`kotlinServerElisp').
         (with-eval-after-load 'eglot
           (add-to-list 'eglot-server-programs
-                       '((kotlin-mode kotlin-ts-mode) . ("kotlin-language-server"))))
+                       '((kotlin-mode kotlin-ts-mode) . ${kotlinServerElisp})))
 
       '' + optionalString cfg.nix.enable ''
         ;; == Nix Language Server (nixd) ==
