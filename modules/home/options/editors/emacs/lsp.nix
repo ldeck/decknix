@@ -88,6 +88,13 @@ in
           (setq eglot-events-buffer-size 0           ; Disable events buffer for performance
                 eglot-autoshutdown t                 ; Shutdown server when last buffer closed
                 eglot-sync-connect nil               ; Don't block on connection
+                ;; Big monorepos (e.g. upside) make the server resolve a huge
+                ;; Gradle classpath during `initialize'; the 30s default is
+                ;; far too short and Eglot gives up ("timed out after 30s").
+                ;; Allow up to 5 min for the handshake.  Async connect means
+                ;; this does not block Emacs — the buffer just isn't
+                ;; LSP-managed until the server answers.
+                eglot-connect-timeout 300
                 eglot-extend-to-xref t)              ; Use LSP for xref
 
           ;; Keybindings (using C-c l prefix for LSP commands)
