@@ -174,9 +174,20 @@ let
         # load-path or native-compiled.  The package dir stays on
         # `-L .' so the modules-under-test resolve via `require'.
         decknix_tests_dir=$(mktemp -d)
-        cp ${testsDir}/decknix-test-helpers.el "$decknix_tests_dir/"
+        # Reference each test file as its OWN store path, never
+        # `${"\${testsDir}"}/name.el'.  Interpolating `testsDir' copies the whole
+        # tests directory to a single store path, and that path is then
+        # baked into EVERY tested package's build script -- so editing
+        # any one test file changed the hash for all of them and
+        # rebuilt the lot (measured: 135 files behind one path,
+        # referenced by 128 derivations).  `path + "/name.el"' yields a
+        # per-file store path instead, so a package depends only on the
+        # tests it actually runs.  The destination name must be spelled
+        # out because the store basename is hash-prefixed.
+        cp ${testsDir + "/decknix-test-helpers.el"} \
+           "$decknix_tests_dir/decknix-test-helpers.el"
         ${lib.concatMapStringsSep "\n        "
-          (f: ''cp ${testsDir}/${f} "$decknix_tests_dir/"'') testFiles}
+          (f: ''cp ${testsDir + "/${f}"} "$decknix_tests_dir/${f}"'') testFiles}
         # Run with the same Emacs the build uses (already on $PATH via
         # nativeBuildInputs).  -Q skips user init; HOME is sandboxed by
         # the Nix builder so persistence tests can't escape.
