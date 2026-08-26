@@ -175,17 +175,47 @@ re-renders so paging does not auto-expand a collapsed section."
                              'read-only t
                              'rear-nonsticky t)))))
               (insert (propertize "\n" 'read-only t 'rear-nonsticky t))
-              (put-text-property body-start (point)
-                                 'decknix-context-body t)
-              ;; Restore collapsed/expanded state: new sections
-              ;; start collapsed; re-renders preserve the prior
-              ;; visibility so paging doesn't yank the user's
-              ;; collapse choice out from under them.
-              (put-text-property body-start (point)
-                                 'invisible
-                                 (if existing was-collapsed t))))))
+              ;; Stop the body's properties short of its own trailing
+              ;; newlines.  Those newlines separate this section from
+              ;; the prompt directly below it, and `agent-shell-chat-mode'
+              ;; anchors the prompt's ` Me '/`❯' overlay on them.  Emacs
+              ;; does not draw an overlay's `before-string' when the
+              ;; overlay starts inside an invisible range -- so covering
+              ;; them made the input marker vanish on every collapsed
+              ;; section, which is every resumed session by default.  The
+              ;; prompt stayed live, writable and cursored; it just had
+              ;; nothing to show it was a prompt.
+              (let ((body-end (decknix--agent-context-invisible-end
+                               body-start (point))))
+                (put-text-property body-start body-end
+                                   'decknix-context-body t)
+                ;; Restore collapsed/expanded state: new sections
+                ;; start collapsed; re-renders preserve the prior
+                ;; visibility so paging doesn't yank the user's
+                ;; collapse choice out from under them.
+                (put-text-property body-start body-end
+                                   'invisible
+                                   (if existing was-collapsed t)))))))
       (setq decknix--agent-history-cursor clamped)
       (cons clamped window-len))))
+
+(defun decknix--agent-context-invisible-end (body-start body-end)
+  "Return BODY-END pulled back past trailing newlines, floored at BODY-START.
+
+The end of the range the Context section marks `decknix-context-body'
+and `invisible'.  Those two properties must NOT reach the section's own
+trailing newlines: they separate it from the prompt rendered directly
+below, `agent-shell-chat-mode' anchors the prompt's ` Me '/`❯' overlay
+on them, and an overlay whose start is inside an invisible range has its
+`before-string' suppressed.
+
+Clamped at BODY-START so an all-newline body cannot produce an END below
+START -- `put-text-property' signals on an inverted range, which would
+abort the render entirely."
+  (save-excursion
+    (goto-char body-end)
+    (skip-chars-backward "\n" body-start)
+    (max body-start (point))))
 
 (defun decknix--agent-session-prepopulate (session-id n)
   "Insert a collapsible Context section with the last N exchanges.

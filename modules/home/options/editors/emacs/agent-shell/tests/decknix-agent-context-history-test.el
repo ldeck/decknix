@@ -142,5 +142,79 @@ the bottom-most window (cursor = total - count)."
         ;; Buffer-local count survived the prepopulate.
         (should (= decknix-agent-session-history-count 2))))))
 
+;; -- the invisible range must stop short of the trailing blank lines --
+;;
+;; `agent-shell-chat-mode' renders the live prompt as a ` Me ' badge and
+;; a `❯' chevron via an overlay `before-string', and it anchors that
+;; overlay on the newlines preceding `Claude> '.  Emacs does not display
+;; an overlay's `before-string' when the overlay's start position is
+;; inside an invisible range.
+;;
+;; The Context section is inserted directly above the prompt and is
+;; collapsed by default, so its body carries `invisible t'.  When that
+;; range was allowed to cover the section's own trailing newlines -- the
+;; ones that separate it from the prompt -- the prompt overlay anchored
+;; on invisible text and the badge silently vanished.  The prompt was
+;; live, writable and had a cursor on it; it just had no visible input
+;; marker, which reads exactly like a session that never became ready.
+;;
+;; Measured on the real thing (session #159): invisible range ended at
+;; 49474, `Claude> ' began at 49474, and the overlay started at 49472 --
+;; two characters inside.
+
+(ert-deftest decknix-context-invisible-end--trims-trailing-newlines ()
+  "Trailing newlines are excluded from the invisible range."
+  (with-temp-buffer
+    (insert "body text\n\n")
+    (should (= (decknix--agent-context-invisible-end 1 (point-max))
+               (+ 1 (length "body text"))))))
+
+(ert-deftest decknix-context-invisible-end--trims-a-single-newline ()
+  "One trailing newline is trimmed just the same."
+  (with-temp-buffer
+    (insert "body\n")
+    (should (= (decknix--agent-context-invisible-end 1 (point-max))
+               (+ 1 (length "body"))))))
+
+(ert-deftest decknix-context-invisible-end--leaves-a-newline-free-body ()
+  "A body not ending in a newline is returned unchanged."
+  (with-temp-buffer
+    (insert "body")
+    (should (= (decknix--agent-context-invisible-end 1 (point-max))
+               (point-max)))))
+
+(ert-deftest decknix-context-invisible-end--never-precedes-body-start ()
+  "An all-newline body collapses to BODY-START, never below it.
+Guards the degenerate case: a `put-text-property' with END before START
+signals, which would abort the whole render."
+  (with-temp-buffer
+    (insert "\n\n\n")
+    (should (= (decknix--agent-context-invisible-end 1 (point-max)) 1))))
+
+(ert-deftest decknix-context-render--leaves-the-prompt-anchor-visible ()
+  "End to end: the newlines just above the prompt are NOT invisible.
+
+This is the property the ` Me '/`❯' badge depends on.  Asserting it on
+the rendered buffer rather than only on the helper means a future change
+to how the section is inserted -- not just to the trimming -- still has
+to keep the anchor visible."
+  (with-temp-buffer
+    (setq-local comint-prompt-regexp "^Claude> ")
+    (setq-local decknix--agent-history-cache '(("hello" . "world")))
+    (setq-local decknix-agent-session-history-count 1)
+    (insert "\n\nClaude> ")
+    (cl-letf (((symbol-function 'decknix--agent-session-window-clamp)
+               (lambda (cursor _count _total) (max 0 cursor)))
+              ((symbol-function 'decknix--agent-session-take-window)
+               (lambda (turns _cursor _count) turns)))
+      (decknix--agent-context-render-window 0))
+    (goto-char (point-max))
+    (should (re-search-backward "^Claude> " nil t))
+    ;; Every character between the body and the prompt must be visible.
+    (let ((prompt-start (match-beginning 0)))
+      (should (> prompt-start 2))
+      (should-not (get-text-property (1- prompt-start) 'invisible))
+      (should-not (get-text-property (- prompt-start 2) 'invisible)))))
+
 (provide 'decknix-agent-context-history-test)
 ;;; decknix-agent-context-history-test.el ends here
