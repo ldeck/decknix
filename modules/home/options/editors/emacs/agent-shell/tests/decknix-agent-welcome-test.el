@@ -133,5 +133,62 @@ is worse than folding one extra line."
   "No `:block-id' must not error out of the advice."
   (should (equal '(:body "x") (decknix--agent-setup-group-args '(:body "x")))))
 
+;; -- no input affordance until the agent can accept input ----------
+;;
+;; Upstream shows the prompt at shell creation, deliberately, "so shell
+;; always has a prompt to type into regardless of strategy".  With
+;; `agent-shell-chat-mode' that prompt is drawn as the ` Me ' badge and
+;; `❯' marker -- the exact signal the user reads as "ready" -- while the
+;; agent is still handshaking, resuming and setting its session mode.
+;;
+;; Blanking the label is not the same as removing the overlay.  The
+;; overlay's `display' property is what hides the raw `Claude> ' text; drop
+;; the overlay and the bare prompt string appears instead, which is worse
+;; than the badge.  So the suppression clears `before-string' only, and
+;; leaves `display' alone.
+
+(ert-deftest decknix-chat-blank-labels--clears-the-me-badge ()
+  "The ` Me '/`❯' before-string is emptied."
+  (with-temp-buffer
+    (insert "Claude> ")
+    (let ((o (make-overlay 1 (point-max))))
+      (overlay-put o 'category 'agent-shell-chat-me)
+      (overlay-put o 'display "")
+      (overlay-put o 'before-string "\n Me \n\n  ❯ ")
+      (decknix--agent-chat-blank-prompt-labels)
+      (should (equal "" (overlay-get o 'before-string))))))
+
+(ert-deftest decknix-chat-blank-labels--keeps-the-prompt-text-hidden ()
+  "`display' survives, so the raw `Claude> ' does not become visible.
+Dropping the overlay outright would show the bare prompt string, which
+is a worse regression than the premature badge."
+  (with-temp-buffer
+    (insert "Claude> ")
+    (let ((o (make-overlay 1 (point-max))))
+      (overlay-put o 'category 'agent-shell-chat-me)
+      (overlay-put o 'display "")
+      (overlay-put o 'before-string "\n Me \n\n  ❯ ")
+      (decknix--agent-chat-blank-prompt-labels)
+      (should (equal "" (overlay-get o 'display)))
+      (should (overlay-buffer o)))))
+
+(ert-deftest decknix-chat-blank-labels--leaves-the-agent-label-alone ()
+  "Only the user-side prompt label is suppressed.
+The agent's own ` Claude ' label marks output that has genuinely
+happened, so it stays."
+  (with-temp-buffer
+    (insert "response")
+    (let ((o (make-overlay 1 (point-max))))
+      (overlay-put o 'category 'agent-shell-chat-agent)
+      (overlay-put o 'before-string "\n Claude \n")
+      (decknix--agent-chat-blank-prompt-labels)
+      (should (equal "\n Claude \n" (overlay-get o 'before-string))))))
+
+(ert-deftest decknix-chat-blank-labels--tolerates-a-bare-buffer ()
+  "No overlays at all must not error -- this runs on every relabel."
+  (with-temp-buffer
+    (insert "nothing here")
+    (should (progn (decknix--agent-chat-blank-prompt-labels) t))))
+
 (provide 'decknix-agent-welcome-test)
 ;;; decknix-agent-welcome-test.el ends here
