@@ -70,6 +70,7 @@ finished turn also looks `unread' — but stays below anything needing you."
 
 (defconst decknix-session-status-signal-map
   '(("killed"       . (:error t))
+    ("netfail"      . (:error t))
     ("waiting"      . (:awaiting-permission t))
     ("asking"       . (:attention t))
     ("closing"      . (:closing t))
@@ -81,6 +82,13 @@ finished turn also looks `unread' — but stays below anything needing you."
 The status strings are those produced by `agent-shell-workspace--buffer-status'
 / `decknix--header-detect-status'.  Unmapped / \"ready\" / \"initializing\"
 statuses carry no signals, classifying as `idle'.
+
+\"netfail\" is decknix-derived (see `decknix-agent-net-error'): a turn that
+died on a transient network/API failure — the shell settles it as an ordinary
+\"ready\", so without this a dropped link left every in-flight session looking
+like one that had merely finished.  It shares `:error' with \"killed\" because
+both mean the last turn produced nothing, but the process is still alive, so
+it is recoverable by `decknix-agent-net-error-retry-all' rather than a restart.
 
 \"asking\" is decknix-derived rather than upstream (see
 `decknix-agent-turn-status'): a settled turn whose closing message put a

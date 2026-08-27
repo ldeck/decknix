@@ -290,6 +290,28 @@ let
     ];
   };
 
+  # Transient network-failure state + bulk retry (#162).  A turn killed by
+  # a dropped link ("API Error: Unable to connect to API (ECONNRESET)")
+  # SETTLES -- agent-shell renders the failure as ordinary agent output --
+  # so the session reported a cheerful "ready" and sat in the sidebar
+  # indistinguishable from one that had finished its work.  This package
+  # senses that shape, reports the `netfail' status (-> the classifier's
+  # `error' state) and provides the one-command reset/retry over every
+  # session the drop stranded.  Detection is text-matching by necessity
+  # (ACP carries no transport-failure bit) and is guarded three ways
+  # against flagging an agent that merely DISCUSSES a network error --
+  # see the file Commentary; the retry sends a prompt, so a false positive
+  # would interrupt a healthy session.  Pure layer ERT-tested; the
+  # advice/keybinding wiring is in the heredoc per Rule 2.
+  decknix-agent-net-error-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-net-error";
+    src = ./agent-shell/net-error;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-net-error-test.el"
+    ];
+  };
+
   # Default-OFF diagnostic (issue #150): record the ACP event stream + the
   # agent-shell turn boundaries (TURN-START/TURN-END) so a Claude session's
   # real turn-return timing can be compared to when the buffer status flips.
@@ -3044,6 +3066,7 @@ in
           decknix-agent-welcome-el
           decknix-agent-turn-signals-el
           decknix-agent-heartbeat-watch-el
+          decknix-agent-net-error-el
           decknix-agent-acp-trace-el
           decknix-record-el
           decknix-layout-groups-el
@@ -4229,6 +4252,32 @@ ${optionalString cfg.tableOverlay.enable ''
           (advice-add 'agent-shell-workspace--buffer-status :around
                       #'decknix--agent-buffer-status-harden))
 
+        ;; Transient network-failure sensing + bulk retry (#162).  A turn
+        ;; killed by a dropped link ends having printed one line ("API
+        ;; Error: Unable to connect to API (ECONNRESET)") and then SETTLES,
+        ;; so the status chain above reports a cheerful `ready' and the
+        ;; session sits in the sidebar looking exactly like one that
+        ;; finished its work.  Observed cost: a dozen turns of typing
+        ;; `continue' into a dead link, and several OTHER sessions that had
+        ;; died the same way hours earlier and were simply sitting there.
+        (require 'decknix-agent-net-error)
+        (declare-function decknix--agent-net-error-observe-event
+                          "decknix-agent-net-error" (&rest args))
+        (declare-function decknix--agent-net-error-status-advice
+                          "decknix-agent-net-error" (orig-fn buffer &rest args))
+        ;; Sensing seam: only the two events that BRACKET a turn, so unlike
+        ;; a chunk accumulator this costs nothing while output streams.
+        (advice-add 'agent-shell--emit-event :before
+                    #'decknix--agent-net-error-observe-event)
+        ;; Display: added LAST on purpose.  `advice-add :around' wraps
+        ;; outermost, so this sees the status already refined to `asking'
+        ;; and already hardened out of a stale `working', and has the final
+        ;; say -- a session dead on the link must not report as merely idle
+        ;; or merely asking.  `waiting'/`killed' pass through untouched.
+        (with-eval-after-load 'agent-shell-workspace
+          (advice-add 'agent-shell-workspace--buffer-status :around
+                      #'decknix--agent-net-error-status-advice))
+
         ;; Quick-capture: `C-c A C' -> jot a feature/bug/investigation into a
         ;; GitHub issue/comment or taskwarrior, async, even while an agent is
         ;; busy.  Tool-agnostic; the key binding is added below with the rest
@@ -4725,6 +4774,15 @@ ${optionalString cfg.tableOverlay.enable ''
           (define-key decknix-session-prefix-map (kbd "l") 'decknix-layout-group-switch)
           (define-key decknix-session-prefix-map (kbd "L") 'decknix-layout-group-save)
           (define-key decknix-session-prefix-map (kbd "C-l") 'decknix-layout-group-delete))
+        ;; Network-failure recovery (#162) on the session prefix.  `N' is the
+        ;; one you want after the link comes back: it resets every stranded
+        ;; session AND re-prompts it.  `C-n' resets without prompting, for
+        ;; when you would rather steer them yourself, and `M-n' just reports
+        ;; which sessions died and on what.
+        (when (fboundp 'decknix-agent-net-error-retry-all)
+          (define-key decknix-session-prefix-map (kbd "N") 'decknix-agent-net-error-retry-all)
+          (define-key decknix-session-prefix-map (kbd "C-n") 'decknix-agent-net-error-reset-all)
+          (define-key decknix-session-prefix-map (kbd "M-n") 'decknix-agent-net-error-list))
         (with-eval-after-load 'which-key
           (which-key-add-key-based-replacements
             "C-c s"   "Session"
@@ -4743,7 +4801,10 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c s V" "review menu"
             "C-c s l" "layout switch"
             "C-c s L" "layout save"
-            "C-c s C-l" "layout delete"))
+            "C-c s C-l" "layout delete"
+            "C-c s N" "net-fail: reset + retry all"
+            "C-c s C-n" "net-fail: reset all"
+            "C-c s M-n" "net-fail: list stuck"))
 
         ;; Compat: the bumped `agent-shell-workspace--buffer-config' calls
         ;; (map-elt config :buffer-name) over each element of

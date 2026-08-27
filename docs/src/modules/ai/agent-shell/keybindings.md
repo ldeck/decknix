@@ -22,6 +22,34 @@ The `C-c A` prefix is labelled "Agent" in which-key.
 | — | `C-c A k` | Interrupt agent |
 | `C-c b` | `C-c A b` | Switch agent buffer (live only) — MRU order, status-coloured |
 
+### Network-Failure Recovery
+
+When the link drops, every in-flight session dies the same way at the same
+moment: the turn ends having printed one line (`API Error: Unable to connect to
+API (ECONNRESET)`) and then *settles*, so without help each one reports a
+cheerful `ready` and sits in the sidebar looking like it finished its work.
+
+Sessions in this state report the **`netfail`** status — the `✗` glyph, a red
+row, and first place in the picker's attention order — and these keys clear
+them all in one action rather than one at a time:
+
+| Key | Action |
+|-----|--------|
+| `C-c s N` | Reset every stranded session **and** send each a `continue`. Run this once the link is back. `C-u` widens it to every live session, for a failure whose evidence has already scrolled away. |
+| `C-c s C-n` | Reset only — clears the flag and the stuck turn state without re-prompting, for when you would rather steer the sessions yourself. |
+| `C-c s M-n` | List which sessions died, and on what. |
+
+Both bulk commands **rescan before acting**, so a session that recovered on its
+own is never re-prompted, and idle sessions are prompted immediately while busy
+ones are queued — a returning link is not saturated by every session at once.
+
+Detection deliberately refuses to flag an agent that merely *discusses* a
+network error (the retry sends a prompt, so a false positive would interrupt
+healthy work): the line must be a reported error, carrying a transient fault
+(errno, socket/fetch failure, or 408/429/5xx — never a 401 or 400), and the turn
+must have ended on it. Extend
+`decknix-agent-net-error-transient-regexp` for an agent whose wording differs.
+
 ### In-Picker Keys
 
 Every session-facing picker (`C-c A s`, `C-c A b`, `C-c A g`) prefixes

@@ -282,6 +282,8 @@
 (defvar decknix--agent-provider-id)
 (declare-function decknix-agent-provider-glyph
                   "decknix-agent-provider" (id))
+(declare-function decknix-agent-net-error-display-face
+                  "decknix-agent-net-error" (status fallback))
 (declare-function decknix--agent-buffer-session-id
                   "decknix-agent-buffer-lookup" (&optional buf))
 (declare-function decknix--agent-session-subagents
@@ -1332,7 +1334,14 @@ basename) or a list of tag strings to suppress from the displayed name."
   (let* ((agent-icon (agent-shell-workspace--agent-icon buf))
          (status (agent-shell-workspace--track-status
                   buf (agent-shell-workspace--buffer-status buf)))
-         (status-face (agent-shell-workspace--status-face status))
+         ;; Upstream's face table answers `default' for any status it does
+         ;; not know, which would paint a session dead on the link (#162)
+         ;; as ordinary text.  Route it through the net-error helper so
+         ;; `netfail' gets the error face.
+         (status-face (if (fboundp 'decknix-agent-net-error-display-face)
+                          (decknix-agent-net-error-display-face
+                           status (agent-shell-workspace--status-face status))
+                        (agent-shell-workspace--status-face status)))
          ;; Provider glyph (A/C/P/?) identifies the AI backend per row.
          (provider-id (buffer-local-value 'decknix--agent-provider-id buf))
          ;; Compute conv-key first so we can derive the canonical name from tags.
@@ -1385,6 +1394,11 @@ basename) or a list of tag strings to suppress from the displayed name."
                     name display-face max-name-width))
          (name-box-styled
           (cond
+           ;; Turn died on the link (#162) — louder still than a permission
+           ;; block: this one is not going to move again until it is reset,
+           ;; and a dropped link strands several sessions at once.
+           ((string= status "netfail")
+            (propertize name-box 'face '(:background "#4a0f14")))
            ;; Blocked mid-turn on a permission dialog — the loudest.
            ((string= status "waiting")
             (propertize name-box 'face '(:background "#3a1515")))
