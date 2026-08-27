@@ -4117,6 +4117,52 @@ ${optionalString cfg.tableOverlay.enable ''
         (advice-add 'agent-shell--update-bootstrapping-fragment :filter-args
                     #'decknix--agent-bootstrapping-group-args)
 
+        ;; 3. No input affordance until the agent can accept input.
+        ;;    Upstream shows the prompt at shell creation so there is
+        ;;    always somewhere to type; under chat-mode that renders as
+        ;;    the ` Me ' badge and `❯' marker, which is exactly the
+        ;;    signal read as "ready" -- while the session is still
+        ;;    handshaking, resuming and setting its mode.  Blank the
+        ;;    label after each relabel until `init-finished', then
+        ;;    relabel once to bring it back.
+        (declare-function decknix--agent-chat-blank-prompt-labels
+                          "decknix-agent-welcome")
+        (defvar decknix--agent-shell-init-finished)
+        (defun decknix--agent-chat-suppress-early-prompt (&rest _)
+          "Blank the prompt label while this shell is still initializing."
+          (when (and (derived-mode-p 'agent-shell-mode)
+                     (not decknix--agent-shell-init-finished))
+            (decknix--agent-chat-blank-prompt-labels)))
+        (with-eval-after-load 'agent-shell-chat-mode
+          (advice-add 'agent-shell-chat--label-prompts :after
+                      #'decknix--agent-chat-suppress-early-prompt))
+
+        (defun decknix--agent-chat-note-init-finished (&rest args)
+          "Flip this shell to ready on `init-finished' and restore its label."
+          (when (and (derived-mode-p 'agent-shell-mode)
+                     (eq (plist-get args :event) 'init-finished)
+                     (not decknix--agent-shell-init-finished))
+            (setq-local decknix--agent-shell-init-finished t)
+            (when (and (bound-and-true-p agent-shell-chat-mode)
+                       (fboundp 'agent-shell-chat--relabel))
+              (agent-shell-chat--relabel))))
+        (advice-add 'agent-shell--emit-event :after
+                    #'decknix--agent-chat-note-init-finished)
+
+        ;; Backfill for hot-reload.  A `decknix switch' evaluates this
+        ;; heredoc into a RUNNING daemon whose shells finished
+        ;; initializing long ago and will never emit `init-finished'
+        ;; again.  Their flag would stay nil, so the suppression advice
+        ;; would strip the label off every already-ready session at the
+        ;; next relabel -- turning a fix for new sessions into a
+        ;; regression for existing ones.  An established ACP session id
+        ;; is the evidence that initialization already happened.
+        (dolist (buf (buffer-list))
+          (with-current-buffer buf
+            (when (and (derived-mode-p 'agent-shell-mode)
+                       (map-nested-elt agent-shell--state '(:session :id)))
+              (setq-local decknix--agent-shell-init-finished t))))
+
         ;; Turn-end signal sensing.  agent-shell renders plan entries, the
         ;; ACP stopReason and the agent's closing message, then throws all
         ;; three away -- so a session that ENDED ON A QUESTION reported

@@ -136,5 +136,29 @@ one that has its own grouping."
               args)
     args))
 
+(defvar-local decknix--agent-shell-init-finished nil
+  "Non-nil once this shell's ACP initialization has fully finished.
+Set from the `init-finished' event.  Until then the prompt exists but
+the agent cannot act on input, so its ` Me '/`❯' affordance is
+suppressed -- see `decknix--agent-chat-blank-prompt-labels'.")
+
+(defun decknix--agent-chat-blank-prompt-labels ()
+  "Empty the ` Me '/`❯' labels on this buffer's chat prompt overlays.
+
+Upstream shows the prompt at shell creation, deliberately, so the shell
+always has somewhere to type.  Under `agent-shell-chat-mode' that prompt
+renders as the ` Me ' badge and `❯' marker -- precisely the signal read
+as \"the agent is ready\" -- while it is in fact still handshaking,
+resuming and setting its session mode.
+
+Clears `before-string' ONLY.  The overlay's `display' property is what
+hides the raw `Claude> ' text, so removing the overlay would replace a
+premature badge with a bare prompt string: a worse lie, not a smaller
+one.  Agent-side labels (`agent-shell-chat-agent') mark output that has
+genuinely happened and are left untouched."
+  (dolist (overlay (overlays-in (point-min) (point-max)))
+    (when (eq (overlay-get overlay 'category) 'agent-shell-chat-me)
+      (overlay-put overlay 'before-string ""))))
+
 (provide 'decknix-agent-welcome)
 ;;; decknix-agent-welcome.el ends here
