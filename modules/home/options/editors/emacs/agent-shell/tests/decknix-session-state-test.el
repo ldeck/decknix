@@ -108,6 +108,25 @@ prompt, so a session that ended its turn on a QUESTION reported plain
   (should (< (decknix-session-score (decknix-session-classify-status "asking"))
              (decknix-session-score (decknix-session-classify-status "waiting")))))
 
+(ert-deftest decknix-session-classify-status--netfail ()
+  "\"netfail\" feeds `:error' — a turn that died on the link (#162).
+
+Before this, a turn killed by an ECONNRESET settled as plain `ready':
+the session sat at the bottom of the attention order looking like one
+that had finished its work, so a dropped link silently stranded every
+in-flight session at once.  It ranks WITH `killed' rather than below,
+because both mean the last turn produced nothing — but unlike `killed'
+the process is alive, which is what makes the bulk retry possible."
+  (should (equal '(:error t) (decknix-session-signals-from-status "netfail")))
+  (should (eq 'error (decknix-session-state
+                      (decknix-session-classify-status "netfail"))))
+  (should (= (decknix-session-score (decknix-session-classify-status "netfail"))
+             (decknix-session-score (decknix-session-classify-status "killed"))))
+  ;; Outranks a permission prompt: that one is merely waiting on you,
+  ;; this one is not going to move again until you act.
+  (should (> (decknix-session-score (decknix-session-classify-status "netfail"))
+             (decknix-session-score (decknix-session-classify-status "waiting")))))
+
 (ert-deftest decknix-session-classify-status--unknown-is-idle ()
   "An unrecognised status carries no signals and classifies as idle."
   (should (null (decknix-session-signals-from-status "wat")))

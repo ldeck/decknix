@@ -55,12 +55,15 @@ on); `other' otherwise.  Pure heuristic over TAGS — no hub lookup."
 
 (defun decknix--agent-picker-attention-rank (status)
   "Return a sort rank for STATUS; a lower rank needs attention sooner.
-`waiting' (a permission request blocking the turn) and `asking' (a turn
-that ended by putting a question to you) are most urgent -- both are
-stalled until you answer -- then a finished turn awaiting me
+`netfail' (a turn killed by a dropped link, #162) is first: it is the
+only status that will not move again on its own, and a link drop strands
+several sessions at once.  Then `waiting' (a permission request blocking
+the turn) and `asking' (a turn that ended by putting a question to you),
+both stalled until you answer; then a finished turn awaiting me
 \(`ready'/`finished'), then `closing', then an in-progress `working'
 turn, then anything else (idle/killed/unknown)."
   (pcase status
+    ("netfail"             -1)
     ((or "waiting" "asking") 0)
     ((or "ready" "finished") 1)
     ("closing"             2)

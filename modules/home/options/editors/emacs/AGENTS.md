@@ -1111,6 +1111,60 @@ Notes:
   outranks one that merely wants an answer. (`waiting` fed `:attention` until
   `asking` arrived, which had left `:awaiting-permission` unfed entirely.)
 
+### Network-failure state + bulk retry (`agent-shell/net-error/`, #162)
+
+When the link drops, a turn does not fail loudly — it ends, having printed one
+line (`API Error: Unable to connect to API (ECONNRESET)`), and then **settles**.
+agent-shell renders that as ordinary agent output, so the status chain reports a
+cheerful `ready` and the session sits in the sidebar **indistinguishable from
+one that finished its work**. Observed cost: a dozen turns spent typing
+`continue` into a dead link, and the later discovery that several *other*
+sessions had died the same way hours earlier and had simply been sitting there.
+
+Two seams (registered in the heredoc per Rule 2):
+
+| Seam | Advice | Does |
+|------|--------|------|
+| `agent-shell--emit-event` | `:before` | scans the buffer tail on `turn-complete`; clears the flag on `input-submitted` |
+| `agent-shell-workspace--buffer-status` | `:around` | refines a settled status → `netfail` |
+
+Notes:
+
+- **Added last on purpose.** `advice-add :around` wraps outermost, so the
+  `netfail` refinement sees the status already refined to `asking` (turn-signals)
+  and already hardened out of a stale `working` (heartbeat-watch), and has the
+  final say. `waiting` and `killed` pass through untouched — a permission prompt
+  is a real block, and a dead process needs a restart rather than a `continue`.
+- `netfail` maps to the classifier's `error` state (score 90, `✗`, red row),
+  sorts **first** in the picker (`-1`, ahead of `waiting`), and gets its own tab
+  tint. It is distinct from `killed` because the process is still alive — which
+  is exactly what makes a retry possible.
+- **Detection is text-matching by necessity** (ACP carries no transport-failure
+  bit) and the retry *sends a prompt*, so a false positive would interrupt a
+  healthy session. Three guards, all in `decknix--agent-net-error-p`: the line
+  must be a **reported** error (an `API Error:`-shaped prefix, not prose
+  containing an errno); it must carry a **transient** fault (errno, socket/fetch
+  failure, or 408/429/5xx — 401/400 are excluded, since retrying those forever is
+  the same wedge in a different costume); and it must be within the last few
+  lines, i.e. the turn **ended** on it. Code fences are stripped first, so a
+  matcher quoted in a diff is source rather than an incident.
+- **Zero hot-path cost**: only the two events that bracket a turn are observed —
+  unlike the turn-signals chunk accumulator, nothing runs while output streams.
+- The bulk commands **rescan every live session first**, so a failure the
+  streaming seam missed is still caught and one that has since recovered is left
+  alone. Reset clears the flag, the residual `:tool-calls`/busy state
+  agent-shell's failure path leaves behind (without which the shell believes a
+  turn is still in flight and refuses the prompt), and the stale turn-end facts.
+- Dispatch reuses `decknix--session-bulk-dispatch`, so idle sessions are prompted
+  immediately while busy ones are queued — a link coming back does not saturate
+  it with every session's context at once.
+
+| Key | Command | Does |
+|-----|---------|------|
+| `C-c s N` | `decknix-agent-net-error-retry-all` | reset every stranded session **and** re-prompt it (`C-u`: all live sessions) |
+| `C-c s C-n` | `decknix-agent-net-error-reset-all` | reset only — for when you would rather steer them yourself |
+| `C-c s M-n` | `decknix-agent-net-error-list` | report which sessions died, and on what |
+
 ### Multi-Session Concurrency
 Multiple agent-shell sessions run **independently and concurrently**. Each
 buffer has its own process. Switching away from a session does NOT pause it —

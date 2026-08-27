@@ -62,6 +62,19 @@ finished and wants reading."
   (should (< (decknix--agent-picker-attention-rank "asking")
              (decknix--agent-picker-attention-rank "ready"))))
 
+(ert-deftest decknix-picker-cat/netfail-ranks-first ()
+  "A session dead on the link outranks everything, including a permission
+prompt (#162).
+
+Both are stalled on you, but a `waiting' session is one keystroke from
+carrying on whereas a `netfail' one has already stopped producing and
+will keep sitting there until it is reset.  Ranking it below `waiting'
+would bury exactly the sessions a dropped link stranded."
+  (should (< (decknix--agent-picker-attention-rank "netfail")
+             (decknix--agent-picker-attention-rank "waiting")))
+  (should (< (decknix--agent-picker-attention-rank "netfail")
+             (decknix--agent-picker-attention-rank "ready"))))
+
 ;; -- stable attention + MRU sort -----------------------------------
 
 (ert-deftest decknix-picker-cat/sort-attention-then-mru ()
