@@ -113,6 +113,35 @@ write-side keys that the read side could never resolve, leaving
 their tags / workspace / linked-PR metadata orphaned in
 `agent-sessions.json'.")
 
+(defconst decknix--agent-non-keying-preambles
+  '("This message is a resumed continuation of an earlier"
+    "This session was forked from an existing")
+  "Openings of MACHINE-GENERATED first messages, which must not key.
+
+The conv-key hashes only the first
+`decknix--agent-conv-key-canonical-length' characters, and these
+preambles are far longer than that cap and byte-identical up to it — so
+every session carrying one hashes to the SAME key no matter which
+conversation it continues.  Measured over 231 transcripts: 25 distinct
+sessions collapsed onto `887e38e509a9ee3e', a \"conversation\" with no
+real identity.
+
+Matched as a PREFIX, deliberately: a message that merely discusses a
+resume is a genuine user message and must still key.")
+
+(defun decknix--agent-non-keying-message-p (first-message)
+  "Return non-nil when FIRST-MESSAGE is a machine-generated preamble.
+
+Such a message says nothing about WHICH conversation it belongs to, so
+keying off it invents a shared bucket rather than an identity.  Callers
+already treat a nil conv-key as \"not known yet\" and fall back to store
+membership — which is exactly where a resumed or forked session's real
+conversation is recorded (see `decknix--agent-conv-key-for-session-id')."
+  (when (and first-message (stringp first-message))
+    (let ((trimmed (string-trim first-message)))
+      (seq-some (lambda (p) (string-prefix-p p trimmed t))
+                decknix--agent-non-keying-preambles))))
+
 (defun decknix--agent-canonicalize-command-message (first-message)
   "Return the conversation-keying canonical form of FIRST-MESSAGE.
 
@@ -164,7 +193,11 @@ hashes raw comint input (which carries a trailing newline, e.g.
 the stored first message (no trailing newline, \"hello\").  Without a
 common trim the two sides produce different keys, orphaning a
 conversation's tags / brokerKey / model / mode on resume."
-  (when (and first-message (not (string-empty-p (string-trim first-message))))
+  (when (and first-message
+             (not (string-empty-p (string-trim first-message)))
+             ;; A resume primer / fork preamble identifies no conversation;
+             ;; keying off one buckets every such session together.
+             (not (decknix--agent-non-keying-message-p first-message)))
     (let* ((normalized (string-trim
                         (decknix--agent-canonicalize-command-message
                          first-message)))
