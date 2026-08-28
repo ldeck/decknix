@@ -300,5 +300,67 @@ launcher-written tags are found on the wrapper-recorded transcript."
            (concat "<command-name>/review-service-pr</command-name>"
                    "<command-args>https://github.com/o/r/pull/2</command-args>")))))
 
+;; -- machine-generated preambles must not key a conversation ----------
+;;
+;; The conv-key hashes the first 200 characters of the first user message.
+;; Claude opens every RESUMED session with an identical primer, and every
+;; FORKED session with a near-identical preamble, both far longer than the
+;; cap -- so each one hashes to the same value regardless of which
+;; conversation it continues.  Measured over 231 transcripts: 25 distinct
+;; sessions collapsed onto the single key 887e38e509a9ee3e.
+;;
+;; That bucket is a spurious "conversation" with no real identity.  It is
+;; also a live tag-write target: anything that flushes pending metadata
+;; while the first message is a preamble lands its tags on the bucket
+;; rather than on the session's own conversation.  A preamble therefore
+;; keys NOTHING -- callers already treat a nil key as "not yet known" and
+;; fall back to store membership, which is where a resumed session's real
+;; identity lives.
+
+(ert-deftest decknix-parse--resume-primer-does-not-key ()
+  "Claude's resume primer never produces a conversation key."
+  (should-not (decknix--agent-conversation-key-raw
+               (concat "This message is a resumed continuation of an earlier "
+                       "Claude session -- the same ongoing conversation, not a "
+                       "new one. Most recently in this conversation: we were "
+                       "fixing the sidebar refresh.")))
+  ;; Leading whitespace/decoration must not smuggle it past the check.
+  (should-not (decknix--agent-conversation-key-raw
+               "\n  This message is a resumed continuation of an earlier Claude session")))
+
+(ert-deftest decknix-parse--fork-preamble-does-not-key ()
+  "A forked session's preamble never produces a conversation key."
+  (should-not (decknix--agent-conversation-key-raw
+               (concat "This session was forked from an existing Claude agent "
+                       "session.\n\nSource provider: Claude\nSource session id: "
+                       "d8d1f0c2-1111-2222-3333-444455556666\n"))))
+
+(ert-deftest decknix-parse--distinct-primers-would-have-collided ()
+  "Two different resumes share a key when keyed -- which is why they must not be.
+Pins the actual collision rather than merely asserting nil, so a future
+change that re-enables keying for preambles fails loudly here."
+  ;; The real primer verbatim: its first 200 characters (the hashing cap)
+  ;; are fixed boilerplate, and the only distinguishing content -- the
+  ;; source session id -- falls AFTER the cap.  That is the collision.
+  (let* ((base (concat "This message is a resumed continuation of an earlier "
+                       "Claude session -- the same ongoing conversation, not a "
+                       "new one.\nEverything before this point already happened; "
+                       "you are picking the thread back up.\n\nSource session id: "))
+         (a (concat base "b22de91c-dffd-46a2-a071-c2a79265a5a0\n"))
+         (b (concat base "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0\n")))
+    ;; Identical within the 200-char cap -> identical hash if keyed at all.
+    (should (equal (substring a 0 200) (substring b 0 200)))
+    (should-not (decknix--agent-conversation-key-raw a))
+    (should-not (decknix--agent-conversation-key-raw b))))
+
+(ert-deftest decknix-parse--ordinary-message-still-keys ()
+  "A real user message is unaffected -- including one that merely mentions a resume."
+  (should (decknix--agent-conversation-key-raw
+           "Looking at this slack thread, what is worth demoing on Monday?"))
+  ;; Discussing the primer is not being one: only a message that STARTS
+  ;; with the preamble is machine-generated.
+  (should (decknix--agent-conversation-key-raw
+           "Why does 'This message is a resumed continuation' keep colliding?")))
+
 (provide 'decknix-agent-parse-test)
 ;;; decknix-agent-parse-test.el ends here
