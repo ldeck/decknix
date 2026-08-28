@@ -3734,6 +3734,30 @@ in
         (defvar decknix--header-timer)
         (defvar decknix--header-prev-status)
 
+        ;; Header perf (#148), both from the hitch profiler rather than a
+        ;; guess: `*decknix-hitches*' recorded 282 per-buffer header ticks
+        ;; blocking for a combined 134s (several >7s), and CPU sampling put
+        ;; ~6% of the daemon in `project-current' filesystem walks reached
+        ;; through `agent-shell--project-name' on that same path.
+        ;;
+        ;; 1. Cache the project name per `default-directory'.  Upstream
+        ;;    recomputes it on EVERY header render, and it cannot change
+        ;;    unless the directory does.
+        (declare-function decknix--header-project-name-advice
+                          "decknix-agent-header" (orig &rest args))
+        (with-eval-after-load 'agent-shell-project
+          (advice-add 'agent-shell--project-name :around
+                      #'decknix--header-project-name-advice))
+        ;; 2. One shared refresh timer over VISIBLE buffers, replacing one
+        ;;    timer per live buffer.  Cost now scales with what is on
+        ;;    screen rather than with how many sessions have ever been
+        ;;    opened.  Armed here (idempotent across hot-reloads); the
+        ;;    per-buffer entry point still exists and now converges onto
+        ;;    this timer, cancelling any legacy per-buffer one.
+        (declare-function decknix--header-start-shared-timer
+                          "decknix-agent-header")
+        (decknix--header-start-shared-timer)
+
         ;; == Focus: optional focus-stealing (attention / new session) ==
         ;; Pure decision layer + per-buffer detector live in the carved
         ;; `decknix-focus-el'.  The attention raise is driven from the

@@ -417,5 +417,99 @@ prev-status memo exists."
         (should-not forced)
         (should (equal header-line-format (list "old")))))))
 
+;; -- project-name cache (hitch profiler: ~6% CPU in filesystem walks) --
+;;
+;; `agent-shell--project-name' calls `project-current', which walks the
+;; filesystem (`locate-dominating-file' / `directory-files' /
+;; `vc-file-getprop').  It sits on the header render path, so it ran for
+;; every visible agent buffer every 2 seconds -- CPU sampling showed
+;; ~6% of the daemon spent recomputing a project name that cannot change
+;; unless `default-directory' does.
+
+(ert-deftest decknix-header--project-name-cached-per-directory ()
+  "The upstream lookup runs once per directory, not once per header tick."
+  (let ((calls 0))
+    (cl-letf (((symbol-function 'decknix--header-project-name-orig)
+               (lambda (&rest _) (setq calls (1+ calls)) "myproj")))
+      (with-temp-buffer
+        (setq-local default-directory "/tmp/proj-a/")
+        (should (equal (decknix--header-project-name-advice
+                        #'decknix--header-project-name-orig)
+                       "myproj"))
+        (dotimes (_ 20)
+          (decknix--header-project-name-advice
+           #'decknix--header-project-name-orig))
+        (should (= calls 1))))))
+
+(ert-deftest decknix-header--project-name-cache-follows-directory ()
+  "Changing `default-directory' invalidates the cache.
+A stale name would be worse than the cost it saves -- the header would
+claim the wrong project."
+  (let ((calls 0))
+    (cl-letf (((symbol-function 'decknix--header-project-name-orig)
+               (lambda (&rest _) (setq calls (1+ calls))
+                 (format "proj-%d" calls))))
+      (with-temp-buffer
+        (setq-local default-directory "/tmp/proj-a/")
+        (should (equal (decknix--header-project-name-advice
+                        #'decknix--header-project-name-orig) "proj-1"))
+        (setq-local default-directory "/tmp/proj-b/")
+        (should (equal (decknix--header-project-name-advice
+                        #'decknix--header-project-name-orig) "proj-2"))
+        (should (= calls 2))))))
+
+(ert-deftest decknix-header--project-name-caches-nil ()
+  "A nil result is cached too -- a directory outside any project is the
+case that pays the FULL filesystem walk, so re-running it every tick is
+the worst version of this bug."
+  (let ((calls 0))
+    (cl-letf (((symbol-function 'decknix--header-project-name-orig)
+               (lambda (&rest _) (setq calls (1+ calls)) nil)))
+      (with-temp-buffer
+        (setq-local default-directory "/tmp/not-a-project/")
+        (should-not (decknix--header-project-name-advice
+                     #'decknix--header-project-name-orig))
+        (should-not (decknix--header-project-name-advice
+                     #'decknix--header-project-name-orig))
+        (should (= calls 1))))))
+
+;; -- shared header timer (#148: 17 timers, 134s of blocking) -----------
+
+(ert-deftest decknix-header--dedupe-visits-each-buffer-once ()
+  "A buffer shown in two windows is refreshed once, not twice."
+  (let ((a (generate-new-buffer "*hdr-a*"))
+        (b (generate-new-buffer "*hdr-b*")))
+    (unwind-protect
+        (progn
+          (dolist (buf (list a b))
+            (with-current-buffer buf (setq-local major-mode 'agent-shell-mode)))
+          (cl-letf (((symbol-function 'derived-mode-p)
+                     (lambda (mode) (eq major-mode mode))))
+            (should (equal (decknix--header-dedupe-agent-buffers
+                            (list a b a b a))
+                           (list a b)))))
+      (kill-buffer a) (kill-buffer b))))
+
+(ert-deftest decknix-header--dedupe-skips-non-agent-and-dead ()
+  "Only live agent-shell buffers are refreshed."
+  (let ((agent (generate-new-buffer "*hdr-agent*"))
+        (other (generate-new-buffer "*hdr-other*"))
+        (dead (generate-new-buffer "*hdr-dead*")))
+    (kill-buffer dead)
+    (unwind-protect
+        (progn
+          (with-current-buffer agent (setq-local major-mode 'agent-shell-mode))
+          (with-current-buffer other (setq-local major-mode 'fundamental-mode))
+          (cl-letf (((symbol-function 'derived-mode-p)
+                     (lambda (mode) (eq major-mode mode))))
+            (should (equal (decknix--header-dedupe-agent-buffers
+                            (list agent other dead))
+                           (list agent)))))
+      (kill-buffer agent) (kill-buffer other))))
+
+(ert-deftest decknix-header--dedupe-empty ()
+  "No visible agent buffers means no work."
+  (should-not (decknix--header-dedupe-agent-buffers nil)))
+
 (provide 'decknix-agent-header-test)
 ;;; decknix-agent-header-test.el ends here

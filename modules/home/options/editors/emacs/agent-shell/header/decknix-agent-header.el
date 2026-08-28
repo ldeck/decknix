@@ -369,24 +369,114 @@ the full bidi/interval relayout cost across all sessions."
           (setq-local header-line-format new)
           (force-mode-line-update))))))
 
+;; ---------------------------------------------------------------------------
+;; Project-name cache
+;; ---------------------------------------------------------------------------
+
+(defvar-local decknix--header-project-name-cache nil
+  "Cons of (DIRECTORY . NAME) for this buffer's cached project name.
+A cons rather than a bare name so a nil NAME is still a cache HIT --
+a directory outside any project is precisely the case that pays the
+full filesystem walk, so re-running it every tick is the worst version
+of the problem.")
+
+(defun decknix--header-project-name-advice (orig &rest args)
+  "Around-advice for `agent-shell--project-name': cache per directory.
+
+Upstream calls `project-current', which walks the filesystem
+\(`locate-dominating-file' / `directory-files' / `vc-file-getprop').
+That sits on the header render path, so it ran for every visible agent
+buffer every 2 seconds; CPU sampling attributed ~6% of the daemon to it.
+
+The answer depends only on `default-directory', so it is cached against
+it and recomputed when that changes -- a stale project name would be
+worse than the cost it saves, since the header would name the wrong
+project."
+  (if (and (consp decknix--header-project-name-cache)
+           (equal (car decknix--header-project-name-cache) default-directory))
+      (cdr decknix--header-project-name-cache)
+    (let ((name (apply orig args)))
+      (setq decknix--header-project-name-cache (cons default-directory name))
+      name)))
+
+;; ---------------------------------------------------------------------------
+;; Header refresh timer
+;; ---------------------------------------------------------------------------
+
+(defcustom decknix-header-refresh-interval 2
+  "Seconds between header-line refreshes.
+One shared timer serves every visible agent buffer; see
+`decknix--header-tick-all'."
+  :type 'number :group 'decknix)
+
+(defvar decknix--header-shared-timer nil
+  "The single header-refresh timer, or nil when not armed.")
+
+(defun decknix--header-dedupe-agent-buffers (buffers)
+  "Return the distinct live agent-shell buffers in BUFFERS, order preserved.
+
+Carved out for ERT: the live caller maps `window-buffer' over every
+window on every frame, and the same buffer shown in two windows must be
+refreshed ONCE -- the whole point of the shared timer is to make the
+work proportional to what is on screen, not to how it is arranged."
+  (let (seen)
+    (dolist (buf buffers)
+      (when (and (buffer-live-p buf)
+                 (not (memq buf seen))
+                 (with-current-buffer buf (derived-mode-p 'agent-shell-mode)))
+        (push buf seen)))
+    (nreverse seen)))
+
+(defun decknix--header-visible-agent-buffers ()
+  "Return the distinct live agent-shell buffers currently on screen."
+  (decknix--header-dedupe-agent-buffers
+   (mapcar #'window-buffer
+           (apply #'append
+                  (mapcar (lambda (f) (window-list f 'no-mini)) (frame-list))))))
+
+(defun decknix--header-tick-all ()
+  "Refresh the header of every VISIBLE agent-shell buffer.
+
+Replaces the per-buffer timer this module used to start (#148).  With 17
+live sessions that meant 17 independent 2-second timers -- ~9 firings a
+second, and the hitch profiler recorded 282 of them blocking for a
+combined 134 seconds, several over 7s.  Each fired regardless of whether
+its buffer was on screen, so the cost scaled with sessions ever opened
+rather than with what is actually being looked at.
+
+One timer, driven from the window list, scales with the latter: a
+20-session day with two visible splits does two refreshes per tick.
+Bails early while input is pending so it never blocks typing -- the
+profiler caught `self-insert-command' stalling 2.3s."
+  (unless (input-pending-p)
+    (dolist (buf (decknix--header-visible-agent-buffers))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf
+          (ignore-errors (decknix--header-update)))))))
+
+(defun decknix--header-start-shared-timer ()
+  "Arm the single shared header-refresh timer (idempotent)."
+  (when (timerp decknix--header-shared-timer)
+    (cancel-timer decknix--header-shared-timer))
+  (setq decknix--header-shared-timer
+        (run-with-timer decknix-header-refresh-interval
+                        decknix-header-refresh-interval
+                        #'decknix--header-tick-all)))
+
 (defun decknix--header-start-timer ()
-  "Start a buffer-local 2-second timer to refresh the header-line.
-Lexical-binding makes the BUF capture work without the
-`(eval `(lambda ...) t)' workaround the dynamic-binding heredoc
-required for the same shape."
-  (when decknix--header-timer
-    (cancel-timer decknix--header-timer))
-  (let ((buf (current-buffer)))
-    (setq decknix--header-timer
-          (run-with-timer
-           1 2
-           (lambda ()
-             (when (buffer-live-p buf)
-               (with-current-buffer buf
-                 (decknix--header-update))))))))
+  "Ensure header refreshing is running for this buffer.
+
+Kept as the per-buffer entry point the shell-creation path already
+calls, but it no longer starts a per-buffer timer: it arms the single
+shared one (idempotent) and cancels any legacy timer this buffer still
+owns, so a daemon carrying pre-existing buffers converges onto the
+shared timer instead of running both."
+  (decknix--header-stop-timer)
+  (unless (timerp decknix--header-shared-timer)
+    (decknix--header-start-shared-timer)))
 
 (defun decknix--header-stop-timer ()
-  "Stop the header-line refresh timer."
+  "Stop this buffer's legacy per-buffer header timer, if any."
   (when decknix--header-timer
     (cancel-timer decknix--header-timer)
     (setq decknix--header-timer nil)))
