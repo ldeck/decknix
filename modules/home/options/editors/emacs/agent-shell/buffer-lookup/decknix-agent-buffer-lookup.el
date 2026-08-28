@@ -75,13 +75,48 @@ the ID needed for --resume).  Falls back to the ACP session ID from
 
 (defun decknix--agent-find-new-shell-buffer (before-buffers)
   "Find the agent-shell buffer that was created after BEFORE-BUFFERS snapshot.
-Returns the new buffer, or nil if not found."
-  (seq-find (lambda (buf)
-              (and (buffer-live-p buf)
-                   (not (memq buf before-buffers))
-                   (with-current-buffer buf
-                     (derived-mode-p 'agent-shell-mode))))
-            (buffer-list)))
+Returns the new buffer, or nil if not found.
+
+BEFORE-BUFFERS is only a snapshot, so \"new\" means \"appeared since\" --
+not \"created by this launch\".  Any agent-shell buffer spawned
+concurrently qualifies: a resume, a sidebar restore, an auto-review.  The
+caller then renames that buffer and persists ITS tags/workspace against
+whatever conversation it already belongs to, so a guided new session
+adopts a resumed conversation's identity and the user's tags are appended
+to that conversation's tag list (observed: a session created with
+`conn,demos' came back carrying `#20571 review pr #256 hot' too, filed
+into the long-running `e06099' container).
+
+Buffers already bound to a conversation are therefore deprioritised: a
+resumed buffer stamps `decknix--agent-conv-key' synchronously at creation
+\(see `decknix--agent-session-resume--new'), while a genuinely new one
+carries none until its first message flush -- so an UNCLAIMED buffer is
+the one this launch actually created.
+
+The preference is a tie-break rather than a filter: when every candidate
+is claimed we still return one, because returning nil would drop the
+caller's rename and metadata persistence altogether, leaving the session
+unnamed and untagged -- worse than the mis-attribution being avoided."
+  (let ((candidates
+         (seq-filter (lambda (buf)
+                       (and (buffer-live-p buf)
+                            (not (memq buf before-buffers))
+                            (with-current-buffer buf
+                              (derived-mode-p 'agent-shell-mode))))
+                     (buffer-list))))
+    (or (seq-find (lambda (buf)
+                    (with-current-buffer buf
+                      (not (bound-and-true-p decknix--agent-conv-key))))
+                  candidates)
+        (when candidates
+          ;; Every candidate is already claimed -- the race actually
+          ;; happened.  Say so: the original incident was only
+          ;; reconstructible from store backups because nothing recorded
+          ;; it at the time.
+          (message "decknix: new-session lookup found only claimed buffer(s) (%s); \
+metadata may be mis-filed"
+                   (mapconcat #'buffer-name candidates ", "))
+          (car candidates)))))
 
 (defun decknix--agent-find-live-buffer-for-conv-key (conv-key)
   "Return the first live agent-shell buffer whose conv-key matches CONV-KEY.
