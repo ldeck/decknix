@@ -348,7 +348,7 @@ fn issuelink_to_link(link: JiraIssueLink, base: &str) -> Option<JiraLink> {
 /// Fetch assigned Jira tasks.
 pub async fn poll_jira_tasks(config: &JiraConfig) -> Result<JiraTasksFile, String> {
     let token = read_api_token(&config.api_token_file)?;
-    let client = Client::new();
+    let client = crate::http_client();
 
     let jql = build_jql(config);
     let base = config.base_url.trim_end_matches('/');

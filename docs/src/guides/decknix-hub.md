@@ -196,6 +196,41 @@ The daemon uses the `gh` CLI for GitHub access. Ensure you're authenticated:
 gh auth status
 ```
 
+**A section is showing stale data (e.g. a Request for a PR that already merged)**
+
+Check `meta.json` first — it is the only place a wedged adapter is visible:
+
+```bash
+python3 -m json.tool ~/.config/decknix/hub/meta.json
+```
+
+Compare each adapter's `last_poll` against now. `last_poll` is stamped on
+**every** outcome including errors, so:
+
+- **`last_poll` current, `ok: false`** — the adapter is alive and retrying;
+  read `last_error` (auth expiry, rate limit, an unreachable proxy).
+- **`last_poll` frozen minutes/hours in the past** — the adapter is *not
+  looping at all*. It is parked inside a call that never returned, so it will
+  never record an error or reach its next cycle. The section it feeds keeps
+  serving whatever it last wrote, silently.
+
+Every outbound call is now bounded (`GH_TIMEOUT`, `HTTP_TIMEOUT`,
+`HTTP_CONNECT_TIMEOUT`), so a frozen `last_poll` should no longer be
+reachable — the call fails, the error is recorded, and the loop continues. If
+you do see one, look for an orphaned child holding the loop open:
+
+```bash
+# gh children of the hub, with elapsed time
+ps -eo pid,ppid,etime,command | grep "[g]h "
+pgrep -f decknix-hub          # the parent pid to match against
+```
+
+Killing the hung child releases the loop immediately; the adapter records the
+failure and resumes on its next cycle. This was a real 24h outage on
+2026-08-27: a dropped link left two `gh` children hung, freezing
+`github-reviews.json` and `github-wip.json` while TeamCity kept updating
+normally.
+
 ## Data Files
 
 All state is stored in `~/.config/decknix/hub/`:
@@ -210,6 +245,13 @@ All state is stored in `~/.config/decknix/hub/`:
 
 Each adapter writes independently — a slow Jira poll won't block GitHub
 data from refreshing.
+
+That independence is per-adapter only: within one adapter, a single call that
+never returns stops that adapter's whole loop. Every outbound call is therefore
+bounded — `gh` invocations by `GH_TIMEOUT` (with `kill_on_drop`, so a timed-out
+child is killed rather than leaked), and HTTP by `HTTP_TIMEOUT` /
+`HTTP_CONNECT_TIMEOUT`. `reqwest::Client::new()` applies no timeout by default,
+so adapters must build their client via `crate::http_client()`.
 
 ## Future Adapters (Planned)
 
