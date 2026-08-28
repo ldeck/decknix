@@ -22,6 +22,20 @@
 ;; consumes agent credits, so team-noise PRs (where I am not directly
 ;; addressed) never trigger a dispatch.
 ;;
+;; A second guard requires the PR to be REVIEW-READY.  Dispatch reads
+;; the raw hub feed, not the rendered Requests list, so without this it
+;; happily spawned sessions for PRs the sidebar itself hides by default:
+;; a draft (author has explicitly marked it not-ready) or a
+;; merge-conflicting PR (its diff is against a stale base, so line
+;; anchors and "is this still referenced" checks are unreliable — the
+;; only honest review verdict is "please rebase").  The booleans come
+;; from the same toggle-aware predicates the sidebar composes
+;; (`decknix--hub-requests-draft-visible-p',
+;; `decknix--hub-requests-conflict-visible-p'), so the `x' / `X' toggles
+;; govern auto-review too: one control surface, not two.  The rule is
+;; simply that auto-review only dispatches what the Requests list would
+;; actually show you.
+;;
 ;; This file is side-effect free.  The dispatch wiring (scanning the hub
 ;; cache, resolving the workspace, calling `decknix--agent-quickaction-start',
 ;; and the file-notify advice) lives in the heredoc per AGENTS.md Rule 2.
@@ -81,6 +95,8 @@ guard takes over once the buffer exists).")
 ;; varrefs against the live globals.
 (declare-function decknix--hub-bot-author-p "decknix-hub-mention-bot")
 (declare-function decknix--hub-item-mentioned-p "decknix-hub-mention-bot")
+(declare-function decknix--hub-requests-draft-visible-p "decknix-hub-attention-filter")
+(declare-function decknix--hub-requests-conflict-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-request-has-live-session-p "decknix-agent-shell-hub")
 (declare-function decknix--agent-pr-detect-workspace "decknix-agent-shell-main-link")
 (declare-function decknix--agent-quickaction-start "decknix-agent-shell-main-link")
@@ -108,14 +124,20 @@ Active states carry a trailing `+@' to advertise the mention guard."
 
 ;; -- Item action classifier ----------------------------------------
 
-(defun decknix-auto-review-item-action (state bot-p mentioned-p)
+(defun decknix-auto-review-item-action (state bot-p mentioned-p
+                                              &optional draft-p conflicting-p)
   "Return the dispatch action for a PR under STATE.
 BOT-P is non-nil when the PR author is a bot; MENTIONED-P is non-nil
 when the PR @-mentions me (directly requested or named in a comment).
+DRAFT-P and CONFLICTING-P mark a PR as not review-ready — the author
+has not finished it, or its diff is against a stale base — and suppress
+dispatch in every state; both default to nil so a caller that has not
+resolved readiness keeps the previous behaviour.
 Returns `ship' (bot ship-flow), `review' (human review-flow), or nil
 when the PR should not be auto-dispatched.  All active states require
 MENTIONED-P."
-  (when (and mentioned-p (not (eq state 'off)))
+  (when (and mentioned-p (not (eq state 'off))
+             (not draft-p) (not conflicting-p))
     (pcase state
       ('bot   (and bot-p 'ship))
       ('human (and (not bot-p) 'review))
@@ -172,13 +194,21 @@ NUMBER is normalised so int and string forms collapse to one key."
 (defun decknix-auto-review--dispatch-item (item)
   "Auto-dispatch a review session for hub review ITEM when eligible.
 Returns the action used (`ship'/`review') or nil when skipped.
-Skips when: no action applies under the current state, a live review
-session already exists for the PR, or it was already dispatched this
-Emacs session (dedup guards the file-notify->buffer-appears window)."
+Skips when: no action applies under the current state, the PR is not
+review-ready (draft or merge-conflicting), a live review session already
+exists for the PR, or it was already dispatched this Emacs session
+(dedup guards the file-notify->buffer-appears window)."
   (let* ((bot-p (decknix--hub-bot-author-p (alist-get 'author item)))
          (mentioned-p (decknix--hub-item-mentioned-p item))
+         ;; Readiness is expressed as the NEGATION of the sidebar's
+         ;; visibility predicates so auto-review can never dispatch a PR
+         ;; the Requests list is hiding from me — and so the `x' / `X'
+         ;; toggles keep governing both surfaces at once.
+         (draft-p (not (decknix--hub-requests-draft-visible-p item)))
+         (conflicting-p (not (decknix--hub-requests-conflict-visible-p item)))
          (action (decknix-auto-review-item-action
-                  decknix-auto-review-mode bot-p mentioned-p)))
+                  decknix-auto-review-mode bot-p mentioned-p
+                  draft-p conflicting-p)))
     (when action
       (let* ((repo-full (or (alist-get 'repo item) ""))
              (parts (split-string repo-full "/"))
