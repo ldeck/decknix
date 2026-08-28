@@ -339,7 +339,7 @@ pub async fn poll_teamcity_builds(
     config: &TeamCityConfig,
     hub_dir: &Path,
 ) -> Result<TeamCityBuildsFile, String> {
-    let client = Client::new();
+    let client = crate::http_client();
     let base = config.proxy_url.trim_end_matches('/');
     let branch_map = load_wip_branch_map(hub_dir);
     let mut all_builds: Vec<TeamCityBuild> = Vec::new();
@@ -666,7 +666,7 @@ pub async fn run_teamcity_adapter(
     once: bool,
 ) {
     let interval = Duration::from_secs(config.interval_secs);
-    let client = Client::new();
+    let client = crate::http_client();
     let base = config.proxy_url.trim_end_matches('/').to_string();
 
     // Discover repo → TC project mapping on startup (cached for lifetime)

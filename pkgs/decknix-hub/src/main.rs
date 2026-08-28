@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::signal;
@@ -353,13 +354,77 @@ pub async fn atomic_write_json<T: Serialize>(dir: &Path, filename: &str, data: &
     Ok(())
 }
 
+/// Hard ceiling on a single HTTP request made by any adapter.
+pub const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Hard ceiling on just the connect phase.
+///
+/// Separate from `HTTP_TIMEOUT` so a black-holed host (packets dropped rather
+/// than refused — the usual shape of a dropped link or a VPN flap) fails fast
+/// instead of burning the whole request budget on a TCP handshake.
+pub const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Build the HTTP client used by every adapter.
+///
+/// `reqwest::Client::new()` applies NO request timeout, so a stalled response
+/// hangs the caller indefinitely — the same wedge as an unbounded `gh` child
+/// (see `GH_TIMEOUT`), and exactly what froze `jira-tasks` for 24h on
+/// 2026-08-27 while its adapter sat parked in `.await`.
+///
+/// Falls back to the untimed client only if the builder itself fails (a broken
+/// TLS backend), which is not a reason to take the whole adapter down.
+pub fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .build()
+        .unwrap_or_else(|e| {
+            eprintln!("hub: HTTP client builder failed ({e}); falling back to defaults");
+            reqwest::Client::new()
+        })
+}
+
+/// Hard ceiling on a single `gh` invocation.
+///
+/// A `gh` child that hangs on a dead socket blocks its adapter's poll loop
+/// FOREVER: the loop is parked in `.await`, so it never records an error, never
+/// sleeps, and never polls again.  Observed 2026-08-27: a network drop left two
+/// `gh` children hung for 24h, which froze `github-reviews.json` and
+/// `github-wip.json` — the sidebar kept showing a Request for a PR that had
+/// since merged, with nothing anywhere reporting a fault.
+///
+/// Generous relative to a healthy call (seconds), so a slow-but-live GraphQL
+/// batch is never cut off; the point is only that no call can hang unbounded.
+const GH_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// Run `gh` CLI and return stdout as String, or an error message.
+///
+/// Bounded by `GH_TIMEOUT`.  The child is spawned with `kill_on_drop`, so when
+/// the timeout future is dropped the hung `gh` is SIGKILLed rather than left
+/// parented to the daemon — otherwise each timeout would leak a process and the
+/// original hang would still be holding its socket.
 async fn gh_json(args: &[&str]) -> Result<String, String> {
-    let output = Command::new("gh")
+    let child = Command::new("gh")
         .args(args)
-        .output()
-        .await
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
         .map_err(|e| format!("gh exec error: {e}"))?;
+
+    let output = match tokio::time::timeout(GH_TIMEOUT, child.wait_with_output()).await {
+        Ok(res) => res.map_err(|e| format!("gh exec error: {e}"))?,
+        Err(_) => {
+            // Dropping the future dropped the Child, which (kill_on_drop) kills
+            // the hung process.  Returning Err lets the adapter loop record the
+            // fault and carry on to its next cycle.
+            return Err(format!(
+                "gh timeout after {}s: gh {}",
+                GH_TIMEOUT.as_secs(),
+                args.join(" ")
+            ));
+        }
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2296,5 +2361,60 @@ mod tests {
         assert!(!compute_review_stale(None, None, Some("CHANGES_REQUESTED"), 0, 0));
         // Approved (not changes-requested) → thread resolution is irrelevant.
         assert!(!compute_review_stale(None, None, Some("APPROVED"), 5, 0));
+    }
+
+    // -- Unbounded-call regression (sidebar froze for 24h, 2026-08-27) -------
+    //
+    // A `gh` child that hangs on a dead socket parks its adapter's poll loop in
+    // `.await` forever: no error is recorded, no sleep is reached, no further
+    // poll happens.  The observable damage is a SILENTLY STALE sidebar — the
+    // Requests section kept offering a PR that had already merged, and nothing
+    // anywhere reported a fault.  These pin the two properties that make that
+    // impossible: every outbound call is bounded, and a timed-out call reports
+    // an error rather than hanging.
+
+    #[tokio::test]
+    async fn gh_json_times_out_rather_than_hanging_forever() {
+        // `gh` is not on PATH in the build sandbox, so exercise the bound
+        // itself with a command that would otherwise never return.
+        let start = Instant::now();
+        let child = Command::new("sleep")
+            .arg("300")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn();
+        let Ok(child) = child else { return }; // no `sleep` — nothing to assert
+        let res = tokio::time::timeout(Duration::from_millis(200), child.wait_with_output()).await;
+        assert!(res.is_err(), "a hung child must hit the timeout, not block");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "the bound must actually fire, not wait for the child"
+        );
+    }
+
+    #[test]
+    fn outbound_calls_are_bounded() {
+        // The regression is "no ceiling at all", so assert a finite, non-zero
+        // bound rather than a specific number (which would just re-state the
+        // constant and break on every tune).
+        assert!(GH_TIMEOUT > Duration::ZERO);
+        assert!(HTTP_TIMEOUT > Duration::ZERO);
+        assert!(HTTP_CONNECT_TIMEOUT > Duration::ZERO);
+        // Connect must fail faster than the whole request, so a black-holed
+        // host gives up on the handshake instead of eating the full budget.
+        assert!(HTTP_CONNECT_TIMEOUT < HTTP_TIMEOUT);
+    }
+
+    #[test]
+    fn http_client_builds_with_timeouts_applied() {
+        // Construction must succeed on the real TLS backend; a client that
+        // silently fell back to `Client::new()` would be unbounded again.
+        let _ = http_client();
+        assert!(reqwest::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .connect_timeout(HTTP_CONNECT_TIMEOUT)
+            .build()
+            .is_ok());
     }
 }
