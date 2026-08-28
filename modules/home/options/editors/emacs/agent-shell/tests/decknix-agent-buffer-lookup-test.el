@@ -79,6 +79,58 @@
           (should (null (decknix--agent-find-new-shell-buffer before))))
       (kill-buffer fresh))))
 
+(ert-deftest decknix-find-new-shell-buffer--skips-a-claimed-buffer ()
+  "A buffer that already belongs to a conversation is never adopted.
+
+`before-buffers' is only a snapshot, so ANY agent-shell buffer created
+between the snapshot and the lookup qualifies -- including one spawned
+concurrently by a resume, a sidebar restore or an auto-review.  Adopting
+it makes the guided new-session flow rename someone else's buffer and
+file the new session under that conversation's conv-key, so the user's
+tags land on that conversation and the new session inherits its whole
+tag union (observed: a session tagged `conn,demos' came back with
+`#20571 review pr #256 hot' as well).
+
+A resumed buffer stamps `decknix--agent-conv-key' synchronously at
+creation, whereas a genuinely new one has none until its first message
+-- so an unclaimed buffer is the one this launch actually created."
+  (let* ((before (buffer-list))
+         (claimed (generate-new-buffer "*test-claimed-as*"))
+         (fresh (generate-new-buffer "*test-fresh-as*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer claimed
+            (setq-local major-mode 'agent-shell-mode)
+            (setq-local decknix--agent-conv-key "e06099eb69ea3456"))
+          (with-current-buffer fresh
+            (setq-local major-mode 'agent-shell-mode))
+          (cl-letf (((symbol-function 'derived-mode-p)
+                     (lambda (mode) (eq major-mode mode))))
+            (should (eq (decknix--agent-find-new-shell-buffer before)
+                        fresh))))
+      (kill-buffer claimed)
+      (kill-buffer fresh))))
+
+(ert-deftest decknix-find-new-shell-buffer--falls-back-to-claimed ()
+  "When every new buffer is claimed, still return one rather than nil.
+
+Returning nil would drop the caller's rename + tag persistence entirely,
+which is a worse outcome than the mis-attribution this guard avoids:
+the session would be left unnamed and untagged.  The preference is a
+tie-break, not a hard filter."
+  (let* ((before (buffer-list))
+         (claimed (generate-new-buffer "*test-claimed-only*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer claimed
+            (setq-local major-mode 'agent-shell-mode)
+            (setq-local decknix--agent-conv-key "e06099eb69ea3456"))
+          (cl-letf (((symbol-function 'derived-mode-p)
+                     (lambda (mode) (eq major-mode mode))))
+            (should (eq (decknix--agent-find-new-shell-buffer before)
+                        claimed))))
+      (kill-buffer claimed))))
+
 ;; -- find-live-buffer-for-conv-key -------------------------------
 
 (ert-deftest decknix-find-live-buffer-for-conv-key--nil-on-nil-key ()
