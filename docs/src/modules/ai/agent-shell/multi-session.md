@@ -29,6 +29,10 @@ When you select a saved session, the picker:
 2. Starts a new agent-shell buffer with the auggie session restored
 3. Stores the auggie session ID in a buffer-local variable for history/tagging
 
+When you multi-select many saved sessions, decknix routes the resumes
+through the spawn queue so the bridge startups are staggered instead of
+all cold-starting at once.
+
 ```elisp
 ;; The resume mechanism — auggie CLI handles the actual session restore
 (let ((agent-shell-auggie-acp-command
