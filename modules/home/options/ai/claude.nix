@@ -139,6 +139,8 @@ in {
   config = mkIf cfg.enable {
     # ACP bridge — allows agent-shell (Emacs) to launch Claude Code sessions
     # via the Agent Client Protocol.  Managed by Nix; no manual npm install needed.
+    # Decknix ships the bridge with its resume replay flag stripped so saved
+    # session restore stays cheap; transcript viewing still comes from Emacs.
     home.packages = [ pkgs.claude-agent-acp ];
 
     # If we have settings, generate the file and sync it

@@ -29,6 +29,10 @@ When you select a saved session, the picker:
 2. Starts a new agent-shell buffer with the auggie session restored
 3. Stores the auggie session ID in a buffer-local variable for history/tagging
 
+Claude's ACP bridge is patched in decknix so it does not replay prior user
+messages during resume; Emacs already restores the transcript for viewing, and
+native ACP `session/resume` restores the model context.
+
 When you multi-select many saved sessions, decknix routes the resumes
 through the spawn queue so the bridge startups are staggered instead of
 all cold-starting at once.

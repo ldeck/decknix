@@ -529,14 +529,17 @@ The largest module (~4400 lines). Key subsystems:
   load path (`agent-shell--set-session-from-response` +
   `agent-shell--finalize-session-init`), so the state machine then applies the
   saved model + permission mode as for a new session, and the transcript
-  continues in-place (the bridge keeps the same session id on resume). We use
-  `session/resume` and **never** `session/load`: `resume` restores context
-  without replaying the transcript back to the client, so it composes with our
-  own buffer prepopulation (`decknix--agent-session-prepopulate`), whereas
-  `load` would replay history and double-render. Pure predicate
-  `decknix--agent-resume-native-p` carved + ERT-tested; the advice registration
-  (a named `decknix--` function, so hot-reload's stale-advice strip handles it)
-  lives in the heredoc per Rule 2.
+  continues in-place (the bridge keeps the same session id on resume). Decknix
+  also strips Claude ACP's upstream `replay-user-messages` flag at package
+  build time, because the transcript is already restored in Emacs and the model
+  context is restored natively over ACP; leaving the flag on just burns CPU by
+  reprocessing old turns. We use `session/resume` and **never**
+  `session/load`: `resume` restores context without replaying the transcript
+  back to the client, so it composes with our own buffer prepopulation
+  (`decknix--agent-session-prepopulate`), whereas `load` would replay history
+  and double-render. Pure predicate `decknix--agent-resume-native-p` carved +
+  ERT-tested; the advice registration (a named `decknix--` function, so
+  hot-reload's stale-advice strip handles it) lives in the heredoc per Rule 2.
   Gated by `decknix-agent-resume-load-full-context` (default **`t`**; toggle
   `c` in the sidebar session menu). Setting it nil deliberately resumes with an
   empty context window and falls through to the primer — that path was once
