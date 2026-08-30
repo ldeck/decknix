@@ -2385,11 +2385,15 @@ let
     # `decknix-agent-purposes' is `(require)'d by `-main-link.el' for
     # the per-purpose (provider, model) resolver consulted by
     # `decknix--agent-review-get-params'.
+    # `decknix-agent-spawn-queue' paces bulk saved-session restores so
+    # a multi-select resume does not cold-start dozens of Claude/Pi
+    # bridges at once.
     packageRequires = [ decknix-picker-selections-el
                         decknix-agent-session-bulk-send-el
                         decknix-agent-provider-el
                         decknix-agent-purposes-el
-                        decknix-agent-picker-category-el ];
+                        decknix-agent-picker-category-el
+                        decknix-agent-spawn-queue-el ];
     extraSiteFiles = [
       "decknix-agent-shell-main-batch.el"
       "decknix-agent-shell-main-compose.el"
@@ -2401,6 +2405,7 @@ let
     ];
     testFiles = [
       "decknix-agent-review-bot-test.el"
+      "decknix-agent-session-picker-test.el"
     ];
   };
 

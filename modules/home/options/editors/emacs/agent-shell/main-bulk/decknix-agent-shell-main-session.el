@@ -44,6 +44,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'comint)
+(require 'decknix-agent-spawn-queue)
 
 ;; Forward declarations for upstream agent-shell + shell-maker + consult.
 (declare-function agent-shell-start "ext:agent-shell")
@@ -1731,27 +1732,33 @@ the off-by-one tail and RET appears to do nothing."
            (gethash key decknix--session-picker-saved-map))
       (let* ((session (gethash key decknix--session-picker-saved-map))
              (workspace (alist-get '__workspace session)))
-      (when session
-        (let ((conv-key (decknix--agent-conversation-key
-                         (alist-get 'firstUserMessage session ""))))
-          (let ((main (window-main-window (selected-frame))))
-            (when (and main (window-live-p main))
-              (select-window main))
-            (let ((agent-shell-display-action
-                   (if (and main (window-live-p main))
-                       (eval `(cons (lambda (buffer alist)
-                                      (let ((win ,main))
-                                        (when (window-live-p win)
-                                          (window--display-buffer
-                                           buffer win 'reuse alist))))
-                                    nil)
-                             t)
-                     agent-shell-display-action)))
-              (decknix--agent-session-resume
-               (alist-get 'sessionId session)
-               decknix-agent-session-history-count
-               (decknix--agent-session-display-name session)
-               workspace conv-key))))))))))
+        (when session
+          (let ((conv-key (decknix--agent-conversation-key
+                           (alist-get 'firstUserMessage session ""))))
+            (let ((main (window-main-window (selected-frame))))
+              (when (and main (window-live-p main))
+                (select-window main))
+              (let ((agent-shell-display-action
+                     (if (and main (window-live-p main))
+                         (eval `(cons (lambda (buffer alist)
+                                        (let ((win ,main))
+                                          (when (window-live-p win)
+                                            (window--display-buffer
+                                             buffer win 'reuse alist))))
+                                      nil)
+                               t)
+                       agent-shell-display-action)))
+                ;; Bulk restore can stampede dozens of Claude bridges at once.
+                ;; Route saved-session resumes through the existing spawn queue so
+                ;; the expensive bridge start + transcript rehydration happens in
+                ;; a paced FIFO drip instead of a thundering herd.
+                (decknix-agent-spawn-enqueue
+                 (lambda ()
+                   (decknix--agent-session-resume
+                    (alist-get 'sessionId session)
+                    decknix-agent-session-history-count
+                    (decknix--agent-session-display-name session)
+                    workspace conv-key))))))))))))
 
 ;; -- Session-picker action helpers (C-k kill, C-d delete) --
 ;;
