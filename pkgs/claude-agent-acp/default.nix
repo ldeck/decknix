@@ -1,11 +1,15 @@
-{ lib, buildNpmPackage, fetchFromGitHub, nodejs_22, stdenv }:
+{
+  lib,
+  stdenv,
+  fetchFromGitHub,
+  nodejs_22,
+  importNpmLock,
+  makeWrapper,
+}:
 
-buildNpmPackage rec {
+let
   pname = "claude-agent-acp";
   version = "0.64.2";
-
-  # Requires Node >= 22 (per package.json engines field)
-  nodejs = nodejs_22;
 
   src = fetchFromGitHub {
     owner = "agentclientprotocol";
@@ -14,71 +18,97 @@ buildNpmPackage rec {
     hash = "sha256-EVFfQrUeAyG4NjJDqaebhc4E6LEoHFySwkvEhkdYq00=";
   };
 
-  npmDepsHash = "sha256-gFBPyxtv7u4sa44XXJqdUBZPA1wG2kErO9wNLFjPzmQ=";
+  package = lib.importJSON "${src}/package.json";
+  rawLock = lib.importJSON "${src}/package-lock.json";
 
-  # Trim the lockfile to the current host platform so npmDeps only prefetches
-  # the one Claude SDK binary we can actually use.  The upstream lockfile lists
-  # darwin/linux/win32 variants together; leaving them in makes Nix fetch a
-  # useless cross-platform blob for every resume.
-  postPatch = let
-    hostOs = if stdenv.hostPlatform.isDarwin then "darwin" else "linux";
-    hostCpu = if stdenv.hostPlatform.isAarch64 then "arm64" else "x64";
-    hostLibc = if stdenv.hostPlatform.isMusl then "musl" else "glibc";
-  in ''
-    cat > prune-lockfile.mjs <<'EOF'
-    import fs from 'node:fs';
+  hostOs = if stdenv.hostPlatform.isDarwin then "darwin" else "linux";
+  hostCpu = if stdenv.hostPlatform.isAarch64 then "arm64" else "x64";
+  hostLibc = if stdenv.hostPlatform.isMusl then "musl" else "glibc";
 
-    const file = process.argv[2];
-    const hostOs = process.argv[3];
-    const hostCpu = process.argv[4];
-    const hostLibc = process.argv[5];
+  compatible = meta:
+    !(meta.optional or false)
+    || ((!(meta ? os) || builtins.elem hostOs meta.os)
+      && (!(meta ? cpu) || builtins.elem hostCpu meta.cpu)
+      && (!(meta ? libc) || builtins.elem hostLibc meta.libc));
 
-    const lock = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const keep = (meta) => {
-      if (!meta || meta.optional !== true) return true;
-      if (meta.os && !meta.os.includes(hostOs)) return false;
-      if (meta.cpu && !meta.cpu.includes(hostCpu)) return false;
-      if (meta.libc && !meta.libc.includes(hostLibc)) return false;
-      return true;
+  platformPackages = lib.filterAttrs
+    (path: meta: path == "" || compatible meta)
+    rawLock.packages;
+
+  # Remove references to optional packages pruned above. importNpmLock resolves
+  # every dependency name through the lock's package map, so dangling optional
+  # references would otherwise fail evaluation before any build starts.
+  filteredPackages = lib.mapAttrs (_path: meta:
+    meta // lib.optionalAttrs (meta ? optionalDependencies) {
+      optionalDependencies = lib.filterAttrs
+        (name: _version: builtins.hasAttr "node_modules/${name}" platformPackages)
+        meta.optionalDependencies;
+    }) platformPackages;
+
+  packageLock = rawLock // { packages = filteredPackages; };
+
+  # Unlike buildNpmPackage's monolithic prefetch-npm-deps FOD, importNpmLock
+  # gives each tarball its own fixed-output derivation. Successful downloads are
+  # therefore retained in the Nix store if another registry request flakes, and
+  # subsequent builds are fully offline. HTTP/1.1 avoids the registry's observed
+  # HTTP/2 framing failures; retries apply independently to each small tarball.
+  fetcherOpts = lib.mapAttrs (_path: _meta: {
+    curlOptsList = [
+      "--http1.1"
+      "--retry" "8"
+      "--retry-delay" "1"
+      "--retry-all-errors"
+    ];
+  }) filteredPackages;
+
+  npmSources = importNpmLock {
+    inherit package packageLock fetcherOpts;
+  };
+
+  nodeModules = importNpmLock.buildNodeModules {
+    inherit package packageLock;
+    nodejs = nodejs_22;
+    derivationArgs = {
+      pname = "${pname}-node-modules";
+      inherit version;
+      npmDeps = npmSources;
     };
+  };
+in
+stdenv.mkDerivation {
+  inherit pname version src;
 
-    for (const [key, meta] of Object.entries(lock.packages || {})) {
-      if (key === "" || keep(meta)) continue;
-      delete lock.packages[key];
-    }
+  npmDeps = nodeModules;
+  nativeBuildInputs = [
+    nodejs_22
+    importNpmLock.linkNodeModulesHook
+    makeWrapper
+  ];
 
-    const root = lock.packages?.[""] ?? {};
-    if (root.optionalDependencies) {
-      root.optionalDependencies = Object.fromEntries(
-        Object.entries(root.optionalDependencies)
-          .filter(([name]) => keep(lock.packages?.['node_modules/' + name]))
-      );
-      lock.packages[""] = root;
-    }
-
-    fs.writeFileSync(file, JSON.stringify(lock, null, 2) + "\n");
-    EOF
-    ${nodejs_22}/bin/node prune-lockfile.mjs package-lock.json ${hostOs} ${hostCpu} ${hostLibc}
-
+  buildPhase = ''
+    runHook preBuild
+    npm run build
+    runHook postBuild
   '';
 
-  # Strip the resume replay flag from the built bridge binary.  The transcript
-  # is already restored in Emacs and the model context is restored natively via
-  # ACP `session/resume`, so replaying the old user turns just burns CPU.
-  postFixup = ''
-    bridge="$out/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js"
-    substituteInPlace "$bridge" \
-      --replace '                "replay-user-messages": "",' ""
-    if grep -q '"replay-user-messages": ""' "$bridge"; then
-      echo "claude-agent-acp: replay-user-messages still present after patch" >&2
-      exit 1
-    fi
+  installPhase = ''
+    runHook preInstall
+
+    target="$out/lib/node_modules/@agentclientprotocol/claude-agent-acp"
+    mkdir -p "$target" "$out/bin"
+    cp -R dist package.json README.md LICENSE "$target/"
+    ln -s ${nodeModules}/node_modules "$target/node_modules"
+
+    makeWrapper ${nodejs_22}/bin/node "$out/bin/claude-agent-acp" \
+      --add-flags "$target/dist/index.js"
+
+    runHook postInstall
   '';
 
   meta = with lib; {
     description = "ACP (Agent Client Protocol) adapter for Anthropic Claude Code";
     homepage = "https://github.com/agentclientprotocol/claude-agent-acp";
-    license = licenses.mit;
+    license = licenses.asl20;
     mainProgram = "claude-agent-acp";
     platforms = platforms.unix;
   };

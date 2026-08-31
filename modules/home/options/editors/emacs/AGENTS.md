@@ -530,12 +530,14 @@ The largest module (~4400 lines). Key subsystems:
   `agent-shell--finalize-session-init`), so the state machine then applies the
   saved model + permission mode as for a new session, and the transcript
   continues in-place (the bridge keeps the same session id on resume). Decknix
-  also prunes Claude ACP's lockfile to the active host platform and strips the
-  upstream `replay-user-messages` flag at package build time, because the
-  transcript is already restored in Emacs and the model context is restored
-  natively over ACP; leaving the flag on just burns CPU by reprocessing old
-  turns. We use `session/resume` and **never**
-  `session/load`: `resume` restores context without replaying the transcript
+  prunes Claude ACP's lockfile to the active host platform and imports each npm
+  tarball as an independent fixed-output Nix derivation, so successful fetches
+  survive a later registry failure and subsequent builds are offline. The
+  bridge's `replay-user-messages` flag is intentionally retained: Claude defines
+  it as re-emitting each newly submitted stdin message as an acknowledgement for
+  bridge turn correlation; it does **not** replay saved session history into the
+  model. We use `session/resume` and **never** `session/load`: `resume` restores
+  context without replaying the transcript
   back to the client, so it composes with our own buffer prepopulation
   (`decknix--agent-session-prepopulate`), whereas `load` would replay history
   and double-render. Pure predicate `decknix--agent-resume-native-p` carved +
