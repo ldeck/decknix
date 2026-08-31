@@ -7159,12 +7159,27 @@ mutated."
         ;; and sets header-line-format to its own value.  We override it
         ;; to use our unified header instead, which already incorporates
         ;; status, tags, workspace, and context panel data.
+        ;;
+        ;; Throttled, and it must NOT force a repaint itself.  CPU sampling
+        ;; (150s, 11811 samples) put 47.9% in `redisplay_internal' and 20.7%
+        ;; in GC, with this path the top decknix entry at 246 samples -- ~9x
+        ;; the shared timer's 27.  Two causes, both fixed here:
+        ;;   - upstream calls this per streamed notification, so the header
+        ;;     was rebuilt once per chunk;
+        ;;   - the unconditional `force-mode-line-update' defeated the
+        ;;     "only force when the header actually CHANGED" check inside
+        ;;     `decknix--header-update', so every chunk forced a redisplay
+        ;;     and -- the tab-bar keymap being uncached -- a tab-bar rebuild
+        ;;     (`tab-bar-auto-width' / `string-pixel-width') with it.
+        ;; `decknix--header-update' still forces when the content differs,
+        ;; which is the only case that needs a repaint.
+        (declare-function decknix--header-update-throttled
+                          "decknix-agent-header")
         (advice-add 'agent-shell--update-header-and-mode-line :override
           (lambda (&rest _args)
             "Use the unified decknix header instead of agent-shell's default."
             (when (derived-mode-p 'agent-shell-mode)
-              (decknix--header-update)
-              (force-mode-line-update))))
+              (decknix--header-update-throttled))))
 
         ;; Guard all submit paths against a dead/missing process or config.
         ;; shell-maker-submit is the single entry point for sending input

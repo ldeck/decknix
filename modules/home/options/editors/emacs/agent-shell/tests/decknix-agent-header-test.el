@@ -511,5 +511,66 @@ the worst version of this bug."
   "No visible agent buffers means no work."
   (should-not (decknix--header-dedupe-agent-buffers nil)))
 
+;; -- event-path throttle (profiler: redisplay 48%, GC 21%) -------------
+;;
+;; `agent-shell--update-header-and-mode-line' is overridden to build our
+;; unified header, and upstream calls it from many places -- including
+;; per-notification streaming updates.  CPU sampling put 246 samples
+;; (~9x the shared timer's) under that path, and the override also called
+;; `force-mode-line-update' UNCONDITIONALLY, defeating the "only force
+;; when the header actually changed" check inside `decknix--header-update'
+;; and driving a redisplay (plus an uncached tab-bar keymap rebuild) per
+;; streamed chunk.
+
+(ert-deftest decknix-header--event-throttle-first-call-passes ()
+  "The first event in a quiet buffer refreshes immediately."
+  (let ((n 0))
+    (cl-letf (((symbol-function 'decknix--header-update)
+               (lambda () (setq n (1+ n)))))
+      (with-temp-buffer
+        (decknix--header-update-throttled)
+        (should (= n 1))))))
+
+(ert-deftest decknix-header--event-throttle-suppresses-burst ()
+  "A burst of streamed chunks collapses to one refresh.
+This is the whole point: a turn streaming hundreds of chunks must not
+rebuild the header hundreds of times."
+  (let ((n 0))
+    (cl-letf (((symbol-function 'decknix--header-update)
+               (lambda () (setq n (1+ n)))))
+      (with-temp-buffer
+        (let ((decknix-header-event-throttle 60))
+          (dotimes (_ 200) (decknix--header-update-throttled))
+          (should (= n 1)))))))
+
+(ert-deftest decknix-header--event-throttle-releases-after-interval ()
+  "Once the interval has passed, the next event refreshes again."
+  (let ((n 0))
+    (cl-letf (((symbol-function 'decknix--header-update)
+               (lambda () (setq n (1+ n)))))
+      (with-temp-buffer
+        (let ((decknix-header-event-throttle 0))
+          (decknix--header-update-throttled)
+          (decknix--header-update-throttled)
+          (should (= n 2)))))))
+
+(ert-deftest decknix-header--event-throttle-is-per-buffer ()
+  "One busy session must not starve another's header.
+The throttle timestamp is buffer-local, so a session streaming flat out
+cannot suppress the refresh of a different session that just changed
+status."
+  (let ((n 0)
+        (a (generate-new-buffer "*hdr-throttle-a*"))
+        (b (generate-new-buffer "*hdr-throttle-b*")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'decknix--header-update)
+                   (lambda () (setq n (1+ n)))))
+          (let ((decknix-header-event-throttle 60))
+            (with-current-buffer a (decknix--header-update-throttled))
+            (with-current-buffer a (decknix--header-update-throttled))
+            (with-current-buffer b (decknix--header-update-throttled))
+            (should (= n 2))))
+      (kill-buffer a) (kill-buffer b))))
+
 (provide 'decknix-agent-header-test)
 ;;; decknix-agent-header-test.el ends here
