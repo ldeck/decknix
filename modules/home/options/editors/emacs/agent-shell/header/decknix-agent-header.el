@@ -454,6 +454,39 @@ profiler caught `self-insert-command' stalling 2.3s."
         (with-current-buffer buf
           (ignore-errors (decknix--header-update)))))))
 
+(defcustom decknix-header-event-throttle 0.3
+  "Minimum seconds between header refreshes driven by agent events.
+
+Bounds the EVENT path (`agent-shell--update-header-and-mode-line', which
+upstream calls per streamed notification), not the shared timer.  A turn
+streaming hundreds of chunks would otherwise rebuild the header hundreds
+of times, each rebuild forcing a redisplay -- and, because the tab-bar
+keymap is uncached, a tab-bar rebuild with it.
+
+Small enough that a status transition still looks instant; the shared
+timer bounds worst-case staleness at
+`decknix-header-refresh-interval' regardless."
+  :type 'number :group 'decknix)
+
+(defvar-local decknix--header-last-event-update 0.0
+  "`float-time' of this buffer's last event-driven header refresh.
+Buffer-local so a session streaming flat out cannot starve the header of
+a different session that just changed status.")
+
+(defun decknix--header-update-throttled ()
+  "Refresh the header from the high-frequency agent-event path.
+
+Collapses a burst of streamed chunks into at most one refresh per
+`decknix-header-event-throttle' seconds.  Anything suppressed here is
+picked up by the shared timer within
+`decknix-header-refresh-interval', so no state is lost -- only the
+redundant rebuilds are."
+  (let ((now (float-time)))
+    (when (>= (- now decknix--header-last-event-update)
+              decknix-header-event-throttle)
+      (setq decknix--header-last-event-update now)
+      (decknix--header-update))))
+
 (defun decknix--header-start-shared-timer ()
   "Arm the single shared header-refresh timer (idempotent)."
   (when (timerp decknix--header-shared-timer)
