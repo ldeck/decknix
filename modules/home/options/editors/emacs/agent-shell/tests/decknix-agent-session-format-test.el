@@ -129,6 +129,57 @@
         (should (string-match-p "\\.\\.\\." name))
         (should (<= (length name) 40))))))
 
+(ert-deftest decknix-agent-session-format/display-name-resolves-a-resumed-session ()
+  "A RESUMED session still shows its conversation's tags.
+
+Reported as \"I can't find my day6 session in `C-c s s'\".  A resumed
+Claude session's `firstUserMessage' is the resume primer (\"This message
+is a resumed continuation of an earlier Claude session…\"), and since
+2c0ada6 a primer deliberately keys NO conversation -- so
+`decknix--agent-conversation-key' returns nil, the tag lookup is skipped
+entirely, and the session renders with no tags at all.  Searching for
+`day6' then matches nothing even though the store has the tags.
+
+The session-id is stable across resumes, so when the first message
+yields no key, resolve the tags by scanning the store for the session."
+  (let ((s (decknix-agent-session-format-test--session
+            nil "This message is a resumed continuation of an earlier Claude session")))
+    (cl-letf (((symbol-function 'decknix--agent-conversation-key)
+               (lambda (_) nil))          ; primer keys nothing
+              ((symbol-function 'decknix--agent-tags-for-conv-key)
+               (lambda (_) nil))
+              ((symbol-function 'decknix--agent-store-field-for-session-id)
+               (lambda (_sid field)
+                 (when (equal field "tags") '("day6" "dos" "log")))))
+      (should (equal (decknix--agent-session-display-name s)
+                     "day6/dos/log")))))
+
+(ert-deftest decknix-agent-session-format/display-name-prefers-the-conv-key-tags ()
+  "When the first message DOES key a conversation, that wins.
+The store scan is a fallback, not a replacement -- it must not override
+a session whose own first message identifies its conversation."
+  (let ((s (decknix-agent-session-format-test--session)))
+    (cl-letf (((symbol-function 'decknix--agent-conversation-key)
+               (lambda (_) "abc123"))
+              ((symbol-function 'decknix--agent-tags-for-conv-key)
+               (lambda (_) '("direct")))
+              ((symbol-function 'decknix--agent-store-field-for-session-id)
+               (lambda (&rest _) '("fallback"))))
+      (should (equal (decknix--agent-session-display-name s) "direct")))))
+
+(ert-deftest decknix-agent-session-format/display-name-survives-no-fallback ()
+  "With neither key nor store hit, fall through to the message preview.
+The fallback must be optional so this still works where the store
+resolver is unavailable (e.g. under isolated tests)."
+  (let ((s (decknix-agent-session-format-test--session nil "Fix the thing")))
+    (cl-letf (((symbol-function 'decknix--agent-conversation-key)
+               (lambda (_) nil))
+              ((symbol-function 'decknix--agent-tags-for-conv-key)
+               (lambda (_) nil))
+              ((symbol-function 'decknix--agent-store-field-for-session-id)
+               (lambda (&rest _) nil)))
+      (should (equal (decknix--agent-session-display-name s) "Fix the thing")))))
+
 (ert-deftest decknix-agent-session-format/display-name-falls-back-to-sid ()
   "Empty first-message + no tags drops to 8-char session id prefix."
   (let ((s `((sessionId . "deadbeef-1234")

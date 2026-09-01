@@ -52,6 +52,8 @@
 (declare-function decknix--agent-tags-for-session "decknix-agent-tags-read" (session-id))
 (declare-function decknix--agent-tags-for-conv-key "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--agent-conversation-key "decknix-agent-conv-resolve" (first-message))
+(declare-function decknix--agent-store-field-for-session-id
+                  "decknix-agent-conv-resolve" (session-id field))
 (declare-function decknix--agent-session-time-ago "decknix-agent-format" (iso-time))
 (declare-function decknix-agent-provider-glyph-for-session
                   "decknix-agent-provider" (session))
@@ -114,7 +116,19 @@ session-id from SESSION, then delegates.  Priority: slug (Claude sub-agent)
          (slug (alist-get 'slug session))
          (first-msg (alist-get 'firstUserMessage session ""))
          (conv-key (decknix--agent-conversation-key first-msg))
-         (tags (when conv-key (decknix--agent-tags-for-conv-key conv-key))))
+         (tags (or (when conv-key (decknix--agent-tags-for-conv-key conv-key))
+                   ;; A RESUMED session's first message is the resume
+                   ;; primer, which deliberately keys no conversation
+                   ;; (2c0ada6) -- so the lookup above yields nothing and
+                   ;; the session would render untagged, making it
+                   ;; unfindable in the picker by the tags it actually
+                   ;; has.  The session-id is stable across resumes, so
+                   ;; fall back to scanning the store by it.  Fallback
+                   ;; only: a first message that DOES key a conversation
+                   ;; still wins.
+                   (and (fboundp 'decknix--agent-store-field-for-session-id)
+                        (not (string-empty-p sid))
+                        (decknix--agent-store-field-for-session-id sid "tags")))))
     (if (and (stringp slug) (not (string-empty-p slug)))
         slug
       (decknix--agent-session-derive-name tags nil nil first-msg sid))))

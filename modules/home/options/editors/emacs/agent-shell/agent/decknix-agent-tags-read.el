@@ -54,16 +54,36 @@
                   "decknix-agent-tags-store" (store))
 (declare-function decknix--agent-conversation-key-for-session
                   "decknix-agent-conv-resolve" (session-id &optional no-block))
+(declare-function decknix--agent-store-field-scan
+                  "decknix-agent-conv-resolve" (convs session-id field))
 
 (defun decknix--agent-tags-for-session (session-id)
-  "Return the list of tags for the conversation containing SESSION-ID."
+  "Return the list of tags for the conversation containing SESSION-ID.
+
+Resolves via the session's first-message conv-key first, then falls back
+to scanning the store for an entry LISTING the session-id.
+
+The fallback is what makes a RESUMED session findable.  Its stored first
+message is the resume primer (\"This message is a resumed continuation
+of an earlier Claude session…\"), which since 2c0ada6 deliberately keys
+no conversation -- so the conv-key lookup returns nil and this returned
+nil with it.  Every resumed session therefore rendered UNTAGGED in the
+`C-c s s' picker, showing the primer text as its preview, and could not
+be found by searching for the tags it actually has (reported as a `day6'
+session that had gone missing; it was present the whole time, just
+nameless).
+
+The session-id is stable across resumes, which is exactly why it works
+where the first-message hash cannot."
   (let* ((conv-key (decknix--agent-conversation-key-for-session session-id t))
          (store (decknix--agent-tags-read))
          (convs (decknix--agent-tags-conversations store)))
-    (when conv-key
-      (let ((entry (gethash conv-key convs)))
-        (when (hash-table-p entry)
-          (gethash "tags" entry))))))
+    (or (when conv-key
+          (let ((entry (gethash conv-key convs)))
+            (when (hash-table-p entry)
+              (gethash "tags" entry))))
+        (and (fboundp 'decknix--agent-store-field-scan)
+             (decknix--agent-store-field-scan convs session-id "tags")))))
 
 (defun decknix--agent-tags-for-conv-key (conv-key)
   "Return the list of tags for conversation CONV-KEY."
