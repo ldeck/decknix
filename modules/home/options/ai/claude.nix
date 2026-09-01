@@ -99,6 +99,36 @@ in {
       };
     };
 
+    disableAutoUpdate = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Stop Claude Code updating itself, so the Nix-pinned version is the
+        one that actually runs.
+
+        Claude Code ships an auto-updater that downloads newer builds into
+        `~/.local/share/claude/versions/` and hands off to them at launch.
+        That silently defeats the Nix pin: `decknix switch` installs one
+        version and you run another.  Observed on this machine -- Nix
+        provided claude-code 2.1.220 while `~/.local/share/claude/versions/`
+        held 2.1.246 through 2.1.257 (a fresh one that morning), and a
+        single session transcript recorded three different `version` values
+        across its lifetime.  It also accumulates ~200MB per build.
+
+        Sets `DISABLE_AUTOUPDATER=1` both as a session variable (covering
+        CLI launches) and in `~/.claude/settings.json`'s `env` block
+        (covering Claude's own start-up), because the two paths are read at
+        different points and only the pair reliably covers both.
+
+        Note `~/.claude.json` already carried `autoUpdates: false` and was
+        NOT honoured -- that is the legacy runtime-state file, not the
+        settings file, which is why versions kept appearing.
+
+        Turning this off means Claude updates itself again and the Nix pin
+        becomes advisory; bump the flake input to move versions instead.
+      '';
+    };
+
     mcpServers = mkOption {
       type = types.attrsOf types.attrs;
       default = {};
@@ -144,6 +174,13 @@ in {
     # subsequent builds offline instead of restarting one monolithic npm download.
     home.packages = [ pkgs.claude-agent-acp ];
 
+    # Keep the Nix pin authoritative (see `disableAutoUpdate').  The session
+    # variable covers a CLI launch; the settings.json `env' merge below
+    # covers Claude's own start-up path.
+    home.sessionVariables = mkIf cfg.disableAutoUpdate {
+      DISABLE_AUTOUPDATER = "1";
+    };
+
     # If we have settings, generate the file and sync it
     decknix.cli.agentSync.enable = true;
     decknix.cli.agentSync.files = mkIf (cfg.settings != {}) {
@@ -185,6 +222,29 @@ in {
         else
           ${pkgs.coreutils}/bin/rm -f "$TMP"
           echo "  [claude-permissions] WARNING: failed to update $CLAUDE_SETTINGS (left unchanged)" >&2
+        fi
+      '');
+
+    # Pin the runtime to the Nix-installed build (see `disableAutoUpdate').
+    # Merged with jq for the same reason as the permissions block: Claude
+    # mutates this file at runtime, so a whole-file deploy would clobber its
+    # keys.  Only `.env.DISABLE_AUTOUPDATER' is touched.
+    home.activation.claude-disable-autoupdate = mkIf cfg.disableAutoUpdate
+      (lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+        ${pkgs.coreutils}/bin/mkdir -p "$(${pkgs.coreutils}/bin/dirname "$CLAUDE_SETTINGS")"
+        if [ ! -f "$CLAUDE_SETTINGS" ]; then
+          echo '{}' > "$CLAUDE_SETTINGS"
+        fi
+        TMP="$(${pkgs.coreutils}/bin/mktemp)"
+        if ${pkgs.jq}/bin/jq \
+             '.env = (.env // {}) | .env.DISABLE_AUTOUPDATER = "1"' \
+             "$CLAUDE_SETTINGS" > "$TMP"; then
+          ${pkgs.coreutils}/bin/mv "$TMP" "$CLAUDE_SETTINGS"
+          echo "  [claude-disable-autoupdate] Pinned Claude to the Nix build (DISABLE_AUTOUPDATER=1)"
+        else
+          ${pkgs.coreutils}/bin/rm -f "$TMP"
+          echo "  [claude-disable-autoupdate] WARNING: failed to update $CLAUDE_SETTINGS (left unchanged)" >&2
         fi
       '');
 
