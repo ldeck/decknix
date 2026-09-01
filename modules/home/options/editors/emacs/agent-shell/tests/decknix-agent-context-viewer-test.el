@@ -55,5 +55,60 @@ displayed in the selected window, and must land on the final turn."
           (should (= (point) 11)))
       (kill-buffer viewer))))
 
+;; -- display placement: stay on THIS frame/tab ------------------------
+;;
+;; Reported: `C-c s c' opened the viewer "against a different tab", so
+;; finishing with it meant switching back, and the sidebar was hidden
+;; while it was up.
+;;
+;; Measured cause: the sidebar is a DEDICATED SIDE window (side=left) and
+;; the session runs with several frames open.  `display-buffer-at-bottom'
+;; alone cannot always place a window against a side-window layout, and
+;; when it fails `display-buffer' falls through to
+;; `display-buffer-fallback-action' -- which reuses a window on ANOTHER
+;; FRAME (or pops one), landing the viewer away from where you are.
+;;
+;; The action must therefore pin the lookup to the selected frame.
+
+(ert-deftest decknix-context-viewer/display-action-never-leaves-this-frame ()
+  "The display action forbids reusing a window on another frame."
+  (let ((captured nil))
+    (cl-letf (((symbol-function 'display-buffer)
+               (lambda (_buf action) (setq captured action) nil))
+              ((symbol-function 'decknix--context-viewer-turns)
+               (lambda (_) '(((role . "user") (text . "hi")))))
+              ((symbol-function 'decknix--context-viewer-render)
+               (lambda (_) nil))
+              ((symbol-function 'decknix-agent-context-viewer-mode)
+               (lambda () nil)))
+      (with-temp-buffer
+        (decknix-agent-context-viewer-open (current-buffer))
+        (should captured)
+        (let ((alist (cdr captured)))
+          ;; nil reusable-frames = only this frame's windows are candidates.
+          (should (assq 'reusable-frames alist))
+          (should-not (alist-get 'reusable-frames alist))
+          ;; and never raise/switch to a different frame.
+          (should (alist-get 'inhibit-switch-frame alist)))))))
+
+(ert-deftest decknix-context-viewer/display-action-prefers-bottom ()
+  "Placement is still a bottom window, reusing one on this frame if present."
+  (let ((captured nil))
+    (cl-letf (((symbol-function 'display-buffer)
+               (lambda (_buf action) (setq captured action) nil))
+              ((symbol-function 'decknix--context-viewer-turns)
+               (lambda (_) '(((role . "user") (text . "hi")))))
+              ((symbol-function 'decknix--context-viewer-render)
+               (lambda (_) nil))
+              ((symbol-function 'decknix-agent-context-viewer-mode)
+               (lambda () nil)))
+      (with-temp-buffer
+        (decknix-agent-context-viewer-open (current-buffer))
+        (let ((fns (car captured)))
+          (should (memq 'display-buffer-at-bottom fns))
+          ;; reuse-window first so a viewer already open here is reused
+          ;; rather than a second one being stacked below it.
+          (should (memq 'display-buffer-reuse-window fns)))))))
+
 (provide 'decknix-agent-context-viewer-test)
 ;;; decknix-agent-context-viewer-test.el ends here

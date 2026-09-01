@@ -226,9 +226,23 @@ Opens in a bottom window and positions point at the most recent turn."
         (setq-local decknix--context-viewer-source src)
         (decknix-agent-context-viewer-mode)
         (decknix--context-viewer-render cache))
+      ;; Pin placement to the SELECTED frame.  The sidebar is a dedicated
+      ;; side window, and `display-buffer-at-bottom' alone cannot always
+      ;; place a window against a side-window layout; when it fails,
+      ;; `display-buffer' falls through to `display-buffer-fallback-action',
+      ;; which happily reuses a window on ANOTHER FRAME -- so the viewer
+      ;; appeared "on a different tab", the sidebar went out of view, and
+      ;; dismissing it meant navigating back.
+      ;;
+      ;; `reusable-frames' nil confines the reuse lookup to this frame and
+      ;; `inhibit-switch-frame' stops another frame being raised.
+      ;; `display-buffer-reuse-window' leads so re-invoking reuses the
+      ;; viewer already open here instead of stacking a second one.
       (let ((win (display-buffer
                   viewer
-                  '((display-buffer-at-bottom)
+                  '((display-buffer-reuse-window display-buffer-at-bottom)
+                    (reusable-frames . nil)
+                    (inhibit-switch-frame . t)
                     (window-height . 0.4)))))
         (when (window-live-p win)
           (select-window win)
