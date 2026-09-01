@@ -444,60 +444,23 @@ async fn gh_json(args: &[&str]) -> Result<String, String> {
 
 
 // ---------------------------------------------------------------------------
-// Archived repo cache
+// Shared cache primitives
 // ---------------------------------------------------------------------------
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use tokio::sync::RwLock;
 
-/// Cache of repo name → archived status.  Populated lazily per poll cycle.
-/// Archived status rarely changes, so we cache for the lifetime of the process
-/// and only look up repos we haven't seen before.
-static ARCHIVED_CACHE: OnceLock<RwLock<HashMap<String, bool>>> = OnceLock::new();
-
-fn archived_cache() -> &'static RwLock<HashMap<String, bool>> {
-    ARCHIVED_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
-/// Check if a repo is archived (cached).  Returns `true` for archived repos.
-async fn is_repo_archived(repo: &str) -> bool {
-    // Fast path: check cache
-    {
-        let cache = archived_cache().read().await;
-        if let Some(&archived) = cache.get(repo) {
-            return archived;
-        }
-    }
-    // Slow path: query GitHub API
-    let archived = match gh_json(&[
-        "api", &format!("repos/{repo}"),
-        "--jq", ".archived",
-    ]).await {
-        Ok(output) => output.trim() == "true",
-        Err(e) => {
-            eprintln!("hub: failed to check archived status for {repo}: {e}");
-            false // assume not archived on error
-        }
-    };
-    // Store in cache
-    {
-        let mut cache = archived_cache().write().await;
-        cache.insert(repo.to_string(), archived);
-    }
-    archived
-}
-
-/// Filter a list of repo names, returning the set of archived ones.
-async fn find_archived_repos(repos: &[String]) -> std::collections::HashSet<String> {
-    let mut archived = std::collections::HashSet::new();
-    for repo in repos {
-        if is_repo_archived(repo).await {
-            archived.insert(repo.clone());
-        }
-    }
-    archived
-}
+// Archived repos are excluded server-side by `--archived=false` on every
+// `gh search prs` call, so there is no per-repo archived lookup or cache here.
+// The previous client-side version asked `gh api repos/<repo>` once per repo and
+// memoised the answer for the process lifetime — including the error fallback of
+// "assume not archived".  A `gh` auth failure at daemon start therefore pinned
+// every repo it touched as live for good (a private repo returns 404, not 403,
+// when unauthenticated), and archived repos leaked into Requests and WIP until
+// the daemon was restarted.  A single server-side qualifier can't be poisoned,
+// stays correct when a repo is archived mid-session, and drops one `gh` spawn
+// per repo per poll.
 
 // ---------------------------------------------------------------------------
 // GitHub Reviews Adapter
@@ -1376,20 +1339,16 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         "search", "prs",
         "--review-requested=@me",
         "--state=open",
+        // Archived repos are read-only: their PRs can never be reviewed or
+        // merged, so they are noise in Requests.  Filtered here rather than
+        // client-side — see the note by the shared cache primitives.
+        "--archived=false",
         "--json", "number,title,url,createdAt,updatedAt,isDraft,labels,author,repository",
         "--limit", "200",
     ]).await?;
 
     let prs: Vec<GhSearchPr> = serde_json::from_str(&output)
         .map_err(|e| format!("parse error: {e}"))?;
-
-    // Collect unique repo names and filter out archived repositories
-    let repo_names: Vec<String> = prs.iter()
-        .filter_map(|pr| pr.repository.as_ref().map(|r| r.name_with_owner.clone()))
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-    let archived = find_archived_repos(&repo_names).await;
 
     // Get current user's login for review state lookup
     let my_login = get_github_login().await;
@@ -1403,7 +1362,6 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         prs.iter()
             .filter_map(|pr| {
                 let repo = pr.repository.as_ref()?.name_with_owner.clone();
-                if archived.contains(&repo) { return None; }
                 let updated_at = pr.updated_at.clone().unwrap_or_default();
                 let hit = cache.get(&(repo.clone(), pr.number))
                     .map(|(ts, inserted, _)| {
@@ -1423,10 +1381,6 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         let repo = pr.repository.as_ref()
             .map(|r| r.name_with_owner.clone())
             .unwrap_or_default();
-        // Skip PRs from archived repositories
-        if archived.contains(&repo) {
-            continue;
-        }
         // Use cache when updatedAt unchanged AND within TTL; otherwise refetch.
         let updated_at = pr.updated_at.clone().unwrap_or_default();
         let cache_key = (repo.clone(), pr.number);
@@ -1735,11 +1689,13 @@ struct GhMyPr {
 async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
     let json_fields = "number,title,url,state,isDraft,updatedAt,repository";
 
-    // 1. Open PRs
+    // 1. Open PRs.  `--archived=false` for the same reason as Requests: an
+    // archived repo is read-only, so a PR there can never be landed.
     let open_output = gh_json(&[
         "search", "prs",
         "--author=@me",
         "--state=open",
+        "--archived=false",
         "--json", json_fields,
         "--limit", "50",
     ]).await?;
@@ -1757,6 +1713,7 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
         "--author=@me",
         "--state=merged",
         &format!("--merged=>{cutoff}"),
+        "--archived=false",
         "--json", json_fields,
         "--limit", "30",
     ]).await.unwrap_or_else(|_| "[]".to_string());
@@ -1777,14 +1734,6 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
         }
     }
 
-    // Collect unique repo names and filter out archived repositories
-    let repo_names: Vec<String> = all_prs.iter()
-        .filter_map(|pr| pr.repository.as_ref().map(|r| r.name_with_owner.clone()))
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-    let archived = find_archived_repos(&repo_names).await;
-
     // Get current user's login for reply detection
     let my_login = get_github_login().await;
 
@@ -1799,7 +1748,6 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
         all_prs.iter()
             .filter_map(|pr| {
                 let repo = pr.repository.as_ref()?.name_with_owner.clone();
-                if archived.contains(&repo) { return None; }
                 let updated_at = pr.updated_at.clone().unwrap_or_default();
                 let hit = cache.get(&(repo.clone(), pr.number))
                     .map(|(ts, inserted, _)| {
@@ -1822,10 +1770,6 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
         let repo = pr.repository.as_ref()
             .map(|r| r.name_with_owner.clone())
             .unwrap_or_else(|| "unknown".to_string());
-        // Skip PRs from archived repositories
-        if archived.contains(&repo) {
-            continue;
-        }
         // Use cache when updatedAt unchanged AND within TTL; otherwise refetch.
         let updated_at = pr.updated_at.clone().unwrap_or_default();
         let cache_key = (repo.clone(), pr.number);
