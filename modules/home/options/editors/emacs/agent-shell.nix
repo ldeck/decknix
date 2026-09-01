@@ -303,6 +303,24 @@ let
   # see the file Commentary; the retry sends a prompt, so a false positive
   # would interrupt a healthy session.  Pure layer ERT-tested; the
   # advice/keybinding wiring is in the heredoc per Rule 2.
+  # Worktree-backed PR review sessions (#165 step 1).  A review used to
+  # run at the WORKSPACE ROOT with no PR checkout anywhere -- the agent
+  # read the diff through the `gh' API.  (The `/tmp' the issue body
+  # blames is agent scratch created by the prompt in decknix-config, not
+  # by decknix; measured before implementing.)  This checks the PR head
+  # out into `<primary>-worktrees/pr-<n>' so a review has a real tree,
+  # which is what unblocks reviewing the diff inside Emacs (step 3).
+  # Pure path/args/decision layer here; the async git chain and the
+  # session launch live in workspace-bulk per Rule 2.
+  decknix-agent-review-worktree-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-review-worktree";
+    src = ./agent-shell/review-worktree;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-review-worktree-test.el"
+    ];
+  };
+
   decknix-agent-net-error-el = mkEmacsTestedPackage {
     pname = "decknix-agent-net-error";
     src = ./agent-shell/net-error;
@@ -3072,6 +3090,7 @@ in
           decknix-agent-turn-signals-el
           decknix-agent-heartbeat-watch-el
           decknix-agent-net-error-el
+          decknix-agent-review-worktree-el
           decknix-agent-acp-trace-el
           decknix-record-el
           decknix-layout-groups-el
@@ -5238,6 +5257,10 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         ;; map, with-eval-after-load wiring, hook + advice) stay
         ;; here, immediately after the require.
         (require 'decknix-worktree-picker)
+        ;; #165: pure path/args/decision layer for worktree-backed review
+        ;; sessions.  Required BEFORE workspace-bulk, which consumes it in
+        ;; `decknix--review-worktree-ensure-then'.
+        (require 'decknix-agent-review-worktree)
         (require 'decknix-agent-shell-workspace)
         ;; Runtime dep of the sidebar `p' People row action (forward-declared
         ;; in workspace.el so sibling packages compile without it).
