@@ -172,25 +172,59 @@ values so an untagged fragment never shadows a tagged one."
                   (throw 'hit val))))))
         nil))))
 
-(defun decknix--agent-conv-key-scan-for-session-id (convs session-id)
+(defun decknix--agent-conv-key-scan-for-session-id (convs session-id &optional anchored-p)
   "Pure: a conv-key whose CONVS entry lists SESSION-ID, or nil.
-Prefers an entry that already carries metadata (brokerKey/tags/model/mode)
-so a WRITE reuses the conversation's established key instead of minting a
-fresh fragment; otherwise any entry listing the session; deterministic by
-sorted conv-key."
+
+Prefers an entry carrying metadata (brokerKey/tags/model/mode) so a WRITE
+reuses the conversation's established key instead of minting a fresh
+fragment.  Among those, precedence is:
+
+  1. ANCHORED   ANCHORED-P, when supplied, is a predicate on a conv-key
+                that answers whether the key is the hash of one of its
+                members' own first messages -- i.e. a real conversation
+                rather than an accretion container.  Ground truth, so it
+                wins outright.
+  2. RECENCY    otherwise the largest `lastAccessed' (ISO-8601, so
+                `string>' orders it).  Where you last worked is a better
+                guess than nothing.
+  3. SORTED KEY otherwise the lexicographically smallest key, purely so
+                the answer is stable across calls.
+
+A session can legitimately be listed under several conversations, and
+43 of 371 in one live store were -- 12 of them claimed by more than one
+TAGGED conversation, which is what decides the tags the session displays
+under.  Ordering by conv-key alone made that decision arbitrary: session
+122adc26 belonged to `756afa19' (day6, dos, log, july, 28) and was also
+claimed by `2a94df56' (fix); `2' sorts before `7', so it showed as `fix'
+and the day6 conversation could not be found.  `fix' was an accretion
+container -- all five of its members were resume primers, which hash
+alike -- while day6 was anchored, so the anchor test is what separates
+them, and it has to outrank recency because the container had been
+touched more recently than the real conversation."
   (when (and (hash-table-p convs) session-id)
-    (let ((keys nil) with-meta any)
+    (let ((keys nil) (meta nil) (any nil))
       (maphash (lambda (k _) (push k keys)) convs)
       (dolist (k (sort keys #'string<))
         (let ((e (gethash k convs)))
           (when (and (hash-table-p e)
                      (member session-id (gethash "sessions" e)))
             (unless any (setq any k))
-            (when (and (null with-meta)
-                       (or (gethash "brokerKey" e) (gethash "tags" e)
-                           (gethash "model" e) (gethash "mode" e)))
-              (setq with-meta k)))))
-      (or with-meta any))))
+            (when (or (gethash "brokerKey" e) (gethash "tags" e)
+                      (gethash "model" e) (gethash "mode" e))
+              (push k meta)))))
+      (setq meta (nreverse meta))       ; back into sorted-key order
+      (or (and meta
+               (or
+                ;; 1. anchored
+                (and anchored-p (seq-find anchored-p meta))
+                ;; 2. most recently accessed
+                (car (sort (copy-sequence meta)
+                           (lambda (a b)
+                             (string> (or (gethash "lastAccessed" (gethash a convs)) "")
+                                      (or (gethash "lastAccessed" (gethash b convs)) "")))))
+                ;; 3. sorted key
+                (car meta)))
+          any))))
 
 (defun decknix--agent-conv-key-for-session-id (session-id)
   "Return an existing conv-key that owns SESSION-ID in the tag store, or nil.
