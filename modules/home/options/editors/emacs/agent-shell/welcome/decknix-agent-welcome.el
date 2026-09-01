@@ -142,8 +142,26 @@ Set from the `init-finished' event.  Until then the prompt exists but
 the agent cannot act on input, so its ` Me '/`❯' affordance is
 suppressed -- see `decknix--agent-chat-blank-prompt-labels'.")
 
+(defun decknix--agent-chat-live-prompt-overlay ()
+  "Return the overlay for this buffer's LIVE input prompt, or nil.
+
+The prompt is the LAST `agent-shell-chat-me' overlay: upstream keeps it
+at the end of the buffer so there is always somewhere to type, while
+every earlier overlay of that category is a user turn already sent.
+
+Identified by position rather than by looking for the `❯' marker in the
+`before-string', so the suppression still finds the prompt on a buffer
+where the marker has already been blanked (it runs on every relabel)."
+  (let ((prompt nil))
+    (dolist (overlay (overlays-in (point-min) (point-max)))
+      (when (and (eq (overlay-get overlay 'category) 'agent-shell-chat-me)
+                 (or (null prompt)
+                     (> (overlay-start overlay) (overlay-start prompt))))
+        (setq prompt overlay)))
+    prompt))
+
 (defun decknix--agent-chat-blank-prompt-labels ()
-  "Empty the ` Me '/`❯' labels on this buffer's chat prompt overlays.
+  "Empty the ` Me '/`❯' affordance on this buffer's LIVE chat prompt.
 
 Upstream shows the prompt at shell creation, deliberately, so the shell
 always has somewhere to type.  Under `agent-shell-chat-mode' that prompt
@@ -151,14 +169,29 @@ renders as the ` Me ' badge and `❯' marker -- precisely the signal read
 as \"the agent is ready\" -- while it is in fact still handshaking,
 resuming and setting its session mode.
 
+Only the live prompt (`decknix--agent-chat-live-prompt-overlay') is
+touched.  This used to blank EVERY `agent-shell-chat-me' overlay in the
+buffer, which is wrong twice over on a resumed session: the restored
+history carries that same category, and one `before-string' encodes
+three separate things --
+
+    sent message   \"\\n Me \\n\\n\"        position + label
+    live prompt    \"\\n Me \\n\\n  ❯ \"    position + label + marker
+
+so emptying it stripped the leading newlines (the message lost its
+spacing and rendered jammed against the preceding line) and the ` Me '
+label that distinguishes a user turn from an agent turn, not just the
+input marker.  Measured on the #453 review session: 19 restored turns
+left permanently blank, and the just-sent message unlabelled.
+
 Clears `before-string' ONLY.  The overlay's `display' property is what
 hides the raw `Claude> ' text, so removing the overlay would replace a
 premature badge with a bare prompt string: a worse lie, not a smaller
 one.  Agent-side labels (`agent-shell-chat-agent') mark output that has
 genuinely happened and are left untouched."
-  (dolist (overlay (overlays-in (point-min) (point-max)))
-    (when (eq (overlay-get overlay 'category) 'agent-shell-chat-me)
-      (overlay-put overlay 'before-string ""))))
+  (let ((prompt (decknix--agent-chat-live-prompt-overlay)))
+    (when prompt
+      (overlay-put prompt 'before-string ""))))
 
 (provide 'decknix-agent-welcome)
 ;;; decknix-agent-welcome.el ends here

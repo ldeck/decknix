@@ -190,5 +190,71 @@ happened, so it stays."
     (insert "nothing here")
     (should (progn (decknix--agent-chat-blank-prompt-labels) t))))
 
+;; -- scope: only the LIVE prompt, never a sent message ----------------
+;;
+;; The suppression blanked EVERY `agent-shell-chat-me' overlay in the
+;; buffer.  A resumed session restores its history, so the buffer is full
+;; of past user messages carrying that same category -- measured on the
+;; #453 review session: 19 of them left permanently `before=""'.
+;;
+;; The damage is wider than a missing badge because one `before-string'
+;; carries three things at once:
+;;
+;;   sent message   "\n Me \n\n"        position + label
+;;   live prompt    "\n Me \n\n  ❯ "    position + label + input marker
+;;
+;; Blanking it destroys the leading newlines (so the message loses its
+;; spacing and renders jammed against whatever precedes it), the ` Me '
+;; label that distinguishes a user turn from an agent turn, AND the
+;; marker.  Only the marker is meant to go.
+
+(ert-deftest decknix-chat-blank-labels--spares-sent-messages ()
+  "A sent user message keeps its label and spacing; only the prompt is blanked.
+
+Observed: after submitting, the message rendered with no ` Me ' badge and
+jammed against the preceding line, because its `before-string' had been
+emptied along with the prompt's."
+  (with-temp-buffer
+    (insert "Please re-review\n\nClaude> ")
+    (let ((sent (make-overlay 1 17))
+          (prompt (make-overlay 19 (point-max))))
+      (overlay-put sent 'category 'agent-shell-chat-me)
+      (overlay-put sent 'before-string "\n Me \n\n")
+      (overlay-put prompt 'category 'agent-shell-chat-me)
+      (overlay-put prompt 'before-string "\n Me \n\n  ❯ ")
+      (decknix--agent-chat-blank-prompt-labels)
+      ;; The sent turn is history: untouched.
+      (should (equal "\n Me \n\n" (overlay-get sent 'before-string)))
+      ;; The live prompt is the input affordance: suppressed.
+      (should (equal "" (overlay-get prompt 'before-string))))))
+
+(ert-deftest decknix-chat-blank-labels--spares-restored-history ()
+  "A resumed session's restored history is never touched.
+Every past turn keeps its label, however many there are."
+  (with-temp-buffer
+    (insert "aaaa bbbb cccc dddd")
+    (let ((history (list (make-overlay 1 5) (make-overlay 6 10) (make-overlay 11 15)))
+          (prompt (make-overlay 16 (point-max))))
+      (dolist (o history)
+        (overlay-put o 'category 'agent-shell-chat-me)
+        (overlay-put o 'before-string "\n Me \n\n"))
+      (overlay-put prompt 'category 'agent-shell-chat-me)
+      (overlay-put prompt 'before-string "\n Me \n\n  ❯ ")
+      (decknix--agent-chat-blank-prompt-labels)
+      (dolist (o history)
+        (should (equal "\n Me \n\n" (overlay-get o 'before-string))))
+      (should (equal "" (overlay-get prompt 'before-string))))))
+
+(ert-deftest decknix-chat-blank-labels--single-overlay-is-the-prompt ()
+  "With only one chat-me overlay it IS the prompt, so it is blanked.
+This is the fresh-session case the suppression was written for."
+  (with-temp-buffer
+    (insert "Claude> ")
+    (let ((o (make-overlay 1 (point-max))))
+      (overlay-put o 'category 'agent-shell-chat-me)
+      (overlay-put o 'before-string "\n Me \n\n  ❯ ")
+      (decknix--agent-chat-blank-prompt-labels)
+      (should (equal "" (overlay-get o 'before-string))))))
+
 (provide 'decknix-agent-welcome-test)
 ;;; decknix-agent-welcome-test.el ends here
