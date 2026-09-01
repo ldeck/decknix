@@ -30,6 +30,19 @@
   ;; word so test fixtures can drive grouping by message content).
   (defun decknix--agent-conversation-key (msg)
     (when msg (car (split-string (or msg "") "[ \n]" t)))))
+;; Session-level resolver: first message, then the session-id store scan.
+;; Mirrors the real `decknix--agent-session-conv-key' so the grouping
+;; specs below still exercise message-based grouping, while the
+;; fallback-specific test can stub the store side independently.
+(unless (fboundp 'decknix--agent-conv-key-for-session-id)
+  (defun decknix--agent-conv-key-for-session-id (_sid) nil))
+(unless (fboundp 'decknix--agent-session-conv-key)
+  (defun decknix--agent-session-conv-key (session)
+    (when session
+      (let ((fm (alist-get 'firstUserMessage session ""))
+            (sid (alist-get 'sessionId session)))
+        (or (and fm (decknix--agent-conversation-key fm))
+            (and sid (decknix--agent-conv-key-for-session-id sid)))))))
 (unless (fboundp 'decknix--agent-conversation-hidden-p)
   (defun decknix--agent-conversation-hidden-p (_key) nil))
 (unless (fboundp 'decknix--agent-conv-last-accessed)
@@ -121,12 +134,38 @@
                             (list s) t)))))))
 
 (ert-deftest decknix-agent-session-group/skips-empty-first-message-keys ()
-  "Sessions whose conversation-key is nil are skipped silently."
+  "A session that resolves to NO conversation at all is skipped silently.
+Neither its message nor the store knows it, so there is no conversation
+to group it under."
   (let ((s (decknix-agent-session-group-test--session
             "s" "" "2026-05-08T01:00:00Z")))
     (cl-letf (((symbol-function 'decknix--agent-conversation-key)
+               (lambda (_) nil))
+              ((symbol-function 'decknix--agent-conv-key-for-session-id)
                (lambda (_) nil)))
       (should-not (decknix--agent-session-group-by-conversation (list s))))))
+
+(ert-deftest decknix-agent-session-group/groups-a-resumed-session-via-the-store ()
+  "A resumed/forked session groups under its conversation, not dropped.
+
+Its first message is the resume primer or fork preamble, which keys no
+conversation -- and the `when conv-key' guard used to DROP it, so a whole
+conversation could vanish from the collapsed `C-c s s' view even though
+its sessions were listed and correctly tagged.  Observed with day6:
+three sessions on disk, all tagged, no row in the picker.
+
+The session-id is stable across resume and fork, so the store scan
+recovers the conversation the hash cannot."
+  (let ((s (decknix-agent-session-group-test--session
+            "sid-day6" "This message is a resumed continuation"
+            "2026-05-08T01:00:00Z")))
+    (cl-letf (((symbol-function 'decknix--agent-conversation-key)
+               (lambda (_) nil))            ; primer keys nothing
+              ((symbol-function 'decknix--agent-conv-key-for-session-id)
+               (lambda (sid) (when (equal sid "sid-day6") "756afa19"))))
+      (let ((groups (decknix--agent-session-group-by-conversation (list s))))
+        (should (= 1 (length groups)))
+        (should (equal (car (car groups)) "756afa19"))))))
 
 ;; -- live-label --------------------------------------------------
 

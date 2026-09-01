@@ -66,6 +66,8 @@
 ;; `decknix--agent-latest-session-id-for-conv-key').
 (declare-function decknix--agent-conversation-key
                   "decknix-agent-conv-resolve" (first-message))
+(declare-function decknix--agent-session-conv-key
+                  "decknix-agent-conv-resolve" (session))
 (declare-function decknix--agent-conv-resolve-key
                   "decknix-agent-conv-resolve" (conv-key))
 (declare-function decknix--agent-conversation-key-for-session
@@ -408,9 +410,7 @@ Prompts for a tag, then shows the latest session per matching conversation."
                (chosen (cdr (assoc selection entries)))
                (session (cdr chosen))
                (session-id (alist-get 'sessionId session)))
-          (let ((conv-key (decknix--agent-conversation-key
-                           (alist-get 'firstUserMessage
-                                      session ""))))
+          (let ((conv-key (decknix--agent-session-conv-key session)))
             (decknix--agent-session-resume
              session-id
              decknix-agent-session-history-count

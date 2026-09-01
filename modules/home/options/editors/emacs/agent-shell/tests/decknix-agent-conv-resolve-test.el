@@ -398,5 +398,65 @@ however the untagged one sorts or when it was last touched."
     (should (equal (decknix--agent-conv-key-scan-for-session-id convs "sid-X")
                    "bbb"))))
 
+;; -- session conv-key with the session-id fallback --------------------
+;;
+;; The pattern that has now bitten in four places.  A session's conv-key
+;; is derived by hashing its own first message, but a RESUMED session's
+;; first message is the resume primer and a FORKED session's is the fork
+;; preamble -- and since 2c0ada6 neither keys a conversation.  So every
+;; caller that resolves "which conversation is this session in?" from the
+;; first message alone gets nil for exactly those sessions:
+;;
+;;   tags-for-session          picker row tags        (fixed ec7b161)
+;;   session-display-name      buffer name            (fixed ec7b161)
+;;   saved-source ws filter    session vanishes       (this sweep)
+;;   conversation-key-for-session   central resolver  (this sweep)
+;;
+;; The session-id is stable across resume and fork, which is why the
+;; store scan succeeds where the hash cannot.
+
+(ert-deftest decknix-cr/session-conv-key--prefers-the-first-message ()
+  "A session whose own first message keys a conversation uses that key."
+  (cl-letf (((symbol-function 'decknix--agent-conversation-key)
+             (lambda (_) "from-message"))
+            ((symbol-function 'decknix--agent-conv-key-for-session-id)
+             (lambda (_) "from-store")))
+    (should (equal (decknix--agent-session-conv-key
+                    '((sessionId . "sid-1") (firstUserMessage . "real prompt")))
+                   "from-message"))))
+
+(ert-deftest decknix-cr/session-conv-key--falls-back-to-the-store ()
+  "A resumed/forked session resolves via its stable session-id.
+This is the case that made day6 invisible: the primer keys nothing, so
+without the fallback the session has no conversation at all."
+  (cl-letf (((symbol-function 'decknix--agent-conversation-key)
+             (lambda (_) nil))
+            ((symbol-function 'decknix--agent-conv-key-for-session-id)
+             (lambda (sid) (when (equal sid "sid-1") "756afa19"))))
+    (should (equal (decknix--agent-session-conv-key
+                    '((sessionId . "sid-1")
+                      (firstUserMessage . "This message is a resumed continuation")))
+                   "756afa19"))))
+
+(ert-deftest decknix-cr/session-conv-key--nil-when-neither-resolves ()
+  "Unknown session with an unkeyable message yields nil, not an error."
+  (cl-letf (((symbol-function 'decknix--agent-conversation-key)
+             (lambda (_) nil))
+            ((symbol-function 'decknix--agent-conv-key-for-session-id)
+             (lambda (_) nil)))
+    (should-not (decknix--agent-session-conv-key
+                 '((sessionId . "sid-x") (firstUserMessage . "primer"))))))
+
+(ert-deftest decknix-cr/session-conv-key--tolerates-missing-fields ()
+  "A session alist missing either field must not error.
+It runs over every row the picker builds."
+  (cl-letf (((symbol-function 'decknix--agent-conversation-key)
+             (lambda (_) nil))
+            ((symbol-function 'decknix--agent-conv-key-for-session-id)
+             (lambda (_) nil)))
+    (should-not (decknix--agent-session-conv-key nil))
+    (should-not (decknix--agent-session-conv-key '((sessionId . "s"))))
+    (should-not (decknix--agent-session-conv-key '((firstUserMessage . "m"))))))
+
 (provide 'decknix-agent-conv-resolve-test)
 ;;; decknix-agent-conv-resolve-test.el ends here

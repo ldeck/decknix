@@ -43,6 +43,8 @@
 ;; the heredoc, so they always resolve at call time.
 (declare-function decknix--agent-conversation-key
                   "decknix-agent-conv-resolve" (first-message))
+(declare-function decknix--agent-session-conv-key
+                  "decknix-agent-conv-resolve" (session))
 (declare-function decknix--agent-conversation-hidden-p
                   "decknix-agent-shell-main" (conv-key))
 (declare-function decknix--agent-conv-last-accessed
@@ -76,8 +78,13 @@ so that tag/rename/resume operations bump a conversation to the top,
 not just augment writing to the session file."
   (let ((groups (make-hash-table :test 'equal)))
     (dolist (s sessions)
-      (let* ((first-msg (alist-get 'firstUserMessage s ""))
-             (conv-key (decknix--agent-conversation-key first-msg)))
+      ;; Resolve via the session-id fallback, not the first message alone:
+      ;; a resumed/forked session's preamble keys no conversation, and the
+      ;; `when conv-key' guard below would DROP it from the grouped list
+      ;; entirely -- which is why a whole conversation (day6) could vanish
+      ;; from the collapsed `C-c s s' view even though its sessions were
+      ;; listed and tagged.
+      (let* ((conv-key (decknix--agent-session-conv-key s)))
         (when (and conv-key
                    (or include-hidden
                        (not (decknix--agent-conversation-hidden-p conv-key))))

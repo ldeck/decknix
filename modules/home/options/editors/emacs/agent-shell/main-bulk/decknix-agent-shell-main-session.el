@@ -48,6 +48,8 @@
 
 ;; Forward declarations for upstream agent-shell + shell-maker + consult.
 (declare-function agent-shell-start "ext:agent-shell")
+(declare-function decknix--agent-session-conv-key
+                  "decknix-agent-conv-resolve" (session))
 (declare-function agent-shell-buffers "ext:agent-shell")
 (declare-function agent-shell-subscribe-to "ext:agent-shell")
 (declare-function agent-shell-unsubscribe "ext:agent-shell")
@@ -1499,8 +1501,7 @@ then calls ON-TOGGLE to reopen the picker with the new filter."
                     (if live-conv-keys
                         (seq-filter
                          (lambda (session)
-                           (let* ((first-msg (alist-get 'firstUserMessage session ""))
-                                  (ck (decknix--agent-conversation-key first-msg)))
+                           (let ((ck (decknix--agent-session-conv-key session)))
                              (not (member ck live-conv-keys))))
                          all)
                       all)))
@@ -1513,8 +1514,7 @@ then calls ON-TOGGLE to reopen the picker with the new filter."
                   (if (null ws-filter-true) sessions
                     (seq-filter
                      (lambda (session)
-                       (let* ((first-msg (alist-get 'firstUserMessage session ""))
-                              (ck (decknix--agent-conversation-key first-msg))
+                       (let* ((ck (decknix--agent-session-conv-key session))
                               (ws (when ck
                                     (decknix--agent-workspace-for-conv-key ck)))
                               (ws-true (when ws
@@ -1536,8 +1536,7 @@ then calls ON-TOGGLE to reopen the picker with the new filter."
                 ;; Pre-resolve workspace so :action doesn't need to
                 ;; re-derive conv-key (which can fail on large files).
                 (dolist (session sessions)
-                  (let* ((first-msg (alist-get 'firstUserMessage session ""))
-                         (conv-key (decknix--agent-conversation-key first-msg))
+                  (let* ((conv-key (decknix--agent-session-conv-key session))
                          (workspace (when conv-key
                                       (decknix--agent-workspace-for-conv-key
                                        conv-key)))
@@ -1578,9 +1577,7 @@ then calls ON-TOGGLE to reopen the picker with the new filter."
                      ;; Workspace was pre-resolved during :items
                      (workspace (alist-get '__workspace session)))
                 (when session
-                  (let ((conv-key (decknix--agent-conversation-key
-                                   (alist-get 'firstUserMessage
-                                              session ""))))
+                  (let ((conv-key (decknix--agent-session-conv-key session)))
                     ;; If no stored workspace, prompt the user so the
                     ;; session opens in the right directory.
                     (unless workspace
@@ -1733,8 +1730,7 @@ the off-by-one tail and RET appears to do nothing."
       (let* ((session (gethash key decknix--session-picker-saved-map))
              (workspace (alist-get '__workspace session)))
         (when session
-          (let ((conv-key (decknix--agent-conversation-key
-                           (alist-get 'firstUserMessage session ""))))
+          (let ((conv-key (decknix--agent-session-conv-key session)))
             (let ((main (window-main-window (selected-frame))))
               (when (and main (window-live-p main))
                 (select-window main))
@@ -1819,8 +1815,7 @@ Prompts once before touching anything, then calls
                (gethash key decknix--session-picker-saved-map))
           (let* ((session (gethash key decknix--session-picker-saved-map))
                  (sid (alist-get 'sessionId session))
-                 (conv-key (decknix--agent-conversation-key
-                            (alist-get 'firstUserMessage session ""))))
+                 (conv-key (decknix--agent-session-conv-key session)))
             (when sid
               (push (cons sid conv-key) deletable)))))))
     ;; Report live refusals
@@ -2529,8 +2524,7 @@ typed search term."
                   decknix--agent-grep-reopen nil)
           (when chosen
             (let* ((s (cdr chosen))
-                   (first-msg (alist-get 'firstUserMessage s ""))
-                   (conv-key (decknix--agent-conversation-key first-msg))
+                   (conv-key (decknix--agent-session-conv-key s))
                    (workspace (when conv-key
                                 (decknix--agent-workspace-for-conv-key
                                  conv-key))))
