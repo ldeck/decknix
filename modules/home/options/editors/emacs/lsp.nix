@@ -5,19 +5,16 @@ with lib;
 let
   cfg = config.programs.emacs.decknix.lsp;
 
-  # Kotlin LSP choice.  JetBrains' official kotlin-lsp (via nix-casks) is the
-  # only server that resolves modern Gradle monorepos — centralised repos,
-  # Google Artifact Registry, JDK 25, Kotlin 2.3 (fwcd/kotlin-language-server
-  # 1.3.13 cannot; verified on the upside monolith, see #170).  The cask is
-  # macOS-only, so fall back to fwcd elsewhere / if unavailable.
+  # Kotlin LSP choice.  JetBrains' official kotlin-lsp is IntelliJ-powered and
+  # is the only server that resolves modern Gradle monorepos — centralised
+  # repos, Google Artifact Registry, JDK 25, Kotlin 2.3 (fwcd's 1.3.13 cannot;
+  # see #170).  We are NOT using it yet: see `useJetBrainsLsp' below.
   jetbrainsKotlinLsp =
     inputs.nix-casks.packages.${pkgs.stdenv.hostPlatform.system}.kotlin-lsp or null;
   useJetBrainsKotlin =
     cfg.kotlin.enable && cfg.kotlin.useJetBrainsLsp && jetbrainsKotlinLsp != null;
   kotlinPkg = if useJetBrainsKotlin then jetbrainsKotlinLsp else pkgs.kotlin-language-server;
-  # Eglot server-programs command for Kotlin (elisp list literal).  JetBrains
-  # kotlin-lsp speaks LSP over stdio with `--stdio' (verify with
-  # `kotlin-lsp --help' after switch if this ever changes).
+  # Eglot server-programs command for Kotlin (elisp list literal).
   kotlinServerElisp =
     if useJetBrainsKotlin then ''("kotlin-lsp" "--stdio")'' else ''("kotlin-language-server")'';
 in
@@ -42,14 +39,32 @@ in
 
     kotlin.useJetBrainsLsp = mkOption {
       type = types.bool;
-      default = pkgs.stdenv.hostPlatform.isDarwin;
+      default = false;
       description = ''
-        Use JetBrains' official kotlin-lsp (via nix-casks) instead of
-        fwcd/kotlin-language-server.  The JetBrains server is IntelliJ-powered
-        and resolves modern Gradle monorepos (centralised repositories, Google
-        Artifact Registry, JDK 25+, Kotlin 2.3+) that fwcd's 1.3.13 cannot
-        (#170).  The cask is macOS-only; where unavailable this silently falls
-        back to fwcd/kotlin-language-server.
+        Use JetBrains' official kotlin-lsp instead of fwcd/kotlin-language-server.
+
+        OFF by default because the nix-casks route is BROKEN, and turning it on
+        breaks Kotlin LSP entirely rather than degrading it.  nix-casks
+        auto-generates the cask's `binary' stanza but never unpacks the `.sit'
+        payload: the derivation builds, the attribute resolves
+        (`kotlin-lsp-262.9593.0'), and the output is a 0 MB stub whose
+        `bin/kotlin-lsp' is a DANGLING symlink to a `kotlin-server-*/kotlin-lsp.sh'
+        that was never extracted.  Eglot then reports
+
+            [eglot] (warning) Searching for program: No such file or directory, kotlin-lsp
+
+        and no Kotlin server runs at all, even though fwcd's is installed.
+        Verifying that the attribute resolved was not evidence the binary worked.
+
+        Re-enabling this needs a real derivation, not this input.  The groundwork:
+        JetBrains' standalone archive
+        (`kotlin-server-<ver>-aarch64.sit', linked from the Kotlin/kotlin-lsp
+        release notes) is despite its extension a plain ZIP (`PK\x03\x04'), so
+        `unzip' unpacks it — no StuffIt handling required — and it ships the
+        `kotlin-lsp.sh' launcher meant for editors other than VS Code.  Note the
+        VS Code `.vsix' build is NOT a substitute: it launches
+        `intellij-server --socket 0', i.e. TCP on an ephemeral port, not stdio,
+        so `kotlinServerElisp' above would also need rewriting for it.
       '';
     };
 
