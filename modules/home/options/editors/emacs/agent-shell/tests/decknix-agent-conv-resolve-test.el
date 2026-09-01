@@ -321,5 +321,82 @@ fragment, so a write consolidates instead of scattering."
     (should (null (decknix--agent-conv-key-scan-for-session-id convs "sid-Z")))
     (should (null (decknix--agent-conv-key-scan-for-session-id nil "sid-A")))))
 
+;; -- contested claims: which tagged conversation owns the session? ----
+;;
+;; A session can end up listed under SEVERAL conversations (43 of 371 in
+;; the live store; 12 with more than one TAGGED claimant).  The scan then
+;; decides which conversation's tags the session displays under -- and it
+;; decided by lexicographic conv-key, which is deterministic but
+;; arbitrary: it has nothing to do with which conversation is right.
+;;
+;; Observed: session 122adc26 belonged to `756afa19' (day6, dos, log,
+;; july, 28) and was also claimed by `2a94df56' (fix).  `2' sorts before
+;; `7', so it displayed as `fix' and the user could not find their day6
+;; session at all.
+;;
+;; ANCHORING is the ground truth available here: a conversation is
+;; anchored when its key is the hash of a member's own first message, so
+;; it is a real conversation rather than an accretion container.  In the
+;; observed case day6 was anchored and `fix' was not -- all five of its
+;; members were resume primers, which all hash alike.
+
+(ert-deftest decknix-cr/conv-key-scan--anchored-beats-alphabetical ()
+  "An anchored conversation wins over one that merely sorts first.
+This is the day6-vs-fix case: without it the session shows the wrong
+tags purely because `2' < `7'."
+  (let ((convs (decknix-cr-test--convs
+                (cons "2a94df56" (decknix-cr-test--entry '("sid-X") "tags" '("fix")))
+                (cons "756afa19" (decknix-cr-test--entry '("sid-X") "tags" '("day6"))))))
+    (should (equal (decknix--agent-conv-key-scan-for-session-id
+                    convs "sid-X" (lambda (k) (equal k "756afa19")))
+                   "756afa19"))))
+
+(ert-deftest decknix-cr/conv-key-scan--recency-breaks-unanchored-ties ()
+  "With no anchor, the most recently used conversation wins.
+Where you last worked is a better guess than alphabetical order."
+  (let ((convs (decknix-cr-test--convs
+                (cons "aaa" (decknix-cr-test--entry
+                             '("sid-X") "tags" '("old")
+                             "lastAccessed" "2026-07-01T00:00:00.000Z"))
+                (cons "zzz" (decknix-cr-test--entry
+                             '("sid-X") "tags" '("recent")
+                             "lastAccessed" "2026-08-30T00:00:00.000Z")))))
+    (should (equal (decknix--agent-conv-key-scan-for-session-id convs "sid-X")
+                   "zzz"))))
+
+(ert-deftest decknix-cr/conv-key-scan--anchor-outranks-recency ()
+  "A stale but anchored conversation still beats a recent container.
+day6 was last touched 2026-08-25 and `fix' 2026-08-31, so recency alone
+would have kept the wrong answer."
+  (let ((convs (decknix-cr-test--convs
+                (cons "container" (decknix-cr-test--entry
+                                   '("sid-X") "tags" '("fix")
+                                   "lastAccessed" "2026-08-31T00:00:00.000Z"))
+                (cons "real" (decknix-cr-test--entry
+                              '("sid-X") "tags" '("day6")
+                              "lastAccessed" "2026-08-25T00:00:00.000Z")))))
+    (should (equal (decknix--agent-conv-key-scan-for-session-id
+                    convs "sid-X" (lambda (k) (equal k "real")))
+                   "real"))))
+
+(ert-deftest decknix-cr/conv-key-scan--still-deterministic-without-signals ()
+  "With neither anchor nor timestamps, fall back to sorted key.
+Determinism is retained so the resolution never flickers between calls."
+  (let ((convs (decknix-cr-test--convs
+                (cons "zzz" (decknix-cr-test--entry '("sid-Y") "tags" '("a")))
+                (cons "mmm" (decknix-cr-test--entry '("sid-Y") "tags" '("b"))))))
+    (should (equal (decknix--agent-conv-key-scan-for-session-id convs "sid-Y")
+                   "mmm"))))
+
+(ert-deftest decknix-cr/conv-key-scan--metadata-still-beats-bare ()
+  "The original contract holds: a tagged entry outranks an untagged one,
+however the untagged one sorts or when it was last touched."
+  (let ((convs (decknix-cr-test--convs
+                (cons "aaa" (decknix-cr-test--entry
+                             '("sid-X") "lastAccessed" "2026-09-01T00:00:00.000Z"))
+                (cons "bbb" (decknix-cr-test--entry '("sid-X") "tags" '("real"))))))
+    (should (equal (decknix--agent-conv-key-scan-for-session-id convs "sid-X")
+                   "bbb"))))
+
 (provide 'decknix-agent-conv-resolve-test)
 ;;; decknix-agent-conv-resolve-test.el ends here
