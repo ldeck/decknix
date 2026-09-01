@@ -6221,9 +6221,7 @@ duration -- the most important number on this branch."
                       (let ((main (window-main-window (selected-frame))))
                         (when (and main (window-live-p main))
                           (select-window main)))
-                      (let ((conv-key (decknix--agent-conversation-key
-                                       (alist-get 'firstUserMessage
-                                                  saved ""))))
+                      (let ((conv-key (decknix--agent-session-conv-key saved)))
                         (decknix--agent-session-resume
                          session-id
                          decknix-agent-session-history-count

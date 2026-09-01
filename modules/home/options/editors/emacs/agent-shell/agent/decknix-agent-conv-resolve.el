@@ -89,8 +89,37 @@ answer (resume, require-conv-key) omit it and accept the brief block."
                             (string= (alist-get 'sessionId s) session-id))
                           sessions)))
     (when match
-      (decknix--agent-conversation-key
-       (alist-get 'firstUserMessage match "")))))
+      (decknix--agent-session-conv-key match))))
+
+(defun decknix--agent-session-conv-key (session)
+  "Return the conversation key for SESSION (a session alist), or nil.
+
+Hashes the session's own first message first, then falls back to
+scanning the store for an entry LISTING its session-id.
+
+The fallback is not an optimisation, it is the only thing that works for
+a RESUMED or FORKED session.  Their first messages are the resume primer
+and the fork preamble, and since 2c0ada6 neither keys a conversation --
+by design, because those preambles are identical across sessions and
+used to collapse them all into one bucket.  Deriving a session's
+conversation from its first message therefore yields nil for exactly
+those sessions, and every caller that did so lost them:
+
+    tags-for-session         the picker row showed no tags
+    session-display-name     the buffer had no name
+    saved-source ws filter   the session vanished from `C-c s s'
+
+The session-id is stable across resume and fork, which is precisely why
+the store scan succeeds where the hash cannot.
+
+Callers holding a session alist should use THIS rather than
+`decknix--agent-conversation-key' on the raw first message."
+  (when session
+    (let ((fm (alist-get 'firstUserMessage session ""))
+          (sid (alist-get 'sessionId session)))
+      (or (and fm (decknix--agent-conversation-key fm))
+          (and sid (stringp sid) (not (string-empty-p sid))
+               (decknix--agent-conv-key-for-session-id sid))))))
 
 (defun decknix--agent-conv-key-store-sessions (conv-key)
   "Return the session-ids recorded under CONV-KEY in the tag store.
