@@ -175,6 +175,13 @@
 (declare-function decknix-hub-worktree-list "ext:decknix-agent-shell-main")
 (declare-function decknix-hub-worktree-find "ext:decknix-agent-shell-main")
 (declare-function decknix-hub-worktree-primary "ext:decknix-agent-shell-main")
+;; #165 review worktrees (pure layer in review-worktree/).
+(declare-function decknix--review-worktree-plan
+                  "decknix-agent-review-worktree" (primary number &optional exists-fn))
+(declare-function decknix--review-worktree-fetch-args
+                  "decknix-agent-review-worktree" (number))
+(declare-function decknix--review-worktree-add-args
+                  "decknix-agent-review-worktree" (path))
 ;; Sidebar-toggles symbols (in decknix-sidebar-toggles).
 (declare-function decknix-sidebar-toggle-keys "decknix-sidebar-toggles")
 (declare-function decknix-sidebar-toggle-saved-sessions "decknix-sidebar-toggles")
@@ -2549,6 +2556,56 @@ window via the re-review path's `pop-to-buffer'."
      (t
       (decknix--nav-hub-start-review-fresh url background parsed)))))
 
+(defun decknix--review-worktree-ensure-then (owner repo number on-ready)
+  "Resolve a review worktree for OWNER/REPO PR NUMBER, then call ON-READY.
+
+ON-READY receives the worktree path, or nil to mean \"carry on without
+one\".  Nil is passed whenever a worktree cannot be produced -- no local
+clone, a fetch that fails, an add that fails -- so a review ALWAYS
+launches.  Degrading to the old workspace-root behaviour costs the
+Emacs-native diff (#165 step 3); refusing to launch would cost the
+review, which is much worse.
+
+Fully asynchronous: `git fetch' hits the network, and per the Emacs
+AGENTS.md performance rule no interactive path may block on that.  The
+session is started from the callback once the tree is on disk."
+  (let* ((slug (format "%s/%s" owner repo))
+         (primary (and (fboundp 'decknix-hub-worktree-primary)
+                       (ignore-errors (decknix-hub-worktree-primary slug))))
+         (plan (decknix--review-worktree-plan primary number)))
+    (pcase (car plan)
+      ('no-clone
+       (funcall on-ready nil))
+      ('reuse
+       ;; Re-review of a PR we already have checked out.  `git worktree
+       ;; add' errors on an existing path, so reuse rather than recreate.
+       (funcall on-ready (cdr plan)))
+      ('create
+       (let ((path (cdr plan)))
+         (condition-case err
+             (progn
+               (make-directory (file-name-directory path) t)
+               (message "Preparing review worktree for %s#%s…" slug number)
+               ;; Plain closures: this file is lexical-binding, so the
+               ;; heredoc's `(eval `(lambda ...) t)' capture workaround is
+               ;; not needed and would only obscure the chain.
+               (decknix--hub-worktree-git-async
+                primary (decknix--review-worktree-fetch-args number) slug
+                ;; fetch ok -> add the detached worktree
+                (lambda (_out)
+                  (decknix--hub-worktree-git-async
+                   primary (decknix--review-worktree-add-args path) slug
+                   (lambda (_o) (funcall on-ready path))
+                   ;; add failed -> launch without a worktree
+                   (lambda (_o) (funcall on-ready nil))))
+                ;; fetch failed (deleted PR ref, offline, no origin) ->
+                ;; launch without a worktree rather than not at all.
+                (lambda (_out) (funcall on-ready nil))))
+           (error
+            (message "Review worktree setup failed (%s); continuing without one"
+                     (error-message-string err))
+            (funcall on-ready nil))))))))
+
 (defun decknix--nav-hub-start-review-fresh (url background parsed)
   "Spawn a brand-new review session for URL.
 The original body of `decknix--nav-hub-start-review', split out so the
@@ -2579,10 +2636,22 @@ BACKGROUND is as documented on the caller."
         (unless background
           (when (and main (window-live-p main))
             (select-window main)))
-        (decknix--agent-quickaction-start
-         name tags workspace command model provider mode background)
-        (message "Starting review%s: %s/%s#%s"
-                 (if background " [background]" "") owner repo number)))))
+        ;; #165: run the review in a worktree checked out at the PR head
+        ;; rather than at the workspace root, so there is a real tree to
+        ;; diff against.  Asynchronous (it fetches), and it yields nil
+        ;; rather than failing when no worktree can be made -- in which
+        ;; case we launch exactly as before.
+        (decknix--review-worktree-ensure-then
+         owner repo number
+         (lambda (worktree)
+           (decknix--agent-quickaction-start
+            name tags (or worktree workspace) command model provider mode background)
+           (message "Starting review%s: %s/%s#%s%s"
+                    (if background " [background]" "") owner repo number
+                    (if worktree
+                        (format " [worktree %s]" (file-name-nondirectory
+                                                  (directory-file-name worktree)))
+                      ""))))))))
 
 ;; PR B.51: `decknix--hub-review-ready-requests' and
 ;; `decknix--hub-review-entries' carved into
@@ -4450,10 +4519,16 @@ exit-0.  Errors are reported via `message'."
        (when (buffer-live-p buf) (kill-buffer buf))
        (message "decknix wt spawn error: %s" (error-message-string err))))))
 
-(defun decknix--hub-worktree-git-async (primary args repo on-success)
+(defun decknix--hub-worktree-git-async (primary args repo on-success &optional on-failure)
   "Run `git -C PRIMARY ARGS' asynchronously for REPO.
 On exit-0 invokes ON-SUCCESS (a function of one argument: stdout).
-Always refreshes the registry for REPO when the process exits."
+On non-zero exit invokes ON-FAILURE, when given, with the same argument;
+without it the failure is only reported via `message' as before.
+
+ON-FAILURE exists because a caller CHAINING these calls (review worktree
+setup fetches, then adds) would otherwise stall silently forever on the
+first failing step -- there would be no callback to continue or fall
+back from.  Optional, so existing single-shot callers are unaffected."
   (let* ((primary (expand-file-name primary))
          (buf (generate-new-buffer " *hub-worktree-git*")))
     (condition-case err
@@ -4484,7 +4559,9 @@ Always refreshes the registry for REPO when the process exits."
                               (message "git %s failed (%d): %s"
                                        ',(car args) code
                                        (string-trim
-                                        (or out "")))))
+                                        (or out "")))
+                              (when ',on-failure
+                                (funcall ,on-failure (or out "")))))
                           (when (buffer-live-p
                                  (process-buffer proc))
                             (kill-buffer (process-buffer proc)))
