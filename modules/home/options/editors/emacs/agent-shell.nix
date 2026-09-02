@@ -2031,9 +2031,10 @@ let
   decknix-agent-session-id-el = mkEmacsTestedPackage {
     pname = "decknix-agent-session-id";
     src = ./agent-shell/agent;
-    # Soft-requires `decknix-session-state' to classify live sessions;
-    # declared here so it is loaded before the board's `(require ... nil t)'.
+    # Buffer-scoped conversation lookup is the authoritative first choice in
+    # `decknix--agent-require-conv-key'; session-state decorates live sessions.
     packageRequires = [
+      decknix-agent-buffer-lookup-el
       decknix-session-state-el
     ];
     testFiles = [
@@ -2405,10 +2406,12 @@ let
     # `decknix--agent-review-get-params'.
     # `decknix-agent-spawn-queue' paces bulk saved-session restores so
     # a multi-select resume does not cold-start dozens of Claude/Pi
-    # bridges at once.
+    # bridges at once.  `decknix-agent-conv-resolve' supplies the
+    # conversation key read by the saved-session picker dispatch path.
     packageRequires = [ decknix-picker-selections-el
                         decknix-agent-session-bulk-send-el
                         decknix-agent-provider-el
+                        decknix-agent-conv-resolve-el
                         decknix-agent-purposes-el
                         decknix-agent-picker-category-el
                         decknix-agent-spawn-queue-el ];
