@@ -309,5 +309,55 @@ The overlay must reach the process mark to count as the input prompt."
         (decknix--agent-chat-blank-prompt-labels)
         (should (equal "" (overlay-get o 'before-string)))))))
 
+
+;; -- Agents-tab isolation: buffers that belong beside their session ---
+;;
+;; agent-shell isolates the Agents tab via a `display-buffer-alist' entry
+;; (`agent-shell-workspace--redirect-display'), which switches to the
+;; previous tab for any buffer `--agent-buffer-p' does not recognise.
+;; `display-buffer-alist' is consulted BEFORE the action argument, so no
+;; action a caller passes can prevent it -- measured during a real
+;; `C-c s c':
+;;
+;;     tab 1 -> 0  frame unchanged  action-fns=(display-buffer-below-selected)
+;;
+;; Two earlier fixes tuned that action list and were therefore both
+;; inert.  The fix is to classify the viewer correctly instead.
+
+(ert-deftest decknix-tab-resident--context-viewer-stays ()
+  "The context viewer belongs on the Agents tab beside its session."
+  (let ((b (generate-new-buffer "*Agent Context: *Claude: foo**")))
+    (unwind-protect (should (decknix--agent-tab-resident-p b))
+      (kill-buffer b))))
+
+(ert-deftest decknix-tab-resident--ordinary-buffers-are-not-exempt ()
+  "Isolation still applies to genuinely foreign buffers.
+The mechanism is deliberate; this only corrects a misclassification."
+  (dolist (n '("*scratch*" "README.md" "*Messages*" "*decknix*"))
+    (let ((b (generate-new-buffer n)))
+      (unwind-protect (should-not (decknix--agent-tab-resident-p b))
+        (kill-buffer b)))))
+
+(ert-deftest decknix-tab-resident--advice-widens-never-narrows ()
+  "The advice only ADDS to what upstream already accepts."
+  (let ((b (generate-new-buffer "*Agent Context: x*"))
+        (other (generate-new-buffer "*random*")))
+    (unwind-protect
+        (progn
+          ;; upstream says yes -> still yes
+          (should (decknix--agent-tab-resident-advice (lambda (_) t) other))
+          ;; upstream says no, ours says yes -> yes
+          (should (decknix--agent-tab-resident-advice (lambda (_) nil) b))
+          ;; both say no -> no
+          (should-not (decknix--agent-tab-resident-advice (lambda (_) nil) other)))
+      (kill-buffer b) (kill-buffer other))))
+
+(ert-deftest decknix-tab-resident--tolerates-dead-and-nil ()
+  "Runs on every display-buffer decision, so it must never error."
+  (let ((dead (generate-new-buffer "*Agent Context: gone*")))
+    (kill-buffer dead)
+    (should-not (decknix--agent-tab-resident-p dead))
+    (should-not (decknix--agent-tab-resident-p nil))))
+
 (provide 'decknix-agent-welcome-test)
 ;;; decknix-agent-welcome-test.el ends here

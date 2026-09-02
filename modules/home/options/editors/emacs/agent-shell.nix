@@ -4201,6 +4201,16 @@ ${optionalString cfg.tableOverlay.enable ''
         ;;    relabel once to bring it back.
         (declare-function decknix--agent-chat-blank-prompt-labels
                           "decknix-agent-welcome")
+        ;; Agents-tab isolation: keep decknix per-session buffers on the
+        ;; Agents tab.  `agent-shell-workspace--redirect-display' sits in
+        ;; `display-buffer-alist', which is consulted BEFORE any action a
+        ;; caller passes -- so this classification is the only lever.  See
+        ;; `decknix-agent-tab-resident-regexps'.
+        (declare-function decknix--agent-tab-resident-advice
+                          "decknix-agent-welcome" (orig buffer))
+        (with-eval-after-load 'agent-shell-workspace
+          (advice-add 'agent-shell-workspace--agent-buffer-p :around
+                      #'decknix--agent-tab-resident-advice))
         (defvar decknix--agent-shell-init-finished)
         (defun decknix--agent-chat-suppress-early-prompt (&rest _)
           "Blank the prompt label while this shell is still initializing."
