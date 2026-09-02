@@ -257,5 +257,63 @@ Add patterns for any other per-session surface that should stay put."
   (or (funcall orig buffer)
       (decknix--agent-tab-resident-p buffer)))
 
+
+;; ---------------------------------------------------------------------------
+;; Never blank a label that is already there
+;; ---------------------------------------------------------------------------
+
+(defun decknix--agent-chat-preserve-label (existing props)
+  "Return PROPS with a label-destroying `before-string' entry removed.
+
+EXISTING is the overlay's current `before-string'.  When PROPS would set
+that to the empty string while EXISTING holds a real label, the entry is
+dropped so the label survives; PROPS is returned unchanged otherwise.
+
+`agent-shell-chat--label-prompts' classifies each prompt run and, for one
+it judges BLANK, emits `before-string' the empty string:
+
+    ;; An empty submission (blank but not the live prompt)
+    ;; is not labeled: only the live prompt shows an empty `Me'.
+    (blank <empty string>)
+
+On a RESUMED session that misfires.  The replay rebuilds every overlay in
+the restored region, and runs whose text does not reproduce the structure
+`agent-shell-chat--prompt-runs' expects come back classified blank -- so
+turns that had a ` Me ' badge lose it.  Caught with a probe on
+`overlay-put' during a real resume + `/show-context':
+
+    [blanked] buf=*Claude: test/create/session* ov=25156..25157
+              init=t was=<a real ` Me ' label>
+
+`init=t' proves this is not decknix's own bootstrap suppression (which
+only runs while init is unfinished, and writes via `overlay-put'
+directly rather than through the upsert path this guards).
+
+Deliberately one-directional: a label may be SET or CHANGED, never
+emptied.  A run that legitimately becomes blank keeps a stale badge,
+which is a far smaller cost than silently losing the marker that
+distinguishes your turn from the agent's."
+  (if (and (equal "" (alist-get 'before-string props))
+           existing
+           (stringp existing)
+           (not (string-empty-p existing)))
+      (assq-delete-all 'before-string (copy-sequence props))
+    props))
+
+(defun decknix--agent-chat-upsert-advice (orig category anchor-beg anchor-end beg end props)
+  "Around-advice for `agent-shell-chat--upsert-overlay': keep real labels.
+Only `agent-shell-chat-me' overlays are guarded; agent-side labels and
+every other category pass through untouched."
+  (let ((props
+         (if (eq category 'agent-shell-chat-me)
+             (let* ((existing
+                     (car (seq-filter
+                           (lambda (o) (eq (overlay-get o 'category) category))
+                           (overlays-in anchor-beg (max anchor-end (1+ anchor-beg))))))
+                    (before (and existing (overlay-get existing 'before-string))))
+               (decknix--agent-chat-preserve-label before props))
+           props)))
+    (funcall orig category anchor-beg anchor-end beg end props)))
+
 (provide 'decknix-agent-welcome)
 ;;; decknix-agent-welcome.el ends here
