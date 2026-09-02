@@ -22,6 +22,11 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'decknix-agent-session-id)
+;; `decknix--agent-require-conv-key' prefers `decknix--agent-current-conv-key'
+;; (buffer-lookup).  Load it for real: an `fboundp' guard means an absent
+;; module degrades SILENTLY to the old derive-from-message path, so a
+;; stub would hide exactly the regression these tests exist to catch.
+(require 'decknix-agent-buffer-lookup nil t)
 
 ;; -- current-session-id -----------------------------------------
 
@@ -63,6 +68,10 @@
   (with-temp-buffer
     (cl-letf (((symbol-function 'derived-mode-p)
                (lambda (&rest modes) (memq 'agent-shell-mode modes)))
+              ;; No buffer-local key and no store scan: this test is about
+              ;; the DERIVE fallback, and `current-conv-key' would otherwise
+              ;; read the real ~/.config/decknix store.
+              ((symbol-function 'decknix--agent-current-conv-key) (lambda () nil))
               ((symbol-function 'decknix--agent-conversation-key-for-session)
                (lambda (sid) (concat "ck:" sid))))
       (setq decknix--agent-auggie-session-id "abc12345-6789")
@@ -74,6 +83,7 @@
   (with-temp-buffer
     (cl-letf (((symbol-function 'derived-mode-p)
                (lambda (&rest modes) (memq 'agent-shell-mode modes)))
+              ((symbol-function 'decknix--agent-current-conv-key) (lambda () nil))
               ((symbol-function 'decknix--agent-conversation-key-for-session)
                (lambda (_sid) nil)))
       ;; Need >=8 chars for the substring 0..8 hint.
@@ -87,6 +97,58 @@
                (lambda (_sid)
                  (error "Resolver should not be called when session id is nil"))))
       (should-error (decknix--agent-require-conv-key) :type 'user-error))))
+
+;; -- require-conv-key must agree with the buffer it is called in ------
+;;
+;; Reported: `C-c s t l' listed a pi session's seven tags, but `C-c s t r'
+;; answered "This conversation has no tags".  Measured on the live buffer:
+;;
+;;     buffer-local conv-key = e06099eb69ea3456   <- where the tags live
+;;     current-conv-key      = e06099eb69ea3456
+;;     require-conv-key      = b081f2b691929f3f   <- what tag-remove used
+;;
+;; `require-conv-key' recomputed the key by hashing the session's first
+;; message instead of trusting the key the buffer was actually filed
+;; under, so show and remove disagreed about which conversation you were
+;; in.  `decknix--agent-current-conv-key' already prefers the buffer-local
+;; key -- and its docstring describes this exact hazard -- so the fix is
+;; to route through it.
+;;
+;; The silent-corruption case is worse than the visible one: had the
+;; recomputed key existed in the store, `tag-add' would have written tags
+;; to the WRONG conversation, and `tag-remove' does `remhash' when the
+;; last tag goes.
+
+(ert-deftest decknix-session-id/require-conv-key-prefers-the-buffers-own-key ()
+  "The buffer's own conv-key wins over one recomputed from the message."
+  (with-temp-buffer
+    (setq-local major-mode 'agent-shell-mode)
+    (setq-local decknix--agent-conv-key "e06099")
+    (setq-local decknix--agent-auggie-session-id "sid-1")
+    (cl-letf (((symbol-function 'derived-mode-p) (lambda (m) (eq m 'agent-shell-mode)))
+              ((symbol-function 'decknix--agent-require-session-id)
+               (lambda () "sid-1"))
+              ;; the stale path: hashing the first message
+              ((symbol-function 'decknix--agent-conversation-key-for-session)
+               (lambda (&rest _) "b081f2b6")))
+      (should (equal (decknix--agent-require-conv-key) "e06099")))))
+
+(ert-deftest decknix-session-id/require-conv-key-falls-back-when-unbound ()
+  "With no buffer-local key, the session-id derivation is still used.
+A session that has not yet flushed its first message has no local key,
+and must still resolve."
+  (with-temp-buffer
+    (setq-local major-mode 'agent-shell-mode)
+    (setq-local decknix--agent-conv-key nil)
+    (setq-local decknix--agent-auggie-session-id "sid-1")
+    (cl-letf (((symbol-function 'derived-mode-p) (lambda (m) (eq m 'agent-shell-mode)))
+              ((symbol-function 'decknix--agent-require-session-id)
+               (lambda () "sid-1"))
+              ;; nil local key AND no scan hit, so the derive path is reached.
+              ((symbol-function 'decknix--agent-current-conv-key) (lambda () nil))
+              ((symbol-function 'decknix--agent-conversation-key-for-session)
+               (lambda (&rest _) "derived-key")))
+      (should (equal (decknix--agent-require-conv-key) "derived-key")))))
 
 (provide 'decknix-agent-session-id-test)
 ;;; decknix-agent-session-id-test.el ends here
