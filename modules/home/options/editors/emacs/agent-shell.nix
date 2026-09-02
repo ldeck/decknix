@@ -4211,6 +4211,20 @@ ${optionalString cfg.tableOverlay.enable ''
         (with-eval-after-load 'agent-shell-workspace
           (advice-add 'agent-shell-workspace--agent-buffer-p :around
                       #'decknix--agent-tab-resident-advice))
+        ;; Never let a relabel EMPTY a ` Me ' badge that is already there.
+        ;; `agent-shell-chat--label-prompts' writes `before-string' "" for a
+        ;; run it judges blank, and on a RESUMED session the replayed text
+        ;; does not reproduce the structure its parser expects -- so restored
+        ;; turns lost their badge.  Caught on `overlay-put' during a real
+        ;; resume with init-finished=t, which rules out our own bootstrap
+        ;; suppression.  One-directional: a label may be set or changed,
+        ;; never emptied.
+        (declare-function decknix--agent-chat-upsert-advice
+                          "decknix-agent-welcome"
+                          (orig category anchor-beg anchor-end beg end props))
+        (with-eval-after-load 'agent-shell-chat-mode
+          (advice-add 'agent-shell-chat--upsert-overlay :around
+                      #'decknix--agent-chat-upsert-advice))
         (defvar decknix--agent-shell-init-finished)
         (defun decknix--agent-chat-suppress-early-prompt (&rest _)
           "Blank the prompt label while this shell is still initializing."

@@ -359,5 +359,36 @@ The mechanism is deliberate; this only corrects a misclassification."
     (should-not (decknix--agent-tab-resident-p dead))
     (should-not (decknix--agent-tab-resident-p nil))))
 
+
+;; -- upstream must not blank a label that already exists ---------------
+
+(ert-deftest decknix-preserve-label--drops-a-blanking-write ()
+  "A `before-string' of \"\" over a real label is removed from PROPS."
+  (let ((props '((before-string . "") (display . "") (line-prefix . ""))))
+    (should-not (assq 'before-string
+                      (decknix--agent-chat-preserve-label "\n Me \n\n" props)))
+    ;; the other properties are untouched
+    (should (assq 'display
+                  (decknix--agent-chat-preserve-label "\n Me \n\n" props)))))
+
+(ert-deftest decknix-preserve-label--allows-setting-a-label ()
+  "Setting or changing a label is always allowed; only emptying is blocked."
+  (let ((props '((before-string . "\n Me \n\n"))))
+    (should (equal props (decknix--agent-chat-preserve-label nil props)))
+    (should (equal props (decknix--agent-chat-preserve-label "" props)))
+    (should (equal props (decknix--agent-chat-preserve-label "\n Me \n\n  x" props)))))
+
+(ert-deftest decknix-preserve-label--blank-over-blank-is-fine ()
+  "Emptying an already-empty label changes nothing and is left alone."
+  (let ((props '((before-string . ""))))
+    (should (equal props (decknix--agent-chat-preserve-label "" props)))
+    (should (equal props (decknix--agent-chat-preserve-label nil props)))))
+
+(ert-deftest decknix-preserve-label--does-not-mutate-the-caller-props ()
+  "The guard copies: upstream reuses its props list across runs."
+  (let ((props (list (cons 'before-string "") (cons 'display ""))))
+    (decknix--agent-chat-preserve-label "\n Me \n\n" props)
+    (should (assq 'before-string props))))
+
 (provide 'decknix-agent-welcome-test)
 ;;; decknix-agent-welcome-test.el ends here
