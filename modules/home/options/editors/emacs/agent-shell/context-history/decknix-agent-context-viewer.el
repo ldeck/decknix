@@ -238,12 +238,33 @@ Opens in a bottom window and positions point at the most recent turn."
       ;; `inhibit-switch-frame' stops another frame being raised.
       ;; `display-buffer-reuse-window' leads so re-invoking reuses the
       ;; viewer already open here instead of stacking a second one.
+      ;; Split the SELECTED window, and nothing else.
+      ;;
+      ;; Anything that HUNTS for an existing window can leave the current
+      ;; tab.  Measured with an `:around' probe on `display-buffer' during
+      ;; a real `C-c s c':
+      ;;
+      ;;   tab 1 -> 0   frame unchanged   win-frame = same frame
+      ;;   action = ((display-buffer-reuse-window display-buffer-at-bottom)
+      ;;             (reusable-frames) (inhibit-switch-frame . t) ...)
+      ;;
+      ;; The tab moved INSIDE `display-buffer' while the frame never did,
+      ;; so the earlier `reusable-frames'/`inhibit-switch-frame' pair was
+      ;; on the wrong axis entirely -- and `display-buffer-reuse-window',
+      ;; added at the same time to avoid stacking a second viewer, is what
+      ;; found the stale viewer window left on tab 0 and pulled selection
+      ;; there.
+      ;;
+      ;; `display-buffer-below-selected' splits the selected window, so it
+      ;; cannot select another tab or frame by construction.  Re-invoking
+      ;; now reuses the viewer only when it is already the window below
+      ;; (the split lands on the same spot); a copy stranded on another tab
+      ;; is left where it is rather than dragging the user to it.
       (let ((win (display-buffer
                   viewer
-                  '((display-buffer-reuse-window display-buffer-at-bottom)
-                    (reusable-frames . nil)
-                    (inhibit-switch-frame . t)
-                    (window-height . 0.4)))))
+                  '((display-buffer-below-selected)
+                    (window-height . 0.4)
+                    (inhibit-same-window . t)))))
         (when (window-live-p win)
           (select-window win)
           ;; Position point only after the window displays VIEWER so
