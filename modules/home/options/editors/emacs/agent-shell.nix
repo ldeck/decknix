@@ -7394,6 +7394,10 @@ mutated."
                       (define-key tag-map (kbd "l") 'decknix-agent-tag-show)
                       (define-key tag-map (kbd "a") 'decknix-agent-tag-add)
                       (define-key tag-map (kbd "r") 'decknix-agent-tag-remove)
+                      ;; C-c s t s — REPLACE the whole tag list.  add/remove
+                      ;; are one-at-a-time, which is the wrong shape when a
+                      ;; session has inherited a foreign tag set.
+                      (define-key tag-map (kbd "s") 'decknix-agent-tag-set)
                       (define-key map (kbd "t") tag-map)
                       (local-set-key (kbd "C-c s") map))
                     ;; which-key labels for C-c s session sub-prefix
