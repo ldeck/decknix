@@ -64,9 +64,33 @@
       (user-error "No auggie session ID for this buffer (is it a resumed session?)")))
 
 (defun decknix--agent-require-conv-key ()
-  "Get the conversation key for the current session, or error."
+  "Get the conversation key for the current session, or error.
+
+Prefers the key THIS buffer was filed under
+\(`decknix--agent-current-conv-key', which reads the buffer-local
+`decknix--agent-conv-key' first) and only then falls back to deriving one
+from the session-id.
+
+Deriving was the sole path, and it disagreed with the buffer.  Measured
+on a live pi session whose tags `C-c s t l' listed correctly:
+
+    buffer-local conv-key = e06099eb69ea3456   <- where the tags live
+    require-conv-key      = b081f2b691929f3f   <- recomputed from the
+                                                  first message
+
+so `C-c s t r' reported \"This conversation has no tags\" while `C-c s t
+l' showed seven.  Every tag verb that starts with this helper was acting
+on a different conversation from the one the user was looking at.
+
+The visible failure is the lucky case.  Had the recomputed key existed in
+the store, `decknix-agent-tag-add' would have written the user's tags
+into an unrelated conversation, and `decknix-agent-tag-remove' does
+`remhash' when the last tag goes -- silent corruption rather than an
+error message."
   (let* ((session-id (decknix--agent-require-session-id))
-         (conv-key (decknix--agent-conversation-key-for-session session-id)))
+         (conv-key (or (and (fboundp 'decknix--agent-current-conv-key)
+                            (decknix--agent-current-conv-key))
+                       (decknix--agent-conversation-key-for-session session-id))))
     (unless conv-key
       (user-error "Cannot determine conversation for session %s"
                   (substring session-id 0 8)))
@@ -86,6 +110,9 @@
 (defvar decknix--agent-provider-id)
 (defvar decknix--agent-session-workspace)
 (defvar decknix--agent-conv-key)
+(declare-function decknix--agent-current-conv-key
+                  "decknix-agent-buffer-lookup" ())
+
 (declare-function agent-shell-buffers "agent-shell" ())
 (declare-function decknix--agent-session-mode-for-conv-key
                   "decknix-agent-session-mode" (conv-key))
