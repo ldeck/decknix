@@ -312,6 +312,22 @@ let
   # which is what unblocks reviewing the diff inside Emacs (step 3).
   # Pure path/args/decision layer here; the async git chain and the
   # session launch live in workspace-bulk per Rule 2.
+  # Startup reattach to live brokers (#151, the missing half).  The
+  # broker survives an Emacs restart, but nothing looked for it
+  # afterwards -- measured: four brokers running, "agent buffers after:
+  # (no agent buffers)".  Pure discovery/decision here (which sockets are
+  # live, which are already attached, which conversation each belongs to,
+  # which are stale); the attach + buffer creation stay in the heredoc
+  # per Rule 2.
+  decknix-agent-broker-reattach-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-broker-reattach";
+    src = ./agent-shell/broker-reattach;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-broker-reattach-test.el"
+    ];
+  };
+
   decknix-agent-review-worktree-el = mkEmacsTestedPackage {
     pname = "decknix-agent-review-worktree";
     src = ./agent-shell/review-worktree;
@@ -3094,6 +3110,7 @@ in
           decknix-agent-heartbeat-watch-el
           decknix-agent-net-error-el
           decknix-agent-review-worktree-el
+          decknix-agent-broker-reattach-el
           decknix-agent-acp-trace-el
           decknix-record-el
           decknix-layout-groups-el
@@ -3591,6 +3608,7 @@ in
         ;; lifecycle threading land in a follow-up.  Default off -> no change.
         (require 'decknix-agent-session-broker)
         (require 'decknix-agent-broker-rehydrate)
+        (require 'decknix-agent-broker-reattach)
         (defvar decknix-agent-broker-enable)
         (setq decknix-agent-broker-enable ${
           if cfg.broker.enable then "t" else "nil"})
