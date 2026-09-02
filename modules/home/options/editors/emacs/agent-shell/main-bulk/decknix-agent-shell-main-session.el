@@ -2587,12 +2587,17 @@ Safety net for sessions created via any path (upstream `c', guided
    Handles new sessions where the input ring is empty at
    prompt-ready.
 
-2. `prompt-ready' subscription — for resumed sessions, the input
-   ring already carries history, so the conv-key can be derived
-   from the oldest entry without waiting for fresh input.
+2. `prompt-ready' subscription — persists the workspace against the
+   conv-key the buffer ALREADY carries (a resumed buffer is stamped
+   with one synchronously by `decknix--agent-session-resume--new').
+   It does NOT derive a key: it used to take the oldest
+   `comint-input-ring' entry, but that ring is shared across
+   sessions, so a new session inherited a foreign conversation --
+   see the comment on the subscription below.
 
 Whichever fires first wins; the other no-ops via the
-`decknix--agent-workspace-persisted' guard."
+`decknix--agent-workspace-persisted' guard.  A buffer with no
+conv-key of its own is left to path 1."
   ;; PR B.81: persist-decision + ring-first-message are pinned by
   ;; `decknix-agent-workspace-persist' (carved, +14 ERT).  This
   ;; function is the comint/event-side adapter that performs hook
@@ -2613,9 +2618,31 @@ Whichever fires first wins; the other no-ops via the
           (add-hook 'comint-input-filter-functions
                     #'decknix--agent-flush-pending-metadata
                     nil t))))
-    ;; Resume-time safety net: if the ring already has history
-    ;; when prompt-ready fires, flush immediately using the
-    ;; oldest ring entry as the first message.
+    ;; Resume-time safety net: persist the workspace against the key THIS
+    ;; buffer already carries.
+    ;;
+    ;; It used to derive a conv-key from the oldest `comint-input-ring'
+    ;; entry, on the assumption that "ring has history" means "resumed
+    ;; session".  That assumption is false: the ring is the SHARED agent
+    ;; input history, so a BRAND-NEW session's oldest entry is a foreign
+    ;; command from some earlier session -- and its hash is the `e06099'
+    ;; container's key.  Four new sessions were filed into that container
+    ;; this way, each inheriting its accumulated tags (`#20571 review pr
+    ;; #256 hot', growing to twelve).  Caught live:
+    ;;
+    ;;   [flush-probe] branch=input-hash chosen=e06099 local=nil byid=nil
+    ;;   [adopt-live]  ... <- flush-pending-metadata <- with-current-buffer
+    ;;
+    ;; `ff624a5' removed exactly this derivation from the sibling
+    ;; `prompt-ready' handler in post-create -- "Do NOT derive a conv-key
+    ;; from the comint ring" -- but this second handler kept doing it.
+    ;;
+    ;; This no longer calls the flush at all: the flush also REGISTERS a
+    ;; session-id, and claiming conversation identity was never this
+    ;; handler's job.  A buffer with no key of its own now waits for its
+    ;; real first message, which the comint input-filter above already
+    ;; covers; a missing workspace is recoverable, a stolen conversation
+    ;; identity is not.
     (agent-shell-subscribe-to
      :shell-buffer buf
      :event 'prompt-ready
@@ -2626,16 +2653,11 @@ Whichever fires first wins; the other no-ops via the
                                'decknix--agent-workspace-persisted ,buf)))
                 (condition-case nil
                     (with-current-buffer ,buf
-                      (let* ((ring (and (boundp 'comint-input-ring)
-                                        comint-input-ring))
-                             (first-msg
-                              (and ring (ring-p ring)
-                                   (decknix--workspace-ring-first-message
-                                    (ring-length ring)
-                                    (lambda (idx) (ring-ref ring idx))))))
-                        (when first-msg
-                          (decknix--agent-flush-pending-metadata
-                           first-msg))))
+                      (when-let ((ck (bound-and-true-p decknix--agent-conv-key))
+                                 (ws (bound-and-true-p
+                                      decknix--agent-pending-workspace)))
+                        (decknix--agent-store-metadata-by-conv-key ck nil ws)
+                        (setq-local decknix--agent-workspace-persisted t)))
                   (error nil))))
            t))))
 (defun decknix-agent-session-new (&optional quick)
