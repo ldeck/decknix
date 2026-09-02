@@ -215,5 +215,47 @@ genuinely happened and are left untouched."
     (when prompt
       (overlay-put prompt 'before-string ""))))
 
+
+;; ---------------------------------------------------------------------------
+;; Agents-tab isolation: decknix buffers that BELONG on the Agents tab
+;; ---------------------------------------------------------------------------
+
+(defcustom decknix-agent-tab-resident-regexps
+  '("\\`\\*Agent Context: ")
+  "Buffer-name patterns that must stay on the Agents tab.
+
+agent-shell isolates that tab: `agent-shell-workspace--redirect-display'
+sits in `display-buffer-alist' and switches to the previous tab for any
+buffer `agent-shell-workspace--agent-buffer-p' does not recognise.  Since
+`display-buffer-alist' is consulted BEFORE the action argument, no
+`display-buffer' action a caller passes can prevent it -- measured during
+a real `C-c s c':
+
+    tab 1 -> 0   frame unchanged   action-fns=(display-buffer-below-selected)
+
+The context viewer shows one session's own history and belongs beside
+it, so being ejected to another tab is wrong; the user loses the sidebar
+and has to navigate back.  Listing it here states that it IS an agent
+buffer rather than suppressing the isolation mechanism, which stays
+intact for genuinely foreign buffers.
+
+Add patterns for any other per-session surface that should stay put."
+  :type '(repeat regexp) :group 'decknix)
+
+(defun decknix--agent-tab-resident-p (buffer)
+  "Return non-nil when BUFFER should be exempt from Agents-tab isolation."
+  (when (and buffer (buffer-live-p buffer))
+    (let ((name (buffer-name buffer)))
+      (and name
+           (seq-some (lambda (re) (string-match-p re name))
+                     decknix-agent-tab-resident-regexps)
+           t))))
+
+(defun decknix--agent-tab-resident-advice (orig buffer)
+  "Treat decknix per-session buffers as agent buffers.
+`:around' advice for `agent-shell-workspace--agent-buffer-p'."
+  (or (funcall orig buffer)
+      (decknix--agent-tab-resident-p buffer)))
+
 (provide 'decknix-agent-welcome)
 ;;; decknix-agent-welcome.el ends here
