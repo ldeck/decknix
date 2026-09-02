@@ -44,12 +44,11 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'comint)
+(require 'decknix-agent-conv-resolve)
 (require 'decknix-agent-spawn-queue)
 
 ;; Forward declarations for upstream agent-shell + shell-maker + consult.
 (declare-function agent-shell-start "ext:agent-shell")
-(declare-function decknix--agent-session-conv-key
-                  "decknix-agent-conv-resolve" (session))
 (declare-function agent-shell-buffers "ext:agent-shell")
 (declare-function agent-shell-subscribe-to "ext:agent-shell")
 (declare-function agent-shell-unsubscribe "ext:agent-shell")
