@@ -55,23 +55,31 @@ displayed in the selected window, and must land on the final turn."
           (should (= (point) 11)))
       (kill-buffer viewer))))
 
-;; -- display placement: stay on THIS frame/tab ------------------------
+;; -- display placement: stay on THIS tab ------------------------------
 ;;
-;; Reported: `C-c s c' opened the viewer "against a different tab", so
-;; finishing with it meant switching back, and the sidebar was hidden
-;; while it was up.
+;; Reported: `C-c s c' switched from the "Agents" tab to "*decknix*" and
+;; opened the viewer there, so dismissing it meant navigating back and
+;; the sidebar was out of view throughout.
 ;;
-;; Measured cause: the sidebar is a DEDICATED SIDE window (side=left) and
-;; the session runs with several frames open.  `display-buffer-at-bottom'
-;; alone cannot always place a window against a side-window layout, and
-;; when it fails `display-buffer' falls through to
-;; `display-buffer-fallback-action' -- which reuses a window on ANOTHER
-;; FRAME (or pops one), landing the viewer away from where you are.
+;; A first attempt blamed FRAMES (the sidebar is a dedicated side window
+;; and several frames are open) and added `reusable-frames nil' +
+;; `inhibit-switch-frame t'.  That was the wrong axis, and an `:around'
+;; probe on `display-buffer' during a real `C-c s c' proved it:
 ;;
-;; The action must therefore pin the lookup to the selected frame.
+;;   tab 1 -> 0   frame unchanged   win-frame = same frame
+;;   action = ((display-buffer-reuse-window display-buffer-at-bottom)
+;;             (reusable-frames) (inhibit-switch-frame . t) ...)
+;;
+;; The TAB moved inside `display-buffer' while the frame never did.  The
+;; culprit was `display-buffer-reuse-window' -- added in that same
+;; attempt to avoid stacking a second viewer -- which finds a stale
+;; viewer window left on another tab and pulls selection to it.
+;;
+;; The rule these tests pin: use a placement that cannot hunt.  Splitting
+;; the SELECTED window cannot leave the current tab or frame.
 
-(ert-deftest decknix-context-viewer/display-action-never-leaves-this-frame ()
-  "The display action forbids reusing a window on another frame."
+(ert-deftest decknix-context-viewer/display-action-never-leaves-this-tab ()
+  "The display action never hunts for a window elsewhere."
   (let ((captured nil))
     (cl-letf (((symbol-function 'display-buffer)
                (lambda (_buf action) (setq captured action) nil))
@@ -84,15 +92,17 @@ displayed in the selected window, and must land on the final turn."
       (with-temp-buffer
         (decknix-agent-context-viewer-open (current-buffer))
         (should captured)
-        (let ((alist (cdr captured)))
-          ;; nil reusable-frames = only this frame's windows are candidates.
-          (should (assq 'reusable-frames alist))
-          (should-not (alist-get 'reusable-frames alist))
-          ;; and never raise/switch to a different frame.
-          (should (alist-get 'inhibit-switch-frame alist)))))))
+        (let ((fns (car captured)))
+          ;; Nothing that HUNTS for an existing window: that is what
+          ;; changed the TAB (measured: tab 1->0 inside `display-buffer',
+          ;; frame unchanged).  `reuse-window' would find a stale viewer
+          ;; left on another tab and pull selection there.
+          (should-not (memq 'display-buffer-reuse-window fns))
+          (should-not (memq 'display-buffer-use-some-window fns))
+          (should-not (memq 'display-buffer-at-bottom fns)))))))
 
 (ert-deftest decknix-context-viewer/display-action-prefers-bottom ()
-  "Placement is still a bottom window, reusing one on this frame if present."
+  "Placement splits the selected window, so it cannot change tab."
   (let ((captured nil))
     (cl-letf (((symbol-function 'display-buffer)
                (lambda (_buf action) (setq captured action) nil))
@@ -105,10 +115,10 @@ displayed in the selected window, and must land on the final turn."
       (with-temp-buffer
         (decknix-agent-context-viewer-open (current-buffer))
         (let ((fns (car captured)))
-          (should (memq 'display-buffer-at-bottom fns))
-          ;; reuse-window first so a viewer already open here is reused
-          ;; rather than a second one being stacked below it.
-          (should (memq 'display-buffer-reuse-window fns)))))))
+          ;; Splitting the SELECTED window cannot select another tab or
+          ;; frame by construction -- the only placement that guarantees
+          ;; the viewer lands where the user is looking.
+          (should (memq 'display-buffer-below-selected fns)))))))
 
 (provide 'decknix-agent-context-viewer-test)
 ;;; decknix-agent-context-viewer-test.el ends here
