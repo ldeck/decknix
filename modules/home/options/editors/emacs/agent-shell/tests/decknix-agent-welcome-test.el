@@ -256,5 +256,58 @@ This is the fresh-session case the suppression was written for."
       (decknix--agent-chat-blank-prompt-labels)
       (should (equal "" (overlay-get o 'before-string))))))
 
+
+(ert-deftest decknix-chat-blank-labels--spares-a-just-sent-message ()
+  "A sent turn is never blanked, even when it is the ONLY overlay.
+
+Measured on a resumed session at the moment of the first prompt:
+
+    [blank] init-finished=nil overlays=1 last=5904..5913 point-max=5913
+
+`agent-shell-chat--label-prompts' runs after submission but BEFORE the
+next prompt's overlay exists, so the sole candidate is the message just
+sent.  Picking \"the last overlay\" then blanked the user's own message,
+taking its ` Me ' badge and leading newlines with it -- the reported
+symptom, on both new and resumed sessions.
+
+The overlay must reach the process mark to count as the input prompt."
+  (with-temp-buffer
+    (insert "Where are we up to?\n\nClaude> ")
+    (let ((sent (make-overlay 1 20)))
+      (overlay-put sent 'category 'agent-shell-chat-me)
+      (overlay-put sent 'before-string "\n Me \n\n")
+      ;; A live process whose mark sits AFTER the sent overlay.
+      (cl-letf (((symbol-function 'get-buffer-process) (lambda (&rest _) 'proc))
+                ((symbol-function 'process-live-p) (lambda (&rest _) t))
+                ((symbol-function 'process-mark) (lambda (&rest _) (copy-marker 22))))
+        (should-not (decknix--agent-chat-live-prompt-overlay))
+        (decknix--agent-chat-blank-prompt-labels)
+        (should (equal "\n Me \n\n" (overlay-get sent 'before-string)))))))
+
+(ert-deftest decknix-chat-blank-labels--prompt-at-the-mark-is-blanked ()
+  "An overlay reaching the process mark IS the prompt and is suppressed."
+  (with-temp-buffer
+    (insert "Claude> ")
+    (let ((prompt (make-overlay 1 (point-max))))
+      (overlay-put prompt 'category 'agent-shell-chat-me)
+      (overlay-put prompt 'before-string "\n Me \n\n  \u276f ")
+      (cl-letf (((symbol-function 'get-buffer-process) (lambda (&rest _) 'proc))
+                ((symbol-function 'process-live-p) (lambda (&rest _) t))
+                ((symbol-function 'process-mark)
+                 (lambda (&rest _) (copy-marker (point-max)))))
+        (decknix--agent-chat-blank-prompt-labels)
+        (should (equal "" (overlay-get prompt 'before-string)))))))
+
+(ert-deftest decknix-chat-blank-labels--no-process-falls-back ()
+  "With no live process nothing has been sent, so the last overlay is the prompt."
+  (with-temp-buffer
+    (insert "Claude> ")
+    (let ((o (make-overlay 1 (point-max))))
+      (overlay-put o 'category 'agent-shell-chat-me)
+      (overlay-put o 'before-string "\n Me \n\n")
+      (cl-letf (((symbol-function 'get-buffer-process) (lambda (&rest _) nil)))
+        (decknix--agent-chat-blank-prompt-labels)
+        (should (equal "" (overlay-get o 'before-string)))))))
+
 (provide 'decknix-agent-welcome-test)
 ;;; decknix-agent-welcome-test.el ends here

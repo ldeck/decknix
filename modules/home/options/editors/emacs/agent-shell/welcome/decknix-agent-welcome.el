@@ -145,20 +145,42 @@ suppressed -- see `decknix--agent-chat-blank-prompt-labels'.")
 (defun decknix--agent-chat-live-prompt-overlay ()
   "Return the overlay for this buffer's LIVE input prompt, or nil.
 
-The prompt is the LAST `agent-shell-chat-me' overlay: upstream keeps it
-at the end of the buffer so there is always somewhere to type, while
-every earlier overlay of that category is a user turn already sent.
+The prompt is the last `agent-shell-chat-me' overlay AND it must reach
+the process mark -- the boundary past which text is unsent input.  An
+overlay that ends before that mark is a turn already SENT, whatever its
+ordinal position.
 
-Identified by position rather than by looking for the `❯' marker in the
-`before-string', so the suppression still finds the prompt on a buffer
-where the marker has already been blanked (it runs on every relabel)."
-  (let ((prompt nil))
+\"Last overlay\" alone was not enough, and blanked the user's message.
+Measured with a probe on a resumed session at the moment of the first
+prompt:
+
+    [blank] init-finished=nil overlays=1 last=5904..5913 point-max=5913
+
+Exactly ONE chat-me overlay existed: `agent-shell-chat--label-prompts'
+runs after submission but before the next prompt's overlay is created,
+so the only candidate at that instant is the message just sent -- and
+being last, it was blanked, taking its ` Me ' badge and its leading
+newlines with it.
+
+Requiring the overlay to reach the process mark distinguishes the two
+cases without depending on relabel ordering.  When there is no process
+\(a dead or not-yet-started shell) fall back to the last overlay, which
+is the historical behaviour and safe: nothing has been sent yet."
+  (let ((prompt nil)
+        (proc (get-buffer-process (current-buffer))))
     (dolist (overlay (overlays-in (point-min) (point-max)))
       (when (and (eq (overlay-get overlay 'category) 'agent-shell-chat-me)
                  (or (null prompt)
                      (> (overlay-start overlay) (overlay-start prompt))))
         (setq prompt overlay)))
-    prompt))
+    (cond
+     ((null prompt) nil)
+     ((not (and proc (process-live-p proc))) prompt)
+     ((>= (overlay-end prompt) (marker-position (process-mark proc))) prompt)
+     ;; Last overlay ends before the input boundary: it is a SENT turn,
+     ;; not the prompt.  Suppress nothing rather than blank the user's
+     ;; own message.
+     (t nil))))
 
 (defun decknix--agent-chat-blank-prompt-labels ()
   "Empty the ` Me '/`❯' affordance on this buffer's LIVE chat prompt.
