@@ -257,6 +257,96 @@ not fragment a genuinely long thread."
       (should (member "sid-y" (gethash "sessions" (gethash "big1" convs))))
       (should (member "sid-y" (gethash "sessions" (gethash "big2" convs)))))))
 
+;; -- the detector gap that let e06099 capture three sessions ----------
+;;
+;; `e06099' has now swallowed a freshly-created session THREE times
+;; (conn/demos on 28 Aug, conn/standup on 1 Sep), each time appending the
+;; user's tags to its existing `#20571 review pr #256 hot'.  Every
+;; occurrence had to be reconstructed afterwards from store backups,
+;; because the detector logged NOTHING:
+;;
+;;   `scatter'     needs the sid to already live elsewhere -- it was brand new
+;;   `big-target'  needs >= 10 sessions in the target  -- it held one
+;;
+;; So the exact signature of the bug -- a NEW session id being filed into
+;; an ESTABLISHED (tagged) conversation -- was the one case that went
+;; unrecorded.  That is what `adopt' catches.
+
+(ert-deftest decknix-tags-mutate/logs-a-new-sid-into-a-tagged-conversation ()
+  "A brand-new sid registered into a TAGGED conversation is logged.
+This is the e06099 signature: target small, sid unseen, tags present."
+  (let* ((log (make-temp-file "decknix-scatter-"))
+         (convs (make-hash-table :test 'equal))
+         (entry (make-hash-table :test 'equal)))
+    (unwind-protect
+        (progn
+          (puthash "sessions" '("existing-sid") entry)
+          (puthash "tags" '("review" "#256") entry)
+          (puthash "e06099" entry convs)
+          (let ((decknix--agent-register-scatter-log log)
+                (decknix--agent-register-scatter-log-adopt t))
+            (decknix--agent-register-log-scatter "e06099" "brand-new-sid" convs))
+          (let ((body (with-temp-buffer (insert-file-contents log) (buffer-string))))
+            (should (string-match-p "adopt" body))
+            (should (string-match-p "brand-new-sid" body))
+            (should (string-match-p "e06099" body))
+            ;; the target's tags must be in the line -- they are what the
+            ;; captured session wrongly inherits.
+            (should (string-match-p "review" body))))
+      (delete-file log))))
+
+(ert-deftest decknix-tags-mutate/does-not-log-an-untagged-target ()
+  "A new sid into an UNTAGGED conversation is ordinary and stays quiet.
+Every first registration of a new conversation looks like this, so
+logging it would bury the signal."
+  (let* ((log (make-temp-file "decknix-scatter-"))
+         (convs (make-hash-table :test 'equal))
+         (entry (make-hash-table :test 'equal)))
+    (unwind-protect
+        (progn
+          (puthash "sessions" '("existing-sid") entry)
+          (puthash "e06099" entry convs)
+          (let ((decknix--agent-register-scatter-log log)
+                (decknix--agent-register-scatter-log-adopt t))
+            (decknix--agent-register-log-scatter "e06099" "brand-new-sid" convs))
+          (should (equal "" (with-temp-buffer (insert-file-contents log)
+                                              (buffer-string)))))
+      (delete-file log))))
+
+(ert-deftest decknix-tags-mutate/does-not-log-a-sid-already-in-the-target ()
+  "Re-registering a sid the target already holds is a no-op, not an adoption."
+  (let* ((log (make-temp-file "decknix-scatter-"))
+         (convs (make-hash-table :test 'equal))
+         (entry (make-hash-table :test 'equal)))
+    (unwind-protect
+        (progn
+          (puthash "sessions" '("sid-1") entry)
+          (puthash "tags" '("review") entry)
+          (puthash "ck" entry convs)
+          (let ((decknix--agent-register-scatter-log log)
+                (decknix--agent-register-scatter-log-adopt t))
+            (decknix--agent-register-log-scatter "ck" "sid-1" convs))
+          (should (equal "" (with-temp-buffer (insert-file-contents log)
+                                              (buffer-string)))))
+      (delete-file log))))
+
+(ert-deftest decknix-tags-mutate/adopt-logging-is-disableable ()
+  "The adopt trigger can be turned off without silencing the others."
+  (let* ((log (make-temp-file "decknix-scatter-"))
+         (convs (make-hash-table :test 'equal))
+         (entry (make-hash-table :test 'equal)))
+    (unwind-protect
+        (progn
+          (puthash "sessions" '("existing-sid") entry)
+          (puthash "tags" '("review") entry)
+          (puthash "ck" entry convs)
+          (let ((decknix--agent-register-scatter-log log)
+                (decknix--agent-register-scatter-log-adopt nil))
+            (decknix--agent-register-log-scatter "ck" "brand-new-sid" convs))
+          (should (equal "" (with-temp-buffer (insert-file-contents log)
+                                              (buffer-string)))))
+      (delete-file log))))
+
 (provide 'decknix-agent-tags-mutate-test)
 
 ;;; decknix-agent-tags-mutate-test.el ends here

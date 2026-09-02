@@ -345,6 +345,63 @@ create them.  Already-applied tags are annotated `(applied)'."
         (message "All tags already applied: [%s]"
                  (string-join tags ", ")))))))
 
+(defun decknix-agent-tag-set ()
+  "REPLACE this conversation's tags with a comma-separated list.
+
+`decknix-agent-tag-add' and `-tag-remove' edit one tag at a time, which
+is the wrong shape when a session has inherited a whole foreign tag set:
+a session created with `conn,standup' that came back carrying `#20571
+review pr #256 hot' as well needs five removals and no additions.  This
+sets the list outright.
+
+Pre-fills the minibuffer with the current tags, so the common repair is
+to delete the ones that do not belong and confirm.  Clearing the input
+entirely removes every tag (confirmed first, since that is unrecoverable
+from the UI).
+
+Edits the CONVERSATION, like every other tag verb here -- tags are
+per-conversation, which is precisely why an inherited set shows up on a
+session that never asked for it."
+  (interactive)
+  (let* ((conv-key (decknix--agent-require-conv-key))
+         (session-id (decknix--agent-require-session-id))
+         (current (decknix--agent-tags-for-conv-key conv-key))
+         (existing (decknix--agent-tags-all))
+         (input (completing-read-multiple
+                 "Set tag(s) (comma-separated, empty clears): "
+                 existing nil nil
+                 (when current (string-join current ","))))
+         (new-tags (delete-dups
+                    (seq-remove #'string-empty-p
+                                (mapcar #'string-trim input)))))
+    (when (and (null new-tags)
+               (not (yes-or-no-p
+                     (format "Remove ALL %d tag(s) from this conversation? "
+                             (length current)))))
+      (user-error "Cancelled"))
+    (let* ((store (decknix--agent-tags-read))
+           (convs (decknix--agent-tags-conversations store))
+           (entry (or (gethash conv-key convs)
+                      (let ((h (make-hash-table :test 'equal)))
+                        (puthash "sessions" nil h)
+                        h)))
+           (sids (gethash "sessions" entry)))
+      (puthash "tags" new-tags entry)
+      (cl-pushnew session-id sids :test #'string=)
+      (puthash "sessions" sids entry)
+      (puthash "lastAccessed"
+               (format-time-string "%Y-%m-%dT%H:%M:%S.000Z" nil t) entry)
+      (puthash conv-key entry convs)
+      (decknix--agent-tags-write store)
+      (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+        (ignore-errors (agent-shell-workspace-sidebar-refresh)))
+      (if new-tags
+          (message "Tags set: [%s] (was [%s])"
+                   (string-join new-tags ", ")
+                   (if current (string-join current ", ") ""))
+        (message "Tags cleared (was [%s])"
+                 (if current (string-join current ", ") ""))))))
+
 (defun decknix-agent-tag-remove ()
   "Remove a tag from the current conversation."
   (interactive)

@@ -128,13 +128,38 @@ print as `closure'/`lambda', still useful for locating the path."
           (push n names))))
     (string-join (seq-take (delete-dups (nreverse names)) 14) " <- ")))
 
+(defvar decknix--agent-register-scatter-log-adopt t
+  "When non-nil, log a NEW session id registered into a TAGGED conversation.
+
+This is the `adopt' trigger, and it exists because the other two missed
+the bug that actually keeps happening.  `e06099' has captured a
+freshly-created session three times — `conn,demos' on 28 Aug, then
+`conn,standup' on 1 Sep — each time appending the user's tags to its
+existing `#20571 review pr #256 hot'.  Every occurrence had to be
+reconstructed afterwards from store backups because nothing recorded it:
+
+  `scatter'     wants the sid to already live elsewhere — it was brand new
+  `big-target'  wants >= 10 sessions in the target — it held one
+
+so the precise signature of the fault was the one case going unlogged.
+Two fixes have been shipped for two different routes into that container
+\(`ff624a5' shared input ring, `edabfeb' buffer adoption) and it recurred
+both times, which is the argument for recording it rather than inferring
+it again.
+
+Noisier than the other triggers by design: joining an established
+conversation is legitimate on resume.  The point is a timestamped
+backtrace at the moment it happens, not a verdict.")
+
 (defun decknix--agent-register-log-scatter (conv-key session-id convs)
   "Append a diagnostic line when registering SESSION-ID under CONV-KEY looks
-like store scatter.  Two triggers: `scatter' — the id already lives in another
-conversation; `big-target' — the target already lists at least
+like store scatter.  Three triggers: `scatter' — the id already lives in
+another conversation; `big-target' — the target already lists at least
 `decknix--agent-register-container-threshold' sessions (a likely pollution
 sink), which catches the FIRST registration into it before any duplication
-exists.  No-op when disabled or neither trigger fires.  Never signals."
+exists; and `adopt' — a session-id NEW to the store joining a conversation
+that already carries tags (see `decknix--agent-register-scatter-log-adopt').
+No-op when disabled or no trigger fires.  Never signals."
   (when decknix--agent-register-scatter-log
     (ignore-errors
       (let* ((others (decknix--agent-register-scatter-others conv-key session-id convs))
@@ -142,9 +167,21 @@ exists.  No-op when disabled or neither trigger fires.  Never signals."
              (tsize (if (hash-table-p target)
                         (length (gethash "sessions" target)) 0))
              (big (>= tsize decknix--agent-register-container-threshold))
+             (ttags-p (and (hash-table-p target)
+                           (gethash "tags" target) t))
+             ;; `adopt': the sid is new to the STORE (not in this target, not
+             ;; in any other) and the target is already an established,
+             ;; tagged conversation -- i.e. a fresh session inheriting
+             ;; someone else's identity.
+             (adopt (and decknix--agent-register-scatter-log-adopt
+                         ttags-p
+                         (null others)
+                         (hash-table-p target)
+                         (not (member session-id (gethash "sessions" target)))))
              (reason (cond ((and others big) "scatter+big")
                            (others "scatter")
-                           (big "big-target"))))
+                           (big "big-target")
+                           (adopt "adopt"))))
         (when reason
           (let* ((ttags (and (hash-table-p target) (gethash "tags" target)))
                  (line (format "%s [%s] sid=%s target=%s(n=%d tags=%s) already-in=%s via %s\n"
