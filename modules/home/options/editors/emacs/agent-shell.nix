@@ -3315,9 +3315,17 @@ in
             :label "Pi"
             :glyph "P"
             :supports-workspace-root nil
-            ;; Same as Claude: `pi-acp' does not restore prior context
-            ;; into the model on resume, so prime it with a
-            ;; continuation message once the session is ready.
+            ;; Pi CAN restore prior context, via ACP `session/load'
+            ;; (`decknix-agent-resume-native.el' picks the method from
+            ;; the bridge's advertised capabilities).  This flag stays t
+            ;; purely as the FALLBACK: if the load request fails, the
+            ;; session comes up fresh and still needs priming.  When the
+            ;; load succeeds it sets `decknix--agent-resume-native-done',
+            ;; which suppresses the primer.
+            ;;
+            ;; It previously read "pi-acp does not restore prior context
+            ;; into the model on resume" -- untrue, and the reason every
+            ;; pi resume paid for a model turn of transcript re-reading.
             :resume-needs-primer t))
 
         ;; Gemini CLI via `gemini --experimental-acp' (upstream

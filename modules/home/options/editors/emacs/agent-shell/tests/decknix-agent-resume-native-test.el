@@ -41,6 +41,58 @@
   (should (eq t (decknix--agent-resume-native-p "sid" t)))
   (should (eq nil (decknix--agent-resume-native-p "sid" nil))))
 
+;; --- method resolution: `session/resume' OR `session/load' ---
+;;
+;; `resume-native-p' only ever asked about `session/resume', so a bridge
+;; advertising `session/load' instead (pi) was treated as incapable and
+;; fell through to the primer.  It is not incapable, it is differently
+;; capable: `loadSession' calls `restoreSession', which spawns the pi CLI
+;; with `--session <path>', so the MODEL really does get its context
+;; back.  The resolver names which of the two calls to make.
+
+(ert-deftest decknix-resume-method--prefers-resume-when-both ()
+  "`session/resume' wins when a bridge advertises both.
+It restores context WITHOUT replaying the transcript to the client, so it
+composes with our own buffer prepopulation.  `session/load' replays, and
+would double-render."
+  (should (eq 'resume (decknix--agent-resume-native-method "sid" t t))))
+
+(ert-deftest decknix-resume-method--load-when-only-load ()
+  "Load capability alone still restores context natively (the pi case)."
+  (should (eq 'load (decknix--agent-resume-native-method "sid" nil t))))
+
+(ert-deftest decknix-resume-method--resume-when-only-resume ()
+  "Resume capability alone -> resume (the claude-code case, unchanged)."
+  (should (eq 'resume (decknix--agent-resume-native-method "sid" t nil))))
+
+(ert-deftest decknix-resume-method--nil-without-any-capability ()
+  "Neither capability -> nil, so the caller falls back to the primer."
+  (should-not (decknix--agent-resume-native-method "sid" nil nil)))
+
+(ert-deftest decknix-resume-method--nil-without-sid ()
+  "No target id -> nothing to restore, whatever the bridge advertises."
+  (should-not (decknix--agent-resume-native-method nil t t))
+  (should-not (decknix--agent-resume-native-method "" t t)))
+
+;; --- who replays history, us or the bridge ---
+;;
+;; Exactly one side must render the transcript.  Verified against pi-acp
+;; 0.0.31: `loadSession' walks `proc.getMessages()' and emits a
+;; `user_message_chunk' / assistant chunk per stored message, so on the
+;; load path the BRIDGE renders and we must not.
+
+(ert-deftest decknix-resume-replays--load-means-bridge-renders ()
+  "On the load path the bridge replays, so we skip prepopulation."
+  (should (decknix--agent-resume-bridge-replays-p 'load)))
+
+(ert-deftest decknix-resume-replays--resume-means-we-render ()
+  "On the resume path nothing is replayed to us, so we prepopulate."
+  (should-not (decknix--agent-resume-bridge-replays-p 'resume)))
+
+(ert-deftest decknix-resume-replays--no-native-means-we-render ()
+  "No native restore at all -> the buffer would be empty; we prepopulate."
+  (should-not (decknix--agent-resume-bridge-replays-p nil)))
+
 ;; --- the default is ON (pins a deliberate decision) ---
 
 (ert-deftest decknix-resume-native--enabled-by-default ()
