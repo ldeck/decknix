@@ -163,5 +163,39 @@ was recorded."
       (puthash conv-key entry convs)
       (decknix--agent-tags-write store))))
 
+;; ── Recorded review coordinates ──────────────────────────────────────
+;;
+;; Co-resident with the broker key because they are the same kind of
+;; fact: immutable session metadata persisted against the conv-key,
+;; written once at launch and read back after a restart.
+
+(defun decknix--agent-review-pr-for-conv-key (conv-key)
+  "Return the recorded `repo#number' this conversation reviews, or nil."
+  (when conv-key
+    (let* ((store (decknix--agent-tags-read))
+           (convs (decknix--agent-tags-conversations store))
+           (entry (gethash conv-key convs)))
+      (when (hash-table-p entry)
+        (gethash "reviewPr" entry)))))
+
+(defun decknix--agent-save-review-pr-for-conv-key (conv-key pr-key)
+  "Persist PR-KEY (`repo#number') as CONV-KEY's review target.
+
+Recorded so \"does this PR already have a reviewer?\" can be answered
+from a fact rather than from a display string.  The buffer name is
+rewritten on reattach and the tags are edited by hand, so both drift;
+this does not."
+  (when (and conv-key pr-key)
+    (let* ((store (decknix--agent-tags-read))
+           (convs (decknix--agent-tags-conversations store))
+           (entry (or (gethash conv-key convs)
+                      (let ((h (make-hash-table :test 'equal)))
+                        (puthash "tags" nil h)
+                        (puthash "sessions" nil h)
+                        h))))
+      (puthash "reviewPr" pr-key entry)
+      (puthash conv-key entry convs)
+      (decknix--agent-tags-write store))))
+
 (provide 'decknix-agent-session-broker)
 ;;; decknix-agent-session-broker.el ends here

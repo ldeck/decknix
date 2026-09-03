@@ -319,6 +319,20 @@ let
   # live, which are already attached, which conversation each belongs to,
   # which are stale); the attach + buffer creation stay in the heredoc
   # per Rule 2.
+  # Pure identity layer for "does this PR already have a review
+  # session?".  Separate package because the answer must not depend on
+  # the hub bulk file: the old name-matching check lived there, was
+  # untested, and silently launched duplicate reviewers once reattach
+  # started renaming review buffers.
+  decknix-hub-review-identity-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-review-identity";
+    src = ./agent-shell/review-identity;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-review-identity-test.el"
+    ];
+  };
+
   decknix-agent-broker-reattach-el = mkEmacsTestedPackage {
     pname = "decknix-agent-broker-reattach";
     src = ./agent-shell/broker-reattach;
@@ -3114,6 +3128,7 @@ in
           decknix-agent-net-error-el
           decknix-agent-review-worktree-el
           decknix-agent-broker-reattach-el
+          decknix-hub-review-identity-el
           decknix-agent-acp-trace-el
           decknix-record-el
           decknix-layout-groups-el
@@ -3618,6 +3633,9 @@ in
         ;; from the module option; command-build wrapping + the new/resume
         ;; lifecycle threading land in a follow-up.  Default off -> no change.
         (require 'decknix-agent-session-broker)
+        ;; Review identity (pure): decides whether a PR already has a
+        ;; live reviewer.  Consulted by the hub before launching one.
+        (require 'decknix-hub-review-identity)
         (require 'decknix-agent-broker-rehydrate)
         (require 'decknix-agent-broker-reattach)
         ;; #151: reattach to brokers that survived the restart.  Armed on a
