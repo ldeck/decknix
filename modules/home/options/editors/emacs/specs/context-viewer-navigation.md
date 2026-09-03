@@ -182,8 +182,27 @@ stepping, not only when jumping.
    - the replay-rendering that strips ` Me ` labels stops happening;
      `d9c0390` guards a symptom of it
 
-   None of that should be done before the viewer can carry history.
-   That is the ordering this spec exists to enforce.
+   **Partly resolved.** The pi half landed ahead of the viewer, because
+   it did not actually depend on it. `decknix--agent-resume-native-method`
+   now picks `session/resume` or `session/load` from the bridge's
+   advertised capabilities, and `decknix--agent-resume-bridge-replays-p`
+   makes exactly one side render the transcript — so pi resumes natively
+   and its primer is suppressed, with no viewer work required.
+
+   The distinction that unblocked it: dropping prepopulation *because
+   the bridge replays it* is local and safe, whereas dropping it *so the
+   viewer becomes the only route to history* is the change that still
+   needs the viewer to be good enough first. Only the second one is
+   gated here.
+
+   Still open, and still gated on the viewer:
+
+   - Claude, which uses `session/resume` (no replay), so our
+     prepopulation is the only thing rendering its history.
+   - Reattach (`#151`), where a buffer starts near-empty.
+
+   The conv-key collision bucket is fixed for pi (its resumed sessions no
+   longer all begin with the identical primer) but remains for Claude.
 
 ## 6. Sequencing
 
