@@ -68,11 +68,27 @@ or ARGV is empty, so a missing key can never silently drop the bridge command."
       (append (list decknix-agent-broker-attach-command key "--") argv)
     argv))
 
+(defconst decknix--agent-broker-providers '(claude-code pi)
+  "Providers whose sessions are brokered.
+
+Membership tracks one property: the provider runs a SEPARATE ACP bridge
+process, which is the thing a broker can hold open across an Emacs
+restart.  Both `claude-code' (claude-agent-acp) and `pi' (pi-acp) do.
+`auggie' does not, so a broker would have nothing to keep alive.
+
+The wrapper itself (`decknix--agent-broker-wrap-command') is a pure argv
+transform and provider-agnostic; the gate named `claude-code' alone
+because M3b shipped it first, not because pi was unsuitable.  That
+omission showed up as the pi session being the single buffer that did
+not return from a restart.")
+
 (defun decknix--agent-broker-should-wrap-p (provider-id)
   "Non-nil when a PROVIDER-ID session should be brokered.
-Gated on `decknix-agent-broker-enable' and the provider being `claude-code'
-(the separate-bridge provider M3b targets first)."
-  (and decknix-agent-broker-enable (eq provider-id 'claude-code)))
+Gated on `decknix-agent-broker-enable' and PROVIDER-ID running a separate
+ACP bridge (see `decknix--agent-broker-providers')."
+  (and decknix-agent-broker-enable
+       (memq provider-id decknix--agent-broker-providers)
+       t))
 
 ;; ── Per-conversation broker-key store (mirrors decknix-agent-session-mode) ──
 
