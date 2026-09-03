@@ -36,13 +36,28 @@
   (should (null (decknix--agent-broker-wrap-command nil "k"))))
 
 (ert-deftest decknix-broker/should-wrap-p ()
-  "Wrap only when enabled AND the provider is claude-code."
+  "Wrap only when enabled AND the provider runs a separate bridge."
   (let ((decknix-agent-broker-enable t))
     (should (decknix--agent-broker-should-wrap-p 'claude-code))
-    (should-not (decknix--agent-broker-should-wrap-p 'auggie))
-    (should-not (decknix--agent-broker-should-wrap-p 'pi)))
+    (should-not (decknix--agent-broker-should-wrap-p 'auggie)))
   (let ((decknix-agent-broker-enable nil))
     (should-not (decknix--agent-broker-should-wrap-p 'claude-code))))
+
+(ert-deftest decknix-broker/wraps-pi-too ()
+  "Pi brokers like Claude: both run a bridge as a child process.
+
+The gate named `claude-code' explicitly because M3b targeted it first,
+not because pi is unsuitable -- the wrapper is a pure argv transform and
+knows nothing about the provider.  Leaving pi out meant a pi session was
+the ONE buffer that did not come back from a restart, since it had no
+broker to survive in.
+
+Auggie stays excluded on a real distinction: it does not run a separate
+ACP bridge for the broker to hold."
+  (let ((decknix-agent-broker-enable t))
+    (should (decknix--agent-broker-should-wrap-p 'pi)))
+  (let ((decknix-agent-broker-enable nil))
+    (should-not (decknix--agent-broker-should-wrap-p 'pi))))
 
 (ert-deftest decknix-broker/generate-key ()
   "Keys are non-empty, filename-safe, and unique across calls."
