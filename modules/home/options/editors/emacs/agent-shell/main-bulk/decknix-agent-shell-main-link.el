@@ -131,7 +131,15 @@
 (declare-function decknix--agent-session-new-post-create
                   "decknix-agent-shell-main-session"
                   (before-buffers name tags workspace
-                                  &optional first-message provider-id))
+                                  &optional first-message provider-id
+                                  broker-key))
+
+;; Broker (#151 M3b).  Quick-action sessions are long-running and
+;; unattended -- exactly the ones worth surviving a restart.
+(declare-function decknix--agent-broker-key-for-new
+                  "decknix-agent-session-broker" (provider-id))
+(declare-function decknix--agent-broker-wrap-command
+                  "decknix-agent-session-broker" (argv key))
 
 ;; Session cache state (carved into `decknix-agent-session-cache';
 ;; mutated here to force the picker to pick up the new session).
@@ -239,7 +247,19 @@ raises the usual attention indicator when it wants input."
                 cur-is-sidebar cur (window-main-window (selected-frame)))))
          (before-buffers (buffer-list))
          (provider (or provider-id decknix-agent-default-provider))
-         (augmented-cmd (decknix--agent-command-build provider workspace model))
+         ;; #151: broker quick-action sessions too.  `session-new' has
+         ;; wrapped since M3b, but every quick action (PR review,
+         ;; auto-review, re-review, batch) launches through HERE and so
+         ;; got no broker at all -- which is why six live `pr-*' review
+         ;; buffers came back from a restart with fresh session ids while
+         ;; the hand-started ones kept theirs.  These are the sessions
+         ;; that most want to survive: they are long-running, often
+         ;; unattended, and losing one silently discards a review in
+         ;; progress.  nil key -> `wrap-command' returns argv unchanged.
+         (broker-key (decknix--agent-broker-key-for-new provider))
+         (augmented-cmd (decknix--agent-broker-wrap-command
+                         (decknix--agent-command-build provider workspace model)
+                         broker-key))
          (config (decknix--agent-make-config provider augmented-cmd mode)))
     ;; Placement prompt: when the caller is not the sidebar AND the
     ;; current frame has 3+ non-sidebar windows, ask which pane the
@@ -300,7 +320,7 @@ raises the usual attention indicator when it wants input."
         (agent-shell-start :config config)))
     (setq decknix--agent-session-cache-time 0)
     (decknix--agent-session-new-post-create
-     before-buffers name tags workspace command provider)
+     before-buffers name tags workspace command provider broker-key)
     ;; Pin the per-conversation model override so subsequent resumes
     ;; pass `--model MODEL' via `decknix--resume-command-build'.  The
     ;; conv-key is derived deterministically from COMMAND (the first
