@@ -2954,6 +2954,41 @@ batch launches."
   "claude-agent-acp\\|pi-acp"
   "Regexp matching an agent-shell ACP bridge process command line.")
 
+(defconst decknix-agent--broker-command-regexp
+  "decknix-agent-broker"
+  "Regexp matching the agent service broker's own command line.
+
+The broker runs as
+
+    decknix-agent-broker --daemonize --socket <sock> -- claude-agent-acp
+
+so its command line CONTAINS the bridge name and, being daemonised, its
+ppid is 1 -- it satisfies both of the orphan reaper's conditions while
+being the one process that is SUPPOSED to be a ppid=1 survivor.")
+
+(defun decknix-agent--reapable-bridge-p (ppid pid self cmd)
+  "Return non-nil when a ps row describes an orphaned bridge to kill.
+
+PPID/PID are the row's parent and process ids (PPID as a string, as `ps'
+prints it), SELF this Emacs' pid, CMD the command line.
+
+Carved out of `decknix-agent-reap-orphaned-bridges' so the decision is
+ERT-testable without spawning processes -- and because getting it wrong
+kills live agents.  It did: the broker runs as
+
+    decknix-agent-broker --daemonize --socket <sock> -- claude-agent-acp
+
+which CONTAINS the bridge name and, being daemonised, has ppid 1.  So it
+matched both conditions and the reaper killed every brokered session 8
+seconds after each daemon start -- the exact processes `broker.enable'
+exists to keep alive.  Measured against the live machine before the fix:
+7 of 7 live brokers were reapable."
+  (and (equal ppid "1")
+       (/= pid self)
+       (string-match-p decknix-agent--bridge-command-regexp cmd)
+       (not (string-match-p decknix-agent--broker-command-regexp cmd))
+       t))
+
 (defun decknix-agent-reap-orphaned-bridges (&optional verbose)
   "Kill orphaned (ppid=1) agent-shell ACP bridge processes; return the count.
 These accumulate when an Emacs daemon dies without reaping its bridge
@@ -2975,9 +3010,7 @@ live session cannot be a ppid=1 orphan, so this is safe to run at will."
         (let ((pid  (string-to-number (match-string 1 line)))
               (ppid (match-string 2 line))
               (cmd  (match-string 3 line)))
-          (when (and (string= ppid "1")
-                     (/= pid self)
-                     (string-match-p decknix-agent--bridge-command-regexp cmd))
+          (when (decknix-agent--reapable-bridge-p ppid pid self cmd)
             (ignore-errors (signal-process pid 'TERM))
             (setq killed (1+ killed))))))
     (when verbose
