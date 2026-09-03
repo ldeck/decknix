@@ -3609,6 +3609,13 @@ in
         (require 'decknix-agent-session-broker)
         (require 'decknix-agent-broker-rehydrate)
         (require 'decknix-agent-broker-reattach)
+        ;; #151: reattach to brokers that survived the restart.  Armed on a
+        ;; timer LATER than the orphan reaper's 8s sweep so it sees the
+        ;; settled set of survivors.  Off via
+        ;; `decknix-agent-broker-reattach-on-startup'.
+        (declare-function decknix-agent-broker-reattach-maybe-on-startup
+                          "decknix-agent-broker-reattach")
+        (decknix-agent-broker-reattach-maybe-on-startup)
         (defvar decknix-agent-broker-enable)
         (setq decknix-agent-broker-enable ${
           if cfg.broker.enable then "t" else "nil"})
