@@ -142,6 +142,49 @@ stepping, not only when jumping.
 4. **Does this replace prepopulation?** The motivating question. Answer
    only after the viewer is genuinely good enough to rely on.
 
+   The case for "yes" got stronger while this spec was being written.
+   Measured against the live bridges:
+
+   | provider | `supports-session-resume` | `supports-session-load` |
+   |----------|---------------------------|-------------------------|
+   | claude-code | `t` | — |
+   | pi | `nil` | `t` |
+
+   `decknix--agent-resume-native-p` requires the *resume* capability
+   specifically, and says why: "`session/resume` restores context
+   without replaying the transcript, so it composes with our buffer
+   prepopulation, whereas `session/load` would double-render."  The
+   objection is entirely about prepopulation.
+
+   pi is not incapable — it is differently capable.  Its bundle
+   declares `agentCapabilities: { loadSession: true }` and only `list`
+   under `sessionCapabilities` (hence the `nil` above), and its
+   `loadSession` handler calls `restoreSession`, which spawns the CLI
+   with `--session <path>`:
+
+   ```js
+   static async spawn(params) {
+     const args = ["--mode", "rpc", "--no-themes"];
+     if (params.sessionPath) args.push("--session", params.sessionPath);
+   ```
+
+   That is pi's own restore, so the MODEL gets its context back, not
+   just the display.  So the continuation primer on pi is compensating
+   for a capability pi has and decknix declines to use.
+
+   Dropping prepopulation therefore resolves four things at once:
+
+   - pi resumes natively via `session/load` (real context)
+   - the continuation primer becomes unnecessary on BOTH providers
+   - the conv-key collision bucket loses its source — every resumed
+     session's first message is that identical primer, which is what
+     made a `day6` conversation unfindable
+   - the replay-rendering that strips ` Me ` labels stops happening;
+     `d9c0390` guards a symptom of it
+
+   None of that should be done before the viewer can carry history.
+   That is the ordering this spec exists to enforce.
+
 ## 6. Sequencing
 
 1. Timestamps into turn records (unblocks everything else; smallest)
