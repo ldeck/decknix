@@ -56,5 +56,50 @@
   "Nil input safely returns nil."
   (should (null (decknix--agent-session-restart-name-from-buffer nil))))
 
+
+;; -- orphan reaper must never kill a live broker ----------------------
+;;
+;; `broker.enable' makes sessions survive an Emacs restart by holding the
+;; bridge in a daemonised broker.  The reaper then killed them 8s after
+;; every daemon start, because the broker's command line is
+;;
+;;     decknix-agent-broker --daemonize --socket <sock> -- claude-agent-acp
+;;
+;; which CONTAINS the bridge name, and being daemonised its ppid is 1 --
+;; both of the reaper's conditions.  Measured on the live machine before
+;; the fix: 7 of 7 live brokers were reapable.  That is why every switch
+;; lost its sessions and `p M-RET' was always needed.
+
+(ert-deftest decknix-reaper/spares-a-live-broker ()
+  "A daemonised broker is never reaped, though it matches on both counts."
+  (should-not
+   (decknix-agent--reapable-bridge-p
+    "1" 50200 999
+    "decknix-agent-broker --daemonize --socket /x/s-1.sock --session-id s-1 -- claude-agent-acp")))
+
+(ert-deftest decknix-reaper/still-reaps-a-genuine-orphan ()
+  "A bare re-parented bridge is still garbage and still collected.
+This is the leak the reaper was added for (09df9ff)."
+  (should
+   (decknix-agent--reapable-bridge-p
+    "1" 4242 999
+    "/nix/store/xxx-claude-agent-acp/bin/claude-agent-acp")))
+
+(ert-deftest decknix-reaper/spares-bridges-owned-by-a-live-emacs ()
+  "A bridge whose parent is a daemon (ppid != 1) is in use."
+  (should-not
+   (decknix-agent--reapable-bridge-p
+    "48695" 49011 999
+    "/nix/store/xxx-claude-agent-acp/bin/claude-agent-acp")))
+
+(ert-deftest decknix-reaper/never-reaps-itself ()
+  "Self-preservation: this Emacs is not a bridge to collect."
+  (should-not (decknix-agent--reapable-bridge-p "1" 999 999 "claude-agent-acp")))
+
+(ert-deftest decknix-reaper/ignores-unrelated-processes ()
+  "Anything that is not a bridge is left alone."
+  (should-not (decknix-agent--reapable-bridge-p "1" 4242 999 "/usr/bin/ssh-agent"))
+  (should-not (decknix-agent--reapable-bridge-p "1" 4242 999 "node /some/other/thing.js")))
+
 (provide 'decknix-agent-session-restart-test)
 ;;; decknix-agent-session-restart-test.el ends here
