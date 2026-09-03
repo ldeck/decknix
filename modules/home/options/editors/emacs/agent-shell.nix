@@ -1202,10 +1202,10 @@ let
     ];
   };
 
-  # `C-c s R' restart command + its pure name-recovery helper, carved
-  # out per AGENTS.md Rule 2.  The interactive command's cross-package
-  # callees (resume, buffer-lookup, tags-read) are forward-declared in
-  # the source and resolve at runtime; only the pure parser is tested.
+  # `C-c s R' restart command plus the pure name-recovery and orphan-
+  # bridge classification helpers, carved out per AGENTS.md Rule 2.  The
+  # interactive command's cross-package callees (resume, buffer-lookup,
+  # tags-read) are forward-declared in the source and resolve at runtime.
   decknix-agent-session-restart-el = mkEmacsTestedPackage {
     pname = "decknix-agent-session-restart";
     src = ./agent-shell/agent;
@@ -2424,10 +2424,13 @@ let
     # a multi-select resume does not cold-start dozens of Claude/Pi
     # bridges at once.  `decknix-agent-conv-resolve' supplies the
     # conversation key read by the saved-session picker dispatch path.
+    # `decknix-agent-session-restart' owns the pure orphan-bridge
+    # predicate consumed by the startup reaper in main-session.
     packageRequires = [ decknix-picker-selections-el
                         decknix-agent-session-bulk-send-el
                         decknix-agent-provider-el
                         decknix-agent-conv-resolve-el
+                        decknix-agent-session-restart-el
                         decknix-agent-purposes-el
                         decknix-agent-picker-category-el
                         decknix-agent-spawn-queue-el ];
