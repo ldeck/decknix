@@ -189,5 +189,112 @@ restart, to see what recovery WOULD do without doing it."
           :attached (length attached) :orphaned (length plan)
           :stale (length stale) :plan plan)))
 
+
+;; ---------------------------------------------------------------------------
+;; Reattach -- resume each orphaned conversation onto its LIVE broker
+;; ---------------------------------------------------------------------------
+
+(declare-function decknix--agent-latest-session-id-for-conv-key
+                  "decknix-agent-conv-resolve" (conv-key))
+(declare-function decknix--agent-workspace-for-conv-key
+                  "decknix-agent-session-workspace" (conv-key))
+(declare-function decknix--agent-tags-for-conv-key
+                  "decknix-agent-tags-read" (conv-key))
+(declare-function decknix--agent-session-derive-name
+                  "decknix-agent-session-format"
+                  (tags &optional workspace branch first-message sid))
+(declare-function decknix--agent-session-resume
+                  "decknix-agent-shell-main-session"
+                  (session-id history-count &optional display-name workspace
+                   conv-key search-term))
+(defvar decknix-agent-session-history-count)
+
+(defcustom decknix-agent-broker-reattach-on-startup t
+  "Reattach to surviving brokers when the daemon starts.
+
+The broker holds its bridge outside Emacs' process tree, so a restart
+leaves live agents with nothing attached.  Without this you get them back
+only by hand (`p' then `M-RET' in the sidebar), and that RESUMES them --
+minting a new session id and, until 414cf87, spawning a second broker
+beside the one still running.
+
+Reattach instead goes through the normal resume path with the
+conversation's SAVED broker key, so `decknix-agent-broker-attach' finds a
+live socket and connects to it rather than spawning.  The agent, and any
+turn it was mid-way through, is the same process you left."
+  :type 'boolean :group 'decknix)
+
+(defcustom decknix-agent-broker-reattach-delay 12
+  "Seconds after startup before reattaching.
+
+Must be LATER than the orphan reaper's own 8s timer
+\(`decknix-agent-reap-orphaned-bridges'), so reattach sees the settled
+set of survivors rather than racing a sweep that is still deciding what
+to kill."
+  :type 'number :group 'decknix)
+
+(defun decknix--broker-reattach-one (key conv-key)
+  "Reattach the conversation CONV-KEY to its live broker KEY.
+Returns non-nil when a resume was dispatched.
+
+Verifies that CONV-KEY's SAVED broker key is still KEY before resuming.
+The mapping is derived by scanning the store for a conversation whose
+`brokerKey' matches, and a conversation can be re-brokered (a resume
+while the old broker was dead mints a fresh key), so a stale reverse
+match would attach a conversation to another agent.  Cheap check, and
+the failure it prevents is putting your session in front of a different
+conversation's model."
+  (when (and conv-key
+             (or (not (fboundp 'decknix--agent-broker-key-for-conv-key))
+                 (equal key (decknix--agent-broker-key-for-conv-key conv-key))))
+    (let* ((sid (ignore-errors
+                  (decknix--agent-latest-session-id-for-conv-key conv-key)))
+           (ws (ignore-errors (decknix--agent-workspace-for-conv-key conv-key)))
+           (tags (ignore-errors (decknix--agent-tags-for-conv-key conv-key)))
+           (name (ignore-errors
+                   (decknix--agent-session-derive-name tags ws nil nil sid))))
+      (when sid
+        (ignore-errors
+          (decknix--agent-session-resume
+           sid (if (boundp 'decknix-agent-session-history-count)
+                   decknix-agent-session-history-count 0)
+           name ws conv-key))
+        t))))
+
+;;;###autoload
+(defun decknix-agent-broker-reattach-all (&optional quiet)
+  "Reattach every orphaned live broker to its conversation.
+
+Idempotent: brokers Emacs is already attached to are skipped, so running
+it twice cannot give one conversation two buffers.  A broker whose
+conversation is unknown is left alone HERE (unlike the plan, which
+includes it) -- without a conv-key there is no session id to resume and
+no name to give the buffer, so there is nothing to reattach TO.  It stays
+visible in `decknix-agent-broker-reattach-report'.
+
+With QUIET, does not message."
+  (interactive)
+  (let* ((brokers (decknix--broker-reattach-keys))
+         (attached (decknix--broker-reattach-attached-keys))
+         (plan (decknix--broker-reattach-plan
+                brokers attached #'decknix--broker-reattach-conv-key-for))
+         (done 0) (skipped 0))
+    (dolist (entry plan)
+      (if (decknix--broker-reattach-one (car entry) (cdr entry))
+          (setq done (1+ done))
+        (setq skipped (1+ skipped))))
+    (unless quiet
+      (message "decknix: reattached %d broker%s%s"
+               done (if (= done 1) "" "s")
+               (if (> skipped 0)
+                   (format " (%d skipped: no conversation)" skipped) "")))
+    done))
+
+(defun decknix-agent-broker-reattach-maybe-on-startup ()
+  "Arm the startup reattach when enabled.  Idempotent."
+  (when decknix-agent-broker-reattach-on-startup
+    (run-with-timer decknix-agent-broker-reattach-delay nil
+                    (lambda () (ignore-errors (decknix-agent-broker-reattach-all t))))))
+
 (provide 'decknix-agent-broker-reattach)
 ;;; decknix-agent-broker-reattach.el ends here
