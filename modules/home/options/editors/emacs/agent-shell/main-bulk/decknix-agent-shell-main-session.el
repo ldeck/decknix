@@ -237,6 +237,9 @@ history; only the model-facing primer is suppressed)."
                   "decknix-agent-provider" (id))
 (defvar decknix--agent-resume-target-sid)
 (defvar decknix--agent-resume-native-done)
+(defvar decknix--agent-resume-native-method)
+(declare-function decknix--agent-resume-bridge-replays-p
+                  "decknix-agent-resume-native" (method))
 (declare-function decknix-agent-provider-sessions-dir
                   "decknix-agent-provider" (id))
 (declare-function decknix-agent-provider-session-file-extension
@@ -1193,7 +1196,18 @@ dedupes against live buffers before calling here."
                          (format "*%s: %s*" lbl ,bname)))
                        (setq-local shell-maker--buffer-name-override
                                    (buffer-name))))
-                   (decknix--agent-session-prepopulate ,sid ,n)
+                   ;; Skip when the bridge is replaying the transcript to
+                   ;; us itself (ACP `session/load', which is how pi
+                   ;; restores).  Exactly one side may render the
+                   ;; history; doing both shows the whole conversation
+                   ;; twice.  The advice publishes its choice
+                   ;; synchronously at session-init, well before this
+                   ;; timer, and clears it if the request failed -- in
+                   ;; which case we prepopulate as always.
+                   (unless (decknix--agent-resume-bridge-replays-p
+                            (bound-and-true-p
+                             decknix--agent-resume-native-method))
+                     (decknix--agent-session-prepopulate ,sid ,n))
                    ;; #151 M6: after the transcript history is restored,
                    ;; replay the broker's in-flight turn — the agent output
                    ;; that streamed while Emacs was detached — so it lands
