@@ -559,6 +559,15 @@ interactively."
       (decknix--agent-context-render-window
        (+ decknix--agent-history-cursor step))))))
 
+(defvar-local decknix--agent-input-ring-seeded nil
+  "Non-nil once this buffer's input ring was seeded from its session.
+Guards `decknix--agent-session-restore-input-ring' so it seeds ONCE --
+see `decknix--input-ring-should-seed-p' for why `ring-empty-p' alone
+never fired on a resumed buffer.")
+
+(declare-function decknix--input-ring-should-seed-p
+                  "decknix-agent-input-ring" (ring-empty already-seeded))
+
 (defun decknix--agent-session-restore-input-ring (session-id)
   "Populate `comint-input-ring' with prompts from SESSION-ID's local JSON.
 On a freshly-resumed session the ring is created empty by
@@ -579,7 +588,9 @@ No-ops when the ring already has entries (the user has typed in this
 buffer) so we never clobber fresh history with stale on-disk data."
   (when (and (bound-and-true-p comint-input-ring)
              (ring-p comint-input-ring)
-             (ring-empty-p comint-input-ring))
+             (decknix--input-ring-should-seed-p
+              (ring-empty-p comint-input-ring)
+              (bound-and-true-p decknix--agent-input-ring-seeded)))
     (let* ((file (decknix--agent-session-file session-id))
            ;; Provider-aware: the resumed buffer's backend selects the
            ;; extraction adapter (auggie JSON vs claude .jsonl vs ...).  Read
@@ -597,7 +608,8 @@ buffer) so we never clobber fresh history with stale on-disk data."
           (setq-local comint-input-ring-size needed)
           (setq-local comint-input-ring (make-ring needed)))
         (dolist (p (decknix--input-ring-insertion-order prompts))
-          (ring-insert comint-input-ring p))))))
+          (ring-insert comint-input-ring p))
+        (setq-local decknix--agent-input-ring-seeded t)))))
 
 (defun decknix--agent-unsorted-table (candidates)
   "Wrap CANDIDATES in a completion table that preserves list order.

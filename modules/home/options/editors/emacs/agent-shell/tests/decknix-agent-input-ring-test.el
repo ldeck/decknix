@@ -81,5 +81,30 @@
     (decknix--input-ring-insertion-order input)
     (should (equal snapshot input))))
 
+
+;; -- seeding a RESUMED buffer -----------------------------------------
+;;
+;; The seeding guard was `ring-empty-p' alone, which did nothing on the
+;; case it existed for.  By the time the resume timer runs, comint has
+;; already inherited the shared history, so the ring is not empty and the
+;; session's own prompts were never loaded.  Measured on a live pi
+;; session: 3 user entries in the transcript, 187 entries in the ring --
+;; `M-p' cycled other sessions' prompts.
+
+(ert-deftest decknix-input-ring/seeds-a-resumed-buffer-with-inherited-history ()
+  "A non-empty (inherited) ring must NOT stop the session seeding."
+  (should (decknix--input-ring-should-seed-p nil nil)))
+
+(ert-deftest decknix-input-ring/seeds-an-empty-ring ()
+  "The original case still seeds."
+  (should (decknix--input-ring-should-seed-p t nil)))
+
+(ert-deftest decknix-input-ring/never-seeds-twice ()
+  "Once seeded, later passes leave the ring alone.
+This is what protects prompts the user types after resume -- the concern
+the `ring-empty-p' guard was reaching for."
+  (should-not (decknix--input-ring-should-seed-p nil t))
+  (should-not (decknix--input-ring-should-seed-p t t)))
+
 (provide 'decknix-agent-input-ring-test)
 ;;; decknix-agent-input-ring-test.el ends here

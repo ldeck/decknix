@@ -84,5 +84,33 @@ PROMPTS is not mutated; the caller's list is left intact."
         (push p acc)))
     acc))
 
+
+(defun decknix--input-ring-should-seed-p (ring-empty already-seeded)
+  "Return non-nil when a resumed buffer's input ring should be seeded.
+
+RING-EMPTY is whether `comint-input-ring' currently holds nothing;
+ALREADY-SEEDED whether this buffer has been seeded from its session
+already.
+
+The original guard was RING-EMPTY alone, and it silently did nothing on
+exactly the case it was written for.  By the time the resume timer runs,
+the buffer's ring is already populated -- comint inherits the shared
+history -- so the guard short-circuited and the session's own prompts
+were never loaded.  Measured on a live pi session:
+
+    transcript user entries:  3
+    comint-input-ring length: 187
+
+so `M-p' cycled 187 prompts from OTHER sessions.  Same shared history
+that filed four new sessions into the `e06099' container.
+
+Seeding once per buffer instead fixes that without reintroducing what
+RING-EMPTY was protecting: at resume the user has not typed here yet, so
+there is no fresh input to clobber, and the ALREADY-SEEDED flag stops a
+later relabel or refresh wiping what they subsequently type."
+  (and (not already-seeded)
+       (or ring-empty t)
+       t))
+
 (provide 'decknix-agent-input-ring)
 ;;; decknix-agent-input-ring.el ends here
