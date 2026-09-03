@@ -141,6 +141,13 @@
 (declare-function decknix--agent-broker-wrap-command
                   "decknix-agent-session-broker" (argv key))
 
+;; Review identity: recorded so reattach's rename cannot orphan a
+;; session and let a second reviewer launch against the same PR.
+(declare-function decknix--hub-review-pr-key-from-name
+                  "decknix-hub-review-identity" (name))
+(declare-function decknix--agent-save-review-pr-for-conv-key
+                  "decknix-agent-session-broker" (conv-key pr-key))
+
 ;; Session cache state (carved into `decknix-agent-session-cache';
 ;; mutated here to force the picker to pick up the new session).
 (defvar decknix--agent-session-cache-time)
@@ -334,6 +341,18 @@ raises the usual attention indicator when it wants input."
         (when conv-key
           (decknix--agent-session-save-model-for-conv-key
            conv-key model))))
+    ;; Record which PR a review session is on, so "does this PR already
+    ;; have a reviewer?" is answered from a fact rather than from the
+    ;; buffer name.  Captured HERE because NAME is still the launcher's
+    ;; `pr-<repo>-<number>' construction; reattach later renames the
+    ;; buffer from its tags, which is precisely what made the old
+    ;; name-matching check miss and spawn duplicate reviewers.
+    ;; Non-review quick actions yield no key and record nothing.
+    (let ((pr-key (decknix--hub-review-pr-key-from-name name))
+          (conv-key (and (stringp command) (not (string-empty-p command))
+                         (decknix--agent-conversation-key command))))
+      (when (and pr-key conv-key)
+        (decknix--agent-save-review-pr-for-conv-key conv-key pr-key)))
     ;; Find the newly created shell buffer and subscribe to prompt-ready.
     ;; agent-shell-start creates the buffer synchronously (mode-hook fires
     ;; before it returns), so find-new-shell-buffer works immediately.

@@ -982,18 +982,40 @@ Order: `hide' → `show' → `mentioned' → `hide'.  See
 ;; -- Hub: active review detection --
 ;; Cross-references request items against live agent-shell buffers
 ;; to detect PRs that already have a review session open.
+(declare-function decknix--hub-review-session-covers-p
+                  "decknix-hub-review-identity"
+                  (repo number buffer-name tags review-pr))
+(declare-function decknix--agent-tags-for-conv-key
+                  "decknix-agent-tags" (conv-key))
+(declare-function decknix--agent-review-pr-for-conv-key
+                  "decknix-agent-session-broker" (conv-key))
+(defvar decknix--agent-conv-key)
 (defun decknix--hub-request-has-live-session-p (item)
   "Return non-nil if ITEM's PR has a live agent-shell review session.
-Checks buffer names for the pattern `pr-<repo>-<number>'."
+
+Identity is decided by `decknix--hub-review-session-covers-p': the PR
+coordinates recorded at launch first, then tags, then the legacy
+`pr-<repo>-<number>' buffer-name convention.
+
+This used to test the buffer NAME alone, which worked only because a
+restart killed every review session and they were relaunched under that
+name.  Once broker reattach (#151) let them survive, they returned named
+from their tags and the needle stopped matching -- so the hub concluded
+each PR had no reviewer and auto-review launched a second agent against
+six live PRs at once."
   (let* ((repo-full (or (alist-get 'repo item) ""))
-         (repo (car (last (split-string repo-full "/"))))
-         (number (alist-get 'number item))
-         (needle (format "pr-%s-%s" repo number)))
+         (number (alist-get 'number item)))
     (and (fboundp 'agent-shell-buffers)
-         (seq-some (lambda (buf)
-                     (string-match-p (regexp-quote needle)
-                                     (buffer-name buf)))
-                   (agent-shell-buffers)))))
+         (seq-some
+          (lambda (buf)
+            (with-current-buffer buf
+              (let ((ck (bound-and-true-p decknix--agent-conv-key)))
+                (decknix--hub-review-session-covers-p
+                 repo-full number (buffer-name buf)
+                 (and ck (ignore-errors (decknix--agent-tags-for-conv-key ck)))
+                 (and ck (ignore-errors
+                           (decknix--agent-review-pr-for-conv-key ck)))))))
+          (agent-shell-buffers)))))
 
 (defun decknix--hub-request-session-needles ()
   "Return `pr-<repo>-<number>' needles for every current hub review request.
