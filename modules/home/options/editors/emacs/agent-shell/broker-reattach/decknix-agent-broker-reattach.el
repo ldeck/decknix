@@ -291,10 +291,23 @@ With QUIET, does not message."
     done))
 
 (defun decknix-agent-broker-reattach-maybe-on-startup ()
-  "Arm the startup reattach when enabled.  Idempotent."
+  "Arm the startup reattach when enabled.  Idempotent.
+
+Runs QUIET so a no-op start (the common case: nothing survived, or
+everything is already attached) says nothing.  But a startup that DID
+reattach leaves a line in *Messages*, because otherwise there is no way
+after the fact to tell a timer-driven reattach from the user having
+pressed `p' `M-RET' by hand -- both leave the session id unchanged, so
+the observable end state is identical.  That ambiguity made the
+acceptance test for this feature inconclusive; one message removes it."
   (when decknix-agent-broker-reattach-on-startup
-    (run-with-timer decknix-agent-broker-reattach-delay nil
-                    (lambda () (ignore-errors (decknix-agent-broker-reattach-all t))))))
+    (run-with-timer
+     decknix-agent-broker-reattach-delay nil
+     (lambda ()
+       (let ((done (ignore-errors (decknix-agent-broker-reattach-all t))))
+         (when (and (numberp done) (> done 0))
+           (message "decknix: startup reattached %d broker%s"
+                    done (if (= done 1) "" "s"))))))))
 
 (provide 'decknix-agent-broker-reattach)
 ;;; decknix-agent-broker-reattach.el ends here
