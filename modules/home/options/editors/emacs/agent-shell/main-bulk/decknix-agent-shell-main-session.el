@@ -94,6 +94,10 @@ history; only the model-facing primer is suppressed)."
                   "decknix-agent-session-broker" (provider-id conv-key &optional session-id))
 (declare-function decknix--agent-broker-wrap-command
                   "decknix-agent-session-broker" (argv key))
+(declare-function decknix--agent-broker-stop-p
+                  "decknix-agent-session-broker" (key other-keys))
+(declare-function decknix-agent-broker-stop
+                  "decknix-agent-session-broker" (key))
 (declare-function decknix--agent-broker-save-key-for-conv-key
                   "decknix-agent-session-broker" (conv-key key))
 (defvar decknix--agent-broker-key)
@@ -3014,7 +3018,17 @@ live session cannot be a ppid=1 orphan, so this is safe to run at will."
 
 (defun decknix-agent-session-quit ()
   "Cleanly quit the current agent-shell session.
-Kills the buffer (which sends SIGHUP to auggie, saving the session).
+Kills the buffer and, when the session is brokered, TERMINATES its broker.
+
+Stopping the broker has to be explicit now.  Killing the buffer used to
+end the agent, because the bridge was a child of Emacs; under brokering
+the buffer's process is only the socat client, so `kill-buffer' detaches
+and the agent keeps running.  Auto-close calls this, so without the stop
+every auto-closed review leaked its agent -- observed still running two
+hours after its buffer closed, socket and pidfile intact.
+
+Use `decknix-agent-session-detach' for the other intent: step away and
+leave the agent working.
 
 If other live agent-shell sessions exist, switches to the most
 recently used one that is not already on screen in another window
@@ -3049,7 +3063,20 @@ returns to the welcome screen or *scratch*."
            ;; candidate is already on screen.  Returns nil only
            ;; when no other live sessions exist.
            (replacement
-            (decknix--quit-pick-replacement other-bufs visible-bufs)))
+            (decknix--quit-pick-replacement other-bufs visible-bufs))
+           ;; Broker keys of the OTHER live sessions, so a broker some
+           ;; other buffer is still attached to is never taken down.
+           (other-broker-keys
+            (delq nil (mapcar (lambda (b)
+                                (and (buffer-live-p b)
+                                     (buffer-local-value
+                                      'decknix--agent-broker-key b)))
+                              other-bufs)))
+           (broker-key (bound-and-true-p decknix--agent-broker-key)))
+      ;; BEFORE the kill: the buffer-local key is gone afterwards.
+      (when (and (fboundp 'decknix--agent-broker-stop-p)
+                 (decknix--agent-broker-stop-p broker-key other-broker-keys))
+        (ignore-errors (decknix-agent-broker-stop broker-key)))
       (kill-buffer buf)
       (cond
        (replacement
@@ -3059,6 +3086,29 @@ returns to the welcome screen or *scratch*."
         (decknix-welcome))
        (t
         (switch-to-buffer (get-buffer-create "*scratch*")))))))
+
+(defun decknix-agent-session-detach ()
+  "Close this session's buffer, LEAVING its agent running in its broker.
+
+The counterpart to `decknix-agent-session-quit'.  Detach when you want to
+step away from a long turn and pick it up later -- from another frame,
+after a restart, or once it has finished thinking.  The broker holds the
+bridge outside Emacs' process tree, so the agent keeps working and
+`decknix-agent-broker-reattach-all' (or resuming the conversation) brings
+you back to the SAME process, mid-turn output included.
+
+Only meaningful for a brokered session.  Without a broker the bridge is a
+child of this Emacs and dies with the buffer, so detaching would just be
+quitting with the cleanup skipped -- refuse rather than pretend."
+  (interactive)
+  (unless (derived-mode-p 'agent-shell-mode)
+    (user-error "Not in an agent-shell buffer"))
+  (let ((key (bound-and-true-p decknix--agent-broker-key)))
+    (unless (and key (stringp key) (not (string-empty-p key)))
+      (user-error "Not a brokered session: nothing would survive detaching"))
+    (let ((kill-buffer-query-functions nil))
+      (kill-buffer (current-buffer)))
+    (message "Detached; agent still running (broker %s)" key)))
 
 (defun decknix-agent-session-recent ()
   "Quickly pick from recently used conversations.
