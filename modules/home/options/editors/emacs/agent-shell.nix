@@ -324,6 +324,18 @@ let
   # the hub bulk file: the old name-matching check lived there, was
   # untested, and silently launched duplicate reviewers once reattach
   # started renaming review buffers.
+  # Pure classifier for "is this review session still worth running?".
+  # Reads only fields the hub adapter already writes, so it costs nothing
+  # on the render path -- no `gh' call may happen during redisplay.
+  decknix-hub-review-status-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-review-status";
+    src = ./agent-shell/review-status;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-review-status-test.el"
+    ];
+  };
+
   decknix-hub-review-identity-el = mkEmacsTestedPackage {
     pname = "decknix-hub-review-identity";
     src = ./agent-shell/review-identity;
@@ -3129,6 +3141,7 @@ in
           decknix-agent-review-worktree-el
           decknix-agent-broker-reattach-el
           decknix-hub-review-identity-el
+          decknix-hub-review-status-el
           decknix-agent-acp-trace-el
           decknix-record-el
           decknix-layout-groups-el
@@ -3636,6 +3649,8 @@ in
         ;; Review identity (pure): decides whether a PR already has a
         ;; live reviewer.  Consulted by the hub before launching one.
         (require 'decknix-hub-review-identity)
+        ;; Review-session staleness (merged / answered / stale).
+        (require 'decknix-hub-review-status)
         (require 'decknix-agent-broker-rehydrate)
         (require 'decknix-agent-broker-reattach)
         ;; #151: reattach to brokers that survived the restart.  Armed on a
