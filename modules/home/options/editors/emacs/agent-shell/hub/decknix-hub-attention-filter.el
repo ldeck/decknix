@@ -176,6 +176,11 @@ Toggle with `r'.")
 
 ;; -- engine: sort + visibility predicates -------------------------
 
+(declare-function decknix--hub-review-priority
+                  "decknix-hub-review-priority" (item &optional status age-days))
+(declare-function decknix--hub-review-status
+                  "decknix-hub-review-status" (item found))
+
 (defun decknix--hub-request-activity-time (item)
   "Return ITEM's most-recent-activity timestamp string, or nil.
 Prefers `updated' (GitHub updatedAt) and falls back to `created'.
@@ -185,29 +190,80 @@ it so the sidebar and pickers can never drift out of agreement on
 which time a row is ordered and labelled by."
   (or (alist-get 'updated item) (alist-get 'created item)))
 
+(defvar decknix--hub-requests-sort-mode 'priority
+  "How the Requests section is ordered: `priority' or `activity'.
+
+`priority' answers \"which review should I do next?\", via
+`decknix--hub-review-priority'.  `activity' is the historical order --
+`updated' descending -- which is a recency FEED rather than a queue: a
+bot nitpick bumps a PR as hard as a genuine re-request, and a PR blocking
+a colleague for three days sinks below a typo note.  Kept because it is
+still the right view when the question is \"what just changed?\".")
+
+(defun decknix--hub-request-age-days (item)
+  "Return days since ITEM's last activity, or nil when it has no timestamp."
+  (when-let* ((ts (decknix--hub-request-activity-time item))
+              (parsed (ignore-errors (date-to-time ts))))
+    (/ (float-time (time-subtract (current-time) parsed)) 86400.0)))
+
+(defun decknix--hub-request-priority (item)
+  "Return ITEM's review priority, folding in its staleness classification."
+  (if (fboundp 'decknix--hub-review-priority)
+      (decknix--hub-review-priority
+       item
+       (when (fboundp 'decknix--hub-review-status)
+         (decknix--hub-review-status item t))
+       (decknix--hub-request-age-days item))
+    0))
+
 (defun decknix--hub-sort-requests (items)
-  "Return ITEMS sorted by most-recent activity, newest first by default.
-The sort key is `updated' when present (GitHub updatedAt), falling
-back to `created'.  This surfaces PRs with recent review requests,
-re-requests, or comments at the top of the sidebar.
-When `decknix--hub-requests-sort-reverse' is non-nil, sort ascending
-(oldest-activity-first) instead.  Items without either field sort
-last regardless of direction.  Uses a stable sort on a fresh copy so
-the caller's list is never mutated."
-  (let ((reverse (and (boundp 'decknix--hub-requests-sort-reverse)
-                      decknix--hub-requests-sort-reverse)))
-    (sort (copy-sequence (or items '()))
-          (lambda (a b)
-            (let ((ka (decknix--hub-request-activity-time a))
-                  (kb (decknix--hub-request-activity-time b)))
-              (cond
-               ;; Items without any timestamp drift to the end.
-               ((and (null ka) (null kb)) nil)
-               ((null ka) nil)
-               ((null kb) t)
-               ;; Default: newest first (descending); reverse: oldest first (ascending).
-               (reverse (string< ka kb))
-               (t       (string> ka kb))))))))
+  "Return ITEMS ordered per `decknix--hub-requests-sort-mode'.
+
+In `priority' mode equal scores fall back to activity, so the order is
+total and stable rather than dependent on the feed's own ordering.
+`decknix--hub-requests-sort-reverse' inverts whichever mode is active.
+Sorts a fresh copy, so the caller's list is never mutated.
+
+Priorities are computed ONCE per item into a decorated list rather than
+inside the comparator, which would recompute them O(n log n) times --
+each one parses a timestamp and a title."
+  (let* ((reverse (and (boundp 'decknix--hub-requests-sort-reverse)
+                       decknix--hub-requests-sort-reverse))
+         (by-priority (eq decknix--hub-requests-sort-mode 'priority))
+         (keyed (mapcar (lambda (it)
+                          (list it
+                                (when by-priority
+                                  (decknix--hub-request-priority it))
+                                (decknix--hub-request-activity-time it)))
+                        (copy-sequence (or items '())))))
+    (mapcar
+     #'car
+     (sort keyed
+           (lambda (a b)
+             (let ((pa (nth 1 a)) (pb (nth 1 b))
+                   (ka (nth 2 a)) (kb (nth 2 b)))
+               (cond
+                ;; A timestamp-less item drifts last in EITHER mode.  This
+                ;; check precedes the priority comparison deliberately:
+                ;; such an item still scores (engagement has a baseline),
+                ;; so ranking it on that score would let a malformed entry
+                ;; outrank real work.  The pre-existing contract wins.
+                ((and (null ka) (null kb)) nil)
+                ((null ka) nil)
+                ((null kb) t)
+                ((and by-priority (numberp pa) (numberp pb) (/= pa pb))
+                 (if reverse (< pa pb) (> pa pb)))
+                (reverse (string< ka kb))
+                (t       (string> ka kb)))))))))
+
+(defun decknix-hub-toggle-requests-sort-mode ()
+  "Toggle the Requests section between priority and activity order."
+  (interactive)
+  (setq decknix--hub-requests-sort-mode
+        (if (eq decknix--hub-requests-sort-mode 'priority) 'activity 'priority))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Requests sorted by %s" decknix--hub-requests-sort-mode))
 
 (defun decknix--hub-attention-visible-p (item hide-reply hide-bot only-my)
   "Return non-nil if ITEM passes the three attention filters.
