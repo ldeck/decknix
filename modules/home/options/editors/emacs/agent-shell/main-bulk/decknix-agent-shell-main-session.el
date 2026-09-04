@@ -3027,8 +3027,8 @@ and the agent keeps running.  Auto-close calls this, so without the stop
 every auto-closed review leaked its agent -- observed still running two
 hours after its buffer closed, socket and pidfile intact.
 
-Use `decknix-agent-session-detach' for the other intent: step away and
-leave the agent working.
+Use `decknix-agent-session-detach' (`C-c s D') for the other intent:
+step away and leave the agent working.
 
 If other live agent-shell sessions exist, switches to the most
 recently used one that is not already on screen in another window
