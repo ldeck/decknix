@@ -59,6 +59,30 @@ ACP bridge for the broker to hold."
   (let ((decknix-agent-broker-enable nil))
     (should-not (decknix--agent-broker-should-wrap-p 'pi))))
 
+;; --- quit terminates the broker; detach deliberately does not ---
+;;
+;; Brokering silently redefined what `kill-buffer' means.  The buffer's
+;; process is the socat client, so killing it DETACHES and the agent
+;; keeps running -- which is the point of #151, and wrong for quit.  An
+;; auto-closed review was leaking its agent: buffer gone, broker still up
+;; two hours later with a 1.6MB log.
+
+(ert-deftest decknix-broker/stop-p-with-a-key ()
+  "A brokered session being quit stops its broker."
+  (should (decknix--agent-broker-stop-p "s-1" nil)))
+
+(ert-deftest decknix-broker/stop-p-without-a-key ()
+  "An unbrokered session has nothing to stop."
+  (should-not (decknix--agent-broker-stop-p nil nil))
+  (should-not (decknix--agent-broker-stop-p "" nil)))
+
+(ert-deftest decknix-broker/stop-p-spares-a-shared-broker ()
+  "Never stop a broker another live buffer is still attached to.
+Killing it would take down an agent someone else is watching, in a
+window they never touched."
+  (should-not (decknix--agent-broker-stop-p "s-1" '("s-1" "s-2")))
+  (should (decknix--agent-broker-stop-p "s-1" '("s-2" "s-3"))))
+
 (ert-deftest decknix-broker/generate-key ()
   "Keys are non-empty, filename-safe, and unique across calls."
   (let ((k1 (decknix--agent-broker-generate-key))

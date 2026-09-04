@@ -163,6 +163,64 @@ was recorded."
       (puthash conv-key entry convs)
       (decknix--agent-tags-write store))))
 
+;; ── Stopping a broker ────────────────────────────────────────────────
+;;
+;; Brokering redefined what killing an agent buffer means.  The buffer's
+;; process is the socat client, so killing it DETACHES: the broker and
+;; the agent behind it survive.  That is exactly what #151 is for, and
+;; exactly wrong for "quit" -- which is what auto-close calls.  The
+;; result was a silent leak: an auto-closed review left its agent running
+;; indefinitely, socket, pidfile and megabytes of log intact.
+;;
+;; So the two intents need separating.  Detach keeps the agent; quit ends
+;; it and must say so explicitly, because `kill-buffer' no longer does.
+
+(declare-function decknix--agent-broker-pidfile-path
+                  "decknix-agent-broker-rehydrate" (key))
+
+(defun decknix--agent-broker-stop-p (key other-keys)
+  "Non-nil when the broker KEY should be terminated on quit.
+
+OTHER-KEYS are the broker keys of the OTHER live agent buffers.  A broker
+that another buffer is still attached to is spared: stopping it would
+kill an agent someone is watching in a window they never touched.  Pure,
+so both conditions are testable without processes."
+  (and key (stringp key) (not (string-empty-p key))
+       (not (member key other-keys))
+       t))
+
+(defun decknix--agent-broker-pid (key)
+  "Return the pid recorded in KEY's pidfile, or nil."
+  (when-let* ((pf (and (fboundp 'decknix--agent-broker-pidfile-path)
+                       (decknix--agent-broker-pidfile-path key)))
+              ((file-readable-p pf))
+              (pid (ignore-errors
+                     (string-to-number
+                      (string-trim
+                       (with-temp-buffer (insert-file-contents pf)
+                                         (buffer-string)))))))
+    (and (integerp pid) (> pid 0) pid)))
+
+(defun decknix-agent-broker-stop (key)
+  "Terminate the broker KEY and clean up its socket and pidfile.
+
+Returns non-nil when a process was signalled.  Killing the broker takes
+the bridge with it: the bridge is its child, so it dies with the process
+group rather than needing a second signal.
+
+Leaves the LOG in place.  It is the record of what the agent did while
+detached, and the rehydrate path reads it; a stopped session is exactly
+when you are most likely to want it."
+  (when-let* ((pid (decknix--agent-broker-pid key)))
+    (ignore-errors (signal-process pid 'TERM))
+    (let ((pf (and (fboundp 'decknix--agent-broker-pidfile-path)
+                   (decknix--agent-broker-pidfile-path key))))
+      (when (and pf (file-exists-p pf)) (ignore-errors (delete-file pf)))
+      (when pf
+        (let ((sock (file-name-sans-extension pf)))
+          (when (file-exists-p sock) (ignore-errors (delete-file sock))))))
+    pid))
+
 ;; ── Recorded review coordinates ──────────────────────────────────────
 ;;
 ;; Co-resident with the broker key because they are the same kind of
