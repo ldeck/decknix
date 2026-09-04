@@ -87,6 +87,10 @@
 ;; Tracked sender: registers the request in `:active-requests' for its
 ;; lifetime, which is what lets a `session/load' replay render.
 (declare-function agent-shell--send-request "agent-shell")
+(declare-function agent-shell--live-input-prompt-p "agent-shell")
+(declare-function shell-maker-finish-output "ext:shell-maker")
+(defvar shell-maker--config)
+(defvar comint-last-prompt)
 (declare-function acp-make-session-resume-request "acp")
 (declare-function acp-make-session-load-request "acp")
 ;; Transcript prepopulation lives in the history layer; needed here only
@@ -316,7 +320,11 @@ and permission mode just as for a fresh session."
                             (propertize "Resuming session" 'font-lock-face
                                         'font-lock-doc-markup-face))
         :expanded t
-        :body ""))
+        :body "")
+       ;; LAST, after every bootstrapping fragment has been written --
+       ;; anything appended afterwards would bury the prompt again.
+       (when (eq method 'load)
+         (decknix--agent-resume-ensure-live-prompt shell-buffer)))
      :on-failure
      (lambda (_error _raw-message)
        (with-current-buffer shell-buffer
@@ -341,6 +349,44 @@ and permission mode just as for a fresh session."
                              decknix-agent-session-history-count
                            0)))))
        (apply orig-fn args)))))
+
+(defun decknix--agent-resume-prompt-buried-p (prompt live-p trailing-text)
+  "Non-nil when the live prompt is not usable at the end of the buffer.
+
+PROMPT is `comint-last-prompt' (or nil), LIVE-P whether it still reads as
+a live input prompt, and TRAILING-TEXT whether any non-whitespace follows
+it.  Pure so the three states can be pinned without a live session.
+
+A prompt with content after it is the failure this exists to catch: the
+session reports ready, but the only place to type sits above a screenful
+of replayed transcript, inside read-only output."
+  (or (null prompt) (not live-p) (and trailing-text t)))
+
+(defun decknix--agent-resume-ensure-live-prompt (shell-buf)
+  "Emit a fresh prompt in SHELL-BUF when the `load' replay left none usable.
+
+`session/load' replays the transcript at `point-max', which lands BELOW
+the prompt the shell created at startup.  Upstream only creates a prompt
+`(unless comint-last-prompt)', and that prompt still exists -- just
+buried -- so nothing re-emits one and the buffer ends in read-only output
+with nowhere to type.  Upstream's own load path sidesteps this by
+narrowing so the replay renders ABOVE the early prompt; our replay
+arrives inside the request, where that narrowing is not ours to do, so
+re-emit at the end instead."
+  (when (buffer-live-p shell-buf)
+    (with-current-buffer shell-buf
+      (let* ((prompt comint-last-prompt)
+             (live-p (and prompt
+                          (fboundp 'agent-shell--live-input-prompt-p)
+                          (agent-shell--live-input-prompt-p prompt)))
+             (trailing (and prompt
+                            (save-excursion
+                              (goto-char (marker-position (cdr prompt)))
+                              (re-search-forward "[^ \t\n]" nil t)))))
+        (when (decknix--agent-resume-prompt-buried-p prompt live-p trailing)
+          (goto-char (point-max))
+          (shell-maker-finish-output :config shell-maker--config :success nil)
+          (decknix--agent-resume-focus-prompt shell-buf))))))
 
 (defun decknix--agent-resume-focus-prompt (shell-buf)
   "Put point on SHELL-BUF's live prompt at `point-max'.

@@ -344,5 +344,29 @@ and each of those writes another fragment."
         (should (= 1 focused))
         (should unsubscribed)))))
 
+;; --- is the live prompt still usable after a replay? ---
+;;
+;; `session/load' replays at `point-max', BELOW the prompt the shell made
+;; at startup.  Upstream only creates a prompt `(unless comint-last-prompt)',
+;; and that prompt still exists -- just buried -- so nothing re-emits one
+;; and the session reports ready with nowhere to type.
+
+(ert-deftest decknix-resume-prompt--buried-when-text-follows ()
+  "A prompt with content after it is unusable, however live it looks."
+  (should (decknix--agent-resume-prompt-buried-p '(1 . 5) t t)))
+
+(ert-deftest decknix-resume-prompt--buried-when-absent ()
+  "No prompt at all is the plain case."
+  (should (decknix--agent-resume-prompt-buried-p nil nil nil)))
+
+(ert-deftest decknix-resume-prompt--buried-when-not-live ()
+  "A prompt that no longer reads as live input cannot be typed at."
+  (should (decknix--agent-resume-prompt-buried-p '(1 . 5) nil nil)))
+
+(ert-deftest decknix-resume-prompt--ok-when-live-and-last ()
+  "A live prompt with nothing after it needs no replacement.
+Guards against re-emitting a second prompt on every resume."
+  (should-not (decknix--agent-resume-prompt-buried-p '(1 . 5) t nil)))
+
 (provide 'decknix-agent-resume-native-test)
 ;;; decknix-agent-resume-native-test.el ends here
