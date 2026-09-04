@@ -4823,7 +4823,6 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c A o" "sidebar focus"
             "C-c A O" "sidebar toggle (this tab)"
             "C-c A q" "quit session"
-            "C-c A d" "detach session (agent keeps running)"
             "C-c A x" "arm auto-close"
             "C-c A R" "rename session"
             "C-c A r" "recent sessions"
@@ -4859,11 +4858,6 @@ ${optionalString cfg.tableOverlay.enable ''
         (define-key decknix-agent-prefix-map (kbd "o") 'decknix-focus-sidebar)               ; Jump to the sidebar window
         (define-key decknix-agent-prefix-map (kbd "O") 'decknix-sidebar-visibility-toggle)   ; Toggle sidebar visibility (this tab)
         (define-key decknix-agent-prefix-map (kbd "q") 'decknix-agent-session-quit)         ; Quit/close session
-        ;; Detach: close the buffer, leave the agent running in its
-        ;; broker.  The behaviour `q' had by accident once sessions were
-        ;; brokered -- now deliberate, and separate from quit, which
-        ;; terminates.
-        (define-key decknix-agent-prefix-map (kbd "d") 'decknix-agent-session-detach)
         (define-key decknix-agent-prefix-map (kbd "?") 'decknix-agent-help-map)           ; Help sub-prefix
         (define-key decknix-agent-help-map (kbd "k") 'decknix-agent-help-keys)            ; Keybindings
         (define-key decknix-agent-help-map (kbd "t") 'decknix-agent-help-tutorial)        ; Tutorial
@@ -4893,7 +4887,7 @@ ${optionalString cfg.tableOverlay.enable ''
         (dolist (b '(("n" . decknix-agent-session-new)
                      ("f" . decknix-agent-session-fork)
                      ("q" . decknix-agent-session-quit)
-                     ("d" . decknix-agent-session-detach)
+                     ("D" . decknix-agent-session-detach)
                      ("R" . decknix-agent-session-rename)
                      ("r" . decknix-agent-session-recent)
                      ("s" . decknix-agent-session-picker)
@@ -4924,7 +4918,8 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c s"   "Session"
             "C-c s n" "new session"
             "C-c s f" "fork session"
-            "C-c s q" "quit session"
+            "C-c s q" "quit session (ends the agent)"
+            "C-c s D" "detach session (agent keeps running)"
             "C-c s R" "rename session"
             "C-c s r" "recent sessions"
             "C-c s s" "session picker"
