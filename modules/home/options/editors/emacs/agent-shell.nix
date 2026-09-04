@@ -327,6 +327,18 @@ let
   # Pure classifier for "is this review session still worth running?".
   # Reads only fields the hub adapter already writes, so it costs nothing
   # on the render path -- no `gh' call may happen during redisplay.
+  # Ordering for "which review next?".  Separate from review-status: that
+  # one classifies a single item, this one ranks a queue, and the weights
+  # are a judgement call that deserves its own tests to argue with.
+  decknix-hub-review-priority-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-review-priority";
+    src = ./agent-shell/review-priority;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-review-priority-test.el"
+    ];
+  };
+
   decknix-hub-review-status-el = mkEmacsTestedPackage {
     pname = "decknix-hub-review-status";
     src = ./agent-shell/review-status;
@@ -758,7 +770,13 @@ let
   decknix-hub-attention-filter-el = mkEmacsTestedPackage {
     pname = "decknix-hub-attention-filter";
     src = ./agent-shell/hub;
-    packageRequires = [ ];
+    # The Requests sort now DEFAULTS to priority order, so the scorer is a
+    # real dependency rather than an optional enhancement.  Declared so the
+    # test phase can exercise the priority path -- without it the suite
+    # silently falls back to activity ordering and passes for the wrong
+    # reason, proving only that the degradation works.
+    packageRequires = [ decknix-hub-review-priority-el
+                        decknix-hub-review-status-el ];
     testFiles = [
       "decknix-hub-attention-filter-test.el"
     ];
@@ -3142,6 +3160,7 @@ in
           decknix-agent-broker-reattach-el
           decknix-hub-review-identity-el
           decknix-hub-review-status-el
+          decknix-hub-review-priority-el
           decknix-agent-acp-trace-el
           decknix-record-el
           decknix-layout-groups-el
@@ -3651,6 +3670,9 @@ in
         (require 'decknix-hub-review-identity)
         ;; Review-session staleness (merged / answered / stale).
         (require 'decknix-hub-review-status)
+        ;; Review queue ordering (incident > feature > EH, crossed with
+        ;; engagement).  Replaces the recency feed as the default.
+        (require 'decknix-hub-review-priority)
         (require 'decknix-agent-broker-rehydrate)
         (require 'decknix-agent-broker-reattach)
         ;; #151: reattach to brokers that survived the restart.  Armed on a
@@ -4928,6 +4950,11 @@ ${optionalString cfg.tableOverlay.enable ''
           (define-key decknix-session-prefix-map (kbd "N") 'decknix-agent-net-error-retry-all)
           (define-key decknix-session-prefix-map (kbd "C-n") 'decknix-agent-net-error-reset-all)
           (define-key decknix-session-prefix-map (kbd "M-n") 'decknix-agent-net-error-list))
+        ;; Requests ordering: priority (default) vs the historical
+        ;; recency feed.  `o' for order.
+        (when (fboundp 'decknix-hub-toggle-requests-sort-mode)
+          (define-key decknix-session-prefix-map
+                      (kbd "o") 'decknix-hub-toggle-requests-sort-mode))
         (with-eval-after-load 'which-key
           (which-key-add-key-based-replacements
             "C-c s"   "Session"
@@ -4950,7 +4977,8 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c s C-l" "layout delete"
             "C-c s N" "net-fail: reset + retry all"
             "C-c s C-n" "net-fail: reset all"
-            "C-c s M-n" "net-fail: list stuck"))
+            "C-c s M-n" "net-fail: list stuck"
+            "C-c s o" "requests: priority <-> activity order"))
 
         ;; Compat: the bumped `agent-shell-workspace--buffer-config' calls
         ;; (map-elt config :buffer-name) over each element of

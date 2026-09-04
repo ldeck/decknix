@@ -412,5 +412,56 @@ reviewer, was always shown under hide-any.  It must now be hidden."
     (call-interactively #'decknix--hub-cycle-requests-hide-reviewed)
     (should (eq decknix--hub-requests-hide-reviewed nil))))
 
+
+;; --- priority ordering (the default) actually applies ---
+;;
+;; These load the scorer explicitly.  Without it every item scores 0 and
+;; the sort degrades to activity order -- which is correct behaviour, but
+;; means the rest of the sort tests here prove only the FALLBACK.
+
+(require 'decknix-hub-review-priority nil t)
+(require 'decknix-hub-review-status nil t)
+
+(ert-deftest decknix-hub-attention-filter--priority-beats-recency ()
+  "An incident PR outranks a newer feature PR in the default mode."
+  (skip-unless (fboundp 'decknix--hub-review-priority))
+  (let* ((decknix--hub-requests-sort-mode 'priority)
+         (decknix--hub-requests-sort-reverse nil)
+         (hot '((title . "HOT-1: incident") (number . 1)
+                (updated . "2026-01-01T00:00:00Z")))
+         (feat '((title . "NYX-1: feature") (number . 2)
+                 (updated . "2026-09-04T00:00:00Z")))
+         (sorted (decknix--hub-sort-requests (list feat hot))))
+    (should (equal 1 (alist-get 'number (car sorted))))))
+
+(ert-deftest decknix-hub-attention-filter--activity-mode-restores-recency ()
+  "Switching to `activity' gives the historical newest-first order back."
+  (skip-unless (fboundp 'decknix--hub-review-priority))
+  (let* ((decknix--hub-requests-sort-mode 'activity)
+         (decknix--hub-requests-sort-reverse nil)
+         (hot '((title . "HOT-1: incident") (number . 1)
+                (updated . "2026-01-01T00:00:00Z")))
+         (feat '((title . "NYX-1: feature") (number . 2)
+                 (updated . "2026-09-04T00:00:00Z")))
+         (sorted (decknix--hub-sort-requests (list hot feat))))
+    (should (equal 2 (alist-get 'number (car sorted))))))
+
+(ert-deftest decknix-hub-attention-filter--priority-ties-fall-back-to-activity ()
+  "Equal priorities order by recency, so the sort stays total.
+
+Both dates are far past `decknix--hub-review-age-cap', so their age
+bonuses saturate to the same value and the scores are genuinely equal --
+which is the only way to reach the fallback, since age is part of the
+score rather than a separate tiebreak."
+  (skip-unless (fboundp 'decknix--hub-review-priority))
+  (let* ((decknix--hub-requests-sort-mode 'priority)
+         (decknix--hub-requests-sort-reverse nil)
+         (older '((title . "NYX-1: a") (number . 1)
+                  (updated . "2026-01-01T00:00:00Z")))
+         (newer '((title . "NYX-2: b") (number . 2)
+                  (updated . "2026-02-01T00:00:00Z")))
+         (sorted (decknix--hub-sort-requests (list older newer))))
+    (should (equal 2 (alist-get 'number (car sorted))))))
+
 (provide 'decknix-hub-attention-filter-test)
 ;;; decknix-hub-attention-filter-test.el ends here
