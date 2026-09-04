@@ -84,6 +84,9 @@
 (declare-function agent-shell-subscribe-to "agent-shell")
 (declare-function agent-shell-unsubscribe "agent-shell")
 (declare-function acp-send-request "acp")
+;; Tracked sender: registers the request in `:active-requests' for its
+;; lifetime, which is what lets a `session/load' replay render.
+(declare-function agent-shell--send-request "agent-shell")
 (declare-function acp-make-session-resume-request "acp")
 (declare-function acp-make-session-load-request "acp")
 ;; Transcript prepopulation lives in the history layer; needed here only
@@ -252,7 +255,26 @@ and permission mode just as for a fresh session."
        :block-id "starting"
        :body (format "\n\nResuming session %s..." session-id)
        :append t))
-    (acp-send-request
+    ;; `session/load' MUST go through the request-tracking sender.  The
+    ;; bridge replays the whole transcript as `session/update's WHILE the
+    ;; request is in flight, and every handler that renders them gates on
+    ;; `agent-shell--active-requests-p'.  Sent raw, the replay arrives
+    ;; with nothing to attach to and each chunk is reported as
+    ;; "Out of turn user_message_chunk - ACP server bug" instead of
+    ;; rendering as conversation -- blaming the bridge for our own
+    ;; bookkeeping.  Upstream's replay path fakes the same entry for the
+    ;; same reason; here the request really is in flight, so tracking it
+    ;; honestly is enough.
+    ;;
+    ;; `session/resume' deliberately keeps the raw sender: it replays
+    ;; nothing, so it needs no tracking, and leaving a working path
+    ;; untouched avoids shifting where its bootstrapping fragments land
+    ;; (several handlers place output using `:above-last-prompt (not
+    ;; active-requests)').
+    (funcall
+     (if (and (eq method 'load) (fboundp 'agent-shell--send-request))
+         (lambda (&rest args) (apply #'agent-shell--send-request :state state args))
+       (lambda (&rest args) (apply #'acp-send-request args)))
      :client (map-elt state :client)
      :request (if (eq method 'load)
                   (acp-make-session-load-request
