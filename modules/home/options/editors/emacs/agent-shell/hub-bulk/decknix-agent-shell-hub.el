@@ -996,10 +996,50 @@ Order: `hide' → `show' → `mentioned' → `hide'.  See
 (declare-function decknix--agent-review-pr-for-conv-key
                   "decknix-agent-session-broker" (conv-key))
 (defvar decknix--agent-conv-key)
+(defvar decknix--hub-review-session-snapshot nil
+  "Memoised (BUFFER-NAME TAGS REVIEW-PR) for each live agent buffer.")
+(defvar decknix--hub-review-session-snapshot-at 0
+  "`float-time' when `decknix--hub-review-session-snapshot' was built.")
+(defconst decknix--hub-review-session-snapshot-ttl 0.5
+  "Seconds a session snapshot stays fresh.
+Long enough to cover one sidebar render pass -- which is the point -- and
+short enough that a session opened or closed shows up immediately.")
+
+(defun decknix--hub-review-session-snapshot ()
+  "Return the live agent sessions as (BUFFER-NAME TAGS REVIEW-PR) triples.
+
+Built once and memoised, because the naive shape of the caller is a
+nested loop: every Request row asked every session whether it covered
+that PR, and each ask did a `with-current-buffer' plus two store
+lookups.  At 21 requests and 11 sessions that is 231 traversals per
+render, measured at 23.6ms -- on the redisplay path, where the sidebar
+performance work exists precisely to keep costs like this out.
+
+Hoisting the per-session reads here makes it O(sessions) store work plus
+O(requests x sessions) pure comparisons; `covers-p' itself is ~3us."
+  (if (< (- (float-time) decknix--hub-review-session-snapshot-at)
+         decknix--hub-review-session-snapshot-ttl)
+      decknix--hub-review-session-snapshot
+    (setq decknix--hub-review-session-snapshot-at (float-time)
+          decknix--hub-review-session-snapshot
+          (when (fboundp 'agent-shell-buffers)
+            (delq nil
+                  (mapcar
+                   (lambda (b)
+                     (when (buffer-live-p b)
+                       (with-current-buffer b
+                         (let ((ck (bound-and-true-p decknix--agent-conv-key)))
+                           (list (buffer-name b)
+                                 (and ck (ignore-errors
+                                           (decknix--agent-tags-for-conv-key ck)))
+                                 (and ck (ignore-errors
+                                           (decknix--agent-review-pr-for-conv-key ck))))))))
+                   (agent-shell-buffers)))))))
+
 (defun decknix--hub-request-has-live-session-p (item)
   "Return non-nil if ITEM's PR has a live agent-shell review session.
 
-Identity is decided by `decknix--hub-review-session-covers-p': the PR
+Identity comes from `decknix--hub-review-session-covers-p': the PR
 coordinates recorded at launch first, then tags, then the legacy
 `pr-<repo>-<number>' buffer-name convention.
 
@@ -1009,19 +1049,12 @@ name.  Once broker reattach (#151) let them survive, they returned named
 from their tags and the needle stopped matching -- so the hub concluded
 each PR had no reviewer and auto-review launched a second agent against
 six live PRs at once."
-  (let* ((repo-full (or (alist-get 'repo item) ""))
-         (number (alist-get 'number item)))
-    (and (fboundp 'agent-shell-buffers)
-         (seq-some
-          (lambda (buf)
-            (with-current-buffer buf
-              (let ((ck (bound-and-true-p decknix--agent-conv-key)))
+  (let ((repo (or (alist-get 'repo item) ""))
+        (number (alist-get 'number item)))
+    (seq-some (lambda (sn)
                 (decknix--hub-review-session-covers-p
-                 repo-full number (buffer-name buf)
-                 (and ck (ignore-errors (decknix--agent-tags-for-conv-key ck)))
-                 (and ck (ignore-errors
-                           (decknix--agent-review-pr-for-conv-key ck)))))))
-          (agent-shell-buffers)))))
+                 repo number (nth 0 sn) (nth 1 sn) (nth 2 sn)))
+              (decknix--hub-review-session-snapshot))))
 
 (defun decknix--hub-request-session-needles ()
   "Return `pr-<repo>-<number>' needles for every current hub review request.
