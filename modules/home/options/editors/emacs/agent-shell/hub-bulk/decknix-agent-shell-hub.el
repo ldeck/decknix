@@ -985,6 +985,12 @@ Order: `hide' → `show' → `mentioned' → `hide'.  See
 (declare-function decknix--hub-review-session-covers-p
                   "decknix-hub-review-identity"
                   (repo number buffer-name tags review-pr))
+(declare-function decknix--hub-review-status
+                  "decknix-hub-review-status" (item found))
+(declare-function decknix--hub-review-status-badge
+                  "decknix-hub-review-status" (status))
+(declare-function decknix--hub-review-find-item
+                  "decknix-hub-review-status" (items repo number))
 (declare-function decknix--agent-tags-for-conv-key
                   "decknix-agent-tags" (conv-key))
 (declare-function decknix--agent-review-pr-for-conv-key
@@ -2903,6 +2909,34 @@ Shows count and summary like [2⬆ 1✓] (2 open, 1 merged)."
               (format " [%s]" (string-join (nreverse parts) " "))
             ""))))))
 
+(declare-function decknix--agent-review-pr-for-conv-key
+                  "decknix-agent-session-broker" (conv-key))
+
+(defun decknix--hub-session-review-status-badge (conv-key)
+  "Return the review-staleness badge for the session CONV-KEY, or \"\".
+
+Only review sessions carry recorded PR coordinates, so anything else
+returns empty rather than guessing.  This is the ONLY surface that can
+show `gone': a merged or closed PR has left the feed, so it has no
+request row left to badge -- but its session is still sitting there,
+still running, which is exactly what needs saying.
+
+Reads the already-parsed feed; no fetch, so it is safe on the render
+path."
+  (let ((pr (and conv-key
+                 (fboundp 'decknix--agent-review-pr-for-conv-key)
+                 (ignore-errors
+                   (decknix--agent-review-pr-for-conv-key conv-key)))))
+    (if (and (stringp pr)
+             (string-match "\\`\\(.+\\)#\\([0-9]+\\)\\'" pr))
+        (let* ((repo (match-string 1 pr))
+               (num (string-to-number (match-string 2 pr)))
+               (items (alist-get 'items decknix--hub-reviews))
+               (item (decknix--hub-review-find-item items repo num)))
+          (decknix--hub-review-status-badge
+           (decknix--hub-review-status item (and item t))))
+      "")))
+
 ;; -- Hub: session attention icons (📥 inbox / 📤 sent) --
 ;; Parallels the attention signals rendered on Requests/WIP rows, but
 ;; aggregated across all PRs linked to a conversation.  Surfaces
@@ -3127,6 +3161,15 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                (status-str (if (string-empty-p active-str)
                                status-str
                              (concat status-str active-str)))
+               ;; Review-session staleness: the author pushed since
+               ;; (`stale'), or somebody else responded (`answered').
+               ;; `gone' never appears here -- a PR that left the feed has
+               ;; no request row -- so this surface shows two of the three.
+               (stale-str (decknix--hub-review-status-badge
+                           (decknix--hub-review-status item t)))
+               (status-str (if (string-empty-p stale-str)
+                               status-str
+                             (concat status-str stale-str)))
                ;; Re-review indicator — the author has asked me back on a
                ;; PR I already reviewed.  Sits with the other state glyphs
                ;; so it survives the display modes that drop the title.

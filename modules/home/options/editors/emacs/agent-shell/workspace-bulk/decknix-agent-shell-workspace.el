@@ -1420,6 +1420,17 @@ basename) or a list of tag strings to suppress from the displayed name."
          (pr-badge (if buf-conv-key
                        (decknix--hub-pr-badge buf-conv-key)
                      ""))
+         ;; Review-session staleness: has this session's PR been merged,
+         ;; answered by someone else, or pushed to since?  Empty for any
+         ;; session that is not a review.  Appended to `pr-badge' so it
+         ;; rides the display modes that already show it.
+         (pr-badge (if (and buf-conv-key
+                            (fboundp 'decknix--hub-session-review-status-badge))
+                       (concat pr-badge
+                               (let ((b (decknix--hub-session-review-status-badge
+                                         buf-conv-key)))
+                                 (if (string-empty-p b) "" (concat " " b))))
+                     pr-badge))
          (attention-icons
           (if buf-conv-key
               (decknix--hub-session-attention-icons buf-conv-key)
