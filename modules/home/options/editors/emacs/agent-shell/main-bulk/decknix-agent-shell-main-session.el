@@ -2893,6 +2893,24 @@ batch launches."
            (when (or tags workspace)
              (decknix--agent-store-metadata-by-conv-key
               conv-key tags workspace))
+           ;; Persist the broker key HERE too.  The other two writers --
+           ;; the deferred flush hook and the resume path -- between them
+           ;; cover every session that carries no first message, which is
+           ;; why hand-started sessions reattach correctly.  A quick
+           ;; action DOES carry one, so it takes this branch, and its key
+           ;; was only ever set buffer-locally.
+           ;;
+           ;; The store is the reverse-lookup reattach uses to answer
+           ;; "which conversation owns this broker?".  Unrecorded, the
+           ;; answer is "none": reattach skips the broker (nothing to
+           ;; reattach TO), and a fresh one is minted beside it.  Measured
+           ;; after one restart -- six live brokers still running review
+           ;; agents, all `conv=NONE', with six replacements alongside.
+           ;; Headless duplicates on the same PRs, which is exactly the
+           ;; hazard the identity fix exists to prevent.
+           (when (and broker-key
+                      (fboundp 'decknix--agent-broker-save-key-for-conv-key))
+             (decknix--agent-broker-save-key-for-conv-key conv-key broker-key))
            ;; Store conv-key buffer-locally so header-line can
            ;; look up tags immediately without waiting for the
            ;; session-list cache to refresh.
