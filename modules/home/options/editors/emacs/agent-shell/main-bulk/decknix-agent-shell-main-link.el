@@ -145,8 +145,8 @@
 ;; session and let a second reviewer launch against the same PR.
 (declare-function decknix--hub-review-pr-key-from-name
                   "decknix-hub-review-identity" (name))
-(declare-function decknix--agent-save-review-pr-for-conv-key
-                  "decknix-agent-session-broker" (conv-key pr-key))
+(declare-function decknix--agent-save-review-prs-for-conv-key
+                  "decknix-agent-session-broker" (conv-key pr-keys))
 
 ;; Session cache state (carved into `decknix-agent-session-cache';
 ;; mutated here to force the picker to pick up the new session).
@@ -352,7 +352,10 @@ raises the usual attention indicator when it wants input."
           (conv-key (and (stringp command) (not (string-empty-p command))
                          (decknix--agent-conversation-key command))))
       (when (and pr-key conv-key)
-        (decknix--agent-save-review-pr-for-conv-key conv-key pr-key)))
+        ;; Plural form: a launch records one PR today, but grouped
+        ;; dispatch records several, and the on-disk shape must not
+        ;; depend on which path wrote it.
+        (decknix--agent-save-review-prs-for-conv-key conv-key (list pr-key))))
     ;; Find the newly created shell buffer and subscribe to prompt-ready.
     ;; agent-shell-start creates the buffer synchronously (mode-hook fires
     ;; before it returns), so find-new-shell-buffer works immediately.

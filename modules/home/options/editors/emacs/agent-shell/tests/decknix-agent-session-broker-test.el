@@ -142,5 +142,30 @@ Prefer the earliest (timestamp-ordered) key — the ORIGINAL broker holding it."
   (should (null (decknix--agent-broker-scan-key-for-session-id nil "sid")))
   (should (null (decknix--agent-broker-scan-key-for-session-id "x" "sid"))))
 
+
+;; --- reviewPr is a list, and legacy single strings still read ---
+
+(ert-deftest decknix-broker/review-pr-normalize-legacy-string ()
+  "Entries written before grouped dispatch are bare strings.
+They are still on disk, so a string must read back as a one-element list
+rather than being discarded -- otherwise every pre-existing review
+session silently loses its identity and can acquire a second reviewer."
+  (should (equal '("upside#20611")
+                 (decknix--agent-review-pr-normalize "upside#20611"))))
+
+(ert-deftest decknix-broker/review-pr-normalize-list ()
+  "A list passes through, which is the grouped-session shape."
+  (should (equal '("a#1" "a#2")
+                 (decknix--agent-review-pr-normalize '("a#1" "a#2")))))
+
+(ert-deftest decknix-broker/review-pr-normalize-rejects-junk ()
+  "Empty and non-string entries never become identities.
+An empty key would match nothing but would still make the field look
+populated, which reads as \"this session reviews something\"."
+  (should-not (decknix--agent-review-pr-normalize nil))
+  (should-not (decknix--agent-review-pr-normalize ""))
+  (should-not (decknix--agent-review-pr-normalize 42))
+  (should (equal '("a#1") (decknix--agent-review-pr-normalize '("a#1" "" nil)))))
+
 (provide 'decknix-agent-session-broker-test)
 ;;; decknix-agent-session-broker-test.el ends here

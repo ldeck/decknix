@@ -148,5 +148,37 @@ the entire queue `stale'.  Requiring `eq t' keeps that impossible."
     (should (equal "org/a" (map-elt (decknix--hub-review-find-item items "a" 5) 'repo)))
     (should (equal "org/b" (map-elt (decknix--hub-review-find-item items "b" 5) 'repo)))))
 
+
+;; --- aggregating a grouped session's PRs into one badge ---
+
+(ert-deftest decknix-review-status--aggregate-gone-needs-unanimity ()
+  "One live PR keeps the group alive.
+Four merged bumps and one still open is not finished work; badging it
+`gone' would invite quitting a session that still has a PR under it."
+  (should (eq 'gone (decknix--hub-review-status-aggregate '(gone gone gone))))
+  (should-not (eq 'gone (decknix--hub-review-status-aggregate '(gone gone nil)))))
+
+(ert-deftest decknix-review-status--aggregate-stale-wins ()
+  "A push to any member invalidates the group's analysis."
+  (should (eq 'stale (decknix--hub-review-status-aggregate '(gone answered stale))))
+  (should (eq 'stale (decknix--hub-review-status-aggregate '(nil stale)))))
+
+(ert-deftest decknix-review-status--aggregate-answered-needs-all ()
+  "`answered' only when every live member is answered.
+One member still plainly wanted means there is work here, and saying
+`someone else has this' would be false."
+  (should (eq 'answered (decknix--hub-review-status-aggregate '(answered answered gone))))
+  (should-not (decknix--hub-review-status-aggregate '(answered nil))))
+
+(ert-deftest decknix-review-status--aggregate-plain-group-is-unbadged ()
+  "A group with ordinary work pending says nothing."
+  (should-not (decknix--hub-review-status-aggregate '(nil nil)))
+  (should-not (decknix--hub-review-status-aggregate nil)))
+
+(ert-deftest decknix-review-status--aggregate-matches-single-pr-case ()
+  "A one-member group behaves exactly as an ungrouped session."
+  (dolist (s '(gone stale answered nil))
+    (should (eq s (decknix--hub-review-status-aggregate (list s))))))
+
 (provide 'decknix-hub-review-status-test)
 ;;; decknix-hub-review-status-test.el ends here
