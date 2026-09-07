@@ -71,6 +71,30 @@ more actionable than telling you it might be redundant."
     'answered)
    (t nil)))
 
+(defun decknix--hub-review-status-aggregate (statuses)
+  "Reduce a grouped session's per-PR STATUSES to one badge.  Pure.
+
+`gone' requires UNANIMITY.  A group with four merged bumps and one still
+open is not finished work, and badging it `gone' would invite quitting a
+session that still has a live PR under it.  Absence has to be true of
+every member before it is true of the group.
+
+Otherwise the strongest signal among the non-gone members wins, on the
+same `stale' > `answered' precedence a single PR uses: a group where the
+author pushed to any member has had its analysis invalidated, whichever
+other members somebody else answered.
+
+Returns nil when at least one member is plainly still wanted, because
+that is the group's real state -- there is work here and nothing
+qualifying to say about it."
+  (let ((live (seq-remove (lambda (s) (eq s 'gone)) statuses)))
+    (cond
+     ((null statuses) nil)
+     ((null live) 'gone)
+     ((memq 'stale live) 'stale)
+     ((seq-every-p (lambda (s) (eq s 'answered)) live) 'answered)
+     (t nil))))
+
 (defun decknix--hub-review-status-glyph (status)
   "Return (GLYPH . FACE-SPEC) for STATUS, or nil when there is nothing to say.
 

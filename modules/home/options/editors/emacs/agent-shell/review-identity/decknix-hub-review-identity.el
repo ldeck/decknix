@@ -65,9 +65,15 @@ use `decknix--hub-review-session-covers-p'."
 (defun decknix--hub-review-session-covers-p (repo number buffer-name tags review-pr)
   "Non-nil when a session covers the PR identified by REPO and NUMBER.
 
-REVIEW-PR is the session's recorded `repo#number' (nil for sessions
-launched before coordinates were recorded).  BUFFER-NAME and TAGS are
-its current display properties.
+REVIEW-PR is the session's recorded coordinates: a list of `repo#number'
+keys, or a bare string for entries written before grouped sessions
+existed, or nil when nothing was recorded.  BUFFER-NAME and TAGS are its
+current display properties.
+
+A LIST because one session can cover several PRs -- grouped dispatch
+sends a service's dependency bumps to a single agent.  Membership, not
+equality: a group covers each of its PRs individually, so each one must
+find its reviewer.
 
 REVIEW-PR is authoritative when present: it both confirms and DENIES.  A
 session recorded against another PR returns nil even if its name or tags
@@ -78,10 +84,15 @@ Otherwise fall back to tags, then to the legacy name convention.  The
 tag test is a subset (`#<number>' AND repo both present) rather than an
 equality, so amending a session's tags by hand does not orphan it and
 quietly license a duplicate reviewer."
-  (let ((key (decknix--hub-review-pr-key repo number)))
+  (let ((key (decknix--hub-review-pr-key repo number))
+        (recorded (cond
+                   ((null review-pr) nil)
+                   ((stringp review-pr) (unless (string-empty-p review-pr)
+                                          (list review-pr)))
+                   ((listp review-pr) (seq-filter #'stringp review-pr)))))
     (when key
-      (if (and review-pr (stringp review-pr) (not (string-empty-p review-pr)))
-          (equal review-pr key)
+      (if recorded
+          (and (member key recorded) t)
         (let* ((short (car (last (split-string repo "/"))))
                (num (if (numberp number) (number-to-string number) number)))
           (or

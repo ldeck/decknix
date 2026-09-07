@@ -227,33 +227,69 @@ when you are most likely to want it."
 ;; fact: immutable session metadata persisted against the conv-key,
 ;; written once at launch and read back after a restart.
 
-(defun decknix--agent-review-pr-for-conv-key (conv-key)
-  "Return the recorded `repo#number' this conversation reviews, or nil."
+(defun decknix--agent-review-pr-normalize (value)
+  "Return VALUE as a list of `repo#number' keys.
+
+The field was written as a single string before grouped dispatch existed,
+and those entries are still on disk, so a bare string reads back as a
+one-element list rather than being discarded.  Pure, and the only place
+that shape question is answered."
+  (cond
+   ((null value) nil)
+   ((stringp value) (if (string-empty-p value) nil (list value)))
+   ((listp value) (seq-filter (lambda (s) (and (stringp s)
+                                               (not (string-empty-p s))))
+                              value))
+   (t nil)))
+
+(defun decknix--agent-review-prs-for-conv-key (conv-key)
+  "Return the `repo#number' keys this conversation reviews, as a list.
+
+A list because one session can cover several PRs: grouped dispatch sends
+a service's dependency bumps to a single agent so they can be sequenced,
+conflict-checked or fixed together, which per-PR sessions structurally
+cannot do."
   (when conv-key
     (let* ((store (decknix--agent-tags-read))
            (convs (decknix--agent-tags-conversations store))
            (entry (gethash conv-key convs)))
       (when (hash-table-p entry)
-        (gethash "reviewPr" entry)))))
+        (decknix--agent-review-pr-normalize (gethash "reviewPr" entry))))))
 
-(defun decknix--agent-save-review-pr-for-conv-key (conv-key pr-key)
-  "Persist PR-KEY (`repo#number') as CONV-KEY's review target.
+(defun decknix--agent-review-pr-for-conv-key (conv-key)
+  "Return the FIRST `repo#number' CONV-KEY reviews, or nil.
+Compatibility shim for callers that predate grouped sessions; prefer
+`decknix--agent-review-prs-for-conv-key', which cannot silently drop the
+rest of a group."
+  (car (decknix--agent-review-prs-for-conv-key conv-key)))
+
+(defun decknix--agent-save-review-prs-for-conv-key (conv-key pr-keys)
+  "Persist PR-KEYS as CONV-KEY's review targets.
+
+PR-KEYS may be a single `repo#number' string or a list of them; either
+way a list is stored, so the on-disk shape stops depending on how many
+PRs a session happened to start with.
 
 Recorded so \"does this PR already have a reviewer?\" can be answered
 from a fact rather than from a display string.  The buffer name is
 rewritten on reattach and the tags are edited by hand, so both drift;
 this does not."
-  (when (and conv-key pr-key)
-    (let* ((store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (entry (or (gethash conv-key convs)
-                      (let ((h (make-hash-table :test 'equal)))
-                        (puthash "tags" nil h)
-                        (puthash "sessions" nil h)
-                        h))))
-      (puthash "reviewPr" pr-key entry)
-      (puthash conv-key entry convs)
-      (decknix--agent-tags-write store))))
+  (let ((keys (decknix--agent-review-pr-normalize pr-keys)))
+    (when (and conv-key keys)
+      (let* ((store (decknix--agent-tags-read))
+             (convs (decknix--agent-tags-conversations store))
+             (entry (or (gethash conv-key convs)
+                        (let ((h (make-hash-table :test 'equal)))
+                          (puthash "tags" nil h)
+                          (puthash "sessions" nil h)
+                          h))))
+        (puthash "reviewPr" keys entry)
+        (puthash conv-key entry convs)
+        (decknix--agent-tags-write store)))))
+
+(defun decknix--agent-save-review-pr-for-conv-key (conv-key pr-key)
+  "Persist PR-KEY as CONV-KEY's review target.  See the plural form."
+  (decknix--agent-save-review-prs-for-conv-key conv-key pr-key))
 
 (provide 'decknix-agent-session-broker)
 ;;; decknix-agent-session-broker.el ends here

@@ -126,5 +126,31 @@ one would suppress a real review of whatever PR it collided with."
   (should-not (decknix--hub-review-pr-key-from-name "pr-widget-"))
   (should-not (decknix--hub-review-pr-key-from-name nil)))
 
+
+;; --- grouped sessions cover several PRs ---
+
+(ert-deftest decknix-review-id--group-covers-each-member ()
+  "A session recorded against several PRs covers each of them.
+Grouped dispatch sends one service's bumps to one agent, so membership
+rather than equality is the test -- otherwise four of five bumps would
+look unreviewed and each would acquire a second reviewer."
+  (let ((group '("widget#1" "widget#2" "widget#3")))
+    (should (decknix--hub-review-session-covers-p "widget" 1 "*x*" nil group))
+    (should (decknix--hub-review-session-covers-p "widget" 2 "*x*" nil group))
+    (should (decknix--hub-review-session-covers-p "widget" 3 "*x*" nil group))))
+
+(ert-deftest decknix-review-id--group-still-denies-non-members ()
+  "A group denies a PR it does not contain, even in the same repo."
+  (should-not (decknix--hub-review-session-covers-p
+               "widget" 4 "*Claude: pr-widget-4*" '("#4" "widget")
+               '("widget#1" "widget#2"))))
+
+(ert-deftest decknix-review-id--legacy-string-still-covers ()
+  "Entries written before grouping are bare strings and must keep working."
+  (should (decknix--hub-review-session-covers-p
+           "widget" 20611 "*x*" nil "widget#20611"))
+  (should-not (decknix--hub-review-session-covers-p
+               "widget" 20612 "*x*" nil "widget#20611")))
+
 (provide 'decknix-hub-review-identity-test)
 ;;; decknix-hub-review-identity-test.el ends here

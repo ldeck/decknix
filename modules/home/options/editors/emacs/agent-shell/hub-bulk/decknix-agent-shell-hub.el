@@ -993,8 +993,10 @@ Order: `hide' → `show' → `mentioned' → `hide'.  See
                   "decknix-hub-review-status" (items repo number))
 (declare-function decknix--agent-tags-for-conv-key
                   "decknix-agent-tags" (conv-key))
-(declare-function decknix--agent-review-pr-for-conv-key
+(declare-function decknix--agent-review-prs-for-conv-key
                   "decknix-agent-session-broker" (conv-key))
+(declare-function decknix--hub-review-status-aggregate
+                  "decknix-hub-review-status" (statuses))
 (defvar decknix--agent-conv-key)
 (defvar decknix--hub-review-session-snapshot nil
   "Memoised (BUFFER-NAME TAGS REVIEW-PR) for each live agent buffer.")
@@ -1033,7 +1035,7 @@ O(requests x sessions) pure comparisons; `covers-p' itself is ~3us."
                                  (and ck (ignore-errors
                                            (decknix--agent-tags-for-conv-key ck)))
                                  (and ck (ignore-errors
-                                           (decknix--agent-review-pr-for-conv-key ck))))))))
+                                           (decknix--agent-review-prs-for-conv-key ck))))))))
                    (agent-shell-buffers)))))))
 
 (defun decknix--hub-request-has-live-session-p (item)
@@ -2942,8 +2944,7 @@ Shows count and summary like [2⬆ 1✓] (2 open, 1 merged)."
               (format " [%s]" (string-join (nreverse parts) " "))
             ""))))))
 
-(declare-function decknix--agent-review-pr-for-conv-key
-                  "decknix-agent-session-broker" (conv-key))
+
 
 (defun decknix--hub-session-review-status-badge (conv-key)
   "Return the review-staleness badge for the session CONV-KEY, or \"\".
@@ -2954,20 +2955,32 @@ show `gone': a merged or closed PR has left the feed, so it has no
 request row left to badge -- but its session is still sitting there,
 still running, which is exactly what needs saying.
 
+A session may cover SEVERAL PRs (grouped dispatch), so the per-PR
+statuses are reduced by `decknix--hub-review-status-aggregate' rather
+than by taking the first -- which would have badged a five-bump group
+`gone' the moment its first member merged.
+
 Reads the already-parsed feed; no fetch, so it is safe on the render
 path."
-  (let ((pr (and conv-key
-                 (fboundp 'decknix--agent-review-pr-for-conv-key)
-                 (ignore-errors
-                   (decknix--agent-review-pr-for-conv-key conv-key)))))
-    (if (and (stringp pr)
-             (string-match "\\`\\(.+\\)#\\([0-9]+\\)\\'" pr))
-        (let* ((repo (match-string 1 pr))
-               (num (string-to-number (match-string 2 pr)))
-               (items (alist-get 'items decknix--hub-reviews))
-               (item (decknix--hub-review-find-item items repo num)))
-          (decknix--hub-review-status-badge
-           (decknix--hub-review-status item (and item t))))
+  (let* ((prs (and conv-key
+                   (fboundp 'decknix--agent-review-prs-for-conv-key)
+                   (ignore-errors
+                     (decknix--agent-review-prs-for-conv-key conv-key))))
+         (items (alist-get 'items decknix--hub-reviews))
+         (statuses
+          (delq nil
+                (mapcar
+                 (lambda (pr)
+                   (when (and (stringp pr)
+                              (string-match "\\`\\(.+\\)#\\([0-9]+\\)\\'" pr))
+                     (let* ((repo (match-string 1 pr))
+                            (num (string-to-number (match-string 2 pr)))
+                            (item (decknix--hub-review-find-item items repo num)))
+                       (list (decknix--hub-review-status item (and item t))))))
+                 prs))))
+    (if statuses
+        (decknix--hub-review-status-badge
+         (decknix--hub-review-status-aggregate (mapcar #'car statuses)))
       "")))
 
 ;; -- Hub: session attention icons (📥 inbox / 📤 sent) --
