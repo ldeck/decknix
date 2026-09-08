@@ -74,7 +74,14 @@ Ordered top to bottom, always rendered:
    are just holding a broker. The lane you clear to reduce noise.
 3. **Human reviews** — one row per PR, priority-ordered.
 4. **Grouped** — bot/dependabot PRs folded by repo (§4.2).
-5. **Idle** — eligible requests with no session yet.
+5. **Idle** — human requests with no session yet.
+
+Bot requests do **not** appear here even before dispatch: they fold into
+`Grouped` whether or not a session exists yet. Rendering forty
+un-dispatched dependabot bumps as forty Idle rows would reproduce the
+flood faithfully on the screen built to remove it. Measured against a
+live feed while implementing: 44 ungrouped rows became 18 human plus 16
+folded services.
 
 Rationale for `Finished` at position 2 rather than last: it is the
 cheapest lane to clear, clearing it is what reduces the noise being
@@ -223,9 +230,9 @@ the board guessing.
 
 ## 9. Sequencing
 
-1. `reviewPr` becomes a list (schema, contained, no behaviour change)
-2. Grouped dispatch in auto-review (removes the volume)
-3. Board: lanes, rows, ordering, navigation — read-only
+1. `reviewPr` becomes a list (schema, contained, no behaviour change) ✅ landed
+2. Grouped dispatch in auto-review (removes the volume) ✅ landed
+3. Board: lanes, rows, ordering, navigation — read-only ✅ landed
 4. Marks and the non-writing verbs (`d`, `j`, `k`, `D`)
 5. Writing verbs (`a`, `s`) behind the §6 gate
 
