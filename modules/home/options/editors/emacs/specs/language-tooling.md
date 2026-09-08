@@ -193,9 +193,50 @@ Options, none yet chosen:
 - **Import lazily**, on the first navigation request rather than on
   buffer open, so a review that never navigates never pays.
 
-This needs measuring before deciding: how long *is* a cold import of
-`upside` in a fresh worktree? Everything else here is guesswork until
-that number exists.
+### 5.0 Measured
+
+Taken on `upside` (11,274 files, 423 MB `.git`, 9 Gradle modules):
+
+| What | Result |
+|------|--------|
+| `git worktree add` off `origin/development` | **166 s** (2m46), 96 MB checked out |
+| Shared `~/.gradle` | **7.0 GB** — so a new worktree is warm for deps, cold for configuration |
+| Cold `./gradlew projects`, attempt 1 | **331 s, then FAILED** on a kotlin-dsl cache lock |
+| Cold `./gradlew projects`, attempt 2 | ran >5 min, killed before completing |
+| `gortex track --as-worktree --wait` | **>900 s** — did not settle within a 15 min ceiling |
+
+Two honest caveats. The attempt-1 lock failure was **self-inflicted**: an
+earlier backgrounded run orphaned a daemon that held the lock. And
+neither Gradle attempt produced a clean completion, so there is still no
+single "cold configure takes N seconds" figure.
+
+What the numbers do establish is enough to decide:
+
+- **Worktree creation alone costs ~2.8 minutes** on the monolith, before
+  any language tooling runs at all. That is a floor per review, and it is
+  paid by `#165` whether or not LSP is ever attached.
+- **Gradle configuration is minutes, not seconds** — two runs exceeded
+  five minutes without finishing.
+- **Concurrent Gradle against one shared cache serialises on locks and
+  can fail outright**, not merely wait. Demonstrated, if accidentally.
+  With several review sessions live this stops being a corner case: it is
+  the normal operating condition.
+- **Gortex indexing a monolith worktree is not the cheap alternative
+  either.** It did not settle in 15 minutes.
+
+### 5.0.1 What this decides
+
+The shared-Gradle-cache option is the one the measurement damages most:
+it does not just fail to help under concurrency, it introduces a failure
+mode that does not exist when each review has no LSP at all.
+
+**Accept degraded review support** is now the recommended default. The
+agent navigates via gortex against the primary checkout (§4.5), the human
+reads the diff, and neither pays a five-minute import per PR. Per-worktree
+gortex indexing is rejected on the same evidence.
+
+That leaves lazy import as the only remaining upgrade path worth
+considering, and only for a review the human actually chooses to navigate.
 
 ### 5.1 Gortex changes this calculus
 
@@ -243,16 +284,16 @@ together.
    mostly through `terraform plan` output rather than in the editor?
 5. **How much of Go/Node/Python is ours** versus vendored or generated?
    17 `go.mod` files may be a handful of real services.
-6. **Is a per-review gortex index cheaper than a Gradle import?** Both
-   are being proposed to solve navigation in a review worktree, and
-   neither has been timed. §5 measures one; measure both.
+6. ~~**Is a per-review gortex index cheaper than a Gradle import?**~~
+   Answered in §5.0: no. It exceeded 15 minutes on a monolith worktree.
+   Neither is cheap; both are rejected for the default path.
 
 ## 7. Sequencing
 
 1. Terraform, Rust, Go servers — small, and makes existing options honest ✅ landed
 2. Tree-sitter grammars, or stop referencing `-ts-` modes ✅ landed (both)
 3. Kotlin: the real JetBrains derivation (§3.1), acceptance per §3.2
-4. Measure cold Gradle import in a review worktree (§5)
+4. Measure cold Gradle import in a review worktree (§5) ✅ landed — see §5.0
 5. dape adapters, JVM first
 6. Review-worktree strategy, decided on the §4 measurement
 
