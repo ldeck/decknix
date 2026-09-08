@@ -46,6 +46,12 @@
 (declare-function decknix-auto-review--dispatch-unit "decknix-auto-review" (unit))
 (declare-function decknix--agent-broker-stop-p "decknix-agent-session-broker" (key other-keys))
 (declare-function decknix-agent-broker-stop "decknix-agent-session-broker" (key))
+(declare-function decknix--agent-pr-detect-workspace
+                  "decknix-agent-workspace-detect" (owner repo))
+(declare-function decknix--agent-quickaction-start
+                  "decknix-agent-shell-main-link"
+                  (name tags workspace command &optional model provider-id mode
+                        background review-prs))
 (defvar decknix--agent-broker-key)
 (defvar decknix--hub-reviews)
 (defvar decknix--agent-conv-key)
@@ -411,6 +417,102 @@ No confirmation: detaching is reversible, and the agent keeps working."
     (decknix-review-board-refresh)
     (decknix-review-board--report "Detached" (length bufs) (length (cdr part)))))
 
+(defvar decknix-review-board-merge-command "/merge-train"
+  "Command the board hands a ship plan to.
+It owns train ordering and its own confirmation gate; the board's job is
+to name the PRs, not to merge them.")
+
+(defun decknix-review-board--row-status (row)
+  "Return ROW's aggregated staleness."
+  (decknix--hub-review-status-aggregate (plist-get row :statuses)))
+
+(defun decknix-review-board--manifest (by-repo blocked dry)
+  "Return the confirmation manifest text for a ship plan."
+  (with-temp-buffer
+    (insert (format "Ship plan%s
+
+" (if dry "  (DRY RUN)" "")))
+    (dolist (cell by-repo)
+      (insert (format "  %s
+    %s %s
+"
+                      (car cell)
+                      decknix-review-board-merge-command
+                      (string-join (cdr cell) " "))))
+    (when blocked
+      (insert "
+  NOT shipping:
+")
+      (dolist (b blocked)
+        (insert (format "    %-28s %s
+"
+                        (or (car (plist-get (car b) :prs)) "?")
+                        (cdr b)))))
+    (buffer-string)))
+
+(defun decknix-review-board-ship (&optional dry)
+  "Ship the target rows via `decknix-review-board-merge-command'.
+
+With a prefix argument, DRY: passes `--dry', so the train is planned and
+printed without merging anything.
+
+The board does not merge.  It names the PRs and hands them to a command
+that owns train ordering and its own confirmation gate -- so this gate is
+the SECOND one, not the only one.  That is deliberate: the batch case
+cannot be looser than the single-PR case, which already requires an
+explicit confirmation before anything is posted.
+
+Refuses stale and already-merged rows, and SAYS which.  A ship that
+silently dropped them would be indistinguishable from one that merged
+them."
+  (interactive "P")
+  (let* ((rows (decknix-review-board--targets))
+         (plan (decknix-review-board-ship-plan
+                rows #'decknix-review-board--row-status))
+         (by-repo (car plan))
+         (blocked (cdr plan)))
+    (unless rows (user-error "Nothing selected"))
+    (unless by-repo
+      (user-error "Nothing shippable%s"
+                  (if blocked
+                      (format " (%d blocked: %s)" (length blocked)
+                              (mapconcat #'cdr blocked "; "))
+                    "")))
+    (let ((manifest (decknix-review-board--manifest by-repo blocked dry)))
+      ;; Shown in full, then confirmed.  A count is not a manifest: the
+      ;; point is to read the PR numbers before they merge, not to be
+      ;; told how many there were afterwards.
+      (with-current-buffer (get-buffer-create "*Review Board Ship Plan*")
+        (let ((inhibit-read-only t))
+          (erase-buffer) (insert manifest) (goto-char (point-min)))
+        (special-mode)
+        (display-buffer (current-buffer)))
+      (if (not (yes-or-no-p
+                (format "Hand %d train%s to %s? "
+                        (length by-repo) (if (= 1 (length by-repo)) "" "s")
+                        decknix-review-board-merge-command)))
+          (message "Ship cancelled")
+        (dolist (cell by-repo)
+          (let* ((repo (car cell))
+                 (nums (cdr cell))
+                 (workspace (decknix--agent-pr-detect-workspace nil repo))
+                 (command (format "%s %s%s"
+                                  decknix-review-board-merge-command
+                                  (string-join nums " ")
+                                  (if dry " --dry" ""))))
+            (if (not workspace)
+                (message "No workspace for %s; skipped" repo)
+              (decknix--agent-quickaction-start
+               (format "merge-%s" repo)
+               (list "merge" repo "train") workspace command
+               nil nil nil t))))
+        (decknix-review-board-unmark-all)
+        (decknix-review-board-refresh)
+        (message "Handed %d train%s to %s%s"
+                 (length by-repo) (if (= 1 (length by-repo)) "" "s")
+                 decknix-review-board-merge-command
+                 (if blocked (format "; %d blocked" (length blocked)) ""))))))
+
 (defvar decknix-review-board-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "n") #'decknix-review-board-next)
@@ -428,6 +530,7 @@ No confirmation: detaching is reversible, and the agent keeps working."
     (define-key map (kbd "d") #'decknix-review-board-dispatch)
     (define-key map (kbd "k") #'decknix-review-board-quit-sessions)
     (define-key map (kbd "D") #'decknix-review-board-detach-sessions)
+    (define-key map (kbd "s") #'decknix-review-board-ship)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `decknix-review-board-mode'.
@@ -435,9 +538,10 @@ No confirmation: detaching is reversible, and the agent keeps working."
 `k' and `D' mirror `C-c s q' and `C-c s D' so the quit/detach
 distinction is learned once rather than twice.
 
-The verbs that WRITE to GitHub (approve, ship) are still unbound.  They
-need the manifest-and-confirmation gate from the spec, and a batch cannot
-be looser than the single-PR case that already mandates one.")
+`s' ships, behind a manifest and an explicit confirmation.  There is no
+`approve': `submit-pr-review' is deprecated and approval now happens
+inside the review commands, behind the mandatory review gate.  A board
+verb that approved directly would route around it.")
 
 (define-derived-mode decknix-review-board-mode special-mode "ReviewBoard"
   "Major mode for the review worklist."

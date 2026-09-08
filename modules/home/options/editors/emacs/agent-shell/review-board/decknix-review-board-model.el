@@ -249,5 +249,71 @@ ignored look identical to the two that succeeded."
   "Return the rows of LANE in MODEL."
   (alist-get lane model))
 
+
+;; ── shipping ─────────────────────────────────────────────────────────
+;;
+;; The board never posts to GitHub itself.  It builds a plan and hands it
+;; to `/merge-train', which owns train ordering and its own confirmation
+;; gate.  There is deliberately no `approve' verb: `submit-pr-review' is
+;; deprecated, and approval now happens INSIDE `/review-service-pr' and
+;; `/review-and-ship-bot-pr', behind the mandatory review gate.  A board
+;; verb that approved directly would route around that gate, which the
+;; workflow rules treat as a serious failure rather than a shortcut.
+
+(defun decknix-review-board-ship-blocker (row status)
+  "Return why ROW cannot be shipped, or nil when it can.  Pure.
+
+STATUS is the row's aggregated staleness.  The refusals are the ones that
+cannot be recovered from afterwards:
+
+- `stale': the author pushed since, so whatever approval exists was
+  earned by a different diff.  Merging it merges something nobody read.
+- `gone': already merged, closed, or no longer requested.  There is
+  nothing left to merge, and trying would be noise at best.
+- no PR numbers: nothing to name in the train."
+  (cond
+   ((eq status 'stale) "author pushed since review")
+   ((eq status 'gone) "already merged or closed")
+   ((null (plist-get row :prs)) "no PR")
+   (t nil)))
+
+(defun decknix-review-board--row-repo (row)
+  "Return ROW's repo, from the first PR key."
+  (when-let* ((key (car (plist-get row :prs))))
+    (when (string-match "\\`\\(.+\\)#[0-9]+\\'" key)
+      (match-string 1 key))))
+
+(defun decknix-review-board--row-numbers (row)
+  "Return ROW's PR numbers as strings."
+  (delq nil (mapcar (lambda (k)
+                      (when (string-match "\\`.+#\\([0-9]+\\)\\'" k)
+                        (match-string 1 k)))
+                    (plist-get row :prs))))
+
+(defun decknix-review-board-ship-plan (rows status-fn)
+  "Return (BY-REPO . BLOCKED) for shipping ROWS.  Pure.
+
+BY-REPO is an alist of (REPO . NUMBERS); BLOCKED is a list of
+(ROW . REASON).  Grouped by repo because `/merge-train' takes bare PR
+numbers and resolves the repository from its workspace -- one train per
+repo, never a mixed list that would merge into whichever repo happened to
+be current.
+
+Blocked rows are returned, not filtered away.  A ship that silently
+dropped the stale ones would look identical to a ship that merged them."
+  (let (by-repo blocked)
+    (dolist (row rows)
+      (let ((reason (decknix-review-board-ship-blocker
+                     row (funcall status-fn row))))
+        (if reason
+            (push (cons row reason) blocked)
+          (let* ((repo (decknix-review-board--row-repo row))
+                 (nums (decknix-review-board--row-numbers row))
+                 (cell (assoc repo by-repo)))
+            (if cell
+                (setcdr cell (append (cdr cell) nums))
+              (push (cons repo nums) by-repo))))))
+    (cons (nreverse by-repo) (nreverse blocked))))
+
 (provide 'decknix-review-board-model)
 ;;; decknix-review-board-model.el ends here
