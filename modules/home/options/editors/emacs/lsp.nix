@@ -14,6 +14,42 @@ let
   useJetBrainsKotlin =
     cfg.kotlin.enable && cfg.kotlin.useJetBrainsLsp && jetbrainsKotlinLsp != null;
   kotlinPkg = if useJetBrainsKotlin then jetbrainsKotlinLsp else pkgs.kotlin-language-server;
+  # The java-debug plugin jar.  jdtls loads it as an OSGi bundle and only
+  # then advertises `vscode.java.resolveClasspath' /
+  # `vscode.java.startDebugSession' -- the two commands dape's `jdtls'
+  # config drives.  Without the bundle dape refuses with "Jdtls instance
+  # does not bundle java-debug-server", which is why JVM debugging is a
+  # jdtls CONFIGURATION problem rather than a dape one.
+  javaDebugExt = pkgs.vscode-extensions.vscjava.vscode-java-debug;
+  javaDebugBundle =
+    "${javaDebugExt}/share/vscode/extensions/vscjava.vscode-java-debug/server/"
+    + "com.microsoft.java.debug.plugin-0.53.1.jar";
+
+  # jdtls is registered with a SUBCLASS when JVM debugging is on, purely so
+  # `eglot-initialization-options' can carry the java-debug bundle.  Eglot
+  # has no per-server initializationOptions slot on a plain contact, so the
+  # subclass is the seam.  Without debugging it stays a plain contact --
+  # same server, one less moving part.
+  jdtlsServerElisp =
+    if (cfg.dap.enable && cfg.dapAdapters.jvm) then ''
+          ;; Subclass so jdtls receives `:bundles' at initialize.  Loading
+          ;; the java-debug OSGi bundle is what makes jdtls advertise
+          ;; `vscode.java.resolveClasspath' and `vscode.java.startDebugSession',
+          ;; the two commands dape's `jdtls' config calls.  Without it dape
+          ;; refuses with "Jdtls instance does not bundle java-debug-server".
+          (defclass decknix-eglot-jdtls (eglot-lsp-server) ()
+            :documentation "jdtls with the java-debug bundle loaded.")
+          (cl-defmethod eglot-initialization-options
+            ((server decknix-eglot-jdtls))
+            (ignore server)
+            (list :bundles (vector "${javaDebugBundle}")))
+          (add-to-list 'eglot-server-programs
+                       '((java-mode java-ts-mode) decknix-eglot-jdtls "jdtls"))
+    '' else ''
+          (add-to-list 'eglot-server-programs
+                       '((java-mode java-ts-mode) . ("jdtls")))
+    '';
+
   # Tree-sitter grammars, packaged the way Emacs expects to find them:
   # `$out/lib/libtree-sitter-<lang>.dylib'.  Curated rather than
   # `with-all-grammars' (128 grammars) -- only languages that have BOTH a
@@ -98,6 +134,46 @@ in
         `intellij-server --socket 0', i.e. TCP on an ephemeral port, not stdio,
         so `kotlinServerElisp' above would also need rewriting for it.
       '';
+    };
+
+    dapAdapters = {
+      jvm = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Load the java-debug bundle into jdtls so dape can drive it.
+
+          dape ships a `jdtls' debug config, but it refuses unless the jdtls
+          instance advertises `vscode.java.resolveClasspath' -- a command that
+          only appears once the java-debug OSGi bundle is loaded.  So this is
+          jdtls configuration, not dape configuration, which is why the
+          `C-c d' keymap has existed for a while with nothing to attach to.
+
+          Java only.  Kotlin is NOT covered: dape's jdtls config is bound to
+          `java-mode'/`java-ts-mode', and jdtls does not resolve Kotlin main
+          classes.  Debugging the monolith therefore still means attaching to
+          a JDWP port rather than launching from the editor.
+        '';
+      };
+
+      rust = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Install lldb, whose `lldb-dap' backs dape's `lldb-dap' config.
+
+          `codelldb' is the richer adapter and dape supports it too, but it is
+          a large Rust build from a VS Code extension; lldb-dap is already
+          part of a toolchain we can install cheaply.  Swap if the extra
+          formatting and expression support proves worth the build.
+        '';
+      };
+
+      go = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Install delve, which backs dape's `dlv' config.";
+      };
     };
 
     treesit = {
@@ -208,7 +284,10 @@ in
       ++ (optionals cfg.terraform.enable [ pkgs.terraform-ls ])
       ++ (optionals cfg.rust.enable [ pkgs.rust-analyzer ])
       ++ (optionals cfg.go.enable [ pkgs.gopls ])
-      ++ (optionals cfg.treesit.enable [ treesitGrammars ]);
+      ++ (optionals cfg.treesit.enable [ treesitGrammars ])
+      ++ (optionals (cfg.dap.enable && cfg.dapAdapters.jvm) [ javaDebugExt ])
+      ++ (optionals (cfg.dap.enable && cfg.dapAdapters.rust) [ pkgs.lldb ])
+      ++ (optionals (cfg.dap.enable && cfg.dapAdapters.go) [ pkgs.delve ]);
 
     programs.emacs = {
       extraPackages = epkgs: with epkgs;
@@ -327,8 +406,7 @@ ${treesitRemapElisp}
         ;; the upside monolith).  jdtls imports the Gradle project itself; the
         ;; java-mode `eglot-ensure' hook above starts it.
         (with-eval-after-load 'eglot
-          (add-to-list 'eglot-server-programs
-                       '((java-mode java-ts-mode) . ("jdtls"))))
+${jdtlsServerElisp})
 
       '' + optionalString cfg.eldocBox.enable ''
         ;; == Eldoc-box: Enhanced documentation popups ==
