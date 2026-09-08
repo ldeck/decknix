@@ -34,8 +34,10 @@ Two things that read as working and are not:
   No `dape-configs` entries for JVM, Rust or Go. The keys exist; nothing
   attaches.
 
-No `treesit-language-source-alist` is configured, so any `*-ts-mode` has
-no grammar to install.
+~~No `treesit-language-source-alist` is configured~~ — ✅ resolved: nine
+grammars now ship from nixpkgs on `treesit-extra-load-path`, and
+`nix-ts-mode` (which does not exist as a package) is no longer
+referenced.
 
 ## 2. What the workspace actually contains
 
@@ -248,7 +250,7 @@ together.
 ## 7. Sequencing
 
 1. Terraform, Rust, Go servers — small, and makes existing options honest ✅ landed
-2. Tree-sitter grammars, or stop referencing `-ts-` modes
+2. Tree-sitter grammars, or stop referencing `-ts-` modes ✅ landed (both)
 3. Kotlin: the real JetBrains derivation (§3.1), acceptance per §3.2
 4. Measure cold Gradle import in a review worktree (§5)
 5. dape adapters, JVM first

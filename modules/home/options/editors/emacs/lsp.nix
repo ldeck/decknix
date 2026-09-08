@@ -14,6 +14,38 @@ let
   useJetBrainsKotlin =
     cfg.kotlin.enable && cfg.kotlin.useJetBrainsLsp && jetbrainsKotlinLsp != null;
   kotlinPkg = if useJetBrainsKotlin then jetbrainsKotlinLsp else pkgs.kotlin-language-server;
+  # Tree-sitter grammars, packaged the way Emacs expects to find them:
+  # `$out/lib/libtree-sitter-<lang>.dylib'.  Curated rather than
+  # `with-all-grammars' (128 grammars) -- only languages that have BOTH a
+  # working `-ts-mode' and a real presence in this workspace.
+  treesitGrammars = pkgs.emacsPackages.treesit-grammars.with-grammars (g: with g; [
+    tree-sitter-kotlin tree-sitter-java tree-sitter-rust tree-sitter-go
+    tree-sitter-bash tree-sitter-json tree-sitter-yaml tree-sitter-toml
+    tree-sitter-dockerfile
+  ]);
+
+  # Remap classic modes to their tree-sitter variants.  Installing grammars
+  # changes nothing on its own -- files still open in the classic mode --
+  # so this is the half that makes them take effect.  Guarded by
+  # `treesit-ready-p' so a missing grammar degrades to the classic mode
+  # instead of erroring on every file of that type.
+  treesitRemapElisp = optionalString cfg.treesit.remapModes ''
+        ;; The grammar language is named EXPLICITLY rather than derived from
+        ;; the mode name.  Deriving it needed `string-remove-suffix' (subr-x,
+        ;; not autoloaded) and would silently break for any mode whose name
+        ;; does not match its grammar -- a rule that holds for these four and
+        ;; nothing guarantees for the next one.
+        (dolist (spec (list (list 'java-mode   'java-ts-mode   'java)
+                            (list 'rust-mode   'rust-ts-mode   'rust)
+                            (list 'go-mode     'go-ts-mode     'go)
+                            (list 'kotlin-mode 'kotlin-ts-mode 'kotlin)))
+          (let ((classic (nth 0 spec))
+                (ts (nth 1 spec))
+                (lang (nth 2 spec)))
+            (when (and (fboundp ts) (treesit-ready-p lang t))
+              (add-to-list 'major-mode-remap-alist (cons classic ts)))))
+  '';
+
   # Eglot server-programs command for Kotlin (elisp list literal).
   kotlinServerElisp =
     if useJetBrainsKotlin then ''("kotlin-lsp" "--stdio")'' else ''("kotlin-language-server")'';
@@ -66,6 +98,39 @@ in
         `intellij-server --socket 0', i.e. TCP on an ephemeral port, not stdio,
         so `kotlinServerElisp' above would also need rewriting for it.
       '';
+    };
+
+    treesit = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Install tree-sitter grammars and put them on `treesit-extra-load-path'.
+
+          Without this, every `*-ts-mode' referenced in `eglot-server-programs'
+          is wired to a mode that cannot load: the grammar is missing, the mode
+          errors on entry, and the server is attached to something that never
+          activates.  Grammars come from nixpkgs rather than
+          `treesit-install-language-grammar', which compiles at runtime and
+          would not reproduce on a fresh machine.
+        '';
+      };
+
+      remapModes = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Remap major modes to their tree-sitter variants where both the mode
+          and its grammar are present (Kotlin, Java, Rust, Go).
+
+          Installing grammars alone changes nothing: files still open in the
+          classic mode.  This is the half that makes them take effect.
+
+          Turn off if a `-ts-mode' proves less capable than its classic
+          counterpart -- notably `kotlin-ts-mode', which is third-party and
+          less exercised than `kotlin-mode' on the monolith.
+        '';
+      };
     };
 
     terraform.enable = mkOption {
@@ -142,7 +207,8 @@ in
       ++ (optionals cfg.nix.enable [ pkgs.nixd ])
       ++ (optionals cfg.terraform.enable [ pkgs.terraform-ls ])
       ++ (optionals cfg.rust.enable [ pkgs.rust-analyzer ])
-      ++ (optionals cfg.go.enable [ pkgs.gopls ]);
+      ++ (optionals cfg.go.enable [ pkgs.gopls ])
+      ++ (optionals cfg.treesit.enable [ treesitGrammars ]);
 
     programs.emacs = {
       extraPackages = epkgs: with epkgs;
@@ -164,7 +230,6 @@ in
                  (java-mode . eglot-ensure)
                  (java-ts-mode . eglot-ensure)
                  (nix-mode . eglot-ensure)
-                 (nix-ts-mode . eglot-ensure)
                  (terraform-mode . eglot-ensure)
                  (rust-mode . eglot-ensure)
                  (rust-ts-mode . eglot-ensure)
@@ -206,10 +271,27 @@ in
       '' + optionalString cfg.nix.enable ''
         ;; == Nix Language Server (nixd) ==
         ;; nixd is installed via Nix; resolves flake attrs (unlike `nil').
+        ;; `nix-mode' only: `nix-ts-mode' is a separate package that is NOT
+        ;; installed, so listing it wired nixd to a mode that could never
+        ;; load.  Harmless in effect, misleading in the config -- it read as
+        ;; though tree-sitter Nix was supported.
         (with-eval-after-load 'eglot
           (add-to-list 'eglot-server-programs
-                       '((nix-mode nix-ts-mode) . ("nixd"))))
+                       '(nix-mode . ("nixd"))))
 
+      '' + optionalString cfg.treesit.enable ''
+        ;; == Tree-sitter grammars ==
+        ;; Emacs looks for `libtree-sitter-<lang>.dylib' on
+        ;; `treesit-extra-load-path'.  The nixpkgs helper lays the grammars
+        ;; out under that exact naming, so this is a single path entry
+        ;; rather than a pile of symlinks we would have to maintain.
+        ;; `require' first: both `treesit-extra-load-path' and
+        ;; `treesit-ready-p' are autoload-less members of `treesit', so
+        ;; touching either before it loads is a void-variable/void-function
+        ;; error at startup.  Verified the hard way in batch.
+        (require 'treesit)
+        (add-to-list 'treesit-extra-load-path "${treesitGrammars}/lib")
+${treesitRemapElisp}
       '' + optionalString cfg.terraform.enable ''
         ;; == Terraform Language Server ==
         ;; The workspace's largest unsupported surface until now: 334 .tf
