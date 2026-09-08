@@ -68,6 +68,41 @@ in
       '';
     };
 
+    terraform.enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Install terraform-ls and wire it as the Eglot server for `.tf' files.
+
+        The largest unsupported surface in the workspace: 334 `.tf' files
+        against 3 `Cargo.toml', concentrated in `terraform-platform' where a
+        great deal of the real work happens.
+      '';
+    };
+
+    rust.enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Install rust-analyzer and wire it as the Eglot server for Rust.
+
+        Distinct from `languages.rust.enable', which only provides the major
+        mode.  That option's name implied LSP support it never delivered:
+        highlighting without navigation.
+      '';
+    };
+
+    go.enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Install gopls and wire it as the Eglot server for Go.
+
+        Distinct from `languages.go.enable', which only provides the major
+        mode -- see `rust.enable' above for the same trap.
+      '';
+    };
+
     java.enable = mkOption {
       type = types.bool;
       default = true;
@@ -104,7 +139,10 @@ in
     home.packages =
       (optionals cfg.kotlin.enable [ kotlinPkg ])
       ++ (optionals cfg.java.enable [ pkgs.jdt-language-server ])
-      ++ (optionals cfg.nix.enable [ pkgs.nixd ]);
+      ++ (optionals cfg.nix.enable [ pkgs.nixd ])
+      ++ (optionals cfg.terraform.enable [ pkgs.terraform-ls ])
+      ++ (optionals cfg.rust.enable [ pkgs.rust-analyzer ])
+      ++ (optionals cfg.go.enable [ pkgs.gopls ]);
 
     programs.emacs = {
       extraPackages = epkgs: with epkgs;
@@ -126,7 +164,12 @@ in
                  (java-mode . eglot-ensure)
                  (java-ts-mode . eglot-ensure)
                  (nix-mode . eglot-ensure)
-                 (nix-ts-mode . eglot-ensure))
+                 (nix-ts-mode . eglot-ensure)
+                 (terraform-mode . eglot-ensure)
+                 (rust-mode . eglot-ensure)
+                 (rust-ts-mode . eglot-ensure)
+                 (go-mode . eglot-ensure)
+                 (go-ts-mode . eglot-ensure))
           :config
           ;; Performance tuning
           (setq eglot-events-buffer-size 0           ; Disable events buffer for performance
@@ -166,6 +209,30 @@ in
         (with-eval-after-load 'eglot
           (add-to-list 'eglot-server-programs
                        '((nix-mode nix-ts-mode) . ("nixd"))))
+
+      '' + optionalString cfg.terraform.enable ''
+        ;; == Terraform Language Server ==
+        ;; The workspace's largest unsupported surface until now: 334 .tf
+        ;; files, nearly all in `terraform-platform'.
+        (with-eval-after-load 'eglot
+          (add-to-list 'eglot-server-programs
+                       '(terraform-mode . ("terraform-ls" "serve"))))
+
+      '' + optionalString cfg.rust.enable ''
+        ;; == Rust Language Server (rust-analyzer) ==
+        ;; `languages.rust.enable' only ever added the major mode, so Rust
+        ;; buffers had highlighting and no navigation while the option name
+        ;; suggested otherwise.  This is the half that was missing.
+        (with-eval-after-load 'eglot
+          (add-to-list 'eglot-server-programs
+                       '((rust-mode rust-ts-mode) . ("rust-analyzer"))))
+
+      '' + optionalString cfg.go.enable ''
+        ;; == Go Language Server (gopls) ==
+        ;; Same gap as Rust: the mode was enabled, the server never was.
+        (with-eval-after-load 'eglot
+          (add-to-list 'eglot-server-programs
+                       '((go-mode go-ts-mode) . ("gopls"))))
 
       '' + optionalString cfg.java.enable ''
         ;; == Java Language Server (jdtls, driven directly) ==
