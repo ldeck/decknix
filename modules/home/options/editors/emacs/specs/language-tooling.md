@@ -154,6 +154,26 @@ compiles at runtime and will not reproduce on a fresh machine.
 JVM first despite being hardest, because it is the only one where the
 alternative (println debugging in a large service) is genuinely painful.
 
+## 4.5 Gortex is a fourth layer, not a rival
+
+Gortex is easy to mistake for overlapping with this work, because all of
+it "understands code". The distinction that matters is **who is asking**:
+
+| | Scope | Kind | Consumer |
+|---|---|---|---|
+| tree-sitter | one buffer | syntactic | the human, in the editor |
+| eglot / LSP | one project, needs an import | semantic | the human, in the editor |
+| gortex | 57 repos, one daemon, over MCP | graph | the **agent**, not the editor |
+
+None substitutes for another. Gortex cannot produce font-lock or
+indentation. Tree-sitter cannot say which service publishes an event
+another repo consumes. Eglot cannot answer across repos, and needs a
+Gradle import before it answers at all.
+
+Verified live: the MCP entry is in `~/.claude.json`, Augment has its
+hand-written entry, and pi has `~/.pi/agent/extensions/gortex/index.ts`.
+All three agents already reach it; no wiring work is outstanding.
+
 ## 5. PR review is a different problem
 
 #165 runs reviews in a **worktree checked out at the PR head**. LSP there
@@ -175,6 +195,37 @@ This needs measuring before deciding: how long *is* a cold import of
 `upside` in a fresh worktree? Everything else here is guesswork until
 that number exists.
 
+### 5.1 Gortex changes this calculus
+
+The cold-import cost only ever applied to whoever needs to NAVIGATE.
+When an agent reviews a PR it navigates through gortex, whose graph is
+already built and daemon-held, and which needs no Gradle import at all.
+So the expensive option is being weighed for a need the agent does not
+have.
+
+That leaves the human reading the diff — who mostly reads a diff rather
+than navigating the project. Which makes **accept degraded review
+support** considerably stronger than it first looked, and the shared
+Gradle cache correspondingly less urgent.
+
+**But gortex tracks primary checkouts only.** Measured: 57 tracked
+paths, 0 of them worktrees. So an agent reviewing a PR queries the repo
+as indexed — essentially `main` — not the PR head. For "what calls this
+function" that is usually fine and often better. For "did this change
+break a caller" it is subtly wrong: the graph does not contain the diff
+under review, so the agent can describe, confidently, a world the PR has
+already altered.
+
+`gortex track --as-worktree` exists precisely for this ("track a linked
+git worktree as an independent instance even when its repo is already
+tracked elsewhere"). So the fix is available: track on worktree creation
+(#165 step 1), untrack on prune (#165 step 2).
+
+Not yet done, because it trades one cost for another: indexing a
+monolith worktree per review is not free either, and whether it is
+cheaper than a Gradle import is exactly the measurement in §5. Do them
+together.
+
 ## 6. Open questions
 
 1. **Does the JetBrains server actually fix the monolith?** The claim is
@@ -190,6 +241,9 @@ that number exists.
    mostly through `terraform plan` output rather than in the editor?
 5. **How much of Go/Node/Python is ours** versus vendored or generated?
    17 `go.mod` files may be a handful of real services.
+6. **Is a per-review gortex index cheaper than a Gradle import?** Both
+   are being proposed to solve navigation in a review worktree, and
+   neither has been timed. §5 measures one; measure both.
 
 ## 7. Sequencing
 
