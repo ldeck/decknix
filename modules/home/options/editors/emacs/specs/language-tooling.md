@@ -30,9 +30,12 @@ Two things that read as working and are not:
   and `go-mode` and nothing else. No server is installed, no
   `eglot-server-programs` entry exists. Those buffers get syntax
   highlighting and no navigation, while the option name implies support.
-- **`dape` is configured with a full `C-c d` keymap and no adapters.**
-  No `dape-configs` entries for JVM, Rust or Go. The keys exist; nothing
-  attaches.
+- ~~**`dape` is configured with a full `C-c d` keymap and no adapters.**~~
+  ✅ resolved. The cause was not missing dape config — dape already ships
+  `jdtls`, `dlv` and `lldb-dap` — but that its `jdtls` entry refuses
+  unless jdtls advertises `vscode.java.resolveClasspath`, which only
+  appears once the java-debug OSGi bundle is loaded. JVM debugging was a
+  jdtls configuration problem wearing a dape costume.
 
 ~~No `treesit-language-source-alist` is configured~~ — ✅ resolved: nine
 grammars now ship from nixpkgs on `treesit-extra-load-path`, and
@@ -299,7 +302,7 @@ together.
 2. Tree-sitter grammars, or stop referencing `-ts-` modes ✅ landed (both)
 3. Kotlin: the real JetBrains derivation (§3.1), acceptance per §3.2
 4. Measure cold Gradle import in a review worktree (§5) ✅ landed — see §5.0
-5. dape adapters, JVM first
+5. dape adapters, JVM first ✅ landed (Java; Kotlin still attach-only)
 6. Review-worktree strategy, decided on the §4 measurement
 
 Steps 1–2 are independent and could land in any order. Step 3 is the
