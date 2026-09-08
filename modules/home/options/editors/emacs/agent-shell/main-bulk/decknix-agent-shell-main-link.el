@@ -196,7 +196,7 @@ provider selection are handled by `decknix-agent-purpose-alist'
 
 (defun decknix--agent-quickaction-start (name tags workspace command
                                               &optional model provider-id mode
-                                              background)
+                                              background review-prs)
   "Start a quick-action session with NAME, TAGS, WORKSPACE, and auto-send COMMAND.
 Creates a new agent session, applies metadata, then subscribes to the
 `prompt-ready' event to send COMMAND as soon as the ACP session is
@@ -220,6 +220,11 @@ When the current frame has three or more non-sidebar windows the
 caller is prompted to pick a placement (Replace / Split right /
 Split below per pane); the default selection lands on
 \"Replace ‹current›\" so RET reproduces today's behaviour.
+Optional REVIEW-PRS is a list of `repo#number' keys this session
+reviews.  Supplied by grouped dispatch, whose session covers several PRs
+and whose NAME therefore encodes none of them; omitted, the single key is
+derived from NAME as before.
+
 Optional BACKGROUND spawns the session WITHOUT displaying it: no
 window is taken, no placement prompt is opened, and the buffer the
 user is currently working in is left alone.  This is the mode
@@ -348,14 +353,17 @@ raises the usual attention indicator when it wants input."
     ;; buffer from its tags, which is precisely what made the old
     ;; name-matching check miss and spawn duplicate reviewers.
     ;; Non-review quick actions yield no key and record nothing.
-    (let ((pr-key (decknix--hub-review-pr-key-from-name name))
-          (conv-key (and (stringp command) (not (string-empty-p command))
-                         (decknix--agent-conversation-key command))))
-      (when (and pr-key conv-key)
-        ;; Plural form: a launch records one PR today, but grouped
-        ;; dispatch records several, and the on-disk shape must not
-        ;; depend on which path wrote it.
-        (decknix--agent-save-review-prs-for-conv-key conv-key (list pr-key))))
+    ;; REVIEW-PRS, when the caller knows them, is authoritative: a
+    ;; grouped session covers several PRs and its name encodes none of
+    ;; them, so there is nothing to derive.  Falling back to the name
+    ;; keeps single-PR launches working unchanged.
+    (let* ((pr-keys (or review-prs
+                        (when-let* ((k (decknix--hub-review-pr-key-from-name name)))
+                          (list k))))
+           (conv-key (and (stringp command) (not (string-empty-p command))
+                          (decknix--agent-conversation-key command))))
+      (when (and pr-keys conv-key)
+        (decknix--agent-save-review-prs-for-conv-key conv-key pr-keys)))
     ;; Find the newly created shell buffer and subscribe to prompt-ready.
     ;; agent-shell-start creates the buffer synchronously (mode-hook fires
     ;; before it returns), so find-new-shell-buffer works immediately.

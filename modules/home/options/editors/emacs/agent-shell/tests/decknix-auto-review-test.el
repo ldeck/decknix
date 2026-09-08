@@ -26,6 +26,8 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'decknix-auto-review)
+;; Grouped dispatch records PR coordinates through this layer.
+(require 'decknix-hub-review-identity nil t)
 
 ;; -- State cycle ----------------------------------------------------
 
@@ -189,7 +191,7 @@ visible on every active state."
 (cl-defun decknix-auto-review-test--dispatch
     (&key (bot nil) (mentioned t) (draft-visible t) (conflict-visible t)
           (live-session nil))
-  "Call `decknix-auto-review--dispatch-item' with collaborators stubbed.
+  "Run the eligibility + dispatch path with collaborators stubbed.
 Returns a cons of (ACTION . SPAWN-COUNT) so a test can assert both that
 no action was chosen and that nothing was enqueued."
   (let ((decknix-auto-review--dispatched (make-hash-table :test 'equal))
@@ -210,12 +212,20 @@ no action was chosen and that nothing was enqueued."
                (lambda (&rest _) '(:model "m" :provider "p" :mode "auto")))
               ((symbol-function 'decknix-agent-spawn-enqueue)
                (lambda (&rest _) (setq spawned (1+ spawned)))))
-      (cons (decknix-auto-review--dispatch-item
-             '((repo   . "UpsideRealty/upside")
-               (number . 20612)
-               (url    . "https://github.com/UpsideRealty/upside/pull/20612")
-               (author . "abatten187")))
-            spawned))))
+      ;; Mirrors the driver: decide eligibility, then dispatch a unit.
+      ;; Pointed at the live path deliberately -- the guards moved to
+      ;; `--eligible-action' when grouping landed, and a regression net
+      ;; aimed at the old entry point would have kept passing while the
+      ;; real one went unguarded.
+      (let* ((item '((repo   . "UpsideRealty/upside")
+                     (number . 20612)
+                     (url    . "https://github.com/UpsideRealty/upside/pull/20612")
+                     (author . "abatten187")))
+             (action (decknix-auto-review--eligible-action item)))
+        (when action
+          (decknix-auto-review--dispatch-unit
+           (list action "upside" (alist-get 'author item) (list item))))
+        (cons action spawned)))))
 
 (ert-deftest decknix-auto-review/dispatch-skips-draft-pr ()
   "A PR the Requests draft filter hides is never auto-dispatched."

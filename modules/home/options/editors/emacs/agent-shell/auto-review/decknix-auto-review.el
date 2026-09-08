@@ -94,6 +94,10 @@ guard takes over once the buffer exists).")
 ;; the hub/model vars special so references compile as dynamic
 ;; varrefs against the live globals.
 (declare-function decknix--hub-bot-author-p "decknix-hub-mention-bot")
+(declare-function decknix--hub-review-pr-key
+                  "decknix-hub-review-identity" (repo number))
+(declare-function decknix--hub-request-priority
+                  "decknix-hub-attention-filter" (item))
 (declare-function decknix--hub-item-mentioned-p "decknix-hub-mention-bot")
 (declare-function decknix--hub-requests-draft-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-requests-conflict-visible-p "decknix-hub-attention-filter")
@@ -146,6 +150,67 @@ MENTIONED-P."
 
 ;; -- Command resolution --------------------------------------------
 
+(defun decknix-auto-review--item-repo-short (item)
+  "Return ITEM's repo name without its owner prefix."
+  (car (last (split-string (or (alist-get 'repo item) "") "/"))))
+
+(defun decknix-auto-review-group-plan (entries &optional priority-fn)
+  "Group ENTRIES into dispatch units.  Pure.
+
+ENTRIES is a list of (ACTION . ITEM).  Returns a list of
+(ACTION REPO AUTHOR ITEMS), one per session to launch.
+
+`ship' entries (bot-authored) group by repo AND author.  Five dependabot
+bumps on one service become one session, which is the entire point: a
+single agent can sequence them, notice that one depends on another, or
+fix them together -- none of which five independent sessions can do,
+because none of them knows the other four exist.
+
+Grouping by author as well as repo is deliberate.  `author_kind' is
+`bot' for several authors, and the ship command is dependabot-shaped, so
+folding a renovate PR in with dependabot ones would hand an agent a
+sequence it has no coherent way to run.  Same repo, different bot,
+different session.
+
+`review' entries (human-authored) are NEVER grouped.  They are
+individually authored and individually argued with; folding them would
+hide exactly the reviews that most need reading.
+
+PRIORITY-FN, when supplied, orders members within a group (descending)
+and orders the units by their strongest member -- so one urgent bump
+lifts its group rather than being buried inside it."
+  (let ((groups nil))
+    (dolist (entry entries)
+      (let* ((action (car entry))
+             (item (cdr entry))
+             (repo (decknix-auto-review--item-repo-short item))
+             (author (or (alist-get 'author item) ""))
+             ;; Human reviews get a unique key so they never coalesce.
+             (key (if (eq action 'ship)
+                      (list action repo author)
+                    (list action repo author (alist-get 'number item))))
+             (cell (assoc key groups)))
+        (if cell
+            (setcdr cell (cons item (cdr cell)))
+          (push (cons key (list item)) groups))))
+    (let ((units
+           (mapcar
+            (lambda (cell)
+              (let* ((key (car cell))
+                     (items (nreverse (cdr cell)))
+                     (items (if priority-fn
+                                (sort items (lambda (a b)
+                                              (> (funcall priority-fn a)
+                                                 (funcall priority-fn b))))
+                              items)))
+                (list (nth 0 key) (nth 1 key) (nth 2 key) items)))
+            (nreverse groups))))
+      (if priority-fn
+          (sort units (lambda (a b)
+                        (> (apply #'max (mapcar priority-fn (nth 3 a)))
+                           (apply #'max (mapcar priority-fn (nth 3 b))))))
+        units))))
+
 (defun decknix-auto-review-resolve-command (action workspace)
   "Return the slash command string for ACTION in WORKSPACE.
 ACTION is `ship' or `review'.  A `decknix-auto-review-commands' entry
@@ -191,74 +256,101 @@ NUMBER is normalised so int and string forms collapse to one key."
 ;; on every reviews refresh is wired in the heredoc (a side-effect,
 ;; per AGENTS.md Rule 2).
 
-(defun decknix-auto-review--dispatch-item (item)
-  "Auto-dispatch a review session for hub review ITEM when eligible.
-Returns the action used (`ship'/`review') or nil when skipped.
-Skips when: no action applies under the current state, the PR is not
-review-ready (draft or merge-conflicting), a live review session already
-exists for the PR, or it was already dispatched this Emacs session
-(dedup guards the file-notify->buffer-appears window)."
+(defun decknix-auto-review--eligible-action (item)
+  "Return the dispatch action for ITEM, or nil when it must not dispatch.
+
+Was the head of the old per-item dispatcher, which grouping replaced:
+eligibility for the whole tick has to be known BEFORE deciding how many
+sessions to launch.  Same conditions as before, in the same order."
   (let* ((bot-p (decknix--hub-bot-author-p (alist-get 'author item)))
          (mentioned-p (decknix--hub-item-mentioned-p item))
-         ;; Readiness is expressed as the NEGATION of the sidebar's
-         ;; visibility predicates so auto-review can never dispatch a PR
-         ;; the Requests list is hiding from me — and so the `x' / `X'
-         ;; toggles keep governing both surfaces at once.
          (draft-p (not (decknix--hub-requests-draft-visible-p item)))
          (conflicting-p (not (decknix--hub-requests-conflict-visible-p item)))
          (action (decknix-auto-review-item-action
                   decknix-auto-review-mode bot-p mentioned-p
-                  draft-p conflicting-p)))
-    (when action
-      (let* ((repo-full (or (alist-get 'repo item) ""))
-             (parts (split-string repo-full "/"))
-             (owner (car parts))
-             (repo (car (last parts)))
-             (number (alist-get 'number item))
-             (url (alist-get 'url item))
-             (key (decknix-auto-review-dispatch-key repo-full number)))
-        (when (and url (not (string-empty-p owner)) repo number
-                   (not (decknix-auto-review-dispatched-p key))
-                   (not (decknix--hub-request-has-live-session-p item)))
-          (let* ((name (format "pr-%s-%s" repo number))
-                 (tags (list "review" repo (format "#%s" number) "auto"))
-                 (workspace (decknix--agent-pr-detect-workspace owner repo))
-                 (command-base (decknix-auto-review-resolve-command
-                                action workspace))
-                 ;; `ship' targets the bot-pr-review purpose (cheap
-                 ;; model on the bot provider); `review' targets
-                 ;; pr-review (human-authored PRs).
-                 (purpose (if (eq action 'ship) 'bot-pr-review 'pr-review))
-                 (cfg (decknix-agent-purpose-resolve purpose))
-                 (model (plist-get cfg :model))
-                 (provider (plist-get cfg :provider))
-                 ;; Seed the permission mode (e.g. Claude "auto") so this
-                 ;; unattended review can run shell commands without
-                 ;; stalling on a permission prompt.
-                 (mode (plist-get cfg :mode))
-                 (command (format "%s %s" command-base url)))
-            ;; Mark before launching so a second file-notify tick during
-            ;; session startup can't double-dispatch.
-            (decknix-auto-review-mark-dispatched key)
-            ;; BACKGROUND (last arg): an auto-dispatch fires from a
-            ;; file-notify tick, so it must never take the window the
-            ;; user is working in — nor open the placement prompt in
-            ;; the middle of their typing.  The session is created
-            ;; undisplayed and surfaces via the sidebar / attention
-            ;; indicator instead.
-            ;;
-            ;; THROTTLED: when a hub refresh makes several PRs eligible at
-            ;; once, enqueue rather than cold-starting them all in this one
-            ;; synchronous loop.  The first launches immediately; the rest
-            ;; drip out one per `decknix-agent-spawn-stagger' seconds, so the
-            ;; machine is not thrashed and Emacs stays responsive.
-            (decknix-agent-spawn-enqueue
-             (lambda ()
-               (decknix--agent-quickaction-start
-                name tags workspace command model provider mode t)
-               (message "[auto-review] %s %s/%s#%s via %s"
-                        action owner repo number command-base)))
-            action))))))
+                  draft-p conflicting-p))
+         (repo-full (or (alist-get 'repo item) ""))
+         (number (alist-get 'number item))
+         (url (alist-get 'url item))
+         (key (decknix-auto-review-dispatch-key repo-full number)))
+    (when (and action url number
+               (not (string-empty-p repo-full))
+               (not (decknix-auto-review-dispatched-p key))
+               ;; Already covered -- including by a GROUP session, since
+               ;; `covers-p' tests membership of the recorded PR list.
+               (not (decknix--hub-request-has-live-session-p item)))
+      action)))
+
+(defvar decknix-auto-review-group-ship-command "/review-and-ship-bot-prs"
+  "Slash command for a GROUP of bot PRs on one service.
+A sequencer over the singular command, not a batch approver: each PR is
+still reviewed and approved individually.  See the command definition in
+`decknix-config/commands/review-and-ship-bot-prs.md'.")
+
+(defun decknix-auto-review--dispatch-unit (unit)
+  "Launch one session for UNIT, an (ACTION REPO AUTHOR ITEMS) tuple.
+
+A single-item unit dispatches exactly as before.  A multi-item unit --
+only ever bot PRs on one service -- dispatches ONE session for all of
+them, which is the whole point: five bumps handled by five agents cannot
+sequence themselves, spot that two touch the same lockfile, or share one
+fix, because none of them knows the others exist.
+
+Marks every member dispatched BEFORE launching, so a second file-notify
+tick arriving during session startup cannot re-dispatch any of them."
+  (let* ((action (nth 0 unit))
+         (repo (nth 1 unit))
+         (items (nth 3 unit))
+         (grouped (> (length items) 1))
+         (first (car items))
+         (owner (car (split-string (or (alist-get 'repo first) "") "/")))
+         (urls (delq nil (mapcar (lambda (i) (alist-get 'url i)) items)))
+         (numbers (mapcar (lambda (i) (alist-get 'number i)) items))
+         (workspace (decknix--agent-pr-detect-workspace owner repo))
+         (purpose (if (eq action 'ship) 'bot-pr-review 'pr-review))
+         (cfg (decknix-agent-purpose-resolve purpose))
+         (model (plist-get cfg :model))
+         (provider (plist-get cfg :provider))
+         (mode (plist-get cfg :mode))
+         (command-base (if grouped
+                           decknix-auto-review-group-ship-command
+                         (decknix-auto-review-resolve-command action workspace)))
+         (command (format "%s %s" command-base (string-join urls " ")))
+         (name (if grouped
+                   (format "pr-%s-group" repo)
+                 (format "pr-%s-%s" repo (car numbers))))
+         (tags (if grouped
+                   (list "review" repo "auto" "group")
+                 (list "review" repo (format "#%s" (car numbers)) "auto")))
+         ;; Recorded explicitly: a group's NAME encodes no PR number, so
+         ;; there is nothing for the identity layer to derive from it.
+         ;; Guarded: a missing identity layer must degrade to "no
+         ;; recorded coordinates" -- the tags/name fallbacks still
+         ;; identify the session -- rather than aborting the dispatch and
+         ;; silently leaving the PR unreviewed.
+         (review-prs (when (fboundp 'decknix--hub-review-pr-key)
+                       (delq nil
+                             (mapcar (lambda (i)
+                                       (decknix--hub-review-pr-key
+                                        (alist-get 'repo i) (alist-get 'number i)))
+                                     items)))))
+    (when (and urls workspace)
+      (dolist (i items)
+        (decknix-auto-review-mark-dispatched
+         (decknix-auto-review-dispatch-key
+          (or (alist-get 'repo i) "") (alist-get 'number i))))
+      (decknix-agent-spawn-enqueue
+       (lambda ()
+         (decknix--agent-quickaction-start
+          name tags workspace command model provider mode t review-prs)
+         (message "[auto-review] %s %s/%s %s via %s"
+                  action owner repo
+                  (if grouped
+                      (format "(%d PRs: %s)" (length numbers)
+                              (mapconcat #'number-to-string numbers ", "))
+                    (format "#%s" (car numbers)))
+                  command-base)))
+      action)))
 
 (defun decknix-auto-review--maybe-dispatch (&rest _)
   "Scan hub reviews and auto-dispatch eligible sessions.
@@ -268,8 +360,23 @@ reviews data is (re)loaded — i.e. on every file-notify refresh."
   (when (and (not (eq decknix-auto-review-mode 'off))
              (boundp 'decknix--hub-reviews)
              decknix--hub-reviews)
-    (dolist (item (alist-get 'items decknix--hub-reviews))
-      (ignore-errors (decknix-auto-review--dispatch-item item)))))
+    (let* ((items (alist-get 'items decknix--hub-reviews))
+           ;; Decide eligibility for the WHOLE tick before launching
+           ;; anything.  Dispatching as we walk is what produced one
+           ;; session per bump: by the time the second bump was seen the
+           ;; first had already been given its own agent.
+           (entries (delq nil
+                          (mapcar (lambda (it)
+                                    (when-let* ((a (ignore-errors
+                                                     (decknix-auto-review--eligible-action it))))
+                                      (cons a it)))
+                                  items)))
+           (plan (decknix-auto-review-group-plan
+                  entries
+                  (when (fboundp 'decknix--hub-request-priority)
+                    #'decknix--hub-request-priority))))
+      (dolist (unit plan)
+        (ignore-errors (decknix-auto-review--dispatch-unit unit))))))
 
 (defun decknix-auto-review-seed-current ()
   "Mark every currently-known review PR as already dispatched.
