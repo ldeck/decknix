@@ -243,5 +243,56 @@ the two ignored look exactly like the two that worked."
   "No rows yields no work and no complaints."
   (should (equal '(nil) (decknix-review-board-partition-targets 'quit nil))))
 
+
+;; --- shipping refuses what cannot be undone ---
+
+(ert-deftest decknix-rb--ship-refuses-stale ()
+  "A stale row must never ship: the approval was earned by another diff.
+Merging it merges something nobody read."
+  (should (equal "author pushed since review"
+                 (decknix-review-board-ship-blocker '(:prs ("a#1")) 'stale))))
+
+(ert-deftest decknix-rb--ship-refuses-gone ()
+  "Nothing left to merge."
+  (should (decknix-review-board-ship-blocker '(:prs ("a#1")) 'gone)))
+
+(ert-deftest decknix-rb--ship-refuses-rows-without-prs ()
+  "Nothing to name in the train."
+  (should (decknix-review-board-ship-blocker '(:prs nil) nil)))
+
+(ert-deftest decknix-rb--ship-allows-answered-and-plain ()
+  "`answered' is not a blocker: somebody else reviewing it does not make
+it unmergeable, and a plain row is the ordinary case."
+  (should-not (decknix-review-board-ship-blocker '(:prs ("a#1")) 'answered))
+  (should-not (decknix-review-board-ship-blocker '(:prs ("a#1")) nil)))
+
+(ert-deftest decknix-rb--ship-plan-groups-by-repo ()
+  "`/merge-train' takes bare PR numbers and resolves the repo from its
+workspace, so a mixed list would merge into whichever repo was current."
+  (let* ((rows '((:prs ("a#1" "a#2")) (:prs ("b#9"))))
+         (plan (decknix-review-board-ship-plan rows (lambda (_) nil)))
+         (by-repo (car plan)))
+    (should (= 2 (length by-repo)))
+    (should (equal '("1" "2") (alist-get "a" by-repo nil nil #'equal)))
+    (should (equal '("9") (alist-get "b" by-repo nil nil #'equal)))))
+
+(ert-deftest decknix-rb--ship-plan-merges-rows-of-one-repo ()
+  "Two rows on one repo become one train, not two."
+  (let* ((rows '((:prs ("a#1")) (:prs ("a#2"))))
+         (plan (decknix-review-board-ship-plan rows (lambda (_) nil))))
+    (should (= 1 (length (car plan))))
+    (should (equal '("1" "2") (cdar (car plan))))))
+
+(ert-deftest decknix-rb--ship-plan-returns-blocked-rows ()
+  "Blocked rows come back with a reason rather than vanishing.
+A ship that silently dropped the stale ones would look identical to one
+that merged them."
+  (let* ((rows '((:prs ("a#1")) (:prs ("a#2"))))
+         (plan (decknix-review-board-ship-plan
+                rows (lambda (r) (when (equal '("a#2") (plist-get r :prs)) 'stale)))))
+    (should (= 1 (length (car plan))))
+    (should (= 1 (length (cdr plan))))
+    (should (equal "author pushed since review" (cdar (cdr plan))))))
+
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here

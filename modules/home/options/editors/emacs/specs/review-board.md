@@ -153,7 +153,6 @@ everyone's fingers.
 | `d` | dispatch a review session (grouped for a group row) |
 | `RET` / `o` | browse the PR |
 | `j` | jump to the session buffer |
-| `a` | approve (see §6) |
 | `s` | ship / merge (see §6) |
 | `k` | quit sessions, terminating brokers |
 | `D` | detach sessions, leaving agents running |
@@ -166,8 +165,17 @@ quit/detach distinction is learned once.
 
 ## 6. Anything that writes to GitHub needs a gate
 
-`a` and `s` post to GitHub across a marked set. That is the one place
-this board can do real damage, and batch amplifies it.
+**There is no `approve` verb, and there should not be.** `submit-pr-review`
+is deprecated; approval now happens *inside* `/review-service-pr` and
+`/review-and-ship-bot-pr`, behind the mandatory review gate. A board verb
+that approved directly would route around that gate, which the workflow
+rules treat as a serious failure rather than a shortcut. Approving is the
+outcome of a review here, not a separate act.
+
+That leaves `s`, and the board does not merge either — it names the PRs
+and hands them to `/merge-train`, which owns train ordering and its own
+confirmation gate. So the board's gate is the SECOND one, not the only
+one.
 
 Constraints:
 
@@ -234,7 +242,7 @@ the board guessing.
 2. Grouped dispatch in auto-review (removes the volume) ✅ landed
 3. Board: lanes, rows, ordering, navigation — read-only ✅ landed
 4. Marks and the non-writing verbs (`d`, `j`, `k`, `D`) ✅ landed
-5. Writing verbs (`a`, `s`) behind the §6 gate
+5. Writing verbs (`s`) behind the §6 gate ✅ landed
 
 Steps 1–2 are worth landing and living with before 3 is built: the
 board's shape depends on how much volume is actually left once bot
