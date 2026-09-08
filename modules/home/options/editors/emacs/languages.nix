@@ -50,7 +50,13 @@ in
       enable = mkOption {
         type = types.bool;
         default = true;
-        description = "Enable Terraform/HCL mode for .tf and .hcl files.";
+        description = ''
+          Enable Terraform/HCL MAJOR MODE for .tf and .hcl files.
+
+          LSP comes separately from `lsp.terraform.enable' (terraform-ls) --
+          see the note on `rust.enable' for why mode and server are named
+          apart.
+        '';
       };
     };
 
@@ -141,7 +147,15 @@ in
       enable = mkOption {
         type = types.bool;
         default = true;
-        description = "Enable Rust mode for .rs files.";
+        description = ''
+          Enable Rust MAJOR MODE for .rs files (syntax, indentation, cargo).
+
+          This does NOT provide LSP.  Navigation, completion and diagnostics
+          come from `lsp.rust.enable', which installs rust-analyzer and wires
+          it into Eglot.  The two are separate on purpose, but the split used
+          to be invisible: this option alone gave highlighting with no
+          navigation while reading as though it enabled Rust support.
+        '';
       };
     };
 
@@ -149,7 +163,12 @@ in
       enable = mkOption {
         type = types.bool;
         default = true;
-        description = "Enable Go mode for .go files.";
+        description = ''
+          Enable Go MAJOR MODE for .go files.
+
+          This does NOT provide LSP -- see `lsp.go.enable' for gopls, and the
+          note on `rust.enable' above for why the distinction is spelled out.
+        '';
       };
     };
 

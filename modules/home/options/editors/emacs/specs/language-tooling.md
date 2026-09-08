@@ -18,9 +18,9 @@ Absent:
 
 | Language | Server | nixpkgs | Notes |
 |----------|--------|---------|-------|
-| Terraform | `terraform-ls` | 0.38.3 | **largest gap** — see §2 |
-| Rust | `rust-analyzer` | 2025-10-28 | option exists, server does not |
-| Go | `gopls` | 0.20.0 | option exists, server does not |
+| Terraform | `terraform-ls` | 0.38.3 | ✅ landed |
+| Rust | `rust-analyzer` | 2025-10-28 | ✅ landed |
+| Go | `gopls` | 0.20.0 | ✅ landed |
 | Python | `basedpyright` | 1.34.0 | |
 | TypeScript | `typescript-language-server` | — | |
 
@@ -193,7 +193,7 @@ that number exists.
 
 ## 7. Sequencing
 
-1. Terraform, Rust, Go servers — small, and makes existing options honest
+1. Terraform, Rust, Go servers — small, and makes existing options honest ✅ landed
 2. Tree-sitter grammars, or stop referencing `-ts-` modes
 3. Kotlin: the real JetBrains derivation (§3.1), acceptance per §3.2
 4. Measure cold Gradle import in a review worktree (§5)
