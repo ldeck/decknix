@@ -9,8 +9,14 @@ let
   # is the only server that resolves modern Gradle monorepos — centralised
   # repos, Google Artifact Registry, JDK 25, Kotlin 2.3 (fwcd's 1.3.13 cannot;
   # see #170).  We are NOT using it yet: see `useJetBrainsLsp' below.
+  # Our own derivation (pkgs/kotlin-lsp), NOT the nix-casks input.  That input
+  # resolved and built while shipping a 0 MB stub with a dangling symlink, so
+  # "the attribute exists" told us nothing.  This one unpacks the standalone
+  # archive and wraps `bin/intellij-server'; verified by running it
+  # (`--version' -> LS-262.9593.0), not by building it.
   jetbrainsKotlinLsp =
-    inputs.nix-casks.packages.${pkgs.stdenv.hostPlatform.system}.kotlin-lsp or null;
+    let drv = pkgs.callPackage ../../../../../pkgs/kotlin-lsp { };
+    in if pkgs.stdenv.hostPlatform.system == "aarch64-darwin" then drv else null;
   useJetBrainsKotlin =
     cfg.kotlin.enable && cfg.kotlin.useJetBrainsLsp && jetbrainsKotlinLsp != null;
   kotlinPkg = if useJetBrainsKotlin then jetbrainsKotlinLsp else pkgs.kotlin-language-server;

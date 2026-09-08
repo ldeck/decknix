@@ -112,6 +112,39 @@ Two traps:
 - It is not in nixpkgs (checked). This has to be a local derivation with
   a pinned hash, which means a manual bump on each release.
 
+### 3.1.1 BLOCKED: the build is time-bombed and has expired
+
+The derivation is written and works (`pkgs/kotlin-lsp`). It downloads
+against JetBrains' published checksum, unpacks the `.sit` (confirming it
+is a ZIP), wraps `bin/intellij-server`, and answers:
+
+```
+$ kotlin-lsp --version
+LS-262.9593.0
+```
+
+An actual LSP session then dies immediately:
+
+```
+This build of intellij-server has expired.
+Please download a new build from https://www.jetbrains.com/intellij-server/
+```
+
+`v262.9593.0` (2026-07-27) is the **newest** release and had already
+expired by 2026-09-08 — about six weeks. There is nothing newer to pin.
+
+Two things follow, and the second matters more:
+
+- **The lesson goes one level deeper than §3 recorded.** "Verify by
+  running it" was not enough either: `--version` answered fine, and the
+  failure only appeared on opening a session. The acceptance in §3.2 is
+  the right test precisely because it exercises a session.
+- **A time-bombed build is a recurring commitment, not a packaging job.**
+  Any pinned version stops working after weeks, silently, and Kotlin LSP
+  would die for everyone at an expiry we did not choose rather than at a
+  switch we did. That is worth weighing before adopting it at all, even
+  once JetBrains ship a build that runs.
+
 ### 3.2 Acceptance
 
 Not "the derivation builds". A Kotlin buffer in `upside` must reach a
@@ -300,7 +333,7 @@ together.
 
 1. Terraform, Rust, Go servers — small, and makes existing options honest ✅ landed
 2. Tree-sitter grammars, or stop referencing `-ts-` modes ✅ landed (both)
-3. Kotlin: the real JetBrains derivation (§3.1), acceptance per §3.2
+3. Kotlin: the real JetBrains derivation (§3.1) — written, BLOCKED on expiry (§3.1.1)
 4. Measure cold Gradle import in a review worktree (§5) ✅ landed — see §5.0
 5. dape adapters, JVM first ✅ landed (Java; Kotlin still attach-only)
 6. Review-worktree strategy, decided on the §4 measurement
