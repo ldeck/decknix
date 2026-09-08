@@ -330,6 +330,23 @@ let
   # Ordering for "which review next?".  Separate from review-status: that
   # one classifies a single item, this one ranks a queue, and the weights
   # are a judgement call that deserves its own tests to argue with.
+  # Pure lane/row model for the review board.  Split from the rendering
+  # so every decision worth arguing with -- which lane a row belongs in,
+  # when a group counts as finished -- is testable without a frame.
+  decknix-review-board-model-el = mkEmacsTestedPackage {
+    pname = "decknix-review-board-model";
+    src = ./agent-shell/review-board;
+    # Hard dependency: the group-unanimity rule lives in review-status,
+    # and the obvious fallback reports a partly-merged group as finished.
+    packageRequires = [ decknix-hub-review-status-el ];
+    extraSiteFiles = [
+      "decknix-review-board.el"
+    ];
+    testFiles = [
+      "decknix-review-board-model-test.el"
+    ];
+  };
+
   decknix-hub-review-priority-el = mkEmacsTestedPackage {
     pname = "decknix-hub-review-priority";
     src = ./agent-shell/review-priority;
@@ -3166,6 +3183,7 @@ in
           decknix-hub-review-identity-el
           decknix-hub-review-status-el
           decknix-hub-review-priority-el
+          decknix-review-board-model-el
           decknix-agent-acp-trace-el
           decknix-record-el
           decknix-layout-groups-el
@@ -3678,6 +3696,9 @@ in
         ;; Review queue ordering (incident > feature > EH, crossed with
         ;; engagement).  Replaces the recency feed as the default.
         (require 'decknix-hub-review-priority)
+        ;; Review board: lanes, rows, ordering (read-only surface).
+        (require 'decknix-review-board-model)
+        (require 'decknix-review-board)
         (require 'decknix-agent-broker-rehydrate)
         (require 'decknix-agent-broker-reattach)
         ;; #151: reattach to brokers that survived the restart.  Armed on a
@@ -4939,7 +4960,8 @@ ${optionalString cfg.tableOverlay.enable ''
                      ("x" . decknix-agent-arm-auto-close)
                      ("e" . decknix-agent-compose)
                      ("v" . decknix-agent-review)
-                     ("V" . decknix-agent-review-menu)))
+                     ("V" . decknix-agent-review-menu)
+                     ("B" . decknix-review-board)))
           (define-key decknix-session-prefix-map (kbd (car b)) (cdr b)))
         ;; Named window-layout groups (#169) on the session prefix.
         (when (fboundp 'decknix-layout-group-switch)
@@ -4977,6 +4999,7 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c s e" "compose"
             "C-c s v" "review last exchange"
             "C-c s V" "review menu"
+            "C-c s B" "review board"
             "C-c s l" "layout switch"
             "C-c s L" "layout save"
             "C-c s C-l" "layout delete"
