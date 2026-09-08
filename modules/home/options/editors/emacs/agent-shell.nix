@@ -904,9 +904,14 @@ let
     src = ./agent-shell/auto-review;
     # Top-level `(require 'decknix-agent-spawn-queue)`: dispatch enqueues
     # spawns through the throttle instead of firing them all at once.
-    packageRequires = [ decknix-agent-spawn-queue-el ];
+    # `decknix-hub-review-identity' supplies the PR-coordinate key that
+    # grouped dispatch records against the session -- a group's NAME
+    # encodes no PR number, so there is nothing to derive from it later.
+    packageRequires = [ decknix-agent-spawn-queue-el
+                        decknix-hub-review-identity-el ];
     testFiles = [
       "decknix-auto-review-test.el"
+      "decknix-auto-review-group-test.el"
     ];
   };
 
