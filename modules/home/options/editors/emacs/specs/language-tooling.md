@@ -201,22 +201,27 @@ Taken on `upside` (11,274 files, 423 MB `.git`, 9 Gradle modules):
 |------|--------|
 | `git worktree add` off `origin/development` | **166 s** (2m46), 96 MB checked out |
 | Shared `~/.gradle` | **7.0 GB** — so a new worktree is warm for deps, cold for configuration |
-| Cold `./gradlew projects`, attempt 1 | **331 s, then FAILED** on a kotlin-dsl cache lock |
-| Cold `./gradlew projects`, attempt 2 | ran >5 min, killed before completing |
+| Cold `./gradlew projects`, contended | **331 s, then FAILED** on a kotlin-dsl cache lock |
+| Cold `./gradlew projects`, clean | **672 s (11m 9s)**, BUILD SUCCESSFUL |
 | `gortex track --as-worktree --wait` | **>900 s** — did not settle within a 15 min ceiling |
 
-Two honest caveats. The attempt-1 lock failure was **self-inflicted**: an
-earlier backgrounded run orphaned a daemon that held the lock. And
-neither Gradle attempt produced a clean completion, so there is still no
-single "cold configure takes N seconds" figure.
+One caveat: the contended failure was **self-inflicted** — an earlier
+backgrounded run orphaned a daemon holding the lock. The clean run is the
+real figure.
 
-What the numbers do establish is enough to decide:
+**Eleven minutes.** With a 7 GB warm dependency cache, on a nine-module
+project. That is configuration alone — no compilation, no indexing, no
+LSP handshake — and it is what a review worktree pays before an editor
+can answer a single question about it.
+
+What the numbers establish:
 
 - **Worktree creation alone costs ~2.8 minutes** on the monolith, before
   any language tooling runs at all. That is a floor per review, and it is
   paid by `#165` whether or not LSP is ever attached.
-- **Gradle configuration is minutes, not seconds** — two runs exceeded
-  five minutes without finishing.
+- **Gradle configuration is 11 minutes**, not the "minutes" first
+  guessed. Roughly four times the checkout cost, and roughly the length
+  of the whole review it is meant to support.
 - **Concurrent Gradle against one shared cache serialises on locks and
   can fail outright**, not merely wait. Demonstrated, if accidentally.
   With several review sessions live this stops being a corner case: it is
