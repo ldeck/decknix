@@ -233,7 +233,7 @@ the board guessing.
 1. `reviewPr` becomes a list (schema, contained, no behaviour change) ✅ landed
 2. Grouped dispatch in auto-review (removes the volume) ✅ landed
 3. Board: lanes, rows, ordering, navigation — read-only ✅ landed
-4. Marks and the non-writing verbs (`d`, `j`, `k`, `D`)
+4. Marks and the non-writing verbs (`d`, `j`, `k`, `D`) ✅ landed
 5. Writing verbs (`a`, `s`) behind the §6 gate
 
 Steps 1–2 are worth landing and living with before 3 is built: the

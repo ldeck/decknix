@@ -15,10 +15,14 @@
 ;; and lists sessions and requests as separate things rather than as one
 ;; worklist.
 ;;
-;; Read-only, in this step.  Marks and batch verbs are specified in
-;; `specs/review-board.md' and land after this has been lived with: the
-;; verbs that write to GitHub need a confirmation gate, and that is worth
-;; designing against a board that exists rather than one imagined.
+;; Marks (`m'/`u'/`U'/`M') and the non-writing verbs -- dispatch, jump,
+;; quit, detach -- act on the marked set, or on the row at point when
+;; nothing is marked.
+;;
+;; The verbs that WRITE to GitHub (approve, ship) are deliberately still
+;; unbound.  They need the manifest-and-confirmation gate from the spec,
+;; and a batch cannot be looser than the single-PR case which already
+;; mandates one.  Everything bound here is recoverable; those are not.
 ;;
 ;; Follows `decknix-dos-board' deliberately -- constant lanes, cursor,
 ;; single-key actions, read-only, refreshed rather than recomputed.  The
@@ -39,6 +43,10 @@
 (declare-function decknix--agent-review-prs-for-conv-key "decknix-agent-session-broker" (conv-key))
 (declare-function decknix-agent-buffer-status "decknix-agent-auto-close" (buffer))
 (declare-function agent-shell-buffers "ext:agent-shell")
+(declare-function decknix-auto-review--dispatch-unit "decknix-auto-review" (unit))
+(declare-function decknix--agent-broker-stop-p "decknix-agent-session-broker" (key other-keys))
+(declare-function decknix-agent-broker-stop "decknix-agent-session-broker" (key))
+(defvar decknix--agent-broker-key)
 (defvar decknix--hub-reviews)
 (defvar decknix--agent-conv-key)
 
@@ -55,6 +63,9 @@
 
 (defvar-local decknix-review-board--model nil
   "The lane model rendered in this buffer.")
+
+(defvar-local decknix-review-board--marks nil
+  "Hash of marked row keys (see `decknix-review-board-row-key').")
 
 (defconst decknix-review-board-buffer-name "*Review Board*"
   "Name of the review board buffer.")
@@ -151,7 +162,10 @@ make the column noisy."
          (badge (decknix--hub-review-status-badge status))
          (state (plist-get row :state))
          (attention (decknix-review-board--attention-p state))
-         (line (format "  %-2s %5d  %-58s %s"
+         (marked (and decknix-review-board--marks
+                      (decknix-review-board--marked-p row)))
+         (line (format "%s %-2s %5d  %-58s %s"
+                       (if marked "*" " ")
                        (if (string-empty-p badge) " " badge)
                        (plist-get row :priority)
                        (truncate-string-to-width
@@ -239,6 +253,164 @@ with, so the link matches where the session's attention is."
       (browse-url url)
     (user-error "No PR URL for this row")))
 
+(defun decknix-review-board--marks-table ()
+  "Return this buffer's mark table, creating it if needed."
+  (or decknix-review-board--marks
+      (setq decknix-review-board--marks (make-hash-table :test 'equal))))
+
+(defun decknix-review-board--marked-p (row)
+  "Non-nil when ROW is marked."
+  (gethash (decknix-review-board-row-key row) (decknix-review-board--marks-table)))
+
+(defun decknix-review-board--marked-rows ()
+  "Return the marked rows, in lane order."
+  (seq-filter #'decknix-review-board--marked-p
+              (decknix-review-board-rows decknix-review-board--model)))
+
+(defun decknix-review-board--targets ()
+  "Return the rows a verb should act on.
+
+The marked set, or the row at point when nothing is marked.  The dired
+convention, chosen because it is already in everyone's fingers rather
+than because it is the only option."
+  (or (decknix-review-board--marked-rows)
+      (when-let* ((row (decknix-review-board--row-at-point))) (list row))))
+
+(defun decknix-review-board--lane-at-point ()
+  "Return the lane symbol whose section point is in, or nil."
+  (save-excursion
+    (let (lane)
+      (while (and (not lane) (not (bobp)))
+        (when-let* ((row (get-text-property (point) 'decknix-review-board-row)))
+          (setq lane (plist-get row :lane)))
+        (forward-line -1))
+      lane)))
+
+(defun decknix-review-board-mark ()
+  "Mark the row at point and move on."
+  (interactive)
+  (when-let* ((row (decknix-review-board--row-at-point)))
+    (puthash (decknix-review-board-row-key row) t (decknix-review-board--marks-table))
+    (decknix-review-board--render)
+    (decknix-review-board-next)))
+
+(defun decknix-review-board-unmark ()
+  "Unmark the row at point and move on."
+  (interactive)
+  (when-let* ((row (decknix-review-board--row-at-point)))
+    (remhash (decknix-review-board-row-key row) (decknix-review-board--marks-table))
+    (decknix-review-board--render)
+    (decknix-review-board-next)))
+
+(defun decknix-review-board-unmark-all ()
+  "Clear every mark."
+  (interactive)
+  (clrhash (decknix-review-board--marks-table))
+  (decknix-review-board--render)
+  (message "Marks cleared"))
+
+(defun decknix-review-board-mark-lane ()
+  "Mark every row in the lane at point."
+  (interactive)
+  (if-let* ((lane (decknix-review-board--lane-at-point))
+            (rows (decknix-review-board-lane-rows decknix-review-board--model lane)))
+      (progn
+        (dolist (row rows)
+          (puthash (decknix-review-board-row-key row) t
+                   (decknix-review-board--marks-table)))
+        (decknix-review-board--render)
+        (message "Marked %d in %s" (length rows) lane))
+    (user-error "No lane here")))
+
+(defun decknix-review-board--report (verb done skipped)
+  "Message what VERB did to DONE rows and did not do to SKIPPED ones."
+  (message "%s: %d row%s%s" verb done (if (= done 1) "" "s")
+           (if skipped
+               (format " (%d skipped: nothing to act on)" skipped)
+             "")))
+
+(defun decknix-review-board-dispatch ()
+  "Dispatch review sessions for the target rows.
+
+Routes through the auto-review dispatcher, so a group launches as ONE
+session with the same command and ordering auto-review would have used.
+A board that dispatched differently from the automatic path would be a
+second way to get it wrong."
+  (interactive)
+  (let* ((part (decknix-review-board-partition-targets
+                'dispatch (decknix-review-board--targets)))
+         (rows (car part))
+         (done 0))
+    (unless rows (user-error "Nothing to dispatch"))
+    (dolist (row rows)
+      (let* ((items (or (plist-get row :items)
+                        (when-let* ((i (plist-get row :item))) (list i))))
+             (first (car items))
+             (repo (car (last (split-string (or (alist-get 'repo first) "") "/"))))
+             (author (or (alist-get 'author first) ""))
+             (action (if (decknix-review-board--item-bot-p first) 'ship 'review)))
+        (when (and items (fboundp 'decknix-auto-review--dispatch-unit))
+          (ignore-errors
+            (decknix-auto-review--dispatch-unit (list action repo author items))
+            (setq done (1+ done))))))
+    (decknix-review-board-unmark-all)
+    (decknix-review-board-refresh)
+    (decknix-review-board--report "Dispatched" done (length (cdr part)))))
+
+(defun decknix-review-board--session-buffers (rows)
+  "Return the live session buffers for ROWS."
+  (delq nil (mapcar (lambda (r)
+                      (let ((b (plist-get r :buffer)))
+                        (and (buffer-live-p b) b)))
+                    rows)))
+
+(defun decknix-review-board-quit-sessions ()
+  "Quit the target sessions, terminating their brokers.
+
+Confirms first, and says how many.  Under brokering a killed buffer
+leaves the agent running, so ending a session is now an explicit act --
+and doing it to several at once is exactly when a count is worth
+reading before rather than after."
+  (interactive)
+  (let* ((part (decknix-review-board-partition-targets
+                'quit (decknix-review-board--targets)))
+         (bufs (decknix-review-board--session-buffers (car part))))
+    (unless bufs (user-error "No live sessions to quit"))
+    (when (yes-or-no-p (format "Quit %d session%s and terminate their brokers? "
+                               (length bufs) (if (= 1 (length bufs)) "" "s")))
+      (let ((others (delq nil
+                          (mapcar (lambda (b)
+                                    (unless (memq b bufs)
+                                      (buffer-local-value 'decknix--agent-broker-key b)))
+                                  (agent-shell-buffers)))))
+        (dolist (buf bufs)
+          (let ((key (buffer-local-value 'decknix--agent-broker-key buf)))
+            ;; Same shared-broker guard the single-session quit uses, so
+            ;; a broker another buffer is attached to survives here too.
+            (when (and (fboundp 'decknix--agent-broker-stop-p)
+                       (decknix--agent-broker-stop-p key others))
+              (ignore-errors (decknix-agent-broker-stop key))))
+          (let ((kill-buffer-query-functions nil))
+            (kill-buffer buf))))
+      (decknix-review-board-unmark-all)
+      (decknix-review-board-refresh)
+      (decknix-review-board--report "Quit" (length bufs) (length (cdr part))))))
+
+(defun decknix-review-board-detach-sessions ()
+  "Detach the target sessions, leaving their agents running.
+No confirmation: detaching is reversible, and the agent keeps working."
+  (interactive)
+  (let* ((part (decknix-review-board-partition-targets
+                'detach (decknix-review-board--targets)))
+         (bufs (decknix-review-board--session-buffers (car part))))
+    (unless bufs (user-error "No live sessions to detach"))
+    (dolist (buf bufs)
+      (let ((kill-buffer-query-functions nil))
+        (kill-buffer buf)))
+    (decknix-review-board-unmark-all)
+    (decknix-review-board-refresh)
+    (decknix-review-board--report "Detached" (length bufs) (length (cdr part)))))
+
 (defvar decknix-review-board-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "n") #'decknix-review-board-next)
@@ -249,14 +421,23 @@ with, so the link matches where the session's attention is."
     (define-key map (kbd "o") #'decknix-review-board-browse)
     (define-key map (kbd "j") #'decknix-review-board-jump)
     (define-key map (kbd "g") #'decknix-review-board-refresh)
+    (define-key map (kbd "m") #'decknix-review-board-mark)
+    (define-key map (kbd "u") #'decknix-review-board-unmark)
+    (define-key map (kbd "U") #'decknix-review-board-unmark-all)
+    (define-key map (kbd "M") #'decknix-review-board-mark-lane)
+    (define-key map (kbd "d") #'decknix-review-board-dispatch)
+    (define-key map (kbd "k") #'decknix-review-board-quit-sessions)
+    (define-key map (kbd "D") #'decknix-review-board-detach-sessions)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `decknix-review-board-mode'.
 
-Navigation and inspection only, for now.  `m'/`u' (marks) and the acting
-verbs are reserved rather than bound: binding a key to nothing teaches
-the wrong reflex, and the writing verbs need their confirmation gate
-designed first.")
+`k' and `D' mirror `C-c s q' and `C-c s D' so the quit/detach
+distinction is learned once rather than twice.
+
+The verbs that WRITE to GitHub (approve, ship) are still unbound.  They
+need the manifest-and-confirmation gate from the spec, and a batch cannot
+be looser than the single-PR case that already mandates one.")
 
 (define-derived-mode decknix-review-board-mode special-mode "ReviewBoard"
   "Major mode for the review worklist."

@@ -208,5 +208,40 @@ be buried at the bottom where it never gets cleared."
                  #'decknix-rb-test--priority #'decknix-rb-test--bot)))
     (should (= 2 (length (alist-get 'idle model))))))
 
+
+;; --- marks and verb targeting ---
+
+(ert-deftest decknix-rb--row-key-prefers-conv-key ()
+  "A session's identity is its conv-key, which survives renaming."
+  (should (equal "ck1" (decknix-review-board-row-key
+                        '(:conv-key "ck1" :prs ("a#1")))))
+  (should (equal "a#1,a#2" (decknix-review-board-row-key
+                            '(:conv-key nil :prs ("a#1" "a#2"))))))
+
+(ert-deftest decknix-rb--dispatch-only-targets-unstarted-rows ()
+  "Dispatching a row that already has an agent would duplicate it."
+  (should (decknix-review-board-verb-applicable-p 'dispatch '(:session nil)))
+  (should-not (decknix-review-board-verb-applicable-p 'dispatch '(:session t))))
+
+(ert-deftest decknix-rb--session-verbs-need-a-session ()
+  "Quit, detach and jump have nothing to act on without one."
+  (dolist (v '(quit detach jump))
+    (should (decknix-review-board-verb-applicable-p v '(:session t)))
+    (should-not (decknix-review-board-verb-applicable-p v '(:session nil)))))
+
+(ert-deftest decknix-rb--partition-reports-what-it-skipped ()
+  "Skipped rows come back, so the caller can say what it did not do.
+Marking five and quietly acting on three is the failure this prevents:
+the two ignored look exactly like the two that worked."
+  (let* ((rows '((:session t :prs ("a#1")) (:session nil :prs ("a#2"))
+                 (:session t :prs ("a#3"))))
+         (part (decknix-review-board-partition-targets 'quit rows)))
+    (should (= 2 (length (car part))))
+    (should (= 1 (length (cdr part))))))
+
+(ert-deftest decknix-rb--partition-of-nothing-is-empty ()
+  "No rows yields no work and no complaints."
+  (should (equal '(nil) (decknix-review-board-partition-targets 'quit nil))))
+
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here
