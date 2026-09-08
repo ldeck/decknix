@@ -200,5 +200,54 @@ shifting with the contents."
   "Return the total number of rows in MODEL."
   (apply #'+ (mapcar (lambda (lane) (length (cdr lane))) model)))
 
+
+;; ── marks and verb targeting ─────────────────────────────────────────
+
+(defun decknix-review-board-row-key (row)
+  "Return a stable identity for ROW, for carrying marks across refreshes.
+
+A session's conv-key is stable; an unstarted row has none, so its PR set
+stands in.  A group's key therefore CHANGES when a member merges, which
+drops the mark -- correct rather than unfortunate: the thing that was
+marked is not the thing now on screen."
+  (or (plist-get row :conv-key)
+      (mapconcat #'identity (plist-get row :prs) ",")))
+
+(defconst decknix-review-board-session-verbs '(jump quit detach)
+  "Verbs that need a live session to act on.")
+
+(defconst decknix-review-board-unstarted-verbs '(dispatch)
+  "Verbs that only make sense for a row with no session yet.")
+
+(defun decknix-review-board-verb-applicable-p (verb row)
+  "Non-nil when VERB can act on ROW."
+  (let ((has-session (and (plist-get row :session) t)))
+    (cond
+     ((memq verb decknix-review-board-session-verbs) has-session)
+     ((memq verb decknix-review-board-unstarted-verbs) (not has-session))
+     (t t))))
+
+(defun decknix-review-board-partition-targets (verb rows)
+  "Split ROWS into (ACTIONABLE . SKIPPED) for VERB.  Pure.
+
+Skipped rows are returned rather than dropped so the caller can SAY what
+it did not do.  Marking five rows and pressing a key that quietly acts on
+three is the failure mode this exists to prevent: the two that were
+ignored look identical to the two that succeeded."
+  (let (ok skip)
+    (dolist (row rows)
+      (if (decknix-review-board-verb-applicable-p verb row)
+          (push row ok)
+        (push row skip)))
+    (cons (nreverse ok) (nreverse skip))))
+
+(defun decknix-review-board-rows (model)
+  "Return every row in MODEL, in lane order."
+  (apply #'append (mapcar #'cdr model)))
+
+(defun decknix-review-board-lane-rows (model lane)
+  "Return the rows of LANE in MODEL."
+  (alist-get lane model))
+
 (provide 'decknix-review-board-model)
 ;;; decknix-review-board-model.el ends here
