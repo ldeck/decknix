@@ -94,6 +94,11 @@ history; only the model-facing primer is suppressed)."
                   "decknix-agent-session-broker" (provider-id conv-key &optional session-id))
 (declare-function decknix--agent-broker-wrap-command
                   "decknix-agent-session-broker" (argv key))
+(declare-function decknix-agent-archived--list "decknix-agent-archived")
+(declare-function decknix-agent-archived--candidate-label
+                  "decknix-agent-archived" (entry))
+(declare-function decknix-agent-archived--restore
+                  "decknix-agent-archived" (id agent))
 (declare-function decknix--agent-broker-stop-p
                   "decknix-agent-session-broker" (key other-keys))
 (declare-function decknix-agent-broker-stop
@@ -1322,6 +1327,19 @@ reopen cycle triggered by the toggle.")
 Captured at `decknix-agent-session-picker' call time; used as the
 M-w cycle target so the filter snaps to the caller's context.")
 
+(defcustom decknix-agent-picker-include-archived nil
+  "When non-nil, the session picker also lists ARCHIVED sessions.
+
+Off by default because listing them shells out to the decknix CLI -- a
+process spawn on every picker open.  Worth it when hunting an old
+conversation, wasteful when switching between two live ones.  Toggle
+inside the picker with `M-a', which reopens with the new scope."
+  :type 'boolean
+  :group 'decknix)
+
+(defvar decknix--session-picker-archived-map nil
+  "Hash of candidate string -> archived entry alist for the current picker.")
+
 (defvar decknix--session-picker-reopen nil
   "When non-nil, `decknix-agent-session-picker' re-invokes itself on exit.
 Set by the M-w workspace-filter toggle; cleared immediately before the
@@ -1713,6 +1731,65 @@ then calls ON-TOGGLE to reopen the picker with the new filter."
                   (decknix--sidebar-restore-previous-session entry t)))))))
   "Consult multi-source for previous (restorable) sessions.")
 
+(defvar decknix--session-source-archived
+  (list :name     "Archived"
+        :narrow   ?a
+        :category 'agent-session-archived
+        :face     'shadow
+        :items
+        (lambda ()
+          ;; Only pay the CLI spawn when archived sessions were asked for.
+          ;; Guarded on the module too, so a build without it degrades to
+          ;; the other sections rather than erroring.
+          (when (and decknix-agent-picker-include-archived
+                     (fboundp 'decknix-agent-archived--list))
+            (let ((ht (make-hash-table :test 'equal))
+                  (ordered nil))
+              (dolist (entry (ignore-errors (decknix-agent-archived--list)))
+                (let ((key (decknix-agent-archived--candidate-label entry)))
+                  (puthash key entry ht)
+                  (push key ordered)))
+              (setq decknix--session-picker-archived-map ht)
+              (nreverse ordered))))
+        :action
+        (lambda (cand)
+          (unless decknix--session-picker-multi-mode
+            (when cand
+              (decknix--session-picker-open-archived
+               (decknix-picker-selections-cand-key cand))))))
+  "Picker source for archived sessions.
+
+Archived sessions are those the CLI has compressed out of the provider
+directory.  They were previously reachable only via
+`M-x decknix-agent-archived-open', which is bound to no key -- so a
+session that had aged out looked, from the picker, exactly like one that
+never existed.")
+
+(defun decknix--session-picker-open-archived (key)
+  "Restore the archived session for KEY and resume it."
+  (let ((entry (and decknix--session-picker-archived-map
+                    (gethash key decknix--session-picker-archived-map))))
+    (when entry
+      (let* ((id (alist-get 'id entry))
+             (agent (or (alist-get 'agent entry) "claude"))
+             (ws (alist-get 'workspace entry))
+             (tags (alist-get 'tags entry)))
+        ;; Decompress back into the provider directory first: without this
+        ;; the resume path has no transcript to read.
+        (decknix-agent-archived--restore id agent)
+        ;; The session cache keys on provider-dir mtimes, so a freshly
+        ;; restored file is invisible until the cache is invalidated.
+        (when (boundp 'decknix--agent-session-cache-time)
+          (setq decknix--agent-session-cache-time 0))
+        (decknix--agent-session-resume
+         id
+         (if (boundp 'decknix-agent-session-history-count)
+             decknix-agent-session-history-count 0)
+         (if (fboundp 'decknix--agent-session-derive-name)
+             (decknix--agent-session-derive-name tags ws nil nil id)
+           id)
+         ws nil)))))
+
 (defvar decknix--session-source-new
   (list :name     "New"
         :narrow   ?n
@@ -1754,6 +1831,11 @@ the off-by-one tail and RET appears to do nothing."
       (let ((entry (gethash key decknix--session-picker-previous-map)))
         (when entry
           (decknix--sidebar-restore-previous-session entry nil))))
+     ;; Archived session: decompress back into the provider dir, then
+     ;; resume it exactly as a saved one would be.
+     ((and decknix--session-picker-archived-map
+           (gethash key decknix--session-picker-archived-map))
+      (decknix--session-picker-open-archived key))
      ;; Saved session: resume without prompting for workspace on multi-pick.
      ((and decknix--session-picker-saved-map
            (gethash key decknix--session-picker-saved-map))
@@ -2132,6 +2214,16 @@ With \\[universal-argument], shows all individual session snapshots."
                        decknix--session-picker-current-ws))
                (setq decknix--session-picker-reopen t)
                (exit-minibuffer)))
+             ;; M-a: include or exclude ARCHIVED sessions.  Same
+             ;; close-and-reopen mechanism as M-w, for the same reason:
+             ;; consult--multi builds its candidate lists once, so a source
+             ;; that was skipped cannot appear without rebuilding.
+             (local-set-key (kbd "M-a")
+               (lambda () (interactive)
+                 (setq decknix-agent-picker-include-archived
+                       (not decknix-agent-picker-include-archived))
+                 (setq decknix--session-picker-reopen t)
+                 (exit-minibuffer)))
            ;; M-<glyph>: toggle a provider's visibility (A/C/P).  Same
            ;; close-and-reopen mechanism as M-w — the hidden set persists
            ;; in its defvar so re-entry applies the new filter.
@@ -2192,8 +2284,9 @@ With \\[universal-argument], shows all individual session snapshots."
       (consult--multi (list decknix--session-source-live
                             decknix--session-source-previous
                             decknix--session-source-saved
+                            decknix--session-source-archived
                             decknix--session-source-new)
-                      :prompt (format "Agent session%s%s%s (M-w ws; M-<glyph> type; C-SPC mark; C-k kill, C-d del, C-s send, C-t tile): "
+                      :prompt (format "Agent session%s%s%s (M-w ws; M-a archived; M-<glyph> type; C-SPC mark; C-k kill, C-d del, C-s send, C-t tile): "
                                       (if arg " (all snapshots)" "")
                                       (if decknix--session-picker-workspace-filter
                                           (format " [%s]"
