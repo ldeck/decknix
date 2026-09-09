@@ -322,5 +322,35 @@ builder -- that is the path the board actually uses."
          (row (car (decknix-review-board-rows model))))
     (should (eq :the-buffer (plist-get row :buffer)))))
 
+
+;; --- bot PRs never ship via merge-train ---
+
+(ert-deftest decknix-rb--ship-refuses-bot-rows ()
+  "A dependency bump must not be rebase-merged by merge-train.
+
+The house process is `/ship' / `/review-and-ship-bot-pr', which runs a
+pre-merge validation round in development first; merge-train
+rebase-merges ALREADY-APPROVED PRs and skips it.  Shipping a bump that
+way merges it without the round that would have caught a regression."
+  (should (equal "bot PR — ship via `d' (review-and-ship), not merge-train"
+                 (decknix-review-board-ship-blocker
+                  '(:prs ("a#1") :bot-p t) nil))))
+
+(ert-deftest decknix-rb--ship-allows-human-rows ()
+  "Human PRs are exactly what merge-train is for."
+  (should-not (decknix-review-board-ship-blocker '(:prs ("a#1") :bot-p nil) nil)))
+
+(ert-deftest decknix-rb--bot-flag-survives-into-rows ()
+  "`:bot-p' reaches the row, or the ship guard cannot fire."
+  (let ((session-row (decknix-review-board--session-row
+                      '(:name "s" :prs ("a#3") :state "ready" :bot-p t)
+                      #'decknix-rb-test--status #'decknix-rb-test--priority))
+        (model (decknix-review-board-build
+                '(((key . "a#1") (repo . "org/a") (bot . t)))
+                nil #'decknix-rb-test--key #'decknix-rb-test--status
+                #'decknix-rb-test--priority #'decknix-rb-test--bot)))
+    (should (plist-get session-row :bot-p))
+    (should (plist-get (car (alist-get 'grouped model)) :bot-p))))
+
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here

@@ -215,6 +215,44 @@ parallelise. What "correct order" is cannot be decided here — it is a
 property of the diffs — so the session decides and reports, rather than
 the board guessing.
 
+## 7.5 Learned from the swarm session (249ff222)
+
+A real multi-PR review session, tagged `ai/coordinator/review/swarm`, 45
+user turns. Four rules stated there, two of which contradict what was
+built, and none of which are guessable from the code.
+
+**Bot PRs are never merge-trained.** *"approving dependabot prs is
+useless on its own. We need to ship them… follow the 'ship' or
+`/review-and-ship-bot-pr` process."* `/merge-train` rebase-merges
+ALREADY-APPROVED PRs and skips the pre-merge validation round in
+development that `/ship` performs. Shipping a bump that way merges it
+without the round that would have caught a regression. **Fixed**: `s`
+refuses bot rows and points at `d`.
+
+**Bot PRs are never commented on.** *"we don't comment on dependabot prs.
+That doesn't help us. We need to either fix them (and seek review after
+pushing the fix commit), ship them, or reject."* Three outcomes — fix,
+ship, reject — and commenting is not among them. Any future verb that
+posts a comment must exclude bot rows.
+
+**Blocked repos need to drop out of the worklist.** Stated twice,
+unprompted: *"rea-integration prs are blocked atm so ignore them"*, *"UK
+deploys are blocked atm"*. Today they sit in the queue at full priority
+and have to be mentally skipped every pass. Not built.
+
+**Live vs saved is a recurring confusion.** *"I want you to figure out
+which live agent shell sessions are obsolete… but you've shown me a list
+of sessions that are not live."* The board's `●`/`·` marker exists
+precisely for this, and the same confusion recurred on the board itself
+until lane descriptions were added — so this is a pattern, not a one-off
+misunderstanding.
+
+**Contributed-to PRs are invisible.** *"given these prs are now
+co-authored by me why their worktrees do not show in the sidebar as prs
+we have participated in"*, and the precision that matters: *"the question
+is does the list of authors amongst the commits for the PR include
+@me"* — commit authorship, not PR author. Not built.
+
 ## 8. Open questions
 
 1. **Does the board replace the sidebar Requests section, or sit beside
