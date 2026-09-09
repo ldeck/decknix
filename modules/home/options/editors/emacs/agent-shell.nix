@@ -4961,7 +4961,8 @@ ${optionalString cfg.tableOverlay.enable ''
                      ("e" . decknix-agent-compose)
                      ("v" . decknix-agent-review)
                      ("V" . decknix-agent-review-menu)
-                     ("B" . decknix-review-board)))
+                     ("B" . decknix-review-board)
+                     ("u" . decknix-agent-session-pr-url)))
           (define-key decknix-session-prefix-map (kbd (car b)) (cdr b)))
         ;; Named window-layout groups (#169) on the session prefix.
         (when (fboundp 'decknix-layout-group-switch)
@@ -5006,6 +5007,7 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c s v" "review last exchange"
             "C-c s V" "review menu"
             "C-c s B" "review board"
+            "C-c s u" "copy this session's PR url (C-u: open)"
             "C-c s l" "layout switch"
             "C-c s L" "layout save"
             "C-c s C-l" "layout delete"
