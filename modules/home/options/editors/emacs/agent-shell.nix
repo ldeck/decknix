@@ -6723,6 +6723,15 @@ duration -- the most important number on this branch."
         (require 'decknix-auto-review)
         (advice-add 'decknix--hub-refresh-reviews :after
                     #'decknix-auto-review--maybe-dispatch)
+        ;; Review board: rebuild when the hub data changes, rather than on a
+        ;; timer.  The board is a VIEW of `github-reviews.json' plus the live
+        ;; sessions, so the moment that file is re-read is exactly when the
+        ;; view is stale -- polling would either lag it or burn work on ticks
+        ;; where nothing moved.  No-op unless the board buffer exists.
+        (advice-add 'decknix--hub-refresh-reviews :after
+                    (lambda (&rest _)
+                      (when (fboundp 'decknix-review-board-refresh)
+                        (ignore-errors (decknix-review-board-refresh)))))
         ;; == Priority lane-based view (#142, phase 1) ==
         ;; Always load the pure package (small, no load-time side effects)
         ;; so the `decknix-priority' command is M-x-available and gets full
