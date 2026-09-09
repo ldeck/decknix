@@ -105,5 +105,33 @@ where the first-message hash cannot."
              convs)
     (sort all-tags #'string<)))
 
+(defun decknix--agent-tags-resolve (conv-key session-id)
+  "Return tags for a session, by CONV-KEY or failing that SESSION-ID.
+
+The conv-key is a hash of the first message, and the live-write and
+transcript-read paths do not always agree on that string -- long prompts
+truncate differently, an edited first message rehashes, and a session
+resumed behind a continuation primer hashes to the primer.  Each
+divergence mints a NEW conversation entry, so one session accumulates
+entries: 5de16692 was found under TEN, nine of them empty.
+
+A buffer therefore often holds a conv-key that is real but untagged,
+while the tags sit under a sibling entry.  The session id is stable
+across launch and resume -- `decknix-agent-session-broker' already calls
+it the RELIABLE reattach link for exactly this reason -- so it is the
+fallback here too.
+
+Union rather than first-hit: when a resume splits tags across entries,
+neither alone is the answer.  ONE resolver, called by every consumer:
+the bug this fixes was two consumers doing it right and three not, and a
+second copy of the fallback would reproduce that a level up."
+  (let ((by-conv (and conv-key (decknix--agent-tags-for-conv-key conv-key)))
+        (by-sid  (and session-id (decknix--agent-tags-for-session session-id))))
+    (cond
+     ((and by-conv by-sid)
+      (delete-dups (append by-conv by-sid)))
+     (by-conv)
+     (by-sid))))
+
 (provide 'decknix-agent-tags-read)
 ;;; decknix-agent-tags-read.el ends here

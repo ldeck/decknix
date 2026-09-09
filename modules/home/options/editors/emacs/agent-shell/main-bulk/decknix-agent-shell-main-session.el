@@ -184,6 +184,8 @@ history; only the model-facing primer is suppressed)."
                   "decknix-agent-session-workspace" (conv-key))
 (declare-function decknix--agent-session-save-workspace-for-conv-key
                   "decknix-agent-session-workspace" (conv-key workspace))
+(declare-function decknix--agent-tags-resolve
+                  "decknix-agent-tags-read" (conv-key session-id))
 (declare-function decknix--agent-tags-for-conv-key
                   "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--agent-tags-all "decknix-agent-tags-read")
@@ -2350,7 +2352,22 @@ early daemon start) so the column stays aligned regardless."
 (defun decknix--agent-switch-buffer--decorated-label (buf)
   "Build a status-decorated picker label for live buffer BUF."
   (concat (decknix--agent-switch-buffer--status-prefix buf)
-          (decknix--agent-session-live-label buf)))
+          (decknix--agent-session-live-label buf)
+          ;; Tags, resolved by conv-key OR session id.  Without the
+          ;; fallback a buffer holding one of the empty duplicate
+          ;; conversation entries showed no tags at all, and named itself
+          ;; after its workspace -- `*Claude: nurturecloud*' among a dozen
+          ;; others, unidentifiable in the switcher.
+          (let ((tags (with-current-buffer buf
+                        (ignore-errors
+                          (decknix--agent-tags-resolve
+                           (bound-and-true-p decknix--agent-conv-key)
+                           (bound-and-true-p decknix--agent-auggie-session-id))))))
+            (if tags
+                (propertize (concat "  " (mapconcat (lambda (tg) (concat "#" tg))
+                                                    tags " "))
+                            'face 'font-lock-type-face)
+              ""))))
 
 (defvar decknix--agent-switch-buffer-reopen nil
   "Non-nil when `decknix-agent-switch-buffer' should reopen after a
