@@ -170,13 +170,24 @@ make the column noisy."
          (attention (decknix-review-board--attention-p state))
          (marked (and decknix-review-board--marks
                       (decknix-review-board--marked-p row)))
-         (line (format "%s %-2s %5d  %-58s %s"
+         ;; A session indicator, because the two largest lanes are mostly
+         ;; NOT sessions.  Without it a request with no agent and a session
+         ;; that happens to be idle render identically, and the board reads
+         ;; as a list of stale sessions to clean up rather than a backlog.
+         (has-session (and (plist-get row :session) t))
+         (line (format "%s %-2s %s %5d  %-52s %s"
                        (if marked "*" " ")
                        (if (string-empty-p badge) " " badge)
+                       (if has-session
+                           (propertize "\u25cf" 'face 'font-lock-string-face)
+                         (propertize "\u00b7" 'face 'font-lock-comment-face))
                        (plist-get row :priority)
                        (truncate-string-to-width
-                        (decknix-review-board--row-title row) 58)
-                       (or state ""))))
+                        (decknix-review-board--row-title row) 52)
+                       (cond (attention (or state ""))
+                             (has-session (or state ""))
+                             (t (propertize "no session"
+                                            'face 'font-lock-comment-face))))))
     (insert (propertize line
                         'decknix-review-board-row row
                         'face (when attention 'decknix-review-board-needs-you))
@@ -188,8 +199,13 @@ make the column noisy."
         (line (line-number-at-pos)))
     (erase-buffer)
     (insert (propertize "Review Board" 'face 'decknix-review-board-lane)
-            (format "  (%d rows)\n\n" (decknix-review-board-count
-                                       decknix-review-board--model)))
+            (format "  (%d rows)   " (decknix-review-board-count
+                                      decknix-review-board--model))
+            (propertize "? for keys and legend\n"
+                        'face 'font-lock-comment-face)
+            (propertize "  m  ● pri  row                                                  state\n"
+                        'face 'font-lock-comment-face)
+            "\n")
     (dolist (lane decknix-review-board-lanes)
       (let* ((rows (alist-get (car lane) decknix-review-board--model))
              (face (if (eq (car lane) 'needs-you)
@@ -199,7 +215,11 @@ make the column noisy."
         ;; to be learnable, and one that vanishes when empty means the
         ;; layout shifts under you exactly when you are scanning it.
         (insert (propertize (format "%s (%d)" (cdr lane) (length rows)) 'face face)
-                "\n")
+                (propertize
+                 (format "  — %s\n"
+                         (or (alist-get (car lane) decknix-review-board-lane-help)
+                             ""))
+                 'face 'font-lock-comment-face))
         (if rows
             (dolist (row rows) (decknix-review-board--insert-row row))
           (insert (propertize "    (none)\n" 'face 'font-lock-comment-face)))
@@ -513,6 +533,72 @@ them."
                  decknix-review-board-merge-command
                  (if blocked (format "; %d blocked" (length blocked)) ""))))))
 
+(defconst decknix-review-board-help-text
+  "Review Board
+
+  The review WORKLIST, not a session list.  Most rows in Grouped and Idle
+  have no agent on them at all -- they are PRs waiting for someone.
+
+NAVIGATE
+  n / p, TAB      next / previous row
+  RET / o         browse the PR on GitHub
+  j               jump to the session buffer
+  g               refresh          q  bury          ?  this help
+
+MARK  (verbs act on the marked set, or the row at point when none marked)
+  m / u           mark / unmark          U  unmark all
+  M               mark every row in this lane
+
+ACT
+  d               dispatch review sessions (a Grouped row launches ONE
+                  session for the whole service, which is the point)
+  k               quit sessions and TERMINATE their brokers (confirms)
+  D               detach: close the buffer, agent keeps working
+  s               ship via /merge-train      C-u s  dry run
+
+COLUMNS
+  m               `*' when marked
+  badge           see below
+  session         `\u25cf' an agent is attached   `\u00b7' nobody is on it
+  pri             priority score -- higher sorts first
+  state           the agent's state, or `no session'
+
+BADGES
+  \u2298   gone       PR left your review queue (merged / closed).  The
+                 session is finished work; `k' it.
+  \u21bb   stale      author pushed since -- the analysis is void
+  \u2611   answered   someone else responded; may be redundant
+
+PRIORITY  (why the numbers look the way they do)
+  Two axes added together, so the score is a rank, not a percentage, and
+  NEGATIVE IS NORMAL for deprioritised work.
+
+    what     incident HOT/PIR/DOS/ALR +100   EH -30   feature 0
+    where    replies-to-me +60  needs-reply +50  re-requested +45
+             stale +40  mine +30  team +15  otherwise +10
+    minus    bot -35   draft -40   answered -25   gone -1000
+    plus     age, +1/day, capped at +14
+
+  So a bot PR nobody has asked you about scores 10 - 35 = -25.  That is
+  it saying `real, but not next'.  Hover a row for its breakdown."
+  "Help text for `decknix-review-board-help'.
+
+Spelled out rather than deferred to `describe-mode' because the two
+things that confuse a first reader -- why most rows have no session, and
+why the numbers go negative -- are not answerable from a keymap.")
+
+(defun decknix-review-board-help ()
+  "Show the board's keys and legend."
+  (interactive)
+  (let ((buf (get-buffer-create "*Review Board Help*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert decknix-review-board-help-text)
+        (goto-char (point-min)))
+      (special-mode))
+    (display-buffer buf)))
+
 (defvar decknix-review-board-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "n") #'decknix-review-board-next)
@@ -531,6 +617,8 @@ them."
     (define-key map (kbd "k") #'decknix-review-board-quit-sessions)
     (define-key map (kbd "D") #'decknix-review-board-detach-sessions)
     (define-key map (kbd "s") #'decknix-review-board-ship)
+    (define-key map (kbd "?") #'decknix-review-board-help)
+    (define-key map (kbd ".") #'decknix-review-board-help)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `decknix-review-board-mode'.

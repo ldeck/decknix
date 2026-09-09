@@ -31,6 +31,19 @@
 ;; answer is worse than a missing function, so require it.
 (require 'decknix-hub-review-status)
 
+(defconst decknix-review-board-lane-help
+  '((needs-you . "agent is blocked on you")
+    (finished  . "PR merged or closed — safe to quit")
+    (human     . "human-authored PRs")
+    (grouped   . "bot PRs, folded per service")
+    (idle      . "no session yet — nobody is on these"))
+  "One-line description per lane, rendered beside the heading.
+
+Without these the board reads as a list of sessions, and the two largest
+lanes are mostly NOT sessions -- they are PRs nobody has started.  A
+reader seeing 16 rows under a bare heading reasonably assumes they are
+stale sessions to clean up, which is the opposite of what they are.")
+
 (defconst decknix-review-board-lanes
   '((needs-you . "Needs you")
     (finished  . "Finished")
