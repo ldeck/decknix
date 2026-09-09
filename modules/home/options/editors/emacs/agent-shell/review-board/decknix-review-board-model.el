@@ -124,6 +124,7 @@ whole group rather than being buried inside it."
           ;; three of the four acting keys silently inert: the row said
           ;; `:session t' and then had nothing to act on.
           :buffer (plist-get session :buffer)
+          :bot-p (plist-get session :bot-p)
           :conv-key (plist-get session :conv-key)
           :prs prs
           :state (plist-get session :state)
@@ -188,7 +189,7 @@ shifting with the contents."
                 (list :kind 'single :name key :conv-key nil :prs (list key)
                       :state nil :statuses (list (funcall status-fn key))
                       :priority (or (funcall priority-fn key) 0)
-                      :item item :session nil
+                      :item item :session nil :bot-p nil
                       :lane (decknix-review-board--lane nil nil nil nil))))
             human-idle)
            (mapcar
@@ -202,7 +203,7 @@ shifting with the contents."
                       ;; Strongest member, so one urgent bump lifts its
                       ;; service rather than hiding inside it.
                       :priority (if priorities (apply #'max priorities) 0)
-                      :items group :session nil
+                      :items group :session nil :bot-p t
                       :lane (decknix-review-board--lane nil nil nil t))))
             bot-groups)))
          (all (append session-rows idle-rows)))
@@ -293,6 +294,16 @@ cannot be recovered from afterwards:
    ((eq status 'stale) "author pushed since review")
    ((eq status 'gone) "already merged or closed")
    ((null (plist-get row :prs)) "no PR")
+   ;; Bot PRs do NOT go through merge-train.  The house process is
+   ;; `/ship' or `/review-and-ship-bot-pr', which runs a pre-merge
+   ;; validation round in development before merging; merge-train
+   ;; rebase-merges ALREADY-APPROVED PRs and skips it.  Shipping a
+   ;; dependency bump that way merges it without the round that would
+   ;; have caught a regression -- and "approving dependabot prs is
+   ;; useless on its own" is the same rule seen from the other side.
+   ;; `d' dispatches the correct flow, so point there rather than
+   ;; silently doing the wrong one.
+   ((plist-get row :bot-p) "bot PR — ship via `d' (review-and-ship), not merge-train")
    (t nil)))
 
 (defun decknix-review-board--row-repo (row)
