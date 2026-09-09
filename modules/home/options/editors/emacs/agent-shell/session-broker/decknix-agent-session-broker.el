@@ -263,6 +263,29 @@ Compatibility shim for callers that predate grouped sessions; prefer
 rest of a group."
   (car (decknix--agent-review-prs-for-conv-key conv-key)))
 
+(defun decknix--agent-conv-key-for-review-pr (pr-key)
+  "Return (CONV-KEY . LATEST-SESSION-ID) for the conversation reviewing PR-KEY.
+
+Answers \"have I reviewed this PR before?\" from recorded coordinates
+rather than from a live buffer.  The launcher previously asked only
+whether a SESSION was live, so closing a review and re-triggering it
+started over with no history -- the conversation was still on record and
+nothing looked for it."
+  (let* ((store (decknix--agent-tags-read))
+         (convs (decknix--agent-tags-conversations store))
+         found)
+    (when (hash-table-p convs)
+      (maphash
+       (lambda (ck entry)
+         (when (and (not found) (hash-table-p entry))
+           (let ((prs (decknix--agent-review-pr-normalize
+                       (gethash "reviewPr" entry)))
+                 (sessions (gethash "sessions" entry)))
+             (when (and (member pr-key prs) sessions)
+               (setq found (cons ck (car (last sessions))))))))
+       convs))
+    found))
+
 (defun decknix--agent-save-review-prs-for-conv-key (conv-key pr-keys)
   "Persist PR-KEYS as CONV-KEY's review targets.
 

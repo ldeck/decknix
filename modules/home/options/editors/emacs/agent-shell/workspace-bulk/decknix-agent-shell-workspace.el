@@ -2564,6 +2564,15 @@ window via the re-review path's `pop-to-buffer'."
                                decknix--sidebar-previous-sessions))))
              (memq (car route) '(live saved))))
       (decknix-agent-re-review-pr url))
+       ;; Recorded coordinates say we have reviewed this PR before, even
+       ;; though no buffer name or Previous entry matched.  The route above
+       ;; asks the two mutable display signals; this asks the fact.
+       ((and (fboundp 'decknix--agent-conv-key-for-review-pr)
+             (fboundp 'decknix--hub-review-pr-key)
+             (decknix--agent-conv-key-for-review-pr
+              (decknix--hub-review-pr-key (alist-get 'repo parsed)
+                                          (alist-get 'number parsed))))
+        (decknix-agent-re-review-pr url))
      (t
       (decknix--nav-hub-start-review-fresh url background parsed)))))
 
