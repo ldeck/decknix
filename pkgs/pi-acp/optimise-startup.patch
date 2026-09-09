@@ -1,0 +1,82 @@
+--- a/src/acp/agent.ts
++++ b/src/acp/agent.ts
+@@ -342 +342,2 @@
+-    const updateNotice = buildUpdateNotice()
++    const installedVersion = quietStartup && updateChecksDisabled() ? null : readPiVersion()
++    const updateNotice = buildUpdateNotice(installedVersion)
+@@ -352,0 +354 @@
++          installedVersion,
+@@ -1389,3 +1391,9 @@
+-function buildUpdateNotice(): string | null {
+-  // Best-effort update check against npm registry.
+-  // Important: keep it fast to not slow down session/new.
++function envFlagEnabled(value: string | undefined): boolean {
++  return ['1', 'true', 'yes'].includes(value?.trim().toLowerCase() ?? '')
++}
++
++function updateChecksDisabled(): boolean {
++  return envFlagEnabled(process.env.PI_OFFLINE) || envFlagEnabled(process.env.PI_SKIP_VERSION_CHECK)
++}
++
++function readPiVersion(): string | null {
+@@ -1397,0 +1406,5 @@
++    return installed || null
++  } catch {
++    return null
++  }
++}
+@@ -1399 +1412,4 @@
+-    if (!installed || !isSemver(installed)) return null
++function buildUpdateNotice(installed: string | null): string | null {
++  // Best-effort update check against npm registry.
++  // Important: keep it fast to not slow down session/new.
++  if (updateChecksDisabled() || !installed || !isSemver(installed)) return null
+@@ -1400,0 +1417 @@
++  try {
+@@ -1420,0 +1438 @@
++  installedVersion: string | null
+@@ -1427,14 +1445,5 @@
+-  // pi version header
+-  try {
+-    const piVersion = spawnSync('pi', ['--version'], { encoding: 'utf-8' })
+-    const installed = (String(piVersion.stdout ?? '').trim() || String(piVersion.stderr ?? '').trim()).replace(
+-      /^v/i,
+-      ''
+-    )
+-    if (installed) {
+-      md.push(`pi v${installed}`)
+-      md.push('---')
+-      md.push('')
+-    }
+-  } catch {
+-    // ignore
++  // pi version header. The caller resolves this once and shares it with the update check.
++  if (opts.installedVersion) {
++    md.push(`pi v${opts.installedVersion}`)
++    md.push('---')
++    md.push('')
+--- a/test/unit/startup-info-env.test.ts
++++ b/test/unit/startup-info-env.test.ts
+@@ -14,0 +15,2 @@
++  const prevSkipVersionCheck = process.env.PI_SKIP_VERSION_CHECK
++  const prevPath = process.env.PATH
+@@ -17 +19 @@
+-  const { mkdtempSync, writeFileSync } = await import('node:fs')
++  const { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } = await import('node:fs')
+@@ -20,0 +23,5 @@
++  const binDir = join(dir, 'bin')
++  const piMarker = join(dir, 'pi-was-spawned')
++  mkdirSync(binDir)
++  writeFileSync(join(binDir, 'pi'), `#!/bin/sh\ntouch "${piMarker}"\nprintf '0.83.0\\n'\n`, 'utf-8')
++  chmodSync(join(binDir, 'pi'), 0o755)
+@@ -22,0 +30,2 @@
++  process.env.PI_SKIP_VERSION_CHECK = '1'
++  process.env.PATH = `${binDir}:${prevPath ?? ''}`
+@@ -64,0 +74,2 @@
++    assert.equal(existsSync(piMarker), false, 'offline quiet startup must not spawn pi --version')
++
+@@ -79,0 +91,4 @@
++    if (prevSkipVersionCheck == null) delete process.env.PI_SKIP_VERSION_CHECK
++    else process.env.PI_SKIP_VERSION_CHECK = prevSkipVersionCheck
++    if (prevPath == null) delete process.env.PATH
++    else process.env.PATH = prevPath

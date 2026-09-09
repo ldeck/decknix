@@ -112,6 +112,14 @@ The Emacs agent-shell module is enabled by default in the `full` profile:
 
 Each sub-module can be independently disabled. See [Agent Shell Overview](./agent-shell/overview.md) for details on each component.
 
+### Pi ACP startup
+
+Set `decknix.ai.pi.settings.quietStartup = true` when Pi runs through
+agent-shell. This suppresses the informational ACP prelude and avoids a redundant
+full Pi launch used only to render its version. The Nix-packaged `pi-acp` also
+skips its npm update probe because Nix owns package upgrades; normal Pi sessions
+remain fully functional and `/changelog` stays available on demand.
+
 ## Per-Purpose Provider & Model
 
 Automated agent launches (PR reviews, bot-authored PR reviews) and the
