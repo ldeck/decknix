@@ -572,5 +572,33 @@ status."
             (should (= n 2))))
       (kill-buffer a) (kill-buffer b))))
 
+
+;; --- essentials is a FALLBACK, not a second copy of the breadcrumb ---
+
+(ert-deftest decknix-header--essentials-dropped-when-breadcrumb-shown ()
+  "With a breadcrumb that fits, the abbreviated block is redundant.
+`C @ nurturecloud' beside `Claude › … › nurturecloud › …' says the same
+thing twice in a line that is already fighting for width."
+  (should (decknix--header-redundant-essentials-p
+           "C @ ws" "Claude > Opus > ws" '("a" "b") 200)))
+
+(ert-deftest decknix-header--essentials-kept-without-a-breadcrumb ()
+  "No breadcrumb means the block is the ONLY source of agent/workspace.
+An earlier version tested merely that the parts list was non-empty, and
+so dropped the block when there was nothing to replace it."
+  (should-not (decknix--header-redundant-essentials-p
+               "C @ ws" nil '("a" "b") 200)))
+
+(ert-deftest decknix-header--essentials-kept-when-breadcrumb-will-not-fit ()
+  "Upstream EXISTING is not upstream SURVIVING the width fit.
+A narrow window is the case the abbreviated block was added for."
+  (should-not (decknix--header-redundant-essentials-p
+               "C @ ws" "Claude > Opus > ws"
+               '("a very long part indeed" "another very long part") 10)))
+
+(ert-deftest decknix-header--nothing-to-drop-without-essentials ()
+  "No block, nothing to decide."
+  (should-not (decknix--header-redundant-essentials-p nil "up" '("a") 200)))
+
 (provide 'decknix-agent-header-test)
 ;;; decknix-agent-header-test.el ends here

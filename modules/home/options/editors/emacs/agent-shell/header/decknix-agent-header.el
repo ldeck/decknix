@@ -232,6 +232,35 @@ the part can be cheaply skipped by `decknix--header-build'."
                           (when ws    (concat " @ " ws)))
                   'face 'font-lock-keyword-face))))
 
+(defun decknix--header-parts-fit-p (parts available)
+  "Non-nil when PARTS joined with the standard separator fit in AVAILABLE."
+  (<= (string-width (mapconcat #'identity (delq nil parts) "  │  ")) available))
+
+(defun decknix--header-redundant-essentials-p (essentials upstream parts available)
+  "Non-nil when ESSENTIALS should be dropped as a duplicate.  Pure.
+
+ESSENTIALS is the abbreviated `<glyph> ▶ <model> @ <workspace>' block,
+UPSTREAM agent-shell's breadcrumb (nil when absent), and PARTS the full
+list including it.
+
+The block exists as a FALLBACK: when the window is too narrow for the
+breadcrumb, it preserves the agent and workspace in a few characters.
+When the breadcrumb IS shown it repeats what the breadcrumb already says
+-- `C @ nurturecloud' beside `Claude › … › nurturecloud › …'.
+
+Both conditions are required.  UPSTREAM must exist -- an earlier version
+tested only that the parts list was non-empty, which dropped the block
+even when there was no breadcrumb to replace it, losing the agent and
+workspace entirely.  And the parts must FIT: upstream existing is not the
+same as upstream surviving the width fit, and a narrow window is exactly
+the case the block was added for.
+
+"
+  (and essentials
+       upstream
+       parts
+       (decknix--header-parts-fit-p parts available)))
+
 (defun decknix--header-available-width ()
   "Return the usable character width for the current buffer's header-line.
 Falls back to `frame-width' when the buffer has no displayed window."
@@ -330,22 +359,24 @@ renders as ^J, not a line break.  All items therefore live on one line."
              (mapconcat (lambda (tg) (format "#%s" tg)) tags " ")
              'face 'font-lock-type-face)
             parts))
-    ;; Item 3: Essentials (glyph ▶ model @ workspace) — kept between
-    ;;         tags and context so the abbreviated block survives the
-    ;;         medium/narrow drops.
-    (when essentials
-      (push essentials parts))
     ;; Item 4: Context panel badge (stable)
-    (when (fboundp 'decknix--context-header-string)
-      (let ((ctx (decknix--context-header-string)))
-        (when ctx (push ctx parts))))
-    ;; Item 5: upstream header — agent name, model, mode, workspace,
-    ;;         session-id, usage, busy animation (animated, last so
-    ;;         truncation only touches this trailing item).
-    (when (and upstream (not (string-empty-p upstream)))
-      (push (string-trim upstream) parts))
-    (decknix--header-fit-parts (nreverse parts)
-                               (decknix--header-available-width))))
+    (let* ((ctx (when (fboundp 'decknix--context-header-string)
+                  (decknix--context-header-string)))
+           (up (when (and upstream (not (string-empty-p upstream)))
+                 (string-trim upstream)))
+           (available (decknix--header-available-width))
+           (tail (delq nil (list ctx up)))
+           ;; Essentials ABBREVIATES the upstream breadcrumb, so it is only
+           ;; worth showing when the breadcrumb will not be.
+           (with-up (append (reverse parts) tail))
+           (drop-essentials
+            (decknix--header-redundant-essentials-p
+             essentials up with-up available)))
+      (decknix--header-fit-parts
+       (if drop-essentials
+           with-up
+         (append (reverse (if essentials (cons essentials parts) parts)) tail))
+       available))))
 
 (defun decknix--header-update ()
   "Update the header-line-format for the current agent-shell buffer.
