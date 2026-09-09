@@ -53,6 +53,9 @@
                   "decknix-hub-review-identity" (owner repo number))
 (declare-function decknix--hub-review-pr-key-parse
                   "decknix-hub-review-identity" (key))
+(declare-function decknix-auto-review-cycle-mode "decknix-auto-review")
+(declare-function decknix-auto-review-state-label "decknix-auto-review" (state))
+(defvar decknix-auto-review-mode)
 (declare-function decknix--agent-quickaction-start
                   "decknix-agent-shell-main-link"
                   (name tags workspace command &optional model provider-id mode
@@ -251,8 +254,26 @@ make the column noisy."
     (insert (propertize "Review Board" 'face 'decknix-review-board-lane)
             (format "  (%d rows)   " (decknix-review-board-count
                                       decknix-review-board--model))
-            (propertize "? for keys and legend\n"
-                        'face 'font-lock-comment-face)
+            ;; Auto-review state belongs HERE, not only in the Requests
+            ;; transient: this is the screen where you decide what to do
+            ;; about reviews, so the policy that spawns them unasked is
+            ;; part of the picture rather than a setting elsewhere.
+            (propertize (format "auto-review %s"
+                                (if (fboundp 'decknix-auto-review-state-label)
+                                    (format "[%s]" (decknix-auto-review-state-label
+                                                    decknix-auto-review-mode))
+                                  "[?]"))
+                        'face 'font-lock-constant-face)
+            "\n"
+            ;; A visible cheat sheet, not a pointer to one.  `?' existed
+            ;; and was announced in a header line, which is discoverability
+            ;; only for someone already looking for it.  Eight verbs on a
+            ;; read-only screen need to be readable without asking.
+            (propertize
+             (concat "  n/p move   RET open   c copy   j jump   m mark   M lane\n"
+                     "  d dispatch  k quit   D detach  s ship   A auto-review  g refresh  ? help\n")
+             'face 'font-lock-comment-face)
+            "\n"
             (propertize "  m  ● pri  row                                                  state\n"
                         'face 'font-lock-comment-face)
             "\n")
@@ -614,6 +635,7 @@ NAVIGATE
   c / w           copy the PR URL(s) to the kill ring
   j               jump to the session buffer
   g               refresh          q  bury          ?  this help
+  A               cycle auto-review: off / bot / human / any
 
 MARK  (verbs act on the marked set, or the row at point when none marked)
   m / u           mark / unmark          U  unmark all
@@ -698,6 +720,19 @@ has merged -- which is when you most want the link, to confirm it did."
       (message "Copied %d URL%s: %s"
                (length urls) (if (= 1 (length urls)) "" "s") (car urls)))))
 
+(defun decknix-review-board-cycle-auto-review ()
+  "Cycle the auto-review policy (off / bot / human / any) and re-render.
+
+The same command the Requests transient exposes; surfaced here because
+the board is where you decide what to do about reviews, and the policy
+that spawns sessions without asking is part of that decision rather than
+a setting kept somewhere else."
+  (interactive)
+  (unless (fboundp 'decknix-auto-review-cycle-mode)
+    (user-error "Auto-review is not available"))
+  (decknix-auto-review-cycle-mode)
+  (decknix-review-board-refresh))
+
 (defvar decknix-review-board-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "n") #'decknix-review-board-next)
@@ -718,6 +753,7 @@ has merged -- which is when you most want the link, to confirm it did."
     (define-key map (kbd "s") #'decknix-review-board-ship)
     (define-key map (kbd "c") #'decknix-review-board-copy-url)
     (define-key map (kbd "w") #'decknix-review-board-copy-url)
+    (define-key map (kbd "A") #'decknix-review-board-cycle-auto-review)
     (define-key map (kbd "?") #'decknix-review-board-help)
     (define-key map (kbd ".") #'decknix-review-board-help)
     (define-key map (kbd "q") #'quit-window)
