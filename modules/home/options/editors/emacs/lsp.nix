@@ -80,7 +80,26 @@ let
         (dolist (spec (list (list 'java-mode   'java-ts-mode   'java)
                             (list 'rust-mode   'rust-ts-mode   'rust)
                             (list 'go-mode     'go-ts-mode     'go)
-                            (list 'kotlin-mode 'kotlin-ts-mode 'kotlin)))
+                            ;; Kotlin is DELIBERATELY absent.  `kotlin-ts-mode'
+                            ;; queries node types (`null_literal',
+                            ;; `boolean_literal') that nixpkgs'
+                            ;; tree-sitter-kotlin does not define, so font-lock
+                            ;; throws `treesit-query-error' on every redisplay
+                            ;; chunk and the buffer is unusable:
+                            ;;
+                            ;;   Error during redisplay: (jit-lock-function 1)
+                            ;;   signaled (treesit-query-error "Node type error
+                            ;;   at" 3 "[(null_literal) (boolean_literal)] ...")
+                            ;;
+                            ;; The mode and the grammar are versioned
+                            ;; independently and disagree.  `kotlin-mode'
+                            ;; (classic) has no such dependency and is the more
+                            ;; exercised of the two on this monolith, so the
+                            ;; remap is worth less than the breakage it causes.
+                            ;; Re-add only once a grammar/mode pair is verified
+                            ;; to agree -- on a real .kt file, not by version
+                            ;; numbers matching.
+                            ))
           (let ((classic (nth 0 spec))
                 (ts (nth 1 spec))
                 (lang (nth 2 spec)))
