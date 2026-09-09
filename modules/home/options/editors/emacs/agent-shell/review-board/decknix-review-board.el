@@ -65,6 +65,10 @@
 (declare-function decknix--hub-requests-draft-visible-p "decknix-hub-attention-filter" (item))
 (declare-function decknix--hub-request-activity-time "decknix-hub-attention-filter" (item))
 (declare-function decknix-auto-review-state-label "decknix-auto-review" (state))
+(declare-function decknix--hub-review-priority-explain
+                  "decknix-hub-review-priority" (item &optional status age-days))
+(declare-function decknix--hub-request-age-days
+                  "decknix-hub-attention-filter" (item))
 (defvar decknix-auto-review-mode)
 (declare-function decknix--agent-quickaction-start
                   "decknix-agent-shell-main-link"
@@ -327,7 +331,7 @@ pick up."
             ;; only for someone already looking for it.  Eight verbs on a
             ;; read-only screen need to be readable without asking.
             (propertize
-             (concat "  n/p move   RET open   c copy   j jump   m mark   M lane\n"
+             (concat "  n/p move   RET open   i inspect   c copy   j jump   m mark   M lane\n"
                      "  d dispatch  k quit   D detach  s ship   A auto-review  f filters  g refresh  ? help\n")
              'face 'font-lock-comment-face)
             "\n"
@@ -690,6 +694,7 @@ NAVIGATE
   n / p, TAB      next / previous row
   RET / o         browse the PR on GitHub
   c / w           copy the PR URL(s) to the kill ring
+  i               inspect: what this session is asking, or the PR detail
   j               jump to the session buffer
   g               refresh          q  bury          ?  this help
   A               cycle auto-review: off / bot / human / any
@@ -784,6 +789,92 @@ has merged -- which is when you most want the link, to confirm it did."
       (message "Copied %d URL%s: %s"
                (length urls) (if (= 1 (length urls)) "" "s") (car urls)))))
 
+(defcustom decknix-review-board-inspect-lines 40
+  "How many trailing lines of a session to show in the inspect window.
+
+Trailing rather than \"the last agent message\": the message boundary is
+not reliably delimited in the rendered buffer, and guessing it wrong
+would silently truncate the question you are trying to read.  A fixed
+tail is dumber and cannot mislead."
+  :type 'integer
+  :group 'decknix-review-board)
+
+(defconst decknix-review-board-inspect-buffer "*Review Board Inspect*"
+  "Buffer showing the detail of the row at point.")
+
+(defun decknix-review-board--inspect-session (row)
+  "Return inspect text for a ROW that has a live session."
+  (let ((buf (plist-get row :buffer)))
+    (if (not (buffer-live-p buf))
+        "session buffer is gone"
+      (with-current-buffer buf
+        (let* ((end (point-max))
+               (start (save-excursion
+                        (goto-char end)
+                        (forward-line (- decknix-review-board-inspect-lines))
+                        (line-beginning-position))))
+          (concat
+           (format "state: %s\n\n" (or (ignore-errors
+                                          (decknix-agent-buffer-status buf))
+                                        "?"))
+           (buffer-substring-no-properties start end)))))))
+
+(defun decknix-review-board--inspect-request (row)
+  "Return inspect text for a ROW with no session: the PR as the feed sees it."
+  (let* ((key (car (plist-get row :prs)))
+         (item (decknix-review-board--item-for-key key)))
+    (if (not item)
+        (concat "No feed entry for " (or key "?") ".\n\n"
+                "That normally means the PR has left your review queue --\n"
+                "merged, closed, or no longer requested of you.")
+      (concat
+       (format "%s\n\n" (or (map-elt item 'title) ""))
+       (format "author    %s%s\n" (or (map-elt item 'author) "?")
+               (if (eq t (map-elt item 'draft)) "   (draft)" ""))
+       (format "updated   %s\n" (or (map-elt item 'updated) "?"))
+       (format "threads   %s unresolved of %s\n"
+               (or (map-elt item 'unresolved_threads) 0)
+               (or (map-elt item 'total_threads) 0))
+       (format "decision  %s\n\n" (or (map-elt item 'review_decision) "-"))
+       ;; The priority breakdown, because a number you cannot interrogate
+       ;; is an ordering you cannot trust -- and this is where someone
+       ;; actually asks "why is this one above that one?".
+       (if (fboundp 'decknix--hub-review-priority-explain)
+           (decknix--hub-review-priority-explain
+            item
+            (when (fboundp 'decknix--hub-review-status)
+              (decknix--hub-review-status item t))
+            (when (fboundp 'decknix--hub-request-age-days)
+              (decknix--hub-request-age-days item)))
+         "")))))
+
+(defun decknix-review-board-inspect ()
+  "Show the detail of the row at point in a side window.
+
+Read-only, and deliberately so at this step: seeing what a session is
+asking is most of the value, and it carries none of the risk of
+answering it from a screen that shows only a row."
+  (interactive)
+  (let ((row (decknix-review-board--row-at-point)))
+    (unless row (user-error "No row here"))
+    (let* ((title (or (plist-get row :name) (car (plist-get row :prs)) "?"))
+           (url (decknix-review-board-row-url row))
+           (body (if (plist-get row :session)
+                     (decknix-review-board--inspect-session row)
+                   (decknix-review-board--inspect-request row)))
+           (buf (get-buffer-create decknix-review-board-inspect-buffer)))
+      (with-current-buffer buf
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (propertize title 'face 'decknix-review-board-lane) "\n")
+          (when url (insert (propertize url 'face 'link) "\n"))
+          (insert "\n" body)
+          (goto-char (point-min)))
+        (special-mode))
+      (display-buffer buf '((display-buffer-below-selected)
+                            (window-height . 0.45)
+                            (inhibit-same-window . t))))))
+
 (defun decknix-review-board-cycle-auto-review ()
   "Cycle the auto-review policy (off / bot / human / any) and re-render.
 
@@ -819,6 +910,7 @@ a setting kept somewhere else."
     (define-key map (kbd "w") #'decknix-review-board-copy-url)
     (define-key map (kbd "A") #'decknix-review-board-cycle-auto-review)
     (define-key map (kbd "f") #'decknix-review-board-toggle-filters)
+    (define-key map (kbd "i") #'decknix-review-board-inspect)
     (define-key map (kbd "?") #'decknix-review-board-help)
     (define-key map (kbd ".") #'decknix-review-board-help)
     (define-key map (kbd "q") #'quit-window)
