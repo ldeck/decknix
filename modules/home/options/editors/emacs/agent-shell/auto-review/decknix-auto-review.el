@@ -94,6 +94,7 @@ guard takes over once the buffer exists).")
 ;; the hub/model vars special so references compile as dynamic
 ;; varrefs against the live globals.
 (declare-function decknix--hub-bot-author-p "decknix-hub-mention-bot")
+(declare-function decknix--sidebar-state-write "decknix-agent-shell-workspace")
 (declare-function decknix--hub-review-pr-key
                   "decknix-hub-review-identity" (repo number))
 (declare-function decknix--hub-request-priority
@@ -409,6 +410,11 @@ the new state is visible."
   (let ((was-off (eq decknix-auto-review-mode 'off)))
     (setq decknix-auto-review-mode
           (decknix-auto-review-next-state decknix-auto-review-mode))
+    ;; Persist immediately.  `launchctl kickstart -k' sends SIGKILL and so
+    ;; skips `kill-emacs-hook' -- waiting for the shutdown save loses the
+    ;; choice on exactly the restart the user just performed deliberately.
+    (when (fboundp 'decknix--sidebar-state-write)
+      (decknix--sidebar-state-write))
     (when (and was-off (not (eq decknix-auto-review-mode 'off)))
       (decknix-auto-review-seed-current))
     (decknix-auto-review--maybe-dispatch)
