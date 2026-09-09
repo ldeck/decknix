@@ -294,5 +294,33 @@ that merged them."
     (should (= 1 (length (cdr plan))))
     (should (equal "author pushed since review" (cdar (cdr plan))))))
 
+
+;; --- a row must carry what the verbs need ---
+
+(ert-deftest decknix-rb--session-row-carries-its-buffer ()
+  "`:buffer' survives into the row.
+
+Dropped, the row still reported `:session t' while `jump', `quit' and
+`detach' all had nothing to act on -- three of the four acting keys
+inert, and the board looking correct throughout.  Lane assignment being
+right is not the same as a row being usable."
+  (let ((row (decknix-review-board--session-row
+              '(:name "s" :buffer :the-buffer :prs ("a#3")
+                :state "ready" :bot-p nil)
+              #'decknix-rb-test--status #'decknix-rb-test--priority)))
+    (should (eq :the-buffer (plist-get row :buffer)))))
+
+(ert-deftest decknix-rb--build-preserves-buffer-through-lanes ()
+  "The buffer survives `decknix-review-board-build', not just the row
+builder -- that is the path the board actually uses."
+  (let* ((model (decknix-review-board-build
+                 nil
+                 '((:name "s" :buffer :the-buffer :prs ("a#3")
+                    :state "ready" :bot-p nil))
+                 #'decknix-rb-test--key #'decknix-rb-test--status
+                 #'decknix-rb-test--priority #'decknix-rb-test--bot))
+         (row (car (decknix-review-board-rows model))))
+    (should (eq :the-buffer (plist-get row :buffer)))))
+
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here
