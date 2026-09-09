@@ -54,6 +54,16 @@
 (declare-function decknix--hub-review-pr-key-parse
                   "decknix-hub-review-identity" (key))
 (declare-function decknix-auto-review-cycle-mode "decknix-auto-review")
+(declare-function decknix--hub-item-visible-p "decknix-agent-shell-hub" (repo))
+(declare-function decknix--hub-age-visible-p "decknix-agent-shell-hub" (ts))
+(declare-function decknix--hub-ci-visible-p "decknix-agent-shell-hub" (item))
+(declare-function decknix--hub-mention-visible-p "decknix-agent-shell-hub" (item))
+(declare-function decknix--hub-bot-visible-p "decknix-agent-shell-hub" (item))
+(declare-function decknix--hub-requests-attention-visible-p "decknix-hub-attention-filter" (item))
+(declare-function decknix--hub-requests-reviewed-visible-p "decknix-hub-attention-filter" (item))
+(declare-function decknix--hub-requests-conflict-visible-p "decknix-hub-attention-filter" (item))
+(declare-function decknix--hub-requests-draft-visible-p "decknix-hub-attention-filter" (item))
+(declare-function decknix--hub-request-activity-time "decknix-hub-attention-filter" (item))
 (declare-function decknix-auto-review-state-label "decknix-auto-review" (state))
 (defvar decknix-auto-review-mode)
 (declare-function decknix--agent-quickaction-start
@@ -191,11 +201,56 @@ make the column noisy."
   "Non-nil when ITEM was authored by a bot."
   (and (decknix--hub-bot-author-p (alist-get 'author item)) t))
 
+(defvar decknix-review-board-show-all nil
+  "When non-nil, show every review request, ignoring the sidebar filters.")
+
+(defun decknix-review-board--request-visible-p (item)
+  "Non-nil when ITEM passes the SAME filters the sidebar Requests section uses.
+
+The board was reading the raw feed, so it showed 30 rows where the
+sidebar showed 2 -- 28 PRs deliberately hidden: bots that do not mention
+you, drafts, items aged out.  Noise on its own, but `d' made it a
+correctness problem: auto-review's readiness check is built as the
+NEGATION of these predicates precisely so it can never dispatch a PR the
+Requests list is hiding, and a board that ignored them offered a key to
+do exactly that."
+  (and (decknix--hub-item-visible-p (alist-get 'repo item))
+       (decknix--hub-age-visible-p (decknix--hub-request-activity-time item))
+       (decknix--hub-ci-visible-p item)
+       (decknix--hub-mention-visible-p item)
+       (decknix--hub-bot-visible-p item)
+       (decknix--hub-requests-attention-visible-p item)
+       (decknix--hub-requests-reviewed-visible-p item)
+       (decknix--hub-requests-conflict-visible-p item)
+       (decknix--hub-requests-draft-visible-p item)))
+
+(defun decknix-review-board--request-items ()
+  "Return the feed items the board should offer as work to pick up."
+  (let ((items (alist-get 'items decknix--hub-reviews)))
+    (if decknix-review-board-show-all
+        items
+      (seq-filter #'decknix-review-board--request-visible-p items))))
+
+(defun decknix-review-board-toggle-filters ()
+  "Toggle between the sidebar's filters and the whole feed."
+  (interactive)
+  (setq decknix-review-board-show-all (not decknix-review-board-show-all))
+  (decknix-review-board-refresh)
+  (message "Requests: %s"
+           (if decknix-review-board-show-all
+               "ALL (sidebar filters ignored)"
+             "filtered, as the sidebar")))
+
 (defun decknix-review-board--build ()
-  "Return a freshly built board model."
+  "Return a freshly built model.
+
+Sessions are NEVER filtered -- a running agent is a fact regardless of
+whether its PR passes a display filter, and a Finished session's PR is
+not in the feed at all.  Filters govern only what is offered as work to
+pick up."
   (decknix-review-board--learn-owners (alist-get 'items decknix--hub-reviews))
   (decknix-review-board-build
-   (alist-get 'items decknix--hub-reviews)
+   (decknix-review-board--request-items)
    (decknix-review-board--sessions)
    #'decknix-review-board--item-key
    #'decknix-review-board--status-for-key
@@ -258,7 +313,9 @@ make the column noisy."
             ;; transient: this is the screen where you decide what to do
             ;; about reviews, so the policy that spawns them unasked is
             ;; part of the picture rather than a setting elsewhere.
-            (propertize (format "auto-review %s"
+            (propertize (format "%s   auto-review %s"
+                                (if decknix-review-board-show-all
+                                    "ALL requests" "filtered")
                                 (if (fboundp 'decknix-auto-review-state-label)
                                     (format "[%s]" (decknix-auto-review-state-label
                                                     decknix-auto-review-mode))
@@ -271,7 +328,7 @@ make the column noisy."
             ;; read-only screen need to be readable without asking.
             (propertize
              (concat "  n/p move   RET open   c copy   j jump   m mark   M lane\n"
-                     "  d dispatch  k quit   D detach  s ship   A auto-review  g refresh  ? help\n")
+                     "  d dispatch  k quit   D detach  s ship   A auto-review  f filters  g refresh  ? help\n")
              'face 'font-lock-comment-face)
             "\n"
             (propertize "  m  ● pri  row                                                  state\n"
@@ -636,6 +693,13 @@ NAVIGATE
   j               jump to the session buffer
   g               refresh          q  bury          ?  this help
   A               cycle auto-review: off / bot / human / any
+  f               filters: the sidebar\'s, or the whole feed
+
+FILTERS
+  Requests use the SAME filters as the sidebar (bots, drafts, age, CI,
+  mentions).  Without them the board showed 30 rows where the sidebar
+  showed 2.  Sessions are never filtered -- a running agent is a fact,
+  and a Finished session\'s PR has left the feed entirely.
 
 MARK  (verbs act on the marked set, or the row at point when none marked)
   m / u           mark / unmark          U  unmark all
@@ -754,6 +818,7 @@ a setting kept somewhere else."
     (define-key map (kbd "c") #'decknix-review-board-copy-url)
     (define-key map (kbd "w") #'decknix-review-board-copy-url)
     (define-key map (kbd "A") #'decknix-review-board-cycle-auto-review)
+    (define-key map (kbd "f") #'decknix-review-board-toggle-filters)
     (define-key map (kbd "?") #'decknix-review-board-help)
     (define-key map (kbd ".") #'decknix-review-board-help)
     (define-key map (kbd "q") #'quit-window)
