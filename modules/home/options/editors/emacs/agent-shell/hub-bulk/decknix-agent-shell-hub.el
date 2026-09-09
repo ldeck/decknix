@@ -997,6 +997,8 @@ Order: `hide' → `show' → `mentioned' → `hide'.  See
                   "decknix-agent-session-broker" (conv-key))
 (declare-function decknix--hub-review-status-aggregate
                   "decknix-hub-review-status" (statuses))
+(declare-function decknix-agent-buffer-status
+                  "decknix-agent-auto-close" (buffer))
 (defvar decknix--agent-conv-key)
 (defvar decknix--hub-review-session-snapshot nil
   "Memoised (BUFFER-NAME TAGS REVIEW-PR) for each live agent buffer.")
@@ -1035,8 +1037,50 @@ O(requests x sessions) pure comparisons; `covers-p' itself is ~3us."
                                  (and ck (ignore-errors
                                            (decknix--agent-tags-for-conv-key ck)))
                                  (and ck (ignore-errors
-                                           (decknix--agent-review-prs-for-conv-key ck))))))))
+                                           (decknix--agent-review-prs-for-conv-key ck)))
+                                 ;; State too, so a Requests row can say
+                                 ;; whether its session needs you rather
+                                 ;; than merely that one exists.
+                                 (ignore-errors
+                                   (decknix-agent-buffer-status b)))))))
                    (agent-shell-buffers)))))))
+
+(defconst decknix--hub-request-session-faces
+  '(("waiting" . (:foreground "#ff5f5f" :weight bold))
+    ("netfail" . (:foreground "#ff5f5f" :weight bold))
+    ("asking"  . (:foreground "#ffaf5f" :weight bold))
+    ("working" . (:foreground "#d7af5f")))
+  "Face per session state for the Requests row indicator.
+States absent here fall back to the neutral colour: they are sessions
+that exist and want nothing.")
+
+(defun decknix--hub-request-session-state (item)
+  "Return the state of the session covering ITEM's PR, or nil."
+  (let ((repo (or (alist-get 'repo item) ""))
+        (number (alist-get 'number item)))
+    (seq-some (lambda (sn)
+                (when (decknix--hub-review-session-covers-p
+                       repo number (nth 0 sn) (nth 1 sn) (nth 2 sn))
+                  (nth 3 sn)))
+              (decknix--hub-review-session-snapshot))))
+
+(defun decknix--hub-request-session-icon (state)
+  "Return the Requests-row indicator for a session in STATE.
+
+Shape carries \"is it working\", colour carries \"does it need you\".  A
+single flat glyph said only that a session existed, which is the least
+useful thing about it once auto-review is on and every request has one --
+at that point the indicator is present on every row and distinguishes
+nothing."
+  (cond
+   ((null state) "")
+   ((equal state "working")
+    (decknix--hub-icon "◐" (alist-get "working" decknix--hub-request-session-faces
+                                      nil nil #'equal)))
+   ((alist-get state decknix--hub-request-session-faces nil nil #'equal)
+    (decknix--hub-icon "◉" (alist-get state decknix--hub-request-session-faces
+                                      nil nil #'equal)))
+   (t (decknix--hub-icon "◉" '(:foreground "#87d7ff")))))
 
 (defun decknix--hub-request-has-live-session-p (item)
   "Return non-nil if ITEM's PR has a live agent-shell review session.
@@ -3201,9 +3245,8 @@ Respects `decknix--hub-org-visibility' to show only items from enabled orgs."
                                status-str
                              (concat status-str reply-str)))
                ;; Active review indicator
-               (active-str (if (decknix--hub-request-has-live-session-p item)
-                               (decknix--hub-icon "◉" '(:foreground "#87d7ff"))
-                             ""))
+               (active-str (decknix--hub-request-session-icon
+                            (decknix--hub-request-session-state item)))
                (status-str (if (string-empty-p active-str)
                                status-str
                              (concat status-str active-str)))
