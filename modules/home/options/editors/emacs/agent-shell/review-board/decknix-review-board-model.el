@@ -119,6 +119,11 @@ whole group rather than being buried inside it."
          (attention (decknix-review-board--attention-p (plist-get session :state))))
     (list :kind (if (> (length prs) 1) 'group 'single)
           :name (plist-get session :name)
+          ;; Carried through, not derived.  Every verb that DOES something --
+          ;; jump, quit, detach -- needs the buffer, and dropping it here left
+          ;; three of the four acting keys silently inert: the row said
+          ;; `:session t' and then had nothing to act on.
+          :buffer (plist-get session :buffer)
           :conv-key (plist-get session :conv-key)
           :prs prs
           :state (plist-get session :state)
