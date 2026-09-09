@@ -4979,9 +4979,15 @@ ${optionalString cfg.tableOverlay.enable ''
           (define-key decknix-session-prefix-map (kbd "M-n") 'decknix-agent-net-error-list))
         ;; Requests ordering: priority (default) vs the historical
         ;; recency feed.  `o' for order.
-        (when (fboundp 'decknix-hub-toggle-requests-sort-mode)
-          (define-key decknix-session-prefix-map
-                      (kbd "o") 'decknix-hub-toggle-requests-sort-mode))
+        ;;
+        ;; NOT guarded on `fboundp'.  It was, and the binding silently never
+        ;; happened: this runs before `decknix-hub-attention-filter' is
+        ;; required, so the command was not yet defined and the guard skipped
+        ;; it.  Verified after a switch -- the function existed, `C-c s o' was
+        ;; nil.  `define-key' on a symbol is fine before that symbol has a
+        ;; function; the guard bought nothing and cost the binding.
+        (define-key decknix-session-prefix-map
+                    (kbd "o") 'decknix-hub-toggle-requests-sort-mode)
         (with-eval-after-load 'which-key
           (which-key-add-key-based-replacements
             "C-c s"   "Session"
