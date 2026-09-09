@@ -152,5 +152,30 @@ look unreviewed and each would acquire a second reviewer."
   (should-not (decknix--hub-review-session-covers-p
                "widget" 20612 "*x*" nil "widget#20611")))
 
+
+;; --- PR URLs, for rows whose feed item has gone ---
+
+(ert-deftest decknix-review-id--pr-url ()
+  "Reconstructs the URL from coordinates rather than a feed item."
+  (should (equal "https://github.com/ExampleOwner/widget/pull/20611"
+                 (decknix--hub-review-pr-url "ExampleOwner" "widget" 20611)))
+  (should (equal "https://github.com/ExampleOwner/widget/pull/20611"
+                 (decknix--hub-review-pr-url "ExampleOwner" "ExampleOwner/widget" "20611"))))
+
+(ert-deftest decknix-review-id--pr-url-needs-an-owner ()
+  "Without an owner there is no URL to guess; nil rather than a wrong link."
+  (should-not (decknix--hub-review-pr-url nil "widget" 1))
+  (should-not (decknix--hub-review-pr-url "" "widget" 1))
+  (should-not (decknix--hub-review-pr-url "org" nil 1))
+  (should-not (decknix--hub-review-pr-url "org" "widget" nil)))
+
+(ert-deftest decknix-review-id--key-parse ()
+  "`repo#number' splits back into its parts."
+  (should (equal '("widget" . "20611") (decknix--hub-review-pr-key-parse "widget#20611")))
+  (should (equal '("listsvc-integration" . "166")
+                 (decknix--hub-review-pr-key-parse "listsvc-integration#166")))
+  (should-not (decknix--hub-review-pr-key-parse "widget"))
+  (should-not (decknix--hub-review-pr-key-parse nil)))
+
 (provide 'decknix-hub-review-identity-test)
 ;;; decknix-hub-review-identity-test.el ends here

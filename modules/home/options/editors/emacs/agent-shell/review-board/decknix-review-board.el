@@ -48,6 +48,11 @@
 (declare-function decknix-agent-broker-stop "decknix-agent-session-broker" (key))
 (declare-function decknix--agent-pr-detect-workspace
                   "decknix-agent-workspace-detect" (owner repo))
+(declare-function decknix--git-remote-url "decknix-agent-vcs")
+(declare-function decknix--hub-review-pr-url
+                  "decknix-hub-review-identity" (owner repo number))
+(declare-function decknix--hub-review-pr-key-parse
+                  "decknix-hub-review-identity" (key))
 (declare-function decknix--agent-quickaction-start
                   "decknix-agent-shell-main-link"
                   (name tags workspace command &optional model provider-id mode
@@ -102,6 +107,50 @@ in the first place."
                            :bot-p (decknix-review-board--prs-bot-p prs)))))))
            (agent-shell-buffers)))))
 
+(defvar decknix-review-board--owner-map (make-hash-table :test 'equal)
+  "Short repo name -> owner, accumulated from every feed seen.
+
+Accumulated rather than recomputed because the rows that most need a URL
+are exactly the ones whose repo may have left the feed: a service whose
+only open PR just merged has no items left, so a map built from the
+CURRENT feed alone would forget the owner precisely when the Finished
+lane needs it.  Entries are cheap and a repo's owner does not change.")
+
+(defun decknix-review-board--learn-owners (items)
+  "Record short-repo -> owner for every ITEMS entry carrying `owner/repo'."
+  (dolist (item items)
+    (let* ((full (map-elt item 'repo))
+           (parts (and (stringp full) (split-string full "/"))))
+      (when (= 2 (length parts))
+        (puthash (nth 1 parts) (nth 0 parts)
+                 decknix-review-board--owner-map)))))
+
+(defun decknix-review-board--owner-for (repo)
+  "Return the owner for short REPO, or nil.
+
+Falls back to the workspace's git remote, which covers a repo never seen
+in a feed at all -- a review session for a repo with no other open PRs."
+  (or (gethash repo decknix-review-board--owner-map)
+      (when-let* ((ws (ignore-errors
+                        (decknix--agent-pr-detect-workspace nil repo)))
+                  (default-directory ws)
+                  (url (ignore-errors (decknix--git-remote-url))))
+        (when (string-match "github\\.com[:/]\\([^/]+\\)/" url)
+          (match-string 1 url)))))
+
+(defun decknix-review-board-row-url (row)
+  "Return a PR URL for ROW, or nil.
+
+Prefers the feed item's own URL, then reconstructs from coordinates.  The
+reconstruction is what makes Finished rows openable at all: their PR has
+left the feed, so there is no item to read a URL from."
+  (let ((key (car (plist-get row :prs))))
+    (or (when-let* ((item (decknix-review-board--item-for-key key)))
+          (map-elt item 'url))
+        (when-let* ((parsed (decknix--hub-review-pr-key-parse key))
+                    (owner (decknix-review-board--owner-for (car parsed))))
+          (decknix--hub-review-pr-url owner (car parsed) (cdr parsed))))))
+
 (defun decknix-review-board--item-for-key (key)
   "Return the feed item for a `repo#number' KEY, or nil."
   (when (and (stringp key)
@@ -141,6 +190,7 @@ make the column noisy."
 
 (defun decknix-review-board--build ()
   "Return a freshly built board model."
+  (decknix-review-board--learn-owners (alist-get 'items decknix--hub-reviews))
   (decknix-review-board-build
    (alist-get 'items decknix--hub-reviews)
    (decknix-review-board--sessions)
@@ -273,11 +323,30 @@ For a group, browses its highest-priority member -- the one it starts
 with, so the link matches where the session's attention is."
   (interactive)
   (if-let* ((row (decknix-review-board--row-at-point))
-            (key (car (plist-get row :prs)))
-            (item (decknix-review-board--item-for-key key))
-            (url (alist-get 'url item)))
+            (url (decknix-review-board-row-url row)))
       (browse-url url)
     (user-error "No PR URL for this row")))
+
+(defun decknix-review-board-copy-url ()
+  "Copy the PR URL(s) for the target rows to the kill ring.
+
+A group copies every member, newline-separated, because the useful thing
+to paste about a grouped row is the whole set -- that is what makes it a
+group."
+  (interactive)
+  (let* ((rows (decknix-review-board--targets))
+         (urls (delq nil
+                     (apply #'append
+                            (mapcar
+                             (lambda (row)
+                               (mapcar (lambda (key)
+                                         (decknix-review-board-row-url
+                                          (list :prs (list key))))
+                                       (plist-get row :prs)))
+                             rows)))))
+    (unless urls (user-error "No PR URL for the selection"))
+    (kill-new (string-join urls "\n"))
+    (message "Copied %d URL%s" (length urls) (if (= 1 (length urls)) "" "s"))))
 
 (defun decknix-review-board--marks-table ()
   "Return this buffer's mark table, creating it if needed."
@@ -542,6 +611,7 @@ them."
 NAVIGATE
   n / p, TAB      next / previous row
   RET / o         browse the PR on GitHub
+  c / w           copy the PR URL(s) to the kill ring
   j               jump to the session buffer
   g               refresh          q  bury          ?  this help
 
@@ -599,6 +669,35 @@ why the numbers go negative -- are not answerable from a keymap.")
       (special-mode))
     (display-buffer buf)))
 
+;;;###autoload
+(defun decknix-agent-session-pr-url (&optional open)
+  "Copy the PR URL(s) this session is reviewing.  With OPEN, browse instead.
+
+Works from the session buffer itself, not only from the board: when you
+are reading a review you generally want its PR to hand, and going via the
+board to get there is a detour through a screen you did not want.
+
+Uses the recorded coordinates, so it still answers for a session whose PR
+has merged -- which is when you most want the link, to confirm it did."
+  (interactive "P")
+  (unless (derived-mode-p 'agent-shell-mode)
+    (user-error "Not in an agent-shell buffer"))
+  (let* ((ck (bound-and-true-p decknix--agent-conv-key))
+         (prs (and ck (ignore-errors
+                        (decknix--agent-review-prs-for-conv-key ck))))
+         (urls (delq nil
+                     (mapcar (lambda (key)
+                               (decknix-review-board-row-url (list :prs (list key))))
+                             prs))))
+    (unless urls
+      (user-error "No PR recorded for this session"))
+    (if open
+        (progn (browse-url (car urls))
+               (message "Opened %s" (car urls)))
+      (kill-new (string-join urls "\n"))
+      (message "Copied %d URL%s: %s"
+               (length urls) (if (= 1 (length urls)) "" "s") (car urls)))))
+
 (defvar decknix-review-board-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "n") #'decknix-review-board-next)
@@ -617,6 +716,8 @@ why the numbers go negative -- are not answerable from a keymap.")
     (define-key map (kbd "k") #'decknix-review-board-quit-sessions)
     (define-key map (kbd "D") #'decknix-review-board-detach-sessions)
     (define-key map (kbd "s") #'decknix-review-board-ship)
+    (define-key map (kbd "c") #'decknix-review-board-copy-url)
+    (define-key map (kbd "w") #'decknix-review-board-copy-url)
     (define-key map (kbd "?") #'decknix-review-board-help)
     (define-key map (kbd ".") #'decknix-review-board-help)
     (define-key map (kbd "q") #'quit-window)

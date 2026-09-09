@@ -62,6 +62,27 @@ use `decknix--hub-review-session-covers-p'."
              (string-match "\\`pr-\\(.+\\)-\\([0-9]+\\)\\'" name))
     (decknix--hub-review-pr-key (match-string 1 name) (match-string 2 name))))
 
+(defun decknix--hub-review-pr-url (owner repo number)
+  "Return the GitHub PR URL for OWNER/REPO#NUMBER, or nil.  Pure.
+
+Needed because a `gone' PR has left the reviews feed, and the feed item
+is where a URL would otherwise come from.  Those are exactly the rows in
+the Finished lane -- the ones you most want to open, to confirm the thing
+really did merge -- so \"no URL for this row\" was worst precisely where it
+mattered."
+  (let ((repo (and (stringp repo) (car (last (split-string repo "/")))))
+        (num (cond ((numberp number) (number-to-string number))
+                   ((and (stringp number) (not (string-empty-p number))) number))))
+    (when (and (stringp owner) (not (string-empty-p owner))
+               repo (not (string-empty-p repo)) num)
+      (format "https://github.com/%s/%s/pull/%s" owner repo num))))
+
+(defun decknix--hub-review-pr-key-parse (key)
+  "Split a `repo#number' KEY into (REPO . NUMBER), or nil."
+  (when (and (stringp key)
+             (string-match "\\`\\(.+\\)#\\([0-9]+\\)\\'" key))
+    (cons (match-string 1 key) (match-string 2 key))))
+
 (defun decknix--hub-review-session-covers-p (repo number buffer-name tags review-pr)
   "Non-nil when a session covers the PR identified by REPO and NUMBER.
 
