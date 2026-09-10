@@ -247,5 +247,71 @@ may be emitted; this pins that the question is never dropped."
   (dolist (s '("ready" "finished" "working" "waiting" "killed" "initializing"))
     (should (equal s (decknix-agent-turn-status s nil)))))
 
+;; --- `asking' must survive a restart ---------------------------------
+;;
+;; Observed after a `decknix switch' on 2026-09-10: two sessions that were
+;; `asking' before the restart came back `ready'.  Both were still blocked
+;; on a question nobody had answered, and both now looked idle in the
+;; sidebar -- the one state whose whole job is to say "this needs you".
+;;
+;; `asking' is a refinement of `ready' driven by `decknix--agent-turn-
+;; question', which is `defvar-local' and captured from the LIVE message
+;; stream at `turn-complete'.  A restart destroys the buffer, so the flag
+;; resets to nil and nothing recomputes it.  The session that kept its
+;; `asking' only did so because it asked AFTER the reattach.
+;;
+;; Recomputing from the restored BUFFER is not enough: prepopulation
+;; truncates, and on both affected sessions the question had been cut
+;; ("[...truncated]" then the prompt).  The transcript still holds the
+;; full last turn, so that is the source.
+
+(ert-deftest decknix-turn-restore--question-from-last-assistant-turn ()
+  "A restored session ending on a decision block is `asking' again."
+  (should (plist-get
+           (decknix-agent-turn-restored-facts
+            '(("do the thing" . "Done, all green.")
+              ("and then?" . "Ready to push.\n\nCHOOSE ONE\n----------\n1. push\n2. wait\n")))
+           :question)))
+
+(ert-deftest decknix-turn-restore--no-question-when-turn-just-reports ()
+  "A restored session that merely reported is left `ready'."
+  (should-not (plist-get
+               (decknix-agent-turn-restored-facts
+                '(("do the thing" . "Done. Tests pass and the branch is pushed.")))
+               :question)))
+
+(ert-deftest decknix-turn-restore--uses-the-LAST-turn-not-an-earlier-one ()
+  "An answered question from an earlier turn must not resurrect `asking'.
+The bug this guards is worse than the one it fixes: a stale ask makes
+every restored session shout for attention it no longer needs."
+  (should-not (plist-get
+               (decknix-agent-turn-restored-facts
+                '(("start" . "Which one?\n\nCHOOSE ONE\n----------\n1. a\n2. b\n")
+                  ("1" . "Done, pushed.")))
+               :question)))
+
+(ert-deftest decknix-turn-restore--tolerates-no-transcript ()
+  "No turns, or a turn with no assistant text, is not a question."
+  (should-not (plist-get (decknix-agent-turn-restored-facts nil) :question))
+  (should-not (plist-get (decknix-agent-turn-restored-facts '(("hi" . nil))) :question))
+  (should-not (plist-get (decknix-agent-turn-restored-facts '(("hi" . ""))) :question)))
+
+(ert-deftest decknix-turn-restore--question-mark-close-counts ()
+  "The other shapes `decknix--agent-question-p' knows still apply."
+  (should (plist-get
+           (decknix-agent-turn-restored-facts
+            '(("check it" . "I can force-push or open a fresh PR. Which do you want?")))
+           :question)))
+
+(ert-deftest decknix-turn-restore--facts-shape-matches-the-live-path ()
+  "The restored plist must be consumable by `decknix-agent-turn-status'.
+Both paths feed the same refiner, so a different shape here would restore
+the flag and still render `ready'."
+  (should (equal "asking"
+                 (decknix-agent-turn-status
+                  "ready"
+                  (decknix-agent-turn-restored-facts
+                   '(("go" . "Ready.\n\nCHOOSE ONE\n----------\n1. yes\n")))))))
+
 (provide 'decknix-agent-turn-signals-test)
 ;;; decknix-agent-turn-signals-test.el ends here

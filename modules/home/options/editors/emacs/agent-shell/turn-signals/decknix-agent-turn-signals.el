@@ -216,6 +216,33 @@ that still ends on a question); `decknix-session-classify' already scores
       (setq signals (plist-put signals :attention t)))
     signals))
 
+(defun decknix-agent-turn-restored-facts (turns)
+  "Return turn-end FACTS reconstructed from a restored session's TURNS.
+
+TURNS is a list of (USER-MSG . ASSISTANT-RESP) cons cells, oldest first,
+as `decknix--agent-session-extract-all-turns' returns.  Pure, so the
+reconstruction is testable without a session or a transcript file.
+
+Exists because `asking' did not survive a restart.  The flag behind it,
+`decknix--agent-turn-question', is `defvar-local' and is captured from the
+LIVE message stream at `turn-complete'; a restart destroys the buffer, so
+it resets to nil and nothing recomputes it.  Two sessions blocked on
+unanswered questions came back reading `ready' after a `decknix switch'
+\(2026-09-10) and so looked idle -- the exact opposite of what `asking'
+exists to communicate.
+
+Reconstructed from the TRANSCRIPT rather than from the restored buffer on
+purpose: prepopulation truncates, and on both affected sessions the
+question itself had been cut, leaving `[...truncated]' and the prompt.
+The transcript still holds the last turn whole.
+
+Only the LAST turn is consulted.  An earlier, already-answered question
+must not resurrect the flag -- a stale ask is worse than the bug being
+fixed, because every restored session would then demand attention it does
+not need."
+  (let ((last-assistant (cdr (car (last turns)))))
+    (list :question (and (decknix--agent-question-p last-assistant) t))))
+
 (defconst decknix-agent-turn-askable-statuses '("ready" "finished")
   "Statuses that may be refined to `asking'.
 Only a settled turn qualifies: `working' has not finished asking yet, and
