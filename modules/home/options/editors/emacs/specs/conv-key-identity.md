@@ -134,6 +134,45 @@ one and the rest are empty. That is the signature of key scatter, not of
 deliberate branching -- suggestive rather than conclusive, since the store
 records no intent.
 
+## 4.5 Step 4, and why the specified merge was wrong
+
+Section 4.3 says "merge entries that share a session id". Run as written,
+against the live store, that is destructive — and the dry run is the only
+reason it was caught.
+
+Merging by shared session id is TRANSITIVE. Some entries are containers
+that wrongly accumulated many unrelated session ids (`d2b0c372c9` holds
+fifteen, untagged; four such entries exist). Chaining through them
+collapsed 60 conversations into one carrying **47 tags and 27 sessions** —
+`guidelines/policies/ai` merged with `activepipe/conn`, `dos/day6/log`,
+`rea-integration/#15/review` and thirty more. That destroys findability,
+which is the entire point of the fix.
+
+The §4.4 measurement did not predict this. It counted session ids owned by
+several conversations and found 34 of 38 unambiguous, which is true and
+irrelevant: it measured pairs, and the danger is in the transitive
+closure.
+
+**Applied instead — a fold that cannot chain.** An entry is removed only
+when all three hold:
+
+- its session set is exactly `{S}` (never a container),
+- it carries no tags (nothing to lose),
+- exactly one owner of `S` has tags (an unambiguous winner).
+
+Result: 46 empty entries folded away, 541 → 495 conversations, zero tags
+lost, zero session ids lost, and the largest tag count on any conversation
+unchanged at 8. `5de16692` went from ten entries to two: its tagged one
+and a container that is deliberately left alone.
+
+26 session ids still sit in more than one conversation. Those are the
+container cases, and they need the containers understood — probably
+repaired at the write path — rather than merged.
+
+The generalisable lesson, and the reason the dry run was mandated: a
+measurement can be accurate and still support the wrong conclusion, when
+it measures a different structure than the operation traverses.
+
 ## 5. Open questions
 
 1. **Do any two conversations legitimately share a session id?** A fork
