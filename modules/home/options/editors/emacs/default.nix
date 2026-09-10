@@ -92,19 +92,169 @@ in
         (blink-cursor-mode -1)
 
         ;; == Theme ==
-        ;; Load modus-vivendi (high-contrast dark theme)
-        (load-theme 'modus-vivendi t)
+        ;; Silence "nil value is invalid, use `unspecified' instead" by
+        ;; repairing the theme's AUTHORITATIVE settings store.
+        ;;
+        ;; modus-themes 20251007.415 ships face specs carrying literal nil
+        ;; for attributes that reject it.  Measured across every face in
+        ;; this Emacs, three are affected -- `modus-themes-button',
+        ;; `widget-inactive' and `window-tool-bar-button-disabled' -- each
+        ;; with `:background nil :foreground nil'.
+        ;;
+        ;; This has now been got wrong twice, the same way each time, so the
+        ;; layering is worth stating.  There are THREE copies of a themed
+        ;; face spec, and only the first is authoritative:
+        ;;
+        ;;   (get THEME 'theme-settings)  entries of (prop face theme spec)
+        ;;   (get FACE  'theme-face)      per-face copy, used to realise it
+        ;;   the realised face attributes on each frame
+        ;;
+        ;; `enable-theme' rebuilds the second from the first, in custom.el:
+        ;;
+        ;;   (put symbol prop (cons (cddr s) (assq-delete-all theme spec-list)))
+        ;;
+        ;; and then recalculates the third from the second.  So:
+        ;;
+        ;;   * The ORIGINAL fix here called `set-face-attribute' with
+        ;;     `unspecified', repairing copy three.  Overwritten by the next
+        ;;     `enable-theme'.
+        ;;   * The SECOND attempt rewrote `theme-face', copy two.  Also
+        ;;     overwritten, from copy one, by that same line above.
+        ;;
+        ;; Both looked correct and neither survived a theme enable.  Fix copy
+        ;; one and the other two follow; fix either of the others and the
+        ;; warning returns the moment anything re-enables the theme.  Copy
+        ;; two is rewritten as well, but only so the running session is clean
+        ;; without waiting for a re-enable.
+        ;;
+        ;; Only attributes that genuinely reject nil are rewritten.  For
+        ;; `:underline', `:box', `:extend' and friends nil is a VALID value
+        ;; meaning "off", and modus uses it that way (e.g.
+        ;; `modus-themes-reset-soft' sets five of them); rewriting those
+        ;; would change how the theme looks.
+        (defconst decknix-face-attrs-rejecting-nil
+          '(:family :foundry :width :height :weight :slant
+            :foreground :background :distant-foreground :font)
+          "Face attributes for which nil is invalid and `unspecified' is meant.
+The complement (`:underline', `:box', `:extend', `:inherit', ...) accepts
+nil as a real value, so those must be left exactly as the theme wrote
+them.")
 
-        ;; Fix face attribute warnings (nil should be 'unspecified)
-        (with-eval-after-load 'modus-themes
-          (when (facep 'modus-themes-button)
-            (set-face-attribute 'modus-themes-button nil
-                                :background 'unspecified
-                                :foreground 'unspecified)))
-        (when (facep 'widget-inactive)
-          (set-face-attribute 'widget-inactive nil
-                              :background 'unspecified
-                              :foreground 'unspecified))
+        (defun decknix-face-attr-plist-p (plist)
+          "Non-nil when PLIST is a well-formed face attribute plist.
+That is: a proper list of even length whose every even element is a
+keyword.
+
+Checked before rewriting anything because a face spec clause is NOT
+always a plist.  The old-style form is (DISPLAY (ATTRS...)), where the
+attributes are nested one level deeper, and walking that as a plist reads
+the inner list as a key, finds no value, and appends a spurious nil.
+Measured: a transform without this guard rewrote 103 face specs when only
+3 contained an invalid nil -- i.e. it silently restructured 100 specs it
+had no business touching.  A theme repair that corrupts the theme is a
+worse bug than the warning."
+          (and (proper-list-p plist)
+               (cl-evenp (length plist))
+               (let ((ok t) (rest plist))
+                 (while rest
+                   (unless (keywordp (car rest)) (setq ok nil))
+                   (setq rest (cddr rest)))
+                 ok)))
+
+        (defun decknix-sanitise-face-plist (plist)
+          "Return PLIST with nil-valued nil-rejecting attributes set to `unspecified'.
+Returns PLIST unchanged when it is not a well-formed attribute plist.
+Pure: builds a fresh list and leaves PLIST untouched."
+          (if (not (decknix-face-attr-plist-p plist))
+              plist
+            (let ((out nil))
+              (while plist
+                (let ((key (car plist))
+                      (value (cadr plist)))
+                  (push key out)
+                  (push (if (and (null value)
+                                 (memq key decknix-face-attrs-rejecting-nil))
+                            'unspecified
+                          value)
+                        out))
+                (setq plist (cddr plist)))
+              (nreverse out))))
+
+        (defun decknix-sanitise-face-spec (spec)
+          "Return face SPEC with every clause's plist sanitised.
+SPEC is a list of (DISPLAY . PLIST) clauses, as stored in a theme.  A
+clause whose tail is not a well-formed attribute plist is returned as-is,
+structure untouched."
+          (mapcar (lambda (clause)
+                    (if (consp clause)
+                        (let* ((old (cdr clause))
+                               (new (decknix-sanitise-face-plist old)))
+                          (if (eq old new) clause (cons (car clause) new)))
+                      clause))
+                  spec))
+
+        (defun decknix-sanitise-theme-faces (theme)
+          "Drop invalid nil face attributes from THEME, authoritative copy first.
+Returns the number of face settings repaired, so a switch that silently
+stops finding any is visible rather than assumed fixed."
+          (let ((repaired 0)
+                (faces nil))
+            ;; Copy one: the theme's own settings store.  `enable-theme'
+            ;; rebuilds each face's `theme-face' from here, so this is the
+            ;; only edit that survives.
+            (put theme 'theme-settings
+                 (mapcar
+                  (lambda (setting)
+                    ;; setting is (PROP FACE THEME SPEC)
+                    (if (eq (car setting) 'theme-face)
+                        (let* ((old (nth 3 setting))
+                               (new (decknix-sanitise-face-spec old)))
+                          (if (equal old new)
+                              setting
+                            (setq repaired (1+ repaired))
+                            (push (nth 1 setting) faces)
+                            (list (nth 0 setting) (nth 1 setting)
+                                  (nth 2 setting) new)))
+                      setting))
+                  (get theme 'theme-settings)))
+            ;; Copy two, and then copy three, for the faces just repaired --
+            ;; so this session is clean immediately rather than only after
+            ;; something re-enables the theme.
+            (dolist (face faces)
+              (put face 'theme-face
+                   (mapcar (lambda (entry)
+                             (list (car entry)
+                                   (decknix-sanitise-face-spec (cadr entry))))
+                           (get face 'theme-face)))
+              ;; Guarded by `facep': a theme carries settings for faces whose
+              ;; package has not loaded (`window-tool-bar-button-disabled' is
+              ;; one here), and `face-spec-recalc' signals "Invalid face" on
+              ;; those, aborting the sweep.  A repair that breaks startup is
+              ;; worse than the warning it was fixing.  Their spec is still
+              ;; fixed, so they come up clean whenever they are defined.
+              (when (facep face)
+                (face-spec-recalc face (selected-frame))))
+            repaired))
+
+        ;; Load modus-vivendi (high-contrast dark theme), then repair it.
+        ;;
+        ;; The two are one operation.  `load-theme' runs the theme's own
+        ;; `custom-theme-set-faces', which INSTALLS the broken specs and
+        ;; APPLIES them in the same breath, so the first burst of warnings is
+        ;; emitted before any repair could run.  Measured: 14 warnings from
+        ;; the `load-theme' call, then 0 across three subsequent
+        ;; `enable-theme's once repaired.
+        ;;
+        ;; So the log is quietened for the duration of that one call only.
+        ;; `inhibit-message' alone would still write to *Messages*; suppressing
+        ;; the log needs `message-log-max' nil as well.  Deliberately narrow:
+        ;; it covers a single form whose only expected output is this warning,
+        ;; and `load-theme' reports real problems by signalling rather than by
+        ;; messaging, so a genuine failure still surfaces.
+        (let ((inhibit-message t)
+              (message-log-max nil))
+          (load-theme 'modus-vivendi t)
+          (decknix-sanitise-theme-faces 'modus-vivendi))
 
         ;; == Line numbers ==
         (global-display-line-numbers-mode 1)
