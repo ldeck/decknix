@@ -40,6 +40,8 @@
 ;; packages (`decknix-agent-tags-read', `decknix-agent-session-format')
 ;; loaded before this module by the heredoc, so they always resolve at
 ;; call time.  Declared here to keep the byte-compile warning-clean.
+(declare-function decknix--agent-tags-resolve
+                  "decknix-agent-tags-read" (conv-key session-id))
 (declare-function decknix--agent-tags-for-conv-key
                   "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--agent-session-derive-name
@@ -188,8 +190,8 @@ already derives names live.  Resolution order:
 A nil `conv-key' skips the store lookup entirely (best-effort rows that
 were never addressable on disk still render from their baked fields)."
   (let* ((conv-key (alist-get 'conv-key entry))
-         (tags (or (and conv-key
-                        (decknix--agent-tags-for-conv-key conv-key))
+         (tags (or (decknix--agent-tags-resolve
+                    conv-key (alist-get 'session-id entry))
                    (alist-get 'tags entry)))
          (name (alist-get 'name entry)))
     (cond

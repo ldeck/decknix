@@ -60,6 +60,8 @@
 (defvar shell-maker--busy)
 
 ;; Sibling carved modules.
+(declare-function decknix--agent-tags-for-buffer
+                  "decknix-agent-tags-read" (buffer))
 (declare-function decknix--agent-tags-for-conv-key
                   "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--agent-tags-for-session
@@ -149,8 +151,10 @@ the session-id-based lookup if conv-key is not set yet."
   (or
    ;; Fast path: conv-key available (set during quickaction or
    ;; deferred prompt-ready) -- no session-list cache dependency.
-   (when (bound-and-true-p decknix--agent-conv-key)
-     (decknix--agent-tags-for-conv-key decknix--agent-conv-key))
+   ;; One resolver rather than a second hand-rolled fallback below: this
+   ;; unions the two lookups, where the `or' only takes the first hit and
+   ;; so lost tags whenever a resume split them across entries.
+   (decknix--agent-tags-for-buffer (current-buffer))
    ;; Slow path: look up via session-id -> session-list -> conv-key
    (when (and (boundp 'decknix--agent-auggie-session-id)
               decknix--agent-auggie-session-id)

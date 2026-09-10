@@ -50,6 +50,8 @@
 ;; packages and are loaded immediately before this file by the
 ;; heredoc, so they always resolve at call time.
 (declare-function decknix--agent-tags-for-session "decknix-agent-tags-read" (session-id))
+(declare-function decknix--agent-tags-resolve
+                  "decknix-agent-tags-read" (conv-key session-id))
 (declare-function decknix--agent-tags-for-conv-key "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--agent-conversation-key "decknix-agent-conv-resolve" (first-message))
 (declare-function decknix--agent-store-field-for-session-id
@@ -116,7 +118,7 @@ session-id from SESSION, then delegates.  Priority: slug (Claude sub-agent)
          (slug (alist-get 'slug session))
          (first-msg (alist-get 'firstUserMessage session ""))
          (conv-key (decknix--agent-conversation-key first-msg))
-         (tags (or (when conv-key (decknix--agent-tags-for-conv-key conv-key))
+         (tags (or (decknix--agent-tags-resolve conv-key sid)
                    ;; A RESUMED session's first message is the resume
                    ;; primer, which deliberately keys no conversation
                    ;; (2c0ada6) -- so the lookup above yields nothing and

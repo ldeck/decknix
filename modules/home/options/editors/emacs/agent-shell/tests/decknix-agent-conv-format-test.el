@@ -26,6 +26,15 @@
 ;; Stubs for forward-declared helpers.
 (unless (fboundp 'decknix--agent-tags-for-conv-key)
   (defun decknix--agent-tags-for-conv-key (_key) nil))
+
+(unless (fboundp 'decknix--agent-tags-resolve)
+  (defun decknix--agent-tags-resolve (conv-key session-id)
+    ;; Mirrors the real union so a test stubbing only one lookup still
+    ;; exercises the path the code takes.
+    (let ((a (and conv-key (decknix--agent-tags-for-conv-key conv-key)))
+          (b (and session-id (fboundp 'decknix--agent-tags-for-session)
+                  (decknix--agent-tags-for-session session-id))))
+      (cond ((and a b) (delete-dups (append a b))) (a) (b)))))
 (unless (fboundp 'decknix--agent-workspace-for-conv-key)
   (defun decknix--agent-workspace-for-conv-key (_key) nil))
 (unless (fboundp 'decknix--agent-session-time-ago)

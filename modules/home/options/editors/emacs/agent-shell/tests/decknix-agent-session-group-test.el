@@ -24,6 +24,25 @@
 (require 'subr-x)
 (require 'decknix-agent-session-group)
 
+;; Tags are now resolved by BUFFER (conv-key unioned with session id).
+(unless (fboundp 'decknix--agent-tags-resolve)
+  (defun decknix--agent-tags-resolve (conv-key session-id)
+    (let ((a (and conv-key (fboundp 'decknix--agent-tags-for-conv-key)
+                  (decknix--agent-tags-for-conv-key conv-key)))
+          (b (and session-id (fboundp 'decknix--agent-tags-for-session)
+                  (decknix--agent-tags-for-session session-id))))
+      (cond ((and a b) (delete-dups (append a b))) (a) (b)))))
+
+(unless (fboundp 'decknix--agent-tags-for-buffer)
+  (defun decknix--agent-tags-for-buffer (buffer)
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (decknix--agent-tags-resolve
+         (and (boundp 'decknix--agent-conv-key) decknix--agent-conv-key)
+         (and (boundp 'decknix--agent-auggie-session-id)
+              decknix--agent-auggie-session-id))))))
+
+
 ;; Stubs for forward-declared helpers.
 (unless (fboundp 'decknix--agent-conversation-key)
   ;; Default: each first-message hashes to a unique key (use the first

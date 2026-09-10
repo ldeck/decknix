@@ -51,6 +51,8 @@
                   "decknix-agent-conv-recency" (conv-key))
 (declare-function decknix--agent-tags-for-session
                   "decknix-agent-tags-read" (session-id))
+(declare-function decknix--agent-tags-for-buffer
+                  "decknix-agent-tags-read" (buffer))
 (declare-function decknix--agent-tags-for-conv-key
                   "decknix-agent-tags-read" (conv-key))
 (declare-function decknix-agent-provider-glyph-for-buffer
@@ -123,16 +125,10 @@ not just augment writing to the session file."
          ;; tags and returns nil whenever that linkage is incomplete (e.g.
          ;; auto-review-dispatched or freshly-resumed sessions), which left
          ;; their rows tag-less in the picker.  Fall back to session-id.
-         (tags (when (buffer-live-p buf)
-                 (with-current-buffer buf
-                   (cond
-                    ((and (bound-and-true-p decknix--agent-conv-key)
-                          (fboundp 'decknix--agent-tags-for-conv-key))
-                     (decknix--agent-tags-for-conv-key decknix--agent-conv-key))
-                    ((and (boundp 'decknix--agent-auggie-session-id)
-                          decknix--agent-auggie-session-id)
-                     (decknix--agent-tags-for-session
-                      decknix--agent-auggie-session-id))))))
+         ;; One resolver rather than the hand-rolled cond this replaced:
+         ;; that took the FIRST hit, so a resume splitting tags across two
+         ;; entries lost whichever half it did not reach.
+         (tags (decknix--agent-tags-for-buffer buf))
          (tag-str (when tags
                     (mapconcat (lambda (tg)
                                  ;; Don't double-hash tags already `#'-prefixed

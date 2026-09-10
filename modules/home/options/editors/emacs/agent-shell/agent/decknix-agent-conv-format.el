@@ -41,6 +41,8 @@
 ;; Forward declarations -- these symbols live in sibling agent/
 ;; packages and are loaded immediately before this file by the
 ;; heredoc, so they always resolve at call time.
+(declare-function decknix--agent-tags-resolve
+                  "decknix-agent-tags-read" (conv-key session-id))
 (declare-function decknix--agent-tags-for-conv-key
                   "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--agent-workspace-for-conv-key
@@ -92,7 +94,10 @@ Shows: glyph id  age  exchanges  preview [tags] (N sessions) @workspace"
          (exchanges (alist-get 'exchangeCount latest 0))
          (first-msg (alist-get 'firstUserMessage latest ""))
          (preview (decknix--agent-conv-preview-text first-msg))
-         (tags (decknix--agent-tags-for-conv-key conv-key))
+         ;; By conv-key AND session id: a conversation whose key diverged
+         ;; renders untagged otherwise, which is what made sessions
+         ;; unfindable in the picker by the tags they actually have.
+         (tags (decknix--agent-tags-resolve conv-key id))
          (tag-str (if tags (format " [%s]" (string-join tags ", ")) ""))
          (count-str (if (> session-count 1)
                         (format " (%d sessions)" session-count)

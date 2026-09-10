@@ -991,6 +991,8 @@ Order: `hide' → `show' → `mentioned' → `hide'.  See
                   "decknix-hub-review-status" (status))
 (declare-function decknix--hub-review-find-item
                   "decknix-hub-review-status" (items repo number))
+(declare-function decknix--agent-tags-for-buffer
+                  "decknix-agent-tags-read" (buffer))
 (declare-function decknix--agent-tags-for-conv-key
                   "decknix-agent-tags" (conv-key))
 (declare-function decknix--agent-review-prs-for-conv-key
@@ -1034,8 +1036,8 @@ O(requests x sessions) pure comparisons; `covers-p' itself is ~3us."
                        (with-current-buffer b
                          (let ((ck (bound-and-true-p decknix--agent-conv-key)))
                            (list (buffer-name b)
-                                 (and ck (ignore-errors
-                                           (decknix--agent-tags-for-conv-key ck)))
+                                 (ignore-errors
+                                   (decknix--agent-tags-for-buffer b))
                                  (and ck (ignore-errors
                                            (decknix--agent-review-prs-for-conv-key ck)))
                                  ;; State too, so a Requests row can say

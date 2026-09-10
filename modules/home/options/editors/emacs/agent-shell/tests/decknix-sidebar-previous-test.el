@@ -18,6 +18,18 @@
 (require 'cl-lib)
 (require 'decknix-sidebar-previous)
 
+;; The code under test now resolves tags by conv-key AND session id.
+;; Stub the resolver so these isolated runs (which stub only the
+;; conv-key lookup) still exercise the real call path.
+(unless (fboundp 'decknix--agent-tags-resolve)
+  (defun decknix--agent-tags-resolve (conv-key session-id)
+    (let ((a (and conv-key (fboundp 'decknix--agent-tags-for-conv-key)
+                  (decknix--agent-tags-for-conv-key conv-key)))
+          (b (and session-id (fboundp 'decknix--agent-tags-for-session)
+                  (decknix--agent-tags-for-session session-id))))
+      (cond ((and a b) (delete-dups (append a b))) (a) (b)))))
+
+
 (defun decknix-sidebar-previous-test--entry (sid ck &optional name)
   "Build a Previous-Sessions alist with SID and CK."
   (list (cons 'session-id sid)
