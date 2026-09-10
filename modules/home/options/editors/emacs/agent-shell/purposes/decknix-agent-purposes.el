@@ -73,6 +73,31 @@ the provider's known-list, it warns and drops MODEL to nil.  A
 nil value here means \"any model accepted\" (no validation).
 Extend by `setq'ing the entry when a new provider ships.")
 
+(defvar decknix-agent-known-model-patterns
+  '((claude-code . ("\\`claude-\\(opus\\|sonnet\\|haiku\\)-[0-9]+\\(-[0-9]+\\)*\\'")))
+  "Alist of PROVIDER-SYMBOL -> regexps matching valid model ids.
+Checked by `decknix-agent-purpose--known-model-p' when MODEL is not on
+the provider's `decknix-agent-known-models' list.
+
+A pattern exists because an enumerated list cannot track a policy of
+PINNING VERSIONS.  decknix-config pins a specific Claude version
+deliberately (`claudePinnedModel'), never a floating alias, so that a
+session cannot drift onto a new flagship mid-conversation.  The
+enumerated list held only the aliases -- \"sonnet\", \"opus\", \"haiku\"
+-- so validation dropped every pinned version to nil:
+
+    [decknix-agent-purpose] pr-review model \"claude-opus-4-8\" is not
+    known for provider claude-code; dropping to nil
+
+and review sessions then ran on the provider default.  The pin looked
+configured and was inert, which is the drift it was written to prevent
+arriving by another route.
+
+Enumerating the versions instead would break again on the next bump, and
+silently, in exactly this way.  The pattern is deliberately narrow enough
+to still reject a typo (\"opus-4-8\", \"claud-opus-5\") and another
+vendor's id, which is what the validation is for.")
+
 (defvar decknix-agent-known-modes
   '((claude-code . ("default" "auto" "acceptEdits" "bypassPermissions" "plan")))
   "Alist of PROVIDER-SYMBOL -> known session/permission mode-id strings.
@@ -102,15 +127,26 @@ the result without a nil-guard."
        (decknix-agent-get-provider sym)))
 
 (defun decknix-agent-purpose--known-model-p (provider model)
-  "Return non-nil when MODEL is on PROVIDER's known-model list.
+  "Return non-nil when MODEL is acceptable for PROVIDER.
+Accepts MODEL when it is on PROVIDER's `decknix-agent-known-models' list
+OR matches one of its `decknix-agent-known-model-patterns'.
+
 Also returns non-nil when the list is nil (\"any model accepted\")
-or when PROVIDER has no entry (unknown provider defers judgement)."
+or when PROVIDER has no entry (unknown provider defers judgement).
+
+The pattern arm is what lets a PINNED version through; see
+`decknix-agent-known-model-patterns' for why an enumerated list alone
+silently defeated the pin."
   (let* ((entry (assq provider decknix-agent-known-models))
-         (known (cdr entry)))
+         (known (cdr entry))
+         (patterns (cdr (assq provider decknix-agent-known-model-patterns))))
     (cond
      ((not entry) t)
      ((null known) t)
-     (t (and (stringp model) (member model known))))))
+     (t (and (stringp model)
+             (or (member model known)
+                 (seq-some (lambda (re) (string-match-p re model)) patterns)
+                 nil))))))
 
 (defun decknix-agent-purpose--known-mode-p (provider mode)
   "Return non-nil when MODE is on PROVIDER's known-mode list.
