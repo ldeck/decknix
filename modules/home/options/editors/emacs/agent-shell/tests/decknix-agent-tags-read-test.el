@@ -154,5 +154,70 @@ Defensive guard for legacy / corrupt entries."
               (decknix--agent-tags-read)))
     (should (equal '("real") (decknix--agent-tags-all)))))
 
+;; --- the buffer-level resolver -----------------------------------------
+;;
+;; `decknix--agent-tags-resolve' was added so every consumer could fall back
+;; from a divergent conv-key to the stable session id.  It was then wired
+;; into ONE consumer.  Twenty-five others still ask the conv-key alone, and
+;; the reason is structural rather than an oversight: most of them hold a
+;; BUFFER, not a (conv-key, session-id) pair, so calling the resolver meant
+;; each site digging both out for itself.
+;;
+;; Session 5de16692 is what that costs.  Its buffer's conv-key
+;; (523fdb64f335b839) is real but untagged, while the tags -- guidelines,
+;; policies, ai, nurturecloud -- sit under a sibling entry keyed by session
+;; id.  So the buffer named itself after its workspace, `*Claude:
+;; nurturecloud*', and the sidebar row showed no tags: unrecognisable among
+;; a dozen sessions.
+;;
+;; One buffer-level entry point removes the excuse.
+
+(ert-deftest decknix-tags-buffer--prefers-the-conv-key ()
+  "When the conv-key has tags, they win and no session lookup is needed."
+  (cl-letf (((symbol-function 'decknix--agent-current-conv-key) (lambda () "ck"))
+            ((symbol-function 'decknix--agent-current-session-id) (lambda () "sid"))
+            ((symbol-function 'decknix--agent-tags-for-conv-key)
+             (lambda (k) (when (equal k "ck") '("from-conv"))))
+            ((symbol-function 'decknix--agent-tags-for-session)
+             (lambda (_s) nil)))
+    (with-temp-buffer
+      (should (equal '("from-conv") (decknix--agent-tags-for-buffer (current-buffer)))))))
+
+(ert-deftest decknix-tags-buffer--falls-back-to-the-session-id ()
+  "The 5de16692 shape: a real but untagged conv-key, tags under the sid."
+  (cl-letf (((symbol-function 'decknix--agent-current-conv-key) (lambda () "523fdb64f335b839"))
+            ((symbol-function 'decknix--agent-current-session-id) (lambda () "5de16692"))
+            ((symbol-function 'decknix--agent-tags-for-conv-key) (lambda (_k) nil))
+            ((symbol-function 'decknix--agent-tags-for-session)
+             (lambda (_s) '("guidelines" "policies" "ai" "nurturecloud"))))
+    (with-temp-buffer
+      (should (equal '("guidelines" "policies" "ai" "nurturecloud")
+                     (decknix--agent-tags-for-buffer (current-buffer)))))))
+
+(ert-deftest decknix-tags-buffer--unions-when-both-answer ()
+  "A resume can split tags across entries; neither alone is the answer."
+  (cl-letf (((symbol-function 'decknix--agent-current-conv-key) (lambda () "ck"))
+            ((symbol-function 'decknix--agent-current-session-id) (lambda () "sid"))
+            ((symbol-function 'decknix--agent-tags-for-conv-key) (lambda (_k) '("a" "b")))
+            ((symbol-function 'decknix--agent-tags-for-session) (lambda (_s) '("b" "c"))))
+    (with-temp-buffer
+      (should (equal '("a" "b" "c") (decknix--agent-tags-for-buffer (current-buffer)))))))
+
+(ert-deftest decknix-tags-buffer--nil-when-neither-answers ()
+  "An untagged session stays untagged; no invented tags."
+  (cl-letf (((symbol-function 'decknix--agent-current-conv-key) (lambda () "ck"))
+            ((symbol-function 'decknix--agent-current-session-id) (lambda () "sid"))
+            ((symbol-function 'decknix--agent-tags-for-conv-key) (lambda (_k) nil))
+            ((symbol-function 'decknix--agent-tags-for-session) (lambda (_s) nil)))
+    (with-temp-buffer
+      (should-not (decknix--agent-tags-for-buffer (current-buffer))))))
+
+(ert-deftest decknix-tags-buffer--tolerates-a-dead-or-nil-buffer ()
+  "Callers pass buffers from lists that can go stale mid-render."
+  (should-not (decknix--agent-tags-for-buffer nil))
+  (let ((b (generate-new-buffer " *gone*")))
+    (kill-buffer b)
+    (should-not (decknix--agent-tags-for-buffer b))))
+
 (provide 'decknix-agent-tags-read-test)
 ;;; decknix-agent-tags-read-test.el ends here

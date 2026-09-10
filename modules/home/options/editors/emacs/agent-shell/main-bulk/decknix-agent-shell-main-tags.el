@@ -645,7 +645,12 @@ Does NOT refresh the sidebar -- callers batch that.  Signals via the
 underlying `decknix--agent-require-*' helpers when the buffer has no
 resolvable conversation."
   (let* ((conv-key (decknix--agent-require-conv-key))
-         (tags (decknix--agent-tags-for-conv-key conv-key))
+         ;; By BUFFER: the conv-key alone is what named 5de16692
+         ;; `*Claude: nurturecloud*\' -- its key is real but untagged, so
+         ;; naming fell through to the workspace fallback.
+         (tags (if (fboundp 'decknix--agent-tags-for-buffer)
+                   (decknix--agent-tags-for-buffer (current-buffer))
+                 (decknix--agent-tags-for-conv-key conv-key)))
          (workspace (and (boundp 'decknix--agent-session-workspace)
                          decknix--agent-session-workspace))
          (sid (ignore-errors (decknix--agent-require-session-id)))

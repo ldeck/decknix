@@ -56,6 +56,10 @@
                   "decknix-agent-conv-resolve" (session-id &optional no-block))
 (declare-function decknix--agent-store-field-scan
                   "decknix-agent-conv-resolve" (convs session-id field))
+(declare-function decknix--agent-current-conv-key
+                  "decknix-agent-buffer-lookup" ())
+(declare-function decknix--agent-current-session-id
+                  "decknix-agent-session-id" ())
 
 (defun decknix--agent-tags-for-session (session-id)
   "Return the list of tags for the conversation containing SESSION-ID.
@@ -132,6 +136,35 @@ second copy of the fallback would reproduce that a level up."
       (delete-dups (append by-conv by-sid)))
      (by-conv)
      (by-sid))))
+
+(defun decknix--agent-tags-for-buffer (buffer)
+  "Return the tags for agent-shell BUFFER, or nil.
+
+Resolves BUFFER's own conv-key and session id and hands both to
+`decknix--agent-tags-resolve'.  Returns nil for a nil or dead BUFFER,
+because callers iterate buffer lists that can go stale mid-render.
+
+This exists because the resolver was not enough on its own.  It takes a
+\(CONV-KEY SESSION-ID) pair, and almost every consumer holds a BUFFER --
+sidebar rows, the header, the pickers, buffer naming.  Each would have
+had to dig both values out itself, so twenty-five of them kept calling
+`decknix--agent-tags-for-conv-key' and kept the bug.
+
+Session 5de16692 is what that cost: its conv-key (523fdb64f335b839) is
+real but untagged while its tags -- guidelines, policies, ai,
+nurturecloud -- sit under a sibling entry keyed by session id.  The
+buffer therefore named itself after its workspace, `*Claude:
+nurturecloud*', and its sidebar row showed no tags at all.
+
+One buffer-level entry point, so a consumer holding a buffer has no
+reason left to ask the fragile key directly."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((conv-key (and (fboundp 'decknix--agent-current-conv-key)
+                           (ignore-errors (decknix--agent-current-conv-key))))
+            (sid (and (fboundp 'decknix--agent-current-session-id)
+                      (ignore-errors (decknix--agent-current-session-id)))))
+        (decknix--agent-tags-resolve conv-key sid)))))
 
 (provide 'decknix-agent-tags-read)
 ;;; decknix-agent-tags-read.el ends here
