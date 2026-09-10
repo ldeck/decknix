@@ -344,13 +344,31 @@ in
           (setq eglot-events-buffer-size 0           ; Disable events buffer for performance
                 eglot-autoshutdown t                 ; Shutdown server when last buffer closed
                 eglot-sync-connect nil               ; Don't block on connection
-                ;; Big monorepos (e.g. upside) make the server resolve a huge
-                ;; Gradle classpath during `initialize'; the 30s default is
-                ;; far too short and Eglot gives up ("timed out after 30s").
-                ;; Allow up to 5 min for the handshake.  Async connect means
-                ;; this does not block Emacs — the buffer just isn't
-                ;; LSP-managed until the server answers.
-                eglot-connect-timeout 300
+                ;; `kotlin-language-server' spends its whole `initialize' in
+                ;; Gradle, and it is far slower than it looks.  MEASURED on
+                ;; trademe-integration, a SMALL service (377 source files),
+                ;; by driving the server over stdio and reading its
+                ;; `window/logMessage' channel:
+                ;;
+                ;;   cold (DB rebuild)                        191.5s
+                ;;   warm                                      99.3s
+                ;;   concurrent with an `upside' Gradle build  >360s, no answer
+                ;;
+                ;; It is not hung in that last case and it is not an Eglot
+                ;; fault; the server shells out to `gradlew' once PER
+                ;; SUBPROJECT PER TASK TYPE (`kotlinLSPProjectDeps' and
+                ;; `kotlinLSPKotlinDSLDeps'), and its two async workers
+                ;; duplicate several of those runs.  So the cost scales with
+                ;; subproject count, not repository size -- which is why the
+                ;; monolith-versus-service intuition was wrong here.
+                ;;
+                ;; 300s sat right in the middle of that spread: fine warm,
+                ;; fine cold when idle, and a guaranteed failure whenever a
+                ;; build was running.  That is the worst place for a timeout,
+                ;; because it fails intermittently and looks like a hang.
+                ;; 900s is past the slowest observed case.  Async connect
+                ;; means waiting costs nothing but an unmanaged buffer.
+                eglot-connect-timeout 900
                 eglot-extend-to-xref t)              ; Use LSP for xref
 
           ;; Keybindings (using C-c l prefix for LSP commands)
