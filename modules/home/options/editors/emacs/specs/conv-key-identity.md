@@ -173,6 +173,63 @@ The generalisable lesson, and the reason the dry run was mandated: a
 measurement can be accurate and still support the wrong conclusion, when
 it measures a different structure than the operation traverses.
 
+## 4.6 The write path: already fixed, plus one latent hole
+
+Asked to fix "unrelated session ids being added to the same
+conversation". Analysed: **the code cause was already fixed.**
+
+`decknix--agent-non-keying-preambles` rejects both machine-generated
+openings, and its own docstring names `887e38e509a9ee3e` -- one of the
+four containers found here. Verified the predicate still behaves: it
+matches a fork preamble and a resume primer, and does NOT match a genuine
+user message that merely mentions resuming.
+
+The containers are residue from before that guard, and they had stopped
+growing: last accessed 2026-06-26, 07-10, 07-13 and 08-03, against a
+current date of 09-11.
+
+Data repaired in two passes (see 4.5 for the first). The second strips a
+session id from an untagged container when exactly one TAGGED owner
+exists, dropping any container left empty:
+
+```
+containers touched         6
+session links removed     25
+emptied entries dropped    2
+conversations            495 -> 493
+duplicated session ids    26 -> 4
+tags lost                  0
+session ids lost           0
+```
+
+`5de16692` now resolves to exactly one conversation carrying its real
+tags. The remaining 4 have tags on more than one owner, so no single
+winner exists and they are deliberately untouched.
+
+### Latent: an argless slash command keys identically every time
+
+Not currently biting -- zero such buckets in the store -- but the same
+class of bug:
+
+```
+/standup       -> 36e6d3abb4947808   (every invocation, any day)
+/start         -> b34dafd9a78e1808
+/review-bot-pr <url-1> -> 8495e79053300a86   (distinct, fine)
+```
+
+A command with args canonicalises to `name args' and keys distinctly. An
+argless one canonicalises to just the name, so two unrelated sessions
+started the same way collide -- a container by construction.
+
+**Deliberately not fixed blind.** The obvious repair, adding argless
+commands to the non-keying list, has a plausible regression: a nil
+conv-key defers metadata to `prompt-ready', which recomputes from the same
+first message and yields nil again, so such a session might store no tags
+at all -- worse than the collision. The likelier correct shape is to key
+those by session id, since for an argless command the conversation genuinely
+IS the single session. That wants its own change and its own test, on
+evidence rather than on this reasoning alone.
+
 ## 5. Open questions
 
 1. **Do any two conversations legitimately share a session id?** A fork
