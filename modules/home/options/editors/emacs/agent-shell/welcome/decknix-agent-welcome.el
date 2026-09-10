@@ -300,20 +300,56 @@ distinguishes your turn from the agent's."
       (assq-delete-all 'before-string (copy-sequence props))
     props))
 
+(defun decknix--agent-chat-label-span-usable-p (beg end)
+  "Non-nil when BEG..END is a span an overlay can actually cover.
+
+Pure, so the rejected shapes can be pinned without a live buffer.
+
+Upstream cannot survive an EMPTY span.  `agent-shell-chat--upsert-overlay'
+creates its overlay and then sets `evaporate', and Emacs deletes an
+already-empty overlay the instant that property is set:
+
+    (let ((created (make-overlay beg end)))     ; beg = end
+      (overlay-put created \\='category category)
+      (overlay-put created \\='evaporate t)       ; <- deleted here
+      created)
+
+The very next line dereferences it -- `(= (overlay-start overlay) beg)' --
+and `overlay-start' on a detached overlay is nil, so the call raises
+\(wrong-type-argument number-or-marker-p nil).
+
+The error matters less than where it lands.  It escapes
+`agent-shell-chat--label-responses' mid-loop, so every LATER response in
+the buffer goes unlabeled.  Measured on *Claude: decknix/nurturecloud*:
+seven end-of-prompt markers, two agent labels, and the relabel timer
+erroring on every tick (hundreds of *Messages* entries).
+
+Nothing is lost by declining: a zero-width overlay has nowhere to hang a
+`before-string', and upstream's own attempt to make one deletes it."
+  (and (numberp beg) (numberp end) (< beg end)))
+
 (defun decknix--agent-chat-upsert-advice (orig category anchor-beg anchor-end beg end props)
   "Around-advice for `agent-shell-chat--upsert-overlay': keep real labels.
-Only `agent-shell-chat-me' overlays are guarded; agent-side labels and
-every other category pass through untouched."
-  (let ((props
-         (if (eq category 'agent-shell-chat-me)
-             (let* ((existing
-                     (car (seq-filter
-                           (lambda (o) (eq (overlay-get o 'category) category))
-                           (overlays-in anchor-beg (max anchor-end (1+ anchor-beg))))))
-                    (before (and existing (overlay-get existing 'before-string))))
-               (decknix--agent-chat-preserve-label before props))
-           props)))
-    (funcall orig category anchor-beg anchor-end beg end props)))
+Only `agent-shell-chat-me' overlays have their props guarded; agent-side
+labels and every other category pass through untouched.
+
+An unusable span (see `decknix--agent-chat-label-span-usable-p') is
+declined for EVERY category, returning nil rather than calling upstream.
+Returning nil is safe: the caller pushes the result onto its `kept' list
+purely so `agent-shell-chat--gc-overlays' spares it, and there is no
+overlay to spare."
+  (if (not (decknix--agent-chat-label-span-usable-p beg end))
+      nil
+    (let ((props
+           (if (eq category 'agent-shell-chat-me)
+               (let* ((existing
+                       (car (seq-filter
+                             (lambda (o) (eq (overlay-get o 'category) category))
+                             (overlays-in anchor-beg (max anchor-end (1+ anchor-beg))))))
+                      (before (and existing (overlay-get existing 'before-string))))
+                 (decknix--agent-chat-preserve-label before props))
+             props)))
+      (funcall orig category anchor-beg anchor-end beg end props))))
 
 (provide 'decknix-agent-welcome)
 ;;; decknix-agent-welcome.el ends here

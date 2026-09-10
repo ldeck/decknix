@@ -390,5 +390,62 @@ The mechanism is deliberate; this only corrects a misclassification."
     (decknix--agent-chat-preserve-label "\n Me \n\n" props)
     (should (assq 'before-string props))))
 
+;; --- an empty label span must not reach upstream ----------------------
+;;
+;; `agent-shell-chat--upsert-overlay' creates its overlay and then sets
+;; `evaporate', and Emacs deletes an ALREADY-empty overlay the moment that
+;; property is set.  The next line dereferences it:
+;;
+;;     (unless (and (= (overlay-start overlay) beg) ...)
+;;
+;; `overlay-start' on a detached overlay is nil, so a beg=end call raises
+;; (wrong-type-argument number-or-marker-p nil).
+;;
+;; The cost is not the error, it is where the error lands.  It escapes
+;; `agent-shell-chat--label-responses' mid-loop, so every LATER response in
+;; the buffer goes unlabeled.  Measured on *Claude: decknix/nurturecloud*:
+;; 7 end-of-prompt markers, 2 agent labels, and the timer erroring once per
+;; relabel (hundreds of entries in *Messages*).
+
+(ert-deftest decknix-chat-span--empty-span-is-unusable ()
+  "A zero-width span cannot carry a label."
+  (should-not (decknix--agent-chat-label-span-usable-p 100 100)))
+
+(ert-deftest decknix-chat-span--real-span-is-usable ()
+  "An ordinary span passes through."
+  (should (decknix--agent-chat-label-span-usable-p 100 143)))
+
+(ert-deftest decknix-chat-span--inverted-span-is-unusable ()
+  "A reversed span is not a span either."
+  (should-not (decknix--agent-chat-label-span-usable-p 143 100)))
+
+(ert-deftest decknix-chat-span--nil-positions-are-unusable ()
+  "Missing positions must not be compared, only rejected."
+  (should-not (decknix--agent-chat-label-span-usable-p nil 100))
+  (should-not (decknix--agent-chat-label-span-usable-p 100 nil)))
+
+(ert-deftest decknix-chat-upsert--skips-an-empty-span ()
+  "The advice declines to call upstream with a zero-width span."
+  (let ((called nil))
+    (should-not
+     (decknix--agent-chat-upsert-advice
+      (lambda (&rest _) (setq called t) 'overlay)
+      'agent-shell-chat-agent 100615 100643 100643 100643
+      (list (cons 'before-string "\n Claude \n\n") (cons 'display ""))))
+    (should-not called)))
+
+(ert-deftest decknix-chat-upsert--passes-a-real-span-through ()
+  "A genuine span still reaches upstream, guard or no guard.
+Without this the fix could silently disable every agent label."
+  (let ((seen nil))
+    (should (eq 'overlay
+                (decknix--agent-chat-upsert-advice
+                 (lambda (&rest args) (setq seen args) 'overlay)
+                 'agent-shell-chat-agent 100615 100643 100620 100643
+                 (list (cons 'before-string "\n Claude \n\n")))))
+    (should (equal (list 'agent-shell-chat-agent 100615 100643 100620 100643
+                         (list (cons 'before-string "\n Claude \n\n")))
+                   seen))))
+
 (provide 'decknix-agent-welcome-test)
 ;;; decknix-agent-welcome-test.el ends here
