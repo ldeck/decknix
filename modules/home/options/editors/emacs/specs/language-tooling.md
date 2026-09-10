@@ -79,6 +79,68 @@ Kotlin and JDK versions in use. So Kotlin LSP is degraded on the single
 largest codebase we work in, which is the opposite of where it should be
 strongest.
 
+### 3.0 Measured, on a SMALL service
+
+Everything above was inferred from versions. This section is measured, by
+driving the server over stdio and reading its `window/logMessage`
+channel — which is where it logs, and the reason stderr only ever showed
+SLF4J noise and the whole thing read as a silent hang.
+
+Target: `trademe-integration`, 377 source files, one `buildSrc` and one
+`app` subproject. Not the monolith.
+
+```
+initialize, cold (DB rebuild)                 191.5s   answered
+initialize, warm                               99.3s   answered
+initialize, concurrent with an upside build   >360s    no answer
+eglot connect, warm, in a real session         75s     connected
+hover, sampled 14 files                        13 OK, 1 analysis failure
+```
+
+Four things this corrects, each of which had been asserted wrongly at
+some point:
+
+- **It was never hung.** The 0% CPU that looked like a deadlock was the
+  server waiting on a `gradlew` child process.
+- **It is not an eglot fault.** Reproduced entirely outside Emacs.
+- **It is not about repository size.** The server shells out to Gradle
+  once per subproject per task type (`kotlinLSPProjectDeps` and
+  `kotlinLSPKotlinDSLDeps`), and its two async workers duplicate several
+  of those runs — an identical `buildSrc` resolution took 7s alone and
+  53s run concurrently. Cost scales with subproject count, so a small
+  service is not cheap.
+- **`eglot-connect-timeout` 300 was the worst possible value.** Inside
+  the spread, so it succeeded warm, succeeded cold when idle, and failed
+  whenever a build ran. Intermittent failure presenting as a hang. Now
+  900.
+
+Two avoidable costs, identified and not yet fixed:
+
+- `.teamcity/pom.xml` drags in two Maven invocations (~15s each) to
+  resolve TeamCity DSL config irrelevant to the service's Kotlin source,
+  and fails to find a snapshot artifact anyway.
+- The server is pinned to **JDK 21** by its Nix wrapper while these
+  projects target JDK 25, and it leaves idle JDK-21 Gradle daemons alive
+  for hours, contending with interactive builds in both directions. An
+  isolated `GRADLE_USER_HOME`, or `GRADLE_RO_DEP_CACHE` over the shared
+  one, is the candidate fix and is unmeasured.
+
+**Usability verdict: it mostly works.** 13 of 14 sampled files answered
+hover correctly. The failure is per-construct, not per-project: the
+embedded K1 frontend throws
+
+```
+KotlinFrontEndException: Exception while analyzing expression in (34,..)
+Caused by: java.lang.UnsupportedOperationException: Should not be called
+```
+
+on specific files (a Spring `@RestController` with stacked Swagger
+annotations, and one payload-mapper). So fwcd is usable for navigation
+and review, with occasional dead files. That is a materially better
+position than "degraded and effectively unusable", and it lowers the
+urgency of the JetBrains route in §3.1.1 without removing the case for
+it.
+
 `useJetBrainsLsp` exists and is deliberately **off**. The reason is
 recorded in `lsp.nix` and is worth preserving: nix-casks builds a
 derivation that *resolves* — the attribute evaluates, the build succeeds
