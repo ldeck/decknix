@@ -20,6 +20,79 @@ let
   useJetBrainsKotlin =
     cfg.kotlin.enable && cfg.kotlin.useJetBrainsLsp && jetbrainsKotlinLsp != null;
   kotlinPkg = if useJetBrainsKotlin then jetbrainsKotlinLsp else pkgs.kotlin-language-server;
+
+  # JDK selection per PROJECT, not per wrapper.
+  #
+  # `kotlin-language-server' ships a Nix wrapper that pins JAVA_HOME to
+  # zulu 21, and that JDK is inherited by every `gradlew' the server shells
+  # out to.  Our services target 25 (`jvmToolchain(25)'), so the classpath
+  # resolution ran on the wrong JDK and left idle 21 daemons behind that
+  # then contended with the interactive 25 daemons -- visible as two
+  # hour-old JDK-21 GradleDaemons at 0% CPU while an `upside' build held
+  # the shared cache locks.
+  kotlinJdks = {
+    "17" = pkgs.zulu17;
+    "21" = pkgs.zulu21;
+    "25" = pkgs.zulu25;
+  };
+  kotlinDefaultJdk = pkgs.zulu21;
+
+  # Gradle cache for the language server, kept OFF the interactive one.
+  #
+  # The server fires one `gradlew' per subproject per task type, and those
+  # runs serialise against whatever build the user is running: an identical
+  # `buildSrc' resolution measured 7s alone and 53s concurrent.  A private
+  # GRADLE_USER_HOME removes the write-lock contention in both directions;
+  # GRADLE_RO_DEP_CACHE points at the shared dependency cache so this does
+  # NOT re-download the world -- Gradle reads it without taking locks.
+  kotlinServerWrapper = pkgs.writeShellScriptBin "decknix-kotlin-lsp" ''
+    set -eu
+
+    # Eglot starts the server with cwd = project root.
+    root="''${PWD}"
+
+    detect_jdk_major() {
+      if [ -r "$root/.java-version" ]; then
+        # "25", "25.0.1", "zulu-25" all reduce to the major.
+        sed -E 's/[^0-9]*([0-9]+).*/\1/' "$root/.java-version" | head -1
+        return
+      fi
+      # Gradle toolchain.  Searched broadly on purpose: the declaration is
+      # often NOT in the root build file.  `trademe-integration' keeps it in
+      # a convention plugin under buildSrc/src/main/kotlin/, five levels
+      # down, and a shallower search silently fell back to the default --
+      # the exact failure this function exists to remove.
+      #
+      # Highest version wins when several are found.  Running the server on
+      # a NEWER JDK than a subproject asks for generally works; running on
+      # an older one fails outright, so the asymmetry breaks the tie.
+      find "$root" -maxdepth 5 \
+           \( -name '*.gradle.kts' -o -name '*.gradle' \) \
+           -not -path '*/build/*' -not -path '*/.git/*' \
+           -not -path '*/node_modules/*' 2>/dev/null \
+        | head -60 \
+        | tr '\n' '\0' | xargs -0 grep -hoE '(jvmToolchain\(|JavaLanguageVersion\.of\()[0-9]+' 2>/dev/null \
+        | grep -oE '[0-9]+' | sort -rn | head -1
+    }
+
+    major="$(detect_jdk_major || true)"
+    case "''${major:-}" in
+      17) export JAVA_HOME="${kotlinJdks."17"}" ;;
+      21) export JAVA_HOME="${kotlinJdks."21"}" ;;
+      25) export JAVA_HOME="${kotlinJdks."25"}" ;;
+      *)  export JAVA_HOME="${kotlinDefaultJdk}" ;;
+    esac
+    export PATH="$JAVA_HOME/bin:$PATH"
+
+    # Private Gradle home; shared dependency cache read-only.
+    export GRADLE_USER_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}/decknix/kotlin-lsp-gradle"
+    mkdir -p "$GRADLE_USER_HOME"
+    if [ -d "$HOME/.gradle/caches/modules-2" ]; then
+      export GRADLE_RO_DEP_CACHE="$HOME/.gradle/caches"
+    fi
+
+    exec "${kotlinPkg}/bin/kotlin-language-server" "$@"
+  '';
   # The java-debug plugin jar.  jdtls loads it as an OSGi bundle and only
   # then advertises `vscode.java.resolveClasspath' /
   # `vscode.java.startDebugSession' -- the two commands dape's `jdtls'
@@ -109,7 +182,11 @@ let
 
   # Eglot server-programs command for Kotlin (elisp list literal).
   kotlinServerElisp =
-    if useJetBrainsKotlin then ''("kotlin-lsp" "--stdio")'' else ''("kotlin-language-server")'';
+    if useJetBrainsKotlin
+    then ''("kotlin-lsp" "--stdio")''
+    # The wrapper, not the bare server: it picks the JDK from the project
+    # and keeps the server's Gradle cache off the interactive one.
+    else ''("${kotlinServerWrapper}/bin/decknix-kotlin-lsp")'';
 in
 {
   options.programs.emacs.decknix.lsp = {
