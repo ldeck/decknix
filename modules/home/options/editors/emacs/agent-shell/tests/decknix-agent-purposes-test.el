@@ -151,5 +151,56 @@
      (decknix-agent-purpose-validate)
      (should (null (plist-get (decknix-agent-purpose-resolve 'pr-review) :mode))))))
 
+;; --- a pinned, versioned model must survive validation ----------------
+;;
+;; The team policy (decknix-config `claudePinnedModel') is to pin a
+;; SPECIFIC Claude version and never a floating alias, because an alias
+;; drifts onto a new flagship and strands resume.  But the known-model
+;; list held only the aliases, so validation dropped exactly the values
+;; the policy mandates and accepted only the ones it forbids:
+;;
+;;     [decknix-agent-purpose] pr-review model "claude-opus-4-8" is not
+;;     known for provider claude-code; dropping to nil
+;;
+;; The warning understates it.  Dropping to nil means review sessions ran
+;; on the provider default, so the pin was inert while looking configured
+;; -- the failure the pin exists to prevent, reached by another route.
+
+(ert-deftest decknix-agent-purpose-known-model--accepts-a-versioned-claude-id ()
+  "A versioned `claude-*' id is a model, not a typo."
+  (should (decknix-agent-purpose--known-model-p 'claude-code "claude-opus-4-8"))
+  (should (decknix-agent-purpose--known-model-p 'claude-code "claude-opus-5"))
+  (should (decknix-agent-purpose--known-model-p 'claude-code "claude-sonnet-5"))
+  (should (decknix-agent-purpose--known-model-p
+           'claude-code "claude-haiku-4-5-20251001")))
+
+(ert-deftest decknix-agent-purpose-known-model--still-accepts-the-aliases ()
+  "The short aliases remain valid; the pattern is additive."
+  (should (decknix-agent-purpose--known-model-p 'claude-code "opus"))
+  (should (decknix-agent-purpose--known-model-p 'claude-code "sonnet"))
+  (should (decknix-agent-purpose--known-model-p 'claude-code "haiku")))
+
+(ert-deftest decknix-agent-purpose-known-model--still-rejects-a-typo ()
+  "Validation must keep catching what it was written for."
+  (should-not (decknix-agent-purpose--known-model-p 'claude-code "opus-4-8"))
+  (should-not (decknix-agent-purpose--known-model-p 'claude-code "claud-opus-5"))
+  (should-not (decknix-agent-purpose--known-model-p 'claude-code "gpt-5")))
+
+(ert-deftest decknix-agent-purpose-known-model--pattern-is-per-provider ()
+  "A Claude id is not automatically valid for another provider."
+  (should-not (decknix-agent-purpose--known-model-p 'auggie "claude-opus-5")))
+
+(ert-deftest decknix-agent-purpose-validate-keeps-a-pinned-claude-version ()
+  "The pinned version reaches the session instead of being dropped."
+  (decknix-purpose-test--with-registry
+   (let ((decknix-agent-purpose-alist
+          '((pr-review . (:provider claude-code
+                                    :model "claude-opus-4-8" :mode "auto"))))
+         (decknix-agent-known-modes '((claude-code . ("auto")))))
+     (decknix-agent-purpose-validate)
+     (should (equal "claude-opus-4-8"
+                    (plist-get (decknix-agent-purpose-resolve 'pr-review)
+                               :model))))))
+
 (provide 'decknix-agent-purposes-test)
 ;;; decknix-agent-purposes-test.el ends here
