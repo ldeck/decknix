@@ -1142,10 +1142,12 @@ they mean in the sidebar itself (cycle layout / worktree menu)."
   "Maximum number of recent saved conversations to show in sidebar.")
 
 (defun decknix--live-buf-tags (buf)
-  "Return the tag list for live buffer BUF, or nil."
-  (let ((ck (with-current-buffer buf (decknix--agent-current-conv-key))))
-    (when (and ck (fboundp 'decknix--agent-tags-for-conv-key))
-      (decknix--agent-tags-for-conv-key ck))))
+  "Return the tag list for live buffer BUF, or nil.
+Resolves via `decknix--agent-tags-for-buffer\', which falls back from a
+divergent conv-key to the stable session id -- asking the conv-key alone
+left 5de16692 showing no tags at all."
+  (when (fboundp 'decknix--agent-tags-for-buffer)
+    (decknix--agent-tags-for-buffer buf)))
 
 (defun decknix--live-tags-intersection (tag-lists)
   "Return the intersection of all TAG-LISTS (lists of strings).
@@ -1355,8 +1357,11 @@ basename) or a list of tag strings to suppress from the displayed name."
          (buf-conv-key
           (with-current-buffer buf
             (decknix--agent-current-conv-key)))
-         (raw-tags (when (and buf-conv-key (fboundp 'decknix--agent-tags-for-conv-key))
-                     (decknix--agent-tags-for-conv-key buf-conv-key)))
+         ;; Resolved by BUFFER, not by conv-key alone: a buffer can hold a
+         ;; real but untagged key while its tags sit under a sibling entry
+         ;; keyed by session id (5de16692), which rendered the row bare.
+         (raw-tags (when (fboundp 'decknix--agent-tags-for-buffer)
+                     (decknix--agent-tags-for-buffer buf)))
          (display-tags
           (cond
            ((and strip-tags (listp strip-tags))
