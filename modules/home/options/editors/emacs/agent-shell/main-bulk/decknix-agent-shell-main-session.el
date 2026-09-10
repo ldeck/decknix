@@ -148,6 +148,10 @@ history; only the model-facing primer is suppressed)."
                   "decknix-agent-session-history" (session-id))
 (declare-function decknix--agent-session-find-turn-containing
                   "decknix-agent-session-history" (turns regexp))
+;; Turn-end facts, reconstructed on resume so `asking' survives a restart.
+(declare-function decknix-agent-turn-restored-facts
+                  "decknix-agent-turn-signals" (turns))
+(defvar decknix--agent-turn-question)
 (declare-function decknix--agent-context-find-existing
                   "decknix-agent-context-history")
 (declare-function decknix--agent-context-render-window
@@ -1106,6 +1110,23 @@ dedupes against live buffers before calling here."
                (not (decknix-agent-provider-resume-cli-flag provider)))
       (with-current-buffer shell-buf
         (setq-local decknix--agent-resume-target-sid session-id)))
+    ;; Restore the `asking' flag from the transcript.  Without this a
+    ;; session that was blocked on an unanswered question comes back
+    ;; reading `ready' and so looks idle, which is the exact opposite of
+    ;; what `asking' exists to say.  `decknix--agent-turn-question' is
+    ;; buffer-local and captured from the LIVE stream at `turn-complete',
+    ;; so a restart resets it and nothing recomputes it (observed on two
+    ;; review sessions across a `decknix switch', 2026-09-10).
+    ;;
+    ;; Unconditional, unlike the primer below: every provider loses the
+    ;; flag on restart, not only the ones whose model context needs
+    ;; priming.
+    (when (buffer-live-p shell-buf)
+      (when-let* ((turns (ignore-errors
+                           (decknix--agent-session-extract-all-turns session-id)))
+                  (facts (decknix-agent-turn-restored-facts turns)))
+        (with-current-buffer shell-buf
+          (setq-local decknix--agent-turn-question (plist-get facts :question)))))
     ;; Model persistence for providers that can't pin the model at
     ;; launch (no `:model-launch-flag' -- Claude, Pi).  Auggie already
     ;; carries `--model' in `augmented-cmd' above; for the rest we
