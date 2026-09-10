@@ -563,6 +563,9 @@ let
   decknix-sidebar-grouping-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-grouping";
     src = ./agent-shell/sidebar;
+    # trivialBuild byte-compiles every sidebar sibling, including
+    # sidebar-toggles, whose top-level require needs age-presets.
+    packageRequires = [ decknix-hub-age-presets-el ];
     testFiles = [
       "decknix-sidebar-grouping-test.el"
     ];
