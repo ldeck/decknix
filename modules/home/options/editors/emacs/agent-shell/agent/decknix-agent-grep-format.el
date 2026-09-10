@@ -46,6 +46,8 @@
 ;; heredoc, so they always resolve at call time.
 (declare-function decknix--agent-tags-for-session
                   "decknix-agent-tags-read" (session-id))
+(declare-function decknix--agent-tags-resolve
+                  "decknix-agent-tags-read" (conv-key session-id))
 (declare-function decknix--agent-tags-for-conv-key
                   "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--agent-session-time-ago
@@ -97,7 +99,8 @@ Otherwise collapse by conversation."
                        (exchanges (alist-get 'exchangeCount latest 0))
                        (first-msg (alist-get 'firstUserMessage latest ""))
                        (preview (car (split-string first-msg "\n" t)))
-                       (tags (decknix--agent-tags-for-conv-key conv-key))
+                       ;; conv-key AND session id -- see `decknix--agent-tags-resolve'.
+                       (tags (decknix--agent-tags-resolve conv-key id))
                        (tag-str (if tags (format " [%s]" (string-join tags ", ")) ""))
                        (count-str (if (> session-count 1)
                                       (format " (%d sessions)" session-count)

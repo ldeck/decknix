@@ -29,6 +29,15 @@
   (defun decknix--agent-tags-for-session (_id) nil))
 (unless (fboundp 'decknix--agent-tags-for-conv-key)
   (defun decknix--agent-tags-for-conv-key (_key) nil))
+
+(unless (fboundp 'decknix--agent-tags-resolve)
+  (defun decknix--agent-tags-resolve (conv-key session-id)
+    ;; Mirrors the real union so a test stubbing only one lookup still
+    ;; exercises the path the code takes.
+    (let ((a (and conv-key (decknix--agent-tags-for-conv-key conv-key)))
+          (b (and session-id (fboundp 'decknix--agent-tags-for-session)
+                  (decknix--agent-tags-for-session session-id))))
+      (cond ((and a b) (delete-dups (append a b))) (a) (b)))))
 (unless (fboundp 'decknix--agent-session-time-ago)
   (defun decknix--agent-session-time-ago (_iso) "5m ago"))
 ;; grep candidates now prefix a provider glyph resolved from the
@@ -145,8 +154,15 @@
         (should (string-match-p "(2 sessions)" cand))
         (should (string-prefix-p "A newer" cand))))))
 
-(ert-deftest decknix-agent-grep-format/entries-collapsed-uses-conv-tags ()
-  "Collapsed entries use `tags-for-conv-key', not `tags-for-session'."
+(ert-deftest decknix-agent-grep-format/entries-collapsed-union-both-lookups ()
+  "Collapsed entries show the UNION of the conv-key and session-id tags.
+
+This deliberately replaces an assertion that the conv-key lookup won
+outright and the session-id tags were suppressed.  First-hit was the bug:
+a resumed session splits its tags across two conversation entries, so
+taking either alone drops half of them and the row becomes unfindable by
+the tags it actually has -- which is how 5de16692 ended up nameless.
+`decknix--agent-tags-resolve' unions them for exactly this reason."
   (let* ((s (decknix-agent-grep-format-test--session "ssssssss" "alpha hi"))
          (called nil))
     (cl-letf (((symbol-function 'decknix--agent-tags-for-conv-key)
@@ -157,7 +173,7 @@
              (cand (caar entries)))
         (should called)
         (should (string-match-p "conv-tag" cand))
-        (should-not (string-match-p "session-tag" cand))))))
+        (should (string-match-p "session-tag" cand))))))
 
 (provide 'decknix-agent-grep-format-test)
 ;;; decknix-agent-grep-format-test.el ends here

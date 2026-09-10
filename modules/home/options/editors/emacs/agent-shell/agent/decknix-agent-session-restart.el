@@ -42,6 +42,8 @@
                   "decknix-agent-buffer-lookup" ())
 (declare-function decknix--agent-latest-session-id-for-conv-key
                   "decknix-agent-conv-resolve" (conv-key))
+(declare-function decknix--agent-tags-for-buffer
+                  "decknix-agent-tags-read" (buffer))
 (declare-function decknix--agent-tags-for-conv-key
                   "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--agent-session-derive-name
@@ -136,7 +138,9 @@ already exited."
          (workspace (or (and (bound-and-true-p decknix--agent-session-workspace)
                              decknix--agent-session-workspace)
                         default-directory))
-         (tags (and conv-key (decknix--agent-tags-for-conv-key conv-key)))
+         ;; By buffer: a restart that loses the tags renames the session
+         ;; after its workspace, which is the 5de16692 failure.
+         (tags (decknix--agent-tags-for-buffer (current-buffer)))
          ;; Preserve the label: tags drive the canonical name (matching
          ;; the render path); otherwise reuse the current buffer's name.
          (display-name (if tags

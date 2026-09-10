@@ -198,6 +198,8 @@ restart, to see what recovery WOULD do without doing it."
                   "decknix-agent-conv-resolve" (conv-key))
 (declare-function decknix--agent-workspace-for-conv-key
                   "decknix-agent-session-workspace" (conv-key))
+(declare-function decknix--agent-tags-resolve
+                  "decknix-agent-tags-read" (conv-key session-id))
 (declare-function decknix--agent-tags-for-conv-key
                   "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--agent-session-derive-name
@@ -250,7 +252,10 @@ conversation's model."
     (let* ((sid (ignore-errors
                   (decknix--agent-latest-session-id-for-conv-key conv-key)))
            (ws (ignore-errors (decknix--agent-workspace-for-conv-key conv-key)))
-           (tags (ignore-errors (decknix--agent-tags-for-conv-key conv-key)))
+           ;; `sid' is already resolved above, so use both keys: a
+           ;; reattached session whose conv-key diverged would otherwise
+           ;; come back untagged and rename itself after its workspace.
+           (tags (ignore-errors (decknix--agent-tags-resolve conv-key sid)))
            (name (ignore-errors
                    (decknix--agent-session-derive-name tags ws nil nil sid))))
       (when sid

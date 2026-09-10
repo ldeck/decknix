@@ -125,6 +125,8 @@
                   "decknix-agent-shell-main-link" (url))
 (declare-function decknix--agent-conversation-set-hidden "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-conversation-key-for-session "decknix-agent-conv-resolve")
+(declare-function decknix--agent-tags-resolve
+                  "decknix-agent-tags-read" (conv-key session-id))
 (declare-function decknix--agent-tags-for-conv-key "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-find-live-buffer-for-conv-key "ext:decknix-agent-shell-main")
 (declare-function decknix-agent-turn-facts "decknix-agent-turn-signals" (&optional buffer))
@@ -6002,8 +6004,10 @@ entry, once after a delay — without producing duplicate rows."
                                (ignore-errors
                                  (decknix--agent-latest-session-id-for-conv-key
                                   conv-key)))))
-                 (tags (when conv-key
-                         (decknix--agent-tags-for-conv-key conv-key)))
+                 ;; Both keys: `sid' is resolved just above, and recording
+                 ;; a snapshot with no tags is what makes a Previous row
+                 ;; unrecognisable later.
+                 (tags (decknix--agent-tags-resolve conv-key sid))
                  (ws (or (when conv-key
                            (decknix--agent-workspace-for-conv-key conv-key))
                          (expand-file-name default-directory))))
