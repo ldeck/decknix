@@ -98,6 +98,42 @@ after computing the whole merge, and keep a backup — a bad merge would
 silently lose tags across many conversations, and tags are the only
 durable metadata a session has.
 
+## 4.4 Measured: how much duplication there actually is
+
+Step 3, run against the live store on 2026-09-11.
+
+```
+conversations total        541
+  with tags                347
+  without tags             194
+  with no sessions at all  133
+distinct session ids       530
+session ids in >1 conv      38     (7% of sessions)
+  worst / median spread     10 / 2
+  surplus entries           96
+```
+
+The breakdown that decides step 4:
+
+```
+  tags on exactly one entry  34   unambiguous merge, one winner
+  tags on more than one       4   merge must union
+  tags on no entry            0   nothing to lose
+```
+
+This is smaller and safer than the `5de16692` example suggested. That
+session, at ten entries, is the worst case in the whole store; the median
+duplicated session has two. Nothing is in the "tags scattered with no
+clear winner" state that would make a merge lossy, and the four
+multi-tagged cases are exactly what the union in
+`decknix--agent-tags-resolve' already handles on read.
+
+It also softens open question 1. If these were legitimate forks we would
+expect tags on several entries; instead 34 of 38 have tags on precisely
+one and the rest are empty. That is the signature of key scatter, not of
+deliberate branching -- suggestive rather than conclusive, since the store
+records no intent.
+
 ## 5. Open questions
 
 1. **Do any two conversations legitimately share a session id?** A fork
