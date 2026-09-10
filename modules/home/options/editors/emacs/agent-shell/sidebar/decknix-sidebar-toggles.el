@@ -18,6 +18,11 @@
 
 ;;; Code:
 
+;; Pure grouping layer (sibling package in this same `sidebar/' dir).
+(declare-function decknix-sidebar-group-next "decknix-sidebar-grouping" (mode))
+(declare-function decknix-sidebar-group-mode-label
+                  "decknix-sidebar-grouping" (mode))
+
 (require 'cl-lib)
 ;; Shared age-filter presets — Sessions cycle reuses the Requests
 ;; preset list so labels (`all/1d/3d/7d/14d/30d') stay aligned.
@@ -52,6 +57,17 @@ Valid values:
   `tags'      grouped by the full shared-tag subset of each group.
   `tree'      grouped by first tag; remaining tags shown per row.
 Toggle with `z' in the sidebar Toggles transient (Live section).")
+
+(defvar decknix--sidebar-session-group-mode 'off
+  "Sub-header grouping for the Live and Previous sections.
+One of `decknix-sidebar-group-modes': `off', `workspace', `repo'.
+
+Shared by both sections deliberately.  They list the same kind of thing
+-- sessions -- and two independent toggles would let them disagree about
+how the same session is filed, which is the confusion the grouping is
+meant to remove.
+
+Cycle with `G' in the sidebar Toggles transient.")
 
 (defvar decknix--sidebar-view-mode 'standard
   "Which family of sidebar sections is shown.
@@ -194,6 +210,15 @@ and Requests age toggles share vocabulary."
           (_          'flat)))
   (decknix--sidebar-refresh-now)
   (message "Live view mode: %s" decknix--sidebar-live-view-mode))
+
+(defun decknix-sidebar-cycle-session-group-mode ()
+  "Cycle Live/Previous sub-header grouping: off -> workspace -> repo -> off."
+  (interactive)
+  (setq decknix--sidebar-session-group-mode
+        (decknix-sidebar-group-next decknix--sidebar-session-group-mode))
+  (decknix--sidebar-refresh-now)
+  (message "Session grouping: %s"
+           (decknix-sidebar-group-mode-label decknix--sidebar-session-group-mode)))
 
 (defun decknix-sidebar-toggle-wip-group-mode ()
   "Cycle WIP grouping mode: repo → workspace → worktree → repo."

@@ -556,6 +556,18 @@ let
   # trivialBuild byte-compiles every sibling, so age-presets must
   # be on the load-path even though previous itself doesn't
   # reference it (sidebar-toggles requires it at load-time).
+  # Pure sub-header grouping for the Live and Previous sections, in the
+  # shape WIP already uses (a repository heading with its rows beneath).
+  # Knows nothing about buffers or alists -- callers pass a key function --
+  # so both sections share one implementation.
+  decknix-sidebar-grouping-el = mkEmacsTestedPackage {
+    pname = "decknix-sidebar-grouping";
+    src = ./agent-shell/sidebar;
+    testFiles = [
+      "decknix-sidebar-grouping-test.el"
+    ];
+  };
+
   decknix-sidebar-previous-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-previous";
     src = ./agent-shell/sidebar;
@@ -2560,6 +2572,7 @@ let
       decknix-progress-el
       decknix-hub-attention-filter-el
       decknix-sidebar-previous-el
+      decknix-sidebar-grouping-el
       decknix-agent-live-sessions-el
       decknix-hub-ci-filter-el
       decknix-hub-mention-bot-el
@@ -3232,6 +3245,7 @@ in
         ++ (optional cfg.workspace.enable decknix-sidebar-row-actions-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-format-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-previous-el)
+        ++ (optional cfg.workspace.enable decknix-sidebar-grouping-el)
         ++ (optional cfg.workspace.enable decknix-agent-live-sessions-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-tile-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-width-el)

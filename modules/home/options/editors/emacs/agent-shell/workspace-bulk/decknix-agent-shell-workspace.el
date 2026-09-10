@@ -621,6 +621,22 @@ candidate movement uses the line text as the search needle."
   (interactive)
   (decknix-sidebar-cycle-live-view-mode))
 
+(transient-define-suffix decknix-sidebar-transient--session-group-mode ()
+  "Cycle Live/Previous sub-header grouping."
+  :key "G"
+  :description
+  (lambda ()
+    (format "group         %s"
+            (propertize
+             (format "[%s]"
+                     (decknix-sidebar-group-mode-label
+                      (if (boundp 'decknix--sidebar-session-group-mode)
+                          decknix--sidebar-session-group-mode 'off)))
+             'face 'font-lock-constant-face)))
+  :transient t
+  (interactive)
+  (decknix-sidebar-cycle-session-group-mode))
+
 (transient-define-suffix decknix-sidebar-transient--wip-group-mode ()
   "Cycle WIP grouping mode."
   :key "g"
@@ -1044,6 +1060,7 @@ WIP / Sessions / Worktrees."
     (decknix-sidebar-transient--symbol-style)     ;; symbols (y)
     (decknix-sidebar-transient--tile-cycle)       ;; Tile cycle (t)
     (decknix-sidebar-transient--hide-request-linked-live) ;; request-linked (X)
+    (decknix-sidebar-transient--session-group-mode) ;; group (G)
     (decknix-sidebar-transient--live-view-mode)]] ;; view (z)
   [["WIP"
     (decknix-sidebar-transient--wip-bot-pending)  ;; bot review (u)
@@ -1214,6 +1231,25 @@ Sessions with no tags are placed under nil (rendered as Other)."
     (mapcar (lambda (k) (cons k (gethash k groups)))
             (nreverse key-ord))))
 
+(defun decknix--sidebar-group-live-buffers (buffers mode)
+  "Group live BUFFERS for the sidebar under MODE (`workspace' or `repo').
+Returns (LABEL . BUFFERS) groups; see `decknix-sidebar-group-items'."
+  (decknix-sidebar-group-items
+   buffers
+   (lambda (buf)
+     (pcase mode
+       ('workspace
+        (decknix-sidebar-group-workspace-label
+         (with-current-buffer buf default-directory)))
+       ('repo
+        (decknix-sidebar-group-repo-label
+         (with-current-buffer buf
+           (let ((ck (bound-and-true-p decknix--agent-conv-key)))
+             (and ck (fboundp 'decknix--agent-review-prs-for-conv-key)
+                  (ignore-errors
+                    (decknix--agent-review-prs-for-conv-key ck)))))))
+       (_ nil)))))
+
 (defun decknix--sidebar-render-live-sessions (line-num buffers selected tiled max-name-width)
   "Render the Live Sessions section. Returns updated LINE-NUM.
 BUFFERS is the list of live agent-shell buffers.
@@ -1229,8 +1265,26 @@ MAX-NAME-WIDTH is the cap for repo name display."
         (insert (propertize "  (none)" 'face 'font-lock-comment-face) "\n")
         (setq line-num (1+ line-num)))
     (let ((view-mode (if (boundp 'decknix--sidebar-live-view-mode)
-                         decknix--sidebar-live-view-mode 'flat)))
+                         decknix--sidebar-live-view-mode 'flat))
+          (group-mode (if (boundp 'decknix--sidebar-session-group-mode)
+                          decknix--sidebar-session-group-mode 'off)))
+      ;; Sub-header grouping (`G') takes precedence over the older
+      ;; view-mode cycle: it is the one the Previous section shares, so
+      ;; letting `z' override it would let the two sections file the same
+      ;; session differently.
+      (when (memq group-mode '(workspace repo))
+        (setq view-mode 'decknix-grouped))
       (pcase view-mode
+        ('decknix-grouped
+         (dolist (group (decknix--sidebar-group-live-buffers buffers group-mode))
+           (insert (propertize (format " %s (%d)" (car group) (length (cdr group)))
+                               'face 'font-lock-doc-face)
+                   "\n")
+           (setq line-num (1+ line-num))
+           (dolist (buf (cdr group))
+             (setq line-num
+                   (decknix--sidebar-render-live-buffer
+                    line-num buf selected (memq buf tiled) max-name-width)))))
         ('flat
          (dolist (buf buffers)
            (setq line-num
@@ -5980,6 +6034,27 @@ next start needs to read as Previous Sessions."
         (decknix--live-sessions-forget conv-key sid)))))
 
 ;; -- Previous sessions: sidebar rendering --
+(defun decknix--sidebar-group-previous-entries (entries mode)
+  "Group Previous ENTRIES under MODE, or one nil-labelled group when off.
+
+Returns (LABEL . ENTRIES); LABEL is nil for the ungrouped case so the
+renderer can emit rows with no heading rather than branch twice."
+  (if (memq mode '(workspace repo))
+      (decknix-sidebar-group-items
+       entries
+       (lambda (entry)
+         (pcase mode
+           ('workspace
+            (decknix-sidebar-group-workspace-label (alist-get 'workspace entry)))
+           ('repo
+            (let ((ck (alist-get 'conv-key entry)))
+              (decknix-sidebar-group-repo-label
+               (and ck (fboundp 'decknix--agent-review-prs-for-conv-key)
+                    (ignore-errors
+                      (decknix--agent-review-prs-for-conv-key ck))))))
+           (_ nil))))
+    (list (cons nil entries))))
+
 (defun decknix--sidebar-render-previous-sessions (line-num)
   "Render greyed-out previous live sessions after the Live section.
 Returns updated LINE-NUM."
@@ -6012,7 +6087,17 @@ Returns updated LINE-NUM."
        (format "Previous (%d)" (length prev))
        'previous)
       (setq line-num (1+ line-num))
-      (dolist (entry prev)
+      (dolist (group (decknix--sidebar-group-previous-entries
+                      prev (if (boundp 'decknix--sidebar-session-group-mode)
+                               decknix--sidebar-session-group-mode 'off)))
+        ;; A nil label is the ungrouped case (`G' off): render the rows
+        ;; straight, with no heading, exactly as before.
+        (when (car group)
+          (insert (propertize (format " %s (%d)" (car group) (length (cdr group)))
+                              'face 'font-lock-doc-face)
+                  "\n")
+          (setq line-num (1+ line-num)))
+      (dolist (entry (cdr group))
         (let* (;; Re-derive the label from the *current* tag store
                ;; (keyed by conv-key) so tags added or changed after
                ;; the snapshot was recorded show immediately, matching
@@ -6048,7 +6133,7 @@ Returns updated LINE-NUM."
                   (+ line-num
                      (decknix--hub-render-session-prs
                       prev-conv-key decknix--hub-expand-prs
-                      'font-lock-comment-face))))))))
+                      'font-lock-comment-face)))))))))
   line-num)
 
 ;; -- Previous sessions: window helper --
