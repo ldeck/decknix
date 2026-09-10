@@ -15,6 +15,14 @@
 (require 'cl-lib)
 (require 'decknix-agent-resume-native)
 
+;; The module under test reads these but declares them value-less, and a
+;; bare `defvar' marks a variable special only in the file that carries
+;; it.  Without the same declaration here, `let' binds them LEXICALLY and
+;; the module still sees an unbound global -- the binding silently fails
+;; to reach the code it was written for.
+(defvar shell-maker--config)
+(defvar comint-last-prompt)
+
 ;; --- true only when BOTH a target id and the resume capability hold ---
 
 (ert-deftest decknix-resume-native--t-with-sid-and-cap ()
@@ -367,6 +375,93 @@ and each of those writes another fragment."
   "A live prompt with nothing after it needs no replacement.
 Guards against re-emitting a second prompt on every resume."
   (should-not (decknix--agent-resume-prompt-buried-p '(1 . 5) t nil)))
+
+;; --- the load replay must announce itself as a restore ---------------
+;;
+;; Observed on pi session 01a083eb: the whole replayed conversation
+;; rendered with NO `Me' label and no prompt marker on any turn.  The
+;; cause is not the replay -- the prompt runs are all present, with the
+;; right faces and end-of-prompt markers.  It is that nothing told
+;; `agent-shell-chat-mode' to look.
+;;
+;; Chat mode labels lazily: `agent-shell-chat--schedule-relabel' runs
+;; from an event subscription and from `shell-maker-finish-output-hook',
+;; and its docstring names the event that covers a reload --
+;; `session-restored'.  Upstream's own restore path ends by emitting it
+;; (`agent-shell--render-pending-restore'), precisely so the labels
+;; appear.  Our load path renders an entire transcript and emits nothing,
+;; so the buffer keeps whatever labels it had before the replay: none.
+;;
+;; Emitted LAST, after the prompt is known good, because the relabel runs
+;; on a zero-delay timer and must see the final buffer.
+
+(ert-deftest decknix-resume-native--load-emits-session-restored ()
+  "A `session/load' replay emits `session-restored' so chat labels apply."
+  (with-temp-buffer
+    (let* ((buf (current-buffer))
+           (events nil)
+           (on-success nil)
+           (comint-last-prompt nil)
+           (shell-maker--config nil))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () (list (cons :buffer buf) (cons :client 'c))))
+                ((symbol-function 'agent-shell--update-bootstrapping-fragment)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'agent-shell--make-status-kind-label)
+                 (lambda (&rest _) "OK"))
+                ((symbol-function 'agent-shell--set-session-from-response)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'agent-shell--finalize-session-init)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'agent-shell--resolve-path) #'identity)
+                ((symbol-function 'agent-shell-cwd) (lambda () "/tmp"))
+                ((symbol-function 'agent-shell--mcp-servers) (lambda () nil))
+                ((symbol-function 'acp-make-session-load-request)
+                 (lambda (&rest _) 'request))
+                ((symbol-function 'agent-shell-subscribe-to) (lambda (&rest _) 'token))
+                ((symbol-function 'agent-shell-unsubscribe) (lambda (&rest _) nil))
+                ((symbol-function 'shell-maker-finish-output) (lambda (&rest _) nil))
+                ((symbol-function 'agent-shell--emit-event)
+                 (lambda (&rest args) (push (plist-get args :event) events)))
+                ((symbol-function 'agent-shell--send-request)
+                 (lambda (&rest args) (setq on-success (plist-get args :on-success)))))
+        (decknix--agent-resume-native-send "sid-1" nil #'ignore 'load)
+        (should on-success)
+        (funcall on-success 'response))
+      (should (memq 'session-restored events)))))
+
+(ert-deftest decknix-resume-native--resume-emits-no-restore ()
+  "`session/resume' replays nothing, so there is no restore to announce.
+Emitting it anyway would schedule a relabel of a buffer whose transcript
+our own prepopulation has not written yet."
+  (with-temp-buffer
+    (let* ((buf (current-buffer))
+           (events nil)
+           (on-success nil))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () (list (cons :buffer buf) (cons :client 'c))))
+                ((symbol-function 'agent-shell--update-bootstrapping-fragment)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'agent-shell--make-status-kind-label)
+                 (lambda (&rest _) "OK"))
+                ((symbol-function 'agent-shell--set-session-from-response)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'agent-shell--finalize-session-init)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'agent-shell--resolve-path) #'identity)
+                ((symbol-function 'agent-shell-cwd) (lambda () "/tmp"))
+                ((symbol-function 'agent-shell--mcp-servers) (lambda () nil))
+                ((symbol-function 'acp-make-session-resume-request)
+                 (lambda (&rest _) 'request))
+                ((symbol-function 'agent-shell-subscribe-to) (lambda (&rest _) 'token))
+                ((symbol-function 'agent-shell-unsubscribe) (lambda (&rest _) nil))
+                ((symbol-function 'agent-shell--emit-event)
+                 (lambda (&rest args) (push (plist-get args :event) events)))
+                ((symbol-function 'acp-send-request)
+                 (lambda (&rest args) (setq on-success (plist-get args :on-success)))))
+        (decknix--agent-resume-native-send "sid-1" nil #'ignore 'resume)
+        (funcall on-success 'response))
+      (should-not (memq 'session-restored events)))))
 
 (provide 'decknix-agent-resume-native-test)
 ;;; decknix-agent-resume-native-test.el ends here

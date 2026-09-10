@@ -88,6 +88,7 @@
 ;; lifetime, which is what lets a `session/load' replay render.
 (declare-function agent-shell--send-request "agent-shell")
 (declare-function agent-shell--live-input-prompt-p "agent-shell")
+(declare-function agent-shell--emit-event "agent-shell")
 (declare-function shell-maker-finish-output "ext:shell-maker")
 (defvar shell-maker--config)
 (defvar comint-last-prompt)
@@ -324,7 +325,26 @@ and permission mode just as for a fresh session."
        ;; LAST, after every bootstrapping fragment has been written --
        ;; anything appended afterwards would bury the prompt again.
        (when (eq method 'load)
-         (decknix--agent-resume-ensure-live-prompt shell-buffer)))
+         (decknix--agent-resume-ensure-live-prompt shell-buffer)
+         ;; Announce the restore.  A replay that nothing announces is a
+         ;; replay no observer can react to, and one observer matters
+         ;; visibly: `agent-shell-chat-mode' labels lazily, scheduling a
+         ;; relabel from its event subscription, and `session-restored'
+         ;; is the event its own docstring names as covering a reload.
+         ;; Without it a whole replayed pi transcript renders with no
+         ;; `Me' label and no prompt marker on any turn -- every prompt
+         ;; run present and correctly faced, but never looked at
+         ;; (observed on session 01a083eb).
+         ;;
+         ;; Upstream emits this at the end of
+         ;; `agent-shell--render-pending-restore' for the same reason, so
+         ;; this is matching its contract rather than inventing one.
+         ;;
+         ;; Emitted after `ensure-live-prompt' because the relabel runs
+         ;; on a zero-delay timer and must see the final buffer,
+         ;; including whatever prompt that call emitted.
+         (with-current-buffer shell-buffer
+           (agent-shell--emit-event :event 'session-restored))))
      :on-failure
      (lambda (_error _raw-message)
        (with-current-buffer shell-buffer
