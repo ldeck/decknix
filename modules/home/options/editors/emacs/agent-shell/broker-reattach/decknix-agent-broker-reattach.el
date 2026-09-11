@@ -283,16 +283,23 @@ With QUIET, does not message."
          (attached (decknix--broker-reattach-attached-keys))
          (plan (decknix--broker-reattach-plan
                 brokers attached #'decknix--broker-reattach-conv-key-for))
-         (done 0) (skipped 0))
+         (done 0) (no-conv 0) (no-sid 0))
     (dolist (entry plan)
-      (if (decknix--broker-reattach-one (car entry) (cdr entry))
-          (setq done (1+ done))
-        (setq skipped (1+ skipped))))
+      (cond
+       ((decknix--broker-reattach-one (car entry) (cdr entry))
+        (setq done (1+ done)))
+       ((null (cdr entry)) (setq no-conv (1+ no-conv)))
+       (t (setq no-sid (1+ no-sid)))))
     (unless quiet
-      (message "decknix: reattached %d broker%s%s"
+      ;; Skips are reported BY REASON.  They were previously all blamed on
+      ;; "no conversation", which is what hid a live session failing to
+      ;; come back: its conversation and broker key both resolved and it
+      ;; stopped on a nil session id, so the one number shown named the one
+      ;; cause that was not happening.
+      (message "decknix: reattached %d broker%s%s%s"
                done (if (= done 1) "" "s")
-               (if (> skipped 0)
-                   (format " (%d skipped: no conversation)" skipped) "")))
+               (if (> no-conv 0) (format " (%d: no conversation)" no-conv) "")
+               (if (> no-sid 0) (format " (%d: no session id)" no-sid) "")))
     done))
 
 (defun decknix-agent-broker-reattach-maybe-on-startup ()

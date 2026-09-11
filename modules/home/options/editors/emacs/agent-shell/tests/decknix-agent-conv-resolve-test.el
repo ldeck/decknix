@@ -255,6 +255,81 @@ tag store lists its session-id under the conv-key (wrapper-first sessions:
                      (decknix--agent-latest-session-id-for-conv-key "k"))))))
 
 
+
+;; -- store fallback when the transcript scan misses -----------------
+;;
+;; Observed 2026-09-11: session c9935439 was live behind a healthy broker
+;; (seven days uptime) and did not come back after a switch, and could not
+;; be found in the `C-c s s' picker either.
+;;
+;; The reattach chain resolved a conv-key and a broker key correctly, then
+;; stopped because this returned nil. It returned nil because the session
+;; was absent from the CACHED `decknix--agent-session-list'; a synchronous
+;; refresh produced the very same 117 entries WITH it present. So a stale
+;; cache silently cost a live session its buffer.
+;;
+;; The store already records the association and its own docstring calls it
+;; "the authoritative association". Gating resume on a scan of transcript
+;; files makes reattach depend on cache freshness for no benefit: the scan
+;; can only ever confirm what the store already says.
+
+(ert-deftest decknix-agent-conv-resolve--latest-falls-back-to-store-when-scan-misses ()
+  "A session the scan has not indexed still resolves from the store."
+  (let ((store (make-hash-table :test #'equal))
+        (convs (make-hash-table :test #'equal))
+        (entry (make-hash-table :test #'equal)))
+    (puthash "sessions" '("only-in-store") entry)
+    (puthash "k" entry convs)
+    (puthash "conversations" convs store)
+    (cl-letf (((symbol-function 'decknix--agent-tags-read) (lambda () store))
+              ((symbol-function 'decknix--agent-session-list) (lambda () nil))
+              ((symbol-function 'decknix--agent-conversation-key) (lambda (_fm) nil)))
+      (should (equal "only-in-store"
+                     (decknix--agent-latest-session-id-for-conv-key "k"))))))
+
+(ert-deftest decknix-agent-conv-resolve--store-fallback-takes-the-most-recent ()
+  "With several recorded sessions the newest wins, matching the scan path.
+Sessions are appended as they are created, so the last entry is newest."
+  (let ((store (make-hash-table :test #'equal))
+        (convs (make-hash-table :test #'equal))
+        (entry (make-hash-table :test #'equal)))
+    (puthash "sessions" '("oldest" "middle" "newest") entry)
+    (puthash "k" entry convs)
+    (puthash "conversations" convs store)
+    (cl-letf (((symbol-function 'decknix--agent-tags-read) (lambda () store))
+              ((symbol-function 'decknix--agent-session-list) (lambda () nil))
+              ((symbol-function 'decknix--agent-conversation-key) (lambda (_fm) nil)))
+      (should (equal "newest"
+                     (decknix--agent-latest-session-id-for-conv-key "k"))))))
+
+(ert-deftest decknix-agent-conv-resolve--scan-still-wins-over-the-store ()
+  "The fallback must not displace a real scan hit.
+The scan carries `modified' timestamps, so when it has an answer it is the
+better one; the store list has no ordering beyond append order."
+  (let ((store (make-hash-table :test #'equal))
+        (convs (make-hash-table :test #'equal))
+        (entry (make-hash-table :test #'equal)))
+    (puthash "sessions" '("store-a" "store-b") entry)
+    (puthash "k" entry convs)
+    (puthash "conversations" convs store)
+    (cl-letf (((symbol-function 'decknix--agent-tags-read) (lambda () store))
+              ((symbol-function 'decknix--agent-session-list)
+               (lambda () '(((sessionId . "store-a") (firstUserMessage . "x")
+                             (modified . "2026-01-01T00:00:00Z")))))
+              ((symbol-function 'decknix--agent-conversation-key) (lambda (_fm) nil)))
+      (should (equal "store-a"
+                     (decknix--agent-latest-session-id-for-conv-key "k"))))))
+
+(ert-deftest decknix-agent-conv-resolve--no-store-and-no-scan-is-still-nil ()
+  "An unknown conversation must not invent a session id."
+  (let ((store (make-hash-table :test #'equal))
+        (convs (make-hash-table :test #'equal)))
+    (puthash "conversations" convs store)
+    (cl-letf (((symbol-function 'decknix--agent-tags-read) (lambda () store))
+              ((symbol-function 'decknix--agent-session-list) (lambda () nil))
+              ((symbol-function 'decknix--agent-conversation-key) (lambda (_fm) nil)))
+      (should-not (decknix--agent-latest-session-id-for-conv-key "k")))))
+
 ;; -- session-id metadata fallback (store-field-scan) ---------------
 
 (defun decknix-cr-test--entry (sessions &rest kv)

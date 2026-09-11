@@ -150,7 +150,24 @@ path rescues sessions whose on-disk first message is a synthetic wrapper
 -- a `/slash-command' invocation or a forked-session preamble -- that
 hashes to a different key than the one the conversation was tagged with;
 without it those sessions are unrecoverable at restore time (the caller
-falls through to \"Cannot restore: no session ID\")."
+falls through to \"Cannot restore: no session ID\").
+
+When the scan yields nothing at all, falls back to the LAST session id the
+store records for CONV-KEY.  The scan is an index of transcript files and
+is cached; the store is, per
+`decknix--agent-conv-key-store-sessions', the authoritative association.
+Gating on the scan therefore made resume depend on cache freshness while
+the scan could only ever confirm what the store already said.
+
+That cost a live session its buffer.  On 2026-09-11 session c9935439 sat
+behind a healthy broker (seven days uptime) and did not come back after a
+switch, nor appear in the `C-c s s' picker: it was missing from the CACHED
+session list, and a synchronous refresh produced the same 117 entries with
+it present.  Reattach resolved the conv-key and the broker key correctly,
+then stopped here on a nil.
+
+The scan still wins when it has an answer: it carries `modified'
+timestamps, whereas the store list is ordered only by append."
   (when conv-key
     (let* ((sessions (decknix--agent-session-list))
            (store-sids (decknix--agent-conv-key-store-sessions conv-key))
@@ -168,8 +185,8 @@ falls through to \"Cannot restore: no session ID\")."
                          (lambda (a b)
                            (string> (or (alist-get 'modified a) "")
                                     (or (alist-get 'modified b) ""))))))
-      (when sorted
-        (alist-get 'sessionId (car sorted))))))
+      (or (when sorted (alist-get 'sessionId (car sorted)))
+          (car (last store-sids))))))
 
 ;; ── session-id metadata fallback (heals conv-key fragmentation) ──────
 ;;
