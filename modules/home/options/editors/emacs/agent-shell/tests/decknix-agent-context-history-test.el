@@ -109,7 +109,7 @@ the cons (clamped . window-len)."
 and renders nothing."
   (with-temp-buffer
     (cl-letf (((symbol-function 'decknix--agent-session-extract-all-turns)
-               (lambda (_sid) nil))
+               (lambda (_sid &optional _provider) nil))
               ((symbol-function 'decknix--agent-session-window-clamp)
                (lambda (_c _n _t) 0)))
       (decknix--agent-session-prepopulate "sid" 2)
@@ -125,7 +125,7 @@ the bottom-most window (cursor = total - count)."
     (let ((all '(("u1" . "r1") ("u2" . "r2") ("u3" . "r3")
                  ("u4" . "r4") ("u5" . "r5"))))
       (cl-letf (((symbol-function 'decknix--agent-session-extract-all-turns)
-                 (lambda (_sid) all))
+                 (lambda (_sid &optional _provider) all))
                 ((symbol-function 'decknix--agent-session-window-clamp)
                  (lambda (cursor _count total)
                    (max 0 (min cursor total))))
