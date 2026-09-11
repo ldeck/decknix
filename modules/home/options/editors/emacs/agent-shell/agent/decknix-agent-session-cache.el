@@ -730,6 +730,50 @@ others get a fresh cons head, so callers must use the returned list."
               (cons (cons 'providerId provider-id) s)))
           sessions))
 
+(defun decknix--session-owns-transcript-p (row)
+  "Non-nil when ROW's `filePath' is the transcript named for its session.
+A sub-agent transcript reports its PARENT's `sessionId', so the only way
+to tell the real session's row from a sub-agent's is the file name."
+  (let ((sid (alist-get 'sessionId row))
+        (path (alist-get 'filePath row)))
+    (and (stringp sid) (stringp path)
+         (equal sid (file-name-base path)))))
+
+(defun decknix--session-dedupe-by-session-id (rows)
+  "Return ROWS with at most one row per `sessionId', order preserved.
+
+Rows with no session id are all kept: they are distinct transcripts that
+merely failed to yield an id, and collapsing them would hide sessions.
+
+Where rows collide, the one whose file is NAMED for the session wins.
+Sub-agent transcripts carry their parent's `sessionId', so a leaked
+sub-agent row otherwise impersonates a real session.
+
+A guard rather than a cure.  On 2026-09-11 the in-memory list held 117
+rows covering 17 distinct sessions, one repeated 99 times; the picker
+could not find most sessions and reattach could not resolve a session id
+for a live conversation, which cost it its buffer.  The scan and the jq
+filter were both verified clean (115 distinct ids across 200 files), so
+the duplication entered during the in-memory merge and the merge is still
+the thing to fix.  Collapsing here cannot lose a session, and keeps the
+picker usable while that is outstanding."
+  (let ((seen (make-hash-table :test 'equal))
+        (out nil))
+    (dolist (row rows)
+      (let ((sid (alist-get 'sessionId row)))
+        (if (not (stringp sid))
+            (push row out)
+          (let ((prev (gethash sid seen)))
+            (cond
+             ((null prev)
+              (puthash sid row seen)
+              (push row out))
+             ((and (decknix--session-owns-transcript-p row)
+                   (not (decknix--session-owns-transcript-p prev)))
+              (puthash sid row seen)
+              (setq out (cons row (delq prev out)))))))))
+    (nreverse out)))
+
 (defun decknix--agent-session-list (&optional provider-id)
   "Return cached sessions.
 If PROVIDER-ID is non-nil, return sessions for that provider.
@@ -757,8 +801,8 @@ callers can render a provider glyph and filter by provider."
           (when (and result (not (alist-get 'providerId (car result))))
             (setq result (decknix--session-stamp-provider-id provider-id result))
             (puthash provider-id result decknix--agent-session-cache-map))
-          result))
-    (decknix--agent-session-list-all)))
+          (decknix--session-dedupe-by-session-id result)))
+    (decknix--session-dedupe-by-session-id (decknix--agent-session-list-all))))
 
 (defun decknix--agent-session-list-all ()
   "Return combined sessions from all registered providers."
