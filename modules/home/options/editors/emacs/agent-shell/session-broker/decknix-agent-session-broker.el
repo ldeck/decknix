@@ -31,6 +31,9 @@
 
 ;;; Code:
 
+(declare-function decknix--agent-newest-session-id
+                  "decknix-agent-conv-resolve" (session-ids))
+
 (require 'decknix-agent-tags-store)
 (require 'subr-x)
 
@@ -282,7 +285,12 @@ nothing looked for it."
                        (gethash "reviewPr" entry)))
                  (sessions (gethash "sessions" entry)))
              (when (and (member pr-key prs) sessions)
-               (setq found (cons ck (car (last sessions))))))))
+               ;; Newest by transcript mtime, not by position: the store
+               ;; records sessions newest-FIRST, so taking the tail
+               ;; reopened the oldest one.
+               (setq found (cons ck (if (fboundp 'decknix--agent-newest-session-id)
+                                        (decknix--agent-newest-session-id sessions)
+                                      (car sessions))))))))
        convs))
     found))
 
