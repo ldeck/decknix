@@ -1188,4 +1188,27 @@ basename matches is the real session and the other is the impostor."
                 ((sessionId . nil) (filePath . "/b.jsonl")))))
     (should (= 2 (length (decknix--session-dedupe-by-session-id rows))))))
 
+
+(ert-deftest decknix-session-cache--merge-never-loses-a-session ()
+  "A refresh returning fewer sessions must not make the rest disappear."
+  (let* ((existing '(((sessionId . "a")) ((sessionId . "b")) ((sessionId . "c"))))
+         (new      '(((sessionId . "a"))))
+         (out (decknix--session-cache-merge existing new))
+         (ids (mapcar (lambda (r) (alist-get 'sessionId r)) out)))
+    (should (equal '("a" "b" "c") (sort ids #'string<)))))
+
+(ert-deftest decknix-session-cache--merge-prefers-the-fresh-row ()
+  "The fresh row wins for a session present in both."
+  (let* ((existing '(((sessionId . "a") (modified . "old"))))
+         (new      '(((sessionId . "a") (modified . "new"))))
+         (out (decknix--session-cache-merge existing new)))
+    (should (= 1 (length out)))
+    (should (equal "new" (alist-get 'modified (car out))))))
+
+(ert-deftest decknix-session-cache--merge-passes-a-complete-refresh-through ()
+  "When the refresh covers everything, nothing stale is carried over."
+  (let* ((existing '(((sessionId . "a"))))
+         (new      '(((sessionId . "a")) ((sessionId . "b")))))
+    (should (equal new (decknix--session-cache-merge existing new)))))
+
 (provide 'decknix-agent-session-cache-test)
