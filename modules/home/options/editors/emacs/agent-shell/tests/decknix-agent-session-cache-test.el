@@ -1135,4 +1135,57 @@ invalidates the other, and the same underlying scan powers both."
               ((symbol-function 'decknix--session-file-mtime) (lambda (_p) 1000.0)))
       (should-not (decknix--agent-subagent-meta 'claude-code "/p/x.jsonl")))))
 
+
+;; -- one row per session ------------------------------------------------
+;;
+;; 2026-09-11: the in-memory list held 117 entries covering 17 distinct
+;; sessions, one repeated 99 times. Most real sessions were invisible, so
+;; `C-c s s' could not find them and reattach could not resolve a session
+;; id for a live conversation (see decknix-agent-conv-resolve).
+;;
+;; The scan and the jq filter were both verified clean at the time (115
+;; distinct ids over 200 files), so the duplication entered during the
+;; in-memory merge. The mechanism is visible in the data: a SUB-AGENT
+;; transcript reports its PARENT's sessionId, and 116 of 350 cached paths
+;; are sub-agent transcripts, so any leak of one into the session list
+;; arrives wearing a real session's id.
+;;
+;; This is the guard rather than the cure. Collapsing by session id cannot
+;; lose a session and would have kept the picker usable throughout.
+
+(ert-deftest decknix-session-cache--dedupe-collapses-repeated-ids ()
+  "A session id appears at most once, however often it was merged in."
+  (let ((dup '(((sessionId . "a") (modified . "2026-01-01T00:00:00Z"))
+               ((sessionId . "a") (modified . "2026-01-01T00:00:00Z"))
+               ((sessionId . "b") (modified . "2026-01-02T00:00:00Z")))))
+    (should (equal '("a" "b")
+                   (sort (mapcar (lambda (s) (alist-get 'sessionId s))
+                                 (decknix--session-dedupe-by-session-id dup))
+                         #'string<)))))
+
+(ert-deftest decknix-session-cache--dedupe-prefers-the-owning-transcript ()
+  "When rows collide, the file NAMED for the session wins.
+A sub-agent transcript carries its parent's id, so the row whose filePath
+basename matches is the real session and the other is the impostor."
+  (let* ((rows '(((sessionId . "sid-1") (exchangeCount . 99)
+                  (filePath . "/p/parent/subagents/agent-x.jsonl"))
+                 ((sessionId . "sid-1") (exchangeCount . 7)
+                  (filePath . "/p/sid-1.jsonl"))))
+         (out (decknix--session-dedupe-by-session-id rows)))
+    (should (= 1 (length out)))
+    (should (equal "/p/sid-1.jsonl" (alist-get 'filePath (car out))))))
+
+(ert-deftest decknix-session-cache--dedupe-keeps-order-and-singletons ()
+  "Deduping must not reorder or drop anything that was already unique."
+  (let ((rows '(((sessionId . "x")) ((sessionId . "y")) ((sessionId . "z")))))
+    (should (equal '("x" "y" "z")
+                   (mapcar (lambda (s) (alist-get 'sessionId s))
+                           (decknix--session-dedupe-by-session-id rows))))))
+
+(ert-deftest decknix-session-cache--dedupe-tolerates-missing-ids ()
+  "Rows with no session id are kept, not collapsed into one."
+  (let ((rows '(((sessionId . nil) (filePath . "/a.jsonl"))
+                ((sessionId . nil) (filePath . "/b.jsonl")))))
+    (should (= 2 (length (decknix--session-dedupe-by-session-id rows))))))
+
 (provide 'decknix-agent-session-cache-test)
