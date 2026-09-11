@@ -49,7 +49,9 @@
 
 ;; Session-history primitives carved earlier.
 (declare-function decknix--agent-session-extract-all-turns
-                  "decknix-agent-session-history" (session-id))
+                  "decknix-agent-session-history" (session-id &optional provider-id))
+(defvar decknix--agent-provider-id)
+(defvar decknix-agent-default-provider)
 (declare-function decknix--agent-session-window-clamp
                   "decknix-agent-session-history" (cursor count total))
 (declare-function decknix--agent-session-take-window
@@ -230,7 +232,16 @@ turns through the same window.
 Caches the full parsed turn list in `decknix--agent-history-cache'
 and seeds `decknix--agent-history-cursor' so subsequent paging
 operates on the cache without re-reading the on-disk JSON."
-  (let* ((all (decknix--agent-session-extract-all-turns session-id))
+  (let* ((provider (or (and (boundp 'decknix--agent-provider-id)
+                            decknix--agent-provider-id)
+                       (bound-and-true-p decknix-agent-default-provider)))
+         ;; The provider is REQUIRED, not optional: transcripts live in
+         ;; per-provider directories with per-provider naming, so reading
+         ;; without it silently resolved every session against Claude's
+         ;; layout and returned nothing for a pi session -- a resumed pi
+         ;; buffer came up with no history, and so no prompts and no `Me'
+         ;; labels at all.
+         (all (decknix--agent-session-extract-all-turns session-id provider))
          (total (length all))
          (count n)
          ;; Land at the bottom of the timeline (most recent N turns).
