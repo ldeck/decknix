@@ -229,8 +229,17 @@ rather than trusting list order -- see
                          (lambda (a b)
                            (string> (or (alist-get 'modified a) "")
                                     (or (alist-get 'modified b) ""))))))
-      (or (when sorted (alist-get 'sessionId (car sorted)))
-          (decknix--agent-newest-session-id store-sids)))))
+      ;; Candidates from BOTH paths, scan-best first, then dated from
+      ;; disk.  The scan alone was not enough: it orders by the CACHED
+      ;; `modified' field, and a stale or incomplete cache made it choose
+      ;; a session older than one the store also knew about (3 of 19
+      ;; multi-session conversations, audited).  Transcript mtime is the
+      ;; one source both paths can agree on.  With nothing datable, the
+      ;; head wins, which is the scan's own pick.
+      (let ((candidates (delete-dups
+                         (append (mapcar (lambda (s) (alist-get 'sessionId s)) sorted)
+                                 (copy-sequence store-sids)))))
+        (decknix--agent-newest-session-id (delq nil candidates))))))
 
 ;; ── session-id metadata fallback (heals conv-key fragmentation) ──────
 ;;
