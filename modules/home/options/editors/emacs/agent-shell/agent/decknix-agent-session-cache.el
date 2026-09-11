@@ -619,6 +619,9 @@ and the persistent cache is saved if any new entries were written."
       ;; Assemble result: cached (already sorted newest-first by ls -t)
       ;; followed by newly parsed.
       (let ((full-list (append (nreverse cached-data) (or new-data '()))))
+        (setq full-list (decknix--session-cache-merge
+                        (gethash provider-id decknix--agent-session-cache-map)
+                        full-list))
         (puthash provider-id full-list decknix--agent-session-cache-map)
         (puthash provider-id (float-time) decknix--agent-session-cache-time-map)
         ;; Update legacy shims if provider is auggie
@@ -655,6 +658,9 @@ in a background subprocess."
         (if (null new-files)
             ;; Fully warm: assemble from memory, no subprocess.
             (let ((full-list (nreverse cached-data)))
+              (setq full-list (decknix--session-cache-merge
+                              (gethash provider-id decknix--agent-session-cache-map)
+                              full-list))
               (puthash provider-id full-list decknix--agent-session-cache-map)
               (puthash provider-id (float-time) decknix--agent-session-cache-time-map)
               (when (eq provider-id 'auggie)
@@ -701,6 +707,9 @@ in a background subprocess."
                                  (decknix--session-store-parsed p-id new-parsed)
                                  (decknix--session-meta-cache-save)
                                  (let ((full-list (append c-data new-parsed)))
+                                   (setq full-list (decknix--session-cache-merge
+                                                   (gethash p-id decknix--agent-session-cache-map)
+                                                   full-list))
                                    (puthash p-id full-list decknix--agent-session-cache-map)
                                    (puthash p-id (float-time) decknix--agent-session-cache-time-map)
                                    (when (eq p-id 'auggie)
@@ -738,6 +747,33 @@ to tell the real session's row from a sub-agent's is the file name."
         (path (alist-get 'filePath row)))
     (and (stringp sid) (stringp path)
          (equal sid (file-name-base path)))))
+
+(defun decknix--session-cache-merge (existing new)
+  "Return the row list to cache, given EXISTING and a freshly built NEW.
+
+NEW wins whenever it covers every session EXISTING did.  When it does
+not, the sessions it dropped are carried over rather than lost.
+
+A refresh returning FEWER sessions than the cache already held is a
+defect, not news.  Observed 2026-09-11: an async refresh replaced 117
+rows over 115 sessions with 19 rows over 17, and everything it dropped
+went invisible -- unfindable in `C-c s s\', and unresolvable by reattach,
+which cost a live session its buffer after a switch.
+
+Being wrong in this direction leaves a stale row for a deleted session,
+which a full sync refresh clears.  Being wrong in the other direction
+loses a session that is still running."
+  (let ((seen (make-hash-table :test 'equal))
+        (kept nil))
+    (dolist (row new)
+      (let ((sid (alist-get 'sessionId row)))
+        (when (stringp sid) (puthash sid t seen))))
+    (dolist (row existing)
+      (let ((sid (alist-get 'sessionId row)))
+        (when (and (stringp sid) (not (gethash sid seen)))
+          (puthash sid t seen)
+          (push row kept))))
+    (if kept (append new (nreverse kept)) new)))
 
 (defun decknix--session-dedupe-by-session-id (rows)
   "Return ROWS with at most one row per `sessionId', order preserved.
