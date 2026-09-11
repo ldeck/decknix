@@ -619,6 +619,8 @@ and the persistent cache is saved if any new entries were written."
       ;; Assemble result: cached (already sorted newest-first by ls -t)
       ;; followed by newly parsed.
       (let ((full-list (append (nreverse cached-data) (or new-data '()))))
+        (setq full-list (decknix--session-rows-for-provider
+                        full-list (mapcar #'cdr pairs)))
         (setq full-list (decknix--session-cache-merge
                         (gethash provider-id decknix--agent-session-cache-map)
                         full-list))
@@ -658,6 +660,8 @@ in a background subprocess."
         (if (null new-files)
             ;; Fully warm: assemble from memory, no subprocess.
             (let ((full-list (nreverse cached-data)))
+              (setq full-list (decknix--session-rows-for-provider
+                              full-list (mapcar #'cdr pairs)))
               (setq full-list (decknix--session-cache-merge
                               (gethash provider-id decknix--agent-session-cache-map)
                               full-list))
@@ -707,6 +711,8 @@ in a background subprocess."
                                  (decknix--session-store-parsed p-id new-parsed)
                                  (decknix--session-meta-cache-save)
                                  (let ((full-list (append c-data new-parsed)))
+                                   (setq full-list (decknix--session-rows-for-provider
+                                                   full-list (decknix--session-list-files p-id decknix--agent-session-cache-max-files)))
                                    (setq full-list (decknix--session-cache-merge
                                                    (gethash p-id decknix--agent-session-cache-map)
                                                    full-list))
@@ -747,6 +753,43 @@ to tell the real session's row from a sub-agent's is the file name."
         (path (alist-get 'filePath row)))
     (and (stringp sid) (stringp path)
          (equal sid (file-name-base path)))))
+
+(defun decknix--session-rows-for-provider (rows paths)
+  "Return ROWS that genuinely belong to the provider owning PATHS.
+
+PATHS is the provider's own scanned transcript list.  A row is kept when
+its `filePath' is one of them, or -- for providers whose filename is not
+just the session id (pi writes `<timestamp>_<sid>.jsonl\') -- when its
+`sessionId' appears in one of those paths.
+
+This enforces an invariant the refresh paths were violating: a provider's
+cached list must contain only that provider's sessions.  Measured
+2026-09-11, claude-code\'s cache repeatedly came back holding 99 rows
+whose session ids belong to PI transcripts, unstamped and jq-parsed,
+which pushed the real claude sessions out.  The picker then could not
+find them and reattach could not resolve a session id for a live
+conversation, costing it its buffer across a switch.
+
+Applied at the write sites rather than at the (still unidentified) point
+where the lists cross, because the invariant is cheap to state and holds
+regardless of which path violated it."
+  (if (null paths)
+      rows
+    (let ((set (make-hash-table :test 'equal)))
+      (dolist (p paths) (puthash p t set))
+      (seq-filter
+       (lambda (row)
+         (let ((fp (alist-get 'filePath row))
+               (sid (alist-get 'sessionId row)))
+           (cond
+            ((and fp (gethash fp set)) t)
+            (fp nil)
+            ((not (stringp sid)) t)
+            (t (let ((hit nil))
+                 (dolist (p paths hit)
+                   (unless hit
+                     (when (string-match-p (regexp-quote sid) p) (setq hit t)))))))))
+       rows))))
 
 (defun decknix--session-cache-merge (existing new)
   "Return the row list to cache, given EXISTING and a freshly built NEW.

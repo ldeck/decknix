@@ -1211,4 +1211,28 @@ basename matches is the real session and the other is the impostor."
          (new      '(((sessionId . "a")) ((sessionId . "b")))))
     (should (equal new (decknix--session-cache-merge existing new)))))
 
+
+(ert-deftest decknix-session-cache--rows-for-provider-drops-foreign-rows ()
+  "A provider's list must hold only that provider's sessions.
+claude-code's cache was repeatedly coming back holding rows whose session
+ids belong to pi transcripts, which pushed the real sessions out."
+  (let ((paths '("/c/projects/p/aaa.jsonl" "/c/projects/p/bbb.jsonl"))
+        (rows '(((sessionId . "aaa") (filePath . "/c/projects/p/aaa.jsonl"))
+                ((sessionId . "01a00d1a") (filePath . "/pi/sessions/x/2026_01a00d1a.jsonl")))))
+    (should (equal '("aaa")
+                   (mapcar (lambda (r) (alist-get 'sessionId r))
+                           (decknix--session-rows-for-provider rows paths))))))
+
+(ert-deftest decknix-session-cache--rows-for-provider-keeps-unstamped-own-rows ()
+  "pi names files `<timestamp>_<sid>', so a row with no filePath is matched
+by finding its session id inside one of the provider's own paths."
+  (let ((paths '("/pi/sessions/w/2026-08-17T00-43-30Z_01a00d2c.jsonl"))
+        (rows '(((sessionId . "01a00d2c")))))
+    (should (= 1 (length (decknix--session-rows-for-provider rows paths))))))
+
+(ert-deftest decknix-session-cache--rows-for-provider-no-paths-is-a-noop ()
+  "With no scan to compare against, filtering would lose everything."
+  (let ((rows '(((sessionId . "a")))))
+    (should (equal rows (decknix--session-rows-for-provider rows nil)))))
+
 (provide 'decknix-agent-session-cache-test)
