@@ -287,19 +287,44 @@ tag store lists its session-id under the conv-key (wrapper-first sessions:
       (should (equal "only-in-store"
                      (decknix--agent-latest-session-id-for-conv-key "k"))))))
 
-(ert-deftest decknix-agent-conv-resolve--store-fallback-takes-the-most-recent ()
-  "With several recorded sessions the newest wins, matching the scan path.
-Sessions are appended as they are created, so the last entry is newest."
+(ert-deftest decknix-agent-conv-resolve--store-fallback-takes-the-newest-by-mtime ()
+  "The fallback picks the most recently MODIFIED session, not a position.
+
+Replaces an assertion that the last element wins.  That encoded a wrong
+guess about store order and resumed the WRONG session: conversation
+conn/contact/ghost records its sessions newest-first, so taking the last
+one resumed a transcript from the previous day and the agent carried on
+from stale assumptions.  Position in the list is not evidence of
+recency; the transcript mtime is."
   (let ((store (make-hash-table :test #'equal))
         (convs (make-hash-table :test #'equal))
         (entry (make-hash-table :test #'equal)))
-    (puthash "sessions" '("oldest" "middle" "newest") entry)
+    (puthash "sessions" '("mid" "newest" "oldest") entry)
     (puthash "k" entry convs)
     (puthash "conversations" convs store)
     (cl-letf (((symbol-function 'decknix--agent-tags-read) (lambda () store))
               ((symbol-function 'decknix--agent-session-list) (lambda () nil))
-              ((symbol-function 'decknix--agent-conversation-key) (lambda (_fm) nil)))
+              ((symbol-function 'decknix--agent-conversation-key) (lambda (_fm) nil))
+              ((symbol-function 'decknix--agent-session-mtime-for-sid)
+               (lambda (sid) (pcase sid ("oldest" 10) ("mid" 20) ("newest" 30) (_ nil)))))
       (should (equal "newest"
+                     (decknix--agent-latest-session-id-for-conv-key "k"))))))
+
+(ert-deftest decknix-agent-conv-resolve--store-fallback-without-mtimes-takes-the-first ()
+  "With no resolvable transcripts, prefer the FIRST entry.
+The store records newest-first, so the head is the better guess than the
+tail when nothing can be dated."
+  (let ((store (make-hash-table :test #'equal))
+        (convs (make-hash-table :test #'equal))
+        (entry (make-hash-table :test #'equal)))
+    (puthash "sessions" '("first" "second") entry)
+    (puthash "k" entry convs)
+    (puthash "conversations" convs store)
+    (cl-letf (((symbol-function 'decknix--agent-tags-read) (lambda () store))
+              ((symbol-function 'decknix--agent-session-list) (lambda () nil))
+              ((symbol-function 'decknix--agent-conversation-key) (lambda (_fm) nil))
+              ((symbol-function 'decknix--agent-session-mtime-for-sid) (lambda (_s) nil)))
+      (should (equal "first"
                      (decknix--agent-latest-session-id-for-conv-key "k"))))))
 
 (ert-deftest decknix-agent-conv-resolve--scan-still-wins-over-the-store ()

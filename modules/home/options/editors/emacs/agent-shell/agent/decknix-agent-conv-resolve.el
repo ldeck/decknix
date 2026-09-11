@@ -41,6 +41,10 @@
 
 ;;; Code:
 
+(declare-function decknix--agent-session-file
+                  "decknix-agent-session-history" (session-id &optional provider-id))
+(defvar decknix-agent-provider-registry)
+
 (require 'seq)
 (require 'decknix-agent-parse)
 (require 'decknix-agent-tags-store)
@@ -136,6 +140,44 @@ target.  Returns nil when CONV-KEY is nil or the store has no entry."
       (when (hash-table-p entry)
         (gethash "sessions" entry)))))
 
+(defun decknix--agent-session-mtime-for-sid (session-id)
+  "Return the modification time of SESSION-ID's transcript, or nil.
+Searches every registered provider, because a conversation's store entry
+records session ids without saying which backend wrote them."
+  (when (stringp session-id)
+    (let ((best nil))
+      (dolist (entry (if (boundp 'decknix-agent-provider-registry)
+                         decknix-agent-provider-registry
+                       nil)
+                     best)
+        (let* ((p-id (car entry))
+               (file (ignore-errors
+                       (decknix--agent-session-file session-id p-id))))
+          (when (and file (stringp file) (not (string-empty-p file))
+                     (file-exists-p file))
+            (let ((mt (float-time (file-attribute-modification-time
+                                   (file-attributes file)))))
+              (when (or (null best) (> mt best)) (setq best mt)))))))))
+
+(defun decknix--agent-newest-session-id (session-ids)
+  "Return the most recently modified of SESSION-IDS, or nil.
+
+Dates each candidate from its transcript rather than trusting its
+position.  Position was the original guess and it resumed the WRONG
+session: `conn/contact/ghost' records its sessions newest-first, so
+taking the last one reopened the previous day's transcript and the agent
+continued from stale assumptions.
+
+Falls back to the FIRST id when nothing can be dated, since the store
+records newest-first, which makes the head the better guess than the
+tail."
+  (let ((best nil) (best-mt nil))
+    (dolist (sid session-ids)
+      (let ((mt (decknix--agent-session-mtime-for-sid sid)))
+        (when (and mt (or (null best-mt) (> mt best-mt)))
+          (setq best sid best-mt mt))))
+    (or best (car session-ids))))
+
 (defun decknix--agent-latest-session-id-for-conv-key (conv-key)
   "Return the session-id of the most recently modified snapshot for CONV-KEY.
 Returns nil when CONV-KEY is nil or no session matches.  Auggie writes
@@ -167,7 +209,9 @@ it present.  Reattach resolved the conv-key and the broker key correctly,
 then stopped here on a nil.
 
 The scan still wins when it has an answer: it carries `modified'
-timestamps, whereas the store list is ordered only by append."
+timestamps.  The store fallback dates each candidate from its transcript
+rather than trusting list order -- see
+`decknix--agent-newest-session-id'."
   (when conv-key
     (let* ((sessions (decknix--agent-session-list))
            (store-sids (decknix--agent-conv-key-store-sessions conv-key))
@@ -186,7 +230,7 @@ timestamps, whereas the store list is ordered only by append."
                            (string> (or (alist-get 'modified a) "")
                                     (or (alist-get 'modified b) ""))))))
       (or (when sorted (alist-get 'sessionId (car sorted)))
-          (car (last store-sids))))))
+          (decknix--agent-newest-session-id store-sids)))))
 
 ;; ── session-id metadata fallback (heals conv-key fragmentation) ──────
 ;;
