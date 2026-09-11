@@ -294,4 +294,105 @@ field must always be a string."
       (should (equal (decknix--agent-session-subagents "sid-2" 'claude-code) '((sid . "sid-2"))))
       (should (= calls 2)))))
 
+
+;; -- pi's schema -------------------------------------------------------
+;;
+;; Pi writes every record as `type: "message"' and puts the role at
+;; `.message.role'; Claude puts it at the TOP level as `type'. The
+;; extractor read only the top level, so every pi session yielded ZERO
+;; turns (verified against session 01a083eb: 3 real user messages, 74
+;; assistant, extractor returned 0).
+;;
+;; That silently disabled everything downstream that needs a pi session's
+;; turns: the resume continuation primer, and the `asking'-flag restore
+;; that decides whether a resumed session is shown as waiting on you.
+
+(ert-deftest decknix-agent-session-history/jsonl-pi-turns ()
+  "Pi-style JSONL nests the role under `message'."
+  (let ((sid "pi-sid-1")
+        (tmp (make-temp-file "pi-history-" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "{\"type\":\"session\",\"id\":\"x\"}\n")
+            (insert "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"first ask\"}]}}\n")
+            (insert "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer one\"}]}}\n")
+            (insert "{\"type\":\"message\",\"message\":{\"role\":\"toolResult\",\"content\":[{\"type\":\"text\",\"text\":\"ran a tool\"}]}}\n")
+            (insert "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer two\"}]}}\n")
+            (insert "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"second ask\"}]}}\n"))
+          (let ((decknix-agent-provider-registry nil))
+            (decknix-agent-register-provider 'pi '(:session-file-extension ".jsonl"))
+            (cl-letf (((symbol-function 'decknix--agent-session-file)
+                       (lambda (_id &optional _p) tmp)))
+              (let ((turns (decknix--agent-session-extract-all-turns sid 'pi)))
+                (should (= 2 (length turns)))
+                (should (equal "first ask" (caar turns)))
+                (should (equal "answer one\nanswer two" (cdar turns)))
+                (should (equal "second ask" (caadr turns)))))))
+      (delete-file tmp))))
+
+(ert-deftest decknix-agent-session-history/jsonl-pi-toolresult-does-not-split ()
+  "A `toolResult' role is the agent's own work loop, not a new turn."
+  (let ((sid "pi-sid-2")
+        (tmp (make-temp-file "pi-history-" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"only ask\"}]}}\n")
+            (insert "{\"type\":\"message\",\"message\":{\"role\":\"toolResult\",\"content\":[{\"type\":\"text\",\"text\":\"tool output\"}]}}\n")
+            (insert "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}\n"))
+          (let ((decknix-agent-provider-registry nil))
+            (decknix-agent-register-provider 'pi '(:session-file-extension ".jsonl"))
+            (cl-letf (((symbol-function 'decknix--agent-session-file)
+                       (lambda (_id &optional _p) tmp)))
+              (let ((turns (decknix--agent-session-extract-all-turns sid 'pi)))
+                (should (= 1 (length turns)))
+                (should (equal "only ask" (caar turns)))
+                (should (equal "done" (cdar turns)))))))
+      (delete-file tmp))))
+
+
+(ert-deftest decknix-agent-session-history/session-file-finds-pi-timestamped-name ()
+  "Pi names transcripts `<timestamp>_<sid>.jsonl', not `<sid>.jsonl'.
+
+The lookup matched the filename exactly, so it never resolved a pi
+transcript: verified against session 01a083eb, whose file is
+`2026-09-09T02-07-25-885Z_01a083eb-....jsonl'. Everything that reads a
+pi session's history was therefore reading nothing."
+  (let* ((dir (make-temp-file "pi-sessions-" t))
+         (proj (expand-file-name "--Users-x--" dir))
+         (sid "01a083eb-86ba-7044-b125-d8562c94e617")
+         (file (expand-file-name (concat "2026-09-09T02-07-25-885Z_" sid ".jsonl") proj)))
+    (unwind-protect
+        (progn
+          (make-directory proj t)
+          (with-temp-file file (insert "{}\n"))
+          (clrhash decknix--agent-session-file-cache)
+          (let ((decknix-agent-provider-registry nil))
+            (decknix-agent-register-provider 'pi
+              '(:session-file-extension ".jsonl" :multi-project t))
+            (cl-letf (((symbol-function 'decknix-agent-provider-sessions-dir)
+                       (lambda (&rest _) dir)))
+              (should (equal file (decknix--agent-session-file sid 'pi))))))
+      (delete-directory dir t))))
+
+(ert-deftest decknix-agent-session-history/session-file-still-finds-exact-name ()
+  "Claude's `<sid>.jsonl' must keep resolving."
+  (let* ((dir (make-temp-file "cc-sessions-" t))
+         (proj (expand-file-name "-proj-" dir))
+         (sid "abcd1234-0000-0000-0000-000000000000")
+         (file (expand-file-name (concat sid ".jsonl") proj)))
+    (unwind-protect
+        (progn
+          (make-directory proj t)
+          (with-temp-file file (insert "{}\n"))
+          (clrhash decknix--agent-session-file-cache)
+          (let ((decknix-agent-provider-registry nil))
+            (decknix-agent-register-provider 'claude-code
+              '(:session-file-extension ".jsonl" :multi-project t))
+            (cl-letf (((symbol-function 'decknix-agent-provider-sessions-dir)
+                       (lambda (&rest _) dir)))
+              (should (equal file (decknix--agent-session-file sid 'claude-code))))))
+      (delete-directory dir t))))
+
 (provide 'decknix-agent-session-history-test)

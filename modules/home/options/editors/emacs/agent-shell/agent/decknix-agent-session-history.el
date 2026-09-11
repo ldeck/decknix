@@ -120,7 +120,13 @@ transcripts live under dir/<slug>/sid.ext) the first lookup runs a
                (cached (gethash key decknix--agent-session-file-cache)))
           (if (and cached (file-exists-p cached))
               cached
-            (let* ((cmd (format "find %s -maxdepth 2 -name '%s%s' -print -quit 2>/dev/null"
+            ;; `*<sid><ext>' rather than `<sid><ext>': pi names its
+            ;; transcripts `<timestamp>_<sid>.jsonl', so an exact match
+            ;; never resolved one and every reader of a pi session's
+            ;; history silently got nothing (the resume primer, the
+            ;; `asking'-flag restore).  The glob still matches Claude's
+            ;; plain `<sid>.jsonl'.
+            (let* ((cmd (format "find %s -maxdepth 2 -name '*%s%s' -print -quit 2>/dev/null"
                                  (shell-quote-argument dir) session-id ext))
                    (path (string-trim (shell-command-to-string cmd))))
               ;; Only cache real hits; a miss (empty) may resolve later
@@ -228,8 +234,17 @@ the result as a string and never hit `wrong-type-argument stringp'."
                                  (json-array-type 'list)
                                  (json-key-type 'symbol))
                              (json-read-from-string line))))
-                   (type (alist-get 'type data))
-                   (msg  (alist-get 'message data)))
+                   (msg  (alist-get 'message data))
+                   ;; Claude puts the role at the TOP level as `type';
+                   ;; pi writes every record as `type: "message"' and
+                   ;; nests the role under `message'.  Reading only the
+                   ;; top level yielded ZERO turns for every pi session,
+                   ;; which silently disabled the resume primer and the
+                   ;; `asking'-flag restore for that provider.
+                   (type (let ((top (alist-get 'type data)))
+                           (if (member top '("user" "assistant"))
+                               top
+                             (or (alist-get 'role msg) top)))))
               (cond
                ((string= type "user")
                 ;; Start of a new turn -- but ONLY for a genuine user
