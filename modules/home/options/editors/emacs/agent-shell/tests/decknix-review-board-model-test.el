@@ -250,27 +250,27 @@ the two ignored look exactly like the two that worked."
   "A stale row must never ship: the approval was earned by another diff.
 Merging it merges something nobody read."
   (should (equal "author pushed since review"
-                 (decknix-review-board-ship-blocker '(:prs ("a#1")) 'stale))))
+                 (decknix-review-board-merge-blocker '(:prs ("a#1")) 'stale))))
 
 (ert-deftest decknix-rb--ship-refuses-gone ()
   "Nothing left to merge."
-  (should (decknix-review-board-ship-blocker '(:prs ("a#1")) 'gone)))
+  (should (decknix-review-board-merge-blocker '(:prs ("a#1")) 'gone)))
 
 (ert-deftest decknix-rb--ship-refuses-rows-without-prs ()
   "Nothing to name in the train."
-  (should (decknix-review-board-ship-blocker '(:prs nil) nil)))
+  (should (decknix-review-board-merge-blocker '(:prs nil) nil)))
 
 (ert-deftest decknix-rb--ship-allows-answered-and-plain ()
   "`answered' is not a blocker: somebody else reviewing it does not make
 it unmergeable, and a plain row is the ordinary case."
-  (should-not (decknix-review-board-ship-blocker '(:prs ("a#1")) 'answered))
-  (should-not (decknix-review-board-ship-blocker '(:prs ("a#1")) nil)))
+  (should-not (decknix-review-board-merge-blocker '(:prs ("a#1")) 'answered))
+  (should-not (decknix-review-board-merge-blocker '(:prs ("a#1")) nil)))
 
 (ert-deftest decknix-rb--ship-plan-groups-by-repo ()
   "`/merge-train' takes bare PR numbers and resolves the repo from its
 workspace, so a mixed list would merge into whichever repo was current."
   (let* ((rows '((:prs ("a#1" "a#2")) (:prs ("b#9"))))
-         (plan (decknix-review-board-ship-plan rows (lambda (_) nil)))
+         (plan (decknix-review-board-merge-plan rows (lambda (_) nil)))
          (by-repo (car plan)))
     (should (= 2 (length by-repo)))
     (should (equal '("1" "2") (alist-get "a" by-repo nil nil #'equal)))
@@ -279,7 +279,7 @@ workspace, so a mixed list would merge into whichever repo was current."
 (ert-deftest decknix-rb--ship-plan-merges-rows-of-one-repo ()
   "Two rows on one repo become one train, not two."
   (let* ((rows '((:prs ("a#1")) (:prs ("a#2"))))
-         (plan (decknix-review-board-ship-plan rows (lambda (_) nil))))
+         (plan (decknix-review-board-merge-plan rows (lambda (_) nil))))
     (should (= 1 (length (car plan))))
     (should (equal '("1" "2") (cdar (car plan))))))
 
@@ -288,7 +288,7 @@ workspace, so a mixed list would merge into whichever repo was current."
 A ship that silently dropped the stale ones would look identical to one
 that merged them."
   (let* ((rows '((:prs ("a#1")) (:prs ("a#2"))))
-         (plan (decknix-review-board-ship-plan
+         (plan (decknix-review-board-merge-plan
                 rows (lambda (r) (when (equal '("a#2") (plist-get r :prs)) 'stale)))))
     (should (= 1 (length (car plan))))
     (should (= 1 (length (cdr plan))))
@@ -333,12 +333,12 @@ pre-merge validation round in development first; merge-train
 rebase-merges ALREADY-APPROVED PRs and skips it.  Shipping a bump that
 way merges it without the round that would have caught a regression."
   (should (equal "bot PR — ship via `d' (review-and-ship), not merge-train"
-                 (decknix-review-board-ship-blocker
+                 (decknix-review-board-merge-blocker
                   '(:prs ("a#1") :bot-p t) nil))))
 
 (ert-deftest decknix-rb--ship-allows-human-rows ()
   "Human PRs are exactly what merge-train is for."
-  (should-not (decknix-review-board-ship-blocker '(:prs ("a#1") :bot-p nil) nil)))
+  (should-not (decknix-review-board-merge-blocker '(:prs ("a#1") :bot-p nil) nil)))
 
 (ert-deftest decknix-rb--bot-flag-survives-into-rows ()
   "`:bot-p' reaches the row, or the ship guard cannot fire."

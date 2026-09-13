@@ -19,10 +19,16 @@
 ;; quit, detach -- act on the marked set, or on the row at point when
 ;; nothing is marked.
 ;;
-;; The verbs that WRITE to GitHub (approve, ship) are deliberately still
-;; unbound.  They need the manifest-and-confirmation gate from the spec,
-;; and a batch cannot be looser than the single-PR case which already
-;; mandates one.  Everything bound here is recoverable; those are not.
+;; `s' (merge) is the one bound verb that WRITES to GitHub, and only
+;; behind a full manifest and an explicit confirmation -- a batch cannot
+;; be looser than the single-PR case, which already mandates one.  It
+;; hands the PRs to `/merge-train', which owns the second gate.
+;;
+;; Two heavier verbs stay unbound: a standalone APPROVE, and a full SHIP
+;; (`/ship' -- validate in dev, merge, progressive deploy, Jira Done).
+;; Merge is only the rebase-merge step; shipping a bot PR already has a
+;; home on this board via `d' (which dispatches `/review-and-ship-bot-pr'
+;; behind the mandatory review gate).
 ;;
 ;; Follows `decknix-dos-board' deliberately -- constant lanes, cursor,
 ;; single-key actions, read-only, refreshed rather than recomputed.  The
@@ -332,7 +338,7 @@ pick up."
             ;; read-only screen need to be readable without asking.
             (propertize
              (concat "  n/p move   RET open   i inspect   c copy   j jump   m mark   M lane\n"
-                     "  d dispatch  k quit   D detach  s ship   A auto-review  f filters  g refresh  ? help\n")
+                     "  d dispatch  k quit   D detach  s merge  A auto-review  f filters  g refresh  ? help\n")
              'face 'font-lock-comment-face)
             "\n"
             (propertize "  m  ● pri  row                                                  state\n"
@@ -589,7 +595,7 @@ No confirmation: detaching is reversible, and the agent keeps working."
     (decknix-review-board--report "Detached" (length bufs) (length (cdr part)))))
 
 (defvar decknix-review-board-merge-command "/merge-train"
-  "Command the board hands a ship plan to.
+  "Command the board hands a merge plan to.
 It owns train ordering and its own confirmation gate; the board's job is
 to name the PRs, not to merge them.")
 
@@ -598,9 +604,9 @@ to name the PRs, not to merge them.")
   (decknix--hub-review-status-aggregate (plist-get row :statuses)))
 
 (defun decknix-review-board--manifest (by-repo blocked dry)
-  "Return the confirmation manifest text for a ship plan."
+  "Return the confirmation manifest text for a merge plan."
   (with-temp-buffer
-    (insert (format "Ship plan%s
+    (insert (format "Merge plan%s
 
 " (if dry "  (DRY RUN)" "")))
     (dolist (cell by-repo)
@@ -612,7 +618,7 @@ to name the PRs, not to merge them.")
                       (string-join (cdr cell) " "))))
     (when blocked
       (insert "
-  NOT shipping:
+  NOT merging:
 ")
       (dolist (b blocked)
         (insert (format "    %-28s %s
@@ -621,8 +627,8 @@ to name the PRs, not to merge them.")
                         (cdr b)))))
     (buffer-string)))
 
-(defun decknix-review-board-ship (&optional dry)
-  "Ship the target rows via `decknix-review-board-merge-command'.
+(defun decknix-review-board-merge (&optional dry)
+  "Merge the target rows via `decknix-review-board-merge-command'.
 
 With a prefix argument, DRY: passes `--dry', so the train is planned and
 printed without merging anything.
@@ -633,18 +639,18 @@ the SECOND one, not the only one.  That is deliberate: the batch case
 cannot be looser than the single-PR case, which already requires an
 explicit confirmation before anything is posted.
 
-Refuses stale and already-merged rows, and SAYS which.  A ship that
+Refuses stale and already-merged rows, and SAYS which.  A merge that
 silently dropped them would be indistinguishable from one that merged
 them."
   (interactive "P")
   (let* ((rows (decknix-review-board--targets))
-         (plan (decknix-review-board-ship-plan
+         (plan (decknix-review-board-merge-plan
                 rows #'decknix-review-board--row-status))
          (by-repo (car plan))
          (blocked (cdr plan)))
     (unless rows (user-error "Nothing selected"))
     (unless by-repo
-      (user-error "Nothing shippable%s"
+      (user-error "Nothing to merge%s"
                   (if blocked
                       (format " (%d blocked: %s)" (length blocked)
                               (mapconcat #'cdr blocked "; "))
@@ -653,7 +659,7 @@ them."
       ;; Shown in full, then confirmed.  A count is not a manifest: the
       ;; point is to read the PR numbers before they merge, not to be
       ;; told how many there were afterwards.
-      (with-current-buffer (get-buffer-create "*Review Board Ship Plan*")
+      (with-current-buffer (get-buffer-create "*Review Board Merge Plan*")
         (let ((inhibit-read-only t))
           (erase-buffer) (insert manifest) (goto-char (point-min)))
         (special-mode)
@@ -662,7 +668,7 @@ them."
                 (format "Hand %d train%s to %s? "
                         (length by-repo) (if (= 1 (length by-repo)) "" "s")
                         decknix-review-board-merge-command)))
-          (message "Ship cancelled")
+          (message "Merge cancelled")
         (dolist (cell by-repo)
           (let* ((repo (car cell))
                  (nums (cdr cell))
@@ -715,7 +721,7 @@ ACT
                   session for the whole service, which is the point)
   k               quit sessions and TERMINATE their brokers (confirms)
   D               detach: close the buffer, agent keeps working
-  s               ship via /merge-train      C-u s  dry run
+  s               merge via /merge-train     C-u s  dry run
 
 COLUMNS
   m               `*' when marked
@@ -905,7 +911,7 @@ a setting kept somewhere else."
     (define-key map (kbd "d") #'decknix-review-board-dispatch)
     (define-key map (kbd "k") #'decknix-review-board-quit-sessions)
     (define-key map (kbd "D") #'decknix-review-board-detach-sessions)
-    (define-key map (kbd "s") #'decknix-review-board-ship)
+    (define-key map (kbd "s") #'decknix-review-board-merge)
     (define-key map (kbd "c") #'decknix-review-board-copy-url)
     (define-key map (kbd "w") #'decknix-review-board-copy-url)
     (define-key map (kbd "A") #'decknix-review-board-cycle-auto-review)
@@ -920,7 +926,7 @@ a setting kept somewhere else."
 `k' and `D' mirror `C-c s q' and `C-c s D' so the quit/detach
 distinction is learned once rather than twice.
 
-`s' ships, behind a manifest and an explicit confirmation.  There is no
+`s' merges, behind a manifest and an explicit confirmation.  There is no
 `approve': `submit-pr-review' is deprecated and approval now happens
 inside the review commands, behind the mandatory review gate.  A board
 verb that approved directly would route around it.")
