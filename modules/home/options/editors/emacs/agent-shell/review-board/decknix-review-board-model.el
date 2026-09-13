@@ -269,7 +269,7 @@ ignored look identical to the two that succeeded."
   (alist-get lane model))
 
 
-;; ── shipping ─────────────────────────────────────────────────────────
+;; ── merging ─────────────────────────────────────────────────────────
 ;;
 ;; The board never posts to GitHub itself.  It builds a plan and hands it
 ;; to `/merge-train', which owns train ordering and its own confirmation
@@ -279,8 +279,8 @@ ignored look identical to the two that succeeded."
 ;; verb that approved directly would route around that gate, which the
 ;; workflow rules treat as a serious failure rather than a shortcut.
 
-(defun decknix-review-board-ship-blocker (row status)
-  "Return why ROW cannot be shipped, or nil when it can.  Pure.
+(defun decknix-review-board-merge-blocker (row status)
+  "Return why ROW cannot be merged, or nil when it can.  Pure.
 
 STATUS is the row's aggregated staleness.  The refusals are the ones that
 cannot be recovered from afterwards:
@@ -319,8 +319,8 @@ cannot be recovered from afterwards:
                         (match-string 1 k)))
                     (plist-get row :prs))))
 
-(defun decknix-review-board-ship-plan (rows status-fn)
-  "Return (BY-REPO . BLOCKED) for shipping ROWS.  Pure.
+(defun decknix-review-board-merge-plan (rows status-fn)
+  "Return (BY-REPO . BLOCKED) for merging ROWS.  Pure.
 
 BY-REPO is an alist of (REPO . NUMBERS); BLOCKED is a list of
 (ROW . REASON).  Grouped by repo because `/merge-train' takes bare PR
@@ -328,11 +328,11 @@ numbers and resolves the repository from its workspace -- one train per
 repo, never a mixed list that would merge into whichever repo happened to
 be current.
 
-Blocked rows are returned, not filtered away.  A ship that silently
-dropped the stale ones would look identical to a ship that merged them."
+Blocked rows are returned, not filtered away.  A merge that silently
+dropped the stale ones would look identical to a merge that merged them."
   (let (by-repo blocked)
     (dolist (row rows)
-      (let ((reason (decknix-review-board-ship-blocker
+      (let ((reason (decknix-review-board-merge-blocker
                      row (funcall status-fn row))))
         (if reason
             (push (cons row reason) blocked)
