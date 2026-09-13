@@ -226,6 +226,14 @@ make the column noisy."
   "Non-nil when ITEM was authored by a bot."
   (and (decknix--hub-bot-author-p (alist-get 'author item)) t))
 
+(defvar decknix-review-board-auto-dismiss nil
+  "When non-nil, a merged or closed PR's session drops off the board.
+The Finished lane is emptied automatically on every refresh, so an
+actioned review clears itself once its PR lands.  When nil (the default),
+finished sessions stay in the Finished lane for you to clear by hand --
+seeing them is the prompt to quit the session and free its broker.
+Toggle with `x'.")
+
 (defvar decknix-review-board-show-all nil
   "When non-nil, show every review request, ignoring the sidebar filters.")
 
@@ -357,13 +365,14 @@ pick up."
             ;; transient: this is the screen where you decide what to do
             ;; about reviews, so the policy that spawns them unasked is
             ;; part of the picture rather than a setting elsewhere.
-            (propertize (format "%s   auto-review %s"
+            (propertize (format "%s   auto-review %s   auto-dismiss [%s]"
                                 (if decknix-review-board-show-all
                                     "ALL requests" "filtered")
                                 (if (fboundp 'decknix-auto-review-state-label)
                                     (format "[%s]" (decknix-auto-review-state-label
                                                     decknix-auto-review-mode))
-                                  "[?]"))
+                                  "[?]")
+                                (if decknix-review-board-auto-dismiss "on" "off"))
                         'face 'font-lock-constant-face)
             "\n"
             ;; A visible cheat sheet, not a pointer to one.  `?' existed
@@ -372,7 +381,7 @@ pick up."
             ;; read-only screen need to be readable without asking.
             (propertize
              (concat "  n/p move   RET open   i inspect   c copy   j jump   m mark   M lane\n"
-                     "  d dispatch  k quit   D detach  s merge  A auto-review  f filters  g refresh  ? help\n")
+                     "  d dispatch  k quit   D detach  s merge  A auto-review  x auto-dismiss  f filters  g refresh  ? help\n")
              'face 'font-lock-comment-face)
             "\n"
             (propertize "  m  ● pri  row                                                  state\n"
@@ -410,7 +419,11 @@ pick up."
   (interactive)
   (when-let* ((buf (get-buffer decknix-review-board-buffer-name)))
     (with-current-buffer buf
-      (setq decknix-review-board--model (decknix-review-board--build))
+      (setq decknix-review-board--model
+            (let ((m (decknix-review-board--build)))
+              (if decknix-review-board-auto-dismiss
+                  (decknix-review-board-drop-finished m)
+                m)))
       (decknix-review-board--render))))
 
 (defun decknix-review-board-next ()
@@ -738,6 +751,7 @@ NAVIGATE
   j               jump to the session buffer
   g               refresh          q  bury          ?  this help
   A               cycle auto-review: off / bot / human / any
+  x               toggle auto-dismiss: finished sessions drop off, or stay
   f               filters: the sidebar\'s, or the whole feed
 
 FILTERS
@@ -915,6 +929,19 @@ answering it from a screen that shows only a row."
                             (window-height . 0.45)
                             (inhibit-same-window . t))))))
 
+(defun decknix-review-board-toggle-auto-dismiss ()
+  "Toggle whether finished sessions drop off the board automatically.
+See `decknix-review-board-auto-dismiss'."
+  (interactive)
+  (setq decknix-review-board-auto-dismiss
+        (not decknix-review-board-auto-dismiss))
+  (decknix-review-board-refresh)
+  (message "Auto-dismiss %s%s"
+           (if decknix-review-board-auto-dismiss "on" "off")
+           (if decknix-review-board-auto-dismiss
+               " — merged/closed PRs' sessions now drop off"
+             " — finished sessions stay for manual quit")))
+
 (defun decknix-review-board-cycle-auto-review ()
   "Cycle the auto-review policy (off / bot / human / any) and re-render.
 
@@ -949,6 +976,7 @@ a setting kept somewhere else."
     (define-key map (kbd "c") #'decknix-review-board-copy-url)
     (define-key map (kbd "w") #'decknix-review-board-copy-url)
     (define-key map (kbd "A") #'decknix-review-board-cycle-auto-review)
+    (define-key map (kbd "x") #'decknix-review-board-toggle-auto-dismiss)
     (define-key map (kbd "f") #'decknix-review-board-toggle-filters)
     (define-key map (kbd "i") #'decknix-review-board-inspect)
     (define-key map (kbd "?") #'decknix-review-board-help)
@@ -978,7 +1006,11 @@ verb that approved directly would route around it.")
     (with-current-buffer buf
       (unless (derived-mode-p 'decknix-review-board-mode)
         (decknix-review-board-mode))
-      (setq decknix-review-board--model (decknix-review-board--build))
+      (setq decknix-review-board--model
+            (let ((m (decknix-review-board--build)))
+              (if decknix-review-board-auto-dismiss
+                  (decknix-review-board-drop-finished m)
+                m)))
       (decknix-review-board--render))
     (pop-to-buffer buf)))
 

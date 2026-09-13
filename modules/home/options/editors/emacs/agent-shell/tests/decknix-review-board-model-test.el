@@ -407,5 +407,27 @@ way merges it without the round that would have caught a regression."
   (should-not (decknix-review-board-activity-verb '("upside" "#5" "hot")))
   (should-not (decknix-review-board-activity-verb nil)))
 
+
+;; --- auto-dismiss drops finished rows ---------------------------------
+
+(ert-deftest decknix-rb--drop-finished-empties-that-lane-only ()
+  "Auto-dismiss drops finished rows and touches nothing else."
+  (let* ((model '((needs-you . (r1))
+                  (doing     . (r2 r3))
+                  (finished  . (r4 r5))
+                  (grouped   . (r6))
+                  (idle      . nil)))
+         (out (decknix-review-board-drop-finished model)))
+    (should-not (alist-get 'finished out))
+    (should (equal '(r1) (alist-get 'needs-you out)))
+    (should (equal '(r2 r3) (alist-get 'doing out)))
+    (should (equal '(r6) (alist-get 'grouped out)))))
+
+(ert-deftest decknix-rb--drop-finished-keeps-the-lane-present ()
+  "The lane stays (empty) so its screen position is learnable."
+  (let ((out (decknix-review-board-drop-finished '((finished . (r1))))))
+    (should (assq 'finished out))
+    (should-not (alist-get 'finished out))))
+
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here
