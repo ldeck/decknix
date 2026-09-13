@@ -244,6 +244,17 @@ shifting with the contents."
                                     (plist-get b :priority))))))
      decknix-review-board-lanes)))
 
+(defun decknix-review-board-drop-finished (model)
+  "Return MODEL with the `finished' lane emptied.  Pure.
+
+The auto-dismiss toggle uses this: once a PR merges or closes, its
+session drops off the board rather than lingering.  The lane is KEPT
+\(empty) rather than removed, so its position on screen stays learnable --
+the same reason empty lanes render at all."
+  (mapcar (lambda (lane)
+            (if (eq (car lane) 'finished) (cons 'finished nil) lane))
+          model))
+
 (defun decknix-review-board-count (model)
   "Return the total number of rows in MODEL."
   (apply #'+ (mapcar (lambda (lane) (length (cdr lane))) model)))
