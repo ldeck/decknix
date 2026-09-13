@@ -27,10 +27,13 @@ filing it under `finished' would bury the question."
   (should (eq 'finished (decknix-review-board--lane t nil 'gone nil)))
   (should (eq 'finished (decknix-review-board--lane t nil 'gone t))))
 
-(ert-deftest decknix-rb--author-splits-only-live-sessions ()
-  "Bot and human sessions split into their own lanes."
-  (should (eq 'grouped (decknix-review-board--lane t nil nil t)))
-  (should (eq 'human   (decknix-review-board--lane t nil nil nil))))
+(ert-deftest decknix-rb--any-live-session-is-doing ()
+  "A live session not blocked and not gone is `doing', whoever authored it.
+A bot session that has been dispatched is one session doing work, not part
+of the un-dispatched flood, so it shows individually in the activity lane
+rather than folding into `grouped'."
+  (should (eq 'doing (decknix-review-board--lane t nil nil t)))
+  (should (eq 'doing (decknix-review-board--lane t nil nil nil))))
 
 (ert-deftest decknix-rb--unsessioned-human-is-idle-bot-is-grouped ()
   "Bot rows fold whether or not anyone is on them yet.
@@ -45,8 +48,8 @@ request has nothing to fold into, so it stays individual."
 (ert-deftest decknix-rb--stale-and-answered-do-not-change-lane ()
   "Only `gone' moves a session out of its author lane.
 `stale' and `answered' are badges on a row that still needs working."
-  (should (eq 'human (decknix-review-board--lane t nil 'stale nil)))
-  (should (eq 'human (decknix-review-board--lane t nil 'answered nil))))
+  (should (eq 'doing (decknix-review-board--lane t nil 'stale nil)))
+  (should (eq 'doing (decknix-review-board--lane t nil 'answered nil))))
 
 ;; --- attention states ---
 
@@ -81,7 +84,7 @@ has a PR under it."
   (let ((row (decknix-review-board--session-row
               '(:name "g" :prs ("a#1" "a#3") :state "ready" :bot-p t)
               #'decknix-rb-test--status #'decknix-rb-test--priority)))
-    (should (eq 'grouped (plist-get row :lane)))))
+    (should (eq 'doing (plist-get row :lane)))))
 
 (ert-deftest decknix-rb--fully-merged-group-is-finished ()
   "Every member gone means the session has nothing left to do."
@@ -150,9 +153,9 @@ would reappear as idle rows and invite a second dispatch."
     (should (= 0 (decknix-review-board-count model)))))
 
 (ert-deftest decknix-rb--lane-order-is-fixed ()
-  "Needs-you first, finished second: the cheapest lane to clear must not
-be buried at the bottom where it never gets cleared."
-  (should (equal '(needs-you finished human grouped idle)
+  "Lifecycle order: blocked on you, then in progress, then done, then the
+un-started backlog.  The lanes you clear stay high, not buried."
+  (should (equal '(needs-you doing finished grouped idle)
                  (mapcar #'car decknix-review-board-lanes))))
 
 (ert-deftest decknix-rb--rows-sort-by-priority-within-a-lane ()
@@ -351,6 +354,58 @@ way merges it without the round that would have caught a regression."
                 #'decknix-rb-test--priority #'decknix-rb-test--bot)))
     (should (plist-get session-row :bot-p))
     (should (plist-get (car (alist-get 'grouped model)) :bot-p))))
+
+
+;; --- the activity lane carries verb and progress -----------------------
+
+(ert-deftest decknix-rb--doing-lane-exists-and-sits-after-needs-you ()
+  "`doing' is a lane, ordered between `needs-you' and `finished'."
+  (let ((lanes (mapcar #'car decknix-review-board-lanes)))
+    (should (memq 'doing lanes))
+    (should (< (seq-position lanes 'needs-you)
+               (seq-position lanes 'doing)))
+    (should (< (seq-position lanes 'doing)
+               (seq-position lanes 'finished)))))
+
+(ert-deftest decknix-rb--session-row-carries-verb-and-progress ()
+  "A session's activity verb and progress ride on its row for the renderer."
+  (let ((row (decknix-review-board--session-row
+              '(:name "n" :prs ("a#3") :state "working" :bot-p nil
+                :verb "merge" :progress "3/5")
+              #'decknix-rb-test--status #'decknix-rb-test--priority)))
+    (should (equal "merge" (plist-get row :verb)))
+    (should (equal "3/5" (plist-get row :progress)))
+    (should (eq 'doing (plist-get row :lane)))))
+
+(ert-deftest decknix-rb--session-row-tolerates-absent-verb-and-progress ()
+  "A session with no dispatched verb or plan still builds a doing row."
+  (let ((row (decknix-review-board--session-row
+              '(:name "n" :prs ("a#3") :state "ready" :bot-p nil)
+              #'decknix-rb-test--status #'decknix-rb-test--priority)))
+    (should-not (plist-get row :verb))
+    (should-not (plist-get row :progress))
+    (should (eq 'doing (plist-get row :lane)))))
+
+
+;; --- activity verb from the session's intent tags ---------------------
+
+(ert-deftest decknix-rb--activity-verb-reads-review ()
+  (should (equal "review"
+                 (decknix-review-board-activity-verb '("auto" "#1" "upside" "review")))))
+
+(ert-deftest decknix-rb--activity-verb-reads-merge ()
+  (should (equal "merge"
+                 (decknix-review-board-activity-verb '("merge" "upside" "train")))))
+
+(ert-deftest decknix-rb--activity-verb-prefers-the-more-specific-action ()
+  "ship and merge outrank review; fix (an action taken) outranks review."
+  (should (equal "ship" (decknix-review-board-activity-verb '("ship" "review"))))
+  (should (equal "merge" (decknix-review-board-activity-verb '("merge" "review"))))
+  (should (equal "fix" (decknix-review-board-activity-verb '("review" "fix")))))
+
+(ert-deftest decknix-rb--activity-verb-nil-when-none-known ()
+  (should-not (decknix-review-board-activity-verb '("upside" "#5" "hot")))
+  (should-not (decknix-review-board-activity-verb nil)))
 
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here

@@ -48,6 +48,10 @@
 (declare-function decknix--hub-bot-author-p "decknix-hub-mention-bot" (author))
 (declare-function decknix--agent-review-prs-for-conv-key "decknix-agent-session-broker" (conv-key))
 (declare-function decknix-agent-buffer-status "decknix-agent-auto-close" (buffer))
+(declare-function decknix--agent-tags-for-buffer "decknix-agent-tags-read" (buffer))
+(declare-function decknix--agent-plan-label "decknix-agent-turn-signals" (progress))
+(declare-function decknix-review-board-activity-verb "decknix-review-board-model" (tags))
+(defvar decknix--agent-turn-plan)
 (declare-function agent-shell-buffers "ext:agent-shell")
 (declare-function decknix-auto-review--dispatch-unit "decknix-auto-review" (unit))
 (declare-function decknix--agent-broker-stop-p "decknix-agent-session-broker" (key other-keys))
@@ -122,12 +126,23 @@ in the first place."
                         (prs (and ck (ignore-errors
                                        (decknix--agent-review-prs-for-conv-key ck)))))
                    (when prs
-                     (list :name (buffer-name buf)
-                           :buffer buf
-                           :conv-key ck
-                           :prs prs
-                           :state (ignore-errors (decknix-agent-buffer-status buf))
-                           :bot-p (decknix-review-board--prs-bot-p prs)))))))
+                     (let* ((tags (ignore-errors
+                                    (decknix--agent-tags-for-buffer buf)))
+                            (plan (bound-and-true-p decknix--agent-turn-plan)))
+                       (list :name (buffer-name buf)
+                             :buffer buf
+                             :conv-key ck
+                             :prs prs
+                             :state (ignore-errors (decknix-agent-buffer-status buf))
+                             :bot-p (decknix-review-board--prs-bot-p prs)
+                             ;; What the session is DOING (its intent tag)
+                             ;; and how far along its plan is, for the
+                             ;; In-progress lane.  Both nil-tolerant.
+                             :verb (and tags
+                                        (decknix-review-board-activity-verb tags))
+                             :progress (and plan
+                                            (fboundp 'decknix--agent-plan-label)
+                                            (decknix--agent-plan-label plan)))))))))
            (agent-shell-buffers)))))
 
 (defvar decknix-review-board--owner-map (make-hash-table :test 'equal)
@@ -293,6 +308,28 @@ pick up."
          ;; that happens to be idle render identically, and the board reads
          ;; as a list of stale sessions to clean up rather than a backlog.
          (has-session (and (plist-get row :session) t))
+         ;; In-progress rows lead their status column with what the
+         ;; session is DOING (its verb) and how far along (N/M), so the
+         ;; lane reads as "merge 3/5 working" rather than a bare state.
+         (verb (plist-get row :verb))
+         (progress (plist-get row :progress))
+         (activity (when (eq (plist-get row :lane) 'doing)
+                     (string-trim
+                      (concat (when verb
+                                (propertize (format "%-6s " verb)
+                                            'face 'font-lock-keyword-face))
+                              (when progress
+                                (propertize (format "%-5s " progress)
+                                            'face 'font-lock-constant-face))))))
+         (trailing (cond (attention (or state ""))
+                         ((and (eq (plist-get row :lane) 'doing)
+                               (not (string-empty-p (or activity ""))))
+                          (concat activity "  "
+                                  (propertize (or state "")
+                                              'face 'font-lock-comment-face)))
+                         (has-session (or state ""))
+                         (t (propertize "no session"
+                                        'face 'font-lock-comment-face))))
          (line (format "%s %-2s %s %5d  %-52s %s"
                        (if marked "*" " ")
                        (if (string-empty-p badge) " " badge)
@@ -302,10 +339,7 @@ pick up."
                        (plist-get row :priority)
                        (truncate-string-to-width
                         (decknix-review-board--row-title row) 52)
-                       (cond (attention (or state ""))
-                             (has-session (or state ""))
-                             (t (propertize "no session"
-                                            'face 'font-lock-comment-face))))))
+                       trailing)))
     (insert (propertize line
                         'decknix-review-board-row row
                         'face (when attention 'decknix-review-board-needs-you))

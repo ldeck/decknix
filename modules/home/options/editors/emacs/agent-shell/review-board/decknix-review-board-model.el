@@ -33,8 +33,8 @@
 
 (defconst decknix-review-board-lane-help
   '((needs-you . "agent is blocked on you")
+    (doing     . "in progress — working, or done and dismissable")
     (finished  . "PR merged or closed — safe to quit")
-    (human     . "human-authored PRs")
     (grouped   . "bot PRs, folded per service")
     (idle      . "no session yet — nobody is on these"))
   "One-line description per lane, rendered beside the heading.
@@ -46,15 +46,17 @@ stale sessions to clean up, which is the opposite of what they are.")
 
 (defconst decknix-review-board-lanes
   '((needs-you . "Needs you")
+    (doing     . "In progress")
     (finished  . "Finished")
-    (human     . "Human reviews")
     (grouped   . "Grouped")
     (idle      . "Idle"))
   "Ordered (LANE . HEADING) pairs, rendered top to bottom.
 
-`finished' sits second, not last, on purpose: it is the cheapest lane to
-clear, clearing it is what reduces the noise the board exists to reduce,
-and a lane buried at the bottom never gets cleared.")
+The order tracks a review's lifecycle top to bottom: blocked on you, then
+in flight, then done.  `doing' and `finished' sit high, not buried,
+because they are the lanes you clear -- a session you have actioned should
+be watchable, and a merged PR's session should be visible to dismiss
+rather than lost at the bottom.")
 
 (defconst decknix-review-board-attention-states '("waiting" "asking" "netfail")
   "Session states that mean the agent is blocked on the user.
@@ -81,23 +83,44 @@ Precedence is deliberate and only partly obvious:
 - Attention outranks everything, including `gone'.  A session asking a
   question still wants an answer even if its PR merged underneath it; it
   may be asking precisely BECAUSE the PR merged.
-- `finished' outranks the author split.  Once no review is wanted, which
-  kind of author wrote it stops being interesting.
-- Bot rows fold whether or not a session exists.  The flood is forty
-  bumps, not forty sessions.
+- `finished' outranks the activity lane.  Once no review is wanted, that
+  the session was mid-flight stops being interesting.
+- Any live, unblocked, not-gone session is `doing', regardless of author.
+- Bot rows fold ONLY when no session is on them.  The flood is forty
+  un-dispatched bumps, not forty sessions.
 - A human request with no session is `idle': individually authored, so
   there is nothing to fold it into."
   (cond
    ((and has-session attention) 'needs-you)
    ((and has-session (eq status 'gone)) 'finished)
-   ;; Bot rows fold whether or not anyone is on them yet.  Grouping is a
-   ;; property of the WORK, not of whether a session happens to exist:
-   ;; forty un-dispatched dependabot bumps are the flood this board was
-   ;; built for, and listing them individually would reproduce it
-   ;; faithfully on a screen meant to remove it.
+   ;; Any live session that is neither blocked nor gone is IN PROGRESS,
+   ;; whoever authored the PR.  A dispatched bot session is one session
+   ;; doing work -- you want to watch its progress, so it shows
+   ;; individually here rather than folding into `grouped'.
+   (has-session 'doing)
+   ;; With no session the author decides the lane.  The bot flood folds:
+   ;; forty un-dispatched dependabot bumps are what this board was built
+   ;; to compress, and listing them one per row would reproduce it on the
+   ;; screen meant to remove it.  A human request has nothing to fold
+   ;; into, so it stays individual.
    (bot-p 'grouped)
-   ((not has-session) 'idle)
-   (t 'human)))
+   (t 'idle)))
+
+(defconst decknix-review-board-activity-verbs '("ship" "merge" "fix" "review")
+  "Known activity verbs, in DISPLAY PRECEDENCE (first match wins).
+
+A dispatched session carries its intent as a tag: auto-review tags
+`review' (and `fix' when it is applying fixes), the board's merge tags
+`merge', a `/ship' session tags `ship'.  Precedence runs most-decisive
+first: shipping and merging outrank reviewing, and `fix' -- an action
+taken on a review -- outranks the `review' it accompanies.")
+
+(defun decknix-review-board-activity-verb (tags)
+  "Return the activity verb TAGS name, or nil.  Pure.
+The first of `decknix-review-board-activity-verbs' present in TAGS, so a
+session tagged both `review' and `fix' reads as the more specific `fix'."
+  (seq-find (lambda (v) (member v tags))
+            decknix-review-board-activity-verbs))
 
 (defun decknix-review-board--session-row (session status-fn priority-fn)
   "Build a row plist for SESSION.
@@ -128,6 +151,12 @@ whole group rather than being buried inside it."
           :conv-key (plist-get session :conv-key)
           :prs prs
           :state (plist-get session :state)
+          ;; The activity verb (from the session's intent tags) and its
+          ;; plan progress ("N/M"), carried through for the renderer.  A
+          ;; session with no dispatched verb or no plan simply has nil
+          ;; here and renders without them.
+          :verb (plist-get session :verb)
+          :progress (plist-get session :progress)
           :statuses statuses
           :priority (if priorities (apply #'max priorities) 0)
           :session t
