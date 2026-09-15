@@ -350,13 +350,19 @@ in
       type = types.bool;
       default = true;
       description = ''
-        Install basedpyright and wire it as the Eglot server for Python.
+        Install pyright and wire it as the Eglot server for Python.
 
         `languages.python.enable' only provides the major mode, the same
         trap as `rust.enable' / `go.enable' -- highlighting without
-        navigation.  basedpyright (a maintained pyright fork) is the LSP
-        half.  The workspace has ~9 Python files, small but until now
-        entirely unsupported.
+        navigation.  pyright is the LSP half.  The workspace has ~9 Python
+        files, small but until now entirely unsupported.
+
+        pyright, NOT basedpyright: basedpyright is not on the binary cache
+        (404) and builds LLVM/clang from source -- an hours-long build on
+        every switch until it lands in cache, which for darwin it may never.
+        pyright is fully cached (18 MB fetch, no build) and gives the same
+        `pyright-langserver --stdio' entry point; the fork's extra strict
+        checks are not worth a clang toolchain build for navigation.
       '';
     };
 
@@ -400,7 +406,7 @@ in
       ++ (optionals cfg.terraform.enable [ pkgs.terraform-ls ])
       ++ (optionals cfg.rust.enable [ pkgs.rust-analyzer ])
       ++ (optionals cfg.go.enable [ pkgs.gopls ])
-      ++ (optionals cfg.python.enable [ pkgs.basedpyright ])
+      ++ (optionals cfg.python.enable [ pkgs.pyright ])
       ++ (optionals cfg.treesit.enable [ treesitGrammars ])
       ++ (optionals (cfg.dap.enable && cfg.dapAdapters.jvm) [ javaDebugExt ])
       ++ (optionals (cfg.dap.enable && cfg.dapAdapters.rust) [ pkgs.lldb ])
@@ -533,14 +539,15 @@ ${treesitRemapElisp}
                        '((go-mode go-ts-mode) . ("gopls"))))
 
       '' + optionalString cfg.python.enable ''
-        ;; == Python Language Server (basedpyright) ==
+        ;; == Python Language Server (pyright) ==
         ;; Same gap as Rust and Go: `languages.python.enable' added the mode,
-        ;; never a server.  basedpyright ships `basedpyright-langserver',
-        ;; which speaks LSP over stdio.
+        ;; never a server.  pyright ships `pyright-langserver', which speaks
+        ;; LSP over stdio.  (pyright not basedpyright: the fork builds
+        ;; LLVM/clang from source and is not cached -- see the option doc.)
         (with-eval-after-load 'eglot
           (add-to-list 'eglot-server-programs
                        '((python-mode python-ts-mode)
-                         . ("basedpyright-langserver" "--stdio"))))
+                         . ("pyright-langserver" "--stdio"))))
 
       '' + optionalString cfg.java.enable ''
         ;; == Java Language Server (jdtls, driven directly) ==

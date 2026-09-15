@@ -21,7 +21,7 @@ Absent:
 | Terraform | `terraform-ls` | 0.38.3 | ✅ landed |
 | Rust | `rust-analyzer` | 2025-10-28 | ✅ landed |
 | Go | `gopls` | 0.20.0 | ✅ landed |
-| Python | `basedpyright` | 1.34.0 | ✅ landed |
+| Python | `pyright` | 1.1.407 | ✅ landed (basedpyright not cached — builds LLVM) |
 | TypeScript | `typescript-language-server` | — | |
 
 Two things that read as working and are not:
