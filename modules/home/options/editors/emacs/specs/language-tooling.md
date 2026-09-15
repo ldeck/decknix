@@ -21,7 +21,7 @@ Absent:
 | Terraform | `terraform-ls` | 0.38.3 | ✅ landed |
 | Rust | `rust-analyzer` | 2025-10-28 | ✅ landed |
 | Go | `gopls` | 0.20.0 | ✅ landed |
-| Python | `basedpyright` | 1.34.0 | |
+| Python | `basedpyright` | 1.34.0 | ✅ landed |
 | TypeScript | `typescript-language-server` | — | |
 
 Two things that read as working and are not:
@@ -114,16 +114,39 @@ some point:
   whenever a build ran. Intermittent failure presenting as a hang. Now
   900.
 
-Two avoidable costs, identified and not yet fixed:
+Two avoidable costs were identified; the second is now fixed.
 
 - `.teamcity/pom.xml` drags in two Maven invocations (~15s each) to
   resolve TeamCity DSL config irrelevant to the service's Kotlin source,
-  and fails to find a snapshot artifact anyway.
-- The server is pinned to **JDK 21** by its Nix wrapper while these
-  projects target JDK 25, and it leaves idle JDK-21 Gradle daemons alive
-  for hours, contending with interactive builds in both directions. An
-  isolated `GRADLE_USER_HOME`, or `GRADLE_RO_DEP_CACHE` over the shared
-  one, is the candidate fix and is unmeasured.
+  and fails to find a snapshot artifact anyway. STILL OPEN: fwcd 1.3.13
+  exposes no exclusion setting, so this needs an upstream change.
+- ~~The server is pinned to **JDK 21** by its Nix wrapper while these
+  projects target JDK 25, and leaves idle JDK-21 daemons contending with
+  interactive builds.~~ ✅ FIXED (`69bf2e4`): a wrapper
+  (`decknix-kotlin-lsp`) picks the JDK from the project's Gradle toolchain
+  (searched to depth 5 — `trademe-integration` declares it in a
+  buildSrc convention plugin) and gives the server its own
+  `GRADLE_USER_HOME` with the shared cache mounted `GRADLE_RO_DEP_CACHE`.
+  A correction fell out of this: `trademe-integration` targets JDK **21**,
+  not 25 — that was `upside`; the old pin was accidentally right for the
+  repo all the measuring was done on.
+
+### 3.0.2 Verified end-to-end, 2026-09-15
+
+With the wrapper live, `TradeMeOAuthController.kt` in `trademe-integration`
+reached `eglot-managed-p` with 17 capabilities, on JDK 21, and hover
+resolved a symbol to its type. The server process carried the wrapper's
+`JAVA_HOME` (zulu 21), isolated `GRADLE_USER_HOME`, and `GRADLE_RO_DEP_CACHE`;
+only JDK-21 Gradle daemons ran, none on 25.
+
+The one regression: the FIRST connect into the fresh isolated
+`GRADLE_USER_HOME` took ~6-7 minutes (Gradle at 122% CPU throughout, not
+stalled), slower than the 191s shared-cache cold run — a cold configure
+into an empty Gradle home, even though `GRADLE_RO_DEP_CACHE` spares the
+dependency re-download. The home is warm afterwards. This is exactly why
+the 900s `eglot-connect-timeout` was necessary; at 300s this legitimate
+start would have failed. Warming the home at switch time is the candidate
+mitigation, unbuilt.
 
 **Usability verdict: it mostly works.** 13 of 14 sampled files answered
 hover correctly. The failure is per-construct, not per-project: the
