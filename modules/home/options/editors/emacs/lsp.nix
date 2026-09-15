@@ -346,6 +346,20 @@ in
       '';
     };
 
+    python.enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Install basedpyright and wire it as the Eglot server for Python.
+
+        `languages.python.enable' only provides the major mode, the same
+        trap as `rust.enable' / `go.enable' -- highlighting without
+        navigation.  basedpyright (a maintained pyright fork) is the LSP
+        half.  The workspace has ~9 Python files, small but until now
+        entirely unsupported.
+      '';
+    };
+
     java.enable = mkOption {
       type = types.bool;
       default = true;
@@ -386,6 +400,7 @@ in
       ++ (optionals cfg.terraform.enable [ pkgs.terraform-ls ])
       ++ (optionals cfg.rust.enable [ pkgs.rust-analyzer ])
       ++ (optionals cfg.go.enable [ pkgs.gopls ])
+      ++ (optionals cfg.python.enable [ pkgs.basedpyright ])
       ++ (optionals cfg.treesit.enable [ treesitGrammars ])
       ++ (optionals (cfg.dap.enable && cfg.dapAdapters.jvm) [ javaDebugExt ])
       ++ (optionals (cfg.dap.enable && cfg.dapAdapters.rust) [ pkgs.lldb ])
@@ -415,7 +430,9 @@ in
                  (rust-mode . eglot-ensure)
                  (rust-ts-mode . eglot-ensure)
                  (go-mode . eglot-ensure)
-                 (go-ts-mode . eglot-ensure))
+                 (go-ts-mode . eglot-ensure)
+                 (python-mode . eglot-ensure)
+                 (python-ts-mode . eglot-ensure))
           :config
           ;; Performance tuning
           (setq eglot-events-buffer-size 0           ; Disable events buffer for performance
@@ -514,6 +531,16 @@ ${treesitRemapElisp}
         (with-eval-after-load 'eglot
           (add-to-list 'eglot-server-programs
                        '((go-mode go-ts-mode) . ("gopls"))))
+
+      '' + optionalString cfg.python.enable ''
+        ;; == Python Language Server (basedpyright) ==
+        ;; Same gap as Rust and Go: `languages.python.enable' added the mode,
+        ;; never a server.  basedpyright ships `basedpyright-langserver',
+        ;; which speaks LSP over stdio.
+        (with-eval-after-load 'eglot
+          (add-to-list 'eglot-server-programs
+                       '((python-mode python-ts-mode)
+                         . ("basedpyright-langserver" "--stdio"))))
 
       '' + optionalString cfg.java.enable ''
         ;; == Java Language Server (jdtls, driven directly) ==
