@@ -930,11 +930,31 @@ Returns nil; the effect is on the per-provider caches."
   nil)
 
 (defun decknix--agent-session-list-all ()
-  "Return combined sessions from all registered providers."
+  "Return combined sessions from all registered providers.
+
+Copies each provider\='s list before combining, and this is the whole
+point of the function rather than a detail.
+
+`append\=' copies every argument EXCEPT the last, whose spine it SHARES,
+and `sort\=' is destructive.  So sorting the combined list reordered cons
+cells still owned by a provider\='s cache, splicing other providers\= rows
+into it.  That is a real aliasing hazard and this
+closes it.
+
+It is NOT, however, the producer of the observed corruption: on the live
+path `decknix--agent-session-list\=' returns a freshly consed list (via
+`decknix--session-dedupe-by-session-id\='), so the shared spine belongs to
+that temporary rather than to a cache.  Kept as a defensive invariant --
+the sharing is real and the next caller to return the cache directly
+would be bitten -- not as the fix for `C-c s s\='.
+
+The copy is shallow: the row alists stay shared, which is correct
+because they are read-only.  Only the spine must be ours to sort."
   (let ((all nil))
     (dolist (provider-entry decknix-agent-provider-registry)
       (let ((p-id (car provider-entry)))
-        (setq all (append all (decknix--agent-session-list p-id)))))
+        (setq all (append all (copy-sequence
+                               (decknix--agent-session-list p-id))))))
     ;; Sort combined list newest-first by modified date (ISO-8601).
     (sort all (lambda (a b)
                 (let ((ma (alist-get 'modified a))
