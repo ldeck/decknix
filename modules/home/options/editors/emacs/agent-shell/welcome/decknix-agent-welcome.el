@@ -328,6 +328,15 @@ Nothing is lost by declining: a zero-width overlay has nowhere to hang a
 `before-string', and upstream's own attempt to make one deletes it."
   (and (numberp beg) (numberp end) (< beg end)))
 
+(defun decknix--agent-chat-span-covers-live-prompt-p (beg end)
+  "Non-nil when BEG..END covers the live prompt (`comint-last-prompt').
+Used to decide whether a ` Me ' label is worth protecting from a blanking
+write: only the live prompt's is.  Nil when there is no live prompt, so a
+buffer without one protects nothing."
+  (when (bound-and-true-p comint-last-prompt)
+    (let ((p (marker-position (car comint-last-prompt))))
+      (and p (<= beg p) (<= p end)))))
+
 (defun decknix--agent-chat-upsert-advice (orig category anchor-beg anchor-end beg end props)
   "Around-advice for `agent-shell-chat--upsert-overlay': keep real labels.
 Only `agent-shell-chat-me' overlays have their props guarded; agent-side
@@ -341,7 +350,16 @@ overlay to spare."
   (if (not (decknix--agent-chat-label-span-usable-p beg end))
       nil
     (let ((props
-           (if (eq category 'agent-shell-chat-me)
+           (if (and (eq category 'agent-shell-chat-me)
+                    ;; Only the LIVE prompt's label is protected.  A second,
+                    ;; STALE prompt run (an empty submission leaves one above
+                    ;; the live one on a `session/load' resume) must be
+                    ;; allowed to blank normally -- protecting it too kept
+                    ;; two ` Me ' labels at the tail and the buffer showed no
+                    ;; usable prompt (pi session 01a083eb).  The live prompt
+                    ;; is the one `comint-last-prompt' points at; a span not
+                    ;; covering it is stale and passes through unguarded.
+                    (decknix--agent-chat-span-covers-live-prompt-p beg end))
                (let* ((existing
                        (car (seq-filter
                              (lambda (o) (eq (overlay-get o 'category) category))
