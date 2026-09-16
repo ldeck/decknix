@@ -37,6 +37,34 @@ let
   };
   kotlinDefaultJdk = pkgs.zulu21;
 
+  # The launcher to exec, bypassing nixpkgs' own wrapper.
+  #
+  # `${kotlinPkg}/bin/kotlin-language-server' is a generated wrapper whose
+  # second line is an UNCONDITIONAL `export JAVA_HOME=<zulu-21>'.  It
+  # therefore overwrote whatever JAVA_HOME this wrapper had just chosen,
+  # and the per-project JDK selection below was inert from the day it was
+  # written -- confirmed by reading the running server's environment:
+  # JAVA_HOME was zulu-21 on a worktree that resolves to 25, while
+  # GRADLE_USER_HOME and GRADLE_RO_DEP_CACHE (which nothing clobbers) were
+  # ours.  It passed its own acceptance test only because the repo it was
+  # verified on resolves to 21 as well, so the two agreed by coincidence.
+  #
+  # `.kotlin-language-server-wrapped' is the real Gradle start script,
+  # which honours JAVA_HOME from the environment.
+  #
+  # A missing file THROWS rather than falling back.  A silent fallback is
+  # exactly how this defect stayed invisible for a week; a failed
+  # evaluation names the problem and is a one-line fix if nixpkgs ever
+  # renames the wrapped binary.
+  kotlinInnerLauncher =
+    let wrapped = "${kotlinPkg}/bin/.kotlin-language-server-wrapped";
+    in if builtins.pathExists wrapped
+       then wrapped
+       else throw ("decknix-kotlin-lsp: ${wrapped} is missing. nixpkgs' "
+                   + "wrapper exports its own JAVA_HOME, so going through "
+                   + "it would silently disable per-project JDK selection. "
+                   + "Point kotlinInnerLauncher at the new unwrapped path.");
+
   # Gradle cache for the language server, kept OFF the interactive one.
   #
   # The server fires one `gradlew' per subproject per task type, and those
@@ -91,7 +119,7 @@ let
       export GRADLE_RO_DEP_CACHE="$HOME/.gradle/caches"
     fi
 
-    exec "${kotlinPkg}/bin/kotlin-language-server" "$@"
+    exec "${kotlinInnerLauncher}" "$@"
   '';
   # The java-debug plugin jar.  jdtls loads it as an OSGi bundle and only
   # then advertises `vscode.java.resolveClasspath' /
