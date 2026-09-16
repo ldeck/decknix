@@ -138,6 +138,7 @@ history; only the model-facing primer is suppressed)."
 (declare-function decknix--agent-conv-touch
                   "decknix-agent-conv-recency" (conv-key))
 (declare-function decknix--agent-session-list "decknix-agent-session-cache")
+(declare-function decknix--agent-session-refresh-all-sync "decknix-agent-session-cache")
 (declare-function decknix--agent-session-ensure-jq-filter
                   "decknix-agent-session-cache")
 (declare-function decknix--agent-session-file
@@ -2204,6 +2205,14 @@ By default, saved sessions are collapsed by conversation.
 With \\[universal-argument], shows all individual session snapshots."
   (interactive "P")
   (require 'consult)
+  ;; Force a synchronous, complete refresh before the picker reads the
+  ;; list.  The async refresh path can leave the cache badly incomplete
+  ;; (one session id duplicated many times crowds out the rest), so the
+  ;; picker intermittently could not find a session the CLI shows at once.
+  ;; A sync refresh is sub-second on the warm meta-cache and always
+  ;; rebuilds the full set.  See `decknix--agent-session-refresh-all-sync'.
+  (when (fboundp 'decknix--agent-session-refresh-all-sync)
+    (ignore-errors (decknix--agent-session-refresh-all-sync)))
   (setq decknix--session-picker-expand arg)
   (setq decknix--session-picker-captured-selections nil)
   (setq decknix--session-picker-multi-mode nil)
