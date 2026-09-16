@@ -188,8 +188,13 @@ Defensive guard for legacy / corrupt entries."
   (cl-letf (((symbol-function 'decknix--agent-current-conv-key) (lambda () "523fdb64f335b839"))
             ((symbol-function 'decknix--agent-current-session-id) (lambda () "5de16692"))
             ((symbol-function 'decknix--agent-tags-for-conv-key) (lambda (_k) nil))
-            ((symbol-function 'decknix--agent-tags-for-session)
-             (lambda (_s) '("guidelines" "policies" "ai" "nurturecloud"))))
+            ;; `tags-resolve\=' now reaches the store scan directly rather
+            ;; than via `tags-for-session\=', which used to cost a session-list
+            ;; round trip on every call.  Same fallback, cheaper mechanism.
+            ((symbol-function 'decknix--agent-tags-read) (lambda () nil))
+            ((symbol-function 'decknix--agent-tags-conversations) (lambda (_s) nil))
+            ((symbol-function 'decknix--agent-store-field-scan)
+             (lambda (_c _s _f) '("guidelines" "policies" "ai" "nurturecloud"))))
     (with-temp-buffer
       (should (equal '("guidelines" "policies" "ai" "nurturecloud")
                      (decknix--agent-tags-for-buffer (current-buffer)))))))
@@ -199,7 +204,10 @@ Defensive guard for legacy / corrupt entries."
   (cl-letf (((symbol-function 'decknix--agent-current-conv-key) (lambda () "ck"))
             ((symbol-function 'decknix--agent-current-session-id) (lambda () "sid"))
             ((symbol-function 'decknix--agent-tags-for-conv-key) (lambda (_k) '("a" "b")))
-            ((symbol-function 'decknix--agent-tags-for-session) (lambda (_s) '("b" "c"))))
+            ((symbol-function 'decknix--agent-tags-read) (lambda () nil))
+            ((symbol-function 'decknix--agent-tags-conversations) (lambda (_s) nil))
+            ((symbol-function 'decknix--agent-store-field-scan)
+             (lambda (_c _s _f) '("b" "c"))))
     (with-temp-buffer
       (should (equal '("a" "b" "c") (decknix--agent-tags-for-buffer (current-buffer)))))))
 

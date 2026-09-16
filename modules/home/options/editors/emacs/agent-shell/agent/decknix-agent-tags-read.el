@@ -129,8 +129,27 @@ Union rather than first-hit: when a resume splits tags across entries,
 neither alone is the answer.  ONE resolver, called by every consumer:
 the bug this fixes was two consumers doing it right and three not, and a
 second copy of the fallback would reproduce that a level up."
-  (let ((by-conv (and conv-key (decknix--agent-tags-for-conv-key conv-key)))
-        (by-sid  (and session-id (decknix--agent-tags-for-session session-id))))
+  (let* ((by-conv (and conv-key (decknix--agent-tags-for-conv-key conv-key)))
+         ;; Store scan, NOT `decknix--agent-tags-for-session'.  That helper
+         ;; first resolves session-id -> conv-key via
+         ;; `decknix--agent-conversation-key-for-session', which reads the
+         ;; SESSION LIST -- and on the miss path schedules a cache refresh.
+         ;; Called once per row by `decknix--agent-conversation-preview',
+         ;; that turned opening `C-c s s' into ~140 refresh schedulings
+         ;; mid-build, and the resulting write left the picker unable to
+         ;; find sessions the CLI lists at once.
+         ;;
+         ;; The round trip was never needed here: the caller already HAS
+         ;; the conv-key, and the session-id fallback only ever wanted the
+         ;; store entry LISTING that id -- which is exactly what
+         ;; `decknix--agent-store-field-scan' returns, with no session list
+         ;; and no refresh.
+         (by-sid (and session-id
+                      (fboundp 'decknix--agent-store-field-scan)
+                      (let* ((store (decknix--agent-tags-read))
+                             (convs (decknix--agent-tags-conversations store)))
+                        (decknix--agent-store-field-scan
+                         convs session-id "tags")))))
     (cond
      ((and by-conv by-sid)
       (delete-dups (append by-conv by-sid)))
