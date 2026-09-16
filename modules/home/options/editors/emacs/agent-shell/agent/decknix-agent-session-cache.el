@@ -620,10 +620,10 @@ and the persistent cache is saved if any new entries were written."
       ;; followed by newly parsed.
       (let ((full-list (append (nreverse cached-data) (or new-data '()))))
         (setq full-list (decknix--session-rows-for-provider
-                        full-list (mapcar #'cdr pairs)))
+                        full-list (mapcar #'cdr pairs) provider-id))
         (setq full-list (decknix--session-cache-merge
                         (gethash provider-id decknix--agent-session-cache-map)
-                        full-list))
+                        full-list provider-id))
         (puthash provider-id full-list decknix--agent-session-cache-map)
         (puthash provider-id (float-time) decknix--agent-session-cache-time-map)
         ;; Update legacy shims if provider is auggie
@@ -661,10 +661,10 @@ in a background subprocess."
             ;; Fully warm: assemble from memory, no subprocess.
             (let ((full-list (nreverse cached-data)))
               (setq full-list (decknix--session-rows-for-provider
-                              full-list (mapcar #'cdr pairs)))
+                              full-list (mapcar #'cdr pairs) provider-id))
               (setq full-list (decknix--session-cache-merge
                               (gethash provider-id decknix--agent-session-cache-map)
-                              full-list))
+                              full-list provider-id))
               (puthash provider-id full-list decknix--agent-session-cache-map)
               (puthash provider-id (float-time) decknix--agent-session-cache-time-map)
               (when (eq provider-id 'auggie)
@@ -712,10 +712,10 @@ in a background subprocess."
                                  (decknix--session-meta-cache-save)
                                  (let ((full-list (append c-data new-parsed)))
                                    (setq full-list (decknix--session-rows-for-provider
-                                                   full-list (decknix--session-list-files p-id decknix--agent-session-cache-max-files)))
+                                                   full-list (decknix--session-list-files p-id decknix--agent-session-cache-max-files) p-id))
                                    (setq full-list (decknix--session-cache-merge
                                                    (gethash p-id decknix--agent-session-cache-map)
-                                                   full-list))
+                                                   full-list p-id))
                                    (puthash p-id full-list decknix--agent-session-cache-map)
                                    (puthash p-id (float-time) decknix--agent-session-cache-time-map)
                                    (when (eq p-id 'auggie)
@@ -754,7 +754,7 @@ to tell the real session's row from a sub-agent's is the file name."
     (and (stringp sid) (stringp path)
          (equal sid (file-name-base path)))))
 
-(defun decknix--session-rows-for-provider (rows paths)
+(defun decknix--session-rows-for-provider (rows paths &optional provider-id)
   "Return ROWS that genuinely belong to the provider owning PATHS.
 
 PATHS is the provider's own scanned transcript list.  A row is kept when
@@ -772,7 +772,17 @@ conversation, costing it its buffer across a switch.
 
 Applied at the write sites rather than at the (still unidentified) point
 where the lists cross, because the invariant is cheap to state and holds
-regardless of which path violated it."
+regardless of which path violated it.
+
+PROVIDER-ID, when supplied, is the cache being written.  A row carrying a
+`providerId' that disagrees is dropped outright.  Measured 2026-09-16:
+`claude-code' held 143 rows over FIFTEEN distinct ids, one repeated
+seventy-five times -- every duplicate stamped `pi\=', with no `filePath\='
+and an identical `modified\='.  The path tests above could not see them,
+because their discriminator is `filePath\=' and these rows have none, so
+they reached the substring test and a pi id can satisfy it by accident.
+Trusting the stamp is both cheaper and more direct than inferring
+ownership from a filename."
   (if (null paths)
       rows
     (let ((set (make-hash-table :test 'equal)))
@@ -780,8 +790,16 @@ regardless of which path violated it."
       (seq-filter
        (lambda (row)
          (let ((fp (alist-get 'filePath row))
-               (sid (alist-get 'sessionId row)))
+               (sid (alist-get 'sessionId row))
+               (owner (alist-get 'providerId row)))
            (cond
+            ;; The row already says whose it is.  Believe it, in both
+            ;; directions, before any filename reasoning: a foreign row is
+            ;; never ours however its id reads, and one of ours survives
+            ;; even when the filename cannot vouch for it (pi writes
+            ;; `<timestamp>_<sid>.jsonl').
+            ((and provider-id owner (not (eq owner provider-id))) nil)
+            ((and provider-id owner (eq owner provider-id)) t)
             ((and fp (gethash fp set)) t)
             (fp nil)
             ((not (stringp sid)) t)
@@ -791,7 +809,7 @@ regardless of which path violated it."
                      (when (string-match-p (regexp-quote sid) p) (setq hit t)))))))))
        rows))))
 
-(defun decknix--session-cache-merge (existing new)
+(defun decknix--session-cache-merge (existing new &optional provider-id)
   "Return the row list to cache, given EXISTING and a freshly built NEW.
 
 NEW wins whenever it covers every session EXISTING did.  When it does
@@ -805,15 +823,25 @@ which cost a live session its buffer after a switch.
 
 Being wrong in this direction leaves a stale row for a deleted session,
 which a full sync refresh clears.  Being wrong in the other direction
-loses a session that is still running."
+loses a session that is still running.
+
+PROVIDER-ID, when supplied, is applied to the CARRY-OVER.  Without it the
+carry-over undoes `decknix--session-rows-for-provider': that filter drops
+a foreign row from NEW, and this function then restores it from EXISTING
+because NEW no longer covers it.  Measured 2026-09-16 -- after the filter
+was made provider-aware the claude cache still held 143 rows over
+eighteen ids, because every pi row it removed came straight back here."
   (let ((seen (make-hash-table :test 'equal))
         (kept nil))
     (dolist (row new)
       (let ((sid (alist-get 'sessionId row)))
         (when (stringp sid) (puthash sid t seen))))
     (dolist (row existing)
-      (let ((sid (alist-get 'sessionId row)))
-        (when (and (stringp sid) (not (gethash sid seen)))
+      (let ((sid (alist-get 'sessionId row))
+            (owner (alist-get 'providerId row)))
+        (when (and (stringp sid) (not (gethash sid seen))
+                   ;; Never carry a row this cache disowns.
+                   (not (and provider-id owner (not (eq owner provider-id)))))
           (puthash sid t seen)
           (push row kept))))
     (if kept (append new (nreverse kept)) new)))

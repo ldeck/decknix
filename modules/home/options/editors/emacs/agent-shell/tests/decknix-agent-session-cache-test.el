@@ -1235,4 +1235,84 @@ by finding its session id inside one of the provider's own paths."
   (let ((rows '(((sessionId . "a")))))
     (should (equal rows (decknix--session-rows-for-provider rows nil)))))
 
+
+;; --- a row must never be cached under a provider it disowns ----------
+;;
+;; Measured 2026-09-16, the reason `C-c s s' could not find a review
+;; session the CLI listed at once: `claude-code' held 143 rows covering
+;; FIFTEEN distinct session ids, one repeated seventy-five times. Every
+;; duplicate carried `providerId' pi, no `filePath', and an identical
+;; `modified' -- pi rows, cloned, filling claude's cache and crowding the
+;; real sessions out.
+;;
+;; The existing path filter could not stop them. Its discriminator is
+;; `filePath', and these rows have none, so they fell through to the
+;; session-id-appears-in-a-path test, which pi ids can pass by
+;; coincidence of substring.
+;;
+;; The row already SAYS whose it is. Trusting that is cheaper and more
+;; direct than inferring ownership from a filename, and it holds no
+;; matter which write path is at fault -- which is the point, since three
+;; previous guards all recorded the crossing point as unidentified.
+
+(ert-deftest decknix-session-rows-for-provider--drops-a-foreign-provider-row ()
+  "A row stamped for another provider is never kept."
+  (let ((rows '(((sessionId . "pi-1") (providerId . pi))
+                ((sessionId . "c-1") (providerId . claude-code)
+                 (filePath . "/p/c-1.jsonl")))))
+    (should (equal '(((sessionId . "c-1") (providerId . claude-code)
+                      (filePath . "/p/c-1.jsonl")))
+                   (decknix--session-rows-for-provider
+                    rows '("/p/c-1.jsonl") 'claude-code)))))
+
+(ert-deftest decknix-session-rows-for-provider--drops-foreign-rows-without-a-path ()
+  "The measured shape: foreign, no filePath, id that could match a path."
+  (let ((rows '(((sessionId . "01a00d1a") (providerId . pi))
+                ((sessionId . "real") (providerId . claude-code)
+                 (filePath . "/p/real.jsonl")))))
+    (should (= 1 (length (decknix--session-rows-for-provider
+                          rows '("/p/real.jsonl" "/p/x_01a00d1a.jsonl")
+                          'claude-code))))))
+
+(ert-deftest decknix-session-rows-for-provider--keeps-unstamped-rows ()
+  "An unstamped row is judged by path as before; stamping is not required."
+  (let ((rows '(((sessionId . "c-1") (filePath . "/p/c-1.jsonl")))))
+    (should (equal rows (decknix--session-rows-for-provider
+                         rows '("/p/c-1.jsonl") 'claude-code)))))
+
+(ert-deftest decknix-session-rows-for-provider--keeps-own-provider-rows ()
+  "A row stamped for THIS provider is kept even with no filePath.
+Pi names its transcripts `<timestamp>_<sid>.jsonl', so its own rows must
+survive the filter that the filename cannot vouch for."
+  (let ((rows '(((sessionId . "pi-1") (providerId . pi)))))
+    (should (equal rows (decknix--session-rows-for-provider
+                         rows '("/p/123_pi-1.jsonl") 'pi)))))
+
+(ert-deftest decknix-session-rows-for-provider--without-a-provider-behaves-as-before ()
+  "Callers that pass no provider keep the original path-only semantics."
+  (let ((rows '(((sessionId . "pi-1") (providerId . pi)))))
+    (should (equal rows (decknix--session-rows-for-provider
+                         rows '("/p/123_pi-1.jsonl"))))))
+
+(ert-deftest decknix-session-cache-merge--carry-over-cannot-resurrect-a-foreign-row ()
+  "The carry-over must not undo the provider filter.
+
+This is the second half of the same bug. `rows-for-provider\=' drops a
+foreign row from NEW, and the merge then restores it from EXISTING
+precisely BECAUSE NEW no longer covers it. With the filter fixed and this
+not, the claude cache still held 143 rows over eighteen ids."
+  (let ((existing '(((sessionId . "pi-1") (providerId . pi))
+                    ((sessionId . "c-old") (providerId . claude-code))))
+        (new '(((sessionId . "c-1") (providerId . claude-code)))))
+    (let ((out (decknix--session-cache-merge existing new 'claude-code)))
+      (should-not (seq-find (lambda (r) (eq 'pi (alist-get 'providerId r))) out))
+      ;; the same-provider row it dropped IS still carried
+      (should (seq-find (lambda (r) (equal "c-old" (alist-get 'sessionId r))) out)))))
+
+(ert-deftest decknix-session-cache-merge--without-a-provider-is-unchanged ()
+  "Existing callers keep the old carry-everything behaviour."
+  (let ((existing '(((sessionId . "pi-1") (providerId . pi))))
+        (new '(((sessionId . "c-1")))))
+    (should (= 2 (length (decknix--session-cache-merge existing new))))))
+
 (provide 'decknix-agent-session-cache-test)
