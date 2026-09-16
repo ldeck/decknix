@@ -1315,4 +1315,41 @@ not, the claude cache still held 143 rows over eighteen ids."
         (new '(((sessionId . "c-1")))))
     (should (= 2 (length (decknix--session-cache-merge existing new))))))
 
+(ert-deftest decknix-session-list-all--must-not-mutate-a-provider-cache ()
+  "Combining providers must leave each provider\='s cached list alone.
+
+A real aliasing hazard, pinned as an invariant.  NOT the producer of the
+`C-c s s\=' corruption: on the live path `decknix--agent-session-list\='
+returns a freshly consed list, so the shared spine is a temporary.  This
+test stubs that out to exercise the hazard directly.
+
+`decknix--agent-session-list-all\=' built its combined list with `append\='
+and then sorted it. `append\=' copies every argument EXCEPT the last, whose
+spine it shares -- and `sort\=' is destructive. So sorting the combined list
+reordered cons cells belonging to a provider\='s cache in place, splicing
+other providers\=' rows into it. Measured: `claude-code\=' ended up holding
+143 rows over fifteen ids, most of them pi rows.
+
+Asserts the caches are untouched, which is the invariant; whether the fix
+copies the spine or avoids `append\=' is left open."
+  (let* ((claude '(((sessionId . "c-1") (providerId . claude-code)
+                    (modified . "2026-01-01T00:00:00Z"))))
+         (pi-rows '(((sessionId . "p-1") (providerId . pi)
+                     (modified . "2026-09-09T00:00:00Z"))))
+         (decknix-agent-provider-registry '((claude-code) (pi)))
+         (decknix--agent-session-cache-map (make-hash-table :test 'eq)))
+    (puthash 'claude-code claude decknix--agent-session-cache-map)
+    (puthash 'pi pi-rows decknix--agent-session-cache-map)
+    (cl-letf (((symbol-function 'decknix--agent-session-list)
+               (lambda (&optional p) (gethash p decknix--agent-session-cache-map))))
+      (let ((combined (decknix--agent-session-list-all)))
+        (should (= 2 (length combined)))
+        ;; Each cache still holds exactly its own rows.
+        (should (equal '("c-1") (mapcar (lambda (r) (alist-get 'sessionId r))
+                                        (gethash 'claude-code
+                                                 decknix--agent-session-cache-map))))
+        (should (equal '("p-1") (mapcar (lambda (r) (alist-get 'sessionId r))
+                                        (gethash 'pi
+                                                 decknix--agent-session-cache-map))))))))
+
 (provide 'decknix-agent-session-cache-test)
