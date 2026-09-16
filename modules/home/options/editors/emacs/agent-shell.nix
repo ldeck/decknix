@@ -571,6 +571,19 @@ let
     ];
   };
 
+  # Session watches: register a condition (a PR's CI), the hub tick
+  # evaluates it, and it notifies + clears when the condition fires.  Pure
+  # core (registry, `checks-complete', fire/expire, `watching' status) with
+  # file persistence; no deps.
+  decknix-session-watch-el = mkEmacsTestedPackage {
+    pname = "decknix-session-watch";
+    src = ./agent-shell/session-watch;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-session-watch-test.el"
+    ];
+  };
+
   decknix-sidebar-previous-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-previous";
     src = ./agent-shell/sidebar;
@@ -2576,6 +2589,7 @@ let
       decknix-hub-attention-filter-el
       decknix-sidebar-previous-el
       decknix-sidebar-grouping-el
+      decknix-session-watch-el
       decknix-agent-live-sessions-el
       decknix-hub-ci-filter-el
       decknix-hub-mention-bot-el
@@ -3249,6 +3263,7 @@ in
         ++ (optional cfg.workspace.enable decknix-sidebar-format-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-previous-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-grouping-el)
+        ++ (optional cfg.workspace.enable decknix-session-watch-el)
         ++ (optional cfg.workspace.enable decknix-agent-live-sessions-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-tile-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-width-el)
@@ -4979,7 +4994,9 @@ ${optionalString cfg.tableOverlay.enable ''
                      ("v" . decknix-agent-review)
                      ("V" . decknix-agent-review-menu)
                      ("B" . decknix-review-board)
-                     ("u" . decknix-agent-session-pr-url)))
+                     ("u" . decknix-agent-session-pr-url)
+                     ("w" . decknix-agent-watch-checks)
+                     ("W" . decknix-agent-unwatch)))
           (define-key decknix-session-prefix-map (kbd (car b)) (cdr b)))
         ;; Named window-layout groups (#169) on the session prefix.
         (when (fboundp 'decknix-layout-group-switch)
@@ -6742,6 +6759,114 @@ duration -- the most important number on this branch."
         (require 'decknix-auto-review)
         (advice-add 'decknix--hub-refresh-reviews :after
                     #'decknix-auto-review--maybe-dispatch)
+
+        ;; == Session watches (session-watch spec, step 2: notify only) ==
+        ;; A session that says "I'll report when the build lands" cannot --
+        ;; an agent does nothing between turns.  So you register a watch on
+        ;; a PR's CI, the hub tick evaluates it, and it NOTIFIES + clears
+        ;; when checks finish.  The session shows `watching' meanwhile.
+        (require 'decknix-session-watch)
+        (declare-function decknix-session-watch-load "decknix-session-watch")
+        (declare-function decknix-session-watch-add "decknix-session-watch" (conv-key pr-key condition baseline-ci))
+        (declare-function decknix-session-watch-remove "decknix-session-watch" (conv-key))
+        (declare-function decknix-session-watch-for-conv-key "decknix-session-watch" (conv-key))
+        (declare-function decknix-session-watch-evaluate "decknix-session-watch" (ci-fn live-conv-keys notify-fn))
+        (declare-function decknix-session-watch-status "decknix-session-watch" (raw-status has-watch))
+        (defvar decknix-session-watches)
+        (decknix-session-watch-load)
+
+        (defun decknix--session-watch-ci-for-pr-key (pr-key)
+          "Return the current CI status string for PR-KEY (`repo#number'), or nil.
+Reads the live reviews feed, the same source the board and auto-review use."
+          (when (and (stringp pr-key) (string-match "\\`\\(.*\\)#\\([0-9]+\\)\\'" pr-key))
+            (let* ((repo (match-string 1 pr-key))
+                   (num (string-to-number (match-string 2 pr-key)))
+                   (items (and (boundp 'decknix--hub-reviews)
+                               (alist-get 'items decknix--hub-reviews)))
+                   (item (seq-find
+                          (lambda (i)
+                            (and (equal num (alist-get 'number i))
+                                 (let ((r (alist-get 'repo i)))
+                                   (or (equal r repo)
+                                       (equal (car (last (split-string (or r "") "/"))) repo)))))
+                          items)))
+              (and item (or (alist-get 'ci-status item)
+                            (and (fboundp 'decknix--hub-ci-status-of)
+                                 (decknix--hub-ci-status-of item)))))))
+
+        (defun decknix--session-watch-live-conv-keys ()
+          "Conv-keys of every live agent-shell session."
+          (delq nil
+                (mapcar (lambda (b)
+                          (and (buffer-live-p b)
+                               (buffer-local-value 'decknix--agent-conv-key b)))
+                        (and (fboundp 'agent-shell-buffers) (agent-shell-buffers)))))
+
+        (defun decknix--session-watch-notify (watch)
+          "Tell the user WATCH fired, and refresh the surfaces that show it."
+          (let* ((pr (alist-get 'pr-key watch))
+                 (ci (decknix--session-watch-ci-for-pr-key pr)))
+            (message "[watch] %s checks finished: %s" pr (or ci "?")))
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (ignore-errors (agent-shell-workspace-sidebar-refresh)))
+          (when (fboundp 'decknix-review-board-refresh)
+            (ignore-errors (decknix-review-board-refresh))))
+
+        (defun decknix--session-watch-tick (&rest _)
+          "Hub-tick entry: evaluate every watch against the fresh feed."
+          (when decknix-session-watches
+            (ignore-errors
+              (decknix-session-watch-evaluate
+               #'decknix--session-watch-ci-for-pr-key
+               (decknix--session-watch-live-conv-keys)
+               #'decknix--session-watch-notify))))
+        (advice-add 'decknix--hub-refresh-reviews :after
+                    #'decknix--session-watch-tick)
+
+        ;; `watching' status: added after net-error so it is outermost, but
+        ;; safe there because `decknix-session-watch-status' refines ONLY a
+        ;; settled `ready'/`finished' -- it never masks `working', `asking',
+        ;; `waiting', `killed' or a dead-link status.
+        (defun decknix--session-watch-status-advice (orig buffer &rest args)
+          (let ((raw (apply orig buffer args)))
+            (if (and (buffer-live-p buffer)
+                     (with-current-buffer buffer
+                       (let ((ck (bound-and-true-p decknix--agent-conv-key)))
+                         (and ck (decknix-session-watch-for-conv-key ck)))))
+                (decknix-session-watch-status raw t)
+              raw)))
+        (with-eval-after-load 'agent-shell-workspace
+          (advice-add 'agent-shell-workspace--buffer-status :around
+                      #'decknix--session-watch-status-advice))
+
+        (defun decknix-agent-watch-checks ()
+          "Watch THIS session's PR: notify when its CI finishes, show `watching'."
+          (interactive)
+          (let* ((ck (and (fboundp 'decknix--agent-current-conv-key)
+                          (decknix--agent-current-conv-key)))
+                 (prs (and ck (fboundp 'decknix--agent-review-prs-for-conv-key)
+                           (ignore-errors (decknix--agent-review-prs-for-conv-key ck))))
+                 (pr (cond ((null prs) nil)
+                           ((= 1 (length prs)) (car prs))
+                           (t (completing-read "Watch which PR: " prs nil t)))))
+            (cond
+             ((not ck) (user-error "No conversation for this buffer"))
+             ((not pr) (user-error "This session has no PR to watch"))
+             (t (decknix-session-watch-add
+                 ck pr 'checks-complete (decknix--session-watch-ci-for-pr-key pr))
+                (message "Watching %s -- will notify when checks finish" pr)
+                (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                  (ignore-errors (agent-shell-workspace-sidebar-refresh)))))))
+
+        (defun decknix-agent-unwatch ()
+          "Drop this session's watch."
+          (interactive)
+          (let ((ck (and (fboundp 'decknix--agent-current-conv-key)
+                         (decknix--agent-current-conv-key))))
+            (when ck (decknix-session-watch-remove ck)
+                  (message "Unwatched")
+                  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+                    (ignore-errors (agent-shell-workspace-sidebar-refresh))))))
         ;; Review board: rebuild when the hub data changes, rather than on a
         ;; timer.  The board is a VIEW of `github-reviews.json' plus the live
         ;; sessions, so the moment that file is re-read is exactly when the
