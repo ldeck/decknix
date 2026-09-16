@@ -447,5 +447,55 @@ Without this the fix could silently disable every agent label."
                          (list (cons 'before-string "\n Claude \n\n")))
                    seen))))
 
+
+;; --- preserve-label must not protect a STALE prompt's label -----------
+;;
+;; Observed on pi session 01a083eb after a `session/load' resume: the tail
+;; had two prompt runs (an empty submission left a stale bare prompt above
+;; the live one), and BOTH carried a ` Me ' label, so the buffer showed no
+;; usable labelled prompt.
+;;
+;; chat-mode blanks the stale prompt (writes before-string "") and labels
+;; only the live one.  `preserve-label' was refusing every blanking write,
+;; so the stale prompt kept its ` Me ' -- the guard that rescued a resumed
+;; LIVE prompt was also freezing a stale one.  It must protect only the
+;; overlay covering `comint-last-prompt'.
+
+(ert-deftest decknix-chat-upsert--blanks-a-stale-prompt-not-covering-live ()
+  "A blanking write is ALLOWED when the span does not cover the live prompt."
+  (with-temp-buffer
+    (insert "Pi> 
+
+Pi> ")
+    (setq-local comint-last-prompt (cons (copy-marker 7) (copy-marker 11)))
+    (let ((stale (make-overlay 1 5)))
+      (overlay-put stale 'category 'agent-shell-chat-me)
+      (overlay-put stale 'before-string " Me ")   ; a real label already sits here
+      (let ((seen 'unset))
+        (decknix--agent-chat-upsert-advice
+         (lambda (&rest args) (setq seen args) 'ov)
+         'agent-shell-chat-me 1 5 1 5           ; stale span [1,5); live prompt is at 7
+         (list (cons 'before-string "")))
+        ;; span does not cover the live prompt (7), so the blank must survive
+        (should (equal "" (alist-get 'before-string (nth 5 seen))))))))
+
+(ert-deftest decknix-chat-upsert--preserves-the-live-prompt-label ()
+  "A blanking write is DROPPED when the span covers the live prompt."
+  (with-temp-buffer
+    (insert "Pi> 
+
+Pi> ")
+    (setq-local comint-last-prompt (cons (copy-marker 7) (copy-marker 11)))
+    (let ((existing (make-overlay 7 11)))
+      (overlay-put existing 'category 'agent-shell-chat-me)
+      (overlay-put existing 'before-string "\n Me \n\n  ❯ ")
+      (let ((seen 'unset))
+        (decknix--agent-chat-upsert-advice
+         (lambda (&rest args) (setq seen args) 'ov)
+         'agent-shell-chat-me 7 11 7 11        ; span covers the live prompt (7..11)
+         (list (cons 'before-string "")))
+        ;; the blank must have been dropped, so the real label survives
+        (should-not (assq 'before-string (nth 5 seen)))))))
+
 (provide 'decknix-agent-welcome-test)
 ;;; decknix-agent-welcome-test.el ends here
