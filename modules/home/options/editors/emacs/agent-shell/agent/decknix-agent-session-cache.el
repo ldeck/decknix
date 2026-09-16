@@ -883,6 +883,24 @@ callers can render a provider glyph and filter by provider."
           (decknix--session-dedupe-by-session-id result)))
     (decknix--session-dedupe-by-session-id (decknix--agent-session-list-all))))
 
+(defun decknix--agent-session-refresh-all-sync ()
+  "Synchronously refresh every registered provider's session cache.
+
+The picker calls this before it reads the list, because the ASYNC
+refresh path can leave the cache holding far fewer sessions than exist on
+disk (one session id duplicated many times crowds out the rest), so
+`C-c s s' intermittently could not find a session the CLI shows at once.
+A sync refresh reliably rebuilds the full set -- it only re-parses
+new/changed files against the warm meta-cache, so it is sub-second -- and
+reading immediately after it sidesteps whatever the async last wrote.
+
+Returns nil; the effect is on the per-provider caches."
+  (dolist (entry (if (boundp 'decknix-agent-provider-registry)
+                     decknix-agent-provider-registry
+                   nil))
+    (ignore-errors (decknix--agent-session-refresh-sync (car entry))))
+  nil)
+
 (defun decknix--agent-session-list-all ()
   "Return combined sessions from all registered providers."
   (let ((all nil))
