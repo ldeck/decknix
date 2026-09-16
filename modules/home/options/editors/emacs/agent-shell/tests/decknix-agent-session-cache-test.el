@@ -1352,4 +1352,25 @@ copies the spine or avoids `append\=' is left open."
                                         (gethash 'pi
                                                  decknix--agent-session-cache-map))))))))
 
+(ert-deftest decknix-session-cache-merge--a-refresh-must-never-shrink-a-cache ()
+  "A refresh returning fewer sessions than the cache held is a defect.
+
+The general guard behind `C-c s s\=\=\=' losing sessions. Three narrower
+guards were written before the producer was traced; this one holds
+whichever path misbehaves, because it states the invariant rather than
+naming a culprit.
+
+The traced chain: `decknix--agent-conversation-preview\=\=\=' resolves tags per
+row, which reaches `decknix--agent-session-list-warm-or-async\=\=\=', which
+schedules a refresh; the refresh then wrote a list covering nineteen
+sessions over a cache holding a hundred and forty."
+  (let ((existing '(((sessionId . "a") (providerId . claude-code))
+                    ((sessionId . "b") (providerId . claude-code))
+                    ((sessionId . "c") (providerId . claude-code))))
+        (thin '(((sessionId . "a") (providerId . claude-code)))))
+    (let ((out (decknix--session-cache-merge existing thin 'claude-code)))
+      (should (= 3 (length out)))
+      (dolist (id '("a" "b" "c"))
+        (should (seq-find (lambda (r) (equal id (alist-get 'sessionId r))) out))))))
+
 (provide 'decknix-agent-session-cache-test)
