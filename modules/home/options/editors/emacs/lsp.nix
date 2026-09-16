@@ -483,6 +483,50 @@ in
                  ("C-c l h" . eglot-inlay-hints-mode)))
 
       '' + optionalString cfg.kotlin.enable ''
+        ;; == Kotlin: keep the idle path OFF the language server ==
+        ;;
+        ;; fwcd 1.3.13 answers slowly on a large Gradle project -- measured
+        ;; 1371s (22.9 min) just to complete `initialize' on an `upside'
+        ;; worktree, and it stays slow afterwards.  The default Emacs idle
+        ;; wiring asks it something every time point settles:
+        ;;
+        ;;   corfu-auto (0.2s)  -> `eglot-completion-at-point', which is a
+        ;;                         SYNCHRONOUS `jsonrpc-request'
+        ;;   eldoc (0.5s)       -> hover AND signatureHelp, and the
+        ;;                         `compose' strategy waits for EVERY
+        ;;                         documentation function to report
+        ;;   inlay hints        -> re-requested on scroll
+        ;;
+        ;; The synchronous completion is the one that freezes Emacs: point
+        ;; stops on a symbol, the request goes out, and nothing moves until
+        ;; the server answers or the user presses C-g (reported: three
+        ;; times, then `Quit').  Reproduced from a script -- a bounded
+        ;; `jsonrpc-request' against a live Kotlin buffer hung rather than
+        ;; honouring its own timeout.
+        ;;
+        ;; So: nothing on the idle path may talk to THIS server.  Completion
+        ;; still works on demand (`C-M-i'), hover on demand (`C-c l d'), and
+        ;; inlay hints toggle with `C-c l h'.  Scoped to Kotlin buffers
+        ;; managed by eglot, so every other language keeps its defaults.
+        (defun decknix--kotlin-eglot-calm-idle-path ()
+          "Stop idle-triggered LSP requests in this Kotlin buffer.
+Leaves the on-demand commands alone; only the automatic paths are cut."
+          (when (derived-mode-p 'kotlin-mode 'kotlin-ts-mode)
+            ;; The synchronous one.  This is the freeze.
+            (setq-local corfu-auto nil)
+            ;; `compose' waits for hover AND signatureHelp before showing
+            ;; anything; `enthusiast' takes the first that answers, so a
+            ;; slow server costs nothing once flymake has replied.
+            (setq-local eldoc-documentation-strategy
+                        #'eldoc-documentation-enthusiast)
+            ;; Give the server a wider berth before it is asked at all.
+            (setq-local eldoc-idle-delay 2.0)
+            (when (bound-and-true-p eglot-inlay-hints-mode)
+              (eglot-inlay-hints-mode -1))))
+
+        (add-hook 'eglot-managed-mode-hook
+                  #'decknix--kotlin-eglot-calm-idle-path)
+
         ;; == Kotlin Language Server ==
         ;; JetBrains kotlin-lsp (nix-casks) where available, else fwcd — the
         ;; command is chosen in lsp.nix (`kotlinServerElisp').
