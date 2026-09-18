@@ -64,6 +64,12 @@
 (declare-function decknix--hub-review-pr-key-parse
                   "decknix-hub-review-identity" (key))
 (declare-function decknix-auto-review-cycle-mode "decknix-auto-review")
+(declare-function decknix--nav-hub-start-review-background
+                  "decknix-agent-shell-workspace" (url))
+(declare-function decknix--nav-hub-start-review
+                  "decknix-agent-shell-workspace" (url &optional background))
+(declare-function decknix-review-board--parse-urls
+                  "decknix-review-board-model" (input))
 (declare-function decknix--hub-item-visible-p "decknix-agent-shell-hub" (repo))
 (declare-function decknix--hub-age-visible-p "decknix-agent-shell-hub" (ts))
 (declare-function decknix--hub-ci-visible-p "decknix-agent-shell-hub" (item))
@@ -425,6 +431,45 @@ pick up."
   "Return the row at point, or nil."
   (get-text-property (point) 'decknix-review-board-row))
 
+(defun decknix-review-board-review-url (input)
+  "Start review sessions for the PR url(s) in INPUT.
+
+Prompts for free text rather than a single url: the common case is
+pasting a line out of Slack that names two or three PRs, and making the
+user split that by hand is the friction this removes.  Anything in the
+text that is not a GitHub PR url is ignored (see
+`decknix-review-board--parse-urls').
+
+Sessions start in the BACKGROUND.  Dispatching three reviews should not
+steal the window three times, and the board is the surface you watch them
+from -- it refreshes itself once they are launched.
+
+The board otherwise only acts on rows that already exist; this is the one
+verb that adds work, which is why it asks rather than acting on point."
+  (interactive
+   (list (read-string
+          "Review PR url(s): "
+          (let ((clip (ignore-errors (current-kill 0 t))))
+            (when (and (stringp clip)
+                       (decknix-review-board--parse-urls clip))
+              (string-trim clip))))))
+  (let ((urls (decknix-review-board--parse-urls input)))
+    (cond
+     ((null urls)
+      (message "No GitHub PR url found in that text"))
+     ((and (> (length urls) 1)
+           (not (yes-or-no-p (format "Start %d review sessions? " (length urls)))))
+      (message "Cancelled"))
+     (t
+      (dolist (url urls)
+        (if (fboundp 'decknix--nav-hub-start-review-background)
+            (decknix--nav-hub-start-review-background url)
+          (decknix--nav-hub-start-review url t)))
+      (message "Started %d review session%s"
+               (length urls) (if (= 1 (length urls)) "" "s"))
+      (when (fboundp 'decknix-review-board-refresh)
+        (ignore-errors (decknix-review-board-refresh)))))))
+
 (defun decknix-review-board-refresh ()
   "Rebuild and re-render the board."
   (interactive)
@@ -760,6 +805,7 @@ NAVIGATE
   c / w           copy the PR URL(s) to the kill ring
   i               inspect: what this session is asking, or the PR detail
   j               jump to the session buffer
+  r               review a PR by url (paste one or several)
   g               refresh          q  bury          ?  this help
   A               cycle auto-review: off / bot / human / any
   x               toggle auto-dismiss: finished sessions drop off, or stay
@@ -976,6 +1022,7 @@ a setting kept somewhere else."
     (define-key map (kbd "o") #'decknix-review-board-browse)
     (define-key map (kbd "j") #'decknix-review-board-jump)
     (define-key map (kbd "g") #'decknix-review-board-refresh)
+    (define-key map (kbd "r") #'decknix-review-board-review-url)
     (define-key map (kbd "m") #'decknix-review-board-mark)
     (define-key map (kbd "u") #'decknix-review-board-unmark)
     (define-key map (kbd "U") #'decknix-review-board-unmark-all)

@@ -465,5 +465,41 @@ way merges it without the round that would have caught a regression."
     (should (assq 'finished out))
     (should-not (alist-get 'finished out))))
 
+
+;; --- initiating a review from a pasted url ---------------------------
+
+(ert-deftest decknix-rb-urls--takes-a-single-url ()
+  (should (equal '("https://github.com/o/r/pull/12")
+                 (decknix-review-board--parse-urls
+                  "https://github.com/o/r/pull/12"))))
+
+(ert-deftest decknix-rb-urls--extracts-from-surrounding-prose ()
+  "A line copied out of Slack must work without hand-editing."
+  (should (equal '("https://github.com/o/r/pull/12")
+                 (decknix-review-board--parse-urls
+                  "please review https://github.com/o/r/pull/12 when you can"))))
+
+(ert-deftest decknix-rb-urls--takes-several-in-order ()
+  (should (equal '("https://github.com/o/r/pull/1" "https://github.com/o/r/pull/2")
+                 (decknix-review-board--parse-urls
+                  "https://github.com/o/r/pull/1, https://github.com/o/r/pull/2"))))
+
+(ert-deftest decknix-rb-urls--drops-duplicates ()
+  "Two sessions racing on one review is the problem this board removes."
+  (should (equal '("https://github.com/o/r/pull/7")
+                 (decknix-review-board--parse-urls
+                  "https://github.com/o/r/pull/7 https://github.com/o/r/pull/7"))))
+
+(ert-deftest decknix-rb-urls--rejects-non-pr-github-links ()
+  "An issue or compare link must not be dispatched as a review."
+  (should-not (decknix-review-board--parse-urls "https://github.com/o/r/issues/12"))
+  (should-not (decknix-review-board--parse-urls "https://github.com/o/r/commit/abc"))
+  (should-not (decknix-review-board--parse-urls "https://github.com/o/r")))
+
+(ert-deftest decknix-rb-urls--empty-and-nil-are-nil ()
+  (should-not (decknix-review-board--parse-urls ""))
+  (should-not (decknix-review-board--parse-urls nil))
+  (should-not (decknix-review-board--parse-urls "no urls here")))
+
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here

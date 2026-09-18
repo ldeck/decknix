@@ -137,6 +137,36 @@ it, so the loudest colour on the board stopped carrying information."
     'decknix-review-board-covered)
    (t 'decknix-review-board-needs-you)))
 
+(defconst decknix-review-board-pr-url-regexp
+  (rx "http" (? "s") "://" (? "www.") "github.com/"
+      (group (+ (not (any "/" space)))) "/"
+      (group (+ (not (any "/" space)))) "/pull/"
+      (group (+ digit)))
+  "Matches a GitHub pull-request URL, capturing owner, repo and number.
+
+Anchored on `/pull/' rather than accepting any github.com URL: pasting an
+issue, a commit or a compare link should be REJECTED with a message, not
+dispatched as a review that then fails somewhere less visible.")
+
+(defun decknix-review-board--parse-urls (input)
+  "Return the GitHub PR urls in INPUT, in order, without duplicates.  Pure.
+
+INPUT is free text -- the user may paste one url, several separated by
+whitespace or commas, or a line copied from Slack with prose around it.
+Everything that is not a PR url is ignored rather than rejected, so a
+paste like \"please review https://... and https://... thanks\" works.
+
+Duplicates are dropped because dispatching the same PR twice would start
+two sessions racing on one review, which is the duplicate-reviewer
+problem this board exists to remove."
+  (when (stringp input)
+    (let ((start 0) (found nil))
+      (while (string-match decknix-review-board-pr-url-regexp input start)
+        (let ((url (match-string 0 input)))
+          (setq start (match-end 0))
+          (unless (member url found) (push url found))))
+      (nreverse found))))
+
 (defconst decknix-review-board-activity-verbs '("ship" "merge" "fix" "review")
   "Known activity verbs, in DISPLAY PRECEDENCE (first match wins).
 
