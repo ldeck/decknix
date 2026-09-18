@@ -15,12 +15,48 @@
 
 ;; --- lane precedence ---
 
-(ert-deftest decknix-rb--attention-outranks-everything ()
-  "A session blocked on the user is `needs-you', even if its PR is gone.
-It may be asking precisely BECAUSE the PR merged underneath it, so
-filing it under `finished' would bury the question."
-  (should (eq 'needs-you (decknix-review-board--lane t t 'gone nil)))
-  (should (eq 'needs-you (decknix-review-board--lane t t nil t))))
+(ert-deftest decknix-rb--gone-outranks-attention ()
+  "A blocked session whose PR is GONE is `finished', not `needs-you'.
+
+This reverses an earlier decision. The argument for keeping it in
+`needs-you' was that the session might be asking precisely BECAUSE the PR
+merged. In practice the board filled with questions about PRs the author
+had already merged, and the lane whose entire job is \"these want you
+now\" stopped meaning that. A question about finished work is still
+answerable from `finished'; a needs-you lane you have learned to distrust
+is not recoverable.
+
+Attention still outranks everything ELSE: `stale' and `answered' are
+statements about the PR, not about whether the agent is stuck."
+  (should (eq 'finished (decknix-review-board--lane t t 'gone nil)))
+  (should (eq 'needs-you (decknix-review-board--lane t t nil t)))
+  (should (eq 'needs-you (decknix-review-board--lane t t 'stale nil)))
+  (should (eq 'needs-you (decknix-review-board--lane t t 'answered nil))))
+
+;; --- row face: urgency must reflect the PR, not just the agent ---
+
+(ert-deftest decknix-rb--face-red-only-when-nobody-has-covered-it ()
+  "Red is reserved for a blocked session on a PR nobody else has touched."
+  (should (eq 'decknix-review-board-needs-you
+              (decknix-review-board--row-face t nil))))
+
+(ert-deftest decknix-rb--face-calmer-once-somebody-else-answered ()
+  "Approved or reviewed by someone else: still yours, but not urgent.
+The work may already be covered, so it must not compete visually with a
+review nobody has looked at."
+  (should (eq 'decknix-review-board-covered
+              (decknix-review-board--row-face t 'answered))))
+
+(ert-deftest decknix-rb--face-calmer-when-the-diff-moved ()
+  "A stale review is not urgent either: the analysis is void until re-run."
+  (should (eq 'decknix-review-board-covered
+              (decknix-review-board--row-face t 'stale))))
+
+(ert-deftest decknix-rb--face-nil-without-attention ()
+  "Rows that are not blocked carry no urgency face at all."
+  (should-not (decknix-review-board--row-face nil nil))
+  (should-not (decknix-review-board--row-face nil 'answered))
+  (should-not (decknix-review-board--row-face nil 'gone)))
 
 (ert-deftest decknix-rb--gone-session-is-finished ()
   "A session whose PR left the queue is finished work, whoever wrote it."

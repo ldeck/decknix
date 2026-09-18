@@ -99,6 +99,15 @@
   '((t :inherit error :weight bold))
   "Face for the needs-you lane heading." :group 'decknix-review-board)
 
+(defface decknix-review-board-covered
+  '((t :inherit warning))
+  "Face for a blocked row somebody else has already answered or invalidated.
+
+Deliberately NOT bold and NOT `error'.  The row is still yours, but an
+approved or stale PR must not compete with a review nobody has looked at
+-- if everything blocked is red, red stops meaning anything."
+  :group 'decknix-review-board)
+
 (defvar-local decknix-review-board--model nil
   "The lane model rendered in this buffer.")
 
@@ -350,7 +359,9 @@ pick up."
                        trailing)))
     (insert (propertize line
                         'decknix-review-board-row row
-                        'face (when attention 'decknix-review-board-needs-you))
+                        ;; Urgency reflects the PR, not just the agent: see
+                        ;; `decknix-review-board--row-face'.
+                        'face (decknix-review-board--row-face attention status))
             "\n")))
 
 (defun decknix-review-board--render ()

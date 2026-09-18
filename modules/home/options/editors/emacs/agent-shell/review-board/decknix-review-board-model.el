@@ -80,9 +80,11 @@ bot.
 
 Precedence is deliberate and only partly obvious:
 
-- Attention outranks everything, including `gone'.  A session asking a
-  question still wants an answer even if its PR merged underneath it; it
-  may be asking precisely BECAUSE the PR merged.
+- `gone' outranks attention.  A session blocked on a question whose PR
+  has merged is `finished': the work landed, so the question is history
+  rather than a call on your time.  Attention still outranks everything
+  ELSE -- `stale' and `answered' describe the PR, not whether the agent
+  is stuck.
 - `finished' outranks the activity lane.  Once no review is wanted, that
   the session was mid-flight stops being interesting.
 - Any live, unblocked, not-gone session is `doing', regardless of author.
@@ -91,8 +93,16 @@ Precedence is deliberate and only partly obvious:
 - A human request with no session is `idle': individually authored, so
   there is nothing to fold it into."
   (cond
-   ((and has-session attention) 'needs-you)
+   ;; `gone' first, ahead of attention.  This reverses an earlier
+   ;; ordering: attention used to outrank everything, on the argument
+   ;; that a session might be asking precisely BECAUSE its PR merged.
+   ;; In practice the board filled with questions about PRs the author
+   ;; had already merged, and a lane whose whole job is "these want you
+   ;; now" stopped meaning it.  The question is still answerable from
+   ;; `finished'; a needs-you lane you have learned to distrust is not
+   ;; recoverable.
    ((and has-session (eq status 'gone)) 'finished)
+   ((and has-session attention) 'needs-you)
    ;; Any live session that is neither blocked nor gone is IN PROGRESS,
    ;; whoever authored the PR.  A dispatched bot session is one session
    ;; doing work -- you want to watch its progress, so it shows
@@ -105,6 +115,27 @@ Precedence is deliberate and only partly obvious:
    ;; into, so it stays individual.
    (bot-p 'grouped)
    (t 'idle)))
+
+(defconst decknix-review-board-covered-statuses '(answered stale)
+  "Statuses that make a blocked row less than urgent.
+
+`answered' means somebody else approved or reviewed it, so the work may
+already be covered.  `stale' means the author pushed, so the analysis is
+void until it is re-run.  Neither is finished -- the row is still yours --
+but neither should compete visually with a review nobody has looked at.")
+
+(defun decknix-review-board--row-face (attention status)
+  "Return the urgency face for a row, or nil.  Pure.
+
+Red is reserved for a blocked session on a PR nobody else has touched.
+Colouring on ATTENTION alone -- which is what this replaces -- painted
+every blocked row red regardless of whether someone had already approved
+it, so the loudest colour on the board stopped carrying information."
+  (cond
+   ((not attention) nil)
+   ((memq status decknix-review-board-covered-statuses)
+    'decknix-review-board-covered)
+   (t 'decknix-review-board-needs-you)))
 
 (defconst decknix-review-board-activity-verbs '("ship" "merge" "fix" "review")
   "Known activity verbs, in DISPLAY PRECEDENCE (first match wins).
