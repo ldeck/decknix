@@ -2771,12 +2771,19 @@ the current layout; with a single window the default is `:split'.
 Returns nil when the user quits (?q)."
   (let* ((splits (decknix--hub-review-splits-present-p))
          (default (if splits :background :split))
-         (prompt (format "%s %d review%s: [s]plit [r]eplace [b]ackground [q]uit (RET=%s) "
+         (prompt (format "%s %d review%s: [s]plit [r]eplace [b]ackground [p]eople [q]uit (RET=%s) "
                          (or verb "Launch") count (if (= count 1) "" "s")
                          (if splits "background" "split")))
-         (choice (read-char-choice prompt '(?s ?r ?b ?q ?\r ?\n))))
+         (choice (read-char-choice prompt '(?s ?r ?b ?p ?q ?\r ?\n))))
     (pcase choice
       ((or ?\r ?\n) default)
+      ;; `p' answers "who else is on these?" before committing to N
+      ;; sessions -- the same question `p' answers on a single row, and
+      ;; the one most likely to change the answer here, since a PR
+      ;; somebody already approved may not be worth a session at all.
+      ;; Returns `:people' rather than a placement; the caller shows the
+      ;; people and re-prompts, so this is a detour, not a choice.
+      (?p :people)
       (_ (decknix--hub-review-placement-from-char choice)))))
 
 (defun decknix--hub-launch-review-items (items placement)
@@ -3098,6 +3105,21 @@ uses the `b' that matches the multi-select prompt."
    (alist-get 'repo decknix--hub-action-item)
    (alist-get 'number decknix--hub-action-item)))
 
+(transient-define-suffix decknix--hub-action-people ()
+  "Show the people on the hub item (authors, reviewers, approvers, blockers).
+
+Mirrors `p' in the sidebar's row menus.  This transient is what the
+Requests picker hands RET to, so without it the picker route was the one
+path to a PR that could not answer \"who else is on this?\" -- the
+question that decides whether a review is still worth starting."
+  :description "People"
+  (interactive)
+  (let ((repo (alist-get 'repo decknix--hub-action-item))
+        (number (alist-get 'number decknix--hub-action-item)))
+    (if (and repo number)
+        (decknix--sidebar-show-people repo number)
+      (message "No PR on this item"))))
+
 (transient-define-prefix decknix--hub-item-transient ()
   "Actions for the hub item stored in `decknix--hub-action-item'."
   [:description decknix--hub-action-description
@@ -3113,7 +3135,9 @@ uses the `b' that matches the multi-select prompt."
     :if decknix--hub-action-wip-p
     ("m" decknix--hub-action-merge)
     ("l" decknix--hub-action-close)
-    ("M" decknix--hub-action-comment)]]
+    ("M" decknix--hub-action-comment)]
+   ["Other"
+    ("p" decknix--hub-action-people)]]
   [("q" "Cancel" transient-quit-all)])
 
 (defun decknix--nav-hub-item-actions (item)
@@ -3669,8 +3693,23 @@ Interactively: \\[universal-argument] N r limits to N items;
                                              base)))))
                                labels)))
                        (count (length items))
-                       (placement (and (> count 0)
-                                       (decknix--hub-review-read-placement count))))
+                       (placement
+                        (and (> count 0)
+                             ;; `p' is a detour: show the people on every
+                             ;; marked PR, then ask again.  Looping here
+                             ;; rather than in the reader keeps the reader
+                             ;; a pure choice.
+                             (let ((answer nil))
+                               (while (progn
+                                        (setq answer
+                                              (decknix--hub-review-read-placement count))
+                                        (eq answer :people))
+                                 (dolist (it items)
+                                   (let ((repo (alist-get 'repo it))
+                                         (number (alist-get 'number it)))
+                                     (when (and repo number)
+                                       (decknix--sidebar-show-people repo number)))))
+                               answer))))
                   (when placement
                     (decknix--hub-launch-review-items
                      items placement)))
