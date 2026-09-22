@@ -192,10 +192,18 @@ Bot family (right slot):
 
 Activity icons are suppressed for APPROVED PRs.
 
-Thread-aware Tier 1 suppression: when `total_threads' is present and
-greater than zero, ALL activity icons (↩/💬 and 👽/🤖) are suppressed if
-`unresolved_threads' equals zero (all threads resolved). A bot trailing
-\"no suggestions\" leaves nothing actionable, so the rail clears.
+Thread-aware suppression applies to BOT CHATTER ONLY: 🤖 (bot-pending) is
+suppressed when `total_threads' is greater than zero and
+`unresolved_threads' is zero, because a bot trailing \"no suggestions\"
+across resolved threads leaves nothing actionable.
+
+The human icons survive resolution.  It used to suppress ALL icons,
+which
+hid real comments -- reported on nc-helix/platform-cli #41 and #44, both
+carrying `needs_reply' t with every inline thread resolved and no sidebar
+indication at all. Threads are normally resolved by the author or by a
+bot rather than by me, so \"resolved\" says nothing about whether I have
+read the reply in them.
 
 Returns a string of length 2 (padded with spaces) if any activity is present,
 else an empty string.  Honours `decknix--hub-symbol-style' (\"ascii\" uses
@@ -222,32 +230,42 @@ italic characters and weight)."
                                  (eq decknix--hub-symbol-style 'emoji))))
     (if approved
         ""
-      (let ((h (if all-resolved
-                   ""
-                 (cond (replies-to-me
-                        (if emoji-layout
-                            (decknix--hub-icon "↩" '(:foreground "#87d7af" :weight bold))
-                          (propertize "i" 'face '(:foreground "#5fc8d4" :weight bold :slant italic))))
-                       ((and needs-reply (not bot-pending))
-                        (if emoji-layout
-                            (decknix--hub-icon "💬" '(:foreground "#d7af5f"))
-                          (propertize "i" 'face '(:foreground "#5fc8d4" :weight normal :slant italic))))
-                       (i-replied-last
-                        (if emoji-layout
-                            (decknix--hub-icon "⏳" '(:foreground "#6c6c6c"))
-                          (propertize "." 'face '(:foreground "#6c6c6c" :weight normal))))
-                       (t ""))))
-            (b (if all-resolved
-                    ""
-                  (cond (bot-replies-to-me
-                      (if emoji-layout
-                          (decknix--hub-icon "👽" '(:foreground "#af5f87" :weight bold))
-                        (propertize "β" 'face '(:foreground "#af5f87" :weight bold))))
-                     (bot-pending
-                      (if emoji-layout
-                          (decknix--hub-icon "🤖" '(:foreground "#af5f87"))
-                        (propertize "β" 'face '(:foreground "#af5f87" :weight normal))))
-                     (t "")))))  
+      ;; Human slot.  NOT gated on thread resolution: resolution is
+      ;; normally done by the author or a bot, not by me, so a resolved
+      ;; thread says nothing about whether I have read the reply inside
+      ;; it.  Suppressing these hid real comments -- reported on
+      ;; nc-helix/platform-cli #41 and #44, both of which had
+      ;; `needs_reply' t with every inline thread resolved.
+      (let ((h (cond
+                (replies-to-me
+                 (if emoji-layout
+                     (decknix--hub-icon "\u21a9" '(:foreground "#87d7af" :weight bold))
+                   (propertize "i" 'face '(:foreground "#5fc8d4" :weight bold :slant italic))))
+                ((and needs-reply (not bot-pending))
+                 (if emoji-layout
+                     (decknix--hub-icon "\U0001F4AC" '(:foreground "#d7af5f"))
+                   (propertize "i" 'face '(:foreground "#5fc8d4" :weight normal :slant italic))))
+                (i-replied-last
+                 (if emoji-layout
+                     (decknix--hub-icon "\u23f3" '(:foreground "#6c6c6c"))
+                   (propertize "." 'face '(:foreground "#6c6c6c" :weight normal))))
+                (t "")))
+            ;; Bot slot.  Unchanged: both bot signals still clear once every
+            ;; thread is resolved.  That suppression fixed a real earlier
+            ;; noise bug (a PR with 22 resolved threads lighting up the
+            ;; rail), and a bot's contribution IS what thread resolution
+            ;; settles -- unlike a human's, which resolution says nothing
+            ;; about.
+            (b (cond
+                ((and bot-replies-to-me (not all-resolved))
+                 (if emoji-layout
+                     (decknix--hub-icon "\U0001F47D" '(:foreground "#af5f87" :weight bold))
+                   (propertize "\u03b2" 'face '(:foreground "#af5f87" :weight bold))))
+                ((and bot-pending (not all-resolved))
+                 (if emoji-layout
+                     (decknix--hub-icon "\U0001F916" '(:foreground "#af5f87"))
+                   (propertize "\u03b2" 'face '(:foreground "#af5f87" :weight normal))))
+                (t ""))))
         (if (and (string-empty-p h) (string-empty-p b))
             ""
           (concat (if (string-empty-p h) " " h)

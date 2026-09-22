@@ -245,31 +245,57 @@
 
 ;; -- activity-icons: thread-aware Tier 1 suppression ---------------
 
-(ert-deftest decknix-hub-activity-icons--all-threads-resolved-hides-needs-reply ()
-  "0 unresolved out of >0 total: bubble suppressed even if needs-reply set."
+(ert-deftest decknix-hub-activity-icons--resolved-threads-do-NOT-hide-needs-reply ()
+  "`needs_reply' survives thread resolution.  This reverses an assertion.
+
+Same reversal as the replies-to-me case below, and the same evidence:
+platform-cli #41 carried `needs_reply' t over six resolved threads and
+showed nothing.  \"Latest activity is a human and not me\" is a fact about
+the conversation, which resolving a thread does not change."
   (let ((pr '((total_threads . 22)
               (unresolved_threads . 0)
               (needs_reply . t))))
-    (should (equal (decknix--hub-activity-icons pr) ""))))
+    (should-not (string-empty-p (string-trim (decknix--hub-activity-icons pr))))))
 
-(ert-deftest decknix-hub-activity-icons--all-threads-resolved-hides-replies ()
-  "0 unresolved out of >0 total: return-arrow suppressed even if replies-to-me set."
+(ert-deftest decknix-hub-activity-icons--resolved-threads-do-NOT-hide-a-human-reply ()
+  "A human reply survives thread resolution.  This reverses an assertion.
+
+It previously required the return-arrow to be suppressed when every
+inline thread was resolved, even with `replies_to_me' set. That silenced
+real comments: reported on nc-helix/platform-cli #41 and #44, both with
+`needs_reply' t, 4 and 6 threads, all resolved, and no sidebar indication.
+
+Threads are normally resolved by the author or by a bot, not by me, so
+resolution says nothing about whether I have read the reply inside one.
+The bot signals keep the old suppression -- a bot's contribution IS what
+resolution settles -- so the noise bug that assertion was written for
+stays fixed."
   (let ((pr '((total_threads . 22)
               (unresolved_threads . 0)
               (replies_to_me . t))))
-    (should (equal (decknix--hub-activity-icons pr) ""))))
+    (should-not (string-empty-p (string-trim (decknix--hub-activity-icons pr))))))
 
-(ert-deftest decknix-hub-activity-icons--all-threads-resolved-hides-both ()
-  "0 unresolved out of >0 total: both icons suppressed.
-Reproduces the bug where a fully-resolved PR was decorated with
-bubble + return-arrow from the stream-based ladder even though
-all 22 threads were resolved."
-  (let ((pr '((total_threads . 22)
-              (unresolved_threads . 0)
-              (needs_reply . t)
-              (replies_to_me . t)
-              (review_decision . "REVIEW_REQUIRED"))))
-    (should (equal (decknix--hub-activity-icons pr) ""))))
+(ert-deftest decknix-hub-activity-icons--resolved-threads-keep-the-human-slot ()
+  "The human slot renders; the BOT slot is what resolution clears.
+
+Replaces an assertion that both slots were suppressed.  That was written
+against a noise bug -- a PR with 22 resolved threads lighting up the rail
+-- and the fix for it over-reached into human signals, which is what hid
+comments on platform-cli #41 and #44.
+
+The noise it guarded against is still guarded: with only bot signals set
+and every thread resolved, the rail stays clear (see the bot tests
+below)."
+  (let* ((pr '((total_threads . 22)
+               (unresolved_threads . 0)
+               (needs_reply . t)
+               (replies_to_me . t)
+               (review_decision . "REVIEW_REQUIRED")))
+         (icons (decknix--hub-activity-icons pr)))
+    (should-not (string-empty-p (string-trim icons)))
+    ;; Bot slot empty: nothing bot-ish was set, and resolution would have
+    ;; cleared it anyway.
+    (should (string-match-p "\\` *[^ ] *\\'" icons))))
 
 (ert-deftest decknix-hub-activity-icons--unresolved-keeps-needs-reply ()
   "Some unresolved: human icon still rendered."
@@ -504,6 +530,58 @@ author column, so the leading glyph is no longer replaced by π."
 
 (ert-deftest decknix-hub-icons/format-row-label-approved ()
   (should (equal (decknix--hub-format-row-label '((state . "OPEN") (review_decision . "APPROVED"))) "approved")))
+
+
+;; --- thread resolution must not hide a human reply -------------------
+;;
+;; Reported 2026-09-22: comments were added to nc-helix/platform-cli #41
+;; and #44 and the sidebar showed nothing. The feed had the signals --
+;; #44 `replies_to_me\=' t, `needs_reply\=' t, `total_threads\=' 4; #41
+;; `needs_reply\=' t, `total_threads\=' 6 -- but BOTH had
+;; `unresolved_threads\=' 0, and the Tier-1 suppression cleared every icon
+;; whenever all inline threads were resolved.
+;;
+;; The rationale was sound for bots: "a bot trailing no suggestions
+;; leaves nothing actionable". It over-reached to humans. Resolution is
+;; usually done by the author or the bot, not by me, so a resolved thread
+;; says nothing about whether I have read the reply in it.
+
+(ert-deftest decknix-hub-icons--human-reply-survives-resolved-threads ()
+  "`replies_to_me\=' is never suppressed: a person answered me.
+This is the #44 shape."
+  (let ((icons (decknix--hub-activity-icons
+                '((replies_to_me . t) (needs_reply . t)
+                  (total_threads . 4) (unresolved_threads . 0)))))
+    (should-not (string-empty-p (string-trim icons)))))
+
+(ert-deftest decknix-hub-icons--needs-reply-survives-resolved-threads ()
+  "Latest activity is a human and not me; the #41 shape."
+  (let ((icons (decknix--hub-activity-icons
+                '((needs_reply . t)
+                  (total_threads . 6) (unresolved_threads . 0)))))
+    (should-not (string-empty-p (string-trim icons)))))
+
+(ert-deftest decknix-hub-icons--bot-noise-is-still-suppressed ()
+  "The case the suppression was written for still works.
+A bot posted and every thread is resolved: nothing actionable, rail clear."
+  (let ((icons (decknix--hub-activity-icons
+                '((bot_pending . t)
+                  (total_threads . 3) (unresolved_threads . 0)))))
+    (should (string-empty-p (string-trim icons)))))
+
+(ert-deftest decknix-hub-icons--unresolved-threads-unaffected ()
+  "With work outstanding, everything shows as before."
+  (should-not (string-empty-p
+               (string-trim (decknix--hub-activity-icons
+                             '((needs_reply . t) (total_threads . 2)
+                               (unresolved_threads . 1)))))))
+
+(ert-deftest decknix-hub-icons--approved-still-clears-everything ()
+  "Approval suppression is independent and unchanged."
+  (should (string-empty-p
+           (decknix--hub-activity-icons
+            '((replies_to_me . t) (review_decision . "APPROVED")
+              (total_threads . 4) (unresolved_threads . 0))))))
 
 (provide 'decknix-hub-icons-test)
 ;;; decknix-hub-icons-test.el ends here
