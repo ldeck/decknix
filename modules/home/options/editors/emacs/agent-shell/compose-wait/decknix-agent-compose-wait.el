@@ -105,6 +105,17 @@ the \"[interrupted]\" marker.  A budget generous enough to cover the ack keeps
 the order interrupt-then-submit; the busy-clear still fires the submit early in
 the common case, so this only extends the rare slow/wedged path.")
 
+(defun decknix--compose-submit-ok-p (buffer-live process-live busy)
+  "Non-nil when a post-interrupt submit may actually be sent.  Pure.
+
+BUSY is the decisive one.  `decknix--compose-wait-not-busy\=' fires on a
+BUDGET as well as on the busy flag clearing, so the callback runs even
+when a Claude cancel-ack never arrived.  Submitting into a still-busy
+shell is refused downstream, and the caller then closed the compose
+buffer anyway -- the prompt neither interrupted nor sent, which is what
+\"went into the ether\" described."
+  (and buffer-live process-live (not busy) t))
+
 (defun decknix--compose-wait-not-busy (target on-ready
                                               &optional timeout interval min-settle)
   "Poll TARGET's `shell-maker--busy' flag, then call ON-READY.

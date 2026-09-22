@@ -29,6 +29,9 @@
 
 ;;; Code:
 
+(declare-function decknix--compose-submit-ok-p
+                  "decknix-agent-compose-wait" (buffer-live process-live busy))
+
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -387,18 +390,26 @@ side-effect indicated by the resolver's `:action'."
 (defun decknix--compose-submit-after-wait (target input)
   "Submit INPUT to TARGET after the wait-not-busy coordination.
 
-Returns silently when TARGET is dead or its process has gone; the
-caller-issued interrupt may have killed the buffer, the compose
-buffer has already closed, and a user-error from a timer callback
-would be noisy.  The synchronous (non-interrupt) path still
-runs its own pre-submit liveness check and surfaces the user-
-error there."
-  (when (and (buffer-live-p target)
-             (get-buffer-process target)
-             (process-live-p (get-buffer-process target)))
-    (with-current-buffer target
-      (goto-char (point-max))
-      (shell-maker-submit :input input))))
+Returns non-nil ONLY when the input was actually sent, so the caller can
+tell a real submit from a refused one and decide whether to consume the
+compose buffer.
+
+Returns nil -- silently -- when TARGET is dead, its process has gone, or
+it is STILL BUSY.  The busy case is the one that bit: the wait fires on a
+budget as well as on the flag clearing, so an un-acked interrupt still
+reaches here, the send is refused downstream, and the compose buffer used
+to be closed regardless.  A user-error from a timer callback would be
+noisy, hence a return value rather than a signal."
+  (let* ((live (buffer-live-p target))
+         (proc (and live (get-buffer-process target)))
+         (proc-live (and proc (process-live-p proc)))
+         (busy (and live (with-current-buffer target
+                           (bound-and-true-p shell-maker--busy)))))
+    (when (decknix--compose-submit-ok-p live proc-live busy)
+      (with-current-buffer target
+        (goto-char (point-max))
+        (shell-maker-submit :input input))
+      t)))
 
 (defun decknix--compose-stash-input (input)
   "Save INPUT to the kill-ring so a broken submit never loses the text.
@@ -524,10 +535,18 @@ before."
       (decknix--compose-wait-not-busy
        target
        (lambda ()
-         (decknix--compose-submit-after-wait target input)
-         (when (buffer-live-p compose-buf)
-           (with-current-buffer compose-buf
-             (decknix--compose-finish))))))))
+         (if (decknix--compose-submit-after-wait target input)
+             ;; Sent: consume the compose buffer as before.
+             (when (buffer-live-p compose-buf)
+               (with-current-buffer compose-buf
+                 (decknix--compose-finish)))
+           ;; Refused -- almost always the interrupt never landed.  KEEP
+           ;; the compose buffer and say so.  Closing it here is what made
+           ;; the prompt look like it vanished; the text is also on the
+           ;; kill ring via `decknix--compose-stash-input', but nothing
+           ;; told the user that.
+           (message
+            "Interrupt did not land — prompt NOT sent, left in the compose buffer (also on the kill ring)")))))))
 
 (defun decknix-agent-compose-cancel ()
   "Cancel/clear the compose buffer without submitting.
