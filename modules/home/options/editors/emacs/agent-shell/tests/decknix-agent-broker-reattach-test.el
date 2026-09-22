@@ -110,5 +110,37 @@ reattaching; without a sweep the directory grows without bound."
 (ert-deftest decknix-reattach--nothing-stale-is-empty ()
   (should-not (decknix--broker-reattach-stale '(("s-live" . t)))))
 
+
+;; --- a reattach that lands on a dead agent must not leave a row ------
+;;
+;; Reported 2026-09-22 by comparing the Live list across a switch: a
+;; `broker/claude/test\=' session from 4 AUGUST came back, seven weeks
+;; later, in a buffer whose process was already dead -- and sat in the
+;; Live list, in red, as `killed\='.
+;;
+;; Reattach keeps brokers "whose pid is still alive", and that is the
+;; flaw: liveness is tested at the BROKER, not at the agent behind it. A
+;; broker is a relay built to outlive things; when its bridge exits the
+;; broker can stay up, pass the pid test, and be reattached to nothing.
+
+(ert-deftest decknix-broker-dead-p--killed-is-dead ()
+  "`killed' is the status a reattach-to-nothing produces."
+  (should (decknix--broker-reattach-dead-p "killed")))
+
+(ert-deftest decknix-broker-dead-p--live-states-are-not ()
+  "Every state a working session can be in must survive."
+  (dolist (s '("ready" "working" "asking" "waiting" "initializing" "finished"))
+    (should-not (decknix--broker-reattach-dead-p s))))
+
+(ert-deftest decknix-broker-dead-p--unknown-is-not-dead ()
+  "`unknown' means the status could not be read, not that it is dead.
+
+Deliberately conservative: killing a buffer we merely failed to classify
+would lose a live conversation, which is far worse than leaving one stale
+row on screen."
+  (should-not (decknix--broker-reattach-dead-p "unknown"))
+  (should-not (decknix--broker-reattach-dead-p nil))
+  (should-not (decknix--broker-reattach-dead-p "")))
+
 (provide 'decknix-agent-broker-reattach-test)
 ;;; decknix-agent-broker-reattach-test.el ends here
