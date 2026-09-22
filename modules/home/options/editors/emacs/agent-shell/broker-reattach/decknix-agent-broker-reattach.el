@@ -40,6 +40,11 @@
 
 ;;; Code:
 
+(declare-function agent-shell-buffers "ext:agent-shell")
+(declare-function decknix-agent-buffer-status
+                  "decknix-agent-auto-close" (buffer))
+(defvar decknix--agent-broker-key)
+
 (require 'json)
 (require 'subr-x)
 
@@ -235,6 +240,47 @@ set of survivors rather than racing a sweep that is still deciding what
 to kill."
   :type 'number :group 'decknix)
 
+(defconst decknix--broker-reattach-dead-statuses '("killed")
+  "Buffer statuses meaning the agent behind a reattached broker is gone.
+
+Only `killed\='.  `unknown\=' is deliberately absent: it means the status
+could not be read, not that the session is dead, and killing a buffer we
+merely failed to classify would lose a live conversation -- much worse
+than leaving one stale row on screen.")
+
+(defun decknix--broker-reattach-dead-p (status)
+  "Non-nil when STATUS means a reattached session has no agent.  Pure."
+  (and (stringp status)
+       (member status decknix--broker-reattach-dead-statuses)
+       t))
+
+(defun decknix--broker-reattach-sweep-dead (keys)
+  "Kill reattached buffers for KEYS whose agent turned out to be dead.
+
+Returns the number killed.  KEYS are the broker keys this run reattached,
+so a buffer the user opened by hand is never touched.
+
+Reattach tests liveness at the BROKER pid, and a broker outlives its
+bridge by design -- that is the whole point of it.  So a broker whose
+agent exited weeks ago still passes and gets reattached, producing a
+`killed\=' buffer in the Live list: observed with a 4 August
+`broker/claude/test\=' session reappearing after a switch.
+
+Testing the agent through the protocol would be the thorough fix; this
+reads the status the sidebar already computes, which is cheap, needs no
+protocol work, and is exactly the thing the user sees."
+  (let ((killed 0))
+    (dolist (buf (and (fboundp 'agent-shell-buffers) (agent-shell-buffers)))
+      (when (buffer-live-p buf)
+        (let ((key (buffer-local-value 'decknix--agent-broker-key buf))
+              (status (ignore-errors (decknix-agent-buffer-status buf))))
+          (when (and key (member key keys)
+                     (decknix--broker-reattach-dead-p status))
+            (setq killed (1+ killed))
+            (let ((kill-buffer-query-functions nil))
+              (ignore-errors (kill-buffer buf)))))))
+    killed))
+
 (defun decknix--broker-reattach-one (key conv-key)
   "Reattach the conversation CONV-KEY to its live broker KEY.
 Returns non-nil when a resume was dispatched.
@@ -290,6 +336,19 @@ With QUIET, does not message."
         (setq done (1+ done)))
        ((null (cdr entry)) (setq no-conv (1+ no-conv)))
        (t (setq no-sid (1+ no-sid)))))
+    ;; Resume is asynchronous, so a reattach that lands on a dead agent
+    ;; only shows as `killed' a moment later.  Sweep once, off the
+    ;; startup path, rather than leaving the row in Live (see
+    ;; `decknix--broker-reattach-sweep-dead').
+    (when (> done 0)
+      (let ((keys (mapcar #'car plan)))
+        (run-at-time
+         6 nil
+         (lambda ()
+           (let ((n (decknix--broker-reattach-sweep-dead keys)))
+             (when (and (> n 0) (not quiet))
+               (message "decknix: dropped %d reattached session%s with no agent"
+                        n (if (= n 1) "" "s"))))))))
     (unless quiet
       ;; Skips are reported BY REASON.  They were previously all blamed on
       ;; "no conversation", which is what hid a live session failing to
