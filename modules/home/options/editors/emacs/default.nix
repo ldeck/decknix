@@ -344,7 +344,30 @@ stops finding any is visible rather than assumed fixed."
           ;; caught it as the "cursor stuck on resume" hitch).  Raise it to
           ;; 20s (above gcmh's own 15s default) so only genuine idle
           ;; reclaims; memory headroom is ample (~600MB RSS, no pressure).
+          ;; The LOW threshold matters as much as the high one, and was
+          ;; left at the Emacs default of 800 KB.  gcmh raises the
+          ;; threshold from `pre-command-hook' and drops it on idle, so
+          ;; anything allocating OUTSIDE the command loop -- timers --
+          ;; runs at 800 KB and collects constantly.
+          ;;
+          ;; Measured 2026-09-22 with `profiler-start' while typing felt
+          ;; laggy, over a 12s sample:
+          ;;
+          ;;     38%  timer-event-handler
+          ;;     33%  Automatic GC          <- at the 800 KB threshold
+          ;;     25%  redisplay_internal
+          ;;
+          ;; A third of the CPU went on collections nobody asked for, and
+          ;; `gc-elapsed' reached 754s over one session.  This is a
+          ;; timer-heavy Emacs -- sidebar ticks, header ticks, agent
+          ;; heartbeats -- so the idle threshold is in force most of the
+          ;; time, not the work one.
+          ;;
+          ;; 64 MB still reclaims on idle (gcmh collects explicitly via
+          ;; `gcmh-idle-garbage-collect'); it only stops the per-800 KB
+          ;; thrash between those reclaims.
           (setq gcmh-high-cons-threshold (* 512 1024 1024)  ; 512 MB during work
+                gcmh-low-cons-threshold  (* 64 1024 1024)   ; 64 MB between commands
                 gcmh-idle-delay 20)                          ; reclaim only after 20s idle
           (gcmh-mode 1))
 
