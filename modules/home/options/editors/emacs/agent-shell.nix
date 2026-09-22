@@ -7000,16 +7000,47 @@ ${optionalString cfg.hub.priority.enable ''
         ;; Throttle the busy-session heartbeat.  Upstream animates the
         ;; header + mode-line spinner at 10 beats/sec (`agent-shell-
         ;; heartbeat-make' default), forcing a `redisplay_internal' pass
-        ;; 10x/second for as long as ANY agent is busy.  Clamp to 3/sec:
-        ;; still a live spinner, ~3x less redisplay churn while agents run.
+        ;; per beat for as long as ANY agent is busy.  This was clamped to
+        ;; 3; measurement says 3 is still too many.
+        ;;
+        ;; The cost is per BUSY SESSION, not per Emacs: each busy session
+        ;; arms its own timer.  Measured 2026-09-22 with the hitch
+        ;; profiler, on a day running 3-4 agents at once:
+        ;;
+        ;;   one forced redisplay            53 ms
+        ;;   heartbeat header updates       279 hits, 81.3 s, max 11.8 s
+        ;;
+        ;; At 3 bps x 3 busy sessions that is ~9 redisplays/second, near
+        ;; 500 ms of every second spent in redisplay -- which is what the
+        ;; macOS beachballs were.  The header COMPUTATION is not the
+        ;; problem and needs no caching: the whole tick measured 6 ms
+        ;; across five visible buffers, and a single header rebuild 0.9 ms.
+        ;; Only the redisplay it forces is expensive.
+        ;;
+        ;; 1 bps reads as a slow pulse rather than a spin.  That is the
+        ;; trade taken deliberately: the spinner is decoration, and status
+        ;; changes arrive on the EVENT path anyway (throttled separately by
+        ;; `decknix-header-event-throttle'), so nothing informational is
+        ;; lost -- only animation smoothness.
+        ;;
         ;; `:filter-args' rewrites the `:beats-per-second' keyword before
         ;; the heartbeat timer is armed.  Named function → hot-reload-safe.
+        (defcustom decknix-heartbeat-max-bps 1
+          "Maximum heartbeat beats per second for a busy agent session.
+
+Each beat forces a redisplay (measured 53 ms), and each busy session runs
+its own heartbeat, so the real rate is this times the number of agents
+working.  Raise it for a smoother spinner at the cost of responsiveness
+while several agents run."
+          :type 'integer :group 'decknix)
+
         (defun decknix--heartbeat-clamp-bps (args)
-          "Clamp `agent-shell-heartbeat-make' :beats-per-second to <=3.
-ARGS is the `&key' plist; returns a fresh plist so the caller's is not
-mutated."
+          "Clamp `agent-shell-heartbeat-make' :beats-per-second.
+Clamped to `decknix-heartbeat-max-bps'.  ARGS is the `&key' plist;
+returns a fresh plist so the caller's is not mutated."
           (plist-put (copy-sequence args) :beats-per-second
-                     (min 3 (or (plist-get args :beats-per-second) 10))))
+                     (min decknix-heartbeat-max-bps
+                          (or (plist-get args :beats-per-second) 10))))
         (with-eval-after-load 'agent-shell-heartbeat
           (advice-add 'agent-shell-heartbeat-make :filter-args
                       #'decknix--heartbeat-clamp-bps))
