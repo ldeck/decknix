@@ -179,5 +179,32 @@ its own dead-target bail-out."
       (funcall (cdr (pop scheduled)))
       (should (= 1 called)))))
 
+
+;; --- a prompt must never be consumed by a submit that did not happen ---
+;;
+;; Reported 2026-09-22: interrupting a busy session (C-c C-c, or the
+;; compose window\='s interrupt-and-submit) neither interrupted nor sent --
+;; "the prompt just went into the ether".
+;;
+;; The wait fires on a BUDGET as well as on the busy flag clearing. When
+;; a Claude cancel-ack does not arrive inside the budget the callback
+;; still runs, submits into a still-busy shell where the send is refused,
+;; and then closes the compose buffer regardless. The text was stashed to
+;; the kill ring, so it was recoverable -- but nothing said so, which is
+;; why it read as vanished.
+
+(ert-deftest decknix-compose-submit-ok--all-conditions-met ()
+  "Submit only when the buffer lives, the process lives, and it is idle."
+  (should (decknix--compose-submit-ok-p t t nil)))
+
+(ert-deftest decknix-compose-submit-ok--refuses-while-still-busy ()
+  "Still busy at fire time means the interrupt never landed.
+Submitting anyway is the send that silently does nothing."
+  (should-not (decknix--compose-submit-ok-p t t t)))
+
+(ert-deftest decknix-compose-submit-ok--refuses-without-a-live-process ()
+  (should-not (decknix--compose-submit-ok-p t nil nil))
+  (should-not (decknix--compose-submit-ok-p nil t nil)))
+
 (provide 'decknix-agent-compose-wait-test)
 ;;; decknix-agent-compose-wait-test.el ends here
