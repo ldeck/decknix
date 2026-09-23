@@ -563,19 +563,31 @@ preserved: no bot attribution, no threads, latest post not mine."
                  '((needs_reply . t) (total_threads . 2)
                    (unresolved_threads . 1)))))))
 
-(ert-deftest decknix-hub-icons--waiting-on-them-no-longer-has-an-icon ()
-  "`i_replied_last' alone shows nothing. This REMOVES a signal.
+(ert-deftest decknix-hub-icons--waiting-on-them-needs-an-open-thread ()
+  "`i_replied_last' with an OPEN thread means I am waiting on them.
 
-The old ladder had a third glyph (⏳ / `.') meaning \"I replied, waiting on
-them\". It is gone: the rule asked for is two icons only -- a human
-comment not yet addressed, and an unresolved bot comment -- and
-`i_replied_last' is by definition addressed.
-
-Pinned as a test rather than left implicit because it is a deliberate
-removal of information, not a side effect. If waiting-on-them turns out to
-be worth surfacing it needs its own slot, not a reuse of the human one."
+Leaving a thread unresolved after replying is how you say \"still
+waiting\", so it is a real state and gets the dim glyph. With nothing open
+it is simply addressed and shows nothing -- that distinction is the whole
+point, and an earlier pass collapsed both into silence."
   (should (string-empty-p
-           (string-trim (decknix--hub-activity-icons '((i_replied_last . t)))))))
+           (string-trim (decknix--hub-activity-icons '((i_replied_last . t))))))
+  (should (string-empty-p
+           (string-trim (decknix--hub-activity-icons
+                         '((i_replied_last . t)
+                           (total_threads . 2) (unresolved_threads . 0))))))
+  (should-not (string-empty-p
+               (string-trim (decknix--hub-activity-icons
+                             '((i_replied_last . t)
+                               (total_threads . 2) (unresolved_threads . 1)))))))
+
+(ert-deftest decknix-hub-icons--a-human-reply-outranks-waiting ()
+  "If they answered after me, that is a call to act, not a wait."
+  (should (equal "i "
+                 (decknix-test--icon-glyph
+                  (decknix--hub-activity-icons
+                   '((i_replied_last . t) (replies_to_me . t)
+                     (total_threads . 2) (unresolved_threads . 1)))))))
 
 (ert-deftest decknix-hub-icons--emoji-style-bot-needs-an-open-thread ()
   "Emoji layout follows the same gating as ascii."
