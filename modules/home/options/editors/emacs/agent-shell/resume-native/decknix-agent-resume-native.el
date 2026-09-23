@@ -421,7 +421,32 @@ and setting `window-start' by hand only fights the display engine."
     (with-current-buffer shell-buf
       (goto-char (point-max))
       (dolist (window (get-buffer-window-list shell-buf nil t))
-        (set-window-point window (point-max))))))
+        (set-window-point window (point-max))
+        ;; Scroll the window too, not just its point.
+        ;;
+        ;; This function used to set point and stop, on the reasoning that
+        ;; "redisplay moves a window to follow its point, and setting
+        ;; `window-start' by hand only fights the display engine".  That
+        ;; holds for the SELECTED window in the command loop.  It does not
+        ;; hold here: the resume lands from a timer, often into a window
+        ;; that is not selected, and the window then keeps its old
+        ;; `window-start' with the prompt below the visible region.
+        ;;
+        ;; Measured on 727cd28d: window-end 116790 against point-max
+        ;; 116828 -- the ` Me ' badge and `❯' existed, correctly placed on
+        ;; the live prompt, and simply were not on screen.  Twice reported
+        ;; as "no Me label + prompt after resuming" when the buffer was
+        ;; in fact correct.
+        ;;
+        ;; It went unnoticed for so long because the busy heartbeat was
+        ;; forcing a redisplay several times a second and incidentally
+        ;; scrolling the window.  Clamping that to 1 bps for performance
+        ;; (1605629) removed the accident, which is why this surfaced
+        ;; immediately afterwards.
+        (when (window-live-p window)
+          (with-selected-window window
+            (goto-char (point-max))
+            (ignore-errors (recenter -1))))))))
 
 (defun decknix--agent-resume-focus-prompt-on-init (shell-buf)
   "Focus SHELL-BUF's prompt once ACP initialization has fully finished.
@@ -460,6 +485,33 @@ yank point away from something the user has since typed."
                (setq done t)
                (when token
                  (agent-shell-unsubscribe :subscription token))
+               ;; Ensure a usable prompt BEFORE focusing, on BOTH restore
+               ;; methods.
+               ;;
+               ;; This used to run only on the `load' path, on the
+               ;; reasoning that `resume' replays nothing so there is
+               ;; nothing to bury the prompt under.  That was wrong: on
+               ;; `resume' WE render, via
+               ;; `decknix--agent-session-prepopulate', and that writes the
+               ;; transcript in after the early prompt -- burying it
+               ;; exactly as a replay does.
+               ;;
+               ;; Observed on session 727cd28d (a Claude `resume'):
+               ;; `comint-last-prompt' spanned 4431 characters of replayed
+               ;; conversation, `agent-shell--live-input-prompt-p' was nil,
+               ;; and the buffer ended on the agent's question with no
+               ;; prompt at all -- so `agent-shell-chat-mode' had no live
+               ;; prompt run to draw ` Me ' and `❯' on.
+               ;;
+               ;; Safe to call unconditionally: it is guarded by
+               ;; `decknix--agent-resume-prompt-buried-p', so a healthy
+               ;; prompt is left alone.  Deferred a beat because
+               ;; prepopulation lands on its own timer after init.
+               (run-at-time
+                2 nil
+                (lambda ()
+                  (decknix--agent-resume-ensure-live-prompt shell-buf)
+                  (decknix--agent-resume-focus-prompt shell-buf)))
                (decknix--agent-resume-focus-prompt shell-buf)))))
     token))
 
