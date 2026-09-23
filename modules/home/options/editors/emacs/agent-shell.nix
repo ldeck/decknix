@@ -461,7 +461,12 @@ let
     pname = "decknix-layout-groups";
     src = ./agent-shell/layout-groups;
     packageRequires = [ ];
-    testFiles = [ ];
+    # Was an empty list, which is how a crash in the window-state walker
+    # reached a release: every entry point to saved layouts signalled
+    # `(wrong-type-argument listp 1724)' and nothing caught it at build.
+    testFiles = [
+      "decknix-layout-groups-test.el"
+    ];
   };
 
   # Quick-capture: jot a feature/bug/investigation/discussion into a GitHub

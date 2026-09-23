@@ -71,16 +71,31 @@ WINDOW-STATE is a `window-state-get' snapshot (serializable).")
 (defun decknix-layout-group--state-buffers (state)
   "Return the list of live buffers referenced by window-STATE."
   (let (bufs)
-    (cl-labels ((walk (node)
-                  (when (consp node)
-                    (if (eq (car node) 'leaf)
-                        (let* ((params (cdr node))
-                               (bufentry (alist-get 'buffer params))
-                               (name (cond ((stringp bufentry) bufentry)
-                                           ((consp bufentry) (car bufentry)))))
-                          (when (and name (get-buffer name))
-                            (push (get-buffer name) bufs)))
-                      (dolist (child (cdr node)) (walk child))))))
+    (cl-labels
+        ((node-p (x)
+           ;; A child NODE, as opposed to a parameter pair.  A window state
+           ;; mixes both in the same cdr:
+           ;;
+           ;;   (hc (min-height . 8) (min-pixel-width . 1724) (leaf ...) ...)
+           ;;
+           ;; Recursing over the whole cdr reached `(min-pixel-width . 1724)',
+           ;; found its car was not `leaf', and ran `(dolist (child 1724))'
+           ;; -- `(wrong-type-argument listp 1724)', which killed
+           ;; `decknix-layout-group-switch' before the prompt appeared,
+           ;; because the reader sorts candidates by attention and the sort
+           ;; calls this walker.
+           (and (consp x) (memq (car x) '(leaf hc vc))))
+         (walk (node)
+           (when (consp node)
+             (if (eq (car node) 'leaf)
+                 (let* ((params (cdr node))
+                        (bufentry (alist-get 'buffer params))
+                        (name (cond ((stringp bufentry) bufentry)
+                                    ((consp bufentry) (car bufentry)))))
+                   (when (and name (get-buffer name))
+                     (push (get-buffer name) bufs)))
+               (dolist (child (cdr node))
+                 (when (node-p child) (walk child)))))))
       (walk state))
     (nreverse bufs)))
 
