@@ -172,7 +172,21 @@ in {
     # Its lockfile is pruned to the active host platform and each npm tarball is
     # fetched into its own Nix store path, making successful fetches reusable and
     # subsequent builds offline instead of restarting one monolithic npm download.
-    home.packages = [ pkgs.claude-agent-acp ];
+    # The Claude Code CLI itself, plus the ACP bridge.
+    #
+    # The CLI was NEVER managed here -- only the bridge was -- which is why
+    # `~/.local/bin/claude' ended up ahead of Nix on PATH, running a
+    # self-updated build out of `~/.local/share/claude/versions/'.  The
+    # `disableAutoUpdate' machinery below was therefore guarding a pin that
+    # did not exist.
+    #
+    # Sourced from `unstable' for the same reason `pi-coding-agent' is (see
+    # pi.nix): stable lags badly on agent CLIs.  Measured 2026-09-23 --
+    # nixos-25.11 had claude-code 2.0.51 while nixpkgs-unstable had 2.1.280.
+    # A hundred-plus patch versions matters here because the MODEL LIST the
+    # `C-c C-v' picker offers comes from the CLI at runtime, so an old pin
+    # silently withholds new models.
+    home.packages = [ pkgs.unstable.claude-code pkgs.claude-agent-acp ];
 
     # Keep the Nix pin authoritative (see `disableAutoUpdate').  The session
     # variable covers a CLI launch; the settings.json `env' merge below
