@@ -70,6 +70,16 @@ the noise that toggle removes.
 A is preferred: it keeps the render path local and matches how the
 worktree registry already caches branch facts.
 
+## 4.1 Sibling: PRs handed to someone else
+
+`wip-ownership.md` records the other half of this theme. A PR you
+authored and then ASSIGNED to someone else stays in your WIP list,
+because nothing models the transfer of responsibility -- the same gap as
+a merged PR staying visible as `wip`.
+
+Both are "WIP shows work that has left you". They touch the same rows and
+want designing together; that spec's step 5 folds these steps in.
+
 ## 5. Open questions
 
 1. **When does a merged worktree stop being shown at all?** This overlaps
