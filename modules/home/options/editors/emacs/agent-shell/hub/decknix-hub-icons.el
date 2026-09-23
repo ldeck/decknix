@@ -230,6 +230,7 @@ italic characters and weight)."
       ;;
       ;;   italic i  a HUMAN comment not yet addressed
       ;;   beta      an UNRESOLVED bot comment
+      ;;   dim .     I replied and left the thread open, awaiting them
       ;;
       ;; `needs_reply' cannot carry the human slot alone: in the feed it
       ;; means "the last post was not mine", not "a human posted".
@@ -237,13 +238,13 @@ italic characters and weight)."
       ;; with `bot_replies_to_me' t and zero unresolved threads -- four
       ;; rows shouting about bots that had already finished.  So a
       ;; bot-attributable row never drives the human slot.
-      (let* ((addressed
-              ;; I answered last, so nothing is outstanding whoever posted
-              ;; before me.
-              (or i-replied-last
-                  ;; Threads exist and every one is resolved.
-                  (and total-threads (> total-threads 0)
-                       unresolved (= unresolved 0))))
+      (let* ((open-threads (and unresolved (> unresolved 0)))
+             (addressed
+              ;; Threads exist and every one is resolved.
+              (or (and total-threads (> total-threads 0)
+                       unresolved (= unresolved 0))
+                  ;; I posted last and left nothing open behind me.
+                  (and i-replied-last (not open-threads))))
              (bot-attributable (or bot-replies-to-me bot-pending))
              (h (cond
                  (addressed "")
@@ -258,6 +259,15 @@ italic characters and weight)."
                   (if emoji-layout
                       (decknix--hub-icon "\U0001F4AC" '(:foreground "#d7af5f"))
                     (propertize "i" 'face '(:foreground "#5fc8d4" :weight normal :slant italic))))
+                 ;; I replied and deliberately left the thread OPEN, so the
+                 ;; ball is with them.  Distinct from addressed: leaving a
+                 ;; thread unresolved is how you say "still waiting", and
+                 ;; collapsing it into silence loses that.  Dim, and last in
+                 ;; the ladder -- it is information, not a call to act.
+                 ((and i-replied-last open-threads)
+                  (if emoji-layout
+                      (decknix--hub-icon "\u23f3" '(:foreground "#6c6c6c"))
+                    (propertize "." 'face '(:foreground "#6c6c6c" :weight normal))))
                  (t "")))
              ;; The bot slot requires an OPEN thread, with no
              ;; no-threads fallback.  A bot's findings ARE threads, so a
