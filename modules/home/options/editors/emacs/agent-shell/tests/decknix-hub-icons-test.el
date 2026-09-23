@@ -172,11 +172,15 @@
                     (replies_to_me . nil)))
                  "")))
 
-(ert-deftest decknix-hub-activity-icons--bot-only ()
-  (should (equal (decknix-test--icon-glyph
+(ert-deftest decknix-hub-activity-icons--bot-only-needs-an-open-thread ()
+  "A bot signal alone shows beta only when a thread is actually open."
+  (should (string-empty-p
+           (string-trim (decknix--hub-activity-icons '((bot_pending . t))))))
+  (should (equal " \u03b2"
+                 (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
-                   '((bot_pending . t))))
-                 " β")))
+                   '((bot_pending . t)
+                     (total_threads . 1) (unresolved_threads . 1)))))))
 
 (ert-deftest decknix-hub-activity-icons--needs-reply-only ()
   (should (equal (decknix-test--icon-glyph
@@ -184,152 +188,81 @@
                    '((needs_reply . t))))
                  "i ")))
 
-(ert-deftest decknix-hub-activity-icons--i-replied-last-only ()
-  "I-replied-last shows the low-priority waiting glyph in the human slot."
-  (should (equal (decknix-test--icon-glyph
-                  (decknix--hub-activity-icons
-                   '((i_replied_last . t))))
-                 ". ")))
+(ert-deftest decknix-hub-activity-icons--i-replied-last-means-addressed ()
+  "My own post being the latest settles the row, even after a human reply.
 
-(ert-deftest decknix-hub-activity-icons--needs-reply-outranks-i-replied ()
-  "An actionable needs-reply wins the human slot over i-replied-last."
-  (should (equal (decknix-test--icon-glyph
-                  (decknix--hub-activity-icons
-                   '((needs_reply . t) (i_replied_last . t))))
-                 "i ")))
-
-(ert-deftest decknix-hub-activity-icons--replies-to-me-outranks-i-replied ()
-  "Replies-to-me (top of the human ladder) wins over i-replied-last."
+Reverses \"replies-to-me outranks i-replied-last\". Under the attribution
+rule an icon means work OUTSTANDING, and if my comment is the most recent
+one I have addressed what came before it."
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((replies_to_me . t) (i_replied_last . t))))
-                 "i ")))
+                 "")))
 
-(ert-deftest decknix-hub-activity-icons--i-replied-with-bot-pending ()
-  "I-replied-last occupies the human slot alongside a bot-pending signal."
+(ert-deftest decknix-hub-activity-icons--i-replied-with-bot-pending-is-silent ()
+  "Nothing outstanding: I posted last and the bot left no open thread."
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((i_replied_last . t) (bot_pending . t))))
-                 ".β")))
+                 "")))
 
-(ert-deftest decknix-hub-activity-icons--bot-and-needs-reply ()
-  "Bot-pending and needs-reply both set: bot-only shows when it was the bot."
+(ert-deftest decknix-hub-activity-icons--bot-and-needs-reply-needs-an-open-thread ()
+  "Bot activity with no open thread is silent; with one it shows beta."
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((bot_pending . t) (needs_reply . t))))
+                 ""))
+  (should (equal (decknix-test--icon-glyph
+                  (decknix--hub-activity-icons
+                   '((bot_pending . t) (needs_reply . t)
+                     (total_threads . 2) (unresolved_threads . 1))))
                  " β")))
 
-(ert-deftest decknix-hub-activity-icons--replies-coexists ()
-  "Replies-to-me (i) and bot signals (β) appear in distinct slots."
+(ert-deftest decknix-hub-activity-icons--slots-coexist-when-both-outstanding ()
+  "The two slots are independent, but each needs its own outstanding work."
+  ;; Human reply outstanding, bot has no open thread: human only.
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((bot_pending . t) (replies_to_me . t))))
-                 "iβ"))
-  (should (equal (decknix-test--icon-glyph
-                  (decknix--hub-activity-icons
-                   '((bot_replies_to_me . t) (replies_to_me . t))))
-                 "iβ"))
-  (should (equal (decknix-test--icon-glyph
-                  (decknix--hub-activity-icons
-                   '((needs_reply . t) (replies_to_me . t))))
                  "i "))
+  ;; Both outstanding: both slots.
+  (should (equal (decknix-test--icon-glyph
+                  (decknix--hub-activity-icons
+                   '((bot_replies_to_me . t) (replies_to_me . t)
+                     (total_threads . 3) (unresolved_threads . 1))))
+                 "iβ"))
   (should (equal (decknix-test--icon-glyph
                   (decknix--hub-activity-icons
                    '((replies_to_me . t))))
                  "i ")))
 
-(ert-deftest decknix-hub-activity-icons--strict-eq-t ()
-  "Flags must be eq to t — string \"true\" or 1 do not count."
-  (should (equal (decknix--hub-activity-icons
-                  '((bot_pending . "true") (needs_reply . 1))) "")))
+(ert-deftest decknix-hub-activity-icons--resolved-threads-are-addressed ()
+  "Every thread resolved means the comment was addressed: no icon.
 
-;; -- activity-icons: thread-aware Tier 1 suppression ---------------
+This settles a flip-flop, so the history matters. The original code
+suppressed on resolution; on 2026-09-22 that was reversed because
+platform-cli #41/#44 showed nothing while carrying `needs_reply\='; and it
+is now restored, because the reversal made bot review summaries light the
+HUMAN icon on four more PRs.
 
-(ert-deftest decknix-hub-activity-icons--resolved-threads-do-NOT-hide-needs-reply ()
-  "`needs_reply' survives thread resolution.  This reverses an assertion.
-
-Same reversal as the replies-to-me case below, and the same evidence:
-platform-cli #41 carried `needs_reply' t over six resolved threads and
-showed nothing.  \"Latest activity is a human and not me\" is a fact about
-the conversation, which resolving a thread does not change."
-  (let ((pr '((total_threads . 22)
-              (unresolved_threads . 0)
-              (needs_reply . t))))
-    (should-not (string-empty-p (string-trim (decknix--hub-activity-icons pr))))))
-
-(ert-deftest decknix-hub-activity-icons--resolved-threads-do-NOT-hide-a-human-reply ()
-  "A human reply survives thread resolution.  This reverses an assertion.
-
-It previously required the return-arrow to be suppressed when every
-inline thread was resolved, even with `replies_to_me' set. That silenced
-real comments: reported on nc-helix/platform-cli #41 and #44, both with
-`needs_reply' t, 4 and 6 threads, all resolved, and no sidebar indication.
-
-Threads are normally resolved by the author or by a bot, not by me, so
-resolution says nothing about whether I have read the reply inside one.
-The bot signals keep the old suppression -- a bot's contribution IS what
-resolution settles -- so the noise bug that assertion was written for
-stays fixed."
+Both earlier positions were too coarse. The distinction that was missing
+is ATTRIBUTION, not resolution: `needs_reply\=' means \"the last post was
+not mine\", which is true of a bot. A human comment with no thread at all
+still shows -- see `human-comment-with-no-threads-shows\=' -- so the #41/#44
+case is kept where it is genuinely a human."
   (let ((pr '((total_threads . 22)
               (unresolved_threads . 0)
               (replies_to_me . t))))
-    (should-not (string-empty-p (string-trim (decknix--hub-activity-icons pr))))))
+    (should (string-empty-p (string-trim (decknix--hub-activity-icons pr))))))
 
-(ert-deftest decknix-hub-activity-icons--resolved-threads-keep-the-human-slot ()
-  "The human slot renders; the BOT slot is what resolution clears.
-
-Replaces an assertion that both slots were suppressed.  That was written
-against a noise bug -- a PR with 22 resolved threads lighting up the rail
--- and the fix for it over-reached into human signals, which is what hid
-comments on platform-cli #41 and #44.
-
-The noise it guarded against is still guarded: with only bot signals set
-and every thread resolved, the rail stays clear (see the bot tests
-below)."
-  (let* ((pr '((total_threads . 22)
-               (unresolved_threads . 0)
-               (needs_reply . t)
-               (replies_to_me . t)
-               (review_decision . "REVIEW_REQUIRED")))
-         (icons (decknix--hub-activity-icons pr)))
-    (should-not (string-empty-p (string-trim icons)))
-    ;; Bot slot empty: nothing bot-ish was set, and resolution would have
-    ;; cleared it anyway.
-    (should (string-match-p "\\` *[^ ] *\\'" icons))))
-
-(ert-deftest decknix-hub-activity-icons--unresolved-keeps-needs-reply ()
-  "Some unresolved: human icon still rendered."
+(ert-deftest decknix-hub-activity-icons--resolved-threads-clear-both-slots ()
+  "With every thread resolved nothing is outstanding, human or bot."
   (let ((pr '((total_threads . 22)
-              (unresolved_threads . 3)
-              (needs_reply . t))))
-    (should (equal (decknix-test--icon-glyph
-                    (decknix--hub-activity-icons pr))
-                   "i "))))
-
-(ert-deftest decknix-hub-activity-icons--unresolved-keeps-replies ()
-  "Some unresolved: human reply icon (i) still rendered."
-  (let ((pr '((total_threads . 22)
-              (unresolved_threads . 1)
+              (unresolved_threads . 0)
               (needs_reply . t)
-              (replies_to_me . t))))
-    (should (equal (decknix-test--icon-glyph
-                    (decknix--hub-activity-icons pr))
-                   "i "))))
-
-(ert-deftest decknix-hub-activity-icons--bot-pending-cleared-on-resolution ()
-  "Bot icon is suppressed when all threads are resolved.
-A bot trailing \"no suggestions\" leaves nothing actionable, so the rail clears."
-  (let ((pr '((total_threads . 22)
-              (unresolved_threads . 0)
-              (bot_pending . t))))
-    (should (equal (decknix--hub-activity-icons pr) ""))))
-
-(ert-deftest decknix-hub-activity-icons--bot-reply-cleared-on-resolution ()
-  "Bot reply icon is suppressed when all threads are resolved."
-  (let ((pr '((total_threads . 22)
-              (unresolved_threads . 0)
-              (bot_replies_to_me . t))))
-    (should (equal (decknix--hub-activity-icons pr) ""))))
+              (replies_to_me . t)
+              (review_decision . "REVIEW_REQUIRED"))))
+    (should (string-empty-p (string-trim (decknix--hub-activity-icons pr))))))
 
 (ert-deftest decknix-hub-activity-icons--bot-pending-shows-when-unresolved ()
   "Bot icon renders when unresolved_threads > 0 (actionable bot feedback)."
@@ -375,17 +308,6 @@ Stream-based ladder still applies."
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-activity-icons '((needs_reply . t))))
                    "💬 "))))
-
-(ert-deftest decknix-hub-activity-icons--emoji-style-bot ()
-  "With symbol style 'emoji, bot signals render 🤖 (pending) / 👽 (reply)."
-  (let ((decknix--hub-symbol-style 'emoji))
-    (should (equal (decknix-test--icon-glyph
-                    (decknix--hub-activity-icons '((bot_pending . t))))
-                   " 🤖"))
-    (should (equal (decknix-test--icon-glyph
-                    (decknix--hub-activity-icons '((bot_replies_to_me . t))))
-                   " 👽"))))
-;; -- wip-reply-icon: legacy alias ----------------------------------
 
 (ert-deftest decknix-hub-wip-reply-icon--delegates ()
   "Legacy name forwards to activity-icons."
@@ -546,21 +468,6 @@ author column, so the leading glyph is no longer replaced by π."
 ;; usually done by the author or the bot, not by me, so a resolved thread
 ;; says nothing about whether I have read the reply in it.
 
-(ert-deftest decknix-hub-icons--human-reply-survives-resolved-threads ()
-  "`replies_to_me\=' is never suppressed: a person answered me.
-This is the #44 shape."
-  (let ((icons (decknix--hub-activity-icons
-                '((replies_to_me . t) (needs_reply . t)
-                  (total_threads . 4) (unresolved_threads . 0)))))
-    (should-not (string-empty-p (string-trim icons)))))
-
-(ert-deftest decknix-hub-icons--needs-reply-survives-resolved-threads ()
-  "Latest activity is a human and not me; the #41 shape."
-  (let ((icons (decknix--hub-activity-icons
-                '((needs_reply . t)
-                  (total_threads . 6) (unresolved_threads . 0)))))
-    (should-not (string-empty-p (string-trim icons)))))
-
 (ert-deftest decknix-hub-icons--bot-noise-is-still-suppressed ()
   "The case the suppression was written for still works.
 A bot posted and every thread is resolved: nothing actionable, rail clear."
@@ -582,6 +489,103 @@ A bot posted and every thread is resolved: nothing actionable, rail clear."
            (decknix--hub-activity-icons
             '((replies_to_me . t) (review_decision . "APPROVED")
               (total_threads . 4) (unresolved_threads . 0))))))
+
+
+;; --- icons mean OUTSTANDING work, by author ---------------------------
+;;
+;; Revises the 2026-09-22 change, which removed thread-resolution gating
+;; from the human slot entirely. That fixed silence on platform-cli #41
+;; and #44 and over-corrected: `needs_reply\=' in the feed means "the last
+;; post was not mine", NOT "a human posted", so bot review summaries lit
+;; the human icon. Measured on the live feed, platform-cli #45-#48 all
+;; carried `needs_reply\=' t with `bot_replies_to_me\=' t and zero
+;; unresolved threads -- four rows shouting about bots that had finished.
+;;
+;; The rule the icons now encode:
+;;   italic i  a HUMAN comment that is not yet addressed
+;;   beta      an UNRESOLVED bot comment
+;; A bot that reviewed and found nothing leaves no unresolved thread, so
+;; it shows nothing.
+
+(ert-deftest decknix-hub-icons--bot-review-with-no-findings-is-silent ()
+  "The #45-#48 shape: bot replied, every thread resolved. Rail stays clear."
+  (should (string-empty-p
+           (string-trim
+            (decknix--hub-activity-icons
+             '((needs_reply . t) (bot_replies_to_me . t)
+               (total_threads . 2) (unresolved_threads . 0)))))))
+
+(ert-deftest decknix-hub-icons--bot-with-no-threads-at-all-is-silent ()
+  "#46/#48: a bot summary and no threads. Its findings WOULD be threads."
+  (should (string-empty-p
+           (string-trim
+            (decknix--hub-activity-icons
+             '((needs_reply . t) (bot_replies_to_me . t)
+               (total_threads . 0) (unresolved_threads . 0)))))))
+
+(ert-deftest decknix-hub-icons--unresolved-bot-thread-shows-beta ()
+  "A bot finding still open is exactly what the bot slot is for."
+  (let ((icons (decknix--hub-activity-icons
+                '((bot_replies_to_me . t)
+                  (total_threads . 3) (unresolved_threads . 2)))))
+    (should (string-match-p "\u03b2" icons))))
+
+(ert-deftest decknix-hub-icons--i-replied-last-is-addressed ()
+  "#49: I answered last, so nothing is outstanding whoever posted before."
+  (should (string-empty-p
+           (string-trim
+            (decknix--hub-activity-icons
+             '((i_replied_last . t) (total_threads . 2)
+               (unresolved_threads . 0)))))))
+
+(ert-deftest decknix-hub-icons--human-reply-to-me-always-shows ()
+  "A person answering ME is outstanding until I answer back."
+  (should-not (string-empty-p
+               (string-trim
+                (decknix--hub-activity-icons
+                 '((replies_to_me . t) (total_threads . 0)
+                   (unresolved_threads . 0)))))))
+
+(ert-deftest decknix-hub-icons--human-comment-with-no-threads-shows ()
+  "A PR-level human comment is never a thread, so resolution cannot gate it.
+This is the platform-cli #41/#44 case that motivated the 09-22 change,
+preserved: no bot attribution, no threads, latest post not mine."
+  (should-not (string-empty-p
+               (string-trim
+                (decknix--hub-activity-icons
+                 '((needs_reply . t) (total_threads . 0)
+                   (unresolved_threads . 0)))))))
+
+(ert-deftest decknix-hub-icons--human-thread-still-open-shows ()
+  (should-not (string-empty-p
+               (string-trim
+                (decknix--hub-activity-icons
+                 '((needs_reply . t) (total_threads . 2)
+                   (unresolved_threads . 1)))))))
+
+(ert-deftest decknix-hub-icons--waiting-on-them-no-longer-has-an-icon ()
+  "`i_replied_last' alone shows nothing. This REMOVES a signal.
+
+The old ladder had a third glyph (⏳ / `.') meaning \"I replied, waiting on
+them\". It is gone: the rule asked for is two icons only -- a human
+comment not yet addressed, and an unresolved bot comment -- and
+`i_replied_last' is by definition addressed.
+
+Pinned as a test rather than left implicit because it is a deliberate
+removal of information, not a side effect. If waiting-on-them turns out to
+be worth surfacing it needs its own slot, not a reuse of the human one."
+  (should (string-empty-p
+           (string-trim (decknix--hub-activity-icons '((i_replied_last . t)))))))
+
+(ert-deftest decknix-hub-icons--emoji-style-bot-needs-an-open-thread ()
+  "Emoji layout follows the same gating as ascii."
+  (let ((decknix--hub-symbol-style 'emoji))
+    (should (string-empty-p
+             (string-trim (decknix--hub-activity-icons '((bot_pending . t))))))
+    (should-not (string-empty-p
+                 (string-trim (decknix--hub-activity-icons
+                               '((bot_pending . t)
+                                 (total_threads . 2) (unresolved_threads . 1))))))))
 
 (provide 'decknix-hub-icons-test)
 ;;; decknix-hub-icons-test.el ends here

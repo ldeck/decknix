@@ -222,50 +222,57 @@ italic characters and weight)."
          ;; so PRs with only PR-level comments fall back to stream logic.
          (total-threads     (alist-get 'total_threads pr))
          (unresolved        (alist-get 'unresolved_threads pr))
-         (all-resolved      (and total-threads
-                                 (> total-threads 0)
-                                 unresolved
-                                 (= unresolved 0)))
          (emoji-layout      (and (boundp 'decknix--hub-symbol-style)
                                  (eq decknix--hub-symbol-style 'emoji))))
     (if approved
         ""
-      ;; Human slot.  NOT gated on thread resolution: resolution is
-      ;; normally done by the author or a bot, not by me, so a resolved
-      ;; thread says nothing about whether I have read the reply inside
-      ;; it.  Suppressing these hid real comments -- reported on
-      ;; nc-helix/platform-cli #41 and #44, both of which had
-      ;; `needs_reply' t with every inline thread resolved.
-      (let ((h (cond
-                (replies-to-me
-                 (if emoji-layout
-                     (decknix--hub-icon "\u21a9" '(:foreground "#87d7af" :weight bold))
-                   (propertize "i" 'face '(:foreground "#5fc8d4" :weight bold :slant italic))))
-                ((and needs-reply (not bot-pending))
-                 (if emoji-layout
-                     (decknix--hub-icon "\U0001F4AC" '(:foreground "#d7af5f"))
-                   (propertize "i" 'face '(:foreground "#5fc8d4" :weight normal :slant italic))))
-                (i-replied-last
-                 (if emoji-layout
-                     (decknix--hub-icon "\u23f3" '(:foreground "#6c6c6c"))
-                   (propertize "." 'face '(:foreground "#6c6c6c" :weight normal))))
-                (t "")))
-            ;; Bot slot.  Unchanged: both bot signals still clear once every
-            ;; thread is resolved.  That suppression fixed a real earlier
-            ;; noise bug (a PR with 22 resolved threads lighting up the
-            ;; rail), and a bot's contribution IS what thread resolution
-            ;; settles -- unlike a human's, which resolution says nothing
-            ;; about.
-            (b (cond
-                ((and bot-replies-to-me (not all-resolved))
-                 (if emoji-layout
-                     (decknix--hub-icon "\U0001F47D" '(:foreground "#af5f87" :weight bold))
-                   (propertize "\u03b2" 'face '(:foreground "#af5f87" :weight bold))))
-                ((and bot-pending (not all-resolved))
-                 (if emoji-layout
-                     (decknix--hub-icon "\U0001F916" '(:foreground "#af5f87"))
-                   (propertize "\u03b2" 'face '(:foreground "#af5f87" :weight normal))))
-                (t ""))))
+      ;; An icon means OUTSTANDING work, attributed to who left it.
+      ;;
+      ;;   italic i  a HUMAN comment not yet addressed
+      ;;   beta      an UNRESOLVED bot comment
+      ;;
+      ;; `needs_reply' cannot carry the human slot alone: in the feed it
+      ;; means "the last post was not mine", not "a human posted".
+      ;; Measured on platform-cli #45-#48, all four had `needs_reply' t
+      ;; with `bot_replies_to_me' t and zero unresolved threads -- four
+      ;; rows shouting about bots that had already finished.  So a
+      ;; bot-attributable row never drives the human slot.
+      (let* ((addressed
+              ;; I answered last, so nothing is outstanding whoever posted
+              ;; before me.
+              (or i-replied-last
+                  ;; Threads exist and every one is resolved.
+                  (and total-threads (> total-threads 0)
+                       unresolved (= unresolved 0))))
+             (bot-attributable (or bot-replies-to-me bot-pending))
+             (h (cond
+                 (addressed "")
+                 ;; A person answering ME outranks everything: it is
+                 ;; outstanding until I answer back.
+                 (replies-to-me
+                  (if emoji-layout
+                      (decknix--hub-icon "\u21a9" '(:foreground "#87d7af" :weight bold))
+                    (propertize "i" 'face '(:foreground "#5fc8d4" :weight bold :slant italic))))
+                 ;; Latest post is not mine AND cannot be blamed on a bot.
+                 ((and needs-reply (not bot-attributable))
+                  (if emoji-layout
+                      (decknix--hub-icon "\U0001F4AC" '(:foreground "#d7af5f"))
+                    (propertize "i" 'face '(:foreground "#5fc8d4" :weight normal :slant italic))))
+                 (t "")))
+             ;; The bot slot requires an OPEN thread, with no
+             ;; no-threads fallback.  A bot's findings ARE threads, so a
+             ;; review that found nothing leaves none -- which is exactly
+             ;; the "reviewed, 0 items" case that must stay silent.
+             (b (cond
+                 ((and bot-attributable unresolved (> unresolved 0))
+                  (if bot-replies-to-me
+                      (if emoji-layout
+                          (decknix--hub-icon "\U0001F47D" '(:foreground "#af5f87" :weight bold))
+                        (propertize "\u03b2" 'face '(:foreground "#af5f87" :weight bold)))
+                    (if emoji-layout
+                        (decknix--hub-icon "\U0001F916" '(:foreground "#af5f87"))
+                      (propertize "\u03b2" 'face '(:foreground "#af5f87" :weight normal)))))
+                 (t ""))))
         (if (and (string-empty-p h) (string-empty-p b))
             ""
           (concat (if (string-empty-p h) " " h)
