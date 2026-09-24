@@ -70,6 +70,41 @@ the noise that toggle removes.
 A is preferred: it keeps the render path local and matches how the
 worktree registry already caches branch facts.
 
+## 4.2 What landed, and how it differs from A as written
+
+Steps 1–3 are done (`decknix-hub-pr-memory`). A was right about where to
+put the data and wrong about what to store.
+
+**Memory holds identity only, never state.** A said store
+`{number, state, url}`. State cannot be harvested: the WIP feed carries
+OPEN PRs, so at harvest time every remembered PR is open and a merge is
+indistinguishable from a disappearance. Storing state would bake in
+`OPEN` forever and be wrong at exactly the moment it mattered.
+
+**State is resolved through the existing URL-keyed cache**, which was
+already built for this case. `decknix--hub-pr-cache-orphan-ttl` says so
+outright: *"When `decknix--hub-pr-status' finds no entry in the hub
+WIP/Reviews data but has a non-terminal cached state, the PR has most
+likely merged or closed since the last hub poll."* That machinery only
+ever needed a URL, and the URL is precisely what the placeholder row threw
+away. So B ("query closed PRs") was half right about needing a lookup and
+wrong that it had to be a new network call.
+
+The split: memory answers *which PR was that*,
+`decknix--hub-pr-status` answers *what state is it in now*,
+`decknix--hub-format-row-label` turns that into a word, and
+`decknix--hub-wip-terminal-visible-p` decides whether the row shows.
+No new vocabulary, no second visibility rule.
+
+**No TTL on the memory.** A status cache should expire; a record of which
+PR a branch had must not, or the row regresses to `wip` after three
+minutes and the bug returns on a timer.
+
+Columns map onto what real rows already use rather than adding one: the
+state word goes in the `%-16s` label column in mode C and the `[...]`
+phase slot in mode D, while modes A and B put `#N` in the same 4-wide slot
+that used to hold the literal `wip`. So alignment is unchanged.
+
 ## 4.1 Sibling: PRs handed to someone else
 
 `wip-ownership.md` records the other half of this theme. A PR you
@@ -98,10 +133,21 @@ want designing together; that spec's step 5 folds these steps in.
 ## 6. Sequencing
 
 1. Persist last-known PR per `(repo, branch)` when the WIP feed is parsed
+   ✅ landed (`decknix--hub-pr-memory-remember`, on `decknix--hub-refresh-wip`)
 2. Placeholder renderer consults it: state-word, `#N`, and a URL
+   ✅ landed (`decknix--hub-render-wip-placeholder`)
 3. Reuse `decknix--hub-wip-terminal-visible-p` so merged placeholders
    follow the same visibility rule as merged PR rows
-4. Decide the prune interaction with `#165 step 2`
+   ✅ landed (`decknix--hub-pr-memory-row-visible-p`, resolving §5 question 2)
+4. Decide the prune interaction with `#165 step 2` — OPEN, a decision
 
 Steps 1–2 fix what is visible and carry no risk to the open-PR path.
 Step 4 is a design decision, not a change.
+
+Question 3 (branch reuse) is **narrowed rather than closed**: a branch
+deleted and recreated with no PR yet still reads as its old PR. Harvest
+overwrites per poll so a real new PR corrects it, and state is resolved
+live rather than stored, which bounds the error to the state word on a
+recreated branch. Strictly better than the starting point, where every
+merged PR lost its number, and cheaper than keying on `created-at` before
+there is evidence anyone hits it.
