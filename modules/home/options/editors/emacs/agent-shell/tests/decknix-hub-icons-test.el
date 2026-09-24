@@ -599,5 +599,133 @@ point, and an earlier pass collapsed both into silence."
                                '((bot_pending . t)
                                  (total_threads . 2) (unresolved_threads . 1))))))))
 
+;; -- attributed feed: the glyph answers "should I read this?" ---------
+;;
+;; `needs_reply' means "the last post was not mine" -- it is set by a
+;; bodiless APPROVED review and by a "LGTM" in the conversation tab, which
+;; is why the italic `i' fired when nothing needed an answer.  Reported as
+;; *"italic i doesn't necessarily mean there's a comment that needs to be
+;; responded to"*.
+;;
+;; An attributed feed carries `human_unresolved' / `bot_unresolved' (the
+;; inline threads split by who spoke last) and `human_said_something' (a
+;; human wrote a NON-EMPTY body after my last activity).  Presence of the
+;; integer counts is what selects these rules; a feed from an older hub
+;; binary keeps the legacy ones.
+
+(defun decknix-icons-test--attributed (&rest overrides)
+  "A PR alist carrying the attributed fields, plus OVERRIDES."
+  (append overrides
+          '((human_unresolved . 0) (bot_unresolved . 0)
+            (total_threads . 0) (unresolved_threads . 0))))
+
+(ert-deftest decknix-hub-icons-attr--bodiless-approval-is-silent ()
+  "An approval with no comment is good news, not a demand.
+It sets `needs_reply' because a review record exists, which is the
+sharpest of the false positives: it rendered as the same glyph as an
+unanswered question."
+  (should (string-empty-p
+           (string-trim
+            (decknix--hub-activity-icons
+             (decknix-icons-test--attributed
+              '(needs_reply . t) '(review_decision . "APPROVED")))))))
+
+(ert-deftest decknix-hub-icons-attr--lgtm-conversation-comment-is-silent ()
+  "A human comment with no substance left after me is not something to read.
+`needs_reply' is t here -- the last post was theirs -- but no thread is
+open and nothing was said after my last say."
+  (should (string-empty-p
+           (string-trim
+            (decknix--hub-activity-icons
+             (decknix-icons-test--attributed '(needs_reply . t)))))))
+
+(ert-deftest decknix-hub-icons-attr--human-thread-open-shows-italic-i ()
+  "An unresolved HUMAN thread is exactly what the glyph should mean."
+  (let ((icons (decknix--hub-activity-icons
+                (decknix-icons-test--attributed
+                 '(human_unresolved . 1) '(unresolved_threads . 1)
+                 '(total_threads . 1)))))
+    (should (string-match-p "i" icons))))
+
+(ert-deftest decknix-hub-icons-attr--human-substance-shows-without-a-thread ()
+  "A conversation comment is never a thread, so counts cannot gate it.
+`human_said_something' carries the PR-level case."
+  (let ((icons (decknix--hub-activity-icons
+                (decknix-icons-test--attributed
+                 '(human_said_something . t)))))
+    (should (string-match-p "i" icons))))
+
+(ert-deftest decknix-hub-icons-attr--bot-thread-shows-beta-not-i ()
+  "An open bot thread is a bot signal only.
+Previously an open Copilot thread and a colleague's question were one
+number, so a bot review lit the human glyph."
+  (let ((icons (decknix--hub-activity-icons
+                (decknix-icons-test--attributed
+                 '(bot_unresolved . 2) '(unresolved_threads . 2)
+                 '(total_threads . 2)))))
+    (should (string-match-p "β" icons))
+    (should-not (string-match-p "i" icons))))
+
+(ert-deftest decknix-hub-icons-attr--bot-review-finding-nothing-is-silent ()
+  "\"Reviewed, 0 items\" leaves no thread, so it must stay silent."
+  (should (string-empty-p
+           (string-trim
+            (decknix--hub-activity-icons
+             (decknix-icons-test--attributed
+              '(bot_pending . t) '(needs_reply . t)))))))
+
+(ert-deftest decknix-hub-icons-attr--both-slots-when-both-are-open ()
+  "A human thread and a bot thread coexist in their own slots."
+  (let ((icons (decknix--hub-activity-icons
+                (decknix-icons-test--attributed
+                 '(human_unresolved . 1) '(bot_unresolved . 1)
+                 '(unresolved_threads . 2) '(total_threads . 2)))))
+    (should (string-match-p "i" icons))
+    (should (string-match-p "β" icons))))
+
+(ert-deftest decknix-hub-icons-attr--resolved-human-thread-goes-quiet ()
+  "Answering and resolving clears the glyph."
+  (should (string-empty-p
+           (string-trim
+            (decknix--hub-activity-icons
+             (decknix-icons-test--attributed
+              '(total_threads . 3) '(needs_reply . t)))))))
+
+(ert-deftest decknix-hub-icons-attr--approved-pr-still-shows-a-human-thread ()
+  "Approval no longer suppresses a real comment.
+
+The legacy path returns \"\" for any APPROVED PR, which hides an open
+human thread on an approved PR -- precisely a comment worth considering.
+With attribution available the fields decide instead of the decision."
+  (let ((icons (decknix--hub-activity-icons
+                (decknix-icons-test--attributed
+                 '(review_decision . "APPROVED")
+                 '(human_unresolved . 1) '(unresolved_threads . 1)
+                 '(total_threads . 1)))))
+    (should (string-match-p "i" icons))))
+
+(ert-deftest decknix-hub-icons-attr--waiting-dot-survives ()
+  "I replied and left the thread open: still \"waiting on them\", dimly.
+Collapsing that into silence loses the distinction between an answered
+thread and one deliberately left open."
+  (let ((icons (decknix--hub-activity-icons
+                (decknix-icons-test--attributed
+                 '(i_replied_last . t) '(bot_unresolved . 0)
+                 '(unresolved_threads . 1) '(total_threads . 1)))))
+    (should (string-match-p "\\." icons))))
+
+(ert-deftest decknix-hub-icons-attr--legacy-feed-keeps-legacy-rules ()
+  "Absent counts select the old behaviour, not nil-as-zero.
+
+The daemon keeps writing the old shape until it restarts, so a feed
+without `human_unresolved' must behave exactly as before rather than
+going silent across the board."
+  (should-not (string-empty-p
+               (string-trim
+                (decknix--hub-activity-icons
+                 '((needs_reply . t) (total_threads . 0)
+                   (unresolved_threads . 0)))))))
+
+
 (provide 'decknix-hub-icons-test)
 ;;; decknix-hub-icons-test.el ends here
