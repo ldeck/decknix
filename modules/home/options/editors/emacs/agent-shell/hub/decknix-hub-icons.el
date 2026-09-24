@@ -190,7 +190,28 @@ Bot family (right slot):
 - 👽 / β[bold] (bot-replies-to-me) when a bot replied after my comment.
 - 🤖 / β[dim]  (bot-pending) when the latest activity is a bot.
 
-Activity icons are suppressed for APPROVED PRs.
+On an ATTRIBUTED feed (one carrying `human_unresolved' /
+`bot_unresolved' / `human_said_something') the rules are:
+
+    i  italic   human_unresolved > 0 OR human_said_something
+    beta        bot_unresolved > 0
+    .  dim      i_replied_last AND a thread still open
+    (none)      approvals, bodiless reviews, resolved threads
+
+`needs_reply' plays no part there.  In the feed it means \"the last post
+was not mine\", which a bodiless APPROVED review and a \"LGTM\" in the
+conversation tab both satisfy -- so it fired the italic `i' when nothing
+needed an answer.  Reported as \"italic i does not necessarily mean there
+is a comment that needs to be responded to\".
+
+Approval no longer suppresses everything on an attributed feed: an open
+human thread on an approved PR is precisely a comment worth considering,
+and the blanket suppression hid it.  The fields decide instead.
+
+On a LEGACY feed -- which is what the daemon writes until it restarts --
+the old rules below apply unchanged, so nothing regresses in the gap.
+
+Activity icons are suppressed for APPROVED PRs (legacy path only).
 
 Thread-aware suppression applies to BOT CHATTER ONLY: 🤖 (bot-pending) is
 suppressed when `total_threads' is greater than zero and
@@ -222,9 +243,18 @@ italic characters and weight)."
          ;; so PRs with only PR-level comments fall back to stream logic.
          (total-threads     (alist-get 'total_threads pr))
          (unresolved        (alist-get 'unresolved_threads pr))
+         ;; Attributed thread counts and the body-aware human signal.  Absent
+         ;; from a feed written by an older hub binary, which is the normal
+         ;; state until the daemon restarts -- so their absence selects the
+         ;; legacy rules rather than silently reading nil as zero.
+         (human-unresolved  (alist-get 'human_unresolved pr))
+         (bot-unresolved    (alist-get 'bot_unresolved pr))
+         (human-said        (eq (alist-get 'human_said_something pr) t))
+         (attributed        (and (integerp human-unresolved)
+                                 (integerp bot-unresolved)))
          (emoji-layout      (and (boundp 'decknix--hub-symbol-style)
                                  (eq decknix--hub-symbol-style 'emoji))))
-    (if approved
+    (if (and approved (not attributed))
         ""
       ;; An icon means OUTSTANDING work, attributed to who left it.
       ;;
@@ -240,22 +270,51 @@ italic characters and weight)."
       ;; bot-attributable row never drives the human slot.
       (let* ((open-threads (and unresolved (> unresolved 0)))
              (addressed
-              ;; Threads exist and every one is resolved.
-              (or (and total-threads (> total-threads 0)
-                       unresolved (= unresolved 0))
-                  ;; I posted last and left nothing open behind me.
-                  (and i-replied-last (not open-threads))))
-             (bot-attributable (or bot-replies-to-me bot-pending))
+              (if attributed
+                  ;; Attributed feed: no human thread open and no human has
+                  ;; said anything since my last say.  Nothing to READ --
+                  ;; which is not the same as nothing to show.  A thread I
+                  ;; answered and left open scores `human_unresolved' 0
+                  ;; (I spoke last), so this would swallow the dim
+                  ;; "waiting on them" marker; that case is excluded and
+                  ;; falls through to its own branch below.
+                  (and (zerop human-unresolved)
+                       (not human-said)
+                       (not (and i-replied-last open-threads)))
+                ;; Threads exist and every one is resolved.
+                (or (and total-threads (> total-threads 0)
+                         unresolved (= unresolved 0))
+                    ;; I posted last and left nothing open behind me.
+                    (and i-replied-last (not open-threads)))))
+             (bot-attributable
+              (if attributed
+                  (> bot-unresolved 0)
+                (or bot-replies-to-me bot-pending)))
+             ;; The human slot's trigger.  On an attributed feed this is the
+             ;; whole point of the change: `needs_reply' means "the last post
+             ;; was not mine" -- it counts a bodiless APPROVED review and a
+             ;; "LGTM" in the conversation tab as things to read, which is why
+             ;; the glyph fired when nothing needed an answer.
+             (human-outstanding
+              (if attributed
+                  (or (> human-unresolved 0) human-said)
+                (and needs-reply (not bot-attributable))))
              (h (cond
                  (addressed "")
                  ;; A person answering ME outranks everything: it is
                  ;; outstanding until I answer back.
-                 (replies-to-me
+                 ;; A person answering ME outranks everything.  On an
+                 ;; attributed feed it must still BE outstanding -- once their
+                 ;; thread is resolved and nothing has been said since, there
+                 ;; is nothing to read.  On a legacy feed `replies_to_me'
+                 ;; stands alone, exactly as before, so nothing regresses
+                 ;; while the daemon is still writing the old shape.
+                 ((and replies-to-me (or (not attributed) human-outstanding))
                   (if emoji-layout
                       (decknix--hub-icon "\u21a9" '(:foreground "#87d7af" :weight bold))
                     (propertize "i" 'face '(:foreground "#5fc8d4" :weight bold :slant italic))))
-                 ;; Latest post is not mine AND cannot be blamed on a bot.
-                 ((and needs-reply (not bot-attributable))
+                 ;; A human left something unaddressed.
+                 (human-outstanding
                   (if emoji-layout
                       (decknix--hub-icon "\U0001F4AC" '(:foreground "#d7af5f"))
                     (propertize "i" 'face '(:foreground "#5fc8d4" :weight normal :slant italic))))
@@ -274,7 +333,9 @@ italic characters and weight)."
              ;; review that found nothing leaves none -- which is exactly
              ;; the "reviewed, 0 items" case that must stay silent.
              (b (cond
-                 ((and bot-attributable unresolved (> unresolved 0))
+                 ((if attributed
+                      (> bot-unresolved 0)
+                    (and bot-attributable unresolved (> unresolved 0)))
                   (if bot-replies-to-me
                       (if emoji-layout
                           (decknix--hub-icon "\U0001F47D" '(:foreground "#af5f87" :weight bold))

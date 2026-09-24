@@ -194,6 +194,12 @@ struct ReviewRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     unresolved_threads: Option<u32>, // unresolved threads where last comment author != me
     #[serde(skip_serializing_if = "Option::is_none")]
+    human_unresolved: Option<u32>, // of unresolved_threads, those whose last commenter is human
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bot_unresolved: Option<u32>, // of unresolved_threads, those whose last commenter is a bot
+    #[serde(skip_serializing_if = "Option::is_none")]
+    human_said_something: Option<bool>, // a human wrote a non-empty body after my last activity
+    #[serde(skip_serializing_if = "Option::is_none")]
     review_decision: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"
     #[serde(skip_serializing_if = "Option::is_none")]
     author_kind: Option<String>, // author provenance: "bot" | "bot_human" | "human"
@@ -270,6 +276,12 @@ struct WipPr {
     total_threads: Option<u32>, // total inline review threads on the PR
     #[serde(skip_serializing_if = "Option::is_none")]
     unresolved_threads: Option<u32>, // unresolved threads where last comment author != me
+    #[serde(skip_serializing_if = "Option::is_none")]
+    human_unresolved: Option<u32>, // of unresolved_threads, those whose last commenter is human
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bot_unresolved: Option<u32>, // of unresolved_threads, those whose last commenter is a bot
+    #[serde(skip_serializing_if = "Option::is_none")]
+    human_said_something: Option<bool>, // a human wrote a non-empty body after my last activity
     #[serde(skip_serializing_if = "Option::is_none")]
     merged_at: Option<DateTime<Utc>>, // when the PR was merged (None for open PRs)
     // People involved in the PR (see ReviewRequest for semantics).  Additive:
@@ -812,6 +824,16 @@ fn compute_review_stale(
 struct ReviewThreadStats {
     total: u32,
     unresolved_to_me: u32,
+    /// Of `unresolved_to_me`, those whose last commenter is a HUMAN.
+    ///
+    /// The glyph that says "read this" must not fire for a bot thread, and
+    /// `unresolved_to_me` cannot tell the two apart -- an open Copilot
+    /// thread and a colleague's question were one number.  The thread query
+    /// already carries the last commenter's login, so the split costs no
+    /// extra request.
+    human_unresolved: u32,
+    /// Of `unresolved_to_me`, those whose last commenter is a bot.
+    bot_unresolved: u32,
 }
 
 /// Parse a flat array of GraphQL review-thread nodes (as `serde_json::Value`)
@@ -819,11 +841,14 @@ struct ReviewThreadStats {
 fn parse_thread_nodes(nodes: &[serde_json::Value], my_login: Option<&str>) -> ReviewThreadStats {
     let total = nodes.len() as u32;
     let me = my_login.map(|s| s.to_ascii_lowercase());
-    let unresolved_to_me = nodes.iter().filter(|t| {
+    let mut unresolved_to_me = 0u32;
+    let mut human_unresolved = 0u32;
+    let mut bot_unresolved = 0u32;
+    for t in nodes {
         let unresolved = !t.get("isResolved")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        if !unresolved { return false; }
+        if !unresolved { continue; }
         let last_login = t.get("comments")
             .and_then(|c| c.get("nodes"))
             .and_then(|ns| ns.as_array())
@@ -832,14 +857,30 @@ fn parse_thread_nodes(nodes: &[serde_json::Value], my_login: Option<&str>) -> Re
             .and_then(|a| a.get("login"))
             .and_then(|l| l.as_str())
             .map(|s| s.to_ascii_lowercase());
-        match (last_login, me.as_deref()) {
+        let actionable = match (last_login.as_deref(), me.as_deref()) {
             (Some(ll), Some(m)) => ll != m,
             // Unknown author or unknown me-login — count as actionable
             // so we err on the side of surfacing it.
             _ => true,
+        };
+        if !actionable { continue; }
+        unresolved_to_me += 1;
+        // Attribute the thread by its LAST commenter, matching what
+        // `unresolved_to_me` already keys on: whoever spoke last is whose
+        // turn it is not.  A human replying under a bot's thread makes it a
+        // human thread, which is the behaviour we want -- that reply is the
+        // part worth reading.
+        //
+        // `is_bot` is unavailable here (the query fetches only `login`), so
+        // this leans on the login patterns in `login_is_bot`.  A bot with an
+        // ordinary-looking login is therefore counted as human, which is the
+        // safe direction: it over-surfaces rather than hiding a real comment.
+        match last_login.as_deref() {
+            Some(ll) if login_is_bot(ll, None) => bot_unresolved += 1,
+            _ => human_unresolved += 1,
         }
-    }).count() as u32;
-    ReviewThreadStats { total, unresolved_to_me }
+    }
+    ReviewThreadStats { total, unresolved_to_me, human_unresolved, bot_unresolved }
 }
 
 /// Single-PR fallback: fetch review-thread stats for one PR via `gh api graphql`.
@@ -963,6 +1004,9 @@ struct ReviewPrDetails {
     i_replied_last: Option<bool>,
     total_threads: Option<u32>,
     unresolved_threads: Option<u32>,
+    human_unresolved: Option<u32>,
+    bot_unresolved: Option<u32>,
+    human_said_something: Option<bool>,
     review_decision: Option<String>,
     /// True when a human has committed to this (bot-opened) PR.  Only
     /// meaningful for a bot author; consumed by `pr_author_kind`.
@@ -983,7 +1027,8 @@ impl Default for ReviewPrDetails {
             team_requested: None, others_requested: None, needs_reply: None,
             bot_pending: None, replies_to_me: None, bot_replies_to_me: None,
             i_replied_last: None, total_threads: None,
-            unresolved_threads: None, review_decision: None,
+            unresolved_threads: None, human_unresolved: None, bot_unresolved: None,
+            human_said_something: None, review_decision: None,
             human_committed: None,
             authors: Vec::new(), requested_reviewers: Vec::new(),
             approvers: Vec::new(), blockers: Vec::new(),
@@ -1110,6 +1155,8 @@ async fn fetch_pr_ci(
         Err(_) => return ReviewPrDetails {
             total_threads: threads.as_ref().map(|t| t.total),
             unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
+            bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
             ..ReviewPrDetails::default()
         },
     };
@@ -1185,12 +1232,19 @@ async fn fetch_pr_ci(
             // Check for @-mentions in comment/review bodies and classify the
             // trailing activity stream into needs_reply / bot_pending /
             // replies_to_me.  All four signals share the same pass.
-            let (comment_mentioned, needs_reply, bot_pending, replies_to_me, bot_replies_to_me, i_replied_last) =
+            let (comment_mentioned, needs_reply, bot_pending, replies_to_me,
+                 bot_replies_to_me, i_replied_last, human_said_something) =
                 my_login.map(|login| {
                 let mention_pattern = format!("@{}", login);
                 let mention_pattern_lower = mention_pattern.to_lowercase();
                 let mut found_mention = false;
-                let mut activities: Vec<(&str, Actor)> = Vec::new();
+                // (timestamp, actor, said_something).
+                //
+                // `said_something` is whether the record carries a non-empty
+                // body.  A bodiless review is an APPROVAL -- good news -- and
+                // counting it as activity is what made an approval render with
+                // the same glyph as an unanswered question.
+                let mut activities: Vec<(&str, Actor, bool)> = Vec::new();
                 if let Some(ref comments) = view.comments {
                     for c in comments {
                         if let Some(ref body) = c.body {
@@ -1199,8 +1253,11 @@ async fn fetch_pr_ci(
                             }
                         }
                         if let Some(ref ts) = c.created_at {
+                            let said = c.body.as_deref()
+                                .map(|b| !b.trim().is_empty()).unwrap_or(false);
                             activities.push((ts.as_str(),
-                                             classify_author(c.author.as_ref(), login)));
+                                             classify_author(c.author.as_ref(), login),
+                                             said));
                         }
                     }
                 }
@@ -1212,23 +1269,26 @@ async fn fetch_pr_ci(
                             }
                         }
                         if let Some(ref ts) = r.submitted_at {
+                            let said = r.body.as_deref()
+                                .map(|b| !b.trim().is_empty()).unwrap_or(false);
                             activities.push((ts.as_str(),
-                                             classify_author(r.author.as_ref(), login)));
+                                             classify_author(r.author.as_ref(), login),
+                                             said));
                         }
                     }
                 }
-                activities.sort_by_key(|(ts, _)| *ts);
+                activities.sort_by_key(|(ts, _, _)| *ts);
                 // Latest non-self activity (bot or human) means a reply has
                 // landed since my turn — matches the original semantics.
                 let reply_needed = activities.last()
-                    .map(|(_, a)| *a != Actor::Me)
+                    .map(|(_, a, _)| *a != Actor::Me)
                     .unwrap_or(false);
                 // I posted the trailing comment/review — my say is on record
                 // and I'm waiting on the author/others; nothing is actionable
                 // on my side.  The complement of `reply_needed`, but false when
                 // there is no activity at all (so a silent PR isn't flagged).
                 let i_replied_last = activities.last()
-                    .map(|(_, a)| *a == Actor::Me)
+                    .map(|(_, a, _)| *a == Actor::Me)
                     .unwrap_or(false);
                 // Bot activity at the head of the stream signals the author
                 // likely needs to push a fix (Codacy/CI/etc.) before further
@@ -1236,24 +1296,39 @@ async fn fetch_pr_ci(
                 // resolved (or there are none), the bot's last comment is just a
                 // summary ("no suggestions") — nothing actionable, so clear the flag.
                 let bot_pending = activities.last()
-                    .map(|(_, a)| *a == Actor::Bot)
+                    .map(|(_, a, _)| *a == Actor::Bot)
                     .unwrap_or(false)
                     && threads.as_ref().map(|t| t.unresolved_to_me > 0).unwrap_or(true);
                 // A human replied *after* one of my comments — worth a look
                 // because they engaged with something I said specifically.
                 let replies_to_me = activities.iter()
-                    .rposition(|(_, a)| *a == Actor::Me)
+                    .rposition(|(_, a, _)| *a == Actor::Me)
                     .map(|i| activities.iter().skip(i + 1)
-                         .any(|(_, a)| *a == Actor::Other))
+                         .any(|(_, a, _)| *a == Actor::Other))
                     .unwrap_or(false);
                 // A bot replied *after* one of my comments.
                 let bot_replies_to_me = activities.iter()
-                    .rposition(|(_, a)| *a == Actor::Me)
+                    .rposition(|(_, a, _)| *a == Actor::Me)
                     .map(|i| activities.iter().skip(i + 1)
-                         .any(|(_, a)| *a == Actor::Bot))
+                         .any(|(_, a, _)| *a == Actor::Bot))
                     .unwrap_or(false);
-                (found_mention, reply_needed, bot_pending, replies_to_me, bot_replies_to_me, i_replied_last)
-            }).unwrap_or((false, false, false, false, false, false));
+                // A HUMAN wrote something with substance after my last say.
+                //
+                // This is the signal the italic glyph actually wants, and the
+                // one `reply_needed` was standing in for badly: it ignores
+                // bots, ignores bodiless approvals, and ignores my own
+                // activity.  Before my first comment there is no "after me",
+                // so fall back to any human having said something at all.
+                let human_said_something = match activities.iter()
+                    .rposition(|(_, a, _)| *a == Actor::Me) {
+                    Some(i) => activities.iter().skip(i + 1)
+                        .any(|(_, a, said)| *a == Actor::Other && *said),
+                    None => activities.iter()
+                        .any(|(_, a, said)| *a == Actor::Other && *said),
+                };
+                (found_mention, reply_needed, bot_pending, replies_to_me,
+                 bot_replies_to_me, i_replied_last, human_said_something)
+            }).unwrap_or((false, false, false, false, false, false, false));
             // mentioned = directly requested OR @-mentioned in a comment
             let mentioned = directly_requested || comment_mentioned;
             // A *genuine* re-request: I already have a standing review AND
@@ -1305,12 +1380,15 @@ async fn fetch_pr_ci(
                 team_requested: Some(team_requested),
                 others_requested: Some(others_requested),
                 needs_reply: Some(needs_reply),
+                human_said_something: Some(human_said_something),
                 bot_pending: Some(bot_pending),
                 replies_to_me: Some(replies_to_me),
                 bot_replies_to_me: Some(bot_replies_to_me),
                 i_replied_last: Some(i_replied_last),
                 total_threads: threads.as_ref().map(|t| t.total),
                 unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
+            bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
                 review_decision: view.review_decision,
                 human_committed: Some(human_committed),
                 authors,
@@ -1322,6 +1400,8 @@ async fn fetch_pr_ci(
         Err(_) => ReviewPrDetails {
             total_threads: threads.as_ref().map(|t| t.total),
             unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
+            bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
             ..ReviewPrDetails::default()
         },
     }
@@ -1400,7 +1480,10 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             d
         } else {
             let prefetched = batched_threads.get(&(repo.clone(), pr.number))
-                .map(|s| ReviewThreadStats { total: s.total, unresolved_to_me: s.unresolved_to_me });
+                .map(|s| ReviewThreadStats { total: s.total,
+                                             unresolved_to_me: s.unresolved_to_me,
+                                             human_unresolved: s.human_unresolved,
+                                             bot_unresolved: s.bot_unresolved });
             let author_login = pr.author.as_ref().map(|a| a.login.as_str()).unwrap_or("");
             let d = fetch_pr_ci(&repo, pr.number, author_login, my_login.as_deref(), prefetched).await;
             let mut cache = reviews_cache().write().await;
@@ -1447,6 +1530,9 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             i_replied_last: details.i_replied_last,
             total_threads: details.total_threads,
             unresolved_threads: details.unresolved_threads,
+            human_unresolved: details.human_unresolved,
+            bot_unresolved: details.bot_unresolved,
+            human_said_something: details.human_said_something,
             review_decision: details.review_decision,
             author_kind: Some(
                 pr_author_kind(pr.author.as_ref(),
@@ -1490,6 +1576,9 @@ struct PrDetails {
     i_replied_last: Option<bool>,
     total_threads: Option<u32>,
     unresolved_threads: Option<u32>,
+    human_unresolved: Option<u32>,
+    bot_unresolved: Option<u32>,
+    human_said_something: Option<bool>,
     merged_at: Option<String>,
     /// People involved, carried through to the emitted `WipPr`.
     authors: Vec<String>,
@@ -1505,6 +1594,7 @@ impl Default for PrDetails {
             needs_reply: None, bot_pending: None, replies_to_me: None,
             bot_replies_to_me: None, i_replied_last: None,
             total_threads: None, unresolved_threads: None,
+            human_unresolved: None, bot_unresolved: None, human_said_something: None,
             merged_at: None,
             authors: Vec::new(), requested_reviewers: Vec::new(),
             approvers: Vec::new(), blockers: Vec::new(),
@@ -1560,6 +1650,8 @@ async fn fetch_pr_details(
         Err(_) => return PrDetails {
             total_threads: threads.as_ref().map(|t| t.total),
             unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
+            bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
             ..PrDetails::default()
         },
     };
@@ -1586,50 +1678,67 @@ async fn fetch_pr_details(
             // Classify the trailing activity stream into needs_reply /
             // bot_pending / replies_to_me.  Same logic as fetch_pr_ci so
             // that WIP and Requests share a consistent reading of the PR.
-            let (needs_reply, bot_pending, replies_to_me, bot_replies_to_me, i_replied_last) =
+            let (needs_reply, bot_pending, replies_to_me, bot_replies_to_me,
+                 i_replied_last, human_said_something) =
                 my_login.map(|login| {
-                let mut activities: Vec<(&str, Actor)> = Vec::new();
+                // (timestamp, actor, said_something) -- see `fetch_pr_ci'.
+                let mut activities: Vec<(&str, Actor, bool)> = Vec::new();
                 if let Some(ref comments) = d.comments {
                     for c in comments {
                         if let Some(ref ts) = c.created_at {
+                            let said = c.body.as_deref()
+                                .map(|b| !b.trim().is_empty()).unwrap_or(false);
                             activities.push((ts.as_str(),
-                                             classify_author(c.author.as_ref(), login)));
+                                             classify_author(c.author.as_ref(), login),
+                                             said));
                         }
                     }
                 }
                 if let Some(ref reviews) = d.reviews {
                     for r in reviews {
                         if let Some(ref ts) = r.submitted_at {
+                            let said = r.body.as_deref()
+                                .map(|b| !b.trim().is_empty()).unwrap_or(false);
                             activities.push((ts.as_str(),
-                                             classify_author(r.author.as_ref(), login)));
+                                             classify_author(r.author.as_ref(), login),
+                                             said));
                         }
                     }
                 }
                 // ISO-8601 strings sort lexicographically — same order as chrono.
-                activities.sort_by_key(|(ts, _)| *ts);
+                activities.sort_by_key(|(ts, _, _)| *ts);
                 let needs_reply = activities.last()
-                    .map(|(_, a)| *a != Actor::Me)
+                    .map(|(_, a, _)| *a != Actor::Me)
                     .unwrap_or(false);
                 // I posted the trailing comment/review — waiting on others.
                 let i_replied_last = activities.last()
-                    .map(|(_, a)| *a == Actor::Me)
+                    .map(|(_, a, _)| *a == Actor::Me)
                     .unwrap_or(false);
                 let bot_pending = activities.last()
-                    .map(|(_, a)| *a == Actor::Bot)
+                    .map(|(_, a, _)| *a == Actor::Bot)
                     .unwrap_or(false)
                     && threads.as_ref().map(|t| t.unresolved_to_me > 0).unwrap_or(true);
                 let replies_to_me = activities.iter()
-                    .rposition(|(_, a)| *a == Actor::Me)
+                    .rposition(|(_, a, _)| *a == Actor::Me)
                     .map(|i| activities.iter().skip(i + 1)
-                         .any(|(_, a)| *a == Actor::Other))
+                         .any(|(_, a, _)| *a == Actor::Other))
                     .unwrap_or(false);
                 let bot_replies_to_me = activities.iter()
-                    .rposition(|(_, a)| *a == Actor::Me)
+                    .rposition(|(_, a, _)| *a == Actor::Me)
                     .map(|i| activities.iter().skip(i + 1)
-                         .any(|(_, a)| *a == Actor::Bot))
+                         .any(|(_, a, _)| *a == Actor::Bot))
                     .unwrap_or(false);
-                (Some(needs_reply), Some(bot_pending), Some(replies_to_me), Some(bot_replies_to_me), Some(i_replied_last))
-            }).unwrap_or((None, None, None, None, None));
+                let human_said_something = match activities.iter()
+                    .rposition(|(_, a, _)| *a == Actor::Me) {
+                    Some(i) => activities.iter().skip(i + 1)
+                        .any(|(_, a, said)| *a == Actor::Other && *said),
+                    None => activities.iter()
+                        .any(|(_, a, said)| *a == Actor::Other && *said),
+                };
+                (Some(needs_reply), Some(bot_pending), Some(replies_to_me),
+                 Some(bot_replies_to_me), Some(i_replied_last),
+                 Some(human_said_something))
+            }).unwrap_or((None, None, None, None, None, None));
             // People involved.  For WIP the PR author is the viewer
             // (`--author=@me`), so seed `authors` with `my_login`.
             let commit_logins = d.commits.as_deref()
@@ -1645,12 +1754,15 @@ async fn fetch_pr_details(
                 mergeable: d.mergeable,
                 review_decision: d.review_decision,
                 needs_reply,
+                human_said_something,
                 bot_pending,
                 replies_to_me,
                 bot_replies_to_me,
                 i_replied_last,
                 total_threads: threads.as_ref().map(|t| t.total),
                 unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
+            bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
                 merged_at: d.merged_at,
                 authors,
                 requested_reviewers,
@@ -1661,6 +1773,8 @@ async fn fetch_pr_details(
         Err(_) => PrDetails {
             total_threads: threads.as_ref().map(|t| t.total),
             unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
+            bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
             ..PrDetails::default()
         },
     }
@@ -1789,7 +1903,10 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
             d
         } else {
             let prefetched = batched_threads.get(&(repo.clone(), pr.number))
-                .map(|s| ReviewThreadStats { total: s.total, unresolved_to_me: s.unresolved_to_me });
+                .map(|s| ReviewThreadStats { total: s.total,
+                                             unresolved_to_me: s.unresolved_to_me,
+                                             human_unresolved: s.human_unresolved,
+                                             bot_unresolved: s.bot_unresolved });
             let d = fetch_pr_details(&repo, pr.number, my_login.as_deref(), prefetched).await;
             let mut cache = wip_cache().write().await;
             cache.insert(cache_key, (updated_at, Instant::now(), d.clone()));
@@ -1812,6 +1929,9 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
             updated: updated_ts,
             review_decision: details.review_decision,
             needs_reply: details.needs_reply,
+            human_unresolved: details.human_unresolved,
+            bot_unresolved: details.bot_unresolved,
+            human_said_something: details.human_said_something,
             bot_pending: details.bot_pending,
             replies_to_me: details.replies_to_me,
             bot_replies_to_me: details.bot_replies_to_me,
@@ -2053,6 +2173,82 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
+    /// Build a review-thread node as the GraphQL query returns it.
+    fn thread(resolved: bool, last_commenter: &str) -> serde_json::Value {
+        serde_json::json!({
+            "isResolved": resolved,
+            "comments": { "nodes": [ { "author": { "login": last_commenter } } ] }
+        })
+    }
+
+    // An open Copilot thread and a colleague's question were one number, so
+    // the glyph that means "read this" fired for both.
+    #[test]
+    fn thread_stats_split_human_from_bot() {
+        let nodes = vec![
+            thread(false, "colleague"),
+            thread(false, "copilot-pull-request-reviewer"),
+            thread(false, "dependabot[bot]"),
+            thread(false, "augmentcode"),
+        ];
+        let st = parse_thread_nodes(&nodes, Some("ldeck"));
+        assert_eq!(st.total, 4);
+        assert_eq!(st.unresolved_to_me, 4);
+        assert_eq!(st.human_unresolved, 1);
+        assert_eq!(st.bot_unresolved, 3);
+    }
+
+    // A thread I spoke last on is their turn, not mine — the pre-existing
+    // meaning of `unresolved_to_me`, which the split must not disturb.
+    #[test]
+    fn thread_stats_ignore_threads_i_answered_last() {
+        let nodes = vec![thread(false, "ldeck"), thread(false, "colleague")];
+        let st = parse_thread_nodes(&nodes, Some("ldeck"));
+        assert_eq!(st.unresolved_to_me, 1);
+        assert_eq!(st.human_unresolved, 1);
+        assert_eq!(st.bot_unresolved, 0);
+    }
+
+    #[test]
+    fn thread_stats_ignore_resolved_threads() {
+        let nodes = vec![thread(true, "colleague"), thread(true, "copilot-pull-request-reviewer")];
+        let st = parse_thread_nodes(&nodes, Some("ldeck"));
+        assert_eq!(st.total, 2);
+        assert_eq!(st.unresolved_to_me, 0);
+        assert_eq!(st.human_unresolved, 0);
+        assert_eq!(st.bot_unresolved, 0);
+    }
+
+    // The counts must partition `unresolved_to_me`, or the Emacs side cannot
+    // trust either number on its own.
+    #[test]
+    fn thread_stats_counts_partition_the_total() {
+        let nodes = vec![
+            thread(false, "a-human"),
+            thread(false, "copilot-pull-request-reviewer"),
+            thread(true, "another-human"),
+            thread(false, "ldeck"),
+        ];
+        let st = parse_thread_nodes(&nodes, Some("ldeck"));
+        assert_eq!(st.human_unresolved + st.bot_unresolved, st.unresolved_to_me);
+    }
+
+    // Unknown author, or unknown me-login, stays actionable and counts as
+    // human: over-surfacing is the safe direction, hiding a real comment is
+    // not.  Also covers a bot whose login looks ordinary.
+    #[test]
+    fn thread_stats_unattributable_counts_as_human() {
+        let nodes = vec![serde_json::json!({ "isResolved": false, "comments": { "nodes": [] } })];
+        let st = parse_thread_nodes(&nodes, Some("ldeck"));
+        assert_eq!(st.unresolved_to_me, 1);
+        assert_eq!(st.human_unresolved, 1);
+
+        let nodes = vec![thread(false, "colleague")];
+        let st = parse_thread_nodes(&nodes, None);
+        assert_eq!(st.unresolved_to_me, 1);
+        assert_eq!(st.human_unresolved, 1);
+    }
+
     use super::*;
 
     fn author(login: &str, is_bot: Option<bool>) -> GhAuthor {

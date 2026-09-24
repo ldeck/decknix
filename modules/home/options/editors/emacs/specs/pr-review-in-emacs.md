@@ -162,10 +162,22 @@ it is the lower-value of the two and should land second.
 
 1. Split `unresolved_to_me` into `human_unresolved` / `bot_unresolved`
    in `parse_thread_nodes` (same query, add classification)
+   ✅ landed, with Rust tests asserting the two counts PARTITION
+   `unresolved_to_me` so the Emacs side can trust either alone
 2. Body-aware activity: add `human_said_something`, stop counting
    bodiless reviews as comment activity
+   ✅ landed. Note there are TWO near-duplicate activity passes (the
+   Requests path in `fetch_pr_ci` and the WIP path), both of which had to
+   change; they are a standing invitation to fix one and not the other.
 3. Repoint `decknix--hub-activity-icons` onto the honest fields, with the
    glyph table from §1.5
+   ✅ landed, gated on the new fields being PRESENT. Absent (a feed from a
+   hub binary that has not restarted) keeps the legacy rules exactly, so
+   nothing regresses in the gap. Treating nil as zero would have gone
+   silent across the board instead.
+   Also: approval no longer blanket-suppresses activity icons on an
+   attributed feed. An open human thread on an approved PR is precisely a
+   comment worth considering, and the old rule hid it.
 4. Fetch full thread detail (author, body, path, line, resolution) with
    pagination — the Part 2 data layer
 5. Thread list + jump + read (reading half of Part 2)
