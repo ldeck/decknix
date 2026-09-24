@@ -2016,6 +2016,22 @@ let
     ];
   };
 
+  # Review threads as data: the per-thread detail an Emacs review surface
+  # renders, as opposed to the counts the sidebar glyphs need.  The unit is a
+  # THREAD (file, line, resolution, ordered conversation) because that is what
+  # a reviewer acts on.  Paginated, unlike the glyph query, since a truncated
+  # conversation is worse than a refused one.  Pure parse/group/summary layers
+  # carved + ERT-tested, including against a real GitHub response; the `gh api'
+  # call and the rendering live outside per AGENTS.md Rule 2.
+  decknix-review-threads-el = mkEmacsTestedPackage {
+    pname = "decknix-review-threads";
+    src = ./agent-shell/review-threads;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-review-threads-test.el"
+    ];
+  };
+
   # Remembers which PR a branch had, so a merged worktree stops rendering
   # as `wip' with its number thrown away.  `wip' is meant to mean "not yet
   # promoted to a PR"; it also meant "PR merged", because a placeholder row
@@ -3248,6 +3264,7 @@ in
           decknix-agent-resume-native-el
           decknix-agent-prompt-probe-el
           decknix-hub-pr-memory-el
+          decknix-review-threads-el
           decknix-agent-welcome-el
           decknix-agent-turn-signals-el
           decknix-agent-heartbeat-watch-el
