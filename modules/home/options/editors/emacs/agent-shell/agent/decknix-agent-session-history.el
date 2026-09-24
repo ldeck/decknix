@@ -217,6 +217,49 @@ the result as a string and never hit `wrong-type-argument stringp'."
         (mapconcat #'identity (nreverse parts) "\n"))))
    (t nil)))
 
+(defconst decknix--agent-turn-timestamp-property 'decknix-turn-timestamp
+  "Text property carrying a turn's ISO-8601 timestamp on its user text.")
+
+(defun decknix--agent-turn-timestamp-put (text timestamp)
+  "Return TEXT carrying TIMESTAMP, or TEXT unchanged when there is none.
+
+A turn record is a `(USER . RESPONSE)' cons, and every consumer reads it
+that way -- the resume primer, the context viewer, the `asking'-flag
+restore, the history extractor.  Adding a third field would break all of
+them at once for the sake of a field only the viewer wants.
+
+So the timestamp rides as a text property on the user string, which is
+transparent to every existing reader: `string=' ignores properties,
+`insert' and `mapconcat' preserve them, and anything calling
+`substring-no-properties' simply drops it rather than breaking."
+  (if (and (stringp text) timestamp)
+      (let ((copy (copy-sequence text)))
+        (put-text-property 0 (length copy)
+                           decknix--agent-turn-timestamp-property
+                           timestamp copy)
+        copy)
+    text))
+
+(defun decknix--agent-turn-timestamp (text)
+  "Return the ISO-8601 timestamp carried by TEXT, or nil."
+  (and (stringp text)
+       (> (length text) 0)
+       (get-text-property 0 decknix--agent-turn-timestamp-property text)))
+
+(defun decknix--agent-turn-record-timestamp (turn)
+  "Return the timestamp of TURN, a `(USER . RESPONSE)' cons, or nil."
+  (and (consp turn) (decknix--agent-turn-timestamp (car turn))))
+
+(defun decknix--agent-session-record-timestamp (data)
+  "Return the ISO-8601 timestamp from a parsed transcript record DATA.
+
+Claude writes `timestamp' at the top level of every line; pi nests the
+whole record under `message', so check both rather than assuming the
+shape -- reading only the top level is what yielded zero turns for every
+pi session when the role was read that way."
+  (or (alist-get 'timestamp data)
+      (alist-get 'timestamp (alist-get 'message data))))
+
 (defun decknix--agent-session-extract-all-turns-jsonl (file)
   "Extract turns from a Claude-style JSONL file."
   (condition-case err
@@ -263,7 +306,14 @@ the result as a string and never hit `wrong-type-argument stringp'."
                                   (mapconcat #'identity
                                              (nreverse cur-resp-parts) "\n"))
                             turns))
-                    (setq cur-user text
+                    ;; Stamp the turn with the time of the line that STARTS
+                    ;; it.  The response accumulates across many later
+                    ;; lines, so the user prompt is the only unambiguous
+                    ;; moment a turn can be said to have happened at.
+                    (setq cur-user (decknix--agent-turn-timestamp-put
+                                    text
+                                    (decknix--agent-session-record-timestamp
+                                     data))
                           cur-resp-parts nil))))
                ((string= type "assistant")
                 ;; Accumulate assistant response parts
