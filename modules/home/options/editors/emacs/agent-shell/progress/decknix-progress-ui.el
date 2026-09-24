@@ -29,6 +29,8 @@
 (declare-function decknix--agent-current-conv-key "ext:agent-shell-config")
 (declare-function decknix--agent-tags-read "ext:agent-shell-config")
 (declare-function decknix--agent-tags-conversations "ext:agent-shell-config" (store))
+(declare-function decknix--agent-tags-for-conv-key-resolved
+                  "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--open-url "ext:agent-shell-config" (url &optional new-session))
 (defvar decknix-agent-prefix-map)
 
@@ -229,8 +231,8 @@ DEFAULT is returned when no explicit state has been set."
          (sum      (decknix-progress--count-summary items))
          (done     (car sum))
          (total    (cdr sum))
-         (tags     (when (fboundp 'decknix--agent-tags-for-conv-key)
-                     (decknix--agent-tags-for-conv-key conv-key)))
+         (tags     (when (fboundp 'decknix--agent-tags-for-conv-key-resolved)
+                     (decknix--agent-tags-for-conv-key-resolved conv-key)))
          (short    (if (and conv-key (>= (length conv-key) 8))
                        (substring conv-key 0 8)
                      (or conv-key "?"))))
@@ -468,8 +470,8 @@ conv-keys still show up).  Result is a list of (LABEL . CONV-KEY)."
                 (when (and ck (not (gethash ck seen)))
                   (puthash ck t seen)
                   (let* ((tags (when (fboundp
-                                      'decknix--agent-tags-for-conv-key)
-                                 (decknix--agent-tags-for-conv-key ck)))
+                                      'decknix--agent-tags-for-conv-key-resolved)
+                                 (decknix--agent-tags-for-conv-key-resolved ck)))
                          (short (if (>= (length ck) 8)
                                     (substring ck 0 8) ck))
                          (label (if tags

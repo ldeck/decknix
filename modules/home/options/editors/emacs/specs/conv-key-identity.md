@@ -250,7 +250,21 @@ evidence rather than on this reasoning alone.
 ## 6. Sequencing
 
 1. `decknix--agent-tags-resolve` + repoint every consumer, header included
+   ✅ landed, and finished: the last conv-key-only READ sites are repointed
+   (main-session ×4, progress-ui ×2). Consumers holding only a conv-key
+   could not use the resolver at all -- it takes a (CONV-KEY SESSION-ID)
+   pair -- so `decknix--agent-tags-for-conv-key-resolved` is the conv-key
+   side of it, reaching sibling entries through the shared `sessions` list.
+   The mutation paths in `main-tags.el` are deliberately NOT repointed:
+   they read current tags in order to WRITE under a conv-key, and unioning
+   a sibling's tags into that write would copy tags between conversations.
 2. Naming re-runs when tags first resolve
+   ✅ landed. The trigger is `decknix--agent-register-session-id`, which is
+   the exact moment tags become resolvable: naming ran at shell creation,
+   before the id joined the conversation's session set, so the store scan
+   found nothing and the name fell through to the workspace fallback.
+   Guarded by `decknix--agent-name-stale-for-tags-p` so it fires once
+   rather than fighting a user's own rename.
 3. Measure the duplication across the store (open question 2)
 4. Consolidation, with a backup and a dry run
 5. Decide on question 3 — a stable conversation id — once 3 shows scale
