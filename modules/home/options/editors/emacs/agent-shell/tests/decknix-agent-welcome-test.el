@@ -299,12 +299,14 @@ The overlay must reach the process mark to count as the input prompt."
         (should (equal "" (overlay-get prompt 'before-string)))))))
 
 (ert-deftest decknix-chat-blank-labels--no-process-falls-back ()
-  "With no live process nothing has been sent, so the last overlay is the prompt."
+  "With no live process nothing has been sent, so the last overlay is the prompt.
+The label still has to carry the input marker to be emptied -- the
+fallback picks the overlay, it does not license blanking a sent turn."
   (with-temp-buffer
     (insert "Claude> ")
     (let ((o (make-overlay 1 (point-max))))
       (overlay-put o 'category 'agent-shell-chat-me)
-      (overlay-put o 'before-string "\n Me \n\n")
+      (overlay-put o 'before-string "\n Me \n\n  ❯ ")
       (cl-letf (((symbol-function 'get-buffer-process) (lambda (&rest _) nil)))
         (decknix--agent-chat-blank-prompt-labels)
         (should (equal "" (overlay-get o 'before-string)))))))
@@ -496,6 +498,53 @@ Pi> ")
          (list (cons 'before-string "")))
         ;; the blank must have been dropped, so the real label survives
         (should-not (assq 'before-string (nth 5 seen)))))))
+
+;; -- the marker, not the geometry, identifies the prompt ----------------
+;;
+;; The process-mark rule above is still wrong for the FIRST submission,
+;; which is exactly what was reported: *"the first prompt's Me label
+;; disappears after entry, whether resumed or not"*.
+;;
+;; Re-read the measurement that motivated the mark rule:
+;;
+;;     overlays=1 last=5904..5913 point-max=5913
+;;
+;; The sent overlay ENDS AT `point-max'.  A process mark cannot exceed
+;; `point-max', so `overlay-end >= mark' is necessarily true and the sent
+;; turn is classified live and blanked.  The rule only ever worked from the
+;; SECOND turn on, where agent output has been appended after the sent
+;; overlay and the mark genuinely sits beyond it.  Hence "only the first".
+;;
+;; Geometry cannot separate the two cases.  The `before-string' can, and
+;; already does -- the shapes differ by the input marker itself:
+;;
+;;     sent message   "\n Me \n\n"        label only
+;;     live prompt    "\n Me \n\n  <marker> "  label + input marker
+;;
+;; Requiring the marker makes blanking structurally incapable of touching a
+;; sent turn, at any geometry.  Failing the other way is benign: a premature
+;; badge is cosmetic, a destroyed user message is not.
+
+(ert-deftest decknix-chat-blank-labels--spares-a-sent-turn-ending-at-point-max ()
+  "The reported first-prompt case: sent overlay ends at the mark."
+  (with-temp-buffer
+    (insert "Where are we up to?")
+    (let ((sent (make-overlay 1 (point-max))))
+      (overlay-put sent 'category 'agent-shell-chat-me)
+      (overlay-put sent 'before-string "\n Me \n\n")
+      (cl-letf (((symbol-function 'get-buffer-process) (lambda (&rest _) 'proc))
+                ((symbol-function 'process-live-p) (lambda (&rest _) t))
+                ((symbol-function 'process-mark)
+                 (lambda (&rest _) (copy-marker (point-max)))))
+        (decknix--agent-chat-blank-prompt-labels)
+        (should (equal "\n Me \n\n" (overlay-get sent 'before-string)))))))
+
+(ert-deftest decknix-chat-blank-labels--marker-is-required ()
+  "Only a label carrying the input marker is ever emptied."
+  (should (decknix--agent-chat-prompt-label-suppressable-p "\n Me \n\n  ❯ "))
+  (should-not (decknix--agent-chat-prompt-label-suppressable-p "\n Me \n\n"))
+  (should-not (decknix--agent-chat-prompt-label-suppressable-p ""))
+  (should-not (decknix--agent-chat-prompt-label-suppressable-p nil)))
 
 (provide 'decknix-agent-welcome-test)
 ;;; decknix-agent-welcome-test.el ends here
