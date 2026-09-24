@@ -182,6 +182,39 @@ is the historical behaviour and safe: nothing has been sent yet."
      ;; own message.
      (t nil))))
 
+(defconst decknix--agent-chat-input-marker "❯"
+  "The glyph `agent-shell-chat-mode' draws as the input affordance.
+Present in the LIVE prompt's `before-string' and absent from a sent
+turn's, which is the only reliable difference between the two.")
+
+(defun decknix--agent-chat-prompt-label-suppressable-p (before-string)
+  "Return non-nil when BEFORE-STRING is a prompt label safe to empty.
+
+The geometric test in `decknix--agent-chat-live-prompt-overlay' cannot
+separate a live prompt from a just-submitted turn on the FIRST
+submission.  Re-read its own measurement:
+
+    overlays=1 last=5904..5913 point-max=5913
+
+the sent overlay ENDS AT `point-max', and a process mark can never
+exceed `point-max', so `overlay-end >= mark' holds necessarily and the
+sent turn is taken for the prompt.  From the second turn on, agent output
+sits after the sent overlay and the mark really is beyond it -- which is
+why the loss was reported as only ever hitting the first prompt, on new
+and resumed sessions alike.
+
+The `before-string' shapes differ by the marker itself:
+
+    sent message   \"\\n Me \\n\\n\"           label only
+    live prompt    \"\\n Me \\n\\n  ❯ \"       label + marker
+
+so requiring the marker makes the blanking structurally unable to touch a
+sent turn at any geometry.  Erring the other way is deliberate: leaving a
+premature badge is cosmetic, destroying a user's message is not."
+  (and (stringp before-string)
+       (string-match-p (regexp-quote decknix--agent-chat-input-marker)
+                       before-string)))
+
 (defun decknix--agent-chat-blank-prompt-labels ()
   "Empty the ` Me '/`❯' affordance on this buffer's LIVE chat prompt.
 
@@ -212,7 +245,9 @@ premature badge with a bare prompt string: a worse lie, not a smaller
 one.  Agent-side labels (`agent-shell-chat-agent') mark output that has
 genuinely happened and are left untouched."
   (let ((prompt (decknix--agent-chat-live-prompt-overlay)))
-    (when prompt
+    (when (and prompt
+               (decknix--agent-chat-prompt-label-suppressable-p
+                (overlay-get prompt 'before-string)))
       (overlay-put prompt 'before-string ""))))
 
 
