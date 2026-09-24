@@ -6150,6 +6150,13 @@ duration -- the most important number on this branch."
         ;; defvars and toggle commands as soon as they're needed.
         (require 'decknix-sidebar-toggles)
 
+        ;; The toggles transient's DESCRIPTIONS call into this package, and a
+        ;; transient evaluates its layout when invoked, so `T' signalled
+        ;; (void-function decknix-sidebar-group-mode-label) with the package
+        ;; merely on the load-path.  Being a `packageRequires' dependency
+        ;; propagates it for byte-compilation; it does not load it.
+        (require 'decknix-sidebar-grouping)
+
         ;; == Sidebar row-level actions (`-at-point' commands) ==
         ;;
         ;; Source moved out of this heredoc into
