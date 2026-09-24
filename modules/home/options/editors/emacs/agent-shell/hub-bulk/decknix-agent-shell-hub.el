@@ -161,6 +161,16 @@
 (declare-function decknix--sidebar-paint-tick "decknix-hub-sidebar-paint")
 (declare-function decknix-sidebar-toggle-hub-display-mode "decknix-sidebar-toggles")
 (declare-function decknix--hub-format-row-label "decknix-hub-icons")
+(declare-function decknix--hub-pr-memory-lookup "decknix-hub-pr-memory"
+                  (repo branch))
+(declare-function decknix--hub-pr-memory-row-label "decknix-hub-pr-memory"
+                  (entry status))
+(declare-function decknix--hub-pr-memory-row-visible-p "decknix-hub-pr-memory"
+                  (entry status))
+(declare-function decknix--hub-pr-memory-remember "decknix-hub-pr-memory"
+                  (wip-data &optional now))
+(declare-function decknix--hub-pr-memory-save "decknix-hub-pr-memory" ())
+(declare-function decknix--hub-pr-memory-restore "decknix-hub-pr-memory" ())
 
 ;; Forward defvars for heredoc-resident toggle / cache state.
 (defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
@@ -3428,6 +3438,17 @@ than the cutoff (by directory mtime) are filtered out."
                                         live-set))))
             (when (and branch path
                        (not (member branch taken))
+                       ;; A remembered-merged placeholder obeys the SAME
+                       ;; deploy-gated rule as a real merged WIP row
+                       ;; (`decknix--hub-wip-terminal-visible-p'), rather
+                       ;; than a second rule that would drift from it.
+                       (or (not (fboundp 'decknix--hub-pr-memory-row-visible-p))
+                           (let* ((mem (decknix--hub-pr-memory-lookup repo branch))
+                                  (url (plist-get mem :url))
+                                  (status (and url
+                                               (fboundp 'decknix--hub-pr-status)
+                                               (decknix--hub-pr-status url))))
+                             (decknix--hub-pr-memory-row-visible-p mem status)))
                        ;; Drop the primary checkout from placeholders via
                        ;; the disk-free cached-truename compare.
                        (not (and primary
@@ -3449,12 +3470,43 @@ open PR (or whose PR hasn't been picked up by the hub poller).  The
 column shape mirrors a real WIP row so the worktree badge column,
 age column, and title column stay aligned, but the `#N' + CI signal
 zone collapses to the dim state-word `wip ' since none of those
-signals exist for a branch-without-a-PR.  The row carries enough
-text properties (`repo', `branch', `worktree-path') for the worktree
-submenu to operate on it, but no `decknix-hub-url' so the row's
-primary action is a no-op until a PR materialises."
+signals exist for a branch-without-a-PR.
+
+That collapse is correct ONLY for a branch that never had a PR.  A
+branch whose PR merged or closed also lacks a matching OPEN PR and so
+also lands here, and hardcoding `wip' for it lost both its state and its
+number -- `wip' silently came to mean two things.  When
+`decknix--hub-pr-memory' remembers a PR for this branch the row shows
+that PR's real state word and `#N' instead, and carries a
+`decknix-hub-url' so it is actionable again.  Otherwise it renders as
+before.
+
+The row always carries enough text properties (`repo', `branch',
+`worktree-path') for the worktree submenu to operate on it."
   (let* ((branch (car wt))
          (path (cdr wt))
+         ;; Did this branch ever have a PR?  A placeholder row means "no
+         ;; matching OPEN PR", which covers both "never had one" and "had
+         ;; one that merged" -- and conflating those is what made a merged
+         ;; worktree render as `wip' with its number thrown away.
+         ;;
+         ;; Memory supplies identity only; state comes from the URL-keyed
+         ;; cache, because the WIP feed carries open PRs and so can never
+         ;; report a merge, only an absence.
+         (remembered (when (fboundp 'decknix--hub-pr-memory-lookup)
+                       (decknix--hub-pr-memory-lookup repo-full branch)))
+         (remembered-url (plist-get remembered :url))
+         (remembered-number (plist-get remembered :number))
+         (remembered-status (and remembered-url
+                                 (fboundp 'decknix--hub-pr-status)
+                                 (decknix--hub-pr-status remembered-url)))
+         (state-word (if (fboundp 'decknix--hub-pr-memory-row-label)
+                         (decknix--hub-pr-memory-row-label
+                          remembered remembered-status)
+                       "wip"))
+         (number-str (if remembered-number
+                         (format "#%s" remembered-number)
+                       ""))
          ;; Cached mtime fact (disk-free); nil -> age renders as `?'.
          (mtime (and path (decknix--hub-path-mtime path)))
          (age (if mtime
@@ -3465,14 +3517,17 @@ primary action is a no-op until a PR materialises."
          (primary-icon (decknix--hub-primary-status-icon '() 'placeholder))
          (line (pcase (decknix--hub-get-display-mode 'wip)
                    ('D ;; Minimal
-                    (let* ((phase-str (propertize "[wip]" 'face 'font-lock-comment-face))
+                    (let* ((phase-str (propertize (format "[%s]" state-word)
+                                                  'face 'font-lock-comment-face))
                            (max-title (max 8 (- (window-width) 14)))
                            (short-branch (if (> (length branch) max-title)
                                              (concat (substring branch 0 (- max-title 1)) "…")
                                            branch)))
                       (format "%s  %s %s" primary-icon phase-str short-branch)))
                    ('C ;; Label
-                    (let* ((label-str (propertize "local branch" 'face 'font-lock-comment-face))
+                    (let* ((label-str (propertize
+                                       (if remembered state-word "local branch")
+                                       'face 'font-lock-comment-face))
                            (max-title (max 8 (- (window-width) 20)))
                            (short-branch (if (> (length branch) max-title)
                                              (concat (substring branch 0 (- max-title 1)) "…")
@@ -3498,13 +3553,22 @@ primary action is a no-op until a PR materialises."
                               wt-badge
                               primary-icon
                               (propertize age 'face 'font-lock-comment-face)
-                              (propertize "wip" 'face 'font-lock-comment-face)
+                              (propertize (if remembered number-str "wip")
+                                          'face 'font-lock-comment-face)
                               (propertize short-branch 'face 'font-lock-comment-face)))))))
-    (insert (propertize line
-                        'decknix-hub-type 'wip-placeholder
-                        'decknix-hub-repo repo-full
-                        'decknix-hub-branch branch
-                        'decknix-hub-worktree-path path)
+    (insert (apply #'propertize line
+                   'decknix-hub-type 'wip-placeholder
+                   'decknix-hub-repo repo-full
+                   'decknix-hub-branch branch
+                   'decknix-hub-worktree-path path
+                   ;; A remembered PR makes the row actionable again.  The
+                   ;; renderer used to attach no URL at all, on the
+                   ;; reasoning that a branch-without-a-PR has nowhere to
+                   ;; go -- true for that case, and the reason a MERGED
+                   ;; worktree became unreachable from the sidebar.
+                   (when remembered-url
+                     (list 'decknix-hub-url remembered-url
+                           'decknix-hub-number remembered-number)))
             "\n")
     (1+ line-num)))
 

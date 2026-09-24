@@ -2016,6 +2016,24 @@ let
     ];
   };
 
+  # Remembers which PR a branch had, so a merged worktree stops rendering
+  # as `wip' with its number thrown away.  `wip' is meant to mean "not yet
+  # promoted to a PR"; it also meant "PR merged", because a placeholder row
+  # selects worktrees lacking a matching OPEN PR and both cases satisfy
+  # that.  Identity only: the feed carries open PRs and so can never report
+  # a merge, only an absence, which is why state is resolved through the
+  # existing URL-keyed cache instead of stored here.  Pure key/harvest/
+  # label/visibility layers carved + ERT-tested; the harvest hook on
+  # `decknix--hub-refresh-wip' lives in the heredoc per AGENTS.md Rule 2.
+  decknix-hub-pr-memory-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-pr-memory";
+    src = ./agent-shell/hub-pr-memory;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-pr-memory-test.el"
+    ];
+  };
+
   # Resume-time capture of prompt state, because "no ` Me ' label after
   # resuming" has now been diagnosed four times from state read minutes
   # after the sighting, and on 01a0b2e2 every known mechanism was ruled
@@ -3228,6 +3246,7 @@ in
           decknix-agent-resume-primer-el
           decknix-agent-resume-native-el
           decknix-agent-prompt-probe-el
+          decknix-hub-pr-memory-el
           decknix-agent-welcome-el
           decknix-agent-turn-signals-el
           decknix-agent-heartbeat-watch-el
@@ -4407,6 +4426,20 @@ ${optionalString cfg.tableOverlay.enable ''
         (with-eval-after-load 'agent-shell-chat-mode
           (advice-add 'agent-shell-chat--label-prompts :after
                       #'decknix--agent-chat-suppress-early-prompt))
+
+        ;; Harvest the branch -> PR association on every WIP poll.
+        ;;
+        ;; This has to happen while the PR is still OPEN, because that is
+        ;; the only time the feed mentions it: a merge is indistinguishable
+        ;; from a disappearance.  Harvesting on each refresh is what lets a
+        ;; merged worktree keep its number and its URL afterwards.
+        (with-eval-after-load 'decknix-agent-shell-hub
+          (decknix--hub-pr-memory-restore)
+          (advice-add 'decknix--hub-refresh-wip :after
+                      (lambda (&rest _)
+                        (when (and (boundp 'decknix--hub-wip) decknix--hub-wip)
+                          (decknix--hub-pr-memory-remember decknix--hub-wip)))))
+        (add-hook 'kill-emacs-hook #'decknix--hub-pr-memory-save)
 
         ;; Sample prompt state ACROSS a resume, not once after it.
         ;;
