@@ -2016,6 +2016,24 @@ let
     ];
   };
 
+  # Resume-time capture of prompt state, because "no ` Me ' label after
+  # resuming" has now been diagnosed four times from state read minutes
+  # after the sighting, and on 01a0b2e2 every known mechanism was ruled
+  # out: marker present, `init-finished' t, `point-max' on screen.  The
+  # fault is transient, so it is sampled ACROSS the resume rather than
+  # once after it.  Records `pos-visible-in-window-p', never `window-end',
+  # which is not evidence for an overlay-drawn prompt.  Pure format and
+  # anomaly layers carved + ERT-tested; the hooks live in the heredoc per
+  # AGENTS.md Rule 2.
+  decknix-agent-prompt-probe-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-prompt-probe";
+    src = ./agent-shell/prompt-probe;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-prompt-probe-test.el"
+    ];
+  };
+
   # Reclaims the top of every agent-shell buffer: the ~14-line ASCII-art
   # banner becomes a one-line greeting that names the provider, and the
   # five bootstrapping setup sections fold into one collapsed group.  On a
@@ -3209,6 +3227,7 @@ in
           decknix-agent-fork-el
           decknix-agent-resume-primer-el
           decknix-agent-resume-native-el
+          decknix-agent-prompt-probe-el
           decknix-agent-welcome-el
           decknix-agent-turn-signals-el
           decknix-agent-heartbeat-watch-el
@@ -4388,6 +4407,38 @@ ${optionalString cfg.tableOverlay.enable ''
         (with-eval-after-load 'agent-shell-chat-mode
           (advice-add 'agent-shell-chat--label-prompts :after
                       #'decknix--agent-chat-suppress-early-prompt))
+
+        ;; Sample prompt state ACROSS a resume, not once after it.
+        ;;
+        ;; On 01a0b2e2 a probe minutes after the sighting found the label
+        ;; present, marked, `init-finished' t and `point-max' on screen at
+        ;; (0 154).  So the fault is transient and a single snapshot cannot
+        ;; name it: "the lazy relabel had not landed yet" and "the window
+        ;; was scrolled wrong" produce identical after-the-fact state and
+        ;; differ only in the sequence.
+        ;;
+        ;; The late samples matter most.  The relabel is deliberately lazy
+        ;; (`agent-shell-chat--schedule-relabel'), so a resume can leave a
+        ;; correct buffer with an unlabelled prompt for a while, and that
+        ;; window is exactly when the user looks.
+        (declare-function decknix-agent-prompt-probe-record
+                          "decknix-agent-prompt-probe" (buffer stage))
+        (defun decknix--agent-prompt-probe-resume (shell-buf &rest _)
+          "Record SHELL-BUF's prompt state through the resume settling window."
+          (when (buffer-live-p shell-buf)
+            (decknix-agent-prompt-probe-record shell-buf "resume")
+            (dolist (delay '(2 6 15))
+              (run-at-time
+               delay nil
+               (lambda ()
+                 (when (buffer-live-p shell-buf)
+                   (decknix-agent-prompt-probe-record
+                    shell-buf (format "resume+%ds" delay))))))))
+        (with-eval-after-load 'decknix-agent-resume-native
+          (advice-add 'decknix--agent-resume-focus-prompt-on-init :after
+                      #'decknix--agent-prompt-probe-resume)
+          (advice-add 'decknix--agent-resume-ensure-live-prompt :after
+                      #'decknix--agent-prompt-probe-resume))
 
         (defun decknix--agent-chat-note-init-finished (&rest args)
           "Flip this shell to ready on `init-finished' and restore its label."
