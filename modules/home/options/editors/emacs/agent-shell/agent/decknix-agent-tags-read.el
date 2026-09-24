@@ -41,6 +41,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 
 ;; Forward declarations for the tags-store accessors and the
 ;; session->conv-key resolver this module depends on.  All three
@@ -155,6 +156,81 @@ second copy of the fallback would reproduce that a level up."
       (delete-dups (append by-conv by-sid)))
      (by-conv)
      (by-sid))))
+
+(defun decknix--agent-name-stale-for-tags-p (buffer-name tags)
+  "Pure: non-nil when BUFFER-NAME predates TAGS and should be re-derived.
+
+Naming runs when a shell is created, and at that moment a resumed or
+freshly-linked session often has no resolvable tags yet: the session id
+has not joined the conversation's session set, so the store scan finds
+nothing and naming falls through to the workspace fallback.  Nothing then
+re-ran it, so the name stayed wrong for the life of the buffer -- 5de16692
+sat as `*Claude: nurturecloud*' while carrying four tags.
+
+True when tags now resolve and NONE of them appears in the current name.
+Requiring all of them would rename on every tag edit, and requiring none
+would never fire; the first tag is what the canonical name is built from,
+so its absence is the signal that the name was derived without tags."
+  (and tags
+       (stringp buffer-name)
+       (not (seq-some (lambda (tag)
+                        (and (stringp tag)
+                             (not (string-empty-p tag))
+                             (string-match-p (regexp-quote tag) buffer-name)))
+                      tags))))
+
+(defun decknix--agent-tags-scan-siblings (convs conv-key)
+  "Pure: union of CONV-KEY's own tags and those of its sibling entries.
+
+A sibling is an entry sharing at least one session id with CONV-KEY's
+entry.  That is the same accretion `decknix--agent-tags-resolve' works
+around, approached from the other side: it takes a (CONV-KEY SESSION-ID)
+pair, and some consumers hold ONLY a conv-key -- a progress payload, a
+group header, a hub-only key with no live buffer.  Those could not use the
+resolver at all and kept calling the fragile key directly.
+
+The route is the `sessions' list.  CONV-KEY's entry may be one of the
+empty fragments while the tags sit under a sibling keyed differently, so
+read the member session ids and collect from every entry listing one of
+them.  Union rather than first-hit, for the same reason the resolver
+unions: when a resume splits tags across entries, neither alone is the
+answer.
+
+Scans CONVS directly rather than calling
+`decknix--agent-store-field-scan', which is deliberately FIRST-HIT -- it
+`throw's on the first non-empty value, ordered by sorted conv-key.  Built
+on that, this returned only the alphabetically-first side and dropped the
+rest, which is precisely the split it exists to reassemble.  A unit test
+pins the two-sided case."
+  (when (and (hash-table-p convs) conv-key)
+    (let* ((entry (gethash conv-key convs))
+           (own (and (hash-table-p entry) (gethash "tags" entry)))
+           (sessions (and (hash-table-p entry) (gethash "sessions" entry)))
+           (found (append own nil))
+           (keys nil))
+      (when sessions
+        (maphash (lambda (k _v) (push k keys)) convs)
+        (dolist (k (sort keys #'string<))
+          (let ((sibling (gethash k convs)))
+            (when (and (hash-table-p sibling)
+                       (seq-intersection sessions
+                                         (gethash "sessions" sibling)
+                                         #'equal))
+              (dolist (tag (gethash "tags" sibling))
+                (cl-pushnew tag found :test #'string=))))))
+      (delete-dups found))))
+
+(defun decknix--agent-tags-for-conv-key-resolved (conv-key)
+  "Return tags for CONV-KEY, following sibling entries when its own are empty.
+
+The conv-key-only counterpart to `decknix--agent-tags-for-buffer'.  Use
+this, not `decknix--agent-tags-for-conv-key', anywhere a consumer holds a
+conv-key and no buffer or session id: the bare accessor reads one entry
+and that entry is often the untagged fragment."
+  (when conv-key
+    (let* ((store (decknix--agent-tags-read))
+           (convs (decknix--agent-tags-conversations store)))
+      (decknix--agent-tags-scan-siblings convs conv-key))))
 
 (defun decknix--agent-tags-for-buffer (buffer)
   "Return the tags for agent-shell BUFFER, or nil.

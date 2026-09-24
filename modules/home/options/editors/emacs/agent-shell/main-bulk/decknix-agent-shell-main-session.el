@@ -995,7 +995,24 @@ when CONV-KEY is nil, or the id is absent/blank at ready time."
                        (when (and sid (stringp sid)
                                   (not (string-empty-p sid)))
                          (decknix--agent-register-session-id conv-key sid)
-                         (decknix--agent-conv-touch conv-key)))))))))
+                         (decknix--agent-conv-touch conv-key)
+                         ;; Tags only become resolvable HERE.  Naming ran at
+                         ;; shell creation, before this id joined the
+                         ;; conversation's session set, so the store scan
+                         ;; found nothing and the name fell through to the
+                         ;; workspace fallback -- and nothing re-ran it, so
+                         ;; the wrong name outlived the buffer.  5de16692 sat
+                         ;; as `*Claude: nurturecloud*' while carrying four
+                         ;; tags.
+                         (when (and (fboundp 'decknix--agent-name-stale-for-tags-p)
+                                    (fboundp 'decknix--agent-tags-for-buffer)
+                                    (fboundp 'decknix--agent-rename-current-buffer-from-tags)
+                                    (decknix--agent-name-stale-for-tags-p
+                                     (buffer-name)
+                                     (decknix--agent-tags-for-buffer
+                                      (current-buffer))))
+                           (ignore-errors
+                             (decknix--agent-rename-current-buffer-from-tags)))))))))))
       token)))
 
 (defun decknix--agent-session-resume--new (session-id history-count
@@ -1159,11 +1176,12 @@ dedupes against live buffers before calling here."
              (primer (decknix--agent-resume-primer-message
                       (decknix-agent-provider-label provider)
                       session-id data-path
-                      (or (and conv-key
-                               (decknix--agent-tags-for-conv-key conv-key))
-                          (and session-id
-                               (decknix--agent-store-field-for-session-id
-                                session-id "tags")))
+                      ;; One resolver, not a hand-rolled chain.  This was
+                      ;; conv-key-or-session-id first-hit, which is the
+                      ;; resolver's job and misses the case where a resume
+                      ;; has SPLIT tags across both entries -- then neither
+                      ;; side alone is the answer and `or' takes one.
+                      (decknix--agent-tags-resolve conv-key session-id)
                       last-user)))
         (when primer
           (decknix--agent-resume-primer-on-ready shell-buf primer))))
@@ -1449,6 +1467,14 @@ ON-TOGGLE (which reopens/refreshes the picker with the new filter)."
 (declare-function decknix--agent-picker-attention-rank "decknix-agent-picker-category" (status))
 (declare-function decknix--agent-picker-order-index "decknix-agent-picker-category" (rows))
 (declare-function decknix--agent-tags-for-conv-key "decknix-agent-tags-read" (conv-key))
+(declare-function decknix--agent-tags-for-conv-key-resolved
+                  "decknix-agent-tags-read" (conv-key))
+(declare-function decknix--agent-tags-for-buffer
+                  "decknix-agent-tags-read" (buffer))
+(declare-function decknix--agent-name-stale-for-tags-p
+                  "decknix-agent-tags-read" (buffer-name tags))
+(declare-function decknix--agent-rename-current-buffer-from-tags
+                  "decknix-agent-shell-main-tags" ())
 (declare-function decknix-agent-buffer-status "decknix-agent-auto-close" (buffer))
 (defvar decknix--agent-picker-categories)
 
@@ -1458,12 +1484,15 @@ buffer picker.  Toggled in-picker by M-R / M-W / M-O; nil (default) shows
 every type.  Not persisted — resets on daemon restart.")
 
 (defun decknix--agent-picker-buffer-tags (buf)
-  "Return the tags for live agent buffer BUF (via its conv-key)."
-  (when (buffer-live-p buf)
-    (with-current-buffer buf
-      (and (bound-and-true-p decknix--agent-conv-key)
-           (fboundp 'decknix--agent-tags-for-conv-key)
-           (decknix--agent-tags-for-conv-key decknix--agent-conv-key)))))
+  "Return the tags for live agent buffer BUF.
+Resolves via `decknix--agent-tags-for-buffer\', which unions the
+conv-key and session-id entries.  Asking the conv-key alone showed no
+tags whenever the buffer held a real but untagged key -- the 5de16692
+case -- which in the picker meant a session was unfindable by the tag it
+was named for."
+  (when (and (buffer-live-p buf)
+             (fboundp 'decknix--agent-tags-for-buffer))
+    (decknix--agent-tags-for-buffer buf)))
 
 (defun decknix--agent-picker-buffer-category (buf)
   "Classify live agent buffer BUF into `requests'/`wip'/`other'."
@@ -2912,8 +2941,11 @@ calling `decknix-agent-session-new' interactively."
                                  (file-exists-p decknix--agent-session-workspace)
                                  decknix--agent-session-workspace)
                             (decknix--agent-detect-workspace)))
-         (src-tags (when src-conv-key
-                     (decknix--agent-tags-for-conv-key src-conv-key)))
+         ;; Buffer-level resolve: a fork must carry the tags the user can
+         ;; SEE on the source, and the bare conv-key misses any held under
+         ;; a sibling entry.
+         (src-tags (when (fboundp 'decknix--agent-tags-for-buffer)
+                     (decknix--agent-tags-for-buffer (current-buffer))))
          (provider (decknix-agent-provider-select))
          ;; Let the user also change the workspace.
          (workspace (expand-file-name
@@ -3283,7 +3315,7 @@ conversations (newest first), annotated with workspace and tags."
                              (abbreviate-file-name workspace))
                          "?"))
              (tags (when conv-key
-                     (decknix--agent-tags-for-conv-key conv-key)))
+                     (decknix--agent-tags-for-conv-key-resolved conv-key)))
              (tag-str (if tags
                           (mapconcat (lambda (tg) (concat "#" tg)) tags " ")
                         ""))
