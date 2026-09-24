@@ -156,6 +156,8 @@ Press q to dismiss."
     (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
     "  C-c C-v     Pick model (persisted for this conversation)\n"
     "  C-c C-m     Pick mode\n"
+    "  M-x decknix-agent-migrate-pinned-model\n"
+    "              Re-pin every conversation on one model onto another\n"
     "\n"
 
     (propertize "Context  (C-c i …)\n" 'font-lock-face '(:weight bold))

@@ -142,5 +142,88 @@
     (should (equal "claude-3.7"
                    (decknix--agent-session-model-for-conv-key "ck")))))
 
+;; -- bulk re-pinning ------------------------------------------------
+;;
+;; A saved model is re-applied on every resume for as long as the session
+;; advertises it, so a conversation started on an older model stays there
+;; for life.  Moving a backlog forward meant resuming each one and
+;; pressing `C-c C-v': 183 of 573 conversations were pinned to
+;; `claude-opus-4-8' when this landed.
+
+(defun decknix-model-test--convs (&rest pairs)
+  "Build a conversations table from PAIRS of (CONV-KEY . MODEL)."
+  (let ((convs (make-hash-table :test 'equal)))
+    (dolist (pair pairs)
+      (let ((entry (make-hash-table :test 'equal)))
+        (puthash "tags" nil entry)
+        (puthash "sessions" nil entry)
+        (when (cdr pair) (puthash "model" (cdr pair) entry))
+        (puthash (car pair) entry convs)))
+    convs))
+
+(ert-deftest decknix-model-migrate--selects-only-the-from-model ()
+  "Exactly the conversations pinned to FROM are planned."
+  (let ((convs (decknix-model-test--convs
+                '("a" . "claude-opus-4-8")
+                '("b" . "claude-sonnet-5")
+                '("c" . "claude-opus-4-8"))))
+    (should (equal '("a" "c")
+                   (decknix--agent-model-migration-plan
+                    convs "claude-opus-4-8" "claude-opus-5-5")))))
+
+(ert-deftest decknix-model-migrate--leaves-unpinned-conversations-alone ()
+  "An unpinned conversation already follows the provider default.
+
+Re-pinning it would REMOVE that freedom -- it would stop moving with the
+default it is currently tracking -- so absence of a pin is never treated
+as a pin to migrate.  349 of 573 conversations were in this state."
+  (let ((convs (decknix-model-test--convs
+                '("a" . nil)
+                '("b" . "claude-opus-4-8"))))
+    (should (equal '("b")
+                   (decknix--agent-model-migration-plan
+                    convs "claude-opus-4-8" "claude-opus-5-5")))))
+
+(ert-deftest decknix-model-migrate--plan-is-sorted ()
+  "A dry run and the write that follows must agree on order."
+  (let ((convs (decknix-model-test--convs
+                '("zz" . "m") '("aa" . "m") '("mm" . "m"))))
+    (should (equal '("aa" "mm" "zz")
+                   (decknix--agent-model-migration-plan convs "m" "n")))))
+
+(ert-deftest decknix-model-migrate--degenerate-input-plans-nothing ()
+  "A no-op request must not rewrite the store.
+FROM equal to TO is the dangerous one: it would rewrite every matching
+entry to the value it already holds, rotating the single backup slot and
+discarding the pre-change state for no gain."
+  (let ((convs (decknix-model-test--convs '("a" . "m"))))
+    (should-not (decknix--agent-model-migration-plan convs "m" "m"))
+    (should-not (decknix--agent-model-migration-plan convs "" "n"))
+    (should-not (decknix--agent-model-migration-plan convs "m" ""))
+    (should-not (decknix--agent-model-migration-plan convs nil "n"))
+    (should-not (decknix--agent-model-migration-plan convs "m" nil))
+    (should-not (decknix--agent-model-migration-plan nil "m" "n"))))
+
+(ert-deftest decknix-model-migrate--no-match-plans-nothing ()
+  "A model absent from the store yields an empty plan, not an error."
+  (let ((convs (decknix-model-test--convs '("a" . "other"))))
+    (should-not (decknix--agent-model-migration-plan
+                 convs "claude-opus-4-8" "claude-opus-5-5"))))
+
+(ert-deftest decknix-models-in-store--counts-and-ranks ()
+  "Candidates come from the store, most-used first."
+  (let ((convs (decknix-model-test--convs
+                '("a" . "opus") '("b" . "sonnet") '("c" . "opus")
+                '("d" . nil) '("e" . "opus"))))
+    (should (equal '(("opus" . 3) ("sonnet" . 1))
+                   (decknix--agent-models-in-store convs)))))
+
+(ert-deftest decknix-models-in-store--ignores-blank-and-missing ()
+  "An empty-string pin is not a model."
+  (let ((convs (decknix-model-test--convs '("a" . "") '("b" . nil))))
+    (should-not (decknix--agent-models-in-store convs))
+    (should-not (decknix--agent-models-in-store nil))))
+
+
 (provide 'decknix-agent-session-model-test)
 ;;; decknix-agent-session-model-test.el ends here
