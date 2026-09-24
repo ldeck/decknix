@@ -765,6 +765,7 @@ fn discover_clones(registry: &[WorktreeEntry]) -> anyhow::Result<HashSet<PathBuf
             clones.insert(entry.primary.clone());
         }
     }
+    clones.extend(repo_sync::configured_clone_paths());
     let sessions_path = dirs::home_dir().unwrap_or_default().join(".config/decknix/agent-sessions.json");
     if sessions_path.exists() {
         if let Ok(content) = fs::read_to_string(&sessions_path) {

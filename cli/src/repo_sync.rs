@@ -224,6 +224,14 @@ fn discover_all(cfg: &RepoConfig, org_filter: Option<&str>) -> Vec<Repo> {
     repos
 }
 
+/// Primary clones under the configured workspace roots, as `repos list` sees them.
+pub fn configured_clone_paths() -> Vec<PathBuf> {
+    discover_all(&repo_config(&[], None), None)
+        .into_iter()
+        .map(|r| r.path)
+        .collect()
+}
+
 /// Run a git command in `repo`, returning trimmed stdout on success.
 fn git(repo: &Path, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
