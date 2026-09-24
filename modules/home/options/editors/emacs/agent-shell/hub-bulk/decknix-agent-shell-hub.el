@@ -1940,11 +1940,102 @@ Memoised on the tag-store mtime -- see
                 (cons mtime fresh)))
         fresh))))
 
+(defcustom decknix-hub-workspace-roots-command
+  '("decknix" "repos" "list" "--json")
+  "Command listing the primary clones under the configured workspace roots.
+Its JSON output (`{\"repos\": [{\"path\": ...}]}') feeds clone discovery,
+so a repo cloned under a workspace root (`[repos].workspaces' in
+settings.toml) reaches the hub without an agent session ever having
+been anchored in it.  The CLI owns which roots exist; the hub only
+asks it."
+  :type '(repeat string)
+  :group 'decknix)
+
+(defcustom decknix-hub-workspace-roots-ttl 300
+  "Seconds a workspace-root clone listing is reused before re-running.
+Clones are added rarely, so this only bounds how long a fresh clone
+waits to appear."
+  :type 'number
+  :group 'decknix)
+
+(defvar decknix--hub-workspace-root-clones nil
+  "Primary clone paths from `decknix-hub-workspace-roots-command'.")
+
+(defvar decknix--hub-workspace-root-clones-time 0.0
+  "`float-time' of the last completed workspace-root listing, or 0.")
+
+(defvar decknix--hub-workspace-root-clones-proc nil
+  "The in-flight workspace-root listing process, if any.")
+
+(defun decknix--hub-workspace-root-clones-parse (output)
+  "Return the clone paths in OUTPUT from `decknix repos list --json'.
+Anything unparseable yields nil: a broken listing must cost the hub a
+discovery source, never a sidebar render."
+  (condition-case nil
+      (let ((repos (alist-get 'repos (json-parse-string
+                                      output :object-type 'alist
+                                      :array-type 'list))))
+        (delq nil (mapcar (lambda (repo)
+                            (let ((path (alist-get 'path repo)))
+                              (and (stringp path) path)))
+                          (and (listp repos) repos))))
+    (error nil)))
+
+(defun decknix--hub-workspace-root-clones-refresh-async ()
+  "Re-list the workspace-root clones in the background.
+No-op while a listing is in flight or when the command is not on
+`exec-path'.  On success the discovery memo is dropped so the next
+render sees the new clones."
+  (let ((program (car decknix-hub-workspace-roots-command)))
+    (unless (or (process-live-p decknix--hub-workspace-root-clones-proc)
+                (not (executable-find program)))
+      (let ((buf (generate-new-buffer " *hub-workspace-roots*")))
+        (setq decknix--hub-workspace-root-clones-proc
+              (make-process
+               :name "hub-workspace-roots"
+               :buffer buf
+               :connection-type 'pipe
+               :stderr (make-pipe-process :name "hub-workspace-roots-err"
+                                          :buffer nil :noquery t)
+               :command decknix-hub-workspace-roots-command
+               :noquery t
+               :sentinel
+               (lambda (proc _event)
+                 (when (memq (process-status proc) '(exit signal))
+                   (when (and (eq (process-status proc) 'exit)
+                              (= 0 (process-exit-status proc))
+                              (buffer-live-p buf))
+                     (setq decknix--hub-workspace-root-clones
+                           (decknix--hub-workspace-root-clones-parse
+                            (with-current-buffer buf (buffer-string)))
+                           decknix--hub-workspace-root-clones-time
+                           (float-time))
+                     (decknix-hub-worktree-clones-cache-invalidate))
+                   (when (buffer-live-p buf) (kill-buffer buf))))))))))
+
+(defun decknix--hub-worktree-discover-from-workspace-roots ()
+  "Return alist (REPO . PATH) for primary clones under the workspace roots.
+Never blocks: a listing older than `decknix-hub-workspace-roots-ttl'
+starts an async refresh and the cached one answers meanwhile, and a
+path not yet in the clone map waits for its async classification."
+  (when (> (- (float-time) decknix--hub-workspace-root-clones-time)
+           decknix-hub-workspace-roots-ttl)
+    (decknix--hub-workspace-root-clones-refresh-async))
+  (let (out)
+    (dolist (path decknix--hub-workspace-root-clones)
+      (let ((repo (decknix--hub-worktree-classify-dir path)))
+        (when (stringp repo)
+          (push (cons repo path) out))))
+    (nreverse out)))
+
 (defun decknix--hub-worktree-discover-clones--compute ()
   "Uncached body of `decknix--hub-worktree-discover-clones'.
 Return alist (REPO . PRIMARY-PATH) by merging discovery sources.
 Priority: explicit `decknix-hub-clones' > cached `:primary' >
-`agent-sessions.json' workspaces > `project.el' known projects.
+workspace-root clones > `agent-sessions.json' workspaces >
+`project.el' known projects.  Workspace roots rank above sessions
+because they only ever list primary clones, while a session may be
+anchored in a linked worktree.
 All paths are normalised via `expand-file-name' so downstream
 `git -C' invocations (no shell) see absolute paths."
   (let ((seen (make-hash-table :test 'equal))
@@ -1964,14 +2055,21 @@ All paths are normalised via `expand-file-name' so downstream
                    (puthash repo t seen)
                    (push (cons repo p) out))))
              decknix--hub-worktree-cache)
-    ;; 3. Sessions.
+    ;; 3. Primary clones under the workspace roots.
+    (dolist (entry (decknix--hub-worktree-discover-from-workspace-roots))
+      (unless (gethash (car entry) seen)
+        (puthash (car entry) t seen)
+        (push (cons (car entry)
+                    (decknix--hub-worktree-normalize-path (cdr entry)))
+              out)))
+    ;; 4. Sessions.
     (dolist (entry (decknix--hub-worktree-discover-from-sessions))
       (unless (gethash (car entry) seen)
         (puthash (car entry) t seen)
         (push (cons (car entry)
                     (decknix--hub-worktree-normalize-path (cdr entry)))
               out)))
-    ;; 4. project.el known projects (best-effort; no-op without it).
+    ;; 5. project.el known projects (best-effort; no-op without it).
     (when (fboundp 'project-known-project-roots)
       (dolist (root (ignore-errors (project-known-project-roots)))
         (when (and (stringp root) (file-directory-p root))

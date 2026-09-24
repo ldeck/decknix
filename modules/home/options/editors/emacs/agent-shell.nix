@@ -2483,6 +2483,7 @@ let
       "decknix-hub-worktree-persistence-test.el"
       "decknix-hub-worktree-cache-test.el"
       "decknix-hub-worktree-badge-test.el"
+      "decknix-hub-worktree-workspace-roots-test.el"
     ];
   };
 
