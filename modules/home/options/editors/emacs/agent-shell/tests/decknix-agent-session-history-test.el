@@ -395,4 +395,123 @@ pi session's history was therefore reading nothing."
               (should (equal file (decknix--agent-session-file sid 'claude-code))))))
       (delete-directory dir t))))
 
+;; -- turn timestamps ------------------------------------------------
+;;
+;; Every transcript line carries `"timestamp":"2026-08-26T03:44:35.770Z"'
+;; and none of it reached the turn records, so the context viewer had no
+;; way to jump by date or show when a turn happened.
+;;
+;; A turn record is a `(USER . RESPONSE)' cons and every consumer reads it
+;; that way -- resume primer, context viewer, `asking'-flag restore,
+;; history extractor.  A third field would break all of them for a field
+;; only the viewer wants, so the timestamp rides as a text property on the
+;; user string: transparent to `string=', preserved by `insert' and
+;; `mapconcat', dropped harmlessly by `substring-no-properties'.
+
+(ert-deftest decknix-turn-ts--round-trips-through-the-property ()
+  "A stamped string reports its timestamp."
+  (let ((stamped (decknix--agent-turn-timestamp-put
+                  "hello" "2026-08-26T03:44:35.770Z")))
+    (should (equal "2026-08-26T03:44:35.770Z"
+                   (decknix--agent-turn-timestamp stamped)))))
+
+(ert-deftest decknix-turn-ts--is-transparent-to-string-comparison ()
+  "The carrier must not change what the string IS.
+Consumers compare and concatenate these strings; a stamp that altered
+equality would break the resume primer rather than enhance it."
+  (let ((stamped (decknix--agent-turn-timestamp-put "hello" "T")))
+    (should (string= "hello" stamped))
+    (should (equal 5 (length stamped)))
+    (should (equal "hello" (substring-no-properties stamped)))))
+
+(ert-deftest decknix-turn-ts--absent-timestamp-leaves-text-alone ()
+  "No timestamp means no copy and no property."
+  (should (equal "hello" (decknix--agent-turn-timestamp-put "hello" nil)))
+  (should-not (decknix--agent-turn-timestamp "hello"))
+  (should-not (decknix--agent-turn-timestamp nil))
+  (should-not (decknix--agent-turn-timestamp "")))
+
+(ert-deftest decknix-turn-ts--reads-from-a-record ()
+  "The record accessor reaches the car's property."
+  (let ((turn (cons (decknix--agent-turn-timestamp-put "q" "T1") "a")))
+    (should (equal "T1" (decknix--agent-turn-record-timestamp turn)))
+    (should-not (decknix--agent-turn-record-timestamp (cons "q" "a")))
+    (should-not (decknix--agent-turn-record-timestamp nil))))
+
+(ert-deftest decknix-turn-ts--found-at-top-level-or-nested ()
+  "Claude stamps the record; pi nests it under `message'.
+
+Reading only the top level is the same assumption that yielded ZERO turns
+for every pi session when the ROLE was read that way, so both shapes are
+pinned here."
+  (should (equal "T-top" (decknix--agent-session-record-timestamp
+                          '((timestamp . "T-top") (type . "user")))))
+  (should (equal "T-nested" (decknix--agent-session-record-timestamp
+                             '((type . "message")
+                               (message . ((timestamp . "T-nested")))))))
+  (should-not (decknix--agent-session-record-timestamp '((type . "user")))))
+
+(ert-deftest decknix-turn-ts--jsonl-extraction-stamps-each-turn ()
+  "End to end: turns extracted from a JSONL transcript carry their times.
+
+The stamp is the time of the line that STARTS the turn.  A response
+accumulates across many later lines, so the user prompt is the only
+unambiguous moment a turn can be said to have happened at."
+  (let ((file (make-temp-file "decknix-turn-ts" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"type\":\"user\",\"timestamp\":\"2026-08-26T01:00:00Z\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first question\"}]}}\n")
+            (insert "{\"type\":\"assistant\",\"timestamp\":\"2026-08-26T01:00:09Z\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first answer\"}]}}\n")
+            (insert "{\"type\":\"user\",\"timestamp\":\"2026-08-26T02:30:00Z\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"second question\"}]}}\n")
+            (insert "{\"type\":\"assistant\",\"timestamp\":\"2026-08-26T02:30:04Z\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"second answer\"}]}}\n"))
+          (let ((turns (decknix--agent-session-extract-all-turns-jsonl file)))
+            (should (= 2 (length turns)))
+            (should (equal "2026-08-26T01:00:00Z"
+                           (decknix--agent-turn-record-timestamp (nth 0 turns))))
+            (should (equal "2026-08-26T02:30:00Z"
+                           (decknix--agent-turn-record-timestamp (nth 1 turns))))
+            ;; The turn content is unchanged by the stamping.
+            (should (string= "first question" (car (nth 0 turns))))
+            (should (string= "first answer" (cdr (nth 0 turns))))))
+      (delete-file file))))
+
+(ert-deftest decknix-turn-ts--jsonl-without-timestamps-still-extracts ()
+  "An older transcript with no timestamps yields turns with nil times."
+  (let ((file (make-temp-file "decknix-turn-nots" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"q\"}]}}\n")
+            (insert "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"a\"}]}}\n"))
+          (let ((turns (decknix--agent-session-extract-all-turns-jsonl file)))
+            (should (= 1 (length turns)))
+            (should (string= "q" (car (nth 0 turns))))
+            (should-not (decknix--agent-turn-record-timestamp (nth 0 turns)))))
+      (delete-file file))))
+
+
+(ert-deftest decknix-turn-ts--separator-stamp-is-local-and-minute-precise ()
+  "The viewer renders UTC transcript times in local time, to the minute.
+Seconds and milliseconds are noise at the granularity of a turn, and the
+reader's question is whether a turn came before or after something else in
+their own day."
+  (require 'decknix-agent-context-viewer nil t)
+  (skip-unless (fboundp 'decknix--context-viewer-format-stamp))
+  (let ((out (decknix--context-viewer-format-stamp "2026-08-26T03:44:35.770Z")))
+    (should (string-match-p "2026-08-26" out))
+    (should (string-match-p "[0-9][0-9]:[0-9][0-9]\\'" out))
+    (should-not (string-match-p "35" out))))
+
+(ert-deftest decknix-turn-ts--separator-stamp-degrades-to-empty ()
+  "No timestamp, or an unparseable one, renders as before rather than breaking.
+Transcripts predating timestamps still open, and so does a provider whose
+field name has not been verified."
+  (require 'decknix-agent-context-viewer nil t)
+  (skip-unless (fboundp 'decknix--context-viewer-format-stamp))
+  (should (equal "" (decknix--context-viewer-format-stamp nil)))
+  (should (equal "" (decknix--context-viewer-format-stamp "")))
+  (should (equal "" (decknix--context-viewer-format-stamp 'not-a-string))))
+
+
 (provide 'decknix-agent-session-history-test)

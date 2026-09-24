@@ -80,6 +80,25 @@ read-only bottom window.  Use n/p to navigate, s to search."
 
 ;;; Rendering ----------------------------------------------------------
 
+(defun decknix--context-viewer-format-stamp (timestamp)
+  "Return TIMESTAMP rendered for a turn separator, or an empty string.
+
+Local time, because the question a reader is asking is \"was this before
+or after lunch\" and the transcript writes UTC (`...T03:44:35.770Z').
+Date and minute only: seconds and milliseconds are noise at the
+granularity of a turn.
+
+Returns \"\" rather than nil for anything unparseable, so a transcript
+predating timestamps -- or a provider whose field name we have not
+verified -- renders exactly as it did before rather than breaking the
+separator."
+  (if (not (stringp timestamp))
+      ""
+    (condition-case nil
+        (format "  %s" (format-time-string "%Y-%m-%d %H:%M"
+                                           (date-to-time timestamp)))
+      (error ""))))
+
 (defun decknix--context-viewer-render (cache)
   "Render all turns from CACHE into the current viewer buffer.
 Sets `decknix--context-viewer-turn-points' so navigation works."
@@ -92,14 +111,19 @@ Sets `decknix--context-viewer-turn-points' so navigation works."
       (let* ((num (1+ i))
              (user (car turn))
              (resp (cdr turn))
+             (stamp (and (fboundp 'decknix--agent-turn-record-timestamp)
+                         (decknix--agent-turn-record-timestamp turn)))
+             (when-str (if (fboundp 'decknix--context-viewer-format-stamp)
+                           (decknix--context-viewer-format-stamp stamp)
+                         ""))
+             (head (format "%d / %d%s" num total when-str))
              (sep (propertize
-                   (format "\n─── Turn %d / %d %s\n"
-                           num total
-                           (make-string
-                            (max 0 (- 52 (length (format "%d / %d" num total))))
-                            ?─))
+                   (format "\n─── Turn %s %s\n"
+                           head
+                           (make-string (max 0 (- 52 (length head))) ?─))
                    'face '(:inherit font-lock-comment-face :weight bold)
-                   'decknix-turn-number num)))
+                   'decknix-turn-number num
+                   'decknix-turn-timestamp stamp)))
         (aset pts i (point))
         (insert sep)
         (insert (propertize (format "\n❯ %s\n" user)

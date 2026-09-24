@@ -207,6 +207,20 @@ stepping, not only when jumping.
 ## 6. Sequencing
 
 1. Timestamps into turn records (unblocks everything else; smallest)
+   ✅ landed. Carried as a text property on the turn's user string, NOT as
+   a third field: a turn record is a `(USER . RESPONSE)` cons and the
+   resume primer, `asking`-flag restore, history extractor and viewer all
+   read it that way, so widening the shape would break four consumers for
+   a field only the viewer wants. A property is transparent to `string=`,
+   preserved by `insert`/`mapconcat`, and dropped harmlessly by
+   `substring-no-properties`. The stamp is the time of the line that
+   STARTS the turn, since a response accumulates across many later lines.
+   Separators now show local time to the minute.
+
+   Claude and pi only. The Auggie JSON path is deliberately unstamped:
+   there was no transcript on disk to verify a field name against, and
+   guessing one would have been an unverified claim about the format. Its
+   turns report nil, which renders exactly as before.
 2. Windowed loading (the performance win, and the largest behaviour
    change)
 3. Index + search-by-kind
