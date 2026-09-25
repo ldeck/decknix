@@ -125,6 +125,9 @@ enum WtAction {
         /// Use 'git branch -d' instead of '-D'
         #[arg(long)]
         safe_delete_branch: bool,
+        /// Pass --force to 'git worktree remove' (removes a dirty or locked worktree)
+        #[arg(long)]
+        force: bool,
         #[command(flatten)]
         filter: WtFilter,
     },
@@ -1755,7 +1758,7 @@ fn main() -> anyhow::Result<()> {
                         Ok(())
                     })?;
                 }
-                WtAction::Prune { apply, paths_file, safe_delete_branch, filter } => {
+                WtAction::Prune { apply, paths_file, safe_delete_branch, force, filter } => {
                     let compiled = compile_filter(&filter)?;
                     let mut registry = load_registry()?;
                     let sessions = get_active_sessions();
@@ -1769,6 +1772,7 @@ fn main() -> anyhow::Result<()> {
 
                     let mut repos_to_git_prune = HashSet::new();
                     let mut any_removed = false;
+                    let mut failed_removals: Vec<(String, String)> = Vec::new();
 
                     for entry in registry.iter_mut() {
                         if !entry.primary.exists() { continue; }
@@ -1800,13 +1804,32 @@ fn main() -> anyhow::Result<()> {
                                 path.display(), branch);
 
                             if apply {
-                                // 1. git worktree remove
-                                let _ = Command::new("git")
-                                    .args(["worktree", "remove", &path.to_string_lossy()])
-                                    .current_dir(&entry.primary)
-                                    .status();
+                                let mut remove_args = vec!["worktree", "remove"];
+                                if force {
+                                    remove_args.push("--force");
+                                }
+                                let path_arg = path.to_string_lossy().to_string();
+                                remove_args.push(&path_arg);
 
-                                // 2. git branch -D (or -d)
+                                let removed = Command::new("git")
+                                    .args(&remove_args)
+                                    .current_dir(&entry.primary)
+                                    .status()
+                                    .map(|s| s.success())
+                                    .unwrap_or(false);
+
+                                // Discarding this status let a refused removal
+                                // report success, delete the branch, and drop the
+                                // registry entry while the worktree stayed on disk.
+                                if !removed {
+                                    eprintln!("\u{26a0}\u{fe0f}  git worktree remove refused {} -- leaving branch {} and the registry entry alone{}",
+                                        path.display(),
+                                        branch,
+                                        if force { "" } else { " (retry with --force)" });
+                                    failed_removals.push((entry.repo.clone(), branch.clone()));
+                                    continue;
+                                }
+
                                 let branch_flag = if safe_delete_branch { "-d" } else { "-D" };
                                 let _ = Command::new("git")
                                     .args(["branch", branch_flag, &branch])
@@ -1818,6 +1841,15 @@ fn main() -> anyhow::Result<()> {
                             }
                             repos_to_git_prune.insert(entry.primary.clone());
                         }
+                    }
+
+                    if apply && !failed_removals.is_empty() {
+                        eprintln!();
+                        eprintln!("\u{26a0}\u{fe0f}  {} worktree(s) were NOT removed:", failed_removals.len());
+                        for (repo, branch) in &failed_removals {
+                            eprintln!("    {} [{}]", repo, branch);
+                        }
+                        eprintln!("Their branches and registry entries are untouched. Retry with --force.");
                     }
 
                     if apply {

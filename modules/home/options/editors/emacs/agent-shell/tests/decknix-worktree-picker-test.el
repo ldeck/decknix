@@ -421,5 +421,47 @@ on the keymap, only `remove' on the menu, etc.)."
     (should (memq 'decknix-worktree-picker-prune commands))
     (should (memq 'decknix-worktree-picker-remove commands))))
 
-(provide 'decknix-worktree-picker-test)
+
 ;;; decknix-worktree-picker-test.el ends here
+
+;; -- primary checkout detection ---------------------------------------
+;;
+;; `decknix wt audit --json' reports a repo's `primary' alongside its
+;; worktrees, so the picker listed main working trees as prune candidates:
+;; 9 of 21 rows on 2026-09-25, including /Users/ldeck/tools/decknix and
+;; two service checkouts on `main'. Marking one and pruning attempted
+;; `git worktree remove' on a main working tree.
+
+(ert-deftest decknix-wt-primary--matches-the-repos-primary ()
+  "The primary checkout is identified by path, not by name."
+  (should (decknix-worktree-picker--primary-p
+           "/Users/ldeck/tools/decknix" "/Users/ldeck/tools/decknix"))
+  (should (decknix-worktree-picker--primary-p
+           "/Users/ldeck/tools/decknix/" "/Users/ldeck/tools/decknix")))
+
+(ert-deftest decknix-wt-primary--a-sibling-worktree-is-not-primary ()
+  "A worktree beside the primary, sharing its name prefix, is not primary.
+
+decknix has `decknix-spec-sidebar-ret' beside `decknix', so a prefix or
+name heuristic would mislabel it. It is also why the `-worktrees/' path
+convention cannot be used as the test: real worktrees do not all follow
+it."
+  (should-not (decknix-worktree-picker--primary-p
+               "/Users/ldeck/tools/decknix-spec-sidebar-ret"
+               "/Users/ldeck/tools/decknix")))
+
+(ert-deftest decknix-wt-primary--conventional-worktree-is-not-primary ()
+  "A worktree under `<repo>-worktrees/' is not the primary."
+  (should-not (decknix-worktree-picker--primary-p
+               "/Users/ldeck/Code/nurturecloud/connect-to-core-worktrees/flake-outputs"
+               "/Users/ldeck/Code/nurturecloud/connect-to-core")))
+
+(ert-deftest decknix-wt-primary--missing-or-blank-input-is-not-primary ()
+  "Absent data must not cause a row to be treated as the primary.
+Hiding a real worktree is worse than showing a primary: the user can see
+the latter, but a silently dropped row looks like it was already pruned."
+  (should-not (decknix-worktree-picker--primary-p nil "/a"))
+  (should-not (decknix-worktree-picker--primary-p "/a" nil))
+  (should-not (decknix-worktree-picker--primary-p "/a" "")))
+
+(provide 'decknix-worktree-picker-test)
