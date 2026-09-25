@@ -4451,6 +4451,7 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; the only time the feed mentions it: a merge is indistinguishable
         ;; from a disappearance.  Harvesting on each refresh is what lets a
         ;; merged worktree keep its number and its URL afterwards.
+        (require 'decknix-hub-pr-memory)
         (with-eval-after-load 'decknix-agent-shell-hub
           (decknix--hub-pr-memory-restore)
           (advice-add 'decknix--hub-refresh-wip :after
@@ -4472,6 +4473,7 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; (`agent-shell-chat--schedule-relabel'), so a resume can leave a
         ;; correct buffer with an unlabelled prompt for a while, and that
         ;; window is exactly when the user looks.
+        (require 'decknix-agent-prompt-probe)
         (declare-function decknix-agent-prompt-probe-record
                           "decknix-agent-prompt-probe" (buffer stage))
         (defun decknix--agent-prompt-probe-resume (shell-buf &rest _)
