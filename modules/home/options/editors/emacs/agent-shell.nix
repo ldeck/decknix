@@ -2016,6 +2016,23 @@ let
     ];
   };
 
+  # Worktree staleness for the sidebar.  `wt audit --json' computes merged
+  # and orphan from git with no network, but the sidebar could not reach it:
+  # placeholder rows come from the registry, which has no such flags, and the
+  # placeholder render path is deliberately disk-free.  So the audit is cached
+  # like every other hub fact and read from cache; nil means UNKNOWN, never
+  # "not stale", so a row is shown until something proves it can be hidden.
+  # Pure predicate + parser carved + ERT-tested, including against the real
+  # audit output; the refresh hook lives in the heredoc per AGENTS.md Rule 2.
+  decknix-hub-wt-stale-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-wt-stale";
+    src = ./agent-shell/hub-wt-stale;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-wt-stale-test.el"
+    ];
+  };
+
   # Review threads as data: the per-thread detail an Emacs review surface
   # renders, as opposed to the counts the sidebar glyphs need.  The unit is a
   # THREAD (file, line, resolution, ordered conversation) because that is what
@@ -3265,6 +3282,7 @@ in
           decknix-agent-prompt-probe-el
           decknix-hub-pr-memory-el
           decknix-review-threads-el
+          decknix-hub-wt-stale-el
           decknix-agent-welcome-el
           decknix-agent-turn-signals-el
           decknix-agent-heartbeat-watch-el

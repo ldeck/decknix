@@ -171,6 +171,8 @@
                   (wip-data &optional now))
 (declare-function decknix--hub-pr-memory-save "decknix-hub-pr-memory" ())
 (declare-function decknix--hub-pr-memory-restore "decknix-hub-pr-memory" ())
+(declare-function decknix--hub-wt-hidden-p "decknix-hub-wt-stale" (path))
+(declare-function decknix--hub-wt-audit-refresh-if-stale "decknix-hub-wt-stale" ())
 
 ;; Forward defvars for heredoc-resident toggle / cache state.
 (defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
@@ -3511,6 +3513,8 @@ than the cutoff (by directory mtime) are filtered out."
                                      (alist-get 'prs repo-entry)))))
         (when repo
           (puthash repo branches existing))))
+    (when (fboundp 'decknix--hub-wt-audit-refresh-if-stale)
+      (decknix--hub-wt-audit-refresh-if-stale))
     (dolist (clone (decknix-hub-worktree-clones))
       (let* ((repo (car clone))
              (primary (cdr clone))
@@ -3536,6 +3540,11 @@ than the cutoff (by directory mtime) are filtered out."
                                         live-set))))
             (when (and branch path
                        (not (member branch taken))
+                       ;; Provably stale per `wt audit': merged or orphaned,
+                       ;; with no live session and nothing uncommitted.  Nil
+                       ;; facts mean unknown and keep the row.
+                       (not (and (fboundp 'decknix--hub-wt-hidden-p)
+                                 (decknix--hub-wt-hidden-p path)))
                        ;; A remembered-merged placeholder obeys the SAME
                        ;; deploy-gated rule as a real merged WIP row
                        ;; (`decknix--hub-wip-terminal-visible-p'), rather
