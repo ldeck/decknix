@@ -115,6 +115,67 @@ a merged PR staying visible as `wip`.
 Both are "WIP shows work that has left you". They touch the same rows and
 want designing together; that spec's step 5 folds these steps in.
 
+## 4.3 Hiding stale worktrees needs no GitHub call
+
+Reported 2026-09-26 after a switch: the sidebar shows 67 non-primary
+worktrees, most for PRs long merged or abandoned, every one labelled `wip`.
+
+Two separate causes, and the second is cheaper to fix than it looks.
+
+**The label.** `decknix--hub-pr-memory` only learns a branch's PR while that
+PR is OPEN in the WIP feed. It began populating at the switch and holds 11
+entries against 67 worktrees, so everything older has no remembered PR and
+correctly falls through to `wip`. Accurate about what is known; useless to
+the reader.
+
+**The visibility.** `decknix--hub-pr-memory-row-visible-p` returns visible
+when there is no memory, by design, so the deploy-gated terminal filter never
+engages for those rows.
+
+A GitHub backfill would fix both and is not required for the common case,
+because `decknix wt audit --json` already computes staleness from git alone:
+
+```
+non-primary worktrees                 67
+merged (git-computed)                  6
+orphan (git-computed)                 28
+active session                         1
+merged-or-orphan, no live session     32
+```
+
+`merged` and `orphan` come from `is_merged' / `is_orphan' in the CLI, which
+are git operations, no network. 32 rows are provably stale with data that
+exists today.
+
+The blocker is that the sidebar cannot see it. Placeholder rows are built
+from the worktree registry (`worktrees.el'), which carries no merged/orphan
+flags; only the picker reads `wt audit'. And the placeholder render path is
+deliberately disk-free -- it exists so a worktree appears at t=0 -- so it
+must not shell out per row.
+
+So this wants the same shape as every other hub fact: a cached async fetch.
+Run `wt audit --json' on the hub cadence, cache it beside the other hub
+state, and have the placeholder path read the cache. The filter itself is
+then a pure predicate over (merged, orphan, active, dirty) and testable
+without a live tree.
+
+Care needed on two points. A DIRTY worktree should not be hidden even when
+merged: 7 are dirty, and hiding uncommitted work is how it gets lost. And an
+ACTIVE session's worktree should never be hidden regardless of PR state,
+which is why the count above excludes it.
+
+### 4.3.1 Cleanup already exists, two keystrokes deep
+
+The other half of the report -- "it should be simple to trigger cleaning" --
+is mostly already built. From a WIP row, `W' opens the worktree submenu and
+`x' prunes; `X' removes the directory only. The prune path now checks the
+removal status and offers `[f]orce' (see the 2026-09-25 fix), so a refused
+removal no longer reports success.
+
+What is missing is discoverability and bulk. A row-level `x' on the WIP row
+itself, or a "prune all stale" verb driven by the same predicate as the
+filter, would turn 32 rows into one confirmation rather than 32 visits.
+
 ## 5. Open questions
 
 1. **When does a merged worktree stop being shown at all?** This overlaps
