@@ -464,4 +464,50 @@ the latter, but a silently dropped row looks like it was already pruned."
   (should-not (decknix-worktree-picker--primary-p "/a" nil))
   (should-not (decknix-worktree-picker--primary-p "/a" "")))
 
+;; -- primary-branch rows ----------------------------------------------
+;;
+;; Distinct from the primary CHECKOUT: `decknix wt audit --json' reported 6
+;; worktrees outside their repo's primary path but still tracking `main'
+;; (nc-helix/helix, oneroof-integration, trademe-integration and others on
+;; 2026-09-26). A primary branch is never a PR branch, so those rows are
+;; noise in a PR-oriented listing, and hiding them needs a different test
+;; than the path comparison.
+
+(ert-deftest decknix-wt-primary-branch--recognises-the-usual-names ()
+  "main, master and the other configured names all count."
+  (should (decknix-worktree-picker--primary-branch-p "main"))
+  (should (decknix-worktree-picker--primary-branch-p "master"))
+  (should (decknix-worktree-picker--primary-branch-p "trunk")))
+
+(ert-deftest decknix-wt-primary-branch--includes-development ()
+  "`upside' defaults to `development', not `main'.
+A two-name list would leave the monolith's checkouts unfilterable, which is
+why this is a defcustom rather than a hardcoded pair."
+  (should (decknix-worktree-picker--primary-branch-p "development"))
+  (should (member "development" decknix-worktree-picker-primary-branches)))
+
+(ert-deftest decknix-wt-primary-branch--is-case-insensitive ()
+  "Branch case should not decide whether a row is filtered."
+  (should (decknix-worktree-picker--primary-branch-p "Main"))
+  (should (decknix-worktree-picker--primary-branch-p "MASTER")))
+
+(ert-deftest decknix-wt-primary-branch--a-feature-branch-is-not-primary ()
+  "A ticket branch must never be hidden by this filter."
+  (should-not (decknix-worktree-picker--primary-branch-p "CONN-539-jlink"))
+  (should-not (decknix-worktree-picker--primary-branch-p "flake-outputs"))
+  (should-not (decknix-worktree-picker--primary-branch-p "main-ish"))
+  (should-not (decknix-worktree-picker--primary-branch-p "feature/main")))
+
+(ert-deftest decknix-wt-primary-branch--respects-the-custom-list ()
+  "Rebinding the list changes what is treated as primary."
+  (let ((decknix-worktree-picker-primary-branches '("release")))
+    (should (decknix-worktree-picker--primary-branch-p "release"))
+    (should-not (decknix-worktree-picker--primary-branch-p "main"))))
+
+(ert-deftest decknix-wt-primary-branch--degenerate-input ()
+  "A nil branch is not primary."
+  (should-not (decknix-worktree-picker--primary-branch-p nil))
+  (should-not (decknix-worktree-picker--primary-branch-p "")))
+
+
 (provide 'decknix-worktree-picker-test)

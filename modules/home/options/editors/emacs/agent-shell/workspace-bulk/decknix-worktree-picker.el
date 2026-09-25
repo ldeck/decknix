@@ -32,6 +32,20 @@
 The audit reports a repo's primary alongside its worktrees, so without
 this the picker offers main working trees as prune candidates.")
 
+(defcustom decknix-worktree-picker-primary-branches
+  '("main" "master" "development" "develop" "trunk")
+  "Branch names treated as a repo's primary branch.
+`upside' defaults to `development' rather than `main', so a two-name list
+would leave the monolith's checkouts unfilterable."
+  :type '(repeat string)
+  :group 'decknix)
+
+(defvar decknix-worktree-picker--hide-primary-branch nil
+  "When non-nil, omit rows whose branch is a primary branch.
+Distinct from `decknix-worktree-picker--hide-primary': a worktree can sit
+outside the primary checkout while still tracking `main', which is never a
+PR branch and so is noise in a PR-oriented listing.")
+
 (defvar decknix-wt-prune-safe-branch-delete nil
   "When non-nil, use `git branch -d' instead of `-D' during prune sweep.")
 
@@ -156,6 +170,8 @@ placeholder so the column reads as `no PR' at a glance."
 
             (when (and
                    (not (and decknix-worktree-picker--hide-primary primary-checkout))
+                   (not (and decknix-worktree-picker--hide-primary-branch
+                             (decknix-worktree-picker--primary-branch-p branch)))
                    ;; Inclusion toggles (OR'd): show rows that match at
                    ;; least one active toggle.  If every toggle is off
                    ;; the picker is empty by design -- use the toggle
@@ -204,6 +220,13 @@ misses real worktrees and mislabels them."
        (not (string-empty-p primary))
        (string= (file-name-as-directory (expand-file-name abs-path))
                 (file-name-as-directory (expand-file-name primary)))))
+
+(defun decknix-worktree-picker--primary-branch-p (branch)
+  "Return non-nil when BRANCH is a primary branch name."
+  (and (stringp branch)
+       (member (downcase branch)
+               (mapcar #'downcase decknix-worktree-picker-primary-branches))
+       t))
 
 (defun decknix-worktree-picker--age-sort (a b)
   "Numeric sort predicate for the Age column.
@@ -309,6 +332,7 @@ want to read it without expanding everything."
     (define-key map (kbd "x") #'decknix-worktree-picker-prune) ;; Default x to prune sweep now
     (define-key map (kbd "X") #'decknix-worktree-picker-remove) ;; X for legacy
     (define-key map (kbd "f P") #'decknix-worktree-picker-toggle-primary)
+    (define-key map (kbd "f B") #'decknix-worktree-picker-toggle-primary-branch)
     (define-key map (kbd "f M") #'decknix-worktree-picker-toggle-merged)
     (define-key map (kbd "f C") #'decknix-worktree-picker-toggle-closed)
     (define-key map (kbd "f S") #'decknix-worktree-picker-toggle-session)
@@ -368,6 +392,13 @@ want to read it without expanding everything."
      ["Include orphans"          decknix-worktree-picker-toggle-orphans
       :style toggle :selected decknix-worktree-picker--filter-orphans])
     "--"
+    ["Hide primary checkouts"   decknix-worktree-picker-toggle-primary
+     :style toggle :selected decknix-worktree-picker--hide-primary
+     :help "Omit each repo's own main working tree, which cannot be pruned"]
+    ["Hide primary-branch rows"  decknix-worktree-picker-toggle-primary-branch
+     :style toggle :selected decknix-worktree-picker--hide-primary-branch
+     :help "Omit worktrees tracking main/master/development -- never PR branches"]
+    "--"
     ["By repo substring..."     decknix-worktree-picker-filter-repo
      :help "Restrict rows to repos whose name matches a substring"]
     ["By minimum age (days)..." decknix-worktree-picker-filter-min-age
@@ -402,7 +433,11 @@ view may look empty."
                 (and (integerp decknix-worktree-picker--filter-min-age)
                      (> decknix-worktree-picker--filter-min-age 0)
                      (format "age>=%dd"
-                             decknix-worktree-picker--filter-min-age))))))
+                             decknix-worktree-picker--filter-min-age))
+                (and decknix-worktree-picker--hide-primary
+                     "no-primary")
+                (and decknix-worktree-picker--hide-primary-branch
+                     "no-main")))))
     (concat
      (propertize " Worktree Picker " 'face '(:background "#3d5a80" :foreground "white"))
      "  "
@@ -412,6 +447,8 @@ view may look empty."
      (propertize "g" 'face 'font-lock-keyword-face) " refresh  "
      (propertize "f r" 'face 'font-lock-keyword-face) " repo  "
      (propertize "f a" 'face 'font-lock-keyword-face) " age  "
+     (propertize "f P" 'face 'font-lock-keyword-face) " primary  "
+     (propertize "f B" 'face 'font-lock-keyword-face) " main-br  "
      (propertize "f x" 'face 'font-lock-keyword-face) " clear  "
      (propertize "=" 'face 'font-lock-keyword-face) " fit-all  "
      (propertize "+" 'face 'font-lock-keyword-face) " fit-col"
@@ -566,6 +603,13 @@ If PATHS is nil, runs a general sweep of all stale worktrees."
                   (revert-buffer))))))
       (when paths-file
         (delete-file paths-file)))))
+
+(defun decknix-worktree-picker-toggle-primary-branch ()
+  "Toggle whether rows on a primary branch are listed."
+  (interactive)
+  (setq decknix-worktree-picker--hide-primary-branch
+        (not decknix-worktree-picker--hide-primary-branch))
+  (revert-buffer))
 
 (defun decknix-worktree-picker-toggle-primary ()
   "Toggle whether primary checkouts are listed."
