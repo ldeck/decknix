@@ -27,6 +27,11 @@
 (defvar decknix--hub-wip)
 (defvar decknix--hub-worktree-cache)
 
+(defvar decknix-worktree-picker--hide-primary nil
+  "When non-nil, omit each repo's primary checkout from the listing.
+The audit reports a repo's primary alongside its worktrees, so without
+this the picker offers main working trees as prune candidates.")
+
 (defvar decknix-wt-prune-safe-branch-delete nil
   "When non-nil, use `git branch -d' instead of `-D' during prune sweep.")
 
@@ -130,11 +135,14 @@ placeholder so the column reads as `no PR' at a glance."
          (entries nil))
     (dolist (repo-report report)
       (let ((repo-key (cdr (assoc 'repo repo-report)))
+            (repo-primary (cdr (assoc 'primary repo-report)))
             (worktrees (cdr (assoc 'worktrees repo-report))))
         (dolist (wt worktrees)
           (let* ((branch (cdr (assoc 'branch wt)))
                  (path (cdr (assoc 'path wt)))
                  (abs-path (expand-file-name path))
+                 (primary-checkout
+                  (decknix-worktree-picker--primary-p abs-path repo-primary))
                  (dirty (cdr (assoc 'dirty wt)))
                  (orphan (cdr (assoc 'orphan wt)))
                  (active (cdr (assoc 'active wt)))
@@ -147,6 +155,7 @@ placeholder so the column reads as `no PR' at a glance."
                  (closed (string= pr-state "closed")))
 
             (when (and
+                   (not (and decknix-worktree-picker--hide-primary primary-checkout))
                    ;; Inclusion toggles (OR'd): show rows that match at
                    ;; least one active toggle.  If every toggle is off
                    ;; the picker is empty by design -- use the toggle
@@ -184,6 +193,17 @@ placeholder so the column reads as `no PR' at a glance."
                            (format "%dd" age)))
                     entries))))))
     (nreverse entries)))
+
+(defun decknix-worktree-picker--primary-p (abs-path primary)
+  "Return non-nil when ABS-PATH is the repo's PRIMARY checkout.
+Compares resolved paths rather than guessing from the directory name: a
+worktree need not live under a `-worktrees/' parent (decknix itself has
+`decknix-spec-sidebar-ret' beside its primary), so a name heuristic both
+misses real worktrees and mislabels them."
+  (and (stringp abs-path) (stringp primary)
+       (not (string-empty-p primary))
+       (string= (file-name-as-directory (expand-file-name abs-path))
+                (file-name-as-directory (expand-file-name primary)))))
 
 (defun decknix-worktree-picker--age-sort (a b)
   "Numeric sort predicate for the Age column.
@@ -288,6 +308,7 @@ want to read it without expanding everything."
     (define-key map (kbd "p") #'decknix-worktree-picker-prune)
     (define-key map (kbd "x") #'decknix-worktree-picker-prune) ;; Default x to prune sweep now
     (define-key map (kbd "X") #'decknix-worktree-picker-remove) ;; X for legacy
+    (define-key map (kbd "f P") #'decknix-worktree-picker-toggle-primary)
     (define-key map (kbd "f M") #'decknix-worktree-picker-toggle-merged)
     (define-key map (kbd "f C") #'decknix-worktree-picker-toggle-closed)
     (define-key map (kbd "f S") #'decknix-worktree-picker-toggle-session)
@@ -517,13 +538,17 @@ If PATHS is nil, runs a general sweep of all stale worktrees."
                            (insert (mapconcat #'identity paths "\n")))
                          tf)))
          (args (list "wt" "prune"))
-         (prompt (concat summary "[d]ry run, [c]onfirm, [q]uit ")))
+         (prompt (concat summary "[d]ry run, [c]onfirm, [f]orce, [q]uit ")))
     (when paths-file
       (setq args (append args (list "--paths-file" paths-file))))
     (when decknix-wt-prune-safe-branch-delete
       (setq args (append args (list "--safe-delete-branch"))))
 
-    (let ((choice (read-char-choice prompt '(?d ?c ?q))))
+    (let ((choice (read-char-choice prompt '(?d ?c ?f ?q))))
+      (when (eq choice ?f)
+        (if (yes-or-no-p "Force removal? This discards uncommitted work in those worktrees. ")
+            (setq args (append args '("--force")))
+          (setq choice ?q)))
       (pcase choice
         (?q (message "Aborted"))
         (?d (let ((out (shell-command-to-string (mapconcat #'identity (append '("decknix") args) " "))))
@@ -533,7 +558,7 @@ If PATHS is nil, runs a general sweep of all stale worktrees."
                   (insert out)
                   (goto-char (point-min))
                   (display-buffer (current-buffer))))))
-        (?c (let ((final-args (append args '("--apply"))))
+        ((or ?c ?f) (let ((final-args (append args '("--apply"))))
               (message "Pruning...")
               (let ((out (shell-command-to-string (mapconcat #'identity (append '("decknix") final-args) " "))))
                 (message "Prune complete:\n%s" (string-trim out))
@@ -541,6 +566,13 @@ If PATHS is nil, runs a general sweep of all stale worktrees."
                   (revert-buffer))))))
       (when paths-file
         (delete-file paths-file)))))
+
+(defun decknix-worktree-picker-toggle-primary ()
+  "Toggle whether primary checkouts are listed."
+  (interactive)
+  (setq decknix-worktree-picker--hide-primary
+        (not decknix-worktree-picker--hide-primary))
+  (revert-buffer))
 
 (defun decknix-worktree-picker-toggle-merged ()
   "Toggle merged filter."
