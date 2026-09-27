@@ -166,6 +166,25 @@ Falls back to the symbol name when :label is absent."
   "Return whether provider ID supports the --workspace-root flag."
   (plist-get (decknix-agent-require-provider id) :supports-workspace-root))
 
+(defcustom decknix-agent-provider-default-models
+  '((claude-code . "opus[1m]"))
+  "Model pinned for a NEW session, per provider id.
+
+Consulted only when no per-conversation model is saved, so an explicit
+`C-c C-v' choice and a resumed conversation's own pin both still win.
+
+`opus[1m]' is the id the Claude adapter labels \"Opus 5.5\"; there is no
+`claude-opus-5-5' id -- CLI 2.1.258 carries `claude-opus-5' and no
+`claude-opus-5-5' string at all. An id absent from a session's advertised
+options is skipped by `decknix--agent-model-replay-reconcile', so a value
+here must be one the adapter actually offers."
+  :type '(alist :key-type symbol :value-type string)
+  :group 'decknix)
+
+(defun decknix-agent-provider-default-model (id)
+  "Return the configured default model for provider ID, or nil."
+  (alist-get id decknix-agent-provider-default-models))
+
 (defun decknix-agent-provider-model-launch-flag (id)
   "Return the CLI flag provider ID uses to pin a model at launch, or nil.
 When nil, the provider does not accept a model flag on the command
@@ -319,10 +338,15 @@ after the session reports ready."
          (base (funcall make-fn))
          ;; Launch-env model pin ("<VAR>=<model>"), or nil unless the provider
          ;; declares `:model-launch-env' and a non-empty MODEL is supplied.
+         (effective-model
+          (if (and (stringp model) (not (string-empty-p model)))
+              model
+            (decknix-agent-provider-default-model provider-id)))
          (model-env
-          (let ((var (and (stringp model) (not (string-empty-p model))
+          (let ((var (and (stringp effective-model)
+                          (not (string-empty-p effective-model))
                           (decknix-agent-provider-model-launch-env provider-id))))
-            (and (stringp var) (format "%s=%s" var model)))))
+            (and (stringp var) (format "%s=%s" var effective-model)))))
     (when (and (stringp mode)
                (not (string-empty-p mode))
                (decknix-agent-provider-session-modes-p provider-id))
