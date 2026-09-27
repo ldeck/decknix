@@ -54,6 +54,10 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'json)
+
+(declare-function decknix-hub-worktree-clones "decknix-agent-shell-hub" ())
+(declare-function decknix-hub-worktree-list "decknix-agent-shell-hub" (repo))
 
 (defvar decknix--hub-pr-memory (make-hash-table :test 'equal)
   "Last-known PR per branch: KEY -> plist (:number :url :repo :branch :seen).
@@ -181,6 +185,139 @@ reused branch replaces the old association on the next poll."
       (error
        (message "hub-pr-memory: restore failed: %s"
                 (error-message-string err))))))
+
+;; --- backfill for branches whose PR already left the feed -------------
+;;
+;; `remember' only learns while a PR is OPEN, so anything merged or closed
+;; before this ran has no entry and its row falls back to `wip'. That is not an
+;; edge case: the house default is REBASE merge, which replays commits onto the
+;; base as new SHAs, so a merged branch's tip is never an ancestor of the base
+;; and no git-side check can see it either.
+;;
+;; So ask GitHub once per unknown branch. Identity only, as ever: the state is
+;; resolved afterwards through the URL-keyed cache.
+
+(defcustom decknix-hub-pr-memory-backfill-parallel 4
+  "How many `gh' queries the backfill runs at once."
+  :type 'integer
+  :group 'decknix)
+
+(defun decknix--hub-pr-memory-parse-gh-pr (json-string)
+  "Return (NUMBER . URL) from a `gh pr list --json number,url' payload, or nil.
+
+Nil for an empty list, which is how \"this branch never had a PR\" arrives and
+must stay distinct from a failed query -- recording nothing on failure is
+right, recording a wrong association is not."
+  (let ((parsed (ignore-errors
+                  (json-parse-string json-string
+                                     :object-type 'alist
+                                     :array-type 'list
+                                     :null-object nil
+                                     :false-object nil))))
+    (when (and (listp parsed) parsed)
+      (let* ((first (car parsed))
+             (number (alist-get 'number first))
+             (url (alist-get 'url first)))
+        (when (and number url) (cons number url))))))
+
+(defun decknix--hub-pr-memory-record (repo branch number url)
+  "Record NUMBER and URL against BRANCH in REPO."
+  (let ((key (decknix--hub-pr-memory-key repo branch)))
+    (when (and key number url)
+      (puthash key (list :number number :url url
+                         :repo (downcase repo) :branch branch
+                         :seen (float-time))
+               decknix--hub-pr-memory)
+      t)))
+
+(defun decknix--hub-pr-memory-unknown-branches ()
+  "Return ((REPO . BRANCH) ...) for worktree branches with no remembered PR."
+  (let (out)
+    (dolist (clone (decknix-hub-worktree-clones))
+      (let ((repo (car clone))
+            (primary (cdr clone)))
+        (dolist (wt (decknix-hub-worktree-list repo))
+          (let ((branch (car wt))
+                (path (cdr wt)))
+            (when (and branch path
+                       (not (and primary
+                                 (string=
+                                  (file-name-as-directory (expand-file-name path))
+                                  (file-name-as-directory (expand-file-name primary)))))
+                       (not (decknix--hub-pr-memory-lookup repo branch)))
+              (push (cons repo branch) out))))))
+    (nreverse out)))
+
+(defvar decknix--hub-pr-memory-backfill-queue nil)
+(defvar decknix--hub-pr-memory-backfill-inflight 0)
+(defvar decknix--hub-pr-memory-backfill-total 0)
+(defvar decknix--hub-pr-memory-backfill-found 0)
+
+(defun decknix--hub-pr-memory-backfill-finish ()
+  "Persist and report once the queue has drained."
+  (decknix--hub-pr-memory-save)
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (ignore-errors (agent-shell-workspace-sidebar-refresh)))
+  (message "PR memory: recorded %d of %d branch(es)"
+           decknix--hub-pr-memory-backfill-found
+           decknix--hub-pr-memory-backfill-total))
+
+(defun decknix--hub-pr-memory-backfill-sentinel (repo branch buffer event)
+  "Record REPO/BRANCH from BUFFER when the query finished, then pump."
+  (when (string-match-p "\\`\\(finished\\|exited\\|deleted\\|failed\\)" event)
+    (setq decknix--hub-pr-memory-backfill-inflight
+          (1- decknix--hub-pr-memory-backfill-inflight))
+    (when (buffer-live-p buffer)
+      (let ((hit (decknix--hub-pr-memory-parse-gh-pr
+                  (with-current-buffer buffer (buffer-string)))))
+        (when (and hit (decknix--hub-pr-memory-record
+                        repo branch (car hit) (cdr hit)))
+          (setq decknix--hub-pr-memory-backfill-found
+                (1+ decknix--hub-pr-memory-backfill-found))))
+      (kill-buffer buffer))
+    (decknix--hub-pr-memory-backfill-pump)))
+
+(defun decknix--hub-pr-memory-backfill-pump ()
+  "Launch queries up to the parallel limit, or finish when drained."
+  (while (and decknix--hub-pr-memory-backfill-queue
+              (< decknix--hub-pr-memory-backfill-inflight
+                 decknix-hub-pr-memory-backfill-parallel))
+    (let* ((entry (pop decknix--hub-pr-memory-backfill-queue))
+           (repo (car entry))
+           (branch (cdr entry))
+           (buffer (generate-new-buffer " *decknix-pr-backfill*")))
+      (setq decknix--hub-pr-memory-backfill-inflight
+            (1+ decknix--hub-pr-memory-backfill-inflight))
+      (make-process
+       :name "decknix-pr-backfill"
+       :buffer buffer
+       :noquery t
+       :command (list "gh" "pr" "list" "--repo" repo "--head" branch
+                      "--state" "all" "--limit" "1" "--json" "number,url")
+       :sentinel (lambda (_proc event)
+                   (decknix--hub-pr-memory-backfill-sentinel
+                    repo branch buffer event)))))
+  (when (and (null decknix--hub-pr-memory-backfill-queue)
+             (zerop decknix--hub-pr-memory-backfill-inflight)
+             (> decknix--hub-pr-memory-backfill-total 0))
+    (setq decknix--hub-pr-memory-backfill-total 0)
+    (decknix--hub-pr-memory-backfill-finish)))
+
+(defun decknix-hub-pr-memory-backfill ()
+  "Learn the PR for every worktree branch that has no remembered one.
+
+Queries `gh pr list --state all' per branch, so a merged or closed PR is
+found even though it left the open feed."
+  (interactive)
+  (let ((pending (decknix--hub-pr-memory-unknown-branches)))
+    (if (null pending)
+        (message "PR memory: nothing to backfill")
+      (setq decknix--hub-pr-memory-backfill-queue pending
+            decknix--hub-pr-memory-backfill-inflight 0
+            decknix--hub-pr-memory-backfill-found 0
+            decknix--hub-pr-memory-backfill-total (length pending))
+      (message "PR memory: backfilling %d branch(es)..." (length pending))
+      (decknix--hub-pr-memory-backfill-pump))))
 
 (provide 'decknix-hub-pr-memory)
 ;;; decknix-hub-pr-memory.el ends here

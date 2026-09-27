@@ -167,5 +167,48 @@ Open question 2 of the spec: a second visibility rule would drift from
   "Never hide a row because its state has not loaded yet."
   (should (decknix--hub-pr-memory-row-visible-p '(:number 41) nil)))
 
+;; -- backfill for branches whose PR left the feed ----------------------
+;;
+;; `remember' only learns while a PR is OPEN. That misses every merged branch,
+;; and not as an edge case: the house default is REBASE merge, which replays
+;; commits onto the base as new SHAs, so a merged branch's tip is never an
+;; ancestor of the base. Measured 2026-09-28: 11 of 34 git-unmerged worktree
+;; branches had MERGED PRs and 7 had CLOSED ones, all rendering as `wip'.
+
+(ert-deftest decknix-pr-memory-gh--parses-the-first-pr ()
+  "A `gh pr list --json number,url' payload yields (NUMBER . URL)."
+  (should (equal '(20 . "https://github.com/o/r/pull/20")
+                 (decknix--hub-pr-memory-parse-gh-pr
+                  "[{\"number\":20,\"url\":\"https://github.com/o/r/pull/20\"}]"))))
+
+(ert-deftest decknix-pr-memory-gh--no-pr-is-nil-not-an-error ()
+  "An empty list means the branch never had a PR.
+That must stay distinct from a failed query: recording nothing on failure is
+right, recording a wrong association is not."
+  (should-not (decknix--hub-pr-memory-parse-gh-pr "[]"))
+  (should-not (decknix--hub-pr-memory-parse-gh-pr ""))
+  (should-not (decknix--hub-pr-memory-parse-gh-pr "not json"))
+  (should-not (decknix--hub-pr-memory-parse-gh-pr "[{\"number\":20}]")))
+
+(ert-deftest decknix-pr-memory-record--is-then-found-by-lookup ()
+  "A recorded association survives for the label to resolve against."
+  (let ((decknix--hub-pr-memory (make-hash-table :test 'equal)))
+    (should (decknix--hub-pr-memory-record
+             "NC-Helix/platform-cli" "feat/nix-build-backend" 1
+             "https://github.com/nc-helix/platform-cli/pull/1"))
+    (let ((entry (decknix--hub-pr-memory-lookup
+                  "nc-helix/platform-cli" "feat/nix-build-backend")))
+      (should entry)
+      (should (equal 1 (plist-get entry :number))))))
+
+(ert-deftest decknix-pr-memory-record--rejects-incomplete-input ()
+  "Without both a number and a URL there is nothing worth remembering."
+  (let ((decknix--hub-pr-memory (make-hash-table :test 'equal)))
+    (should-not (decknix--hub-pr-memory-record "o/r" "b" nil "u"))
+    (should-not (decknix--hub-pr-memory-record "o/r" "b" 1 nil))
+    (should-not (decknix--hub-pr-memory-record nil "b" 1 "u"))
+    (should (zerop (hash-table-count decknix--hub-pr-memory)))))
+
+
 (provide 'decknix-hub-pr-memory-test)
 ;;; decknix-hub-pr-memory-test.el ends here
