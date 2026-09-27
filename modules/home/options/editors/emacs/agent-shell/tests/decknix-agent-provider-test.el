@@ -368,4 +368,31 @@ overriding the real default it ships."
            (m (alist-get :default-session-mode-id cfg)))
       (should (equal "auto" (if (functionp m) (funcall m) m))))))
 
+;; -- default model for a new session ----------------------------------
+;;
+;; A new session supplies no model, so nothing pinned ANTHROPIC_MODEL and the
+;; adapter chose its own default. The fallback applies only when no
+;; per-conversation model is saved, so an explicit `C-c C-v' choice and a
+;; resumed pin both still win.
+
+(ert-deftest decknix-provider-default-model--claude-defaults-to-opus-5-5 ()
+  "Claude's default is the id the adapter labels Opus 5.5.
+
+`opus[1m]', not `claude-opus-5-5': that string does not exist in CLI 2.1.258,
+which carries `claude-opus-5' and no `-5-5' variant."
+  (should (equal "opus[1m]"
+                 (decknix-agent-provider-default-model 'claude-code))))
+
+(ert-deftest decknix-provider-default-model--unlisted-provider-has-none ()
+  "A provider with no entry pins nothing, leaving the adapter's own default."
+  (should-not (decknix-agent-provider-default-model 'pi))
+  (should-not (decknix-agent-provider-default-model 'no-such-provider)))
+
+(ert-deftest decknix-provider-default-model--is-customisable ()
+  "Rebinding the alist changes the default rather than needing a code edit."
+  (let ((decknix-agent-provider-default-models '((claude-code . "claude-opus-5"))))
+    (should (equal "claude-opus-5"
+                   (decknix-agent-provider-default-model 'claude-code)))))
+
+
 (provide 'decknix-agent-provider-test)
