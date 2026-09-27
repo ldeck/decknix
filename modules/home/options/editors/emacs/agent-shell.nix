@@ -4470,6 +4470,7 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; from a disappearance.  Harvesting on each refresh is what lets a
         ;; merged worktree keep its number and its URL afterwards.
         (require 'decknix-hub-pr-memory)
+        (require 'decknix-hub-wt-stale)
         (with-eval-after-load 'decknix-agent-shell-hub
           (decknix--hub-pr-memory-restore)
           (advice-add 'decknix--hub-refresh-wip :after

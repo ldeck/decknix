@@ -773,7 +773,7 @@ Accessible only via the `?' transient; no standalone key binding."
   (call-interactively #'decknix-sidebar-toggle-sessions-hide-live))
 
 (transient-define-suffix decknix-sidebar-transient--hide-request-linked-live ()
-  :key "X"
+  :key "J"
   :description
   (lambda ()
     (format "request-linked %s"
@@ -1055,13 +1055,13 @@ WIP / Sessions / Worktrees."
     (decknix-sidebar-transient--live-display-mode) ;; Layout (d)
     (decknix-sidebar-transient--hidden-toggle)    ;; Hidden (H)
     (decknix-sidebar-transient--show-progress)    ;; progress (p)
-    (decknix-sidebar-transient--hide-completed-subagents) ;; sub-agents (G)
+    (decknix-sidebar-transient--hide-completed-subagents) ;; sub-agents (K)
     (decknix-sidebar-transient--quick-switch)     ;; Quick-switch (S)
     (decknix-sidebar-transient--repo-name-cap)    ;; repo name (N)
     (decknix-sidebar-transient--expand-prs)       ;; session PRs (E)
     (decknix-sidebar-transient--symbol-style)     ;; symbols (y)
     (decknix-sidebar-transient--tile-cycle)       ;; Tile cycle (t)
-    (decknix-sidebar-transient--hide-request-linked-live) ;; request-linked (X)
+    (decknix-sidebar-transient--hide-request-linked-live) ;; request-linked (J)
     (decknix-sidebar-transient--session-group-mode) ;; group (G)
     (decknix-sidebar-transient--live-view-mode)]] ;; view (z)
   [["WIP"
@@ -1572,7 +1572,7 @@ Toggles transient (Live section); persisted via
 
 (transient-define-suffix decknix-sidebar-transient--hide-completed-subagents ()
   "Live-section toggle: hide finished (`done') sub-agents."
-  :key "G"
+  :key "K"
   :description
   (lambda ()
     (format "sub-agents    %s"
