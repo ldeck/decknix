@@ -593,4 +593,43 @@ Guessing a state would be worse than an empty column."
       (should-not (decknix-worktree-picker--pr-state-for "o/r" "br" map)))))
 
 
+;; -- PR URL resolution for the browse action --------------------------
+
+(ert-deftest decknix-wtp-pr-url--open-feed-supplies-it ()
+  "A live PR's URL comes from the feed, matched case-insensitively on repo."
+  (let ((decknix--hub-wip
+         '((repos . (((repo . "NC-Helix/platform-cli")
+                      (prs . (((branch . "feat/x")
+                               (url . "https://github.com/nc-helix/platform-cli/pull/1")))))))))) 
+    (should (equal "https://github.com/nc-helix/platform-cli/pull/1"
+                   (decknix-worktree-picker--pr-url-for
+                    "nc-helix/platform-cli" "feat/x")))))
+
+(ert-deftest decknix-wtp-pr-url--merged-pr-comes-from-memory ()
+  "A merged PR has left the feed, so the remembered URL is used.
+Without this, a row showing `merged' could not be opened -- which is the gap
+that made the picker less useful than the sidebar."
+  (let ((decknix--hub-wip nil))
+    (cl-letf (((symbol-function 'decknix--hub-pr-memory-lookup)
+               (lambda (_r _b) '(:number 20 :url "https://x/pull/20"))))
+      (should (equal "https://x/pull/20"
+                     (decknix-worktree-picker--pr-url-for "o/r" "br"))))))
+
+(ert-deftest decknix-wtp-pr-url--unknown-is-nil ()
+  "No feed entry and no memory yields nil, so the caller can say so."
+  (let ((decknix--hub-wip nil))
+    (cl-letf (((symbol-function 'decknix--hub-pr-memory-lookup)
+               (lambda (&rest _) nil)))
+      (should-not (decknix-worktree-picker--pr-url-for "o/r" "br")))))
+
+(ert-deftest decknix-wtp-pr-url--wrong-branch-does-not-match ()
+  "A repo match is not enough; the branch must match too."
+  (let ((decknix--hub-wip
+         '((repos . (((repo . "o/r")
+                      (prs . (((branch . "other") (url . "https://x/pull/9"))))))))))
+    (cl-letf (((symbol-function 'decknix--hub-pr-memory-lookup)
+               (lambda (&rest _) nil)))
+      (should-not (decknix-worktree-picker--pr-url-for "o/r" "br")))))
+
+
 (provide 'decknix-worktree-picker-test)
