@@ -202,5 +202,32 @@
                     (plist-get (decknix-agent-purpose-resolve 'pr-review)
                                :model))))))
 
+;; -- Opus 5.5 must pass model validation -------------------------------
+;;
+;; The review purposes default to `opus[1m]', the id the Claude adapter labels
+;; "Opus 5.5". It matches neither the old enumerated list ("sonnet" "opus"
+;; "haiku") nor the `claude-<family>-<n>' pattern, so validation would have
+;; dropped it to nil with a warning and the purpose would have silently run on
+;; the adapter default instead.
+
+(ert-deftest decknix-purpose-model--opus-5-5-alias-is-known ()
+  "`opus[1m]' passes, since the review purposes now default to it."
+  (should (decknix-agent-purpose--known-model-p 'claude-code "opus[1m]")))
+
+(ert-deftest decknix-purpose-model--versioned-opus-5-still-passes-by-pattern ()
+  "`claude-opus-5' is accepted by the pattern without an enum entry."
+  (should (decknix-agent-purpose--known-model-p 'claude-code "claude-opus-5")))
+
+(ert-deftest decknix-purpose-model--default-alias-is-known ()
+  "`default' is a real adapter option and must not be rejected."
+  (should (decknix-agent-purpose--known-model-p 'claude-code "default")))
+
+(ert-deftest decknix-purpose-model--a-typo-is-still-rejected ()
+  "Widening the list must not make validation useless."
+  (should-not (decknix-agent-purpose--known-model-p 'claude-code "opus[1M]"))
+  (should-not (decknix-agent-purpose--known-model-p 'claude-code "opus-1m"))
+  (should-not (decknix-agent-purpose--known-model-p 'claude-code "bogus")))
+
+
 (provide 'decknix-agent-purposes-test)
 ;;; decknix-agent-purposes-test.el ends here

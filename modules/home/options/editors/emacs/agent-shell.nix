@@ -3041,7 +3041,7 @@ in
         };
         model = mkOption {
           type = types.nullOr types.str;
-          default = "sonnet";
+          default = "opus[1m]";
           example = "opus";
           description = ''
             Model id pinned for the PR-review purpose.  For
@@ -3068,7 +3068,7 @@ in
         };
         model = mkOption {
           type = types.nullOr types.str;
-          default = "sonnet";
+          default = "opus[1m]";
           example = "haiku";
           description = ''
             Model id pinned for bot-authored PR reviews.  Note: the
