@@ -1202,6 +1202,17 @@ fn parse_paths_file(path: &Path) -> anyhow::Result<HashSet<PathBuf>> {
 }
 
 /// Age of `path` as the wall-clock interval since its mtime, or 0 on error.
+/// Whether two paths refer to the same directory, ignoring a trailing
+/// separator. The registry stores a repo's `primary' with a trailing slash and
+/// its worktree paths without, so a plain comparison never matched.
+fn paths_equal(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let norm = |p: &std::path::Path| {
+        let s = p.to_string_lossy().to_string();
+        s.trim_end_matches('/').to_string()
+    };
+    norm(a) == norm(b)
+}
+
 fn mtime_age(path: &Path, now: SystemTime) -> Duration {
     fs::metadata(path)
         .and_then(|m| m.modified())
@@ -1779,6 +1790,14 @@ fn main() -> anyhow::Result<()> {
 
                         let mut to_remove = Vec::new();
                         for (branch, path) in &entry.worktrees {
+                            // A repo's own primary checkout appears in its
+                            // worktree list, and `git worktree remove' refuses a
+                            // main working tree -- so proposing it is noise at
+                            // best and, before the status check landed, deleted
+                            // its branch and registry entry on the refusal.
+                            if paths_equal(path, &entry.primary) {
+                                continue;
+                            }
                             let age = mtime_age(path, now);
                             let matches_filter = filter_matches(&compiled, &entry.repo, path, age);
 
