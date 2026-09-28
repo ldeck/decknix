@@ -247,6 +247,7 @@ italic characters and weight)."
          ;; from a feed written by an older hub binary, which is the normal
          ;; state until the daemon restarts -- so their absence selects the
          ;; legacy rules rather than silently reading nil as zero.
+         (unresolved-total  (alist-get 'unresolved_total pr))
          (human-unresolved  (alist-get 'human_unresolved pr))
          (bot-unresolved    (alist-get 'bot_unresolved pr))
          (human-said        (eq (alist-get 'human_said_something pr) t))
@@ -268,7 +269,14 @@ italic characters and weight)."
       ;; with `bot_replies_to_me' t and zero unresolved threads -- four
       ;; rows shouting about bots that had already finished.  So a
       ;; bot-attributable row never drives the human slot.
-      (let* ((open-threads (and unresolved (> unresolved 0)))
+      (let* ((open-threads
+          ;; Any thread still open, whoever spoke last. `unresolved_threads'
+          ;; means "awaiting MY reply" and reads 0 once I have replied, so a
+          ;; thread I answered but never resolved was invisible: PR 203 had two
+          ;; of them and showed nothing.
+          (if (integerp unresolved-total)
+              (> unresolved-total 0)
+            (and unresolved (> unresolved 0))))
              (addressed
               (if attributed
                   ;; Attributed feed: no human thread open and no human has
@@ -280,7 +288,7 @@ italic characters and weight)."
                   ;; falls through to its own branch below.
                   (and (zerop human-unresolved)
                        (not human-said)
-                       (not (and i-replied-last open-threads)))
+                       (not open-threads))
                 ;; Threads exist and every one is resolved.
                 (or (and total-threads (> total-threads 0)
                          unresolved (= unresolved 0))
@@ -323,7 +331,14 @@ italic characters and weight)."
                  ;; thread unresolved is how you say "still waiting", and
                  ;; collapsing it into silence loses that.  Dim, and last in
                  ;; the ladder -- it is information, not a call to act.
-                 ((and i-replied-last open-threads)
+                 ((and open-threads
+                       (or i-replied-last
+                           ;; Every open thread has me as its last commenter,
+                           ;; so nothing awaits my reply but they still need
+                           ;; resolving.
+                           (and attributed
+                                (zerop human-unresolved)
+                                (zerop bot-unresolved))))
                   (if emoji-layout
                       (decknix--hub-icon "\u23f3" '(:foreground "#6c6c6c"))
                     (propertize "." 'face '(:foreground "#6c6c6c" :weight normal))))

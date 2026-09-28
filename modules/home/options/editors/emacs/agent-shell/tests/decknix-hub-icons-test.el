@@ -727,5 +727,50 @@ going silent across the board."
                    (unresolved_threads . 0)))))))
 
 
+;; -- a thread I replied to but never resolved --------------------------
+;;
+;; Reported on followupboss-integration#203: two open bot threads, no glyph.
+;; The feed was self-consistent -- 56 total_threads, `unresolved_threads' 0,
+;; `bot_unresolved' 0 -- because `unresolved_to_me' counts only threads whose
+;; last commenter is NOT me, and I had replied on both. Still open, still
+;; needing resolution, and invisible.
+
+(ert-deftest decknix-hub-icons-attr--open-thread-i-replied-to-shows-waiting ()
+  "Two threads open with me last: the dim waiting marker, not silence."
+  (let ((icons (decknix--hub-activity-icons
+                (decknix-icons-test--attributed
+                 '(unresolved_total . 2)
+                 '(total_threads . 56)
+                 '(bot_replies_to_me . t)
+                 '(needs_reply . t)))))
+    (should-not (string-empty-p (string-trim icons)))
+    (should (string-match-p "\\." icons))))
+
+(ert-deftest decknix-hub-icons-attr--all-resolved-stays-silent ()
+  "`unresolved_total' 0 across many threads is genuinely nothing to show."
+  (should (string-empty-p
+           (string-trim
+            (decknix--hub-activity-icons
+             (decknix-icons-test--attributed
+              '(unresolved_total . 0) '(total_threads . 56)
+              '(needs_reply . t)))))))
+
+(ert-deftest decknix-hub-icons-attr--unresolved-total-does-not-mask-a-human ()
+  "An open HUMAN thread still outranks the waiting marker."
+  (let ((icons (decknix--hub-activity-icons
+                (decknix-icons-test--attributed
+                 '(unresolved_total . 3) '(human_unresolved . 1)
+                 '(unresolved_threads . 1) '(total_threads . 3)))))
+    (should (string-match-p "i" icons))))
+
+(ert-deftest decknix-hub-icons-attr--unresolved-total-absent-falls-back ()
+  "A feed without the field keeps the old behaviour rather than going quiet."
+  (let ((icons (decknix--hub-activity-icons
+                (decknix-icons-test--attributed
+                 '(i_replied_last . t)
+                 '(unresolved_threads . 1) '(total_threads . 1)))))
+    (should (string-match-p "\\." icons))))
+
+
 (provide 'decknix-hub-icons-test)
 ;;; decknix-hub-icons-test.el ends here

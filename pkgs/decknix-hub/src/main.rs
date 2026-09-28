@@ -194,6 +194,8 @@ struct ReviewRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     unresolved_threads: Option<u32>, // unresolved threads where last comment author != me
     #[serde(skip_serializing_if = "Option::is_none")]
+    unresolved_total: Option<u32>, // unresolved threads regardless of who spoke last
+    #[serde(skip_serializing_if = "Option::is_none")]
     human_unresolved: Option<u32>, // of unresolved_threads, those whose last commenter is human
     #[serde(skip_serializing_if = "Option::is_none")]
     bot_unresolved: Option<u32>, // of unresolved_threads, those whose last commenter is a bot
@@ -276,6 +278,8 @@ struct WipPr {
     total_threads: Option<u32>, // total inline review threads on the PR
     #[serde(skip_serializing_if = "Option::is_none")]
     unresolved_threads: Option<u32>, // unresolved threads where last comment author != me
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unresolved_total: Option<u32>, // unresolved threads regardless of who spoke last
     #[serde(skip_serializing_if = "Option::is_none")]
     human_unresolved: Option<u32>, // of unresolved_threads, those whose last commenter is human
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -823,6 +827,14 @@ fn compute_review_stale(
 /// the thread is open.
 struct ReviewThreadStats {
     total: u32,
+    /// Unresolved threads regardless of who spoke last.
+    ///
+    /// `unresolved_to_me' answers "awaiting MY reply" and so reads 0 once I
+    /// have replied -- but the thread is still OPEN and still needs resolving,
+    /// which is what a reviewer wants to see. PR 203 had 56 threads, 2
+    /// unresolved with me as the last commenter, and every count the sidebar
+    /// could see was 0.
+    unresolved_total: u32,
     unresolved_to_me: u32,
     /// Of `unresolved_to_me`, those whose last commenter is a HUMAN.
     ///
@@ -841,6 +853,7 @@ struct ReviewThreadStats {
 fn parse_thread_nodes(nodes: &[serde_json::Value], my_login: Option<&str>) -> ReviewThreadStats {
     let total = nodes.len() as u32;
     let me = my_login.map(|s| s.to_ascii_lowercase());
+    let mut unresolved_total = 0u32;
     let mut unresolved_to_me = 0u32;
     let mut human_unresolved = 0u32;
     let mut bot_unresolved = 0u32;
@@ -849,6 +862,7 @@ fn parse_thread_nodes(nodes: &[serde_json::Value], my_login: Option<&str>) -> Re
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         if !unresolved { continue; }
+        unresolved_total += 1;
         let last_login = t.get("comments")
             .and_then(|c| c.get("nodes"))
             .and_then(|ns| ns.as_array())
@@ -880,7 +894,8 @@ fn parse_thread_nodes(nodes: &[serde_json::Value], my_login: Option<&str>) -> Re
             _ => human_unresolved += 1,
         }
     }
-    ReviewThreadStats { total, unresolved_to_me, human_unresolved, bot_unresolved }
+    ReviewThreadStats { total, unresolved_total, unresolved_to_me,
+                        human_unresolved, bot_unresolved }
 }
 
 /// Single-PR fallback: fetch review-thread stats for one PR via `gh api graphql`.
@@ -1004,6 +1019,7 @@ struct ReviewPrDetails {
     i_replied_last: Option<bool>,
     total_threads: Option<u32>,
     unresolved_threads: Option<u32>,
+    unresolved_total: Option<u32>,
     human_unresolved: Option<u32>,
     bot_unresolved: Option<u32>,
     human_said_something: Option<bool>,
@@ -1027,7 +1043,7 @@ impl Default for ReviewPrDetails {
             team_requested: None, others_requested: None, needs_reply: None,
             bot_pending: None, replies_to_me: None, bot_replies_to_me: None,
             i_replied_last: None, total_threads: None,
-            unresolved_threads: None, human_unresolved: None, bot_unresolved: None,
+            unresolved_threads: None, unresolved_total: None, human_unresolved: None, bot_unresolved: None,
             human_said_something: None, review_decision: None,
             human_committed: None,
             authors: Vec::new(), requested_reviewers: Vec::new(),
@@ -1155,6 +1171,7 @@ async fn fetch_pr_ci(
         Err(_) => return ReviewPrDetails {
             total_threads: threads.as_ref().map(|t| t.total),
             unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            unresolved_total: threads.as_ref().map(|t| t.unresolved_total),
             human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
             bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
             ..ReviewPrDetails::default()
@@ -1387,6 +1404,7 @@ async fn fetch_pr_ci(
                 i_replied_last: Some(i_replied_last),
                 total_threads: threads.as_ref().map(|t| t.total),
                 unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            unresolved_total: threads.as_ref().map(|t| t.unresolved_total),
             human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
             bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
                 review_decision: view.review_decision,
@@ -1400,6 +1418,7 @@ async fn fetch_pr_ci(
         Err(_) => ReviewPrDetails {
             total_threads: threads.as_ref().map(|t| t.total),
             unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            unresolved_total: threads.as_ref().map(|t| t.unresolved_total),
             human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
             bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
             ..ReviewPrDetails::default()
@@ -1481,6 +1500,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         } else {
             let prefetched = batched_threads.get(&(repo.clone(), pr.number))
                 .map(|s| ReviewThreadStats { total: s.total,
+                                             unresolved_total: s.unresolved_total,
                                              unresolved_to_me: s.unresolved_to_me,
                                              human_unresolved: s.human_unresolved,
                                              bot_unresolved: s.bot_unresolved });
@@ -1530,6 +1550,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             i_replied_last: details.i_replied_last,
             total_threads: details.total_threads,
             unresolved_threads: details.unresolved_threads,
+            unresolved_total: details.unresolved_total,
             human_unresolved: details.human_unresolved,
             bot_unresolved: details.bot_unresolved,
             human_said_something: details.human_said_something,
@@ -1576,6 +1597,7 @@ struct PrDetails {
     i_replied_last: Option<bool>,
     total_threads: Option<u32>,
     unresolved_threads: Option<u32>,
+    unresolved_total: Option<u32>,
     human_unresolved: Option<u32>,
     bot_unresolved: Option<u32>,
     human_said_something: Option<bool>,
@@ -1594,7 +1616,7 @@ impl Default for PrDetails {
             needs_reply: None, bot_pending: None, replies_to_me: None,
             bot_replies_to_me: None, i_replied_last: None,
             total_threads: None, unresolved_threads: None,
-            human_unresolved: None, bot_unresolved: None, human_said_something: None,
+            unresolved_total: None, human_unresolved: None, bot_unresolved: None, human_said_something: None,
             merged_at: None,
             authors: Vec::new(), requested_reviewers: Vec::new(),
             approvers: Vec::new(), blockers: Vec::new(),
@@ -1650,6 +1672,7 @@ async fn fetch_pr_details(
         Err(_) => return PrDetails {
             total_threads: threads.as_ref().map(|t| t.total),
             unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            unresolved_total: threads.as_ref().map(|t| t.unresolved_total),
             human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
             bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
             ..PrDetails::default()
@@ -1761,6 +1784,7 @@ async fn fetch_pr_details(
                 i_replied_last,
                 total_threads: threads.as_ref().map(|t| t.total),
                 unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            unresolved_total: threads.as_ref().map(|t| t.unresolved_total),
             human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
             bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
                 merged_at: d.merged_at,
@@ -1773,6 +1797,7 @@ async fn fetch_pr_details(
         Err(_) => PrDetails {
             total_threads: threads.as_ref().map(|t| t.total),
             unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+            unresolved_total: threads.as_ref().map(|t| t.unresolved_total),
             human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
             bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
             ..PrDetails::default()
@@ -1904,6 +1929,7 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
         } else {
             let prefetched = batched_threads.get(&(repo.clone(), pr.number))
                 .map(|s| ReviewThreadStats { total: s.total,
+                                             unresolved_total: s.unresolved_total,
                                              unresolved_to_me: s.unresolved_to_me,
                                              human_unresolved: s.human_unresolved,
                                              bot_unresolved: s.bot_unresolved });
@@ -1929,6 +1955,7 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
             updated: updated_ts,
             review_decision: details.review_decision,
             needs_reply: details.needs_reply,
+            unresolved_total: details.unresolved_total,
             human_unresolved: details.human_unresolved,
             bot_unresolved: details.bot_unresolved,
             human_said_something: details.human_said_something,
@@ -2183,6 +2210,29 @@ mod tests {
 
     // An open Copilot thread and a colleague's question were one number, so
     // the glyph that means "read this" fired for both.
+    // `unresolved_to_me' reads 0 once I have replied, but the thread is still
+    // OPEN and still needs resolving. PR 203 (followupboss-integration) had 56
+    // threads, 2 unresolved with me as the last commenter, and every count the
+    // sidebar could see was 0 -- so it showed nothing at all.
+    #[test]
+    fn thread_stats_count_unresolved_even_when_i_replied_last() {
+        let nodes = vec![thread(false, "ldeck"), thread(false, "ldeck")];
+        let st = parse_thread_nodes(&nodes, Some("ldeck"));
+        assert_eq!(st.unresolved_total, 2);
+        assert_eq!(st.unresolved_to_me, 0);
+        assert_eq!(st.human_unresolved, 0);
+        assert_eq!(st.bot_unresolved, 0);
+    }
+
+    #[test]
+    fn thread_stats_unresolved_total_excludes_resolved() {
+        let nodes = vec![thread(true, "ldeck"), thread(false, "colleague")];
+        let st = parse_thread_nodes(&nodes, Some("ldeck"));
+        assert_eq!(st.total, 2);
+        assert_eq!(st.unresolved_total, 1);
+        assert_eq!(st.unresolved_to_me, 1);
+    }
+
     #[test]
     fn thread_stats_split_human_from_bot() {
         let nodes = vec![
