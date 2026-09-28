@@ -189,7 +189,7 @@ visible on every active state."
 ;; pinned, not just the classifier downstream of it.
 
 (cl-defun decknix-auto-review-test--dispatch
-    (&key (bot nil) (mentioned t) (draft-visible t) (conflict-visible t)
+    (&key (bot nil) (mentioned t) (draft nil) (conflicting nil)
           (live-session nil))
   "Run the eligibility + dispatch path with collaborators stubbed.
 Returns a cons of (ACTION . SPAWN-COUNT) so a test can assert both that
@@ -200,10 +200,14 @@ no action was chosen and that nothing was enqueued."
                (lambda (&rest _) bot))
               ((symbol-function 'decknix--hub-item-mentioned-p)
                (lambda (&rest _) mentioned))
+              ;; Draft and conflicting are now read off the ITEM, because a
+              ;; display filter must not decide a dispatch (attom#296). These
+              ;; stubs stay, set to "visible", so a regression back to the
+              ;; visibility predicates cannot pass by accident.
               ((symbol-function 'decknix--hub-requests-draft-visible-p)
-               (lambda (&rest _) draft-visible))
+               (lambda (&rest _) t))
               ((symbol-function 'decknix--hub-requests-conflict-visible-p)
-               (lambda (&rest _) conflict-visible))
+               (lambda (&rest _) t))
               ((symbol-function 'decknix--hub-request-has-live-session-p)
                (lambda (&rest _) live-session))
               ((symbol-function 'decknix--agent-pr-detect-workspace)
@@ -217,10 +221,13 @@ no action was chosen and that nothing was enqueued."
       ;; `--eligible-action' when grouping landed, and a regression net
       ;; aimed at the old entry point would have kept passing while the
       ;; real one went unguarded.
-      (let* ((item '((repo   . "UpsideRealty/upside")
-                     (number . 20612)
-                     (url    . "https://github.com/UpsideRealty/upside/pull/20612")
-                     (author . "abatten187")))
+      (let* ((item (append
+                    (when draft '((draft . t)))
+                    (when conflicting '((mergeable . "CONFLICTING")))
+                    '((repo   . "UpsideRealty/upside")
+                      (number . 20612)
+                      (url    . "https://github.com/UpsideRealty/upside/pull/20612")
+                      (author . "abatten187"))))
              (action (decknix-auto-review--eligible-action item)))
         (when action
           (decknix-auto-review--dispatch-unit
@@ -228,22 +235,24 @@ no action was chosen and that nothing was enqueued."
         (cons action spawned)))))
 
 (ert-deftest decknix-auto-review/dispatch-skips-draft-pr ()
-  "A PR the Requests draft filter hides is never auto-dispatched."
+  "A draft PR is never auto-dispatched, whatever the sidebar shows.
+The visibility stubs report \"visible\" in this helper, so this passes only
+because the item's own `draft' flag is read."
   (let ((decknix-auto-review-mode 'human))
     (should (equal '(nil . 0)
-                   (decknix-auto-review-test--dispatch :draft-visible nil))))
+                   (decknix-auto-review-test--dispatch :draft t))))
   (let ((decknix-auto-review-mode 'any))
     (should (equal '(nil . 0)
-                   (decknix-auto-review-test--dispatch :draft-visible nil)))))
+                   (decknix-auto-review-test--dispatch :draft t)))))
 
 (ert-deftest decknix-auto-review/dispatch-skips-conflicting-pr ()
-  "A PR the Requests conflict filter hides is never auto-dispatched."
+  "A conflicting PR is never auto-dispatched, whatever the sidebar shows."
   (let ((decknix-auto-review-mode 'human))
     (should (equal '(nil . 0)
-                   (decknix-auto-review-test--dispatch :conflict-visible nil))))
+                   (decknix-auto-review-test--dispatch :conflicting t))))
   (let ((decknix-auto-review-mode 'any))
     (should (equal '(nil . 0)
-                   (decknix-auto-review-test--dispatch :conflict-visible nil)))))
+                   (decknix-auto-review-test--dispatch :conflicting t)))))
 
 (ert-deftest decknix-auto-review/dispatch-review-ready-pr ()
   "A mentioned, non-draft, non-conflicting human PR still dispatches."
@@ -285,6 +294,44 @@ Wanted where a team carries more PRs than the viewer intends to review."
     (should-not (decknix-auto-review--requested-of-me-p
                  '((mentioned . nil) (team_requested . t))))
     (should (decknix-auto-review--requested-of-me-p '((mentioned . t))))))
+
+
+;; -- draft and conflict gates read the PR, not the view ----------------
+;;
+;; These used to derive from the sidebar's visibility predicates, whose first
+;; clause is `(not decknix--hub-requests-hide-draft)'. With drafts VISIBLE that
+;; returned t for a draft, so suppression vanished: attom#296 is a draft on
+;; GitHub and in the feed and was dispatched anyway.
+
+(ert-deftest decknix-auto-review-draft--reads-the-prs-own-flag ()
+  "A draft is a draft whatever the sidebar is showing."
+  (should (decknix-auto-review--draft-p '((draft . t))))
+  (should-not (decknix-auto-review--draft-p '((draft . nil))))
+  (should-not (decknix-auto-review--draft-p '())))
+
+(ert-deftest decknix-auto-review-draft--ignores-the-visibility-toggle ()
+  "Making drafts visible must not make them dispatchable.
+This is the attom#296 case: the toggle changed a display preference and
+silently disabled a dispatch guard."
+  (let ((decknix--hub-requests-hide-draft nil))
+    (should (decknix-auto-review--draft-p '((draft . t))))))
+
+(ert-deftest decknix-auto-review-conflict--reads-mergeable ()
+  "A conflicting diff is detected from the PR, not from the filter."
+  (should (decknix-auto-review--conflicting-p '((mergeable . "CONFLICTING"))))
+  (should-not (decknix-auto-review--conflicting-p '((mergeable . "MERGEABLE"))))
+  (should-not (decknix-auto-review--conflicting-p '()))
+  (let ((decknix--hub-requests-hide-conflict nil))
+    (should (decknix-auto-review--conflicting-p '((mergeable . "CONFLICTING"))))))
+
+(ert-deftest decknix-auto-review-draft--suppresses-dispatch-for-attom-296 ()
+  "The reported item yields no action even though the team was requested."
+  (should-not (decknix-auto-review-item-action
+               'any nil
+               (decknix-auto-review--requested-of-me-p
+                '((mentioned . nil) (team_requested . t)))
+               (decknix-auto-review--draft-p '((draft . t)))
+               nil)))
 
 
 (provide 'decknix-auto-review-test)

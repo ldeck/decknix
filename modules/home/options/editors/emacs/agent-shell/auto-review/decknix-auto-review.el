@@ -29,12 +29,22 @@
 ;; merge-conflicting PR (its diff is against a stale base, so line
 ;; anchors and "is this still referenced" checks are unreliable — the
 ;; only honest review verdict is "please rebase").  The booleans come
-;; from the same toggle-aware predicates the sidebar composes
-;; (`decknix--hub-requests-draft-visible-p',
-;; `decknix--hub-requests-conflict-visible-p'), so the `x' / `X' toggles
-;; govern auto-review too: one control surface, not two.  The rule is
-;; simply that auto-review only dispatches what the Requests list would
-;; actually show you.
+;; from the PR's own `draft' and `mergeable' fields.
+;;
+;; They used to come from the sidebar's toggle-aware predicates
+;; (`decknix--hub-requests-draft-visible-p', `-conflict-visible-p') on the
+;; reasoning that the `x' / `X' toggles should govern auto-review too -- one
+;; control surface, and "auto-review only dispatches what the Requests list
+;; would show you".  That is wrong for these two conditions, and attom#296
+;; showed how: it is a draft on GitHub and in the feed, but the viewer had
+;; drafts VISIBLE, so `draft-visible-p' returned t, auto-review read it as
+;; review-ready, and dispatched a session against work its author had
+;; explicitly marked unfinished.
+;;
+;; Wanting to SEE a draft and wanting an agent to REVIEW it are different
+;; decisions. Draft and conflicting are the author's declarations about the
+;; PR, not the viewer's preferences about a list, so a display filter must not
+;; decide a dispatch.
 ;;
 ;; This file is side-effect free.  The dispatch wiring (scanning the hub
 ;; cache, resolving the workspace, calling `decknix--agent-quickaction-start',
@@ -271,6 +281,24 @@ if a team you are in carries more PRs than you intend to review."
   :type 'boolean
   :group 'decknix)
 
+(defun decknix-auto-review--draft-p (item)
+  "Return non-nil when ITEM is a draft PR.
+
+Reads the PR's own `draft' flag rather than
+`decknix--hub-requests-draft-visible-p'. That predicate answers \"does this
+row pass my filters\", and its first clause is
+`(not decknix--hub-requests-hide-draft)' -- so making drafts VISIBLE in the
+sidebar made it return t for a draft, which auto-review read as
+review-ready. A display filter must not decide a dispatch: attom#296 is a
+draft on GitHub and in the feed, and was dispatched anyway."
+  (eq (alist-get 'draft item) t))
+
+(defun decknix-auto-review--conflicting-p (item)
+  "Return non-nil when ITEM's diff conflicts with its base.
+Reads `mergeable' directly, for the same reason as
+`decknix-auto-review--draft-p'."
+  (equal (alist-get 'mergeable item) "CONFLICTING"))
+
 (defun decknix-auto-review--requested-of-me-p (item)
   "Return non-nil when ITEM asks for MY review, directly or via a team."
   (or (decknix--hub-item-mentioned-p item)
@@ -286,8 +314,8 @@ eligibility for the whole tick has to be known BEFORE deciding how many
 sessions to launch.  Same conditions as before, in the same order."
   (let* ((bot-p (decknix--hub-bot-author-p (alist-get 'author item)))
          (mentioned-p (decknix-auto-review--requested-of-me-p item))
-         (draft-p (not (decknix--hub-requests-draft-visible-p item)))
-         (conflicting-p (not (decknix--hub-requests-conflict-visible-p item)))
+         (draft-p (decknix-auto-review--draft-p item))
+         (conflicting-p (decknix-auto-review--conflicting-p item))
          (action (decknix-auto-review-item-action
                   decknix-auto-review-mode bot-p mentioned-p
                   draft-p conflicting-p))
