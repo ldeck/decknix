@@ -2,6 +2,20 @@
 
 (require 'ert)
 (require 'decknix-worktree-picker)
+
+;; `list-entries' used to shell out; it now reads the async cache via
+;; `--audit-report'. The tests below stub `shell-command-to-string' to supply
+;; an audit payload, which is still the clearest way to drive them, so the seam
+;; is pointed back at that stub here. The cache path itself is covered by
+;; `decknix-wtp-audit-report--reads-the-cache' below, since that is the part
+;; production actually uses.
+(defun decknix-worktree-picker--audit-report ()
+  "Test shim: parse whatever `shell-command-to-string' yields."
+  (json-parse-string (shell-command-to-string "decknix wt audit --json")
+                     :object-type 'alist :array-type 'list
+                     :null-object nil :false-object nil))
+
+
 (require 'decknix-test-helpers)
 
 (ert-deftest decknix-worktree-picker-list-entries--mocked ()
@@ -508,6 +522,32 @@ why this is a defcustom rather than a hardcoded pair."
   "A nil branch is not primary."
   (should-not (decknix-worktree-picker--primary-branch-p nil))
   (should-not (decknix-worktree-picker--primary-branch-p "")))
+
+
+(ert-deftest decknix-wtp-audit-report--reads-the-cache ()
+  "The real `--audit-report' groups cached rows, with no subprocess.
+
+A synchronous `decknix wt audit --json' per paint froze Emacs, and every
+filter toggle goes through `revert-buffer', so each keystroke paid for
+another one. `shell-command-to-string' is made to error here so a
+regression back to shelling out fails loudly rather than just being slow."
+  (let ((decknix--hub-wt-facts (make-hash-table :test 'equal))
+        (decknix--hub-wt-facts-ts (float-time)))
+    (puthash "/w/a" '(:repo "o/r" :branch "br-a" :path "/w/a"
+                      :merged t :orphan nil :active nil :dirty nil :age 3)
+             decknix--hub-wt-facts)
+    (puthash "/w/b" '(:repo "o/r" :branch "br-b" :path "/w/b"
+                      :merged nil :orphan t :active nil :dirty nil :age 9)
+             decknix--hub-wt-facts)
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (&rest _) (error "audit must not shell out")))
+              ((symbol-function 'decknix-worktree-picker--audit-report)
+               (symbol-function 'decknix-worktree-picker--audit-report-real)))
+      (let* ((report (decknix-worktree-picker--audit-report-real))
+             (wts (alist-get 'worktrees (car report))))
+        (should (= 1 (length report)))
+        (should (equal "o/r" (alist-get 'repo (car report))))
+        (should (= 2 (length wts)))))))
 
 
 (provide 'decknix-worktree-picker-test)

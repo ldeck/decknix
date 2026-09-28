@@ -121,6 +121,57 @@ and the picker shows `none' for every row."
             (puthash (cons (and repo (downcase repo)) branch) state pr-map)))))
     pr-map))
 
+(declare-function decknix-hub-wt-rows "decknix-hub-wt-stale" ())
+(declare-function decknix-hub-wt-cache-ready-p "decknix-hub-wt-stale" ())
+(declare-function decknix--hub-wt-audit-refresh "decknix-hub-wt-stale" (&optional on-done))
+
+(defun decknix-worktree-picker--audit-report-real ()
+  "Return the audit grouped as ((repo . (primary worktrees...)) ...).
+
+Sourced from `decknix-hub-wt-stale''s async cache, never from a synchronous
+`decknix wt audit --json'. That call took seconds and froze Emacs, and since
+every filter toggle goes through `revert-buffer' each keystroke paid for
+another subprocess. Reading a cache makes the toggles pure and instant.
+
+An empty cache returns nothing and kicks off a refresh, so the first open
+shows an empty list briefly rather than blocking; `g' repaints it."
+  (if (not (fboundp 'decknix-hub-wt-rows))
+      nil
+    (unless (decknix-hub-wt-cache-ready-p)
+      (when (fboundp 'decknix--hub-wt-audit-refresh)
+        (decknix--hub-wt-audit-refresh
+         (lambda (_n)
+           (when-let ((buf (get-buffer "*decknix worktree picker*")))
+             (with-current-buffer buf
+               (when (derived-mode-p 'decknix-worktree-picker-mode)
+                 (decknix-worktree-picker-save-state)
+  (revert-buffer))))))))
+    (let ((by-repo (make-hash-table :test 'equal))
+          out)
+      (dolist (row (decknix-hub-wt-rows))
+        (let ((repo (plist-get row :repo)))
+          (when repo (push row (gethash repo by-repo)))))
+      (maphash
+       (lambda (repo rows)
+         (push (list (cons 'repo repo)
+                     (cons 'worktrees
+                           (mapcar (lambda (r)
+                                     (list (cons 'branch (plist-get r :branch))
+                                           (cons 'path (plist-get r :path))
+                                           (cons 'dirty (plist-get r :dirty))
+                                           (cons 'orphan (plist-get r :orphan))
+                                           (cons 'active (plist-get r :active))
+                                           (cons 'merged (plist-get r :merged))
+                                           (cons 'age_days (plist-get r :age))))
+                                   rows)))
+               out))
+       by-repo)
+      out)))
+
+(defun decknix-worktree-picker--audit-report ()
+  "Return the audit report; see `decknix-worktree-picker--audit-report-real'."
+  (decknix-worktree-picker--audit-report-real))
+
 (defun decknix-worktree-picker-list-entries ()
   "Build entries for the worktree picker using `decknix wt audit --json'.
 
@@ -137,8 +188,7 @@ between `decknix wt audit --json' and `github-wip.json'.  PR
 state values are lowercase (`open' / `closed' / `merged'); rows
 with no associated PR get `-' rather than the legacy `none'
 placeholder so the column reads as `no PR' at a glance."
-  (let* ((json-str (shell-command-to-string "decknix wt audit --json"))
-         (report (json-parse-string json-str :object-type 'alist :array-type 'list :null-object nil :false-object nil))
+  (let* ((report (decknix-worktree-picker--audit-report))
          (pr-map (decknix-worktree-picker--get-pr-map))
          (repo-filter (and (stringp decknix-worktree-picker--filter-repo)
                            (not (string-empty-p decknix-worktree-picker--filter-repo))
@@ -502,6 +552,54 @@ Column widths:
   (interactive)
   (tabulated-list-put-tag " " t))
 
+(defconst decknix-worktree-picker--persisted-toggles
+  '(decknix-worktree-picker--filter-merged
+    decknix-worktree-picker--filter-closed
+    decknix-worktree-picker--filter-no-session
+    decknix-worktree-picker--filter-dirty
+    decknix-worktree-picker--filter-orphans
+    decknix-worktree-picker--filter-repo
+    decknix-worktree-picker--filter-min-age
+    decknix-worktree-picker--hide-primary
+    decknix-worktree-picker--hide-primary-branch)
+  "Picker state restored across restarts.")
+
+(defvar decknix-worktree-picker--state-file
+  (expand-file-name "~/.config/decknix/hub/worktree-picker-state.el")
+  "Where `decknix-worktree-picker--persisted-toggles' are stored.")
+
+(defun decknix-worktree-picker-save-state ()
+  "Persist the picker's filter state."
+  (condition-case err
+      (let (alist)
+        (dolist (sym decknix-worktree-picker--persisted-toggles)
+          (when (boundp sym) (push (cons sym (symbol-value sym)) alist)))
+        (make-directory (file-name-directory decknix-worktree-picker--state-file) t)
+        (with-temp-file decknix-worktree-picker--state-file
+          (insert ";; Auto-generated worktree picker state — do not edit\n")
+          (prin1 alist (current-buffer))
+          (insert "\n")))
+    (error (message "worktree picker: state save failed: %s"
+                    (error-message-string err)))))
+
+(defun decknix-worktree-picker-restore-state ()
+  "Restore the picker's filter state, if any was saved.
+
+Only symbols on `decknix-worktree-picker--persisted-toggles' are set, so a
+stale file cannot inject arbitrary variables."
+  (when (file-exists-p decknix-worktree-picker--state-file)
+    (condition-case err
+        (let ((alist (with-temp-buffer
+                       (insert-file-contents decknix-worktree-picker--state-file)
+                       (read (current-buffer)))))
+          (when (listp alist)
+            (dolist (cell alist)
+              (when (and (consp cell)
+                         (memq (car cell) decknix-worktree-picker--persisted-toggles))
+                (set (car cell) (cdr cell))))))
+      (error (message "worktree picker: state restore failed: %s"
+                      (error-message-string err))))))
+
 (defun decknix-worktree-picker-mark-all ()
   "Mark every listed worktree for removal.
 
@@ -622,7 +720,8 @@ If PATHS is nil, runs a general sweep of all stale worktrees."
               (let ((out (shell-command-to-string (mapconcat #'identity (append '("decknix") final-args) " "))))
                 (message "Prune complete:\n%s" (string-trim out))
                 (when (derived-mode-p 'decknix-worktree-picker-mode)
-                  (revert-buffer))))))
+                  (decknix-worktree-picker-save-state)
+  (revert-buffer))))))
       (when paths-file
         (delete-file paths-file)))))
 
@@ -631,6 +730,7 @@ If PATHS is nil, runs a general sweep of all stale worktrees."
   (interactive)
   (setq decknix-worktree-picker--hide-primary-branch
         (not decknix-worktree-picker--hide-primary-branch))
+  (decknix-worktree-picker-save-state)
   (revert-buffer))
 
 (defun decknix-worktree-picker-toggle-primary ()
@@ -638,36 +738,42 @@ If PATHS is nil, runs a general sweep of all stale worktrees."
   (interactive)
   (setq decknix-worktree-picker--hide-primary
         (not decknix-worktree-picker--hide-primary))
+  (decknix-worktree-picker-save-state)
   (revert-buffer))
 
 (defun decknix-worktree-picker-toggle-merged ()
   "Toggle merged filter."
   (interactive)
   (setq decknix-worktree-picker--filter-merged (not decknix-worktree-picker--filter-merged))
+  (decknix-worktree-picker-save-state)
   (revert-buffer))
 
 (defun decknix-worktree-picker-toggle-closed ()
   "Toggle closed filter."
   (interactive)
   (setq decknix-worktree-picker--filter-closed (not decknix-worktree-picker--filter-closed))
+  (decknix-worktree-picker-save-state)
   (revert-buffer))
 
 (defun decknix-worktree-picker-toggle-session ()
   "Toggle session filter."
   (interactive)
   (setq decknix-worktree-picker--filter-no-session (not decknix-worktree-picker--filter-no-session))
+  (decknix-worktree-picker-save-state)
   (revert-buffer))
 
 (defun decknix-worktree-picker-toggle-dirty ()
   "Toggle dirty filter."
   (interactive)
   (setq decknix-worktree-picker--filter-dirty (not decknix-worktree-picker--filter-dirty))
+  (decknix-worktree-picker-save-state)
   (revert-buffer))
 
 (defun decknix-worktree-picker-toggle-orphans ()
   "Toggle orphans filter."
   (interactive)
   (setq decknix-worktree-picker--filter-orphans (not decknix-worktree-picker--filter-orphans))
+  (decknix-worktree-picker-save-state)
   (revert-buffer))
 
 (defun decknix-worktree-picker-filter-repo (substring)
@@ -680,6 +786,7 @@ The match is case-insensitive against `OWNER/REPO'."
           nil nil "")))
   (setq decknix-worktree-picker--filter-repo
         (and (stringp substring) (not (string-empty-p substring)) substring))
+  (decknix-worktree-picker-save-state)
   (revert-buffer))
 
 (defun decknix-worktree-picker-filter-min-age (days)
@@ -691,6 +798,7 @@ The match is case-insensitive against `OWNER/REPO'."
           (or decknix-worktree-picker--filter-min-age 0))))
   (setq decknix-worktree-picker--filter-min-age
         (and (integerp days) (> days 0) days))
+  (decknix-worktree-picker-save-state)
   (revert-buffer))
 
 (defun decknix-worktree-picker-clear-restrictions ()
@@ -699,11 +807,13 @@ Inclusion toggles (`f M / C / S / D / O') are left untouched."
   (interactive)
   (setq decknix-worktree-picker--filter-repo nil
         decknix-worktree-picker--filter-min-age nil)
+  (decknix-worktree-picker-save-state)
   (revert-buffer))
 
 (defun decknix-worktree-picker ()
   "Open the worktree cleanup picker."
   (interactive)
+  (decknix-worktree-picker-restore-state)
   (let ((buf (get-buffer-create "*decknix worktree picker*")))
     (with-current-buffer buf
       (decknix-worktree-picker-mode))
