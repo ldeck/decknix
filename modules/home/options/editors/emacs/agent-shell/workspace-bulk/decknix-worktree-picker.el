@@ -125,6 +125,30 @@ and the picker shows `none' for every row."
 (declare-function decknix-hub-wt-cache-ready-p "decknix-hub-wt-stale" ())
 (declare-function decknix--hub-wt-audit-refresh "decknix-hub-wt-stale" (&optional on-done))
 
+(declare-function decknix--hub-pr-memory-lookup "decknix-hub-pr-memory" (repo branch))
+(declare-function decknix--hub-pr-status "decknix-agent-shell-hub" (url))
+
+(defun decknix-worktree-picker--pr-state-for (repo branch pr-map)
+  "Return the lowercase PR state for BRANCH in REPO, or nil.
+
+PR-MAP is built from `github-wip.json', which carries OPEN PRs only, so a
+merged or closed branch was absent from it and the column rendered empty --
+for most rows, since a worktree usually outlives its PR.
+
+Falls back to the remembered PR (`decknix-hub-pr-memory', populated by the
+harvest and by `decknix-hub-pr-memory-backfill') and resolves its state
+through the URL-keyed cache, which is the same composition the sidebar's
+placeholder rows use. Nil when nothing is known, which still renders as
+`-' rather than guessing."
+  (or (gethash (cons (and repo (downcase repo)) branch) pr-map)
+      (when (fboundp 'decknix--hub-pr-memory-lookup)
+        (let* ((entry (decknix--hub-pr-memory-lookup repo branch))
+               (url (plist-get entry :url))
+               (status (and url (fboundp 'decknix--hub-pr-status)
+                            (decknix--hub-pr-status url)))
+               (state (and status (alist-get 'state status))))
+          (and (stringp state) (downcase state))))))
+
 (defun decknix-worktree-picker--audit-report-real ()
   "Return the audit grouped as ((repo . (primary worktrees...)) ...).
 
@@ -212,10 +236,9 @@ placeholder so the column reads as `no PR' at a glance."
                  (active (cdr (assoc 'active wt)))
                  (merged (cdr (assoc 'merged wt)))
                  (age (cdr (assoc 'age_days wt)))
-                 (pr-state (gethash (cons (and repo-key (downcase repo-key))
-                                          branch)
-                                    pr-map
-                                    "-"))
+                 (pr-state (or (decknix-worktree-picker--pr-state-for
+                                repo-key branch pr-map)
+                               "-"))
                  (closed (string= pr-state "closed")))
 
             (when (and

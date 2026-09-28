@@ -550,4 +550,47 @@ regression back to shelling out fails loudly rather than just being slow."
         (should (= 2 (length wts)))))))
 
 
+;; -- PR state falls back to the remembered PR -------------------------
+;;
+;; The map is built from `github-wip.json', which carries OPEN PRs only, so
+;; the column was empty for most rows: a worktree usually outlives its PR.
+;; Measured 2026-09-28: of 34 branches, 11 had MERGED PRs and 7 CLOSED, all
+;; rendering as `-'.
+
+(ert-deftest decknix-wtp-pr-state--open-feed-wins ()
+  "A branch in the open feed uses that state without consulting memory."
+  (let ((map (make-hash-table :test 'equal)))
+    (puthash (cons "o/r" "br") "open" map)
+    (cl-letf (((symbol-function 'decknix--hub-pr-memory-lookup)
+               (lambda (&rest _) (error "memory must not be consulted"))))
+      (should (equal "open" (decknix-worktree-picker--pr-state-for "O/R" "br" map))))))
+
+(ert-deftest decknix-wtp-pr-state--falls-back-to-memory-for-merged ()
+  "A merged PR is absent from the feed and resolved through memory."
+  (let ((map (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'decknix--hub-pr-memory-lookup)
+               (lambda (_repo _branch) '(:number 20 :url "https://x/pull/20")))
+              ((symbol-function 'decknix--hub-pr-status)
+               (lambda (_url) '((state . "MERGED")))))
+      (should (equal "merged"
+                     (decknix-worktree-picker--pr-state-for "o/r" "br" map))))))
+
+(ert-deftest decknix-wtp-pr-state--unknown-stays-nil ()
+  "No feed entry and no memory yields nil, which renders as `-'.
+Guessing a state would be worse than an empty column."
+  (let ((map (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'decknix--hub-pr-memory-lookup)
+               (lambda (&rest _) nil)))
+      (should-not (decknix-worktree-picker--pr-state-for "o/r" "br" map)))))
+
+(ert-deftest decknix-wtp-pr-state--memory-without-status-stays-nil ()
+  "A remembered PR whose state has not loaded does not invent one."
+  (let ((map (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'decknix--hub-pr-memory-lookup)
+               (lambda (&rest _) '(:number 20 :url "https://x/pull/20")))
+              ((symbol-function 'decknix--hub-pr-status)
+               (lambda (_url) nil)))
+      (should-not (decknix-worktree-picker--pr-state-for "o/r" "br" map)))))
+
+
 (provide 'decknix-worktree-picker-test)
