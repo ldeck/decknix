@@ -61,7 +61,7 @@ consult via `decknix-agent-purpose-resolve'.")
 
 (defvar decknix-agent-known-models
   '((auggie      . ("prism-a" "opus4.7" "sonnet4.6" "haiku4.5"))
-    (claude-code . ("sonnet" "opus" "haiku"))
+    (claude-code . ("default" "sonnet" "opus" "haiku" "opus[1m]"))
     (pi          . nil)
     (gemini      . nil)
     (opencode    . nil)
