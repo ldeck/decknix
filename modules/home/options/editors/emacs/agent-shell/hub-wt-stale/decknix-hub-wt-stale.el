@@ -96,7 +96,11 @@ its own primary alongside them."
                               (list :merged (and (alist-get 'merged wt) t)
                                     :orphan (and (alist-get 'orphan wt) t)
                                     :active (and (alist-get 'active wt) t)
-                                    :dirty (and (alist-get 'dirty wt) t)))
+                                    :dirty (and (alist-get 'dirty wt) t)
+                                    :repo (alist-get 'repo repo)
+                                    :branch (alist-get 'branch wt)
+                                    :path path
+                                    :age (alist-get 'age_days wt)))
                         out))))))
         (nreverse out)))))
 
@@ -160,6 +164,21 @@ subprocess per paint."
                (when (decknix--hub-wt-stale-p facts) (push path paths)))
              decknix--hub-wt-facts)
     (sort paths #'string<)))
+
+(defun decknix-hub-wt-rows ()
+  "Return every cached worktree record, newest audit first.
+
+The picker renders from this rather than shelling out: a synchronous
+`decknix wt audit --json' per paint froze Emacs, and every filter toggle
+calls `revert-buffer', so each keystroke paid for a fresh subprocess."
+  (let (rows)
+    (maphash (lambda (_path facts) (push facts rows)) decknix--hub-wt-facts)
+    rows))
+
+(defun decknix-hub-wt-cache-ready-p ()
+  "Return non-nil when an audit has completed at least once."
+  (and decknix--hub-wt-facts-ts
+       (> (hash-table-count decknix--hub-wt-facts) 0)))
 
 (defun decknix-hub-wt-toggle-hide-stale ()
   "Toggle whether provably stale worktrees are hidden from the sidebar."
