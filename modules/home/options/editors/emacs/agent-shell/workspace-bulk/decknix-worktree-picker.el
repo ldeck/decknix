@@ -400,6 +400,9 @@ want to read it without expanding everything."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "m") #'decknix-worktree-picker-mark)
     (define-key map (kbd "u") #'decknix-worktree-picker-unmark)
+    (define-key map (kbd "b") #'decknix-worktree-picker-browse-pr)
+    (define-key map (kbd "c") #'decknix-worktree-picker-copy-pr-url)
+    (define-key map (kbd "o") #'decknix-worktree-picker-dired)
     (define-key map (kbd "M") #'decknix-worktree-picker-mark-all)
     (define-key map (kbd "U") #'decknix-worktree-picker-unmark-all)
     (define-key map (kbd "p") #'decknix-worktree-picker-prune)
@@ -446,6 +449,11 @@ want to read it without expanding everything."
      :help "Tag the current row for the next Operate verb"]
     ["Unmark this worktree" decknix-worktree-picker-unmark
      :help "Clear the tag on the current row"]
+    ["Browse PR (marked, or at point)" decknix-worktree-picker-browse-pr
+     :help "Open the PR for each marked row, or the row at point"]
+    ["Copy PR URL"              decknix-worktree-picker-copy-pr-url]
+    ["Open worktree in Dired"   decknix-worktree-picker-dired]
+    "--"
     ["Mark all listed"          decknix-worktree-picker-mark-all
      :help "Mark every row the current filters leave visible"]
     ["Unmark all"           decknix-worktree-picker-unmark-all
@@ -519,6 +527,8 @@ view may look empty."
      "  "
      (propertize "m" 'face 'font-lock-keyword-face) " mark  "
      (propertize "M" 'face 'font-lock-keyword-face) " mark-all  "
+     (propertize "b" 'face 'font-lock-keyword-face) " browse-pr  "
+     (propertize "o" 'face 'font-lock-keyword-face) " dired  "
      (propertize "u" 'face 'font-lock-keyword-face) " unmark  "
      (propertize "x" 'face 'font-lock-keyword-face) " prune  "
      (propertize "g" 'face 'font-lock-keyword-face) " refresh  "
@@ -622,6 +632,70 @@ stale file cannot inject arbitrary variables."
                 (set (car cell) (cdr cell))))))
       (error (message "worktree picker: state restore failed: %s"
                       (error-message-string err))))))
+
+(defun decknix-worktree-picker--pr-url-for (repo branch)
+  "Return the PR URL for BRANCH in REPO, or nil.
+
+The open feed carries a URL for a live PR; a merged or closed one is gone from
+it, so the remembered PR supplies the URL instead. Same two sources the PR
+State column resolves from, so a row showing `merged' can always be opened."
+  (or (let (found)
+        (dolist (repo-entry (alist-get 'repos decknix--hub-wip))
+          (let ((r (alist-get 'repo repo-entry)))
+            (when (and r (equal (downcase r) (and repo (downcase repo))))
+              (dolist (pr (alist-get 'prs repo-entry))
+                (when (equal (alist-get 'branch pr) branch)
+                  (setq found (alist-get 'url pr)))))))
+        found)
+      (when (fboundp 'decknix--hub-pr-memory-lookup)
+        (plist-get (decknix--hub-pr-memory-lookup repo branch) :url))))
+
+(defun decknix-worktree-picker--rows-to-act-on ()
+  "Return the marked rows, or the row at point when nothing is marked."
+  (or (decknix-worktree-picker--get-marked)
+      (when-let ((id (tabulated-list-get-id))) (list id))))
+
+(defun decknix-worktree-picker-browse-pr ()
+  "Open the PR for the marked rows, or the row at point.
+
+Mirrors the sidebar's `b': a worktree row is about a PR, and having to find
+that PR by hand was the gap between the picker and every other surface."
+  (interactive)
+  (let ((rows (decknix-worktree-picker--rows-to-act-on))
+        (opened 0)
+        (missing nil))
+    (if (null rows)
+        (message "No worktree here")
+      (dolist (id rows)
+        (let* ((repo (nth 0 id))
+               (branch (nth 1 id))
+               (url (decknix-worktree-picker--pr-url-for repo branch)))
+          (if url
+              (progn (browse-url url) (setq opened (1+ opened)))
+            (push branch missing))))
+      (message "Opened %d PR%s%s" opened (if (= opened 1) "" "s")
+               (if missing
+                   (format "; no PR known for %s"
+                           (mapconcat #'identity (nreverse missing) ", "))
+                 "")))))
+
+(defun decknix-worktree-picker-copy-pr-url ()
+  "Copy the PR URL for the row at point."
+  (interactive)
+  (let* ((id (tabulated-list-get-id))
+         (url (and id (decknix-worktree-picker--pr-url-for (nth 0 id) (nth 1 id)))))
+    (cond ((null id) (message "No worktree here"))
+          ((null url) (message "No PR known for %s" (nth 1 id)))
+          (t (kill-new url) (message "Copied %s" url)))))
+
+(defun decknix-worktree-picker-dired ()
+  "Open the worktree directory for the row at point."
+  (interactive)
+  (let* ((id (tabulated-list-get-id))
+         (path (and id (nth 2 id))))
+    (cond ((null path) (message "No worktree here"))
+          ((not (file-directory-p path)) (message "Gone from disk: %s" path))
+          (t (dired path)))))
 
 (defun decknix-worktree-picker-mark-all ()
   "Mark every listed worktree for removal.
