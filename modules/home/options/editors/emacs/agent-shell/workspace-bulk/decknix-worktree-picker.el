@@ -709,6 +709,53 @@ ignore them."
              (summary (format "Prune %d marked worktrees (sweep branch/dir/metadata)? " count)))
         (decknix--wt-run-prune-sweep paths summary)))))
 
+(defun decknix--wt-prune-refresh-after ()
+  "Repaint the picker and sidebar once a prune has finished."
+  (when-let ((buf (get-buffer "*decknix worktree picker*")))
+    (with-current-buffer buf
+      (when (derived-mode-p 'decknix-worktree-picker-mode)
+        (revert-buffer))))
+  (when (fboundp 'decknix--hub-wt-audit-refresh)
+    (decknix--hub-wt-audit-refresh))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (ignore-errors (agent-shell-workspace-sidebar-refresh))))
+
+(defun decknix--wt-run-prune-async (args label paths-file)
+  "Run `decknix ARGS' asynchronously, streaming into a buffer named LABEL.
+
+Asynchronous because a sweep removes a directory and deletes a branch per
+worktree: 44 of them blocked Emacs for the duration under
+`shell-command-to-string', for an operation the user has no reason to wait on.
+
+PATHS-FILE is deleted in the sentinel rather than by the caller -- the
+subprocess is still reading it after the caller returns."
+  (let ((buffer (get-buffer-create label)))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "$ decknix %s\n\n" (mapconcat #'identity args " ")))))
+    (display-buffer buffer)
+    (make-process
+     :name "decknix-wt-prune"
+     :buffer buffer
+     :noquery t
+     :command (cons "decknix" args)
+     :sentinel
+     (lambda (proc event)
+       (when (string-match-p "\\`\\(finished\\|exited\\|deleted\\|failed\\)" event)
+         (when paths-file (ignore-errors (delete-file paths-file)))
+         (let ((ok (and (eq (process-status proc) 'exit)
+                        (zerop (process-exit-status proc)))))
+           (when (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (let ((inhibit-read-only t))
+                 (goto-char (point-max))
+                 (insert (format "\n[%s]\n" (string-trim event))))))
+           (decknix--wt-prune-refresh-after)
+           (message "Prune %s -- see %s"
+                    (if ok "complete" "FAILED")
+                    label)))))))
+
 (defun decknix--wt-run-prune-sweep (paths summary)
   "Run the full prune sweep on PATHS with SUMMARY prompt.
 If PATHS is nil, runs a general sweep of all stale worktrees."
@@ -730,23 +777,15 @@ If PATHS is nil, runs a general sweep of all stale worktrees."
             (setq args (append args '("--force")))
           (setq choice ?q)))
       (pcase choice
-        (?q (message "Aborted"))
-        (?d (let ((out (shell-command-to-string (mapconcat #'identity (append '("decknix") args) " "))))
-              (with-current-buffer (get-buffer-create "*decknix prune dry-run*")
-                (let ((inhibit-read-only t))
-                  (erase-buffer)
-                  (insert out)
-                  (goto-char (point-min))
-                  (display-buffer (current-buffer))))))
-        ((or ?c ?f) (let ((final-args (append args '("--apply"))))
-              (message "Pruning...")
-              (let ((out (shell-command-to-string (mapconcat #'identity (append '("decknix") final-args) " "))))
-                (message "Prune complete:\n%s" (string-trim out))
-                (when (derived-mode-p 'decknix-worktree-picker-mode)
-                  (decknix-worktree-picker-save-state)
-  (revert-buffer))))))
-      (when paths-file
-        (delete-file paths-file)))))
+        (?q
+         (when paths-file (ignore-errors (delete-file paths-file)))
+         (message "Aborted"))
+        (?d
+         (decknix--wt-run-prune-async args "*decknix prune dry-run*" paths-file))
+        ((or ?c ?f)
+         (message "Pruning in the background...")
+         (decknix--wt-run-prune-async (append args '("--apply"))
+                                      "*decknix prune*" paths-file))))))
 
 (defun decknix-worktree-picker-toggle-primary-branch ()
   "Toggle whether rows on a primary branch are listed."
