@@ -327,6 +327,7 @@ want to read it without expanding everything."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "m") #'decknix-worktree-picker-mark)
     (define-key map (kbd "u") #'decknix-worktree-picker-unmark)
+    (define-key map (kbd "M") #'decknix-worktree-picker-mark-all)
     (define-key map (kbd "U") #'decknix-worktree-picker-unmark-all)
     (define-key map (kbd "p") #'decknix-worktree-picker-prune)
     (define-key map (kbd "x") #'decknix-worktree-picker-prune) ;; Default x to prune sweep now
@@ -372,6 +373,8 @@ want to read it without expanding everything."
      :help "Tag the current row for the next Operate verb"]
     ["Unmark this worktree" decknix-worktree-picker-unmark
      :help "Clear the tag on the current row"]
+    ["Mark all listed"          decknix-worktree-picker-mark-all
+     :help "Mark every row the current filters leave visible"]
     ["Unmark all"           decknix-worktree-picker-unmark-all
      :help "Clear every tag in the buffer"]))
 
@@ -442,6 +445,7 @@ view may look empty."
      (propertize " Worktree Picker " 'face '(:background "#3d5a80" :foreground "white"))
      "  "
      (propertize "m" 'face 'font-lock-keyword-face) " mark  "
+     (propertize "M" 'face 'font-lock-keyword-face) " mark-all  "
      (propertize "u" 'face 'font-lock-keyword-face) " unmark  "
      (propertize "x" 'face 'font-lock-keyword-face) " prune  "
      (propertize "g" 'face 'font-lock-keyword-face) " refresh  "
@@ -497,6 +501,24 @@ Column widths:
   "Unmark current worktree."
   (interactive)
   (tabulated-list-put-tag " " t))
+
+(defun decknix-worktree-picker-mark-all ()
+  "Mark every listed worktree for removal.
+
+Marks what is CURRENTLY LISTED, so the filters are the selection: narrow
+with `f M' / `f O' / `f C' and the age and repo restrictions first, then
+mark the result. Without this, clearing a backlog meant pressing `m' once
+per row -- 26 times for the stale set measured on 2026-09-28."
+  (interactive)
+  (let ((n 0))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (when (tabulated-list-get-id)
+          (tabulated-list-put-tag "D")
+          (setq n (1+ n)))
+        (forward-line 1)))
+    (message "Marked %d worktree%s" n (if (= n 1) "" "s"))))
 
 (defun decknix-worktree-picker-unmark-all ()
   "Unmark all worktrees."
