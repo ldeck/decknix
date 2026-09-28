@@ -256,5 +256,36 @@ no action was chosen and that nothing was enqueued."
     (should (equal '(nil . 0)
                    (decknix-auto-review-test--dispatch :mentioned nil)))))
 
+;; -- team-requested reviews count as mine -----------------------------
+;;
+;; `attom-integration' and `followupboss-integration' never assign individual
+;; reviewers; CODEOWNERS tags the team. Their PRs arrive with `mentioned' nil
+;; and `team_requested' t, so eligibility keyed on `mentioned' alone dispatched
+;; nothing. Observed on attom #294-#297, all four from jonathan-lo.
+
+(ert-deftest decknix-auto-review-requested--individual-request-counts ()
+  "A direct request is still eligible."
+  (should (decknix-auto-review--requested-of-me-p '((mentioned . t)))))
+
+(ert-deftest decknix-auto-review-requested--team-request-counts ()
+  "A team-only request is eligible, which is the reported gap."
+  (should (decknix-auto-review--requested-of-me-p
+           '((mentioned . nil) (team_requested . t)))))
+
+(ert-deftest decknix-auto-review-requested--neither-is-not-eligible ()
+  "A PR that asks nothing of me must not dispatch a session."
+  (should-not (decknix-auto-review--requested-of-me-p
+               '((mentioned . nil) (team_requested . nil))))
+  (should-not (decknix-auto-review--requested-of-me-p '())))
+
+(ert-deftest decknix-auto-review-requested--opt-out-restores-old-behaviour ()
+  "With the option off, a team request is ignored again.
+Wanted where a team carries more PRs than the viewer intends to review."
+  (let ((decknix-auto-review-include-team-requests nil))
+    (should-not (decknix-auto-review--requested-of-me-p
+                 '((mentioned . nil) (team_requested . t))))
+    (should (decknix-auto-review--requested-of-me-p '((mentioned . t))))))
+
+
 (provide 'decknix-auto-review-test)
 ;;; decknix-auto-review-test.el ends here

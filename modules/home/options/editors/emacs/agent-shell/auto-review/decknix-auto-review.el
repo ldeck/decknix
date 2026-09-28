@@ -99,6 +99,7 @@ guard takes over once the buffer exists).")
                   "decknix-hub-review-identity" (repo number))
 (declare-function decknix--hub-request-priority
                   "decknix-hub-attention-filter" (item))
+(declare-function decknix--hub-item-team-requested-p "decknix-hub-mention-bot" (item))
 (declare-function decknix--hub-item-mentioned-p "decknix-hub-mention-bot")
 (declare-function decknix--hub-requests-draft-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-requests-conflict-visible-p "decknix-hub-attention-filter")
@@ -257,6 +258,26 @@ NUMBER is normalised so int and string forms collapse to one key."
 ;; on every reviews refresh is wired in the heredoc (a side-effect,
 ;; per AGENTS.md Rule 2).
 
+(defcustom decknix-auto-review-include-team-requests t
+  "When non-nil, a review requested of one of my TEAMS counts as mine.
+
+Some repos never assign individual reviewers and rely on the CODEOWNERS team
+being tagged -- `attom-integration' and `followupboss-integration' both do.
+Those PRs arrive with `mentioned' nil and `team_requested' t, so an
+eligibility test keyed on `mentioned' alone dispatched nothing for them.
+
+Set to nil to go back to individual requests only, which is the right choice
+if a team you are in carries more PRs than you intend to review."
+  :type 'boolean
+  :group 'decknix)
+
+(defun decknix-auto-review--requested-of-me-p (item)
+  "Return non-nil when ITEM asks for MY review, directly or via a team."
+  (or (decknix--hub-item-mentioned-p item)
+      (and decknix-auto-review-include-team-requests
+           (fboundp 'decknix--hub-item-team-requested-p)
+           (decknix--hub-item-team-requested-p item))))
+
 (defun decknix-auto-review--eligible-action (item)
   "Return the dispatch action for ITEM, or nil when it must not dispatch.
 
@@ -264,7 +285,7 @@ Was the head of the old per-item dispatcher, which grouping replaced:
 eligibility for the whole tick has to be known BEFORE deciding how many
 sessions to launch.  Same conditions as before, in the same order."
   (let* ((bot-p (decknix--hub-bot-author-p (alist-get 'author item)))
-         (mentioned-p (decknix--hub-item-mentioned-p item))
+         (mentioned-p (decknix-auto-review--requested-of-me-p item))
          (draft-p (not (decknix--hub-requests-draft-visible-p item)))
          (conflicting-p (not (decknix--hub-requests-conflict-visible-p item)))
          (action (decknix-auto-review-item-action
