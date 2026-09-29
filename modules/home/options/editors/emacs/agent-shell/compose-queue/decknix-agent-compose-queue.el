@@ -137,6 +137,95 @@ queue at all -- the user needs to know it is waiting on them."
           (format "%d queued, held (%s)" n held-reason)
         (format "%d queued" n)))))
 
+(defconst decknix--compose-queue-boundary "---"
+  "Line marking a TURN boundary when a queue is drained into compose.
+
+A markdown horizontal rule, so a drained queue still reads as a document.
+Distinct from `decknix--compose-queue-combine-separator' on purpose: a
+blank line separates paragraphs WITHIN one turn, this separates turns.  That
+is what lets `decknix--compose-queue-combine' be a real combine -- its
+output carries no boundary, so a later drain cannot split it back apart.")
+
+(defconst decknix--compose-queue-boundary-regexp
+  "^[ \t]*---[ \t]*$"
+  "Regexp matching a `decknix--compose-queue-boundary' line.
+Anchored to a whole line: a `---' inside prose is not a turn boundary.")
+
+(defun decknix--compose-queue-drain-text (queue)
+  "Return QUEUE as one editable document, turns separated by a rule.
+Nil when the queue is empty.  Round-trips through
+`decknix--compose-queue-split-text'."
+  (let ((pending (decknix--compose-queue-normalise queue)))
+    (when pending
+      (mapconcat #'identity pending
+                 (concat "\n\n" decknix--compose-queue-boundary "\n\n")))))
+
+(defun decknix--compose-queue-split-text (text)
+  "Return TEXT split back into a list of turns on boundary lines.
+
+Empty segments are dropped, so a stray leading or trailing rule -- or two
+in a row after an edit deleted a turn's body -- yields no empty prompt.
+Each turn is trimmed, since the rule is surrounded by blank lines."
+  (let ((parts (split-string (or text "")
+                             decknix--compose-queue-boundary-regexp)))
+    (seq-filter (lambda (part) (not (string-empty-p part)))
+                (mapcar #'string-trim parts))))
+
+;; -- dispatch tables for the two prompts -------------------------------
+;;
+;; Pure relative to `read-char-choice', which the suite stubs, and shaped
+;; like `decknix--compose-busy-action' so both busy prompts read alike.
+
+(defconst decknix--compose-queue-enqueue-prompt
+  "%d already queued: [a]ppend  [r]eplace all  [j]oin into one turn  [c]ancel "
+  "Prompt shown when queueing onto a non-empty queue.")
+
+(defun decknix--compose-queue-enqueue-action (queued-count)
+  "Return the dispatch symbol for queueing onto a queue of QUEUED-COUNT.
+
+Returns `append' without asking when the queue is empty: the question only
+exists because a second message used to destroy the first, and there is
+nothing to destroy at zero.
+
+  `append'   add at the end (the default, and the old behaviour)
+  `replace'  drop what is queued and keep only the new message
+  `combine'  collapse queue and new message into a single turn
+  `cancel'   queue nothing"
+  (if (or (null queued-count) (zerop queued-count))
+      'append
+    (pcase (read-char-choice
+            (format decknix--compose-queue-enqueue-prompt queued-count)
+            '(?a ?r ?j ?c))
+      (?a 'append)
+      (?r 'replace)
+      (?j 'combine)
+      (?c 'cancel))))
+
+(defconst decknix--compose-queue-interrupt-prompt
+  "%d queued: [f]irst-then-queue  [o]nly-this (drop queue)  [l]ast (after queue)  [c]ancel "
+  "Prompt shown when interrupting with a non-empty queue.")
+
+(defun decknix--compose-queue-interrupt-action (queued-count)
+  "Return the dispatch symbol for interrupting with QUEUED-COUNT queued.
+
+Returns `first' without asking when nothing is queued.  The point of the
+prompt is the ORDERING, which was previously silent: interrupting submitted
+the new message and the older queued ones then ran BEHIND it.
+
+  `first'  submit this now, the queue follows (the old behaviour)
+  `only'   submit this and drop the queue
+  `last'   append this to the queue so everything runs in the order queued
+  `cancel'  do nothing"
+  (if (or (null queued-count) (zerop queued-count))
+      'first
+    (pcase (read-char-choice
+            (format decknix--compose-queue-interrupt-prompt queued-count)
+            '(?f ?o ?l ?c))
+      (?f 'first)
+      (?o 'only)
+      (?l 'last)
+      (?c 'cancel))))
+
 (defun decknix--compose-queue-entry-label (input index &optional width)
   "Return a one-line completion label for INPUT at INDEX.
 Newlines collapse to spaces and the text is truncated to WIDTH (default

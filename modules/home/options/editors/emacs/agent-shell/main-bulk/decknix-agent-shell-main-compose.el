@@ -78,6 +78,14 @@
                   "decknix-agent-compose-queue" (queue &optional held-reason))
 (declare-function decknix--compose-queue-entry-label
                   "decknix-agent-compose-queue" (input index &optional width))
+(declare-function decknix--compose-queue-drain-text
+                  "decknix-agent-compose-queue" (queue))
+(declare-function decknix--compose-queue-split-text
+                  "decknix-agent-compose-queue" (text))
+(declare-function decknix--compose-queue-enqueue-action
+                  "decknix-agent-compose-queue" (queued-count))
+(declare-function decknix--compose-queue-interrupt-action
+                  "decknix-agent-compose-queue" (queued-count))
 (declare-function decknix--header-detect-status "decknix-agent-header" ())
 (declare-function decknix--compose-wait-not-busy
                   "decknix-agent-compose-wait"
@@ -305,11 +313,13 @@ Without prefix, toggle inline header. With prefix, open side panel."
     (define-key map (kbd "d") #'decknix-agent-queue-drop)
     (define-key map (kbd "k") #'decknix-agent-queue-clear)
     (define-key map (kbd "j") #'decknix-agent-queue-combine)
+    (define-key map (kbd "e") #'decknix-agent-queue-edit)
     (define-key map (kbd "f") #'decknix-agent-queue-flush)
     map)
   "Queue commands, bound under \`C-c q' in compose mode and \`C-c A Q'
 in an agent-shell buffer (\`C-c A q' is session-quit).
 \`s' show, \`d' drop one, \`k' clear, \`j' join into one turn,
+\`e' edit (drain into compose; \`C-u' for one entry),
 \`f' flush (release a held queue, or interrupt a busy agent).")
 
 (defvar decknix-agent-compose-mode-map
@@ -351,6 +361,9 @@ C-c k k interrupt agent, C-c k C-c interrupt & submit."
 Resets prompt history navigation state."
   ;; Reset all history navigation state (rebuilt on next M-p)
   (decknix--compose-history-reset)
+  ;; A sticky buffer survives the submit, so leaving this set would split
+  ;; every later prompt that happened to contain a `---' line.
+  (setq-local decknix--compose-drained nil)
   (if decknix--compose-sticky
       (progn
         (erase-buffer)
@@ -433,12 +446,35 @@ cancel/submit/wait/hold decision is pinned by
       ('wait
        (setq decknix--compose-queue-held nil)))))
 
-(defun decknix--compose-enqueue-prompt (target input)
-  "Add INPUT to TARGET buffer's queue, for submission when the agent is idle."
+(defun decknix--compose-queue-count (target)
+  "Return how many prompts are queued on TARGET."
+  (if (buffer-live-p target)
+      (with-current-buffer target
+        (length (decknix--compose-queue-normalise
+                 decknix--compose-queued-prompt)))
+    0))
+
+(defun decknix--compose-enqueue-prompt (target input &optional mode)
+  "Add INPUT to TARGET buffer's queue, for submission when the agent is idle.
+
+INPUT may be a string or a list of turns (a drained document split back on
+its boundary rules).  MODE is `append' (default), `replace' or `combine',
+as resolved by `decknix--compose-queue-enqueue-action'.  Returns the new
+queue length, or nil when nothing was queued."
   (when (buffer-live-p target)
     (with-current-buffer target
-      (setq decknix--compose-queued-prompt
-            (decknix--compose-queue-append decknix--compose-queued-prompt input))
+      (let ((incoming (if (listp input) input (list input))))
+        (setq decknix--compose-queued-prompt
+              (pcase mode
+                ('replace incoming)
+                ('combine
+                 (list (decknix--compose-queue-combine
+                        (append (decknix--compose-queue-normalise
+                                 decknix--compose-queued-prompt)
+                                incoming))))
+                (_ (seq-reduce #'decknix--compose-queue-append
+                               incoming
+                               decknix--compose-queued-prompt)))))
       ;; Start a polling timer (every 1s) if not already running
       (unless (and decknix--compose-queue-timer
                   (memq decknix--compose-queue-timer timer-list))
@@ -450,9 +486,8 @@ cancel/submit/wait/hold decision is pinned by
                           (with-current-buffer ,target
                             (decknix--compose-queue-poll))))
                      t))))
-      (message "%s" (decknix--compose-queue-summary
-                     decknix--compose-queued-prompt
-                     decknix--compose-queue-held)))))
+      (length (decknix--compose-queue-normalise
+               decknix--compose-queued-prompt)))))
 
 ;; -- Queue inspection and control --
 ;;
@@ -549,6 +584,68 @@ asked; this is the explicit opt-in to one turn."
         (setq decknix--compose-queued-prompt
               (list (decknix--compose-queue-combine pending)))
         (message "Combined %d prompts into one turn" (length pending)))))))
+
+(defvar-local decknix--compose-drained nil
+  "Non-nil when this compose buffer was filled by draining the queue.
+
+Gates boundary splitting on submit.  Splitting every buffer containing a
+`---' line would turn an ordinary prompt that happens to use a markdown
+rule into several turns, so only a buffer we ourselves drained is split.")
+
+(defun decknix--compose-submit-turns (input)
+  "Return INPUT as the list of turns to queue.
+
+One turn normally.  A drained buffer is split back on its boundary rules,
+so editing N queued messages and re-queueing gives N turns again rather
+than collapsing them into one."
+  (if decknix--compose-drained
+      (or (decknix--compose-queue-split-text input) (list input))
+    (list input)))
+
+(defun decknix-agent-queue-edit (&optional one)
+  "Drain this session's queue into a compose buffer for editing.
+
+Turns are separated by a `---' rule, which is a real boundary: submitting
+or re-queueing splits on it, so N edited messages go back as N turns.  The
+queue is emptied first -- what is in the compose buffer IS the queue now,
+and leaving a copy behind would double-send it.
+
+With prefix argument ONE, pick a single entry instead of draining all."
+  (interactive "P")
+  (let ((target (decknix--compose-queue-buffer)))
+    (unless (buffer-live-p target)
+      (user-error "No session for this queue"))
+    (let ((pending (with-current-buffer target
+                     (decknix--compose-queue-normalise
+                      decknix--compose-queued-prompt))))
+      (unless pending
+        (user-error "Nothing queued"))
+      (let* ((labels (seq-map-indexed
+                      (lambda (in i) (decknix--compose-queue-entry-label in i))
+                      pending))
+             (index (when one
+                      (seq-position
+                       labels
+                       (completing-read "Edit queued prompt: " labels nil t))))
+             (taken (if index (list (nth index pending)) pending))
+             (text (decknix--compose-queue-drain-text taken)))
+        (with-current-buffer target
+          (setq decknix--compose-queued-prompt
+                (if index
+                    (decknix--compose-queue-drop pending index)
+                  nil)
+                decknix--compose-queue-held nil)
+          (unless decknix--compose-queued-prompt
+            (decknix--compose-queue-cancel-timer)))
+        (let ((compose (decknix--compose-get-or-create target)))
+          (with-current-buffer compose
+            (erase-buffer)
+            (insert text)
+            (setq-local decknix--compose-drained t)
+            (goto-char (point-min)))
+          (message "%d turn%s drained for editing -- C-c C-c to re-queue"
+                   (length taken) (if (= 1 (length taken)) "" "s"))
+          compose)))))
 
 (defun decknix-agent-queue-flush ()
   "Release a held queue, or interrupt a busy agent to send it now.
@@ -647,10 +744,36 @@ interrupt."
           ('cancel
            (user-error "Submit cancelled — agent is still processing"))
           ('queue
-           (decknix--compose-enqueue-prompt target input)
-           (decknix--compose-finish)
-           (message "Prompt queued — will submit when agent is ready"))
+           (let* ((turns (decknix--compose-submit-turns input))
+                  (queued (decknix--compose-queue-count target))
+                  (mode (decknix--compose-queue-enqueue-action queued)))
+             (if (eq mode 'cancel)
+                 (user-error "Nothing queued — existing queue left alone")
+               (let ((n (decknix--compose-enqueue-prompt target turns mode)))
+                 (decknix--compose-finish)
+                 (message "Queued (%d pending) — will submit when agent is ready"
+                          (or n 0))))))
           ('interrupt-submit
+           ;; The ordering used to be silent: this message ran first and the
+           ;; older queued ones followed BEHIND it.
+           (let ((choice (decknix--compose-queue-interrupt-action
+                          (decknix--compose-queue-count target))))
+             (when (eq choice 'cancel)
+               (user-error "Interrupt cancelled"))
+             (pcase choice
+               ('only (with-current-buffer target
+                        (setq decknix--compose-queued-prompt nil
+                              decknix--compose-queue-held nil)
+                        (decknix--compose-queue-cancel-timer)))
+               ('last
+                ;; Chronological order: this message goes behind what was
+                ;; queued before it, and the interrupt lets the queue drain.
+                (decknix--compose-enqueue-prompt
+                 target (decknix--compose-submit-turns input) 'append)
+                (with-current-buffer target
+                  (setq decknix--compose-queue-release t))
+                (setq input nil))
+               (_ nil)))
            (with-current-buffer target
              (when (fboundp 'agent-shell-interrupt)
                (let ((agent-shell-confirm-interrupt nil))
@@ -662,16 +785,29 @@ interrupt."
            (decknix--compose-wait-not-busy
             target
             (lambda ()
-              (decknix--compose-submit-after-wait target input))))
+              ;; Nil input means `last' put this message in the queue; the
+              ;; poller owns the send from here.
+              (when input
+                (decknix--compose-submit-after-wait target input)))))
           ('submit
            (unless (and (buffer-live-p target)
                         (get-buffer-process target)
                         (process-live-p (get-buffer-process target)))
              (user-error "Agent process not running — wait for it to start or restart with C-c A a"))
-           (decknix--compose-finish)
-           (with-current-buffer target
-             (goto-char (point-max))
-             (shell-maker-submit :input input)))))))))
+           ;; A drained document is N turns, so the agent being idle means
+           ;; send the first and queue the rest rather than collapsing them.
+           (let* ((turns (decknix--compose-submit-turns input))
+                  (rest (cdr turns))
+                  (head (car turns)))
+             (decknix--compose-finish)
+             (when rest
+               (decknix--compose-enqueue-prompt target rest 'append))
+             (with-current-buffer target
+               (goto-char (point-max))
+               (shell-maker-submit :input head))
+             (when rest
+               (message "Submitted 1 of %d turns (%d queued)"
+                        (length turns) (length rest)))))))))))
 
 (defun decknix-agent-compose-interrupt-agent ()
   "Pre-emptively interrupt the agent without submitting.
