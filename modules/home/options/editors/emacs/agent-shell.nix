@@ -1490,6 +1490,7 @@ let
     packageRequires = [ decknix-agent-tags-store-el ];
     testFiles = [
       "decknix-agent-session-model-test.el"
+      "decknix-agent-session-model-live-test.el"
     ];
   };
 

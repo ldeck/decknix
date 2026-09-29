@@ -36,6 +36,50 @@
 ;;; Code:
 
 (require 'decknix-agent-tags-store)
+(require 'map)
+
+(defun decknix--agent-model-id-from-state (state)
+  "Return the model id from agent-shell STATE, or nil.  Pure.
+
+Reads `:config-options' first.  The adapter reports the live model as the
+`model' config option's `:current-value'; `(:session :model-id)' is nil in
+current builds, which is why the save-on-change callback silently recorded
+nothing -- its `when' guard never passed, for any provider.  The old path is
+still tried second so an older adapter keeps working."
+  (or (let ((options (alist-get :config-options state))
+            (found nil))
+        (dolist (opt options)
+          (when (and (not found) (equal (alist-get :id opt) "model"))
+            (setq found (alist-get :current-value opt))))
+        (and (stringp found) (not (string-empty-p found)) found))
+      (let ((legacy (ignore-errors
+                      (map-nested-elt state '(:session :model-id)))))
+        (and (stringp legacy) (not (string-empty-p legacy)) legacy))))
+
+(declare-function agent-shell--state "agent-shell" ())
+
+(defun decknix--agent-session-current-model-id ()
+  "Return the current buffer's live model id, or nil."
+  (decknix--agent-model-id-from-state (ignore-errors (agent-shell--state))))
+
+(defun decknix-agent-session-sync-model ()
+  "Record this buffer's LIVE model as the conversation's pin.
+
+For conversations whose model was changed while the save callback was
+reading a state path that no longer exists: the change took effect in the
+session but was never written, so the header and the resume path both still
+report the old model."
+  (interactive)
+  (let ((conv-key (bound-and-true-p decknix--agent-conv-key))
+        (live (decknix--agent-session-current-model-id)))
+    (cond
+     ((not (and conv-key live))
+      (message "No live model to record for this buffer"))
+     ((equal live (decknix--agent-session-model-for-conv-key conv-key))
+      (message "Model already recorded: %s" live))
+     (t
+      (decknix--agent-session-save-model-for-conv-key conv-key live)
+      (message "Model %s recorded for this conversation" live)))))
 
 (defun decknix--agent-session-model-for-conv-key (conv-key)
   "Return saved auggie model-id for CONV-KEY, or nil."
