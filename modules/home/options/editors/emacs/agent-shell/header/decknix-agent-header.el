@@ -242,6 +242,22 @@ the part can be cheaply skipped by `decknix--header-build'."
                           (when ws    (concat " @ " ws)))
                   'face 'font-lock-keyword-face))))
 
+(defun decknix--header-queue-badge ()
+  "Return a badge for this buffer's pending prompt queue, or nil.
+
+The queue had no indicator at all, so a message waiting to auto-submit --
+or one HELD because the session is asking you something -- was invisible.
+A held queue uses the warning face: it has stopped moving and only the
+user can restart it."
+  (when (and (fboundp 'decknix--compose-queue-summary)
+             (bound-and-true-p decknix--compose-queued-prompt))
+    (let* ((held (bound-and-true-p decknix--compose-queue-held))
+           (label (decknix--compose-queue-summary
+                   decknix--compose-queued-prompt held)))
+      (when label
+        (propertize (concat "⏳ " label)
+                    'face (if held 'warning 'font-lock-constant-face))))))
+
 (defun decknix--header-parts-fit-p (parts available)
   "Non-nil when PARTS joined with the standard separator fit in AVAILABLE."
   (<= (string-width (mapconcat #'identity (delq nil parts) "  │  ")) available))
@@ -369,6 +385,10 @@ renders as ^J, not a line break.  All items therefore live on one line."
              (mapconcat (lambda (tg) (format "#%s" tg)) tags " ")
              'face 'font-lock-type-face)
             parts))
+    ;; Item 3: Pending prompt queue (stable -- actionable, so it ranks
+    ;; above the context badge and upstream when the window narrows)
+    (when-let ((queue (decknix--header-queue-badge)))
+      (push queue parts))
     ;; Item 4: Context panel badge (stable)
     (let* ((ctx (when (fboundp 'decknix--context-header-string)
                   (decknix--context-header-string)))
