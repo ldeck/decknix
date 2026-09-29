@@ -149,6 +149,7 @@
 (declare-function decknix--hub-requests-reviewed-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-requests-conflict-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-toggle-requests-hide-conflict "decknix-hub-attention-filter")
+(declare-function decknix-review-board-review-url "decknix-review-board" (input))
 (declare-function decknix--hub-requests-draft-visible-p "decknix-hub-attention-filter")
 (declare-function decknix--hub-toggle-requests-hide-draft "decknix-hub-attention-filter")
 (declare-function decknix--hub-wip-attention-visible-p "decknix-hub-attention-filter")
@@ -3364,8 +3365,15 @@ Shows result in the echo area and triggers a hub refresh on success."
                   (transient-parse-suffix
                    transient--prefix
                    (list key label cmd))))
-       (list (transient-parse-suffix transient--prefix
-               '("q" "Quit" transient-quit-all)))))))
+       (list
+        ;; The nav keys are generated per row, so a pasted PR url can never
+        ;; match one -- it reports "no match" and the user is stuck. This is
+        ;; the verb for a PR the board does not list yet, reusing the board's
+        ;; own multi-url command.
+        (transient-parse-suffix transient--prefix
+          '("U" "Review PR url(s)…" decknix-review-board-review-url))
+        (transient-parse-suffix transient--prefix
+          '("q" "Quit" transient-quit-all)))))))
 
 ;; -- Consult-based section pickers --
 ;; All section navigation (r, w, l, p) uses consult for filtering.

@@ -398,7 +398,8 @@ pick up."
             ;; read-only screen need to be readable without asking.
             (propertize
              (concat "  n/p move   RET open   i inspect   c copy   j jump   m mark   M lane\n"
-                     "  d dispatch  k quit   D detach  s merge  A auto-review  x auto-dismiss  f filters  g refresh  ? help\n")
+                     "  d dispatch  k quit   D detach  s merge  A auto-review  x auto-dismiss  f filters  g refresh  ? help\n"
+                     "  r review a PR url not listed here\n")
              'face 'font-lock-comment-face)
             "\n"
             (propertize "  m  ● pri  row                                                  state\n"
@@ -801,6 +802,8 @@ them."
 
 NAVIGATE
   n / p, TAB      next / previous row
+  r               review PR url(s) not listed here -- paste one or several;
+                  the only verb that ADDS work rather than acting on a row
   RET / o         browse the PR on GitHub
   c / w           copy the PR URL(s) to the kill ring
   i               inspect: what this session is asking, or the PR detail
