@@ -324,13 +324,15 @@ Three states drive filtering (see `decknix--hub-requests-hide-reviewed'):
                (a colleague's standing APPROVED/CHANGES_REQUESTED/COMMENTED
                review) or the aggregate `review_decision' is conclusive.
 
-Three signals resurface a PR regardless of the hiding state (but never
+Four signals resurface a PR regardless of the hiding state (but never
 when the filter is nil):
   `re_requested'      — I reviewed and the author has requested me again.
   `comment_mentioned' — I was @-mentioned by name in a comment/review.
   `review_stale'      — the author moved the PR forward since the review
                         (a commit landed after it, or changes were
                         requested and all inline threads are now resolved).
+  `replies_to_me'     — a human posted after one of my comments and is
+                        waiting on me.
 
 These replace the old blanket `mentioned' override, which force-showed
 every PR where I was merely a currently-requested reviewer — defeating
@@ -343,6 +345,7 @@ is treated identically to `hide-any'."
          (re-requested (eq (alist-get 're_requested item) t))
          (comment-ment (eq (alist-get 'comment_mentioned item) t))
          (stale        (eq (alist-get 'review_stale item) t))
+         (replied-to-me (eq (alist-get 'replies_to_me item) t))
          (my-review    (alist-get 'my_review item))
          (decision     (alist-get 'review_decision item))
          (others-rev   (eq (alist-get 'others_reviewed item) t))
@@ -356,6 +359,12 @@ is treated identically to `hide-any'."
      ((or re-requested comment-ment) t)
      ;; Author moved it forward since the review — bring it back to look.
      (stale                          t)
+     ;; A human answered me and is now waiting.  `review_stale' only fires on
+     ;; a commit landing, so a reply that answers a question without touching
+     ;; the code stayed hidden — which is how a colleague ended up chasing a
+     ;; reply in person.  The `i_replied_last' filter still hides the ones
+     ;; where I spoke last.
+     (replied-to-me                  t)
      ((eq state 'hide-mine)          (not i-reviewed))  ; hide-mine: mine only
      (t                              (not any-reviewed))))) ; hide-any: anyone
 

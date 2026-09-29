@@ -334,5 +334,29 @@ silently disabled a dispatch guard."
                nil)))
 
 
+
+;; -- follow-up rows are not dispatch targets ---------------------------
+;;
+;; Requests now also carries PRs recovered by the hub\'s `--reviewed-by=@me\'
+;; source.  They exist so a human reply I owe is visible; dispatching a review
+;; session at one would re-review work already reviewed, unprompted.
+
+(ert-deftest decknix-auto-review--follow-up-row-is-not-requested-of-me ()
+  (should-not (decknix-auto-review--requested-of-me-p
+               '((mentioned . t) (review_requested_of_me . :json-false)))))
+
+(ert-deftest decknix-auto-review--follow-up-team-row-is-not-requested-of-me ()
+  "The hub already forces `team_requested' false on a follow-up row; this
+pins the client-side gate so both layers have to fail before a session runs."
+  (let ((decknix-auto-review-include-team-requests t))
+    (should-not (decknix-auto-review--requested-of-me-p
+                 '((team_requested . t)
+                   (review_requested_of_me . :json-false))))))
+
+(ert-deftest decknix-auto-review--standing-request-still-dispatches ()
+  (should (decknix-auto-review--requested-of-me-p
+           '((mentioned . t) (review_requested_of_me . t))))
+  (should (decknix-auto-review--requested-of-me-p '((mentioned . t)))))
+
 (provide 'decknix-auto-review-test)
 ;;; decknix-auto-review-test.el ends here
