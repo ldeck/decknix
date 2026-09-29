@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'decknix-agent-compose-queue)
 
 (ert-deftest decknix-compose-queue--dead-buffer-cancels ()
@@ -148,6 +149,80 @@ the queue indefinitely, since running unattended is its whole purpose."
   "A multi-line prompt has to stay pickable in the minibuffer."
   (should (equal "1: one two" (decknix--compose-queue-entry-label "one\ntwo" 0)))
   (should (equal "2: ab…" (decknix--compose-queue-entry-label "abc" 1 2))))
+
+
+;; -- drain and split: the turn boundary --------------------------------
+;;
+;; A drained queue has to come back as N turns, not one, so the boundary is a
+;; real marker rather than presentation.  `---' (a markdown rule) rather than
+;; a blank line, because a blank line separates paragraphs INSIDE one turn --
+;; which is what keeps `combine' a real combine.
+
+(ert-deftest decknix-compose-queue--drain-round-trips ()
+  "split(drain(q)) = q.  If this breaks, editing a queue silently reorders
+or merges the user's messages."
+  (dolist (queue '(("a") ("a" "b") ("one" "two" "three")
+                   ("multi\nline" "second")))
+    (should (equal queue
+                   (decknix--compose-queue-split-text
+                    (decknix--compose-queue-drain-text queue))))))
+
+(ert-deftest decknix-compose-queue--drain-of-empty-is-nil ()
+  (should-not (decknix--compose-queue-drain-text nil)))
+
+(ert-deftest decknix-compose-queue--boundary-must-be-its-own-line ()
+  "A rule inside prose is not a boundary; an em-dash-ish run is not either."
+  (should (equal '("a --- b") (decknix--compose-queue-split-text "a --- b")))
+  (should (equal '("a\n----\nb") (decknix--compose-queue-split-text "a\n----\nb"))))
+
+(ert-deftest decknix-compose-queue--boundary-tolerates-surrounding-space ()
+  (should (equal '("a" "b") (decknix--compose-queue-split-text "a\n  ---  \nb"))))
+
+(ert-deftest decknix-compose-queue--stray-rules-yield-no-empty-turn ()
+  "Deleting a turn's body leaves two rules together; an empty prompt must
+not be queued from that."
+  (should (equal '("a" "b")
+                 (decknix--compose-queue-split-text "---\na\n---\n---\nb\n---")))
+  (should-not (decknix--compose-queue-split-text "---\n\n---")))
+
+(ert-deftest decknix-compose-queue--combine-output-cannot-be-resplit ()
+  "`j' means one turn.  If combine used the boundary, a later drain would
+split it back apart and combine would not mean anything."
+  (let ((combined (decknix--compose-queue-combine '("a" "b"))))
+    (should (equal (list combined)
+                   (decknix--compose-queue-split-text combined)))))
+
+;; -- the enqueue prompt ------------------------------------------------
+
+(ert-deftest decknix-compose-queue--enqueue-does-not-ask-on-an-empty-queue ()
+  "The question exists because a second message used to destroy the first.
+At zero there is nothing to destroy, so asking would just be friction."
+  (cl-letf (((symbol-function 'read-char-choice)
+             (lambda (&rest _) (error "must not prompt"))))
+    (should (eq 'append (decknix--compose-queue-enqueue-action 0)))
+    (should (eq 'append (decknix--compose-queue-enqueue-action nil)))))
+
+(ert-deftest decknix-compose-queue--enqueue-maps-every-key ()
+  (dolist (pair '((?a . append) (?r . replace) (?j . combine) (?c . cancel)))
+    (cl-letf (((symbol-function 'read-char-choice)
+               (lambda (&rest _) (car pair))))
+      (should (eq (cdr pair) (decknix--compose-queue-enqueue-action 2))))))
+
+;; -- the interrupt prompt ----------------------------------------------
+
+(ert-deftest decknix-compose-queue--interrupt-does-not-ask-without-a-queue ()
+  (cl-letf (((symbol-function 'read-char-choice)
+             (lambda (&rest _) (error "must not prompt"))))
+    (should (eq 'first (decknix--compose-queue-interrupt-action 0)))
+    (should (eq 'first (decknix--compose-queue-interrupt-action nil)))))
+
+(ert-deftest decknix-compose-queue--interrupt-maps-every-key ()
+  "`first' is the old behaviour, now named rather than silent: the new
+message ran first and the older queued ones followed behind it."
+  (dolist (pair '((?f . first) (?o . only) (?l . last) (?c . cancel)))
+    (cl-letf (((symbol-function 'read-char-choice)
+               (lambda (&rest _) (car pair))))
+      (should (eq (cdr pair) (decknix--compose-queue-interrupt-action 3))))))
 
 (provide 'decknix-agent-compose-queue-test)
 ;;; decknix-agent-compose-queue-test.el ends here

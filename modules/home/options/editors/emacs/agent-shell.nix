@@ -5543,6 +5543,7 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
             "d" "drop one"
             "k" "clear queue"
             "j" "join into one turn"
+            "e" "edit in compose"
             "f" "flush / release hold"))
 
         ;; Queue commands also reachable from the agent-shell buffer itself:
