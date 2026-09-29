@@ -144,6 +144,27 @@ Overwrites an existing group of the same name."
   (decknix-layout-groups--persist)
   (message "Saved layout group %S" name))
 
+(defun decknix-layout-group--protect-side-windows ()
+  "Re-apply delete protection to every side window on this frame.
+
+`window-state-get' only records parameters listed in
+`window-persistent-parameters', whose default is `((context . writable)
+\(clone-of . t))'.  The sidebar is opened with `no-delete-other-windows'
+set, and `window-side' DOES survive a state round-trip while that flag
+does NOT -- so a restored layout kept a side window that had silently lost
+its protection, and the next `C-x 1' from a main window deleted the
+sidebar.
+
+Repairing after the put rather than extending
+`window-persistent-parameters' also fixes the groups already saved
+without it, which a persistence-only change would leave broken until each
+was re-saved."
+  (walk-windows
+   (lambda (window)
+     (when (window-parameter window 'window-side)
+       (set-window-parameter window 'no-delete-other-windows t)))
+   nil nil))
+
 ;;;###autoload
 (defun decknix-layout-group-switch (name)
   "Switch the current frame to saved layout group NAME.
@@ -153,6 +174,7 @@ Attention-needing groups are offered first."
     (if (not state)
         (user-error "No layout group %S" name)
       (window-state-put state (frame-root-window) 'safe)
+      (decknix-layout-group--protect-side-windows)
       (message "Layout group %S%s" name
                (if (decknix-layout-group--attention-p name) " (needs attention)" "")))))
 

@@ -314,6 +314,49 @@ gating (hiding developer sections in `support') is driven by
   (setq decknix--sidebar-show-keys (not decknix--sidebar-show-keys))
   (decknix--sidebar-refresh-now))
 
+(defun decknix-sidebar-visible-p ()
+  "Return the sidebar window on this frame, or nil."
+  (and (boundp 'agent-shell-workspace-sidebar-buffer-name)
+       (get-buffer-window agent-shell-workspace-sidebar-buffer-name)))
+
+;;;###autoload
+(defun decknix-sidebar-toggle-visible ()
+  "Show or hide the agent sidebar on this frame.
+
+Upstream has no such command: `agent-shell-workspace-sidebar-open' carries
+no `interactive' form, so it is unreachable from \[execute-extended-command],
+and `agent-shell-workspace-toggle' switches the whole Agents TAB rather than
+the sidebar within it.  Closing was only ever possible from inside the
+sidebar itself, with `q'."
+  (interactive)
+  (let ((window (decknix-sidebar-visible-p)))
+    (cond
+     (window
+      (delete-window window)
+      (message "Sidebar hidden (C-c A M-w to show)"))
+     ((fboundp 'agent-shell-workspace-sidebar-open)
+      (agent-shell-workspace-sidebar-open)
+      (decknix-sidebar-pin)
+      (message "Sidebar shown"))
+     (t (user-error "agent-shell-workspace is not loaded")))))
+
+;;;###autoload
+(defun decknix-sidebar-pin ()
+  "Protect the sidebar window from `delete-other-windows'.
+
+Set at open time by upstream, but lost whenever a window layout is
+restored, since `no-delete-other-windows' is not in
+`window-persistent-parameters'.  Exposed as a command so a sidebar that
+has already lost it can be re-pinned without reopening."
+  (interactive)
+  (if-let ((window (decknix-sidebar-visible-p)))
+      (progn
+        (set-window-parameter window 'no-delete-other-windows t)
+        (when (called-interactively-p 'interactive)
+          (message "Sidebar pinned -- C-x 1 will keep it")))
+    (when (called-interactively-p 'interactive)
+      (user-error "Sidebar is not visible"))))
+
 (defun decknix-sidebar-toggle-hidden ()
   "Toggle visibility of hidden/background sessions in the sidebar."
   (interactive)
