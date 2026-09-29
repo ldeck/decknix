@@ -120,6 +120,17 @@ includes `me'."
 True when one of the viewer's teams was requested as a reviewer."
   (eq (alist-get 'team_requested item) t))
 
+(defun decknix--hub-item-review-requested-of-me-p (item)
+  "Return non-nil if ITEM carries a standing request for my review.
+
+Distinguishes the two sources the hub now unions into Requests: a genuine
+`--review-requested=@me' hit, versus a PR recovered by `--reviewed-by=@me'
+because GitHub evicted me from the reviewers box when I reviewed it.  An
+absent field means an older hub, where every row was a standing request, so
+it reads as true rather than silently disabling whatever gates on it."
+  (let ((cell (assq 'review_requested_of_me item)))
+    (if cell (eq (cdr cell) t) t)))
+
 (defun decknix--hub-item-reviewed-by-me-p (item)
   "Return non-nil if the viewer has personally submitted a review on ITEM.
 Uses the `my_review' field, which carries the viewer's latest review

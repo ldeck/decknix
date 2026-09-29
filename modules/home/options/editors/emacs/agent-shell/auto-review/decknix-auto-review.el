@@ -300,11 +300,19 @@ Reads `mergeable' directly, for the same reason as
   (equal (alist-get 'mergeable item) "CONFLICTING"))
 
 (defun decknix-auto-review--requested-of-me-p (item)
-  "Return non-nil when ITEM asks for MY review, directly or via a team."
-  (or (decknix--hub-item-mentioned-p item)
-      (and decknix-auto-review-include-team-requests
-           (fboundp 'decknix--hub-item-team-requested-p)
-           (decknix--hub-item-team-requested-p item))))
+  "Return non-nil when ITEM asks for MY review, directly or via a team.
+
+Requires a STANDING request.  Requests now also carries PRs recovered by the
+hub's `--reviewed-by=@me' source, which exist so I can see a follow-up I owe
+a human reply -- dispatching a fresh review session at one would re-review
+work I have already reviewed, unprompted."
+  (and (or (not (fboundp 'decknix--hub-item-review-requested-of-me-p))
+           (decknix--hub-item-review-requested-of-me-p item))
+       (or (decknix--hub-item-mentioned-p item)
+           (and decknix-auto-review-include-team-requests
+                (fboundp 'decknix--hub-item-team-requested-p)
+                (decknix--hub-item-team-requested-p item)))
+       t))
 
 (defun decknix-auto-review--eligible-action (item)
   "Return the dispatch action for ITEM, or nil when it must not dispatch.

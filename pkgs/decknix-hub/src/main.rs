@@ -167,6 +167,12 @@ struct ReviewRequest {
     my_review: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "PENDING", "DISMISSED"
     #[serde(skip_serializing_if = "Option::is_none")]
     mentioned: Option<bool>, // true when user was directly requested as reviewer (not just via team) OR @-mentioned
+    /// Which query produced this row: true for `--review-requested=@me',
+    /// false for the `--reviewed-by=@me' follow-up source.  Consumers that
+    /// must act only on a standing request (auto-review) gate on it; absent
+    /// means an older hub, where every row came from the request query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    review_requested_of_me: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     re_requested: Option<bool>, // true when I have a prior review AND am currently requested again (genuine re-request)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1426,6 +1432,45 @@ async fn fetch_pr_ci(
     }
 }
 
+/// Merge the Requests candidate list from its two sources.
+///
+/// Returns the merged PRs plus the keys that came from the review-request
+/// query, which is what licenses reading a pending Team reviewer as "one of
+/// MY teams": the follow-up source carries no such constraint.
+///
+/// A PR present in both sources keeps its request-query entry, so the flag
+/// stays true for it.  Self-authored PRs are dropped from the follow-up
+/// source only: they already have a home in the WIP section, and they were 16
+/// of the 19 rows it added when this was measured.
+fn merge_review_sources(
+    requested: Vec<GhSearchPr>,
+    reviewed: Vec<GhSearchPr>,
+    my_login: Option<&str>,
+) -> (Vec<GhSearchPr>, std::collections::HashSet<(String, u64)>) {
+    let requested_keys: std::collections::HashSet<(String, u64)> = requested.iter()
+        .filter_map(|pr| pr.repository.as_ref()
+                    .map(|r| (r.name_with_owner.clone(), pr.number)))
+        .collect();
+
+    let mut prs = requested;
+    for pr in reviewed {
+        let Some(repo) = pr.repository.as_ref().map(|r| r.name_with_owner.clone()) else {
+            continue;
+        };
+        if requested_keys.contains(&(repo, pr.number)) {
+            continue;
+        }
+        let mine = match (my_login, pr.author.as_ref()) {
+            (Some(me), Some(a)) => a.login.eq_ignore_ascii_case(me),
+            _ => false,
+        };
+        if !mine {
+            prs.push(pr);
+        }
+    }
+    (prs, requested_keys)
+}
+
 /// Fetch PR reviews assigned to the current user.
 async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, String> {
     // Limit 200 — `gh search prs` defaults to recency-sorted, so 50
@@ -1446,11 +1491,38 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         "--limit", "200",
     ]).await?;
 
-    let prs: Vec<GhSearchPr> = serde_json::from_str(&output)
+    let requested: Vec<GhSearchPr> = serde_json::from_str(&output)
         .map_err(|e| format!("parse error: {e}"))?;
 
     // Get current user's login for review state lookup
     let my_login = get_github_login().await;
+
+    // Second source: PRs I have already reviewed.  GitHub removes a reviewer
+    // from `requested_reviewers' the moment they submit a review, and restores
+    // it only if the author clicks "Re-request review" -- so the query above
+    // loses a PR PERMANENTLY once reviewed, however much the author then does
+    // to it.  Measured on upside#21097: a reply to an unresolved thread of mine
+    // plus three commits after my review, and the PR was absent from the feed
+    // entirely, so the filter layer's `review_stale' resurface never got a
+    // chance to fire.  A failure here degrades to the request query alone
+    // rather than emptying the section.
+    let reviewed: Vec<GhSearchPr> = match gh_json(&[
+        "search", "prs",
+        "--reviewed-by=@me",
+        "--state=open",
+        "--archived=false",
+        "--json", "number,title,url,createdAt,updatedAt,isDraft,labels,author,repository",
+        "--limit", "100",
+    ]).await {
+        Ok(out) => serde_json::from_str(&out).unwrap_or_default(),
+        Err(e) => {
+            eprintln!("decknix-hub: reviewed-by query failed, requests may be incomplete: {e}");
+            Vec::new()
+        }
+    };
+
+    let (prs, requested_keys) =
+        merge_review_sources(requested, reviewed, my_login.as_deref());
 
     // Identify which PRs are not in cache (need fresh detail + thread fetches).
     // Cache hit requires updatedAt match AND insertion within `PR_CACHE_TTL` —
@@ -1483,6 +1555,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
         // Use cache when updatedAt unchanged AND within TTL; otherwise refetch.
         let updated_at = pr.updated_at.clone().unwrap_or_default();
         let cache_key = (repo.clone(), pr.number);
+        let requested_of_me = requested_keys.contains(&cache_key);
 
         let cached_details = {
             let cache = reviews_cache().read().await;
@@ -1537,11 +1610,20 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             mergeable,
             my_review: details.my_review,
             mentioned: details.mentioned,
+            review_requested_of_me: Some(requested_of_me),
             re_requested: details.re_requested,
             comment_mentioned: details.comment_mentioned,
             others_reviewed: details.others_reviewed,
             review_stale: details.review_stale,
-            team_requested: details.team_requested,
+            // `details.team_requested' only records THAT a team is requested.
+            // Reading it as "one of MY teams" is an inference licensed by the
+            // request query's own constraint, which the follow-up source does
+            // not share -- a PR I reviewed may have any team pending on it.
+            team_requested: if requested_of_me {
+                details.team_requested
+            } else {
+                Some(false)
+            },
             others_requested: details.others_requested,
             needs_reply: details.needs_reply,
             bot_pending: details.bot_pending,
@@ -2524,6 +2606,78 @@ mod tests {
         // A non-conclusive/pending state does not count.
         assert!(!compute_others_reviewed(&[review("alice", false, "PENDING")], Some("ldeck")));
         assert!(!compute_others_reviewed(&[], Some("ldeck")));
+    }
+
+    // Requests had exactly one source, `--review-requested=@me'.  GitHub drops
+    // a reviewer from that list on review submission, so a reviewed PR left the
+    // sidebar for good -- upside#21097 was chased in person because of it.
+    // These pin the union that recovers it.
+
+    fn search_pr(repo: &str, number: u64, author: &str) -> GhSearchPr {
+        serde_json::from_str(&format!(
+            r#"{{"number":{number},"title":"t","url":"u","createdAt":"2026-09-01T00:00:00Z",
+                 "author":{{"login":"{author}"}},"repository":{{"nameWithOwner":"{repo}"}}}}"#
+        )).expect("fixture shaped like gh search output")
+    }
+
+    fn keys(prs: &[GhSearchPr]) -> Vec<(String, u64)> {
+        prs.iter()
+            .map(|p| (p.repository.as_ref().unwrap().name_with_owner.clone(), p.number))
+            .collect()
+    }
+
+    #[test]
+    fn merge_recovers_a_reviewed_pr_that_left_the_request_query() {
+        let (prs, flags) = merge_review_sources(
+            vec![search_pr("o/r", 1, "alice")],
+            vec![search_pr("UpsideRealty/upside", 21097, "jurandir")],
+            Some("ldeck"));
+        assert_eq!(keys(&prs),
+                   vec![("o/r".into(), 1), ("UpsideRealty/upside".into(), 21097)]);
+        // Only the request-query row may be read as "a team of mine is pending".
+        assert!(flags.contains(&("o/r".to_string(), 1)));
+        assert!(!flags.contains(&("UpsideRealty/upside".to_string(), 21097)));
+    }
+
+    #[test]
+    fn merge_does_not_duplicate_a_pr_present_in_both_sources() {
+        // Still requested AND already reviewed: one row, and it keeps the
+        // standing-request flag so auto-review and the team inference hold.
+        let (prs, flags) = merge_review_sources(
+            vec![search_pr("o/r", 1, "alice")],
+            vec![search_pr("o/r", 1, "alice")],
+            Some("ldeck"));
+        assert_eq!(prs.len(), 1);
+        assert!(flags.contains(&("o/r".to_string(), 1)));
+    }
+
+    #[test]
+    fn merge_drops_my_own_prs_from_the_follow_up_source() {
+        // They are the WIP section's job.  16 of the 19 rows this source added
+        // were mine, so without this the recovery reads as duplication.
+        let (prs, _) = merge_review_sources(
+            vec![],
+            vec![search_pr("o/r", 2, "ldeck"), search_pr("o/r", 3, "LDeck")],
+            Some("ldeck"));
+        assert!(prs.is_empty(), "case-insensitive self-match");
+    }
+
+    #[test]
+    fn merge_keeps_my_own_prs_when_the_login_is_unknown() {
+        // Without a login we cannot tell self from other; showing a row is
+        // recoverable, dropping one silently is not.
+        let (prs, _) = merge_review_sources(
+            vec![], vec![search_pr("o/r", 2, "ldeck")], None);
+        assert_eq!(prs.len(), 1);
+    }
+
+    #[test]
+    fn merge_of_an_empty_follow_up_source_changes_nothing() {
+        // The follow-up query failing must degrade to today's behaviour.
+        let (prs, flags) = merge_review_sources(
+            vec![search_pr("o/r", 1, "alice")], vec![], Some("ldeck"));
+        assert_eq!(prs.len(), 1);
+        assert!(flags.contains(&("o/r".to_string(), 1)));
     }
 
     #[test]

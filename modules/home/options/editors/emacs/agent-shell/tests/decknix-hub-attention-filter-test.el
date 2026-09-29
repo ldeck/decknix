@@ -302,6 +302,33 @@ ready PRs are never inadvertently suppressed."
     (call-interactively #'decknix--hub-toggle-requests-hide-draft)
     (should-not decknix--hub-requests-hide-draft)))
 
+;; -- replies-to-me resurface -------------------------------------
+;;
+;; upside#21097: reviewed, so hidden by the `hide-any' default, and the author
+;; then replied to an unresolved thread of mine.  `review_stale' only fires on
+;; a commit landing, so a reply that answers a question without touching code
+;; left the PR hidden and the colleague chased a reply in person.
+
+(ert-deftest decknix-hub-attention-filter--reply-to-me-resurfaces-under-hide-any ()
+  (let ((decknix--hub-requests-hide-reviewed 'hide-any))
+    (should (decknix--hub-requests-reviewed-visible-p
+             '((my_review . "COMMENTED") (others_reviewed . t)
+               (replies_to_me . t))))))
+
+(ert-deftest decknix-hub-attention-filter--reply-to-me-resurfaces-under-hide-mine ()
+  (let ((decknix--hub-requests-hide-reviewed 'hide-mine))
+    (should (decknix--hub-requests-reviewed-visible-p
+             '((my_review . "COMMENTED") (replies_to_me . t))))))
+
+(ert-deftest decknix-hub-attention-filter--no-reply-to-me-still-hides ()
+  "The resurface must be the reply, not merely having reviewed."
+  (let ((decknix--hub-requests-hide-reviewed 'hide-any))
+    (should-not (decknix--hub-requests-reviewed-visible-p
+                 '((my_review . "COMMENTED") (others_reviewed . t))))
+    (should-not (decknix--hub-requests-reviewed-visible-p
+                 '((my_review . "COMMENTED") (others_reviewed . t)
+                   (replies_to_me . :json-false))))))
+
 ;; -- hide-reviewed filter (3-state cycle) ------------------------
 
 (ert-deftest decknix-hub-attention-filter--hide-reviewed-nil-shows-all ()

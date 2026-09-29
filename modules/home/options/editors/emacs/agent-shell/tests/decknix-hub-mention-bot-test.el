@@ -433,5 +433,30 @@ routed Augment-authored code PRs into the dependabot ship flow."
                  (decknix-test--make-hub-item
                   :author "dependabot[bot]")))))
 
+
+;; -- request source ----------------------------------------------------
+;;
+;; Requests unions two queries: `--review-requested=@me' and, because GitHub
+;; evicts a reviewer from the reviewers box on review submission,
+;; `--reviewed-by=@me'.  The flag is what keeps "a team is pending on this PR"
+;; from being read as "one of MY teams" on a row the request query never
+;; constrained, and what keeps auto-review off follow-up rows.
+
+(ert-deftest decknix-hub-requested-of-me--explicit-true ()
+  (should (decknix--hub-item-review-requested-of-me-p
+           '((review_requested_of_me . t)))))
+
+(ert-deftest decknix-hub-requested-of-me--explicit-false ()
+  "A follow-up row must read as not-requested however JSON false decodes."
+  (should-not (decknix--hub-item-review-requested-of-me-p
+               '((review_requested_of_me . :json-false))))
+  (should-not (decknix--hub-item-review-requested-of-me-p
+               '((review_requested_of_me . nil)))))
+
+(ert-deftest decknix-hub-requested-of-me--absent-is-a-legacy-request ()
+  "An older hub emitted no such field and every row WAS a standing request.
+Reading absence as false would silently stop auto-review against that feed."
+  (should (decknix--hub-item-review-requested-of-me-p '((number . 1)))))
+
 (provide 'decknix-hub-mention-bot-test)
 ;;; decknix-hub-mention-bot-test.el ends here
