@@ -66,6 +66,8 @@
                   "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--agent-tags-for-session
                   "decknix-agent-tags-read" (session-id))
+(declare-function decknix--agent-session-current-model-id
+                  "decknix-agent-session-model" ())
 (declare-function decknix--agent-session-model-for-conv-key
                   "decknix-agent-session-model" (conv-key))
 
@@ -219,7 +221,11 @@ Delegates to `decknix--agent-session-model-for-conv-key' keyed by the
 buffer-local `decknix--agent-conv-key'."
   (when (bound-and-true-p decknix--agent-conv-key)
     (ignore-errors
-      (decknix--agent-session-model-for-conv-key decknix--agent-conv-key))))
+      ;; Live first: reading only the store reported what we recorded rather
+      ;; than what the session is running, which went stale on a model change.
+      (or (and (fboundp 'decknix--agent-session-current-model-id)
+               (decknix--agent-session-current-model-id))
+          (decknix--agent-session-model-for-conv-key decknix--agent-conv-key)))))
 
 (defun decknix--header-essentials ()
   "Return the abbreviated essentials string, or nil.

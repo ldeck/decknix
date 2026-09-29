@@ -170,9 +170,7 @@ it is immediately visible when browsing candidates."
                       " ← current"))))))
     (agent-shell-set-session-model
      (eval `(lambda ()
-              (let ((model-id (map-nested-elt
-                               (agent-shell--state)
-                               '(:session :model-id)))
+              (let ((model-id (decknix--agent-session-current-model-id))
                     (conv-key (bound-and-true-p
                                decknix--agent-conv-key)))
                 (when (and conv-key model-id)
