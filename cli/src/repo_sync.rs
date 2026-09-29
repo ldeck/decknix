@@ -67,6 +67,32 @@ pub enum RepoAction {
         /// Directory depth to scan under each root for `.git` clones (default 2).
         #[arg(long)]
         depth: Option<usize>,
+
+        /// Only sync clones whose directory name or path contains this string.
+        /// Lets the sidebar retry one repo after clearing a lock, instead of
+        /// waiting up to the 3h launchd interval for the whole sweep.
+        #[arg(long, value_name = "NAME")]
+        only: Option<String>,
+    },
+    /// Remove an abandoned `.git/index.lock', but only when it is provably
+    /// abandoned: older than the staleness threshold AND with no git process
+    /// live in the repo. Refuses otherwise, because deleting a live lock
+    /// corrupts the index of whatever holds it.
+    FixLock {
+        /// Repository path (the working tree, not the `.git' dir).
+        path: PathBuf,
+
+        /// Seconds after which a lock counts as abandoned.
+        #[arg(long, default_value_t = STALE_LOCK_SECS)]
+        older_than: u64,
+
+        /// Report the decision without removing anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// List the clones that `sync` would consider, with current branch + status.
     /// Local only — does not touch the network.
@@ -256,6 +282,32 @@ fn git(repo: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Does this git failure mean `index.lock' already exists?  Pure.
+///
+/// Matched on the message rather than an exit code because git reports it as a
+/// generic failure; the wording has been stable across git versions and is what
+/// the operator sees.
+pub fn index_lock_failure(message: &str) -> bool {
+    message.contains("index.lock") && message.contains("File exists")
+}
+
+/// Seconds after which an `index.lock' is treated as abandoned.
+///
+/// No real git operation holds the index for an hour.  The lock that prompted
+/// this was two weeks old, so the threshold is not the interesting part -- the
+/// point is that it is a threshold at all, rather than deleting on sight.
+pub const STALE_LOCK_SECS: u64 = 3600;
+
+/// Should a lock of AGE_SECS be removed, given whether it is still HELD?
+/// Pure, so the rule is testable without creating locks.
+///
+/// Both conditions are required.  Age alone would race a long checkout on a
+/// repo the size of the monolith; "no live process" alone would delete a lock a
+/// sibling agent had just taken, corrupting its index.
+pub fn lock_is_stale(age_secs: u64, held: bool, threshold_secs: u64) -> bool {
+    !held && age_secs >= threshold_secs
+}
+
 /// The action chosen for a repo after inspecting its state. Pure/testable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Plan {
@@ -412,8 +464,22 @@ fn sync_one(repo: &Repo, dry_run: bool) -> SyncResult {
                 r.detail = format!("fast-forwarded {def} +{n}");
             }
             Err(e) => {
-                r.outcome = "error".into();
-                r.detail = format!("ff-only merge failed: {e}");
+                // A lock failure is separated from every other merge failure
+                // because it is the one with a safe, mechanical remedy. It went
+                // unnoticed for 61 consecutive runs against `upside' -- two
+                // weeks with no updates -- because the summary reported a flat
+                // "3 errors" and nothing distinguished "needs a click" from
+                // "needs a human".
+                let msg = e.to_string();
+                if index_lock_failure(&msg) {
+                    r.outcome = "error-lock".into();
+                    r.detail = format!(
+                        "index.lock blocks fast-forward of {def} (+{n}); clear it if stale"
+                    );
+                } else {
+                    r.outcome = "error".into();
+                    r.detail = format!("ff-only merge failed: {msg}");
+                }
                 r.error = true;
             }
         },
@@ -508,11 +574,77 @@ fn result_json(r: &SyncResult) -> serde_json::Value {
     })
 }
 
+/// Does REPO match a `--only' needle?  Directory name first, then the full
+/// path, so both `--only upside' and a pasted absolute path work.
+fn repo_matches(repo: &Repo, needle: &str) -> bool {
+    let name = repo
+        .path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    name.contains(needle) || repo.path.to_string_lossy().contains(needle)
+}
+
+/// Where the sweep leaves its report for the Emacs sidebar to read.
+pub fn report_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".config/decknix/repo-sync.json")
+}
+
+fn write_report(results: &[SyncResult]) -> std::io::Result<()> {
+    let path = report_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let arr: Vec<_> = results.iter().map(result_json).collect();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let body = serde_json::json!({ "updated": now, "repos": arr });
+    // Write-then-rename: the sidebar polls this path, and a reader that
+    // arrives mid-write would otherwise parse a truncated file and conclude
+    // there are no problems.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(&body).unwrap_or_default())?;
+    std::fs::rename(&tmp, &path)
+}
+
+/// Does any process currently hold LOCK open?
+///
+/// Asks `lsof' about the lock file itself rather than scanning `ps' for the
+/// repo path.  The `ps' approach matched its OWN invocation -- the parent
+/// shell's argv contains both the repo path and `.git/index.lock', so the
+/// check reported "live" every time and `fix-lock' could never succeed. A
+/// safety check that always refuses is indistinguishable from a broken one.
+///
+/// git creates `index.lock' with O_CREAT|O_EXCL and keeps the descriptor until
+/// it commits or rolls back, so an open descriptor is the accurate signal.
+///
+/// Fails CLOSED: if `lsof' cannot be run we report held, so an unusable probe
+/// refuses to delete rather than guessing.
+fn lock_is_held(lock: &Path) -> bool {
+    match std::process::Command::new("lsof").arg("-t").arg("--").arg(lock).output() {
+        Ok(out) => !String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        Err(_) => true,
+    }
+}
+
+fn lock_age_secs(lock: &Path) -> Option<u64> {
+    let meta = std::fs::metadata(lock).ok()?;
+    let mtime = meta.modified().ok()?;
+    std::time::SystemTime::now().duration_since(mtime).ok().map(|d| d.as_secs())
+}
+
 pub fn run(action: RepoAction) -> Result<()> {
     match action {
-        RepoAction::Sync { workspace, org, dry_run, json, jobs, depth } => {
+        RepoAction::Sync { workspace, org, dry_run, json, jobs, depth, only } => {
             let cfg = repo_config(&workspace, depth);
-            let repos = discover_all(&cfg, org.as_deref());
+            let mut repos = discover_all(&cfg, org.as_deref());
+            if let Some(needle) = only.as_deref() {
+                repos = repos.into_iter().filter(|r| repo_matches(r, needle)).collect();
+            }
             if repos.is_empty() {
                 if json {
                     println!("{}", serde_json::json!({"repos": [], "summary": {}}));
@@ -526,6 +658,16 @@ pub fn run(action: RepoAction) -> Result<()> {
             }
             let jobs = jobs.unwrap_or_else(default_jobs);
             let results = run_pool(repos, jobs, dry_run);
+
+            // Persist the report unless this was a dry run or a single-repo
+            // retry: the sidebar renders from this file rather than shelling
+            // out per paint, and a partial sweep must not overwrite the full
+            // picture with one repo.
+            if !dry_run && only.is_none() {
+                if let Err(e) = write_report(&results) {
+                    eprintln!("decknix: could not write repo-sync report: {e}");
+                }
+            }
 
             if json {
                 let arr: Vec<_> = results.iter().map(result_json).collect();
@@ -549,7 +691,7 @@ pub fn run(action: RepoAction) -> Result<()> {
                         updated += 1;
                         "UPDATED"
                     }
-                    "error" => {
+                    "error" | "error-lock" => {
                         errored += 1;
                         "ERROR  "
                     }
@@ -574,6 +716,59 @@ pub fn run(action: RepoAction) -> Result<()> {
                 errored,
                 if dry_run { "  (dry run)" } else { "" }
             );
+        }
+        RepoAction::FixLock { path, older_than, dry_run, json } => {
+            let lock = path.join(".git/index.lock");
+            let (ok, reason) = if !lock.exists() {
+                (false, "no index.lock present".to_string())
+            } else {
+                let live = lock_is_held(&lock);
+                match lock_age_secs(&lock) {
+                    None => (false, "cannot read lock mtime".to_string()),
+                    Some(age) => {
+                        if lock_is_stale(age, live, older_than) {
+                            (true, format!("abandoned {age}s, lock not held by any process"))
+                        } else if live {
+                            (false, format!("a process still holds the lock ({age}s old)"))
+                        } else {
+                            (false, format!("only {age}s old, under the {older_than}s threshold"))
+                        }
+                    }
+                }
+            };
+            let removed = if ok && !dry_run {
+                match std::fs::remove_file(&lock) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        if json {
+                            println!("{}", serde_json::json!({
+                                "path": path.to_string_lossy(), "removed": false,
+                                "stale": ok, "reason": format!("remove failed: {e}") }));
+                        } else {
+                            println!("REFUSED  {}: remove failed: {e}", path.display());
+                        }
+                        return Ok(());
+                    }
+                }
+            } else {
+                false
+            };
+            if json {
+                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "lock": lock.to_string_lossy(),
+                    "stale": ok,
+                    "removed": removed,
+                    "dryRun": dry_run,
+                    "reason": reason,
+                }))?);
+            } else if removed {
+                println!("removed {} ({reason})", lock.display());
+            } else if ok {
+                println!("would remove {} ({reason})", lock.display());
+            } else {
+                println!("REFUSED  {} ({reason})", lock.display());
+            }
         }
         RepoAction::List { workspace, org, depth, json } => {
             let cfg = repo_config(&workspace, depth);
@@ -604,6 +799,57 @@ pub fn run(action: RepoAction) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    #[test]
+    fn index_lock_failure_recognises_gits_wording() {
+        assert!(index_lock_failure(
+            "error: Unable to create '/w/upside/.git/index.lock': File exists."));
+    }
+
+    #[test]
+    fn index_lock_failure_ignores_other_merge_errors() {
+        // Must not classify a real conflict as a clearable lock -- the sidebar
+        // would then offer "clear lock" as the remedy for a merge conflict.
+        assert!(!index_lock_failure("error: Your local changes would be overwritten"));
+        assert!(!index_lock_failure("fatal: refusing to merge unrelated histories"));
+        assert!(!index_lock_failure("could not open index.lock for writing"));
+    }
+
+    #[test]
+    fn a_live_git_process_is_never_stale() {
+        // Age is irrelevant while something holds it: deleting a lock a sibling
+        // agent just took corrupts that process's index.
+        assert!(!lock_is_stale(u64::MAX, true, STALE_LOCK_SECS));
+        assert!(!lock_is_stale(0, true, STALE_LOCK_SECS));
+    }
+
+    #[test]
+    fn a_young_lock_is_never_stale_even_with_no_process_seen() {
+        // `ps' is a snapshot; a checkout on a repo the size of the monolith can
+        // sit between samples.
+        assert!(!lock_is_stale(0, false, STALE_LOCK_SECS));
+        assert!(!lock_is_stale(STALE_LOCK_SECS - 1, false, STALE_LOCK_SECS));
+    }
+
+    #[test]
+    fn an_old_lock_with_no_process_is_stale() {
+        assert!(lock_is_stale(STALE_LOCK_SECS, false, STALE_LOCK_SECS));
+        // The one that prompted this was two weeks old.
+        assert!(lock_is_stale(14 * 24 * 3600, false, STALE_LOCK_SECS));
+    }
+
+    #[test]
+    fn repo_matches_by_name_or_full_path() {
+        let repo = Repo { org: "o".into(), path: PathBuf::from("/w/nurturecloud/upside") };
+        assert!(repo_matches(&repo, "upside"));
+        assert!(repo_matches(&repo, "/w/nurturecloud/upside"));
+        assert!(!repo_matches(&repo, "downside"));
+    }
 }
 
 #[cfg(test)]

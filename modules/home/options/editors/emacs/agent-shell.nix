@@ -1896,6 +1896,25 @@ let
   # (queued-prompt, buffer-live?, busy?, process-live?) returns
   # one of (:action cancel-timer | submit :input STR | wait).
   # Bulk pcase's on the action and applies the side-effect.
+  # Surfaces repo-sync failures in the sidebar.  The sweep reported a flat
+  # "3 errors" every run, so `upside' sat on an abandoned index.lock for 61
+  # consecutive runs -- two weeks unsynced -- without the count moving.
+  decknix-repo-sync-el = mkEmacsTestedPackage {
+    pname = "decknix-repo-sync";
+    src = ./agent-shell/repo-sync;
+    packageRequires = [ ];
+    testFiles = [ "decknix-repo-sync-test.el" ];
+  };
+
+  # Cache + remedies (clear stale lock, retry one repo, visit, resweep) and the
+  # sidebar section.  Split from the pure layer per AGENTS.md Rule 2.
+  decknix-repo-sync-actions-el = mkEmacsTestedPackage {
+    pname = "decknix-repo-sync-actions";
+    src = ./agent-shell/repo-sync;
+    packageRequires = [ decknix-repo-sync-el ];
+    testFiles = [ "decknix-repo-sync-actions-test.el" ];
+  };
+
   decknix-agent-compose-queue-el = mkEmacsTestedPackage {
     pname = "decknix-agent-compose-queue";
     src = ./agent-shell/compose-queue;
@@ -3272,6 +3291,8 @@ in
           decknix-agent-resume-command-el
           decknix-agent-jump-target-el
           decknix-agent-input-ring-el
+          decknix-repo-sync-el
+          decknix-repo-sync-actions-el
           decknix-agent-compose-queue-el
           decknix-agent-quickaction-window-el
           decknix-agent-workspace-persist-el
@@ -4256,6 +4277,12 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; Compose-queue policy (PR B.79) -- pure action resolver
         ;; for the auto-submit timer.  Bulk owns timer/submit
         ;; side-effects per Rule 2.
+        ;; Explicit requires: `packageRequires' makes a package available on
+        ;; the load-path, it does NOT load it.  A missing require here is how
+        ;; `decknix-hub-wt-stale' shipped as a silent no-op.
+        (require 'decknix-repo-sync)
+        (require 'decknix-repo-sync-actions)
+
         (require 'decknix-agent-compose-queue)
         (declare-function decknix--compose-queue-action
                           "decknix-agent-compose-queue"
@@ -5611,6 +5638,7 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         ;; it and `M-W' re-pins it.  Plain `W' is already support-workflow.
         (define-key decknix-agent-prefix-map (kbd "M-w") 'decknix-sidebar-toggle-visible)
         (define-key decknix-agent-prefix-map (kbd "M-W") 'decknix-sidebar-pin)
+        (define-key decknix-agent-prefix-map (kbd "M-r") 'decknix-repo-sync-resweep)
 
         ;; xwidget-webkit JS-bridge primitives (PR B.32) -- the
         ;; `page-text' and `find-in-page' helpers feed both the
@@ -6307,6 +6335,10 @@ duration -- the most important number on this branch."
               (when (fboundp 'decknix--hub-render-wip)
                 (setq line-num (decknix--hub-render-wip line-num)))
 
+              ;; ── Repos: sync failures needing attention ──
+              (when (fboundp 'decknix--repo-sync-render)
+                (setq line-num (decknix--repo-sync-render line-num)))
+
               ;; ── Hub: status hint when no data ──
               (when (fboundp 'decknix--hub-render-status-hint)
                 (setq line-num (decknix--hub-render-status-hint line-num)))
@@ -6699,6 +6731,8 @@ duration -- the most important number on this branch."
         ;; T = toggles transient (sectioned: Global, Requests, Live, WIP)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "T") (lambda () (interactive)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "G") 'decknix-repo-sync-row-action)
                       (decknix--sidebar-call-transient
                        #'decknix-sidebar-toggles-transient)))
         (define-key agent-shell-workspace-sidebar-mode-map
