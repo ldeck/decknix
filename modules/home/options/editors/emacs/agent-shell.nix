@@ -5529,6 +5529,7 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
             "C-c C-q" "close"
             "C-c C-s" "toggle sticky"
             "C-c k"   "interrupt…"
+            "C-c q"   "queue…"
             "C-c j"   "jump pending"
             "C-c w"   "workspace"
             "C-c W"   "sidebar"
@@ -5536,7 +5537,18 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
             "C-c i"   "context")
           (which-key-add-keymap-based-replacements decknix-agent-compose-interrupt-map
             "k"   "interrupt agent"
-            "C-c" "interrupt+submit"))
+            "C-c" "interrupt+submit")
+          (which-key-add-keymap-based-replacements decknix-agent-queue-map
+            "s" "show queue"
+            "d" "drop one"
+            "k" "clear queue"
+            "j" "join into one turn"
+            "f" "flush / release hold"))
+
+        ;; Queue commands also reachable from the agent-shell buffer itself:
+        ;; a held queue is noticed there (the header badge), not in a compose
+        ;; buffer that may well have been closed.
+        (define-key decknix-agent-prefix-map (kbd "Q") decknix-agent-queue-map)
 
         (define-key decknix-agent-prefix-map (kbd "e") 'decknix-agent-compose)               ; Compose prompt
         (define-key decknix-agent-prefix-map (kbd "E") 'decknix-agent-compose-interrupt)

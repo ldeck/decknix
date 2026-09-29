@@ -33,6 +33,7 @@
                   "decknix-agent-compose-wait" (buffer-live process-live busy))
 
 (require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 
 ;; Forward declarations for symbols defined in carved compose/
@@ -64,7 +65,20 @@
                   "decknix-agent-compose-busy" (busy-p))
 (declare-function decknix--compose-queue-action
                   "decknix-agent-compose-queue"
-                  (queued-prompt buffer-live busy proc-live))
+                  (queued-prompt buffer-live busy proc-live &optional status))
+(declare-function decknix--compose-queue-normalise
+                  "decknix-agent-compose-queue" (queue))
+(declare-function decknix--compose-queue-append
+                  "decknix-agent-compose-queue" (queue input))
+(declare-function decknix--compose-queue-drop
+                  "decknix-agent-compose-queue" (queue index))
+(declare-function decknix--compose-queue-combine
+                  "decknix-agent-compose-queue" (queue &optional separator))
+(declare-function decknix--compose-queue-summary
+                  "decknix-agent-compose-queue" (queue &optional held-reason))
+(declare-function decknix--compose-queue-entry-label
+                  "decknix-agent-compose-queue" (input index &optional width))
+(declare-function decknix--header-detect-status "decknix-agent-header" ())
 (declare-function decknix--compose-wait-not-busy
                   "decknix-agent-compose-wait"
                   (target on-ready &optional timeout interval))
@@ -285,6 +299,19 @@ Without prefix, toggle inline header. With prefix, open side panel."
   (when (fboundp 'decknix-session-tags-show)
     (decknix-compose--forward-to-parent 'decknix-session-tags-show)))
 
+(defvar decknix-agent-queue-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "s") #'decknix-agent-queue-show)
+    (define-key map (kbd "d") #'decknix-agent-queue-drop)
+    (define-key map (kbd "k") #'decknix-agent-queue-clear)
+    (define-key map (kbd "j") #'decknix-agent-queue-combine)
+    (define-key map (kbd "f") #'decknix-agent-queue-flush)
+    map)
+  "Queue commands, bound under \`C-c q' in compose mode and \`C-c A Q'
+in an agent-shell buffer (\`C-c A q' is session-quit).
+\`s' show, \`d' drop one, \`k' clear, \`j' join into one turn,
+\`f' flush (release a held queue, or interrupt a busy agent).")
+
 (defvar decknix-agent-compose-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'decknix-agent-compose-submit)
@@ -292,6 +319,7 @@ Without prefix, toggle inline header. With prefix, open side panel."
     (define-key map (kbd "C-c C-q") #'decknix-agent-compose-close)
     (define-key map (kbd "C-c C-s") #'decknix-agent-compose-toggle-sticky)
     (define-key map (kbd "C-c k") decknix-agent-compose-interrupt-map)
+    (define-key map (kbd "C-c q") decknix-agent-queue-map)
     (define-key map (kbd "M-p") #'decknix-agent-compose-previous-input)
     (define-key map (kbd "M-n") #'decknix-agent-compose-next-input)
     (define-key map (kbd "M-P") #'decknix-agent-compose-previous-input-global)
@@ -332,49 +360,85 @@ Resets prompt history navigation state."
 
 ;; -- Prompt queue: auto-submit when agent becomes idle --
 (defvar-local decknix--compose-queued-prompt nil
-  "Pending prompt string queued for submission when the agent is idle.
-Buffer-local on agent-shell buffers.")
+  "Pending prompts queued for submission when the agent is idle.
+A list, submitted one turn at a time in order.  Buffer-local on
+agent-shell buffers.  Was a single string, which made a second queued
+message overwrite the first; see `decknix-agent-compose-queue'.")
 
 (defvar-local decknix--compose-queue-timer nil
   "Timer polling `shell-maker--busy' to submit a queued prompt.
 Buffer-local on agent-shell buffers.")
 
-(defun decknix--compose-queue-poll ()
-  "Check if the agent is idle and submit the queued prompt.
-Called by a repeating timer on the agent-shell buffer.
+(defvar-local decknix--compose-queue-held nil
+  "Blocking status the queue is currently held on, or nil.
+Set so the hold is announced once rather than on every poll tick.")
 
-PR B.79: the cancel/submit/wait decision is pinned by
-`decknix-agent-compose-queue' (carved, +7 ERT).  This function
-is the comint/timer-side adapter that performs the actual
-side-effect indicated by the resolver's `:action'."
+(defvar-local decknix--compose-queue-release nil
+  "When non-nil, submit the queue even though the session wants the user.
+Consumed by the next successful submit, so releasing is a one-shot
+decision rather than a mode that silently disables the gate.")
+
+(defun decknix--compose-queue-status ()
+  "Return the current buffer's session status string, or nil.
+Absent the status detector the queue keeps its old behaviour of
+submitting whenever idle, rather than stalling on an unknown."
+  (and (fboundp 'decknix--header-detect-status)
+       (ignore-errors (decknix--header-detect-status))))
+
+(defun decknix--compose-queue-cancel-timer ()
+  "Stop this buffer's queue poller."
+  (when decknix--compose-queue-timer
+    (cancel-timer decknix--compose-queue-timer)
+    (setq decknix--compose-queue-timer nil)))
+
+(defun decknix--compose-queue-poll ()
+  "Submit the head of the queue when the agent is idle and not asking.
+Called by a repeating timer on the agent-shell buffer.  The
+cancel/submit/wait/hold decision is pinned by
+`decknix-agent-compose-queue'; this is the comint-side adapter."
   (let* ((buf (current-buffer))
          (proc (and (buffer-live-p buf) (get-buffer-process buf)))
          (action (decknix--compose-queue-action
                   decknix--compose-queued-prompt
                   (buffer-live-p buf)
                   (bound-and-true-p shell-maker--busy)
-                  (and proc (process-live-p proc)))))
+                  (and proc (process-live-p proc))
+                  (unless decknix--compose-queue-release
+                    (decknix--compose-queue-status)))))
     (pcase (plist-get action :action)
-      ('cancel-timer
-       (when decknix--compose-queue-timer
-         (cancel-timer decknix--compose-queue-timer)
-         (setq decknix--compose-queue-timer nil)))
+      ('cancel-timer (decknix--compose-queue-cancel-timer))
+      ('hold
+       (let ((reason (plist-get action :reason)))
+         (unless (equal decknix--compose-queue-held reason)
+           (setq decknix--compose-queue-held reason)
+           (message
+            "%s: %s held -- session is %s.  Answer it, or C-c A Q f to release."
+            (buffer-name buf)
+            (decknix--compose-queue-summary decknix--compose-queued-prompt)
+            reason))))
       ('submit
-       (let ((input (plist-get action :input)))
-         (setq decknix--compose-queued-prompt nil)
-         (when decknix--compose-queue-timer
-           (cancel-timer decknix--compose-queue-timer)
-           (setq decknix--compose-queue-timer nil))
+       (let ((input (plist-get action :input))
+             (rest (plist-get action :rest)))
+         (setq decknix--compose-queued-prompt rest
+               decknix--compose-queue-held nil
+               decknix--compose-queue-release nil)
+         ;; Keep polling while anything remains: the timer used to be
+         ;; cancelled on every submit, which with a list would strand the
+         ;; tail unsent.
+         (unless rest (decknix--compose-queue-cancel-timer))
          (goto-char (point-max))
          (shell-maker-submit :input input)
-         (message "Queued prompt submitted")))
-      ('wait nil))))
+         (message "Queued prompt submitted%s"
+                  (if rest (format " (%d still queued)" (length rest)) ""))))
+      ('wait
+       (setq decknix--compose-queue-held nil)))))
 
 (defun decknix--compose-enqueue-prompt (target input)
-  "Queue INPUT for submission on TARGET buffer when the agent is idle."
+  "Add INPUT to TARGET buffer's queue, for submission when the agent is idle."
   (when (buffer-live-p target)
     (with-current-buffer target
-      (setq decknix--compose-queued-prompt input)
+      (setq decknix--compose-queued-prompt
+            (decknix--compose-queue-append decknix--compose-queued-prompt input))
       ;; Start a polling timer (every 1s) if not already running
       (unless (and decknix--compose-queue-timer
                   (memq decknix--compose-queue-timer timer-list))
@@ -385,7 +449,129 @@ side-effect indicated by the resolver's `:action'."
                         (when (buffer-live-p ,target)
                           (with-current-buffer ,target
                             (decknix--compose-queue-poll))))
-                     t)))))))
+                     t))))
+      (message "%s" (decknix--compose-queue-summary
+                     decknix--compose-queued-prompt
+                     decknix--compose-queue-held)))))
+
+;; -- Queue inspection and control --
+;;
+;; The queue had no user-facing surface at all: nothing to see it, drop it,
+;; edit it or send it early, so the only way out of a queued message was to
+;; kill the buffer.
+
+(defun decknix--compose-queue-buffer ()
+  "Return the agent-shell buffer whose queue the current buffer commands.
+The compose buffer acts on its target; an agent-shell buffer on itself."
+  (or (and (boundp 'decknix--compose-target-buffer)
+           decknix--compose-target-buffer
+           (buffer-live-p decknix--compose-target-buffer)
+           decknix--compose-target-buffer)
+      (current-buffer)))
+
+(defmacro decknix--with-compose-queue-buffer (&rest body)
+  "Run BODY in the buffer owning the queue this command addresses."
+  (declare (indent 0) (debug t))
+  `(let ((buf (decknix--compose-queue-buffer)))
+     (when (buffer-live-p buf)
+       (with-current-buffer buf ,@body))))
+
+(defun decknix-agent-queue-show ()
+  "Report the pending prompt queue for this session."
+  (interactive)
+  (decknix--with-compose-queue-buffer
+    (let ((pending (decknix--compose-queue-normalise
+                    decknix--compose-queued-prompt)))
+      (if (null pending)
+          (message "Nothing queued")
+        (message "%s\n%s"
+                 (decknix--compose-queue-summary
+                  pending decknix--compose-queue-held)
+                 (mapconcat #'identity
+                            (seq-map-indexed
+                             (lambda (input i)
+                               (decknix--compose-queue-entry-label input i))
+                             pending)
+                            "\n"))))))
+
+(defun decknix-agent-queue-drop ()
+  "Drop one pending prompt from this session's queue."
+  (interactive)
+  (decknix--with-compose-queue-buffer
+    (let ((pending (decknix--compose-queue-normalise
+                    decknix--compose-queued-prompt)))
+      (if (null pending)
+          (message "Nothing queued")
+        (let* ((labels (seq-map-indexed
+                        (lambda (input i)
+                          (decknix--compose-queue-entry-label input i))
+                        pending))
+               (choice (completing-read "Drop queued prompt: " labels nil t))
+               (index (seq-position labels choice)))
+          (setq decknix--compose-queued-prompt
+                (decknix--compose-queue-drop pending index))
+          (unless decknix--compose-queued-prompt
+            (decknix--compose-queue-cancel-timer))
+          (message "Dropped. %s"
+                   (or (decknix--compose-queue-summary
+                        decknix--compose-queued-prompt
+                        decknix--compose-queue-held)
+                       "Queue empty")))))))
+
+(defun decknix-agent-queue-clear ()
+  "Drop every pending prompt from this session's queue."
+  (interactive)
+  (decknix--with-compose-queue-buffer
+    (let ((n (length (decknix--compose-queue-normalise
+                      decknix--compose-queued-prompt))))
+      (if (zerop n)
+          (message "Nothing queued")
+        (when (yes-or-no-p (format "Drop %d queued prompt%s? "
+                                   n (if (= n 1) "" "s")))
+          (setq decknix--compose-queued-prompt nil
+                decknix--compose-queue-held nil
+                decknix--compose-queue-release nil)
+          (decknix--compose-queue-cancel-timer)
+          (message "Queue cleared"))))))
+
+(defun decknix-agent-queue-combine ()
+  "Collapse this session's queue into a single pending prompt.
+Separate turns are the default because merging two asks changes what was
+asked; this is the explicit opt-in to one turn."
+  (interactive)
+  (decknix--with-compose-queue-buffer
+    (let ((pending (decknix--compose-queue-normalise
+                    decknix--compose-queued-prompt)))
+      (cond
+       ((< (length pending) 2)
+        (message "Nothing to combine"))
+       (t
+        (setq decknix--compose-queued-prompt
+              (list (decknix--compose-queue-combine pending)))
+        (message "Combined %d prompts into one turn" (length pending)))))))
+
+(defun decknix-agent-queue-flush ()
+  "Release a held queue, or interrupt a busy agent to send it now.
+
+Releasing is one-shot: it clears the question gate for the next submit
+only, so a later question stops the queue again rather than the gate
+staying off."
+  (interactive)
+  (decknix--with-compose-queue-buffer
+    (cond
+     ((null (decknix--compose-queue-normalise decknix--compose-queued-prompt))
+      (message "Nothing queued"))
+     ((bound-and-true-p shell-maker--busy)
+      (when (yes-or-no-p "Agent is busy.  Interrupt and send the queue? ")
+        (setq decknix--compose-queue-release t)
+        (when (fboundp 'agent-shell-interrupt)
+          (let ((agent-shell-confirm-interrupt nil))
+            (agent-shell-interrupt)))
+        (message "Interrupted; queue will send when the turn settles")))
+     (t
+      (setq decknix--compose-queue-release t
+            decknix--compose-queue-held nil)
+      (decknix--compose-queue-poll)))))
 
 (defun decknix--compose-submit-after-wait (target input)
   "Submit INPUT to TARGET after the wait-not-busy coordination.
