@@ -501,5 +501,40 @@ way merges it without the round that would have caught a regression."
   (should-not (decknix-review-board--parse-urls nil))
   (should-not (decknix-review-board--parse-urls "no urls here")))
 
+;; -- owner/repo#N shorthand -------------------------------------------
+;;
+;; Requiring the expanded url meant retyping what GitHub had already rendered
+;; in a Slack paste or a PR body. Reported alongside the sidebar having no
+;; url verb at all: `r' opened a nav transient whose keys are generated per
+;; row, so a pasted url could never match and reported "no match".
+
+(ert-deftest decknix-board-urls--accepts-shorthand ()
+  "`owner/repo#N' expands to a PR url."
+  (should (equal '("https://github.com/UpsideRealty/reapit-service/pull/244")
+                 (decknix-review-board--parse-urls
+                  "UpsideRealty/reapit-service#244"))))
+
+(ert-deftest decknix-board-urls--several-shorthands-in-one-paste ()
+  "A comma-separated Slack line yields both, in order."
+  (should (equal '("https://github.com/UpsideRealty/upside/pull/17178"
+                   "https://github.com/UpsideRealty/upside/pull/16823")
+                 (decknix-review-board--parse-urls
+                  "UpsideRealty/upside#17178, UpsideRealty/upside#16823"))))
+
+(ert-deftest decknix-board-urls--a-url-and-its-own-shorthand-dedupe ()
+  "The same PR written both ways starts ONE session, not two.
+Dispatching twice would put two sessions on one review, which is the
+duplicate-reviewer problem the board exists to remove."
+  (should (equal '("https://github.com/o/r/pull/5")
+                 (decknix-review-board--parse-urls
+                  "https://github.com/o/r/pull/5 and o/r#5"))))
+
+(ert-deftest decknix-board-urls--prose-without-a-reference-is-nil ()
+  "Free text with no PR reference still yields nothing."
+  (should-not (decknix-review-board--parse-urls "no url here"))
+  (should-not (decknix-review-board--parse-urls "issue #244"))
+  (should-not (decknix-review-board--parse-urls nil)))
+
+
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here

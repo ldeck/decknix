@@ -165,6 +165,19 @@ problem this board exists to remove."
         (let ((url (match-string 0 input)))
           (setq start (match-end 0))
           (unless (member url found) (push url found))))
+      ;; `owner/repo#N\' shorthand too, because that is what GitHub renders in
+      ;; a Slack paste and a reference in a PR body -- requiring the expanded
+      ;; url meant retyping what was already on screen. Scanned after the urls
+      ;; so a full url is never also matched as shorthand.
+      (setq start 0)
+      (while (string-match
+              "\\([A-Za-z0-9._-]+\\)/\\([A-Za-z0-9._-]+\\)#\\([0-9]+\\)" input start)
+        (let* ((owner (match-string 1 input))
+               (repo (match-string 2 input))
+               (number (match-string 3 input))
+               (url (format "https://github.com/%s/%s/pull/%s" owner repo number)))
+          (setq start (match-end 0))
+          (unless (member url found) (push url found))))
       (nreverse found))))
 
 (defconst decknix-review-board-activity-verbs '("ship" "merge" "fix" "review")
