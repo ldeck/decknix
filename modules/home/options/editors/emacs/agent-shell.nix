@@ -5607,6 +5607,10 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         ;; == Workspace: dedicated tab-bar tab with sidebar ==
         (require 'agent-shell-workspace)
         (define-key decknix-agent-prefix-map (kbd "w") 'agent-shell-workspace-toggle)
+        ;; `w' switches the Agents TAB; `M-w' shows/hides the sidebar within
+        ;; it and `M-W' re-pins it.  Plain `W' is already support-workflow.
+        (define-key decknix-agent-prefix-map (kbd "M-w") 'decknix-sidebar-toggle-visible)
+        (define-key decknix-agent-prefix-map (kbd "M-W") 'decknix-sidebar-pin)
 
         ;; xwidget-webkit JS-bridge primitives (PR B.32) -- the
         ;; `page-text' and `find-in-page' helpers feed both the
