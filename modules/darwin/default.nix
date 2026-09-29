@@ -39,7 +39,7 @@ in
 
     NSGlobalDomain = {
       AppleShowAllExtensions = lib.mkDefault true;
-      "com.apple.swipescrolldirection" = lib.mkDefault false; # Natural scrolling off
+      "com.apple.swipescrolldirection" = lib.mkDefault true; # Natural scrolling on
     };
 
     finder = {
