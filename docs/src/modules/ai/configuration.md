@@ -2,6 +2,16 @@
 
 All AI tooling is configured declaratively in Nix and deployed via `decknix switch`.
 
+## Claude Code version
+
+Claude Code is installed by Nix, not by the self-updating native installer.
+The framework overlays `pkgs.unstable.claude-code` from the separately locked
+`nixpkgs-claude` input so updating Claude does not upgrade every other unstable
+package. To move to a newer nixpkgs Claude Code release, update that input in
+`decknix` (`nix flake update nixpkgs-claude`), verify with a full system build,
+then run `decknix switch`. `which claude` confirms the Nix profile takes
+precedence; `claude --version` confirms the version selected by the lock.
+
 ## Auggie CLI
 
 ### Enabling
