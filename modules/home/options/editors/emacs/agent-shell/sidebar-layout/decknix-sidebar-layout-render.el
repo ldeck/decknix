@@ -125,6 +125,18 @@ PR those filters exist to hide."
          items)
       items)))
 
+(defvar decknix--hub-wip)
+
+(defun decknix--layout-wip-repos ()
+  "Return the hub WIP feed's repos list, or nil."
+  (and (boundp 'decknix--hub-wip)
+       (alist-get 'repos decknix--hub-wip)))
+
+(defun decknix--layout-worktrees ()
+  "Return cached worktree records, or nil when the audit has not run."
+  (and (fboundp 'decknix-hub-wt-rows)
+       (ignore-errors (decknix-hub-wt-rows))))
+
 (defun decknix--layout-short-name (buffer-name)
   "Return BUFFER-NAME without the agent wrapper."
   (replace-regexp-in-string
@@ -173,7 +185,25 @@ PR those filters exist to hide."
                                   'decknix-hub-number (plist-get pr :number)
                                   'decknix-hub-url (alist-get 'url (plist-get pr :item)))
                       "\n")
-              (setq line-num (1+ line-num))))))
+              (setq line-num (1+ line-num))
+              ;; A review session is normally implied by its PR row, so
+              ;; listing it as well would double every review.  MORE than one
+              ;; session on a PR is the exception worth naming: 16 PRs have
+              ;; two agents on them, which is invisible from a single row and
+              ;; is the thing to act on.
+              (let ((covering (decknix--layout-pr-sessions
+                               sessions (plist-get pr :key))))
+                (when (> (length covering) 1)
+                  (dolist (cs covering)
+                    (insert (propertize
+                             (format "      %s %s"
+                                     (decknix--layout-state-glyph (nth 3 cs))
+                                     (decknix--layout-short-name (nth 0 cs)))
+                             'face 'error
+                             'decknix-layout-session cs
+                             'decknix-layout-buffer (nth 0 cs))
+                            "\n")
+                    (setq line-num (1+ line-num)))))))))
       (when (> held 0)
         (insert (propertize
                  (format " ·  %d more in flight, nothing waiting" held)
@@ -190,16 +220,26 @@ PR those filters exist to hide."
   line-num)
 
 (defun decknix--layout-render-wip (line-num width)
-  "Render the WIP section: sessions I started.  Returns updated LINE-NUM."
-  (let ((wip (decknix--layout-wip-sessions (decknix--layout-sessions))))
+  "Render WIP: my live sessions with their own work nested beneath each.
+
+Nesting rather than a separate PR-centric section: the old layout listed my
+PRs and worktrees under a second heading also called \"WIP\", with nothing
+stating which session was on which.  An item may appear under two sessions
+when both share a workspace, which is preferred over picking a winner and
+hiding the sharing."
+  (let* ((sessions (decknix--layout-sessions))
+         (wip (decknix--layout-wip-sessions sessions))
+         (tree (decknix--layout-wip-tree wip (decknix--layout-wip-repos)
+                                         (decknix--layout-worktrees))))
     (when wip
       (insert "\n")
       (setq line-num (1+ line-num))
       (decknix--sidebar-render-section-header
        (format "WIP (%d)" (length wip)) 'wip-sessions)
       (setq line-num (1+ line-num))
-      (dolist (session wip)
-        (let* ((state (nth 3 session))
+      (dolist (row (plist-get tree :sessions))
+        (let* ((session (plist-get row :session))
+               (state (nth 3 session))
                (name (decknix--layout-short-name (nth 0 session)))
                (left (format " %s  %s" (decknix--layout-state-glyph state) name))
                (right (or state ""))
@@ -210,7 +250,61 @@ PR those filters exist to hide."
                               'decknix-layout-session session
                               'decknix-layout-buffer (nth 0 session))
                   "\n")
-          (setq line-num (1+ line-num))))))
+          (setq line-num (1+ line-num))
+          (dolist (claim (plist-get row :repos))
+            (let* ((left (format "     ⇡ %s" (plist-get claim :repo)))
+                   (right (format "%d pr %d wt"
+                                  (plist-get claim :prs)
+                                  (plist-get claim :worktrees)))
+                   (pad (max 1 (- width (string-width left) (string-width right)))))
+              (insert (propertize (concat left (make-string pad ?\s) right)
+                                  'face 'font-lock-comment-face
+                                  'decknix-layout-claim claim
+                                  'decknix-layout-session session)
+                      "\n")
+              (setq line-num (1+ line-num))))))
+      (setq line-num (decknix--layout-render-dormant
+                      line-num width (plist-get tree :dormant)))))
+  line-num)
+
+(defvar decknix-sidebar-layout-dormant-limit 12
+  "Most Dormant repo groups to render, or nil for all.
+Dormant is a backlog, not a queue; an unbounded list of every branch ever
+left behind pushes the sections that need action off screen.  The number
+held back is always reported.")
+
+(defun decknix--layout-render-dormant (line-num width dormant)
+  "Render the Dormant section: work with no live session on it.
+
+Separate from WIP because the distinction is the whole point -- WIP is work
+an agent is on, Dormant is work sitting there without one."
+  (let* ((groups (decknix--layout-dormant-by-repo dormant))
+         (shown (if decknix-sidebar-layout-dormant-limit
+                    (seq-take groups decknix-sidebar-layout-dormant-limit)
+                  groups))
+         (held (- (length groups) (length shown))))
+    (when groups
+      (insert "\n")
+      (setq line-num (1+ line-num))
+      (decknix--sidebar-render-section-header
+       (format "Dormant (%d)" (length groups)) 'dormant)
+      (setq line-num (1+ line-num))
+      (dolist (g shown)
+        (let* ((left (format " ·  %s" (plist-get g :repo)))
+               (right (format "%d pr %d wt"
+                              (length (plist-get g :prs))
+                              (length (plist-get g :worktrees))))
+               (pad (max 1 (- width (string-width left) (string-width right)))))
+          (insert (propertize (concat left (make-string pad ?\s) right)
+                              'face 'font-lock-comment-face
+                              'decknix-layout-dormant g)
+                  "\n")
+          (setq line-num (1+ line-num))))
+      (when (> held 0)
+        (insert (propertize (format " ·  %d more repos dormant" held)
+                            'face 'font-lock-comment-face)
+                "\n")
+        (setq line-num (1+ line-num)))))
   line-num)
 
 (provide 'decknix-sidebar-layout-render)
