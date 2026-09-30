@@ -285,6 +285,42 @@ the owning section."
      (or (not only-my)
          any-reply-to-me))))
 
+(defconst decknix--hub-requests-session-attention-states
+  '("waiting" "asking" "netfail")
+  "Session states that mean a live review session is blocked on the user.
+
+The same three `decknix-session-status-signal-map' classifies as wanting
+you: \"waiting\" is a permission prompt, \"asking\" a settled turn that put
+a question to you, \"netfail\" a turn that died and needs a retry.
+
+\"ready\" and \"working\" are deliberately absent.  An idle or busy session
+wants nothing, and including them would resurface nearly every row and so
+restore the noise these filters exist to remove.")
+
+(defvar decknix--hub-requests-show-session-attention t
+  "When non-nil (default), never hide a Request whose session is blocked on me.
+
+The Requests filters all answer \"is this PR review-ready?\", and their
+default answers are reasonable in isolation: a bot spoke last
+\(`hide-bot-pending'), I spoke last (`hide-i-replied-last'), somebody has
+already reviewed it (`hide-reviewed'), it is a draft, it conflicts.
+
+But a LIVE review session sitting on `asking' is a different question
+entirely -- it is blocked on the user, right now, and the review board
+lists it as such.  With this nil the two disagree: measured on a live
+feed, five PRs whose sessions were `asking' were hidden from Requests,
+which is what sent the user to the board to find them.")
+
+(defun decknix--hub-requests-session-wants-me-p (item)
+  "Return non-nil when ITEM's live review session is blocked on the user.
+
+Reads the state the session snapshot already records; nothing here starts
+a process or touches a buffer, so it is safe on the render path."
+  (and decknix--hub-requests-show-session-attention
+       (fboundp 'decknix--hub-request-session-state)
+       (let ((state (ignore-errors (decknix--hub-request-session-state item))))
+         (and (member state decknix--hub-requests-session-attention-states) t))))
+
 (defun decknix--hub-requests-i-replied-visible-p (item)
   "Return non-nil if ITEM passes the Requests i-replied-last filter.
 When `decknix--hub-requests-hide-i-replied-last' is non-nil (default),
@@ -299,12 +335,16 @@ treated as not-mine so nothing is inadvertently suppressed."
 Combines the shared three-signal engine (needs-reply / bot-pending /
 only-my-replies) with the Requests-only i-replied-last filter so every
 call site that renders the Requests list inherits it uniformly."
-  (and (decknix--hub-attention-visible-p
-        item
-        decknix--hub-requests-hide-needs-reply
-        decknix--hub-requests-hide-bot-pending
-        decknix--hub-requests-only-my-replies)
-       (decknix--hub-requests-i-replied-visible-p item)))
+  (or
+   ;; A session blocked on the user outranks every "waiting on someone
+   ;; else" judgement: the thing waiting is the user.
+   (decknix--hub-requests-session-wants-me-p item)
+   (and (decknix--hub-attention-visible-p
+         item
+         decknix--hub-requests-hide-needs-reply
+         decknix--hub-requests-hide-bot-pending
+         decknix--hub-requests-only-my-replies)
+        (decknix--hub-requests-i-replied-visible-p item))))
 
 (defun decknix--hub-requests-reviewed-label ()
   "Return a short label for the current hide-reviewed filter state."
@@ -355,6 +395,9 @@ is treated identically to `hide-any'."
                            (member decision '("APPROVED" "CHANGES_REQUESTED")))))
     (cond
      ((null state)                   t)   ; nil: show all
+     ;; A live session blocked on me: I am wanted more specifically than by
+     ;; any re-request.
+     ((decknix--hub-requests-session-wants-me-p item) t)
      ;; Genuine re-request or a direct @-mention: I am specifically wanted.
      ((or re-requested comment-ment) t)
      ;; Author moved it forward since the review — bring it back to look.
@@ -375,6 +418,11 @@ PRs whose `mergeable' field is \"CONFLICTING\" (GitHub's merge-conflict
 marker).  A nil mergeable field (e.g. unknown/queued) is treated as
 non-conflicting so new PRs are not inadvertently suppressed."
   (or (not decknix--hub-requests-hide-conflict)
+      ;; A conflicted PR is not mergeable, but a session asking about it
+      ;; still needs an answer -- and the conflict may be what it is asking
+      ;; about.  Measured: upside#17178 and #16823 were both hidden here
+      ;; while their sessions sat on `asking'.
+      (decknix--hub-requests-session-wants-me-p item)
       (not (equal (alist-get 'mergeable item) "CONFLICTING"))))
 
 (defun decknix--hub-requests-draft-visible-p (item)
@@ -384,6 +432,7 @@ PRs whose `draft' field is t (GitHub's `isDraft' marker).  A nil,
 :json-false, or absent draft field is treated as non-draft so
 ready PRs are never inadvertently suppressed."
   (or (not decknix--hub-requests-hide-draft)
+      (decknix--hub-requests-session-wants-me-p item)
       (not (eq (alist-get 'draft item) t))))
 
 (defun decknix--hub-wip-attention-visible-p (pr)

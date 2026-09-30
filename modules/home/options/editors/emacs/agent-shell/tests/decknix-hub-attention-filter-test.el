@@ -302,6 +302,88 @@ ready PRs are never inadvertently suppressed."
     (call-interactively #'decknix--hub-toggle-requests-hide-draft)
     (should-not decknix--hub-requests-hide-draft)))
 
+;; -- a live session blocked on the user --------------------------------
+;;
+;; Measured on a live feed after a switch: five PRs whose review sessions
+;; were sitting on `asking' -- blocked on the user, and listed as such by the
+;; review board -- were hidden from Requests.  #17178 and #16823 by the
+;; conflict filter, #17172 by hide-bot-pending/i-replied-last, #21213 and
+;; reapit#625 by hide-reviewed.  The board said "these want you" and the
+;; sidebar said nothing, which is what sent the user to the board to find
+;; them.
+
+(defmacro decknix-attention-test--with-session-state (state &rest body)
+  "Run BODY with the covering session reporting STATE."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'decknix--hub-request-session-state)
+              (lambda (_item) ,state)))
+     ,@body))
+
+(ert-deftest decknix-hub-attention-filter--asking-session-beats-bot-pending ()
+  (let ((decknix--hub-requests-hide-bot-pending t))
+    (decknix-attention-test--with-session-state "asking"
+      (should (decknix--hub-requests-attention-visible-p
+               '((bot_pending . t) (needs_reply . t)))))))
+
+(ert-deftest decknix-hub-attention-filter--asking-session-beats-i-replied-last ()
+  (let ((decknix--hub-requests-hide-i-replied-last t))
+    (decknix-attention-test--with-session-state "asking"
+      (should (decknix--hub-requests-attention-visible-p
+               '((i_replied_last . t)))))))
+
+(ert-deftest decknix-hub-attention-filter--asking-session-beats-hide-reviewed ()
+  (let ((decknix--hub-requests-hide-reviewed 'hide-any))
+    (decknix-attention-test--with-session-state "asking"
+      (should (decknix--hub-requests-reviewed-visible-p
+               '((my_review . "COMMENTED") (others_reviewed . t)))))))
+
+(ert-deftest decknix-hub-attention-filter--asking-session-beats-conflict ()
+  "A conflicted PR is not mergeable, but the session may be asking about
+exactly that conflict."
+  (let ((decknix--hub-requests-hide-conflict t))
+    (decknix-attention-test--with-session-state "asking"
+      (should (decknix--hub-requests-conflict-visible-p
+               '((mergeable . "CONFLICTING")))))))
+
+(ert-deftest decknix-hub-attention-filter--asking-session-beats-draft ()
+  (let ((decknix--hub-requests-hide-draft t))
+    (decknix-attention-test--with-session-state "asking"
+      (should (decknix--hub-requests-draft-visible-p '((draft . t)))))))
+
+(ert-deftest decknix-hub-attention-filter--waiting-and-netfail-also-want-me ()
+  "A permission prompt blocks a turn mid-flight and a dead turn needs a
+retry; both want the user as much as a question does."
+  (dolist (state '("waiting" "netfail"))
+    (decknix-attention-test--with-session-state state
+      (should (decknix--hub-requests-session-wants-me-p '((repo . "o/r")))))))
+
+(ert-deftest decknix-hub-attention-filter--idle-or-busy-sessions-do-not-resurface ()
+  "`ready' and `working' want nothing.  Treating them as attention would
+resurface nearly every row and restore the noise these filters remove."
+  (dolist (state '("ready" "working" "finished" "closing" nil))
+    (decknix-attention-test--with-session-state state
+      (should-not (decknix--hub-requests-session-wants-me-p '((repo . "o/r")))))))
+
+(ert-deftest decknix-hub-attention-filter--no-session-leaves-filters-alone ()
+  "Without a covering session the filters must behave exactly as before."
+  (decknix-attention-test--with-session-state nil
+    (let ((decknix--hub-requests-hide-draft t)
+          (decknix--hub-requests-hide-conflict t)
+          (decknix--hub-requests-hide-i-replied-last t))
+      (should-not (decknix--hub-requests-draft-visible-p '((draft . t))))
+      (should-not (decknix--hub-requests-conflict-visible-p
+                   '((mergeable . "CONFLICTING"))))
+      (should-not (decknix--hub-requests-attention-visible-p
+                   '((i_replied_last . t)))))))
+
+(ert-deftest decknix-hub-attention-filter--override-can-be-turned-off ()
+  "The escape hatch has to actually restore the old behaviour."
+  (let ((decknix--hub-requests-show-session-attention nil)
+        (decknix--hub-requests-hide-draft t))
+    (decknix-attention-test--with-session-state "asking"
+      (should-not (decknix--hub-requests-session-wants-me-p '((repo . "o/r"))))
+      (should-not (decknix--hub-requests-draft-visible-p '((draft . t)))))))
+
 ;; -- replies-to-me resurface -------------------------------------
 ;;
 ;; upside#21097: reviewed, so hidden by the `hide-any' default, and the author
