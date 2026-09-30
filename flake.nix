@@ -6,10 +6,9 @@
 
     nixpkgs-unstable.url = "github:nixos/nixpkgs/nixpkgs-unstable";
 
-    # Claude Code moves faster than the shared unstable pin. Keep just this
-    # package on a separate, recent lock so an update does not rebuild every
-    # other pkgs.unstable consumer (Pi, editors, etc.).
-    nixpkgs-claude.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+    # Fast-moving packages use a separate, recent lock so updating them does
+    # not also upgrade every other pkgs.unstable consumer (notably Spec Kit).
+    nixpkgs-current.url = "github:nixos/nixpkgs/nixpkgs-unstable";
 
     # Newer nixpkgs sourced *solely* for rustPlatform. The pinned stable
     # (nixos-25.11) and the current nixpkgs-unstable pin both predate the
@@ -117,7 +116,7 @@
             find = import ./lib/find.nix { lib = nixpkgs.lib; };
             unstableOverlay = final: prev: let
               system = prev.stdenv.hostPlatform.system;
-              claudePkgs = import inputs.nixpkgs-claude {
+              currentPkgs = import inputs.nixpkgs-current {
                 inherit system;
                 config = prev.config;
               };
@@ -125,7 +124,11 @@
               unstable = import inputs.nixpkgs-unstable {
                 inherit system;
                 config = prev.config;
-                overlays = [ (_: _: { claude-code = claudePkgs.claude-code; }) ];
+                # Only these packages advance; Gemini and Spec Kit retain the
+                # shared unstable pin. OmniWM is absent on that older pin.
+                overlays = [ (_: _: {
+                  inherit (currentPkgs) claude-code pi-coding-agent tabularis omniwm;
+                }) ];
               };
             };
           # LLVM 20.x getMacOSHostVersion test fails on macOS Sequoia (Darwin 25.x).

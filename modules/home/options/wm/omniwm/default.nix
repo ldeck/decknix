@@ -50,9 +50,9 @@ in {
       default = pkgs.unstable.omniwm;
       defaultText = literalExpression "pkgs.unstable.omniwm";
       description = ''
-        The OmniWM package.  Sourced from `pkgs.unstable' because omniwm is
-        not in the pinned stable nixpkgs (nixos-25.11) -- the same tiered
-        sourcing `decknix.ai.claude' and `decknix.ai.pi' use.
+        The OmniWM package.  `pkgs.unstable.omniwm' is overlaid from
+        nixpkgs-current: OmniWM is absent on both the pinned stable
+        nixpkgs (nixos-25.11) and the older shared unstable pin.
 
         Puts both `OmniWM' and `omniwmctl' on PATH.
       '';

@@ -134,7 +134,7 @@
         "type": "github"
       }
     },
-    "nixpkgs-claude": {
+    "nixpkgs-current": {
       "locked": {
         "lastModified": 1790652569,
         "narHash": "sha256-641r7xrlSOHYoktL9/aArPIYNgZJ9eM5URzSEOtPJDY=",
@@ -235,7 +235,7 @@
         "nix-darwin": "nix-darwin",
         "nix-parts": "nix-parts",
         "nixpkgs": "nixpkgs",
-        "nixpkgs-claude": "nixpkgs-claude",
+        "nixpkgs-current": "nixpkgs-current",
         "nixpkgs-rust": "nixpkgs-rust",
         "nixpkgs-unstable": "nixpkgs-unstable"
       }

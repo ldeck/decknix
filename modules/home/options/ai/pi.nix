@@ -33,7 +33,9 @@ in {
     # out to it) plus the ACP bridge that lets agent-shell (Emacs) launch
     # Pi over the Agent Client Protocol.  Managed by Nix; no manual npm
     # install needed.  `pi-coding-agent' is currently only in
-    # nixpkgs-unstable, so it comes through the `unstable' overlay.
+    # nixpkgs-unstable, so it comes through the `unstable' overlay. That
+    # attribute is sourced from the newer nixpkgs-current pin in flake.nix;
+    # the shared unstable pin still carries 0.83.0.
     home.packages = [ pkgs.unstable.pi-coding-agent pkgs.pi-acp ];
 
     # If we have settings, generate the file and sync it

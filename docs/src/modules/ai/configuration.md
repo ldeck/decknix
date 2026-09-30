@@ -5,12 +5,13 @@ All AI tooling is configured declaratively in Nix and deployed via `decknix swit
 ## Claude Code version
 
 Claude Code is installed by Nix, not by the self-updating native installer.
-The framework overlays `pkgs.unstable.claude-code` from the separately locked
-`nixpkgs-claude` input so updating Claude does not upgrade every other unstable
-package. To move to a newer nixpkgs Claude Code release, update that input in
-`decknix` (`nix flake update nixpkgs-claude`), verify with a full system build,
-then run `decknix switch`. `which claude` confirms the Nix profile takes
-precedence; `claude --version` confirms the version selected by the lock.
+The framework overlays selected `pkgs.unstable` packages (Claude Code, Pi,
+Tabularis, and optional OmniWM) from the separately locked `nixpkgs-current`
+input. This lets those tools advance without upgrading every shared unstable
+consumer (notably Spec Kit). To move them to a newer nixpkgs release, run
+`nix flake update nixpkgs-current` in `decknix`, verify with a full system
+build, then run `decknix switch`. `which claude` confirms the Nix profile
+takes precedence; `claude --version` confirms the selected version.
 
 ## Auggie CLI
 
