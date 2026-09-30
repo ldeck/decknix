@@ -1906,6 +1906,25 @@ let
   # `.app' bundle.  Resolves by search rather than a baked store path, which
   # would go stale on the next `nix flake update' and would force Firefox
   # into every user's closure -- it is installed downstream, not here.
+  # Session-first sidebar model.  40 of 47 live sessions were reviews, so a
+  # row per session was 40 lines before anything else -- which is why Live
+  # became unreadable and the review board was the only usable view.  This
+  # collapses them to one row per repo, expandable.
+  decknix-sidebar-layout-el = mkEmacsTestedPackage {
+    pname = "decknix-sidebar-layout";
+    src = ./agent-shell/sidebar-layout;
+    packageRequires = [ ];
+    testFiles = [ "decknix-sidebar-layout-test.el" ];
+  };
+
+  # Render + expansion state for the above.  Split per AGENTS.md Rule 2.
+  decknix-sidebar-layout-render-el = mkEmacsTestedPackage {
+    pname = "decknix-sidebar-layout-render";
+    src = ./agent-shell/sidebar-layout;
+    packageRequires = [ decknix-sidebar-layout-el ];
+    testFiles = [ "decknix-sidebar-layout-render-test.el" ];
+  };
+
   decknix-browse-el = mkEmacsTestedPackage {
     pname = "decknix-browse";
     src = ./agent-shell/browse;
@@ -3307,6 +3326,8 @@ in
           decknix-agent-resume-command-el
           decknix-agent-jump-target-el
           decknix-agent-input-ring-el
+          decknix-sidebar-layout-el
+          decknix-sidebar-layout-render-el
           decknix-browse-el
           decknix-repo-sync-el
           decknix-repo-sync-actions-el
@@ -4314,6 +4335,10 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; to decide whether a URL leaves Emacs.  `browse-url-firefox'
         ;; already carries it upstream.
         (put 'browse-url-safari 'browse-url-browser-kind 'external)
+
+        (require 'decknix-sidebar-layout)
+        (require 'decknix-sidebar-layout-render)
+        (decknix--layout-load-state)
 
         (require 'decknix-repo-sync)
         (require 'decknix-repo-sync-actions)
@@ -6362,13 +6387,25 @@ duration -- the most important number on this branch."
                 (buffer-disable-undo))
               (erase-buffer)
 
-              ;; ── Hub: Requests (PR reviews) ──
-              (when (fboundp 'decknix--hub-render-requests)
-                (setq line-num (decknix--hub-render-requests line-num)))
-
-              ;; ── Hub: WIP (my open PRs) ──
-              (when (fboundp 'decknix--hub-render-wip)
-                (setq line-num (decknix--hub-render-wip line-num)))
+              ;; ── Reviews (collapsed by repo) then WIP (my sessions) ──
+              ;; Requests folds into Reviews: a PR with no session is a row
+              ;; in its repo's group, so "what is asked of me" becomes
+              ;; "which of these has nothing on it".
+              (if (and (bound-and-true-p decknix-sidebar-layout-enable)
+                       (fboundp 'decknix--layout-render-reviews))
+                  (let ((w (max 24 (1- (window-width)))))
+                    (setq line-num (decknix--layout-render-reviews line-num w))
+                    (setq line-num (decknix--layout-render-wip line-num w))
+                    ;; The PR-centric WIP section still earns its place: it
+                    ;; shows MY open PRs and worktrees, which are not
+                    ;; sessions and appear nowhere above.
+                    (when (fboundp 'decknix--hub-render-wip)
+                      (setq line-num (decknix--hub-render-wip line-num))))
+                ;; ── Previous layout, kept behind the switch ──
+                (when (fboundp 'decknix--hub-render-requests)
+                  (setq line-num (decknix--hub-render-requests line-num)))
+                (when (fboundp 'decknix--hub-render-wip)
+                  (setq line-num (decknix--hub-render-wip line-num))))
 
               ;; ── Repos: sync failures needing attention ──
               (when (fboundp 'decknix--repo-sync-render)
@@ -6768,6 +6805,8 @@ duration -- the most important number on this branch."
           (kbd "T") (lambda () (interactive)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "G") 'decknix-repo-sync-row-action)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "TAB") 'decknix-layout-toggle-expand)
                       (decknix--sidebar-call-transient
                        #'decknix-sidebar-toggles-transient)))
         (define-key agent-shell-workspace-sidebar-mode-map
