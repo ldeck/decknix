@@ -6395,12 +6395,13 @@ duration -- the most important number on this branch."
                        (fboundp 'decknix--layout-render-reviews))
                   (let ((w (max 24 (1- (window-width)))))
                     (setq line-num (decknix--layout-render-reviews line-num w))
-                    (setq line-num (decknix--layout-render-wip line-num w))
-                    ;; The PR-centric WIP section still earns its place: it
-                    ;; shows MY open PRs and worktrees, which are not
-                    ;; sessions and appear nowhere above.
-                    (when (fboundp 'decknix--hub-render-wip)
-                      (setq line-num (decknix--hub-render-wip line-num))))
+                    ;; WIP nests my PRs and worktrees under the session
+                    ;; working on them, and puts the rest in Dormant.  The
+                    ;; PR-centric `decknix--hub-render-wip' is NOT called:
+                    ;; it emits a second heading also called "WIP", so the
+                    ;; sidebar showed the name twice with nothing saying
+                    ;; which session owned which row.
+                    (setq line-num (decknix--layout-render-wip line-num w)))
                 ;; ── Previous layout, kept behind the switch ──
                 (when (fboundp 'decknix--hub-render-requests)
                   (setq line-num (decknix--hub-render-requests line-num)))
@@ -6444,6 +6445,13 @@ duration -- the most important number on this branch."
                 (decknix--hub-write-linked-prs))
 
               ;; ── Live Sessions ──
+              ;; Skipped under the session-first layout: every live session is
+              ;; already accounted for above -- my own in WIP, review sessions
+              ;; by the Reviews row of the PR they cover (listed individually
+              ;; only where two share one PR).  Rendering Live as well listed
+              ;; 32 sessions a third time.
+              (if (bound-and-true-p decknix-sidebar-layout-enable)
+                  line-num
               (if (fboundp 'decknix--sidebar-render-live-sessions)
                   (setq line-num
                         (decknix--sidebar-render-live-sessions
@@ -6504,7 +6512,7 @@ duration -- the most important number on this branch."
                         (setq line-num
                               (+ line-num
                                  (decknix--hub-render-session-prs
-                                  buf-conv-key decknix--hub-expand-prs))))))))
+                                  buf-conv-key decknix--hub-expand-prs)))))))))
 
               ;; ── Previous sessions (greyed-out, from last exit) ──
               (when (fboundp 'decknix--sidebar-render-previous-sessions)

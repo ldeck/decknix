@@ -300,6 +300,188 @@ normalisation bug that once hid `decknix-config' from the picker."
                                  covered))))
                 worktrees)))
 
+(defun decknix--layout-session-workspace (session)
+  "Return SESSION's workspace directory, normalised, or nil."
+  (let ((ws (nth 4 session)))
+    (and (stringp ws) (not (string-empty-p ws))
+         (file-name-as-directory (expand-file-name ws)))))
+
+(defun decknix--layout-wt-path (wt)
+  "Return worktree WT's path, normalised."
+  (let ((p (plist-get wt :path)))
+    (and p (file-name-as-directory (expand-file-name p)))))
+
+(defconst decknix-sidebar-layout-min-tag-match 4
+  "Shortest tag allowed to claim a repo by name.
+
+Session tags are free text and the short ones are not repo names: `us',
+`ai', `mvp', `org' would each match something.  Four characters excludes
+every generic tag observed in the live workspace while still matching
+`decknix', `followupboss' and `rea-integration'.")
+
+(defun decknix--layout-tag-matches-repo-p (tag repo)
+  "Return non-nil when TAG names REPO.  Pure.
+
+Exact match, or TAG as the leading segment of a hyphenated repo name --
+`followupboss' names `followupboss-integration', which is how the tags are
+written in practice.  Not a substring test: `core' would then claim
+`connect-to-core', which it does not name."
+  (and (stringp tag) (stringp repo)
+       (>= (length tag) decknix-sidebar-layout-min-tag-match)
+       (let ((short (downcase (car (last (split-string repo "/" t)))))
+             (tag (downcase tag)))
+         (or (string= tag short)
+             (string-prefix-p (concat tag "-") short)))))
+
+(defun decknix--layout-session-claims-repo-p (session repo)
+  "Return non-nil when SESSION's tags name REPO.
+
+The only association available.  A session's workspace is the workspace
+ROOT for every session in practice (measured: all 47 reported
+`~/Code/nurturecloud/'), and own sessions carry no linked PRs, so neither
+can link a session to a repo.  Tags can, because they are how these
+sessions are named.
+
+Heuristic, and deliberately conservative -- see
+`decknix-sidebar-layout-min-tag-match'.  The durable fix is for the launch
+paths to record the repo or worktree the way review sessions record their
+PR; until then this is inference, not data."
+  (seq-some (lambda (tag) (decknix--layout-tag-matches-repo-p tag repo))
+            (nth 1 session)))
+
+(defun decknix--layout-session-owns-wt-p (session wt)
+  "Return non-nil when SESSION is working in worktree WT.
+
+Compared as directories: the audit writes some paths with a trailing slash
+and some without, which is the normalisation bug that once hid
+`decknix-config' from the worktree picker."
+  (let ((ws (decknix--layout-session-workspace session))
+        (wp (decknix--layout-wt-path wt)))
+    (and ws wp (string= ws wp))))
+
+(defun decknix--layout-wip-tree (sessions wip-repos worktrees)
+  "Return (:sessions LIST :dormant PLIST) nesting work under its owning session.
+
+Each entry of :sessions is (:session S :worktrees WTS :prs PRS).  A session
+claims a worktree when its workspace IS that worktree, and claims a PR when
+the PR's branch matches a worktree it claims.
+
+:dormant holds what no live session claims, as (:worktrees WTS :prs PRS).
+That is the distinction the sections draw: WIP is work with an agent on it,
+Dormant is work sitting there without one.
+
+WIP-REPOS is the hub WIP feed's `repos' list; PRS keep their repo alongside
+them because a bare number is ambiguous across repos.
+
+A worktree or PR can legitimately appear under more than one session -- two
+agents may share a workspace -- and that is preferred over picking a winner,
+which would hide the sharing."
+  (let* ((all-prs
+          (apply #'append
+                 (mapcar (lambda (repo)
+                           (mapcar (lambda (pr)
+                                     (list :repo (alist-get 'repo repo)
+                                           :number (alist-get 'number pr)
+                                           :branch (alist-get 'branch pr)
+                                           :pr pr))
+                                   (alist-get 'prs repo)))
+                         wip-repos)))
+         (claimed-wts nil)
+         (claimed-prs nil)
+         (rows
+          (mapcar
+           (lambda (session)
+             (let* ((wts (seq-filter
+                          (lambda (wt)
+                            (or (decknix--layout-session-owns-wt-p session wt)
+                                (decknix--layout-session-claims-repo-p
+                                 session (or (plist-get wt :repo) ""))))
+                          worktrees))
+                    ;; Two ways a PR is claimed, and both are needed.  BRANCH
+                    ;; is the precise one: a session whose workspace IS a
+                    ;; worktree owns the PR for that worktree's branch.  TAG is
+                    ;; the loose one, and the only thing available for sessions
+                    ;; that sit in the workspace root (all of them, in
+                    ;; practice).  Dropping the branch path regressed exactly
+                    ;; the case where the association is actually known.
+                    (branches (delq nil (mapcar (lambda (wt) (plist-get wt :branch))
+                                                wts)))
+                    (prs (seq-filter
+                          (lambda (p)
+                            (or (and (plist-get p :branch)
+                                     (member (plist-get p :branch) branches))
+                                (decknix--layout-session-claims-repo-p
+                                 session (or (plist-get p :repo) ""))))
+                          all-prs)))
+               (setq claimed-wts (append claimed-wts wts)
+                     claimed-prs (append claimed-prs prs))
+               ;; Grouped by repo rather than listed flat.  Tag matching is
+               ;; repo-level, so a session claims ALL of a repo's work: the
+               ;; two followupboss sessions each claimed 5 PRs and 6
+               ;; worktrees, which is 22 nested rows for two sessions in a
+               ;; section whose purpose is to fit on screen.  One row per repo
+               ;; states the same association in a tenth of the space, and is
+               ;; honest about the granularity the data actually supports.
+               (list :session session :worktrees wts :prs prs
+                     :repos (decknix--layout-group-claims wts prs))))
+           sessions)))
+    (list :sessions rows
+          :dormant
+          (list :worktrees (seq-remove (lambda (wt) (memq wt claimed-wts)) worktrees)
+                :prs (seq-remove (lambda (p) (memq p claimed-prs)) all-prs)))))
+
+(defun decknix--layout-group-claims (worktrees prs)
+  "Return (:repo R :prs N :worktrees N) per repo across WORKTREES and PRS."
+  (let ((by-repo (make-hash-table :test 'equal)))
+    (dolist (wt worktrees)
+      (let* ((short (car (last (split-string (or (plist-get wt :repo) "?") "/" t))))
+             (e (gethash short by-repo)))
+        (puthash short (list :repo short
+                             :worktrees (1+ (or (plist-get e :worktrees) 0))
+                             :prs (or (plist-get e :prs) 0))
+                 by-repo)))
+    (dolist (pr prs)
+      (let* ((short (car (last (split-string (or (plist-get pr :repo) "?") "/" t))))
+             (e (gethash short by-repo)))
+        (puthash short (list :repo short
+                             :worktrees (or (plist-get e :worktrees) 0)
+                             :prs (1+ (or (plist-get e :prs) 0)))
+                 by-repo)))
+    (let (out)
+      (maphash (lambda (_k v) (push v out)) by-repo)
+      (sort out (lambda (a b) (string< (plist-get a :repo) (plist-get b :repo)))))))
+
+(defun decknix--layout-dormant-by-repo (dormant)
+  "Group DORMANT work by repo for rendering.
+
+Returns a list of (:repo R :worktrees WTS :prs PRS), repo-sorted.  Grouped
+because an ungrouped list of 20-odd branches and PR numbers gives no clue
+which belong together."
+  (let ((by-repo (make-hash-table :test 'equal)))
+    (dolist (wt (plist-get dormant :worktrees))
+      (let* ((repo (or (plist-get wt :repo) "?"))
+             (short (car (last (split-string repo "/" t))))
+             (e (gethash short by-repo)))
+        (puthash short (list :repo short
+                             :worktrees (cons wt (plist-get e :worktrees))
+                             :prs (plist-get e :prs))
+                 by-repo)))
+    (dolist (pr (plist-get dormant :prs))
+      (let* ((repo (or (plist-get pr :repo) "?"))
+             (short (car (last (split-string repo "/" t))))
+             (e (gethash short by-repo)))
+        (puthash short (list :repo short
+                             :worktrees (plist-get e :worktrees)
+                             :prs (cons pr (plist-get e :prs)))
+                 by-repo)))
+    (let (out)
+      (maphash (lambda (_k v) (push v out)) by-repo)
+      (sort out (lambda (a b) (string< (plist-get a :repo) (plist-get b :repo)))))))
+
+(defun decknix--layout-pr-sessions (sessions key)
+  "Return the SESSIONS whose review PRs include KEY."
+  (seq-filter (lambda (s) (member key (decknix--layout-session-prs s))) sessions))
+
 ;; --- labels -----------------------------------------------------------
 
 (defconst decknix-sidebar-layout-state-glyphs

@@ -1056,7 +1056,13 @@ O(requests x sessions) pure comparisons; `covers-p' itself is ~3us."
                                  ;; whether its session needs you rather
                                  ;; than merely that one exists.
                                  (ignore-errors
-                                   (decknix-agent-buffer-status b)))))))
+                                   (decknix-agent-buffer-status b))
+                                 ;; Workspace and conv-key, so the sidebar can
+                                 ;; nest a session's OWN repos, worktrees and
+                                 ;; PRs beneath it instead of listing them in a
+                                 ;; separate section with no stated relation.
+                                 (bound-and-true-p decknix--agent-session-workspace)
+                                 ck)))))
                    (agent-shell-buffers)))))))
 
 (defconst decknix--hub-request-session-faces

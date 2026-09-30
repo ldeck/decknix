@@ -344,5 +344,135 @@ included, or `off' would still be a filtered view."
 (ert-deftest decknix-layout--filter-of-nothing-is-nothing ()
   (should (equal '(nil . 0) (decknix--layout-filter-groups nil t))))
 
+
+;; --- WIP nesting and Dormant ------------------------------------------
+;;
+;; The old layout emitted a SECOND heading also called "WIP" for my PRs and
+;; worktrees, with nothing stating which session was on which. Nesting fixes
+;; that; Dormant holds what no live session claims.
+
+(defun decknix-layout-test--ws-session (name state ws)
+  (list name '("t") nil state ws))
+
+(defconst decknix-layout-test--wip-repos
+  '(((repo . "UpsideRealty/upside")
+     (prs . (((number . 20511) (branch . "fix/postman"))
+             ((number . 21300) (branch . "unrelated-branch")))))
+    ((repo . "nc-helix/platform-cli")
+     (prs . (((number . 57) (branch . "CONN-1040-generator-fixes")))))))
+
+(defconst decknix-layout-test--worktrees
+  '((:repo "upsiderealty/upside" :branch "fix/postman" :path "/w/upside-wt/postman")
+    (:repo "nc-helix/platform-cli" :branch "CONN-1040-generator-fixes"
+     :path "/w/cli-wt/CONN-1040")
+    (:repo "upsiderealty/decknix" :branch "abandoned" :path "/w/decknix-wt/old")))
+
+(ert-deftest decknix-layout--wip-nests-the-worktree-a-session-occupies ()
+  (let* ((s (decknix-layout-test--ws-session "*Claude: a*" "working" "/w/upside-wt/postman"))
+         (tree (decknix--layout-wip-tree (list s) decknix-layout-test--wip-repos
+                                         decknix-layout-test--worktrees))
+         (row (car (plist-get tree :sessions))))
+    (should (equal '("fix/postman")
+                   (mapcar (lambda (w) (plist-get w :branch))
+                           (plist-get row :worktrees))))))
+
+(ert-deftest decknix-layout--wip-nests-the-pr-on-that-branch ()
+  "The PR is claimed via the worktree's branch, which is the only link
+between a session's workspace and a PR number."
+  (let* ((s (decknix-layout-test--ws-session "*Claude: a*" "working" "/w/upside-wt/postman"))
+         (tree (decknix--layout-wip-tree (list s) decknix-layout-test--wip-repos
+                                         decknix-layout-test--worktrees))
+         (row (car (plist-get tree :sessions))))
+    (should (equal '(20511) (mapcar (lambda (p) (plist-get p :number))
+                                    (plist-get row :prs))))))
+
+(ert-deftest decknix-layout--workspace-match-ignores-a-trailing-slash ()
+  "The audit writes some paths with a trailing slash and some without; the
+plain compare is the bug that once hid `decknix-config' from the picker."
+  (let ((s (decknix-layout-test--ws-session "*Claude: a*" "working" "/w/upside-wt/postman/")))
+    (should (decknix--layout-session-owns-wt-p
+             s '(:path "/w/upside-wt/postman")))
+    (should (decknix--layout-session-owns-wt-p
+             (decknix-layout-test--ws-session "*C*" "working" "/w/upside-wt/postman")
+             '(:path "/w/upside-wt/postman/")))))
+
+(ert-deftest decknix-layout--unclaimed-work-is-dormant ()
+  "Everything no live session occupies lands in Dormant, not nowhere."
+  (let* ((s (decknix-layout-test--ws-session "*Claude: a*" "working" "/w/upside-wt/postman"))
+         (tree (decknix--layout-wip-tree (list s) decknix-layout-test--wip-repos
+                                         decknix-layout-test--worktrees))
+         (dormant (plist-get tree :dormant)))
+    (should (equal '("CONN-1040-generator-fixes" "abandoned")
+                   (mapcar (lambda (w) (plist-get w :branch))
+                           (plist-get dormant :worktrees))))
+    ;; #20511 is claimed via the session's worktree branch; the other two
+    ;; belong to repos no tag names.
+    (should (equal '(21300 57) (mapcar (lambda (p) (plist-get p :number))
+                                       (plist-get dormant :prs))))))
+
+(ert-deftest decknix-layout--tag-claims-a-repo-by-name ()
+  "The only association available for a session in the workspace ROOT, which
+is where all 47 live sessions actually sit."
+  (should (decknix--layout-tag-matches-repo-p "decknix" "upsiderealty/decknix"))
+  (should (decknix--layout-tag-matches-repo-p
+           "followupboss" "UpsideRealty/followupboss-integration"))
+  (should (decknix--layout-tag-matches-repo-p "rea-integration" "o/rea-integration")))
+
+(ert-deftest decknix-layout--short-tags-claim-nothing ()
+  "`us\=', `ai\=', `mvp\=' and `org\=' are all real session tags and none is a repo
+name; without a floor they would each claim something."
+  (dolist (tag '("us" "ai" "mvp" "org" "" nil))
+    (should-not (decknix--layout-tag-matches-repo-p tag "upsiderealty/mvp-thing"))))
+
+(ert-deftest decknix-layout--tag-match-is-not-a-substring-test ()
+  "`core\=' does not name `connect-to-core\=', and a substring test would say it
+does -- so the prefix must be the LEADING hyphenated segment."
+  (should-not (decknix--layout-tag-matches-repo-p "core" "o/connect-to-core"))
+  (should-not (decknix--layout-tag-matches-repo-p "integration" "o/rea-integration")))
+
+(ert-deftest decknix-layout--no-sessions-makes-everything-dormant ()
+  (let* ((tree (decknix--layout-wip-tree nil decknix-layout-test--wip-repos
+                                         decknix-layout-test--worktrees))
+         (dormant (plist-get tree :dormant)))
+    (should (= 3 (length (plist-get dormant :worktrees))))
+    (should (= 3 (length (plist-get dormant :prs))))))
+
+(ert-deftest decknix-layout--two-sessions-sharing-a-workspace-both-claim-it ()
+  "Preferred over picking a winner, which would hide that they share."
+  (let* ((a (decknix-layout-test--ws-session "*A*" "working" "/w/upside-wt/postman"))
+         (b (decknix-layout-test--ws-session "*B*" "ready" "/w/upside-wt/postman"))
+         (tree (decknix--layout-wip-tree (list a b) decknix-layout-test--wip-repos
+                                         decknix-layout-test--worktrees)))
+    (dolist (row (plist-get tree :sessions))
+      (should (= 1 (length (plist-get row :worktrees)))))
+    ;; and it is not double-counted into Dormant
+    (should-not (seq-find (lambda (w) (equal "fix/postman" (plist-get w :branch)))
+                          (plist-get (plist-get tree :dormant) :worktrees)))))
+
+(ert-deftest decknix-layout--a-session-with-no-workspace-claims-nothing ()
+  (let* ((s (decknix-layout-test--ws-session "*A*" "ready" nil))
+         (tree (decknix--layout-wip-tree (list s) decknix-layout-test--wip-repos
+                                         decknix-layout-test--worktrees)))
+    (should-not (plist-get (car (plist-get tree :sessions)) :worktrees))
+    (should (= 3 (length (plist-get (plist-get tree :dormant) :worktrees))))))
+
+(ert-deftest decknix-layout--dormant-groups-by-repo ()
+  (let* ((tree (decknix--layout-wip-tree nil decknix-layout-test--wip-repos
+                                         decknix-layout-test--worktrees))
+         (groups (decknix--layout-dormant-by-repo (plist-get tree :dormant))))
+    (should (equal '("decknix" "platform-cli" "upside")
+                   (mapcar (lambda (g) (plist-get g :repo)) groups)))))
+
+;; --- sessions covering one PR -----------------------------------------
+
+(ert-deftest decknix-layout--pr-sessions-finds-every-cover ()
+  "Drives the indented session rows shown only where two agents share a PR."
+  (should (= 2 (length (decknix--layout-pr-sessions
+                        decknix-layout-test--sessions "upside#21248"))))
+  (should (= 1 (length (decknix--layout-pr-sessions
+                        decknix-layout-test--sessions "upside#17172"))))
+  (should-not (decknix--layout-pr-sessions
+               decknix-layout-test--sessions "upside#99999")))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here
