@@ -156,5 +156,32 @@ is here to observe."
     (kill-buffer b)
     (should-not (decknix--agent-prompt-probe-measure b "test"))))
 
+;; --- resume sampling schedule ----------------------------------------
+
+(ert-deftest decknix-probe-resume--passes-state-as-timer-arguments ()
+  "Delayed samples must not depend on a dynamic-binding closure.
+`default.el' is dynamically bound, so a timer lambda referring to the
+surrounding `shell-buf' and `delay' variables signals `void-variable' after
+that surrounding call returns.  Passing both values as explicit timer
+arguments keeps the callback valid in every binding mode."
+  (let ((buf (generate-new-buffer "probe-schedule"))
+        recorded scheduled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'decknix-agent-prompt-probe-record)
+                   (lambda (buffer stage)
+                     (push (list buffer stage) recorded)))
+                  ((symbol-function 'run-at-time)
+                   (lambda (delay repeat function &rest args)
+                     (push (append (list delay repeat function) args) scheduled))))
+          (decknix--agent-prompt-probe-resume buf)
+          (should (equal (nreverse recorded) (list (list buf "resume"))))
+          (should
+           (equal (nreverse scheduled)
+                  (list
+                   (list 2 nil #'decknix--agent-prompt-probe-delayed-sample buf 2)
+                   (list 6 nil #'decknix--agent-prompt-probe-delayed-sample buf 6)
+                   (list 15 nil #'decknix--agent-prompt-probe-delayed-sample buf 15)))))
+      (kill-buffer buf))))
+
 (provide 'decknix-agent-prompt-probe-test)
 ;;; decknix-agent-prompt-probe-test.el ends here

@@ -172,5 +172,27 @@ supplied by the caller so the pure layer stays free of the clock."
                    "\n")
            nil decknix-agent-prompt-probe-file 'append 'quiet))))))
 
+
+;; --- resume sampling schedule ----------------------------------------
+
+(defun decknix--agent-prompt-probe-delayed-sample (buffer delay)
+  "Record the DELAY-second resume sample for BUFFER when it is still live."
+  (when (buffer-live-p buffer)
+    (decknix-agent-prompt-probe-record
+     buffer (format "resume+%ds" delay))))
+
+(defun decknix--agent-prompt-probe-resume (shell-buf &rest _)
+  "Record SHELL-BUF's prompt state through the resume settling window.
+
+BUFFER and DELAY are passed to each timer callback explicitly.  This function
+is advised from generated `default.el', which uses dynamic binding, so a timer
+lambda must not capture either value from the surrounding call."
+  (when (buffer-live-p shell-buf)
+    (decknix-agent-prompt-probe-record shell-buf "resume")
+    (dolist (delay '(2 6 15))
+      (run-at-time delay nil
+                   #'decknix--agent-prompt-probe-delayed-sample
+                   shell-buf delay))))
+
 (provide 'decknix-agent-prompt-probe)
 ;;; decknix-agent-prompt-probe.el ends here
