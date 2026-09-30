@@ -32,7 +32,12 @@ Nix build time.
 ### Hot-reload (`deckmacs-reload`, `C-c D r`)
 
 `decknix switch` invokes `(deckmacs-reload)` via `emacsclient` from
-`postActivation`.  The reload performs three steps in order so that
+`postActivation`. After switching, the CLI reports whether the running
+Emacs binary differs from the profile (restart required), Elisp is still
+pending hot reload (no restart required), or the daemon is current. The
+probe is bounded and reports uncertainty when the daemon does not answer;
+it never restarts a daemon merely because Elisp changed. The reload
+performs three steps in order so that
 edits to **carved first-party packages** (everything matching
 `decknix-*` under `agent-shell/<feature>/`) propagate without a
 `launchctl kickstart`:

@@ -48,6 +48,19 @@ decknix switch --override decknix=~/tools/decknix --override nc-config=~/Code/my
 4. For each active override (CLI or `settings.toml`), adds
    `--override-input <INPUT> path:<PATH>`.
 5. With `--dry-run`, uses `build` instead of `switch` and skips the preflight.
+6. After a successful switch (including a no-op), checks the running Emacs
+   daemon against the active profile. A changed Emacs binary requires a
+   restart; changed Elisp is hot-reloaded without restarting. If the reload
+   has not completed yet, the status says so and suggests `C-c D r` if it
+   stays stale. If the daemon does not answer within five seconds, the
+   status is unknown rather than claiming that a restart is needed. This
+   check never restarts the daemon or interrupts agent sessions. A dry run
+   does not perform this check.
+
+If a restart is actually required, the output prints the launchctl command.
+After installing a new version of the `decknix` CLI, the *next* invocation
+will display this status because the invocation that installed it is still
+running the old CLI binary.
 
 ### Why the preflight
 
