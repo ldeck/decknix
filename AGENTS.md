@@ -161,6 +161,47 @@ cd ~/.config/decknix && nix build .#darwinConfigurations.default.system \
 - Test activation with `decknix switch --override decknix=~/tools/decknix` only
   when the user requests it.
 
+#### Final readiness gate: "ready to switch"
+
+A successful full system build is a hard gate before telling the user that a
+change is ready for `decknix switch`. This applies to every change that can
+affect Nix evaluation, a package derivation, generated configuration, or Emacs.
+Targeted tests and parse checks are preliminary feedback, not substitutes for
+this gate.
+
+Run the build against the **final working-tree contents**, not merely the
+revision pinned in the consumer flake. From the decknix repository root:
+
+```bash
+repo="$PWD"
+cd ~/.config/decknix
+set -o pipefail
+darwin-rebuild build --flake .#default --impure \
+  --override-input decknix "git+file://$repo" \
+  2>&1 | tee /tmp/decknix-build-verify.txt
+```
+
+Add equivalent `git+file://` overrides for any other locally modified flake
+inputs involved in the change. Prefer `git+file://` over `path:` for large Git
+repositories because `path:` copies ignored build outputs into the Nix source.
+
+The gate is satisfied only when all of the following are true:
+
+1. The complete command exits zero. With `tee`, `set -o pipefail` is mandatory.
+2. The build ran after the last source edit. Any subsequent source change
+   invalidates the result and requires another full build.
+3. Every failure uncovered by the build has been fixed and the full command has
+   been rerun. A later failure that was previously masked is part of the same
+   verification cycle.
+4. The agent inspected the command's final result. A successful targeted
+   derivation, truncated output prefix, parse check, or old build does not count.
+5. The readiness report names the successful command and log path. If the full
+   build has not passed, say that plainly and do not use "ready to switch",
+   "fixed", or equivalent completion language.
+
+This gate builds only; it does not activate the generation. Continue to reserve
+an actual `decknix switch` for explicit user request.
+
 ### 5. Command Execution — Prefer Nix-managed Tools
 
 This is a Nix-managed system. **Never hardcode paths** to system binaries like
