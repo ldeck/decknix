@@ -19,6 +19,7 @@
 (require 'json)
 (require 'tabulated-list)
 (require 'transient)
+(require 'decknix-hub-wt-stale)
 
 (declare-function tabulated-list-get-id "tabulated-list")
 (declare-function tabulated-list-get-entry "tabulated-list")

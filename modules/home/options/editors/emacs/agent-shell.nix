@@ -547,7 +547,8 @@ let
   decknix-worktree-picker-el = mkEmacsTestedPackage {
     pname = "decknix-worktree-picker";
     src = ./agent-shell/workspace-bulk;
-    packageRequires = [ ];
+    # The picker reads the asynchronous worktree-audit cache directly.
+    packageRequires = [ decknix-hub-wt-stale-el ];
     testFiles = [
       "decknix-worktree-picker-test.el"
     ];
@@ -931,10 +932,10 @@ let
   # sessions for incoming PR review requests.  4-state cycle
   # (off -> bot -> human -> any), per-item action classifier
   # (state x bot x mentioned -> ship | review | nil), per-workspace
-  # command resolver, and dedup keys.  No deps — the hub predicates
-  # (`decknix--hub-bot-author-p', `decknix--hub-item-mentioned-p')
-  # that supply the bot/mention booleans, and the dispatch glue that
-  # spawns sessions, live in the heredoc side-effect block.
+  # command resolver, and dedup keys.  The canonical hub predicates
+  # (`decknix--hub-item-mentioned-p', team request, and standing request)
+  # are a runtime dependency; the dispatch glue that spawns sessions lives
+  # in the heredoc side-effect block.
   # Paces bursty session spawns (auto-review dispatching one per eligible PR
   # on a single hub refresh) so a burst doesn't cold-start N node+claude
   # processes at once — which thrashed the machine and froze Emacs's main
@@ -958,6 +959,7 @@ let
     # grouped dispatch records against the session -- a group's NAME
     # encodes no PR number, so there is nothing to derive from it later.
     packageRequires = [ decknix-agent-spawn-queue-el
+                        decknix-hub-mention-bot-el
                         decknix-hub-review-identity-el ];
     testFiles = [
       "decknix-auto-review-test.el"
@@ -2696,6 +2698,8 @@ let
       decknix-hub-attention-filter-el
       decknix-sidebar-previous-el
       decknix-sidebar-grouping-el
+      # Co-resident worktree-picker.el requires the async audit cache.
+      decknix-hub-wt-stale-el
       decknix-session-watch-el
       decknix-agent-live-sessions-el
       decknix-hub-ci-filter-el
