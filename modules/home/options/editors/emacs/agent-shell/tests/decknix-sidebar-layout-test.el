@@ -299,5 +299,50 @@ destroys the one-row-per-repo property the collapse exists for."
     (should (string-match-p "2" label))
     (should-not (string-match-p "⚑" label))))
 
+
+;; --- attention-only filtering -----------------------------------------
+;;
+;; A repo whose sessions are all `working' or `ready' is in flight and wants
+;; nothing.  At the top of the sidebar it competes with the rows that do.
+
+(ert-deftest decknix-layout--a-blocked-session-earns-a-row ()
+  (should (decknix--layout-group-wants-me-p '(:asking 1 :sessions 3 :uncovered 0))))
+
+(ert-deftest decknix-layout--an-unstarted-pr-earns-a-row ()
+  "This is the folded-in Requests case: nobody is on it yet."
+  (should (decknix--layout-group-wants-me-p '(:asking 0 :sessions 0 :uncovered 2))))
+
+(ert-deftest decknix-layout--work-in-flight-does-not-earn-a-row ()
+  "Sessions present, none blocked, nothing unstarted: wants nothing."
+  (should-not (decknix--layout-group-wants-me-p
+               '(:asking 0 :sessions 4 :uncovered 0))))
+
+(ert-deftest decknix-layout--an-empty-group-does-not-earn-a-row ()
+  (should-not (decknix--layout-group-wants-me-p '(:asking 0 :sessions 0 :uncovered 0)))
+  (should-not (decknix--layout-group-wants-me-p nil)))
+
+(ert-deftest decknix-layout--filter-reports-what-it-held-back ()
+  "A section that quietly shrinks is indistinguishable from an empty one --
+the same failure that let a repo-sync error hide for 61 runs."
+  (let* ((groups '((:repo "loud" :asking 2 :sessions 2 :uncovered 0)
+                   (:repo "quiet" :asking 0 :sessions 4 :uncovered 0)
+                   (:repo "new" :asking 0 :sessions 0 :uncovered 1)))
+         (split (decknix--layout-filter-groups groups t)))
+    (should (equal '("loud" "new")
+                   (mapcar (lambda (g) (plist-get g :repo)) (car split))))
+    (should (= 1 (cdr split)))))
+
+(ert-deftest decknix-layout--filter-off-restores-everything ()
+  "The toggle has to genuinely restore the previous behaviour, held count
+included, or `off' would still be a filtered view."
+  (let* ((groups '((:repo "a" :asking 0 :sessions 4 :uncovered 0)
+                   (:repo "b" :asking 1 :sessions 1 :uncovered 0)))
+         (split (decknix--layout-filter-groups groups nil)))
+    (should (= 2 (length (car split))))
+    (should (= 0 (cdr split)))))
+
+(ert-deftest decknix-layout--filter-of-nothing-is-nothing ()
+  (should (equal '(nil . 0) (decknix--layout-filter-groups nil t))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here

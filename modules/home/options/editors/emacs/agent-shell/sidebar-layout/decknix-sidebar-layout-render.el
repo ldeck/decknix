@@ -35,6 +35,15 @@
   "When non-nil, render the session-first Reviews/WIP/Unattached sections.
 Set nil to fall back to the previous Requests/WIP/Live layout.")
 
+(defvar decknix-sidebar-layout-reviews-attention-only t
+  "When non-nil (default), Reviews lists only repos that want something.
+
+That means a blocked session or a PR with no session.  A repo whose
+sessions are all `working' or `ready' is in flight and wants nothing; at
+the top of the sidebar it competes with the rows that do.  Toggle with
+\[decknix-layout-toggle-attention-only]; the count held back is always
+shown, so the section never shrinks silently.")
+
 (defvar decknix--layout-expanded (make-hash-table :test 'equal)
   "Repo -> non-nil when its Reviews group is expanded.")
 
@@ -79,6 +88,17 @@ Set nil to fall back to the previous Requests/WIP/Live layout.")
     (when (fboundp 'agent-shell-workspace-sidebar-refresh)
       (agent-shell-workspace-sidebar-refresh))))
 
+(defun decknix-layout-toggle-attention-only ()
+  "Toggle whether Reviews lists only repos that want something."
+  (interactive)
+  (setq decknix-sidebar-layout-reviews-attention-only
+        (not decknix-sidebar-layout-reviews-attention-only))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Reviews: %s"
+           (if decknix-sidebar-layout-reviews-attention-only
+               "only what wants me" "everything")))
+
 (defun decknix--layout-sessions ()
   "Return the live session snapshot, or nil."
   (and (fboundp 'decknix--hub-review-session-snapshot)
@@ -115,11 +135,17 @@ PR those filters exist to hide."
   "Render the Reviews section.  Returns the updated LINE-NUM."
   (let* ((sessions (decknix--layout-sessions))
          (items (decknix--layout-feed-items))
-         (groups (decknix--layout-review-groups sessions items))
+         (all-groups (decknix--layout-review-groups sessions items))
+         (split (decknix--layout-filter-groups
+                 all-groups decknix-sidebar-layout-reviews-attention-only))
+         (groups (car split))
+         (held (cdr split))
          (dups (decknix--layout-duplicate-prs sessions))
-         (total (apply #'+ (mapcar (lambda (g) (or (plist-get g :sessions) 0)) groups)))
-         (asking (apply #'+ (mapcar (lambda (g) (or (plist-get g :asking) 0)) groups))))
-    (when groups
+         (total (apply #'+ (mapcar (lambda (g) (or (plist-get g :sessions) 0))
+                                   all-groups)))
+         (asking (apply #'+ (mapcar (lambda (g) (or (plist-get g :asking) 0))
+                                    all-groups))))
+    (when (or groups (> held 0))
       (decknix--sidebar-render-section-header
        (if (> asking 0)
            (format "Reviews (%d) — %d need you" total asking)
@@ -148,6 +174,13 @@ PR those filters exist to hide."
                                   'decknix-hub-url (alist-get 'url (plist-get pr :item)))
                       "\n")
               (setq line-num (1+ line-num))))))
+      (when (> held 0)
+        (insert (propertize
+                 (format " ·  %d more in flight, nothing waiting" held)
+                 'face 'font-lock-comment-face
+                 'decknix-layout-held held)
+                "\n")
+        (setq line-num (1+ line-num)))
       (when dups
         (insert (propertize (format " ⚠  %d PRs have 2+ sessions" (length dups))
                             'face 'error

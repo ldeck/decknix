@@ -228,6 +228,36 @@ Highest number first because a PR raised later is the one still moving."
              (t (string< (or (plist-get a :repo) "")
                          (or (plist-get b :repo) ""))))))))
 
+(defun decknix--layout-group-wants-me-p (group)
+  "Return non-nil when GROUP earns a row at the top of the sidebar.
+
+Two reasons qualify, and only two:
+
+  a session is blocked on me   (:asking > 0)
+  a PR has no session at all    (:uncovered > 0)
+
+A repo whose sessions are all `working' or `ready' is work in flight that
+wants nothing: it is the single largest source of rows, and showing it at
+the top competes with the rows that do want something.  Expanding is still
+how you look at it -- see `decknix--layout-filter-groups', which reports how
+many were held back rather than dropping them silently."
+  (or (> (or (plist-get group :asking) 0) 0)
+      (> (or (plist-get group :uncovered) 0) 0)))
+
+(defun decknix--layout-filter-groups (groups attention-only)
+  "Return (VISIBLE . HIDDEN-COUNT) for GROUPS.
+
+With ATTENTION-ONLY nil every group is visible and HIDDEN-COUNT is 0, so
+the toggle genuinely restores the previous behaviour.
+
+HIDDEN-COUNT is returned rather than discarded because a section that
+quietly shrinks is indistinguishable from one with nothing in it -- the
+same failure that let a repo-sync error hide for 61 runs."
+  (if (not attention-only)
+      (cons groups 0)
+    (let ((visible (seq-filter #'decknix--layout-group-wants-me-p groups)))
+      (cons visible (- (length groups) (length visible))))))
+
 ;; --- duplicate coverage ----------------------------------------------
 
 (defun decknix--layout-duplicate-prs (sessions)

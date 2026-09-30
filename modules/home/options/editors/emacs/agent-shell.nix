@@ -6807,6 +6807,8 @@ duration -- the most important number on this branch."
           (kbd "G") 'decknix-repo-sync-row-action)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "TAB") 'decknix-layout-toggle-expand)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "A") 'decknix-layout-toggle-attention-only)
                       (decknix--sidebar-call-transient
                        #'decknix-sidebar-toggles-transient)))
         (define-key agent-shell-workspace-sidebar-mode-map
