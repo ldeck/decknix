@@ -61,6 +61,8 @@
 ;; otherwise cold-start that many node+claude processes at once, thrashing
 ;; the machine and freezing Emacs.  `decknix-agent-spawn-enqueue' paces them.
 (require 'decknix-agent-spawn-queue)
+;; Eligibility reads the canonical direct/team/standing-request predicates.
+(require 'decknix-hub-mention-bot)
 
 (defconst decknix-auto-review-states '(off bot human any)
   "Ordered cycle of auto-review states.
