@@ -4556,19 +4556,6 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; correct buffer with an unlabelled prompt for a while, and that
         ;; window is exactly when the user looks.
         (require 'decknix-agent-prompt-probe)
-        (declare-function decknix-agent-prompt-probe-record
-                          "decknix-agent-prompt-probe" (buffer stage))
-        (defun decknix--agent-prompt-probe-resume (shell-buf &rest _)
-          "Record SHELL-BUF's prompt state through the resume settling window."
-          (when (buffer-live-p shell-buf)
-            (decknix-agent-prompt-probe-record shell-buf "resume")
-            (dolist (delay '(2 6 15))
-              (run-at-time
-               delay nil
-               (lambda ()
-                 (when (buffer-live-p shell-buf)
-                   (decknix-agent-prompt-probe-record
-                    shell-buf (format "resume+%ds" delay))))))))
         (with-eval-after-load 'decknix-agent-resume-native
           (advice-add 'decknix--agent-resume-focus-prompt-on-init :after
                       #'decknix--agent-prompt-probe-resume)
