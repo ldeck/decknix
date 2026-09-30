@@ -954,6 +954,77 @@ fn snapshot_launch_agents() -> HashMap<String, u64> {
     map
 }
 
+/// Read the real Emacs binary and Elisp aggregator from an emacsWithPackages wrapper.
+/// Comparing wrapper store paths alone would call every Elisp change a binary change.
+fn emacs_wrapper_paths(wrapper: &str) -> Option<(String, String)> {
+    let binary = wrapper.lines().find_map(|line| {
+        line.strip_prefix("exec /nix/store/")
+            .and_then(|rest| rest.split_whitespace().next())
+            .map(|rest| format!("/nix/store/{rest}"))
+    })?;
+    let config = wrapper.lines().find_map(|line| {
+        line.strip_prefix("export emacsWithPackages_siteLisp=")
+            .and_then(|path| path.strip_suffix("/share/emacs/site-lisp"))
+            .map(str::to_owned)
+    })?;
+    Some((binary, config))
+}
+
+fn emacs_switch_status(old_binary: &str, new_binary: &str, loaded: &str, current: &str, reload: bool) -> &'static str {
+    if old_binary != new_binary {
+        "Emacs binary changed; restart the server to use the new binary."
+    } else if loaded == current {
+        "Emacs is up to date; no restart needed."
+    } else if reload {
+        "Emacs config changed; hot reload is pending. No restart needed; use C-c D r if it remains stale."
+    } else {
+        "Emacs config changed but hot reload is unavailable; restart the server."
+    }
+}
+
+/// Report daemon status after activation (or a no-op switch). This is diagnostic
+/// only: never kill a daemon holding active agent sessions just to load Elisp.
+fn report_emacs_switch_status() {
+    let Some(home) = dirs::home_dir() else { return };
+    let profile = home.join(".nix-profile/bin/emacs");
+    let Ok(profile) = fs::canonicalize(profile) else { return };
+    let Some(new_wrapper) = profile.parent().map(|p| p.join(".emacs-wrapped")) else { return };
+    let Some((new_binary, current)) = fs::read_to_string(new_wrapper)
+        .ok().and_then(|s| emacs_wrapper_paths(&s)) else { return };
+
+    // A bounded query: the daemon can be busy restoring sessions. Do not hang
+    // `decknix switch` waiting for it. invocation-directory points to the
+    // wrapper used to start this daemon, even when the profile has moved on.
+    let output = Command::new("timeout").args(["5", "emacsclient", "-s", "server", "-e",
+        "(format \"%s|%s|%s\" invocation-directory (if (boundp 'deckmacs--loaded-store-path) (or deckmacs--loaded-store-path \"\") \"\") (if (fboundp 'deckmacs-reload) \"yes\" \"no\"))"])
+        .output();
+    let Ok(output) = output else {
+        eprintln!("⚠️  Could not check Emacs daemon status; check it before restarting.");
+        return;
+    };
+    if !output.status.success() {
+        eprintln!("⚠️  Emacs daemon did not respond within 5s; cannot tell whether a restart is needed.");
+        return;
+    }
+    let reply = String::from_utf8_lossy(&output.stdout);
+    let reply = reply.trim().trim_matches('"');
+    let mut fields = reply.split('|');
+    let (Some(directory), Some(loaded), Some(reload)) = (fields.next(), fields.next(), fields.next()) else {
+        eprintln!("⚠️  Could not read Emacs daemon status; no restart attempted.");
+        return;
+    };
+    let Some((old_binary, _)) = fs::read_to_string(Path::new(directory).join(".emacs-wrapped"))
+        .ok().and_then(|s| emacs_wrapper_paths(&s)) else {
+        eprintln!("⚠️  Could not identify running Emacs binary; no restart attempted.");
+        return;
+    };
+    let status = emacs_switch_status(&old_binary, &new_binary, loaded, &current, reload == "yes");
+    eprintln!("ℹ️  {status}");
+    if old_binary != new_binary || (loaded != current && reload != "yes") {
+        eprintln!("   To restart: launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server");
+    }
+}
+
 /// Gracefully stop the Emacs daemon before restarting via launchd.
 ///
 /// Tries `emacsclient --eval '(kill-emacs)'` first for a clean shutdown
@@ -1366,6 +1437,7 @@ fn main() -> anyhow::Result<()> {
                                 println!("✅ Already up to date");
                                 println!("   {}", new_path.display());
                                 verify_launch_agents();
+                                report_emacs_switch_status();
                                 return Ok(());
                             }
                             eprintln!("📦 System will change:");
@@ -1425,6 +1497,7 @@ fn main() -> anyhow::Result<()> {
             if !dry_run {
                 let agents_after = snapshot_launch_agents();
                 restart_changed_agents(&agents_before, &agents_after);
+                report_emacs_switch_status();
             }
         }
         Some(Commands::Update { input }) => {
@@ -2064,6 +2137,26 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn emacs_switch_status_distinguishes_binary_from_elisp_change() {
+        assert_eq!(super::emacs_switch_status("/store/emacs-a", "/store/emacs-b", "old", "new", true),
+                   "Emacs binary changed; restart the server to use the new binary.");
+        assert_eq!(super::emacs_switch_status("/store/emacs-a", "/store/emacs-a", "old", "new", true),
+                   "Emacs config changed; hot reload is pending. No restart needed; use C-c D r if it remains stale.");
+        assert_eq!(super::emacs_switch_status("/store/emacs-a", "/store/emacs-a", "old", "new", false),
+                   "Emacs config changed but hot reload is unavailable; restart the server.");
+        assert_eq!(super::emacs_switch_status("/store/emacs-a", "/store/emacs-a", "new", "new", true),
+                   "Emacs is up to date; no restart needed.");
+    }
+
+    #[test]
+    fn emacs_wrapper_paths_extract_binary_and_config() {
+        let wrapper = "export emacsWithPackages_siteLisp=/nix/store/abc-emacs-packages-deps/share/emacs/site-lisp\nexec /nix/store/def-emacs-30/bin/emacs \"$@\"\n";
+        assert_eq!(super::emacs_wrapper_paths(wrapper), Some((
+            "/nix/store/def-emacs-30/bin/emacs".to_string(),
+            "/nix/store/abc-emacs-packages-deps".to_string())));
+    }
+
     use super::*;
 
     fn git_in(repo: &Path, args: &[&str]) {
