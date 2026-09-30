@@ -27,8 +27,8 @@ let
   # profile at runtime.  Because the script content never references the
   # Nix store directly, it doesn't change when only Elisp config changes.
   # This keeps the launchd plist stable so launchd does NOT restart the
-  # daemon on config-only `decknix switch`.  Instead, the post-activation
-  # hook sends (deckmacs-reload) to the running daemon via emacsclient.
+  # daemon on config-only `decknix switch`. Post-activation reports when a
+  # manual restart is needed rather than hot-reloading a live daemon.
   #
   # The daemon only restarts when this script's content changes (never for
   # Elisp-only changes) or when the Emacs binary package itself changes.
@@ -133,49 +133,31 @@ in
       '')
     ];
 
-    # After activation, signal the running Emacs daemon to hot-reload its
-    # config instead of waiting for a manual C-c D r.  If the daemon was
-    # restarted by launchd (binary change), this is a harmless no-op since
-    # the daemon already loaded the fresh config.  If the daemon is still
-    # running (config-only change), this picks up the new default.el.
-    #
-    # We run this as the primary user via `launchctl asuser` to ensure
-    # emacsclient finds the user's session-specific socket (usually under
-    # /var/folders/.../T/emacs501/server).
-    #
-    # Two hard rules so activation can never hang:
-    #
-    #   1. The reload is scheduled via `run-with-idle-timer` so the eval
-    #      returns instantly (it only enqueues the work).  Without the
-    #      defer, `emacsclient -e` blocks until `deckmacs-reload` finishes
-    #      — and if the reload triggers any interactive prompt on a visible
-    #      frame (yes-or-no-p, debugger, etc.), `darwin-rebuild` hangs
-    #      indefinitely waiting for the user to answer that prompt.  The
-    #      deferred reload runs on the daemon's own timeline; any prompt
-    #      it raises is the user's concern, not the activation script's.
-    #
-    #   2. Every `emacsclient` invocation is wrapped in `timeout 5`.  If
-    #      the daemon's main thread is busy or wedged (so it can't even
-    #      accept the schedule request), the activation script moves on
-    #      after 5 s instead of blocking the entire switch.
+    # Automatic hot reload is unsafe for native-compiled Elisp in a live
+    # daemon. Shortly after the 2026-09-30 switch, a timer entered an .eln
+    # image and the process aborted; the subsequent launchd restart aborted
+    # again in a worktree-cache timer. We cannot prove which part of the
+    # switch caused the abort, so do not unload/reload features behind live
+    # timers without an explicit user decision.
+    # Report the state instead, without destroying active agent sessions.
+    # This diagnostic is bounded to five seconds and runs in the user's GUI
+    # session so emacsclient finds the correct socket. A CLI status check after
+    # activation separately distinguishes binary changes from config changes.
     system.activationScripts.postActivation.text = lib.mkAfter ''
       USER_ID=$(id -u ${username})
-
       PROBE=$(${pkgs.coreutils}/bin/timeout 5 \
         launchctl asuser "$USER_ID" sudo -u ${username} \
-          ${emacsPackage}/bin/emacsclient -e '(fboundp (quote deckmacs-reload))' \
+          ${emacsPackage}/bin/emacsclient -e \
+            '(if (and (boundp (quote deckmacs--loaded-store-path)) (fboundp (quote deckmacs--resolve-current-default-el))) (if (equal deckmacs--loaded-store-path (deckmacs--store-path-for (deckmacs--resolve-current-default-el))) "current" "changed") "unknown")' \
           2>/dev/null || true)
-
-      if echo "$PROBE" | grep -q t; then
-        if ${pkgs.coreutils}/bin/timeout 5 \
-             launchctl asuser "$USER_ID" sudo -u ${username} \
-               ${emacsPackage}/bin/emacsclient -e '(run-with-idle-timer 0 nil (lambda () (condition-case err (deckmacs-reload) (error (message "deckmacs-reload (deferred): %s" (error-message-string err))))))' \
-               >/dev/null 2>&1; then
-          echo "emacs: scheduled deckmacs-reload on idle timer"
-        else
-          echo "emacs: skipped deckmacs-reload (daemon unresponsive within 5s)"
-        fi
-      fi
+      case "$PROBE" in
+        '"current"') echo "emacs: configuration already loaded; no restart needed" ;;
+        '"changed"')
+          printf '\033[1;33m⚠️  EMACS CHANGE NOT LOADED: restart the server to apply it.\033[0m\n'
+          echo '   launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server'
+          ;;
+        *) printf '\033[1;33m⚠️  EMACS STATUS UNKNOWN: daemon did not answer within 5s; check before restarting.\033[0m\n' ;;
+      esac
     '';
   };
 }

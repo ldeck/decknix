@@ -976,9 +976,9 @@ fn emacs_switch_status(old_binary: &str, new_binary: &str, loaded: &str, current
     } else if loaded == current {
         "Emacs is up to date; no restart needed."
     } else if reload {
-        "Emacs config changed; hot reload is pending. No restart needed; use C-c D r if it remains stale."
+        "Emacs config changed; restart the server to load it safely (automatic hot reload is disabled)."
     } else {
-        "Emacs config changed but hot reload is unavailable; restart the server."
+        "Emacs config changed; restart the server to load it safely."
     }
 }
 
@@ -1019,8 +1019,12 @@ fn report_emacs_switch_status() {
         return;
     };
     let status = emacs_switch_status(&old_binary, &new_binary, loaded, &current, reload == "yes");
-    eprintln!("ℹ️  {status}");
-    if old_binary != new_binary || (loaded != current && reload != "yes") {
+    if old_binary != new_binary || loaded != current {
+        eprintln!("\x1b[1;33m⚠️  EMACS RESTART NEEDED: {status}\x1b[0m");
+    } else {
+        eprintln!("ℹ️  {status}");
+    }
+    if old_binary != new_binary || loaded != current {
         eprintln!("   To restart: launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server");
     }
 }
@@ -2142,9 +2146,9 @@ mod tests {
         assert_eq!(super::emacs_switch_status("/store/emacs-a", "/store/emacs-b", "old", "new", true),
                    "Emacs binary changed; restart the server to use the new binary.");
         assert_eq!(super::emacs_switch_status("/store/emacs-a", "/store/emacs-a", "old", "new", true),
-                   "Emacs config changed; hot reload is pending. No restart needed; use C-c D r if it remains stale.");
+                   "Emacs config changed; restart the server to load it safely (automatic hot reload is disabled).");
         assert_eq!(super::emacs_switch_status("/store/emacs-a", "/store/emacs-a", "old", "new", false),
-                   "Emacs config changed but hot reload is unavailable; restart the server.");
+                   "Emacs config changed; restart the server to load it safely.");
         assert_eq!(super::emacs_switch_status("/store/emacs-a", "/store/emacs-a", "new", "new", true),
                    "Emacs is up to date; no restart needed.");
     }

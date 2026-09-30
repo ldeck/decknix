@@ -29,18 +29,22 @@ Nix build time.
 - `ProcessType = "Background"` in the plist
 - GUI frames via `emacsclient -c`; `ec` wrapper auto-starts daemon
 
-### Hot-reload (`deckmacs-reload`, `C-c D r`)
+### Manual hot-reload (`deckmacs-reload`, `C-c D r`)
 
-`decknix switch` invokes `(deckmacs-reload)` via `emacsclient` from
-`postActivation`. After switching, the CLI reports whether the running
-Emacs binary differs from the profile (restart required), Elisp is still
-pending hot reload (no restart required), or the daemon is current. The
-probe is bounded and reports uncertainty when the daemon does not answer;
-it never restarts a daemon merely because Elisp changed. The reload
-performs three steps in order so that
-edits to **carved first-party packages** (everything matching
-`decknix-*` under `agent-shell/<feature>/`) propagate without a
-`launchctl kickstart`:
+`decknix switch` no longer invokes `deckmacs-reload` automatically. A
+2026-09-30 switch scheduled an idle reload and the daemon aborted in
+native-compiled timer code shortly afterwards; a subsequent launchd
+restart aborted in a cache-save timer. The crash reports do not prove
+that the reload caused the abort, but unloading features underneath
+running timers is too risky for unattended activation. Activation
+prints a conspicuous warning when the loaded config differs from the
+profile; the CLI checks the binary and config separately and recommends
+a restart when either changed. Neither silently interrupts active sessions.
+If the daemon does not respond within five seconds, the status is unknown.
+
+The manual reload remains available for controlled experiments, but it
+is not a substitute for a restart when native-compiled code changed.
+Its intended steps are:
 
 1. **Swap store paths.**  The aggregator lives at one
    `/nix/store/<HASH>-emacs-packages-deps` root that changes on every
@@ -75,13 +79,10 @@ edits to **carved first-party packages** (everything matching
    `condition-case` as belt-and-braces for any advice pattern the
    step-3 strip can't catch.
 
-A manual `launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server`
-is still needed when (and only when):
-- The Emacs **major version** changes (different `emacs-30.2` store path).
-- `EMACSLOADPATH` gains entries outside `emacs-packages-deps` that
-  the daemon's environment doesn't know about.
-- A buffer-local `decknix-*` function is mid-execution at reload
-  time (extremely rare; the reload runs in idle).
+After a switch changes the Emacs binary **or** Elisp, run
+`launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server` when it is
+safe to interrupt your active sessions. No restart is needed if the
+running daemon already loaded the profile's config and binary.
 
 Note: `add-hook` lambdas in the heredoc that lack a symbol form
 will accumulate duplicates across reloads — this pre-dated the

@@ -49,11 +49,11 @@ decknix switch --override decknix=~/tools/decknix --override nc-config=~/Code/my
    `--override-input <INPUT> path:<PATH>`.
 5. With `--dry-run`, uses `build` instead of `switch` and skips the preflight.
 6. After a successful switch (including a no-op), checks the running Emacs
-   daemon against the active profile. A changed Emacs binary requires a
-   restart; changed Elisp is hot-reloaded without restarting. If the reload
-   has not completed yet, the status says so and suggests `C-c D r` if it
-   stays stale. If the daemon does not answer within five seconds, the
-   status is unknown rather than claiming that a restart is needed. This
+   daemon against the active profile. A changed Emacs binary **or Elisp**
+   triggers a prominent restart recommendation. Automatic hot reload is
+   disabled because unloading native-compiled code while timers are active
+   crashed a live daemon. If the daemon does not answer within five seconds,
+   the status is unknown rather than claiming that a restart is needed. This
    check never restarts the daemon or interrupts agent sessions. A dry run
    does not perform this check.
 
