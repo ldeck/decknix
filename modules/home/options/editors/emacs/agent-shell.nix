@@ -6356,6 +6356,19 @@ duration -- the most important number on this branch."
                    (saved (when decknix--hub-show-saved-sessions
                             (decknix--sidebar-saved-sessions)))
                    (line-num 0))
+              ;; The sidebar is a rendered, read-only VIEW, erased and
+              ;; rebuilt every 2s by `decknix--sidebar-idle-tick'.  Undo was
+              ;; left enabled on it, so every one of those rebuilds pushed
+              ;; insert+delete records that nothing can ever undo.  Measured
+              ;; via `memory-report': 1805 characters of text carrying 2356
+              ;; undo records, and 8 MiB of buffer memory -- the largest
+              ;; non-agent buffer in the image.
+              ;;
+              ;; Guarded rather than set from a mode hook so it also heals a
+              ;; sidebar buffer that already exists, which a hook added after
+              ;; the buffer was created would not.
+              (unless (eq buffer-undo-list t)
+                (buffer-disable-undo))
               (erase-buffer)
 
               ;; ── Hub: Requests (PR reviews) ──
