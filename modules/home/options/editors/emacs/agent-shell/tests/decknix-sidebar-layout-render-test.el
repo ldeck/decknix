@@ -17,6 +17,12 @@
 (require 'cl-lib)
 (require 'decknix-sidebar-layout-render)
 
+;; The hub bulk module owns the real special variable, but the isolated
+;; layout-render package tests do not load it. A value is required here:
+;; a bare `(defvar decknix--hub-reviews)' is only a compiler hint, so the
+;; lexical `let' fixtures would never reach the renderer's dynamic read.
+(defvar decknix--hub-reviews nil)
+
 (ert-deftest decknix-layout-render--feed-items-obey-the-request-filters ()
   "Every item passes through all four filters, not none of them."
   (let ((decknix--hub-reviews
@@ -50,6 +56,7 @@ one can veto on its own."
                  (lambda (_i) t))
                 ((symbol-function 'decknix--hub-requests-conflict-visible-p)
                  (lambda (_i) t)))
+        (should (= 1 (length (decknix--layout-feed-items))))
         (cl-letf (((symbol-function vetoer) (lambda (_i) nil)))
           (should-not (decknix--layout-feed-items)))))))
 
