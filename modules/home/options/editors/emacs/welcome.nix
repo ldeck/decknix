@@ -461,6 +461,13 @@ in
           "Render the welcome buffer content with interactive elements."
           (let ((inhibit-read-only t)
                 (win-width (window-width)))
+            ;; Same as the agent sidebar: a read-only rendered view whose
+            ;; re-render pushed undo records nothing can undo.  Measured at
+            ;; 606 records for 4910 characters of text.  Cheaper than the
+            ;; sidebar because this renders on demand rather than every 2s,
+            ;; but it is the same mistake.
+            (unless (eq buffer-undo-list t)
+              (buffer-disable-undo))
             (erase-buffer)
 
             ;; Add some top padding
