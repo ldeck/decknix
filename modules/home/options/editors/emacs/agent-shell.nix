@@ -1899,6 +1899,18 @@ let
   # Surfaces repo-sync failures in the sidebar.  The sweep reported a flat
   # "3 errors" every run, so `upside' sat on an abandoned index.lock for 61
   # consecutive runs -- two weeks unsynced -- without the count moving.
+  # `browse-url-firefox' was broken outright: its default program name
+  # "firefox" is not on PATH, because the nixpkgs darwin build ships only an
+  # `.app' bundle.  Resolves by search rather than a baked store path, which
+  # would go stale on the next `nix flake update' and would force Firefox
+  # into every user's closure -- it is installed downstream, not here.
+  decknix-browse-el = mkEmacsTestedPackage {
+    pname = "decknix-browse";
+    src = ./agent-shell/browse;
+    packageRequires = [ ];
+    testFiles = [ "decknix-browse-test.el" ];
+  };
+
   decknix-repo-sync-el = mkEmacsTestedPackage {
     pname = "decknix-repo-sync";
     src = ./agent-shell/repo-sync;
@@ -3291,6 +3303,7 @@ in
           decknix-agent-resume-command-el
           decknix-agent-jump-target-el
           decknix-agent-input-ring-el
+          decknix-browse-el
           decknix-repo-sync-el
           decknix-repo-sync-actions-el
           decknix-agent-compose-queue-el
@@ -4280,6 +4293,24 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; Explicit requires: `packageRequires' makes a package available on
         ;; the load-path, it does NOT load it.  A missing require here is how
         ;; `decknix-hub-wt-stale' shipped as a silent no-op.
+        ;; Browsers: point `browse-url-firefox' at the bundled executable and
+        ;; register `browse-url-safari'.
+        (require 'browse-url)
+        (require 'decknix-browse)
+        (let ((firefox (decknix-browse-firefox-program)))
+          ;; Left alone when Firefox is absent: setting the program to
+          ;; something that cannot run turns a clear "no firefox" into a
+          ;; confusing process-start failure.
+          (when firefox
+            (setq browse-url-firefox-program firefox)))
+
+        ;; Declares Safari as an EXTERNAL browser, which is what makes
+        ;; `browse-url-safari' a legal `browse-url-browser-function' rather
+        ;; than merely a callable command: browse-url consults this property
+        ;; to decide whether a URL leaves Emacs.  `browse-url-firefox'
+        ;; already carries it upstream.
+        (put 'browse-url-safari 'browse-url-browser-kind 'external)
+
         (require 'decknix-repo-sync)
         (require 'decknix-repo-sync-actions)
 
