@@ -181,9 +181,9 @@ in {
     # did not exist.
     #
     # `pkgs.unstable.claude-code' is overlaid from the independent
-    # nixpkgs-claude input in flake.nix. The shared unstable lock was still
+    # nixpkgs-current input in flake.nix. The shared unstable lock was still
     # at 2.1.220 on 2026-10-01 while upstream had 2.1.283. A separate pin
-    # lets us refresh Claude without advancing all unstable packages (and
+    # lets us refresh selected tools without advancing all unstable packages (and
     # also updates consumers that list unstable.claude-code themselves).
     # A stale CLI can withhold new models from the C-c C-v picker.
     home.packages = [ pkgs.unstable.claude-code pkgs.claude-agent-acp ];
