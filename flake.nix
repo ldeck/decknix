@@ -6,6 +6,11 @@
 
     nixpkgs-unstable.url = "github:nixos/nixpkgs/nixpkgs-unstable";
 
+    # Claude Code moves faster than the shared unstable pin. Keep just this
+    # package on a separate, recent lock so an update does not rebuild every
+    # other pkgs.unstable consumer (Pi, editors, etc.).
+    nixpkgs-claude.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+
     # Newer nixpkgs sourced *solely* for rustPlatform. The pinned stable
     # (nixos-25.11) and the current nixpkgs-unstable pin both predate the
     # crates.io vendoring fixes — #512735 (sets a non-generic User-Agent on
@@ -110,10 +115,17 @@
         darwinModules = {
           default = { config, ... }: let
             find = import ./lib/find.nix { lib = nixpkgs.lib; };
-            unstableOverlay = final: prev: {
-              unstable = import inputs.nixpkgs-unstable {
-                system = prev.stdenv.hostPlatform.system;
+            unstableOverlay = final: prev: let
+              system = prev.stdenv.hostPlatform.system;
+              claudePkgs = import inputs.nixpkgs-claude {
+                inherit system;
                 config = prev.config;
+              };
+            in {
+              unstable = import inputs.nixpkgs-unstable {
+                inherit system;
+                config = prev.config;
+                overlays = [ (_: _: { claude-code = claudePkgs.claude-code; }) ];
               };
             };
           # LLVM 20.x getMacOSHostVersion test fails on macOS Sequoia (Darwin 25.x).

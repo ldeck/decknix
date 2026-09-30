@@ -180,12 +180,12 @@ in {
     # `disableAutoUpdate' machinery below was therefore guarding a pin that
     # did not exist.
     #
-    # Sourced from `unstable' for the same reason `pi-coding-agent' is (see
-    # pi.nix): stable lags badly on agent CLIs.  Measured 2026-09-23 --
-    # nixos-25.11 had claude-code 2.0.51 while nixpkgs-unstable had 2.1.280.
-    # A hundred-plus patch versions matters here because the MODEL LIST the
-    # `C-c C-v' picker offers comes from the CLI at runtime, so an old pin
-    # silently withholds new models.
+    # `pkgs.unstable.claude-code' is overlaid from the independent
+    # nixpkgs-claude input in flake.nix. The shared unstable lock was still
+    # at 2.1.220 on 2026-10-01 while upstream had 2.1.283. A separate pin
+    # lets us refresh Claude without advancing all unstable packages (and
+    # also updates consumers that list unstable.claude-code themselves).
+    # A stale CLI can withhold new models from the C-c C-v picker.
     home.packages = [ pkgs.unstable.claude-code pkgs.claude-agent-acp ];
 
     # Keep the Nix pin authoritative (see `disableAutoUpdate').  The session
