@@ -262,6 +262,54 @@ in {
         fi
       '');
 
+    # Reclaim `~/.local/bin/claude' from the native installer.
+    #
+    # `disableAutoUpdate' stops the CLI fetching NEW builds, but it does not
+    # remove the ones already installed, and the installer's symlink still
+    # shadows Nix: `~/.local/bin' is prepended to PATH (for tools with no Nix
+    # equivalent), so `claude' resolved to
+    # `~/.local/share/claude/versions/<v>' rather than the Nix build.
+    # Measured on this machine 2026-10-01: Nix provided 2.1.220 while the
+    # symlink pointed at 2.1.258, and the running session was executing
+    # 2.1.257 -- three versions in play at once.
+    #
+    # Only a symlink INTO `~/.local/share/claude/' is removed.  A real file,
+    # or a link to anywhere else, is left alone and reported: someone may
+    # have put their own `claude' there deliberately, and silently deleting
+    # it would be worse than the shadowing.
+    #
+    # PATH is deliberately NOT reordered to fix this.  `~/.local/bin' also
+    # holds `nc-dos-rs' and `nc-health-kargo', which exist in Nix too, so
+    # appending instead of prepending would change which of THOSE runs --
+    # a much wider blast radius than the problem being solved.
+    #
+    # The versions directory itself is reported, not deleted: it was ~800MB
+    # across four builds here, and reclaiming that much disk is the user's
+    # call, not an activation script's.
+    home.activation.claude-reclaim-native = mkIf cfg.disableAutoUpdate
+      (lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        LINK="$HOME/.local/bin/claude"
+        NATIVE_DIR="$HOME/.local/share/claude"
+        if [ -L "$LINK" ]; then
+          TARGET="$(${pkgs.coreutils}/bin/readlink "$LINK")"
+          case "$TARGET" in
+            "$NATIVE_DIR"/*)
+              ${pkgs.coreutils}/bin/rm -f "$LINK"
+              echo "  [claude-reclaim-native] Removed $LINK -> $TARGET (Nix build now wins on PATH)"
+              ;;
+            *)
+              echo "  [claude-reclaim-native] Left $LINK alone (points outside $NATIVE_DIR: $TARGET)"
+              ;;
+          esac
+        elif [ -e "$LINK" ]; then
+          echo "  [claude-reclaim-native] Left $LINK alone (not a symlink -- remove it yourself if unwanted)"
+        fi
+        if [ -d "$NATIVE_DIR/versions" ]; then
+          SZ="$(${pkgs.coreutils}/bin/du -sh "$NATIVE_DIR/versions" 2>/dev/null | ${pkgs.coreutils}/bin/cut -f1)"
+          echo "  [claude-reclaim-native] $NATIVE_DIR/versions still holds $SZ of self-updated builds; remove it when convenient"
+        fi
+      '');
+
     # Merge Nix-declared MCP servers into ~/.claude.json.  Like settings.json
     # above, this file is *mutated by Claude at runtime* (skillUsage, cached*,
     # OAuth tokens, etc.), so we jq-merge only `.mcpServers` and leave every
