@@ -194,14 +194,38 @@ asked for, so a short log replays whole rather than empty."
 (defun decknix--agent-broker-page (lines turns)
   "Return (START . NOTIFICATIONS) for a TURNS-deep page back from the attach.
 
-START is the window\='s start index, so a caller can ask for the next page
-further back.  Returns nil when the log has no live attach marker."
+START is the window\='s start index within LINES.  Returns nil when the log
+has no live attach marker."
   (let* ((vec (vconcat lines))
          (end (decknix--agent-broker-attach-index vec)))
     (when end
       (let ((start (decknix--agent-broker-window-start vec end turns)))
         (cons start (decknix--agent-broker-notifications-between
                      vec start end))))))
+
+(defcustom decknix-agent-broker-replay-window-bytes 1048576
+  "Bytes of broker log read for the initial styled replay of a session.
+
+Bounded for the same reason the status check is: these logs record a whole
+session and the largest measured was 217 MB.  A megabyte covers the last
+turns on every log measured; when it does not, the replay simply starts
+further forward and `decknix-agent-broker-replay-more\=' reaches back by
+doubling this window rather than by re-reading the file whole."
+  :type 'integer
+  :group 'decknix)
+
+(defun decknix--agent-broker-read-byte-range (log-path beg end)
+  "Return LOG-PATH\='s bytes between BEG and END as lines, or nil."
+  (when (and log-path (file-readable-p log-path) (< beg end))
+    (with-temp-buffer
+      (insert-file-contents log-path nil beg end)
+      (split-string (buffer-string) "\n" t))))
+
+(defun decknix--agent-broker-log-size (key)
+  "Return the size in bytes of KEY\='s broker log, or 0."
+  (or (when-let* ((log (decknix--agent-broker-log-path key)))
+        (file-attribute-size (file-attributes log)))
+      0))
 
 ;; ── log path + buffer replay ────────────────────────────────────────
 
@@ -248,11 +272,12 @@ replaying a stale in-flight tail would be wrong."
     (and (integerp pid) (> pid 0)
          (= 0 (call-process "kill" nil nil nil "-0" (number-to-string pid))))))
 
-(defvar-local decknix--agent-broker-replay-start nil
-  "Index in the broker log where this buffer\='s restored history begins.
+(defvar-local decknix--agent-broker-replay-window nil
+  "Bytes from the end of the broker log this buffer has restored.
 Nil when nothing has been replayed.  `decknix-agent-broker-replay-more\='
-walks it further back, which is how older history loads on demand instead
-of all of it loading at open.")
+doubles it, which is how older history loads on demand instead of all of
+it loading at open.  A BYTE window rather than a line index because line
+indices are not comparable across two different read windows.")
 
 (defvar-local decknix--agent-broker-replay-depth nil
   "How many turns deep this buffer has replayed so far.")
@@ -277,12 +302,12 @@ abort the rest of the replay."
   "Restore BUFFER\='s brokered history from the broker log, styled.
 
 Replays the last TURNS committed turns (default
-`decknix-agent-broker-replay-turns\=') plus any in-flight tail, backwards
-from the live attach marker.  BUFFER defaults to the current buffer and
-must be a live agent-shell buffer carrying a `decknix--agent-broker-key\='.
+`decknix-agent-broker-replay-turns\=') plus any in-flight tail, read from a
+BOUNDED window at the end of the log -- never the whole file, which on the
+largest measured log would be a 217 MB read at session open.
 
 No-op (nil) when replay is disabled, the buffer is not brokered, its
-broker is dead, the renderer is unavailable, or the log has no attach
+broker is dead, the renderer is unavailable, or the window holds no attach
 marker.  Returns the number of notifications replayed."
   (with-current-buffer (or buffer (current-buffer))
     (when (and decknix-agent-broker-rehydrate-enable
@@ -291,11 +316,15 @@ marker.  Returns the number of notifications replayed."
                (fboundp 'agent-shell--on-notification)
                (fboundp 'agent-shell--state))
       (let* ((turns (or turns decknix-agent-broker-replay-turns))
-             (log   (decknix--agent-broker-log-path decknix--agent-broker-key))
-             (lines (decknix--agent-broker-read-log-lines log))
-             (page  (and lines (decknix--agent-broker-page lines turns))))
+             (key decknix--agent-broker-key)
+             (log (decknix--agent-broker-log-path key))
+             (size (decknix--agent-broker-log-size key))
+             (window decknix-agent-broker-replay-window-bytes)
+             (lines (decknix--agent-broker-read-byte-range
+                     log (max 0 (- size window)) size))
+             (page (and lines (decknix--agent-broker-page lines turns))))
         (when page
-          (setq decknix--agent-broker-replay-start (car page))
+          (setq decknix--agent-broker-replay-window window)
           (setq decknix--agent-broker-replay-depth turns)
           (decknix--agent-broker-replay-notifications (cdr page)))))))
 
@@ -310,6 +339,33 @@ worse than the `ready\=' it replaces, so staleness decides."
   :type 'integer
   :group 'decknix)
 
+(defcustom decknix-agent-broker-tail-bytes 65536
+  "How many bytes from the end of a broker log to read for a status check.
+
+Never the whole file.  The status check runs once per session per sidebar
+refresh, and these logs are append-only records of an entire session:
+measured on 13 open sessions, the largest was 217 MB and reading them all
+cost 452 MB PER REFRESH, which is what made Emacs unresponsive.
+
+The tail only has to reach the last turn boundary.  When it does not, that
+itself is the answer -- a log with no committed boundary in its last 64 KB
+is one producing output, which is what `working\=' means."
+  :type 'integer
+  :group 'decknix)
+
+(defun decknix--agent-broker-read-log-tail (log-path &optional bytes)
+  "Return the last BYTES of LOG-PATH as lines, or nil when unreadable.
+
+The leading line is usually torn, which costs nothing: every consumer
+parses per line and a malformed line is skipped."
+  (when (and log-path (file-readable-p log-path))
+    (let* ((bytes (or bytes decknix-agent-broker-tail-bytes))
+           (size (or (file-attribute-size (file-attributes log-path)) 0))
+           (beg (max 0 (- size bytes))))
+      (with-temp-buffer
+        (insert-file-contents log-path nil beg size)
+        (split-string (buffer-string) "\n" t)))))
+
 (defun decknix--agent-broker-inflight-p (lines)
   "Non-nil when LINES end in an uncommitted turn carrying visible content.
 
@@ -319,13 +375,18 @@ and counting those marks every session as working."
   (let* ((vec (vconcat lines))
          (n (length vec))
          (boundary (decknix--agent-broker-boundary-before vec n)))
-    (let ((i (1+ boundary)) (found nil))
-      (while (and (< i n) (null found))
-        (when (decknix--agent-broker-visible-notification
-               (decknix--agent-broker-parse-json-line (aref vec i)))
-          (setq found t))
-        (setq i (1+ i)))
-      found)))
+    (if (< boundary 0)
+        ;; No committed boundary in the window.  Over a bounded tail that
+        ;; is itself the answer: a log whose last 64 KB holds no turn
+        ;; boundary is one that has been producing output throughout it.
+        (> n 0)
+      (let ((i (1+ boundary)) (found nil))
+        (while (and (< i n) (null found))
+          (when (decknix--agent-broker-visible-notification
+                 (decknix--agent-broker-parse-json-line (aref vec i)))
+            (setq found t))
+          (setq i (1+ i)))
+        found))))
 
 (defun decknix--agent-broker-log-fresh-p (key)
   "Non-nil when KEY\='s broker log grew within the staleness window."
@@ -347,7 +408,7 @@ has grown recently.  Either alone is not evidence -- see
                 (key decknix--agent-broker-key)
                 ((decknix--agent-broker-live-p key))
                 ((decknix--agent-broker-log-fresh-p key))
-                (lines (decknix--agent-broker-read-log-lines
+                (lines (decknix--agent-broker-read-log-tail
                         (decknix--agent-broker-log-path key))))
       (and (decknix--agent-broker-inflight-p lines) t))))
 
@@ -370,40 +431,46 @@ rendering the same conversation."
          (fboundp 'agent-shell--state)
          t)))
 
-(defun decknix-agent-broker-replay-more (&optional turns)
-  "Load TURNS more turns of this session\='s history above what is shown.
+(defun decknix-agent-broker-replay-more (&optional _arg)
+  "Load more of this session\='s history above what is shown.
 
-Reads further back in the broker log and prepends the result, so history
-arrives on demand rather than all of it being replayed at open -- the
-longest live log measured 95872 lines."
+Doubles the byte window read from the end of the broker log and replays
+only the newly exposed region, so paging back costs the new bytes rather
+than a fresh read of a file that can be 217 MB."
   (interactive "p")
   (unless (bound-and-true-p decknix--agent-broker-key)
     (user-error "Not a brokered session"))
-  (let* ((turns (max 1 (or turns 1)))
-         (log (decknix--agent-broker-log-path decknix--agent-broker-key))
-         (lines (decknix--agent-broker-read-log-lines log))
-         (vec (and lines (vconcat lines)))
-         (end (or decknix--agent-broker-replay-start
-                  (and vec (decknix--agent-broker-attach-index vec)))))
+  (let* ((key decknix--agent-broker-key)
+         (log (decknix--agent-broker-log-path key))
+         (size (decknix--agent-broker-log-size key))
+         (old-window (or decknix--agent-broker-replay-window
+                         decknix-agent-broker-replay-window-bytes))
+         (new-window (* 2 old-window))
+         (beg (max 0 (- size new-window)))
+         (end (max 0 (- size old-window))))
     (cond
-     ((or (null vec) (null end))
-      (message "No broker log to read"))
-     ((<= end 0)
-      (message "Already at the start of this session"))
+     ((<= size 0) (message "No broker log to read"))
+     ((<= end 0) (message "Already showing the start of this session"))
      (t
-      (let* ((start (decknix--agent-broker-window-start vec end (1- turns)))
-             (notes (decknix--agent-broker-notifications-between vec start end))
+      (let* ((lines (decknix--agent-broker-read-byte-range log beg end))
+             (vec (and lines (vconcat lines)))
+             ;; Snap to the first turn boundary in the new region, so the
+             ;; replay does not begin mid-turn with a tool_call_update
+             ;; whose tool_call is outside the window.
+             (start (and vec (decknix--agent-broker-boundary-before
+                              vec (length vec))))
+             (notes (and vec (decknix--agent-broker-notifications-between
+                              vec (if (and start (>= start 0)) start -1)
+                              (length vec))))
              (inhibit-read-only t))
         (save-excursion
           (goto-char (point-min))
           (decknix--agent-broker-replay-notifications notes))
-        (setq decknix--agent-broker-replay-start start)
-        (setq decknix--agent-broker-replay-depth
-              (+ (or decknix--agent-broker-replay-depth 0) turns))
+        (setq decknix--agent-broker-replay-window new-window)
         (message "Loaded %d more notification%s (%s)"
                  (length notes) (if (= 1 (length notes)) "" "s")
-                 (if (<= start 0) "start of session"
-                   (format "%d turns deep" decknix--agent-broker-replay-depth))))))))
+                 (if (<= beg 0) "start of session"
+                   (format "%d KB deep" (/ new-window 1024)))))))))
 
 (provide 'decknix-agent-broker-rehydrate)
 ;;; decknix-agent-broker-rehydrate.el ends here
