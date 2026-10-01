@@ -33,6 +33,18 @@
 (defconst decknix-session-board-buffer-name "*deckmacs: Session Board*"
   "Name of the Session Board buffer.")
 
+(defcustom decknix-session-board-width 76
+  "Column at which the board's right-hand values are aligned.
+
+Capped rather than right-aligned to the window.  The board opens in a
+full-width window -- 244 columns on this frame -- and aligning the state
+to that put it some 200 characters from the name it describes, which is
+exactly the \"pushed out of view\" complaint.  A fixed column keeps the
+two readable together however wide the window is, which is also what the
+Review Board does with its `%-28s' columns."
+  :type 'integer
+  :group 'decknix)
+
 (defvar decknix-session-board--marks nil
   "Hash of marked row keys, or nil before first use.")
 
@@ -84,7 +96,8 @@
   "Redraw the board from current data, preserving point by line."
   (let ((inhibit-read-only t)
         (line (line-number-at-pos))
-        (width (max 40 (1- (window-width)))))
+        (width (min decknix-session-board-width
+                    (max 40 (1- (window-width))))))
     (setq decknix-session-board--groups (decknix-session-board--compute))
     (erase-buffer)
     (let ((summary (decknix-session-board-summary decknix-session-board--groups)))

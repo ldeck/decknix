@@ -177,21 +177,31 @@ board whose purpose is to show what is there."
    (or buffer-name "")))
 
 (defun decknix-session-board-row-label (row marked-p width)
-  "Return the rendered line for ROW, padded to WIDTH.
+  "Return the rendered line for ROW, padded to exactly WIDTH.
 
 MARKED-P draws the leading mark.  The PR is shown rather than the buffer
 name where one exists: for a review session the PR IS the identity, and the
-buffer name is a naming convention that has changed twice."
+buffer name is a naming convention that has changed twice.
+
+A name too long for WIDTH is truncated rather than allowed to push the
+state off the end.  Without that a grouped session covering three PRs
+overflowed the line and the state it was there to show was the first thing
+lost."
   (let* ((state (plist-get row :state))
          (prs (plist-get row :prs))
          (name (if prs
                    (string-join prs ",")
                  (decknix-session-board-short-name (plist-get row :buffer))))
+         (right (or state ""))
+         ;; 3 for the mark and glyph, 2 for the minimum gap before the state.
+         (room (max 1 (- width 3 (string-width right) 2)))
+         (name (if (> (string-width name) room)
+                   (concat (truncate-string-to-width name (max 1 (1- room))) "…")
+                 name))
          (left (format "%s %s %s"
                        (if marked-p "*" " ")
                        (decknix-session-board-state-glyph state)
                        name))
-         (right (or state ""))
          (pad (max 1 (- width (string-width left) (string-width right)))))
     (concat left (make-string pad ?\s) right)))
 
