@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -17,7 +17,8 @@ Search order:\n  \
 /Applications/\n  \
 ~/Applications/")]
 struct Cli {
-    /// Restart the app: quit the running instance then reopen.
+    /// Restart the app. For Emacs, restart the launchd daemon (loses open
+    /// buffers), wait for readiness, then create a frame.
     /// Useful after `decknix switch` to pick up a new Nix store version.
     #[arg(short, long)]
     restart: bool,
@@ -42,7 +43,7 @@ struct Cli {
     /// Wait for the app to be ready after opening/restarting.
     /// For Emacs: polls until the daemon responds to emacsclient.
     /// For other apps: waits until the process is running.
-    /// Timeout: 60 seconds (exits with error if not ready).
+    /// Emacs waits until ready (Ctrl-C to cancel); other apps time out after 60s.
     #[arg(short, long)]
     wait: bool,
 
@@ -339,32 +340,109 @@ fn launchctl_ensure_args(uid: u32) -> Vec<String> {
     ]
 }
 
-/// Quiet wait applied *before* the first frame attempt, to cover the window
-/// between a fresh daemon process appearing in `ps` and it finishing
-/// `init.el` / `(server-start)` and binding its socket.  Empirically 2–3 s
-/// on a populated decknix session; 5 s gives comfortable headroom without
-/// noticeably slowing the healthy-daemon path (a live daemon answers on the
-/// very first probe, ~zero cost).
-const EMACS_PRE_POLL_SECS: u64 = 5;
+/// Explicit restart only: `kickstart -k` kills the existing daemon and loses
+/// all in-memory Emacs buffers. Plain `nix-open emacs` must never call this.
+fn launchctl_restart_args(uid: u32) -> Vec<String> {
+    vec![
+        "kickstart".to_string(),
+        "-k".to_string(),
+        format!("gui/{}/org.nixos.emacs-server", uid),
+    ]
+}
 
-/// Fallback wait after an explicit `launchctl kickstart`.  Longer than the
-/// pre-poll because a cold spawn from launchd includes process fork plus the
-/// full init cycle.
-const EMACS_FALLBACK_POLL_SECS: u64 = 20;
+fn should_ensure_emacs_launchd(pid: Option<u32>) -> bool {
+    pid.is_none()
+}
 
-/// Attempt to create the GUI frame.  Returns true on success.
-///
-/// When `quiet` is true, suppresses emacsclient's stderr so the caller can
-/// probe silently during the pre-poll window (where "socket not found" is
-/// expected and handled by retry).  The noisy fallback path leaves stderr
-/// inherited so genuine failures still surface to the user.
-fn try_emacs_frame(client: &str, quiet: bool) -> bool {
-    let mut cmd = Command::new(client);
-    cmd.args(emacsclient_frame_args());
-    if quiet {
-        cmd.stderr(Stdio::null());
+const EMACS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const EMACS_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const EMACS_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
+
+/// A client eval must not block the progress reporter indefinitely when the
+/// socket exists but Emacs is busy in synchronous init code. Reap timed-out
+/// clients; never touch the daemon during a probe.
+fn emacsclient_eval(client: &str, expression: &str, timeout: Duration) -> Option<Output> {
+    let mut child = Command::new(client)
+        .args(["-e", expression])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) if start.elapsed() < timeout => thread::sleep(Duration::from_millis(100)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
     }
-    cmd.status().map(|s| s.success()).unwrap_or(false)
+}
+
+fn emacs_daemon_responding(client: &str) -> bool {
+    emacsclient_eval(client, "t", EMACS_PROBE_TIMEOUT).is_some_and(|out| out.status.success())
+}
+
+fn emacs_wait_progress(elapsed: Duration, pid: Option<u32>) -> String {
+    match pid {
+        Some(pid) => format!(
+            "Emacs daemon PID {pid} is still initializing or busy ({}s); waiting...",
+            elapsed.as_secs()
+        ),
+        None => format!(
+            "Waiting for launchd Emacs daemon ({}s); still retrying...",
+            elapsed.as_secs()
+        ),
+    }
+}
+
+/// No arbitrary cold-start deadline: return only once the daemon responds.
+fn poll_until_emacs_ready<F, G>(
+    mut probe: F,
+    interval: Duration,
+    progress_interval: Duration,
+    mut report: G,
+) -> Duration
+where
+    F: FnMut() -> bool,
+    G: FnMut(Duration),
+{
+    let start = Instant::now();
+    let mut next_report = start + progress_interval;
+    loop {
+        if probe() {
+            return start.elapsed();
+        }
+        if Instant::now() >= next_report {
+            report(start.elapsed());
+            next_report = Instant::now() + progress_interval;
+        }
+        thread::sleep(interval);
+    }
+}
+
+fn wait_for_emacs_daemon(client: &str, uid: u32) {
+    eprintln!("   ⏳ Waiting for Emacs server (Ctrl-C to stop waiting; daemon stays running)");
+    let elapsed = poll_until_emacs_ready(
+        || emacs_daemon_responding(client),
+        EMACS_POLL_INTERVAL,
+        EMACS_PROGRESS_INTERVAL,
+        |elapsed| eprintln!("   ⏳ {}", emacs_wait_progress(elapsed, daemon_pid(uid))),
+    );
+    eprintln!("   ✅ Emacs server ready ({:.1}s)", elapsed.as_secs_f32());
+}
+
+/// Create a GUI frame only after the server answers a readiness probe.
+/// Leave stderr visible if frame creation itself fails.
+fn try_emacs_frame(client: &str) -> bool {
+    Command::new(client)
+        .args(emacsclient_frame_args())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -397,45 +475,10 @@ fn wait_for_app_process(name: &str) -> bool {
     false
 }
 
-/// Wait for the Emacs daemon to respond, with progress output.
-/// Returns true if daemon is ready, false on timeout.
-fn wait_for_emacs_daemon_verbose() -> bool {
-    let client = emacsclient_path();
-    let start = Instant::now();
-    let timeout = Duration::from_secs(WAIT_FLAG_TIMEOUT_SECS);
-    let poll_interval = Duration::from_millis(WAIT_FLAG_POLL_INTERVAL_MS);
-
-    eprint!("Waiting for Emacs daemon");
-    while start.elapsed() < timeout {
-        let ready = Command::new(&client)
-            .args(["-e", "t"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-
-        if ready {
-            eprintln!(" ready ({:.1}s)", start.elapsed().as_secs_f32());
-            return true;
-        }
-
-        eprint!(".");
-        thread::sleep(poll_interval);
-    }
-
-    eprintln!(" timeout after {}s", WAIT_FLAG_TIMEOUT_SECS);
-    false
-}
-
-/// Wait for an app to be ready after opening (--wait flag handler).
-/// Dispatches to app-specific wait logic (Emacs daemon) or generic process check.
+/// Generic apps retain the 60s `--wait` bound. Emacs waits during frame
+/// creation instead, regardless of whether `--wait` was specified.
 fn wait_for_app(name: &str) -> bool {
-    if name.eq_ignore_ascii_case("emacs") {
-        wait_for_emacs_daemon_verbose()
-    } else {
-        wait_for_app_process(name)
-    }
+    wait_for_app_process(name)
 }
 
 /// Parse the `pid = N` line out of `launchctl print` output.  Factored out so
@@ -506,83 +549,57 @@ fn activate_emacs_app(uid: u32) {
         .status();
 }
 
-/// Return true once the launchd Emacs daemon answers an `emacsclient` eval.
-/// Polls up to `timeout_secs`.  Uses a no-op eval (`-e t`) WITHOUT `-a ""`,
-/// so it never spawns a daemon — it only detects when the kickstarted server
-/// has finished initialising and opened its socket.
-fn wait_for_emacs_daemon(client: &str, timeout_secs: u64) -> bool {
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_secs(timeout_secs);
-    while std::time::Instant::now() < deadline {
-        let ready = Command::new(client)
-            .args(["-e", "t"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if ready {
-            return true;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(300));
-    }
-    false
-}
-
-/// Create a new Emacs GUI frame on the launchd-managed daemon.
-///
-/// Never spawns an unmanaged orphan daemon: it connects to the existing
-/// launchd server, and if that server is not answering it kickstarts
-/// `org.nixos.emacs-server` (launchd-managed, so it is supervised and reaped)
-/// and retries once the socket is ready.
-///
-/// The first attempt is preceded by a quiet pre-poll: right after a manual
-/// `launchctl kickstart -k`, the daemon process appears in `ps` within a
-/// second but does not bind its socket until `init.el` and `(server-start)`
-/// have run.  Probing during that window would dump raw emacsclient
-/// "can't find socket" errors and print a misleading "kickstarting" message
-/// even though the daemon is alive and about to answer.  Pre-polling
-/// silently absorbs that init window.
-fn handle_emacs_daemon_frame() -> bool {
+/// Open a frame on the single launchd-managed daemon. Plain open waits for
+/// a starting daemon without killing it; only explicit `-r` restarts it.
+/// Neither path invokes Emacs.app or an emacsclient alternate editor.
+fn handle_emacs_daemon_frame(restart: bool) -> bool {
     let client = emacsclient_path();
     let uid = unsafe { libc::getuid() };
     eprintln!("🖥️  Emacs: creating daemon frame via emacsclient");
 
-    // Quiet pre-poll: covers the "daemon process exists but socket not yet
-    // bound" window after a fresh spawn.  A healthy daemon answers on the
-    // first probe, so this is ~zero cost in the common case.
-    let _ = wait_for_emacs_daemon(&client, EMACS_PRE_POLL_SECS);
+    let ready = if restart {
+        eprintln!("   🔄 Restarting launchd Emacs daemon (open buffers will be lost)");
+        let status = Command::new("launchctl")
+            .args(launchctl_restart_args(uid))
+            .status();
+        if !status.is_ok_and(|s| s.success()) {
+            eprintln!("   ❌ launchctl could not restart org.nixos.emacs-server");
+            return false;
+        }
+        false
+    } else {
+        emacs_daemon_responding(&client)
+    };
 
-    // First attempt: connect to the launchd-managed daemon (no `-a ""`).
-    // `quiet=true` suppresses stderr so a still-initialising daemon does not
-    // leak raw emacsclient socket errors; the loud fallback path below keeps
-    // stderr inherited so genuine failures still surface.
-    if try_emacs_frame(&client, /* quiet */ true) {
-        activate_emacs_app(uid);
-        eprintln!("   ✅ Emacs frame opened");
-        return true;
+    if !ready {
+        if !restart {
+            let pid = daemon_pid(uid);
+            if should_ensure_emacs_launchd(pid) {
+                eprintln!("   ⏳ Emacs daemon not running; asking launchd to start it");
+                let status = Command::new("launchctl")
+                    .args(launchctl_ensure_args(uid))
+                    .status();
+                if !status.is_ok_and(|s| s.success()) {
+                    eprintln!("   ❌ launchctl could not start org.nixos.emacs-server");
+                    return false;
+                }
+            } else {
+                eprintln!(
+                    "   ⏳ Emacs daemon PID {} is starting or busy; not restarting it",
+                    pid.unwrap()
+                );
+            }
+        }
+        wait_for_emacs_daemon(&client, uid);
     }
 
-    // Daemon not answering — kickstart the launchd service and retry once
-    // its socket is ready, rather than letting emacsclient orphan-spawn one.
-    eprintln!("   ⏳ daemon not responding — kickstarting org.nixos.emacs-server");
-    let _ = Command::new("launchctl")
-        .args(launchctl_ensure_args(uid))
-        .status();
-
-    if wait_for_emacs_daemon(&client, EMACS_FALLBACK_POLL_SECS)
-        && try_emacs_frame(&client, /* quiet */ false)
-    {
-        activate_emacs_app(uid);
-        eprintln!("   ✅ Emacs frame opened");
-        return true;
+    if !try_emacs_frame(&client) {
+        eprintln!("   ❌ Emacs server responded, but creating a frame failed");
+        return false;
     }
-
-    eprintln!(
-        "   ❌ org.nixos.emacs-server did not come up — try: \
-         launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server"
-    );
-    false
+    activate_emacs_app(uid);
+    eprintln!("   ✅ Emacs frame opened");
+    true
 }
 
 /// Get the executable path of the running Emacs daemon process.
@@ -701,13 +718,12 @@ fn handle_app_status(name: &str) {
 fn handle_emacs_daemon_status() {
     let client = emacsclient_path();
 
-    // Check if daemon responds
-    let uptime_result = Command::new(&client)
-        .args(["-e", "(emacs-uptime)"])
-        .output();
+    // A busy daemon may accept a socket connection without answering yet.
+    // Status must return promptly rather than waiting through startup.
+    let uptime_result = emacsclient_eval(&client, "(emacs-uptime)", EMACS_PROBE_TIMEOUT);
 
     let uptime = match uptime_result {
-        Ok(out) if out.status.success() => {
+        Some(out) if out.status.success() => {
             Some(String::from_utf8_lossy(&out.stdout)
                 .trim()
                 .trim_matches('"')
@@ -745,7 +761,7 @@ fn handle_emacs_daemon_status() {
             if let Some(new) = nix_store_label(c) {
                 eprintln!("  Current: {}", new);
             }
-            eprintln!("  Run: launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server");
+            eprintln!("  Run: nix-open -r emacs (restarts daemon; loses open buffers)");
         }
         (Some(r), _, Some(up)) => {
             eprintln!("Emacs daemon: running");
@@ -755,6 +771,11 @@ fn handle_emacs_daemon_status() {
             }
         }
         (_, _, None) => {
+            if let Some(pid) = daemon_pid(unsafe { libc::getuid() }) {
+                eprintln!("Emacs daemon: starting or busy (pid {pid}); status probe did not answer within 2s");
+                eprintln!("  Run: nix-open emacs to wait and open a frame");
+                return;
+            }
             eprintln!("Emacs daemon: not running");
             if let Some(c) = &current {
                 if let Some(label) = nix_store_label(c) {
@@ -772,9 +793,9 @@ fn handle_open_app(name: &str, restart: bool, new_instance: bool) -> bool {
     // Special case: Emacs — connect to the running daemon instead of
     // spawning a separate standalone Emacs.app process.  This keeps all
     // buffers, LSP servers, and session caches in one shared heap.
-    // `--restart` still falls through to quit+reopen the app normally.
-    if name.eq_ignore_ascii_case("emacs") && !restart {
-        return handle_emacs_daemon_frame();
+    // Even `--restart` must target launchd, never the Emacs.app bundle.
+    if name.eq_ignore_ascii_case("emacs") {
+        return handle_emacs_daemon_frame(restart);
     }
 
     let app_path = match find_app(name) {
@@ -864,7 +885,7 @@ fn main() {
         for (name, _) in &stale {
             if !handle_open_app(name, true, false) {
                 all_ok = false;
-            } else if cli.wait && !wait_for_app(name) {
+            } else if cli.wait && !name.eq_ignore_ascii_case("emacs") && !wait_for_app(name) {
                 all_ok = false;
             }
         }
@@ -876,7 +897,7 @@ fn main() {
         for name in &cli.apps {
             if !handle_open_app(name, cli.restart, cli.new) {
                 all_ok = false;
-            } else if cli.wait && !wait_for_app(name) {
+            } else if cli.wait && !name.eq_ignore_ascii_case("emacs") && !wait_for_app(name) {
                 all_ok = false;
             }
         }
@@ -915,6 +936,15 @@ mod tests {
             !launchctl_ensure_args(501).contains(&"-k".to_string()),
             "ensure must not force-restart with -k"
         );
+    }
+
+    #[test]
+    fn explicit_restart_targets_launchd_and_kills_only_when_requested() {
+        assert_eq!(
+            launchctl_restart_args(501),
+            vec!["kickstart", "-k", "gui/501/org.nixos.emacs-server"]
+        );
+        assert!(!launchctl_ensure_args(501).contains(&"-k".to_string()));
     }
 
     #[test]
@@ -972,31 +1002,61 @@ mod tests {
     }
 
     #[test]
-    fn pre_poll_is_shorter_than_fallback_poll() {
-        // The pre-poll runs on every `nix-open emacs` — including the
-        // happy path where the daemon is already up.  It must be strictly
-        // shorter than the post-kickstart fallback poll so a genuine "daemon
-        // is down" case still spends the bulk of its budget waiting on the
-        // cold spawn, not on the pre-flight check.
-        assert!(
-            EMACS_PRE_POLL_SECS < EMACS_FALLBACK_POLL_SECS,
-            "pre-poll ({}s) must be shorter than fallback poll ({}s)",
-            EMACS_PRE_POLL_SECS,
-            EMACS_FALLBACK_POLL_SECS,
+    fn slow_daemon_is_not_treated_as_failed_or_kickstarted_again() {
+        // launchd already has a PID while init.el is still loading. No
+        // `kickstart -k` or redundant ensure, regardless of socket state.
+        assert!(!should_ensure_emacs_launchd(Some(50123)));
+        assert!(should_ensure_emacs_launchd(None));
+        let mut attempts = 0;
+        let waited = poll_until_emacs_ready(
+            || {
+                attempts += 1;
+                attempts == 76
+            },
+            Duration::ZERO,
+            Duration::from_secs(5),
+            |_| {},
         );
+        assert_eq!(attempts, 76, "do not give up after a fixed poll count");
+        assert!(waited < Duration::from_secs(5));
     }
 
     #[test]
-    fn pre_poll_covers_daemon_init_window() {
-        // A fresh `launchctl kickstart -k` daemon takes ~2–3s on a populated
-        // decknix session to load init.el and call (server-start).  The
-        // pre-poll must comfortably cover that window, or the loud fallback
-        // path fires spuriously and dumps raw emacsclient socket errors —
-        // the exact UX regression this constant exists to prevent.
-        assert!(
-            EMACS_PRE_POLL_SECS >= 3,
-            "pre-poll ({}s) must cover the observed 2–3s daemon init window",
-            EMACS_PRE_POLL_SECS,
+    fn readiness_progress_explains_what_is_still_happening() {
+        assert!(emacs_wait_progress(Duration::from_secs(75), Some(1234))
+            .contains("75s"));
+        assert!(emacs_wait_progress(Duration::from_secs(75), Some(1234))
+            .contains("1234"));
+        assert!(emacs_wait_progress(Duration::from_secs(75), None)
+            .contains("launchd"));
+        let mut attempts = 0;
+        let mut reports = 0;
+        poll_until_emacs_ready(
+            || { attempts += 1; attempts == 4 },
+            Duration::from_millis(3),
+            Duration::from_millis(1),
+            |_| reports += 1,
         );
+        assert!(reports >= 2, "a slow daemon must produce heartbeat updates");
+    }
+
+    #[test]
+    fn unresponsive_client_probe_is_killed_and_reaped() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "nix-open-probe-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir(&dir).unwrap();
+        let client = dir.join("emacsclient");
+        fs::write(&client, "#!/bin/sh\nexec sleep 3\n").unwrap();
+        fs::set_permissions(&client, fs::Permissions::from_mode(0o755)).unwrap();
+        let start = Instant::now();
+        let result = emacsclient_eval(client.to_str().unwrap(), "t", Duration::from_millis(50));
+        fs::remove_dir_all(dir).unwrap();
+        assert!(result.is_none(), "a blocked eval must time out");
+        assert!(start.elapsed() < Duration::from_secs(1), "status must not hang");
     }
 }

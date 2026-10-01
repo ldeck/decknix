@@ -112,6 +112,24 @@ emacsclient -c       # Create new GUI frame
 
 GUI frames appear in the Dock while open; closing a frame doesn't kill the daemon.
 
+### Opening and checking a cold daemon
+
+```bash
+nix-open emacs       # Wait for the launchd daemon to answer, then open a frame
+nix-open -s emacs    # Quick status check; reports a busy/starting daemon promptly
+nix-open -r emacs    # Explicitly restart the launchd daemon, wait, then open a frame
+```
+
+Plain `nix-open emacs` does not restart an already-running daemon. If launchd
+has not started it yet, it asks launchd to start it once. It prints elapsed
+readiness updates every five seconds, waits as long as startup takes, and can
+be cancelled with Ctrl-C without killing the daemon. `--wait` is redundant for
+Emacs; frame creation always waits for server readiness. Only `-r` kills the
+old daemon (losing unsaved in-memory buffers), so use it deliberately. It never
+opens a separate Emacs.app instance. A status probe is capped at two seconds;
+`-s` reports an initializing or busy daemon rather than hanging in
+`emacsclient` or calling it stopped.
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `services.emacs.decknix.enable` | `true` | Enable Emacs daemon |
