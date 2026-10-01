@@ -30,6 +30,8 @@
                   "decknix-hub-attention-filter" (item))
 (declare-function decknix--hub-requests-conflict-visible-p
                   "decknix-hub-attention-filter" (item))
+(declare-function decknix--hub-requests-not-mine-visible-p
+                  "decknix-hub-attention-filter" (item))
 (declare-function agent-shell-workspace-sidebar-refresh "agent-shell-workspace" ())
 
 (defvar decknix-sidebar-layout-enable t
@@ -192,7 +194,9 @@ PR those filters exist to hide."
            (and (decknix--hub-requests-attention-visible-p item)
                 (decknix--hub-requests-reviewed-visible-p item)
                 (decknix--hub-requests-draft-visible-p item)
-                (decknix--hub-requests-conflict-visible-p item)))
+                (decknix--hub-requests-conflict-visible-p item)
+                (or (not (fboundp 'decknix--hub-requests-not-mine-visible-p))
+                    (decknix--hub-requests-not-mine-visible-p item))))
          items)
       items)))
 

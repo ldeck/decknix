@@ -592,6 +592,24 @@ picker's dynamic binding unwinds.")
   (interactive)
   (call-interactively #'decknix--hub-toggle-requests-hide-i-replied-last))
 
+(transient-define-suffix decknix-sidebar-transient--req-not-mine ()
+  ;; `r\=' is free here: the sidebar\='s own `r\=' is goto-requests, a
+  ;; different keymap.
+  :key "r"
+  :description
+  (lambda ()
+    (format "not mine      %s"
+            (propertize
+             (format "[%s]"
+                     (if (bound-and-true-p decknix-hub-requests-show-not-mine)
+                         "shown" "hidden"))
+             'face (if (bound-and-true-p decknix-hub-requests-show-not-mine)
+                       'font-lock-keyword-face
+                     'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-hub-toggle-show-not-mine))
+
 (transient-define-suffix decknix-sidebar-transient--req-reviewed ()
   ;; `R' (not `v'): `v' is the Live "attention" toggle in the same
   ;; toggles transient, so a shared key left this one unreachable.

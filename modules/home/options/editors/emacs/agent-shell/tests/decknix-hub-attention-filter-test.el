@@ -587,5 +587,35 @@ score rather than a separate tiebreak."
          (sorted (decknix--hub-sort-requests (list older newer))))
     (should (equal 2 (alist-get 'number (car sorted))))))
 
+;; --- the named-reviewer filter ----------------------------------------
+
+(ert-deftest decknix-notmine--hidden-by-default ()
+  "These are somebody else's queue; that is the point of the rule."
+  (let ((decknix-hub-requests-show-not-mine nil))
+    (cl-letf (((symbol-function 'decknix--hub-item-mine-to-take-p)
+               (lambda (&rest _) nil)))
+      (should-not (decknix--hub-requests-not-mine-visible-p '((number . 1)))))))
+
+(ert-deftest decknix-notmine--shown-when-toggled-on ()
+  "Without a way back the auto-review rule is unauditable -- there is no
+way to see what it decided against."
+  (let ((decknix-hub-requests-show-not-mine t))
+    (cl-letf (((symbol-function 'decknix--hub-item-mine-to-take-p)
+               (lambda (&rest _) nil)))
+      (should (decknix--hub-requests-not-mine-visible-p '((number . 1)))))))
+
+(ert-deftest decknix-notmine--mine-is-always-visible ()
+  (let ((decknix-hub-requests-show-not-mine nil))
+    (cl-letf (((symbol-function 'decknix--hub-item-mine-to-take-p)
+               (lambda (&rest _) t)))
+      (should (decknix--hub-requests-not-mine-visible-p '((number . 1)))))))
+
+(ert-deftest decknix-notmine--fails-open-without-the-rule ()
+  "Hiding every row because a predicate is missing is worse than showing
+one too many."
+  (let ((decknix-hub-requests-show-not-mine nil))
+    (cl-letf (((symbol-function 'decknix--hub-item-mine-to-take-p) nil))
+      (should (decknix--hub-requests-not-mine-visible-p '((number . 1)))))))
+
 (provide 'decknix-hub-attention-filter-test)
 ;;; decknix-hub-attention-filter-test.el ends here

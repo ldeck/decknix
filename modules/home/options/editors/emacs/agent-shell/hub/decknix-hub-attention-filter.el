@@ -555,5 +555,45 @@ for an ephemeral flip that does not persist."
    'decknix--hub-wip-only-my-replies
    "WIP ↩/👽 only-my-replies: %s"))
 
+(defcustom decknix-hub-requests-show-not-mine nil
+  "When non-nil, show review items whose named reviewers exclude me.
+
+The auto-review rule is that individually-named reviewers win: if a PR
+names people and I am not among them, it is not mine to take even when a
+team I belong to was also asked.  Those PRs are still in the feed, and
+hiding them with no way back makes the rule unauditable -- there is no way
+to see what it decided against.
+
+Off by default, because the whole point of the rule is that these are
+somebody else\='s queue.  Toggle it to inspect them deliberately."
+  :type 'boolean
+  :group 'decknix)
+
+(declare-function decknix--hub-item-mine-to-take-p
+                  "decknix-hub-mention-bot" (item &optional viewer))
+
+(defun decknix--hub-requests-not-mine-visible-p (item)
+  "Return non-nil when ITEM passes the named-reviewer filter.
+
+Always true while `decknix-hub-requests-show-not-mine\=' is on, and true
+for anything the mine-to-take rule accepts.  Fails open when that rule is
+unavailable: hiding every row because a predicate is missing is worse
+than showing one too many."
+  (or decknix-hub-requests-show-not-mine
+      (not (fboundp 'decknix--hub-item-mine-to-take-p))
+      (and (decknix--hub-item-mine-to-take-p item) t)))
+
+(defun decknix-hub-toggle-show-not-mine ()
+  "Show or hide review items whose named reviewers exclude me."
+  (interactive)
+  (setq decknix-hub-requests-show-not-mine
+        (not decknix-hub-requests-show-not-mine))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (ignore-errors (agent-shell-workspace-sidebar-refresh)))
+  (message "Reviews: %s"
+           (if decknix-hub-requests-show-not-mine
+               "including PRs not requested of me"
+             "only PRs requested of me")))
+
 (provide 'decknix-hub-attention-filter)
 ;;; decknix-hub-attention-filter.el ends here
