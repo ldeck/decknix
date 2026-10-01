@@ -1953,6 +1953,22 @@ let
     testFiles = [ "decknix-session-board-test.el" ];
   };
 
+  # Bulk repo remedies, the repo counterpart to the Review and Session
+  # Boards.  Split pure/side-effecting per AGENTS.md Rule 2.
+  decknix-forge-board-model-el = mkEmacsTestedPackage {
+    pname = "decknix-forge-board-model";
+    src = ./agent-shell/forge-board;
+    packageRequires = [ ];
+    testFiles = [ "decknix-forge-board-model-test.el" ];
+  };
+
+  decknix-forge-board-el = mkEmacsTestedPackage {
+    pname = "decknix-forge-board";
+    src = ./agent-shell/forge-board;
+    packageRequires = [ decknix-forge-board-model-el ];
+    testFiles = [ "decknix-forge-board-test.el" ];
+  };
+
   decknix-sidebar-layout-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-layout";
     src = ./agent-shell/sidebar-layout;
@@ -3384,6 +3400,8 @@ in
           decknix-agent-session-lifecycle-el
           decknix-session-board-model-el
           decknix-session-board-el
+          decknix-forge-board-model-el
+          decknix-forge-board-el
           decknix-sidebar-layout-el
           decknix-sidebar-layout-render-el
           decknix-browse-el
@@ -4397,6 +4415,10 @@ ${optionalString cfg.tableOverlay.enable ''
         (require 'decknix-agent-session-lifecycle)
         (require 'decknix-session-board-model)
         (require 'decknix-session-board)
+        ;; Being in `packageRequires' only puts these on the load-path; the
+        ;; command does not exist until something requires them.
+        (require 'decknix-forge-board-model)
+        (require 'decknix-forge-board)
 
         (require 'decknix-sidebar-layout)
         (require 'decknix-sidebar-layout-render)
@@ -5707,6 +5729,11 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         (define-key decknix-agent-command-map (kbd "e") 'decknix-agent-command-edit)   ; Edit
         (define-key decknix-agent-command-map (kbd "r") 'decknix-agent-review-pr)      ; PR review
         (define-key decknix-agent-command-map (kbd "B") 'decknix-agent-batch-process)  ; Batch
+        ;; Forge Board: repo problems in bulk.  The sidebar's row menu is
+        ;; one repo at a time, and a sweep that cannot reach the network
+        ;; fails every repo at once -- 11 measured -- which is 11
+        ;; interactions for one cause.
+        (define-key decknix-agent-command-map (kbd "F") 'decknix-forge-board)  ; Forge Board
         (define-key decknix-agent-command-map (kbd "l") 'decknix-agent-link-pr)        ; Link PR
         (define-key decknix-agent-command-map (kbd "L") 'decknix-agent-link-repo)      ; Link Repo
         (define-key decknix-agent-command-map (kbd "u") 'decknix-agent-unlink-pr)
