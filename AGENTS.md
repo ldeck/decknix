@@ -74,7 +74,7 @@ non-negotiable. Specifically:
 - Reference issues: `(#73)`, `(#74)`.
 - Do NOT add co-author footers (e.g. `Co-authored-by:`) to commits or messages.
 - **Commit incrementally** on the main branch — after each logically complete unit of work
-  (e.g. after tests pass, after a bug fix is verified), commit immediately without waiting
+  (e.g. after tests and the full system build pass), commit immediately without waiting
   for explicit user instruction. This keeps the history clean and progress visible.
   - **One logical change per commit.** If the working tree contains multiple
     unrelated in-flight changes (e.g. a new feature, a bugfix, and a doc tweak),
@@ -161,9 +161,21 @@ cd ~/.config/decknix && nix build .#darwinConfigurations.default.system \
 - Test activation with `decknix switch --override decknix=~/tools/decknix` only
   when the user requests it.
 
-#### Final readiness gate: "ready to switch"
+#### Commit and switch readiness gate
 
-A successful full system build is a hard gate before telling the user that a
+**Do not commit code or config until the full system builds from the exact
+staged index tree.** The Nix-managed `pre-commit` hook in
+`decknix-config/modules/build-guard/pre-commit.sh` enforces this for both
+`~/tools/decknix` and `~/Code/nurturecloud/decknix-config`. It archives each
+repo's Git index, excluding unstaged edits and ignored Cargo outputs, then
+builds the complete system with both snapshots as flake overrides. It blocks
+the commit on any failure, including a newly exposed downstream ERT failure.
+Never use `--no-verify` or change `core.hooksPath` to evade this gate. When
+setting up a new machine, install the Nix-managed hook before committing in
+either repository. Do not claim that a passing working-tree build proves a
+staged commit: unstaged changes can mask failures.
+
+A successful full system build is also a hard gate before telling the user that a
 change is ready for `decknix switch`. This applies to every change that can
 affect Nix evaluation, a package derivation, generated configuration, or Emacs.
 Targeted tests and parse checks are preliminary feedback, not substitutes for
@@ -185,7 +197,7 @@ Add equivalent `git+file://` overrides for any other locally modified flake
 inputs involved in the change. Prefer `git+file://` over `path:` for large Git
 repositories because `path:` copies ignored build outputs into the Nix source.
 
-The gate is satisfied only when all of the following are true:
+The switch-readiness gate is satisfied only when all of the following are true:
 
 1. The complete command exits zero. With `tee`, `set -o pipefail` is mandatory.
 2. The build ran after the last source edit. Any subsequent source change
