@@ -5403,6 +5403,9 @@ in-menu `S Session…' entry both route here."
 
 ;; -- Dispatcher and primary action --
 
+(declare-function decknix-repo-sync-row-action
+                  "decknix-repo-sync-actions" ())
+
 (defun decknix-sidebar-ret ()
   "Open the action menu for the row at point.
 Hub rows (Request, WIP, Task, Linked PR, Linked Repo) get a row-
@@ -5413,6 +5416,8 @@ directly — see `decknix-sidebar-primary-action'."
   (interactive)
   (let* ((ctx (decknix--sidebar-row-context))
          (type (alist-get 'decknix-hub-type ctx))
+         (repo-problem (get-text-property (line-beginning-position)
+                                          'decknix-repo-sync-problem))
          (cmd (pcase type
                 ('review            #'decknix-sidebar-request-menu)
                 ('wip               #'decknix-sidebar-wip-menu)
@@ -5430,6 +5435,13 @@ directly — see `decknix-sidebar-primary-action'."
      ((and ctx cmd)
       (setq decknix--sidebar-action-context ctx)
       (decknix--sidebar-call-transient cmd))
+     ;; Repos rows carry `decknix-repo-sync-problem' rather than a
+     ;; `decknix-hub-type', so they matched no branch above and fell
+     ;; through to a goto that has no branch for them either -- RET on a
+     ;; stale lock did nothing at all, while the remedies to offer had
+     ;; been written and simply never bound.
+     ((and repo-problem (fboundp 'decknix-repo-sync-row-action))
+      (call-interactively #'decknix-repo-sync-row-action))
      (t
       (call-interactively #'agent-shell-workspace-sidebar-goto)))))
 
