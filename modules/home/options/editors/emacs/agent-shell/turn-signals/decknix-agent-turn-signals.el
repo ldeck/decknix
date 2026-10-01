@@ -243,19 +243,37 @@ not need."
   (let ((last-assistant (cdr (car (last turns)))))
     (list :question (and (decknix--agent-question-p last-assistant) t))))
 
+(defun decknix-agent-turn-broker-facts (buffer)
+  "Return turn facts BUFFER\='s broker log can supply, or nil.
+
+Only `:working\='.  Read from the broker rather than the transcript because
+the transcript is written at turn END, so a turn still in progress leaves
+no trace in it at all."
+  (when (and (buffer-live-p buffer)
+             (fboundp 'decknix--agent-broker-working-p))
+    (list :working (and (decknix--agent-broker-working-p buffer) t))))
+
 (defconst decknix-agent-turn-askable-statuses '("ready" "finished")
   "Statuses that may be refined to `asking'.
 Only a settled turn qualifies: `working' has not finished asking yet, and
 `waiting' (a permission prompt) is the more specific block already.")
 
 (defun decknix-agent-turn-status (raw-status facts)
-  "Refine RAW-STATUS to \"asking\" when turn-end FACTS show a question.
-Any other status is returned unchanged -- a live, blocked or dead session
-is never relabelled by how it happened to sign off."
-  (if (and (plist-get facts :question)
-           (member raw-status decknix-agent-turn-askable-statuses))
-      "asking"
-    raw-status))
+  "Refine RAW-STATUS from turn-end FACTS.
+
+`:working\=' wins over `:question\=': a mid-turn agent is working, and a
+question only closes a turn, so the two cannot both be current.  Without
+this, a session reattached to a still-running broker reported `ready\=' and
+read as dormant while its agent was producing output.
+
+Any status outside `decknix-agent-turn-askable-statuses\=' is returned
+unchanged -- a live, blocked or dead session is never relabelled by how it
+happened to sign off."
+  (cond
+   ((not (member raw-status decknix-agent-turn-askable-statuses)) raw-status)
+   ((plist-get facts :working) "working")
+   ((plist-get facts :question) "asking")
+   (t raw-status)))
 
 ;; ---------------------------------------------------------------------------
 ;; Capture layer -- buffer-local facts fed by the heredoc wiring.
@@ -365,7 +383,9 @@ on a question.  Never invents urgency for a live, blocked or dead
 session -- see `decknix-agent-turn-status'."
   (let ((raw (funcall orig-fn buffer)))
     (if (buffer-live-p buffer)
-        (decknix-agent-turn-status raw (decknix-agent-turn-facts buffer))
+        (decknix-agent-turn-status
+         raw (append (decknix-agent-turn-broker-facts buffer)
+                     (decknix-agent-turn-facts buffer)))
       raw)))
 
 (provide 'decknix-agent-turn-signals)

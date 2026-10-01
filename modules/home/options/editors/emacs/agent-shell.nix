@@ -2220,6 +2220,7 @@ let
     packageRequires = [ ];
     testFiles = [
       "decknix-agent-turn-signals-test.el"
+      "decknix-agent-turn-working-test.el"
     ];
   };
 
