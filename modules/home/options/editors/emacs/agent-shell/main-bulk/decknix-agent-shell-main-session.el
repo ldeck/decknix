@@ -1255,16 +1255,27 @@ dedupes against live buffers before calling here."
                    ;; synchronously at session-init, well before this
                    ;; timer, and clears it if the request failed -- in
                    ;; which case we prepopulate as always.
-                   (unless (decknix--agent-resume-bridge-replays-p
-                            (bound-and-true-p
-                             decknix--agent-resume-native-method))
+                   ;; A session whose broker is still ALIVE restores from
+                   ;; the broker log instead (below), which replays the
+                   ;; real event stream through the live renderer and so
+                   ;; comes back styled.  Prepopulation reads the session
+                   ;; TRANSCRIPT and renders it as flat text in two faces,
+                   ;; collapsed -- correct for a session that has actually
+                   ;; ended, wrong for one that is still running, which is
+                   ;; why every reattached session looked dormant.
+                   (unless (or (and (fboundp 'decknix--agent-broker-can-restore-p)
+                                    (decknix--agent-broker-can-restore-p shell-buf))
+                               (decknix--agent-resume-bridge-replays-p
+                                (bound-and-true-p
+                                 decknix--agent-resume-native-method)))
                      (decknix--agent-session-prepopulate ,sid ,n))
-                   ;; #151 M6: after the transcript history is restored,
-                   ;; replay the broker's in-flight turn — the agent output
-                   ;; that streamed while Emacs was detached — so it lands
-                   ;; below the restored history and continues into the live
-                   ;; stream.  No-op unless reattaching to a LIVE broker with
-                   ;; an uncommitted turn (see decknix-agent-broker-rehydrate).
+                   ;; Restore from the broker log: the last turns plus any
+                   ;; in-flight tail, read backwards from the live attach
+                   ;; marker so a 95872-line log does not have to be
+                   ;; replayed whole.  Older turns load on demand via
+                   ;; `decknix-agent-broker-replay-more'.  No-op unless the
+                   ;; broker is still alive, in which case prepopulation
+                   ;; above has already covered the history.
                    (when (fboundp 'decknix--agent-broker-rehydrate-buffer)
                      (decknix--agent-broker-rehydrate-buffer shell-buf))
                    ;; Seed `comint-input-ring' from the on-disk

@@ -1543,6 +1543,7 @@ let
     src = ./agent-shell/broker-rehydrate;
     testFiles = [
       "decknix-agent-broker-rehydrate-test.el"
+      "decknix-agent-broker-rehydrate-page-test.el"
     ];
   };
 
@@ -5745,6 +5746,12 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         (define-key decknix-agent-prefix-map (kbd "M-w") 'decknix-sidebar-toggle-visible)
         (define-key decknix-agent-prefix-map (kbd "M-W") 'decknix-sidebar-pin)
         (define-key decknix-agent-prefix-map (kbd "M-r") 'decknix-repo-sync-resweep)
+
+        ;; `H' loads another page of a brokered session's history above
+        ;; what is shown.  A resumed session restores only its last turns,
+        ;; because the longest live broker log measured 95872 lines and
+        ;; replaying one whole blocks the open.
+        (define-key decknix-agent-prefix-map (kbd "H") 'decknix-agent-broker-replay-more)
 
         ;; xwidget-webkit JS-bridge primitives (PR B.32) -- the
         ;; `page-text' and `find-in-page' helpers feed both the

@@ -128,6 +128,81 @@ prepopulation, and everything since the attach is delivered live)."
           (setq i (1+ i)))
         (nreverse out)))))
 
+(defcustom decknix-agent-broker-replay-turns 2
+  "How many committed turns to replay backwards from the live attach.
+
+A \"page\" of restored history.  Counted in TURNS rather than lines so the
+window always snaps to a turn boundary: a turn carries its own tool calls,
+so slicing there keeps a `tool_call_update' with the `tool_call' it
+updates.  Measured on a live log, 9 of 10764 updates still reference an
+earlier turn, which the per-notification `ignore-errors' in the replay
+absorbs.
+
+Replaying from the START is not an option: the longest live broker log
+measured 95872 lines.  Older turns load on demand instead -- see
+`decknix-agent-broker-replay-more'."
+  :type 'integer
+  :group 'decknix)
+
+(defun decknix--agent-broker-attach-index (vec)
+  "Return the index of the last `# client attached\=' marker in VEC, or nil.
+
+That marker is the seam: everything after it is delivered live by the
+broker, so replaying past it would double the output."
+  (let ((i (1- (length vec))) (found nil))
+    (while (and (>= i 0) (null found))
+      (when (equal (string-trim (aref vec i)) "# client attached")
+        (setq found i))
+      (setq i (1- i)))
+    found))
+
+(defun decknix--agent-broker-boundary-before (vec end)
+  "Return the index of the last committed turn boundary before END in VEC.
+Returns -1 when there is none, meaning the window reaches the log start."
+  (let ((i (1- end)) (found -1))
+    (while (and (>= i 0) (= found -1))
+      (when (decknix--agent-broker-result-stop-reason-p
+             (decknix--agent-broker-parse-json-line (aref vec i)))
+        (setq found i))
+      (setq i (1- i)))
+    found))
+
+(defun decknix--agent-broker-window-start (vec end turns)
+  "Return the start index of a replay window of TURNS turns ending at END.
+
+Walks boundaries backwards from END.  TURNS of 0 gives the in-flight tail
+alone (the last boundary before END); each further turn steps back one
+more boundary.  Stops at the log start when there are fewer turns than
+asked for, so a short log replays whole rather than empty."
+  (let ((start (decknix--agent-broker-boundary-before vec end))
+        (n turns))
+    (while (and (> n 0) (> start 0))
+      (setq start (decknix--agent-broker-boundary-before vec start))
+      (setq n (1- n)))
+    start))
+
+(defun decknix--agent-broker-notifications-between (vec start end)
+  "Return the replayable notifications in VEC strictly between START and END."
+  (let ((out nil) (i (1+ start)))
+    (while (< i end)
+      (when-let* ((obj (decknix--agent-broker-visible-notification
+                        (decknix--agent-broker-parse-json-line (aref vec i)))))
+        (push obj out))
+      (setq i (1+ i)))
+    (nreverse out)))
+
+(defun decknix--agent-broker-page (lines turns)
+  "Return (START . NOTIFICATIONS) for a TURNS-deep page back from the attach.
+
+START is the window\='s start index, so a caller can ask for the next page
+further back.  Returns nil when the log has no live attach marker."
+  (let* ((vec (vconcat lines))
+         (end (decknix--agent-broker-attach-index vec)))
+    (when end
+      (let ((start (decknix--agent-broker-window-start vec end turns)))
+        (cons start (decknix--agent-broker-notifications-between
+                     vec start end))))))
+
 ;; ── log path + buffer replay ────────────────────────────────────────
 
 (defun decknix--agent-broker-dir ()
@@ -173,29 +248,110 @@ replaying a stale in-flight tail would be wrong."
     (and (integerp pid) (> pid 0)
          (= 0 (call-process "kill" nil nil nil "-0" (number-to-string pid))))))
 
-(defun decknix--agent-broker-rehydrate-buffer (&optional buffer)
-  "Replay BUFFER's brokered in-flight turn from the broker log.
-BUFFER defaults to the current buffer and must be a live agent-shell
-buffer carrying a `decknix--agent-broker-key'.  No-op (returns nil) when
-rehydrate is disabled, the buffer is not brokered, the renderer is
-unavailable, or the log has no in-flight tail.  Returns the number of
-notifications replayed."
+(defvar-local decknix--agent-broker-replay-start nil
+  "Index in the broker log where this buffer\='s restored history begins.
+Nil when nothing has been replayed.  `decknix-agent-broker-replay-more\='
+walks it further back, which is how older history loads on demand instead
+of all of it loading at open.")
+
+(defvar-local decknix--agent-broker-replay-depth nil
+  "How many turns deep this buffer has replayed so far.")
+
+(defun decknix--agent-broker-replay-notifications (notes)
+  "Replay NOTES through the live renderer.  Returns how many were replayed.
+
+The same `agent-shell--on-notification\=' the live stream uses, so restored
+history is styled identically rather than being flat text -- the whole
+point of reading the broker log instead of the session transcript.
+
+Each is guarded individually: a `tool_call_update\=' whose `tool_call\=' is
+older than the window (measured at 9 in 10764) must drop itself, not
+abort the rest of the replay."
+  (let ((state (agent-shell--state)))
+    (dolist (n notes)
+      (ignore-errors
+        (agent-shell--on-notification :state state :notification n))))
+  (length notes))
+
+(defun decknix--agent-broker-rehydrate-buffer (&optional buffer turns)
+  "Restore BUFFER\='s brokered history from the broker log, styled.
+
+Replays the last TURNS committed turns (default
+`decknix-agent-broker-replay-turns\=') plus any in-flight tail, backwards
+from the live attach marker.  BUFFER defaults to the current buffer and
+must be a live agent-shell buffer carrying a `decknix--agent-broker-key\='.
+
+No-op (nil) when replay is disabled, the buffer is not brokered, its
+broker is dead, the renderer is unavailable, or the log has no attach
+marker.  Returns the number of notifications replayed."
   (with-current-buffer (or buffer (current-buffer))
     (when (and decknix-agent-broker-rehydrate-enable
                (bound-and-true-p decknix--agent-broker-key)
                (decknix--agent-broker-live-p decknix--agent-broker-key)
                (fboundp 'agent-shell--on-notification)
                (fboundp 'agent-shell--state))
-      (let* ((log   (decknix--agent-broker-log-path decknix--agent-broker-key))
+      (let* ((turns (or turns decknix-agent-broker-replay-turns))
+             (log   (decknix--agent-broker-log-path decknix--agent-broker-key))
              (lines (decknix--agent-broker-read-log-lines log))
-             (notes (and lines
-                         (decknix--agent-broker-inflight-notifications lines))))
-        (when notes
-          (let ((state (agent-shell--state)))
-            (dolist (n notes)
-              (ignore-errors
-                (agent-shell--on-notification :state state :notification n))))
-          (length notes))))))
+             (page  (and lines (decknix--agent-broker-page lines turns))))
+        (when page
+          (setq decknix--agent-broker-replay-start (car page))
+          (setq decknix--agent-broker-replay-depth turns)
+          (decknix--agent-broker-replay-notifications (cdr page)))))))
+
+(defun decknix--agent-broker-can-restore-p (&optional buffer)
+  "Non-nil when BUFFER\='s history should come from the broker log.
+
+True for a session whose broker is still ALIVE: the log holds the real
+event stream, so replaying it restores the buffer styled, including
+whatever the agent did while Emacs was down.
+
+False once the broker has died, in which case the session is genuinely
+historical and the transcript prepopulation is the only source left.
+Deciding this BEFORE prepopulating is what stops the two paths both
+rendering the same conversation."
+  (with-current-buffer (or buffer (current-buffer))
+    (and decknix-agent-broker-rehydrate-enable
+         (bound-and-true-p decknix--agent-broker-key)
+         (decknix--agent-broker-live-p decknix--agent-broker-key)
+         (fboundp 'agent-shell--on-notification)
+         (fboundp 'agent-shell--state)
+         t)))
+
+(defun decknix-agent-broker-replay-more (&optional turns)
+  "Load TURNS more turns of this session\='s history above what is shown.
+
+Reads further back in the broker log and prepends the result, so history
+arrives on demand rather than all of it being replayed at open -- the
+longest live log measured 95872 lines."
+  (interactive "p")
+  (unless (bound-and-true-p decknix--agent-broker-key)
+    (user-error "Not a brokered session"))
+  (let* ((turns (max 1 (or turns 1)))
+         (log (decknix--agent-broker-log-path decknix--agent-broker-key))
+         (lines (decknix--agent-broker-read-log-lines log))
+         (vec (and lines (vconcat lines)))
+         (end (or decknix--agent-broker-replay-start
+                  (and vec (decknix--agent-broker-attach-index vec)))))
+    (cond
+     ((or (null vec) (null end))
+      (message "No broker log to read"))
+     ((<= end 0)
+      (message "Already at the start of this session"))
+     (t
+      (let* ((start (decknix--agent-broker-window-start vec end (1- turns)))
+             (notes (decknix--agent-broker-notifications-between vec start end))
+             (inhibit-read-only t))
+        (save-excursion
+          (goto-char (point-min))
+          (decknix--agent-broker-replay-notifications notes))
+        (setq decknix--agent-broker-replay-start start)
+        (setq decknix--agent-broker-replay-depth
+              (+ (or decknix--agent-broker-replay-depth 0) turns))
+        (message "Loaded %d more notification%s (%s)"
+                 (length notes) (if (= 1 (length notes)) "" "s")
+                 (if (<= start 0) "start of session"
+                   (format "%d turns deep" decknix--agent-broker-replay-depth))))))))
 
 (provide 'decknix-agent-broker-rehydrate)
 ;;; decknix-agent-broker-rehydrate.el ends here
