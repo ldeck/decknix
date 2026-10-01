@@ -304,16 +304,37 @@ Reads `mergeable' directly, for the same reason as
 (defun decknix-auto-review--requested-of-me-p (item)
   "Return non-nil when ITEM asks for MY review, directly or via a team.
 
+A team request standing BESIDE named individual reviewers is not an ask of
+me: those individuals are who was chosen.  See
+`decknix--hub-item-mine-to-take-p'.
+
 Requires a STANDING request.  Requests now also carries PRs recovered by the
 hub's `--reviewed-by=@me' source, which exist so I can see a follow-up I owe
 a human reply -- dispatching a fresh review session at one would re-review
 work I have already reviewed, unprompted."
   (and (or (not (fboundp 'decknix--hub-item-review-requested-of-me-p))
            (decknix--hub-item-review-requested-of-me-p item))
-       (or (decknix--hub-item-mentioned-p item)
-           (and decknix-auto-review-include-team-requests
-                (fboundp 'decknix--hub-item-team-requested-p)
-                (decknix--hub-item-team-requested-p item)))
+       ;; Gated on the DATA, not on the function existing.  Keying it off
+       ;; `fboundp' made the new rule apply to items that carry no
+       ;; `requested_reviewers' at all -- which the hub omits when the list
+       ;; is empty -- so those stopped dispatching entirely.
+       (if (and (assq 'requested_reviewers item)
+                (fboundp 'decknix--hub-item-mine-to-take-p))
+           ;; A team request ALONGSIDE named individuals is the fallback those
+           ;; individuals have already answered -- taking it anyway reviewed
+           ;; 10 of 26 requests nobody had asked me for.  `include-team-
+           ;; requests' still gates the team case; being individually
+           ;; requested is never gated, since that is a direct ask.
+           (or (decknix--hub-item-individually-requested-p item)
+               (and decknix-auto-review-include-team-requests
+                    (decknix--hub-item-mine-to-take-p item)))
+         ;; No `requested_reviewers' on this item (older hub, or a PR with
+         ;; none requested): fall back to the mention flag rather than
+         ;; dispatching nothing.
+         (or (decknix--hub-item-mentioned-p item)
+             (and decknix-auto-review-include-team-requests
+                  (fboundp 'decknix--hub-item-team-requested-p)
+                  (decknix--hub-item-team-requested-p item))))
        t))
 
 (defun decknix-auto-review--eligible-action (item)

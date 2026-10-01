@@ -458,5 +458,80 @@ routed Augment-authored code PRs into the dependabot ship flow."
 Reading absence as false would silently stop auto-review against that feed."
   (should (decknix--hub-item-review-requested-of-me-p '((number . 1)))))
 
+
+;; -- whose review is it? -----------------------------------------------
+;;
+;; auto-review dispatched on any team request, including PRs where named
+;; individuals had been asked and the viewer had not. Measured on a live
+;; feed: 10 of 26 requests named other individuals beside a team, and a
+;; session had been started on every one -- upside#21089 was requested of
+;; `annie-nguyen-parque' and `ye-nc' with `team:cloud-services' as well.
+;;
+;; Fixtures carry `requested_reviewers' exactly as the hub emits it: users
+;; and teams in one list, teams prefixed `team:'.
+
+(defconst decknix-mine-test--viewer "ldeck")
+
+(ert-deftest decknix-hub-mine--individually-requested-is-mine ()
+  (should (decknix--hub-item-mine-to-take-p
+           '((requested_reviewers . ("ldeck" "fabiogm")))
+           decknix-mine-test--viewer)))
+
+(ert-deftest decknix-hub-mine--others-named-and-not-me-is-not-mine ()
+  "The named individuals are who was chosen; a team beside them is the
+fallback they have already answered."
+  (should-not (decknix--hub-item-mine-to-take-p
+               '((requested_reviewers . ("team:cloud-services"
+                                         "annie-nguyen-parque" "ye-nc"))
+                 (team_requested . t))
+               decknix-mine-test--viewer)))
+
+(ert-deftest decknix-hub-mine--team-only-is-mine ()
+  (should (decknix--hub-item-mine-to-take-p
+           '((requested_reviewers . ("team:cloud-services"))
+             (team_requested . t))
+           decknix-mine-test--viewer)))
+
+(ert-deftest decknix-hub-mine--two-teams-and-no-individuals-is-mine ()
+  "reapit-service#244 requests both plat-devs and cloud-services."
+  (should (decknix--hub-item-mine-to-take-p
+           '((requested_reviewers . ("team:plat-devs" "team:cloud-services"))
+             (team_requested . t))
+           decknix-mine-test--viewer)))
+
+(ert-deftest decknix-hub-mine--me-plus-others-is-still-mine ()
+  "Being named alongside someone else is still being named."
+  (should (decknix--hub-item-mine-to-take-p
+           '((requested_reviewers . ("team:cloud-services" "ldeck" "miere"))
+             (team_requested . t))
+           decknix-mine-test--viewer)))
+
+(ert-deftest decknix-hub-mine--login-match-is-case-insensitive ()
+  "GitHub preserves display case; the feed's viewer and the reviewer list
+need not agree on it."
+  (should (decknix--hub-item-mine-to-take-p
+           '((requested_reviewers . ("LDeck"))) "ldeck")))
+
+(ert-deftest decknix-hub-mine--no-reviewers-at-all-is-not-mine ()
+  "Nothing asked, so nothing to take -- and no team to fall back on."
+  (should-not (decknix--hub-item-mine-to-take-p
+               '((requested_reviewers . nil)) decknix-mine-test--viewer))
+  (should-not (decknix--hub-item-mine-to-take-p
+               '((number . 1)) decknix-mine-test--viewer)))
+
+(ert-deftest decknix-hub-mine--teams-are-not-counted-as-individuals ()
+  "A `team:' entry must not read as another person having been asked, or
+every team-only request would be skipped."
+  (should (equal '("alice")
+                 (decknix--hub-requested-individuals
+                  '((requested_reviewers . ("team:a" "alice" "team:b"))))))
+  (should-not (decknix--hub-item-others-individually-requested-p
+               '((requested_reviewers . ("team:cloud-services")))
+               decknix-mine-test--viewer)))
+
+(ert-deftest decknix-hub-mine--my-own-login-is-not-an-other ()
+  (should-not (decknix--hub-item-others-individually-requested-p
+               '((requested_reviewers . ("ldeck"))) decknix-mine-test--viewer)))
+
 (provide 'decknix-hub-mention-bot-test)
 ;;; decknix-hub-mention-bot-test.el ends here

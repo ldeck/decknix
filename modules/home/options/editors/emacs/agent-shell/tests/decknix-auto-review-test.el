@@ -24,6 +24,7 @@
 ;;; Code:
 
 (require 'ert)
+(defvar decknix--hub-reviews nil)
 (require 'cl-lib)
 (require 'decknix-auto-review)
 ;; Grouped dispatch records PR coordinates through this layer.
@@ -357,6 +358,47 @@ pins the client-side gate so both layers have to fail before a session runs."
   (should (decknix-auto-review--requested-of-me-p
            '((mentioned . t) (review_requested_of_me . t))))
   (should (decknix-auto-review--requested-of-me-p '((mentioned . t)))))
+
+(ert-deftest decknix-auto-review--items-without-reviewers-use-the-mention-flag ()
+  "The hub omits `requested_reviewers' when empty, so the new rule must be
+gated on the DATA.  Gating on `fboundp' instead stopped four existing cases
+dispatching at all."
+  (let ((decknix-auto-review-include-team-requests t)
+        (decknix--hub-reviews '((viewer . "ldeck"))))
+    (should (decknix-auto-review--requested-of-me-p '((mentioned . t))))
+    (should (decknix-auto-review--requested-of-me-p '((team_requested . t))))))
+
+(ert-deftest decknix-auto-review--team-beside-named-individuals-does-not-dispatch ()
+  "The defect: a session was started on 10 of 26 requests where named
+individuals had been asked and the viewer had not."
+  (let ((decknix-auto-review-include-team-requests t)
+        (decknix--hub-reviews '((viewer . "ldeck"))))
+    (should-not (decknix-auto-review--requested-of-me-p
+                 '((team_requested . t)
+                   (requested_reviewers . ("team:cloud-services"
+                                           "annie-nguyen-parque" "ye-nc")))))))
+
+(ert-deftest decknix-auto-review--team-alone-still-dispatches ()
+  (let ((decknix-auto-review-include-team-requests t)
+        (decknix--hub-reviews '((viewer . "ldeck"))))
+    (should (decknix-auto-review--requested-of-me-p
+             '((team_requested . t)
+               (requested_reviewers . ("team:cloud-services")))))))
+
+(ert-deftest decknix-auto-review--being-named-is-never-team-gated ()
+  "Being individually requested is a direct ask, so it dispatches even with
+`include-team-requests' off."
+  (let ((decknix-auto-review-include-team-requests nil)
+        (decknix--hub-reviews '((viewer . "ldeck"))))
+    (should (decknix-auto-review--requested-of-me-p
+             '((requested_reviewers . ("ldeck" "fabiogm")))))))
+
+(ert-deftest decknix-auto-review--team-case-honours-the-toggle ()
+  (let ((decknix-auto-review-include-team-requests nil)
+        (decknix--hub-reviews '((viewer . "ldeck"))))
+    (should-not (decknix-auto-review--requested-of-me-p
+                 '((team_requested . t)
+                   (requested_reviewers . ("team:cloud-services")))))))
 
 (provide 'decknix-auto-review-test)
 ;;; decknix-auto-review-test.el ends here

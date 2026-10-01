@@ -131,6 +131,60 @@ it reads as true rather than silently disabling whatever gates on it."
   (let ((cell (assq 'review_requested_of_me item)))
     (if cell (eq (cdr cell) t) t)))
 
+(defun decknix--hub-requested-individuals (item)
+  "Return the individual logins requested to review ITEM.
+
+`requested_reviewers' mixes users and teams, teams prefixed `team:'.  Only
+the users are individuals; a team entry says nothing about who will take
+it."
+  (seq-remove (lambda (r) (string-prefix-p "team:" r))
+              (or (alist-get 'requested_reviewers item) nil)))
+
+(defun decknix--hub-item-individually-requested-p (item &optional viewer)
+  "Return non-nil when VIEWER is an individually requested reviewer of ITEM.
+
+Computed from `requested_reviewers' rather than the `mentioned' flag, which
+conflates being a requested reviewer with merely having been @-mentioned in
+a comment -- two different asks that need different answers."
+  (let ((me (or viewer (alist-get 'viewer decknix--hub-reviews))))
+    (and me (seq-some (lambda (r) (string-equal-ignore-case r me))
+                      (decknix--hub-requested-individuals item))
+         t)))
+
+(defun decknix--hub-item-others-individually-requested-p (item &optional viewer)
+  "Return non-nil when someone OTHER than VIEWER is individually requested."
+  (let ((me (or viewer (alist-get 'viewer decknix--hub-reviews))))
+    (and (seq-some (lambda (r) (not (and me (string-equal-ignore-case r me))))
+                   (decknix--hub-requested-individuals item))
+         t)))
+
+(defun decknix--hub-item-mine-to-take-p (item &optional viewer)
+  "Return non-nil when ITEM's review is VIEWER's to take.
+
+The rule, in order:
+
+  I am individually requested                      -> mine
+  other individuals are requested and I am not     -> NOT mine
+  only a team is requested                         -> mine
+
+Naming individuals is how a reviewer is actually chosen; a team request
+alongside them is the fallback that those individuals have already
+answered.  Measured on a live feed: 10 of 26 requests named other
+individuals beside a team, and auto-review had started a session on every
+one of them -- e.g. upside#21089, requested of `annie-nguyen-parque' and
+`ye-nc' with `team:cloud-services' as well.
+
+The team case does not re-check membership: the hub's request query is
+`--review-requested=@me', so a team entry on such a row is already one of
+mine.  Rows from the `--reviewed-by=@me' source carry `team_requested' nil
+for exactly that reason."
+  (let ((me (or viewer (alist-get 'viewer decknix--hub-reviews))))
+    (cond
+     ((decknix--hub-item-individually-requested-p item me) t)
+     ((decknix--hub-item-others-individually-requested-p item me) nil)
+     ((decknix--hub-item-team-requested-p item) t)
+     (t nil))))
+
 (defun decknix--hub-item-reviewed-by-me-p (item)
   "Return non-nil if the viewer has personally submitted a review on ITEM.
 Uses the `my_review' field, which carries the viewer's latest review
