@@ -99,6 +99,51 @@ shown, so the section never shrinks silently.")
            (if decknix-sidebar-layout-reviews-attention-only
                "only what wants me" "everything")))
 
+(defun decknix-layout-toggle-enable ()
+  "Turn the session-first sidebar layout on or off.
+
+Off restores the previous Requests/WIP/Live sections, which is why the
+toggles for those are only offered when it IS off -- under the new layout
+their renders are skipped, so they would be switches that change nothing."
+  (interactive)
+  (setq decknix-sidebar-layout-enable (not decknix-sidebar-layout-enable))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Sidebar layout: %s"
+           (if decknix-sidebar-layout-enable "session-first" "previous")))
+
+(defconst decknix-sidebar-layout-items-cycle '(3 5 10 nil)
+  "Cycle for `decknix-sidebar-layout-items-per-repo'; nil means all.")
+
+(defun decknix-layout-cycle-items-per-repo ()
+  "Cycle how many items are listed under one repo in WIP."
+  (interactive)
+  (let* ((cur decknix-sidebar-layout-items-per-repo)
+         (pos (seq-position decknix-sidebar-layout-items-cycle cur))
+         (next (nth (mod (1+ (or pos -1))
+                         (length decknix-sidebar-layout-items-cycle))
+                    decknix-sidebar-layout-items-cycle)))
+    (setq decknix-sidebar-layout-items-per-repo next)
+    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+      (agent-shell-workspace-sidebar-refresh))
+    (message "WIP items per repo: %s" (or next "all"))))
+
+(defconst decknix-sidebar-layout-dormant-cycle '(6 12 24 nil)
+  "Cycle for `decknix-sidebar-layout-dormant-limit'; nil means all.")
+
+(defun decknix-layout-cycle-dormant-limit ()
+  "Cycle how many Dormant repo groups are listed."
+  (interactive)
+  (let* ((cur decknix-sidebar-layout-dormant-limit)
+         (pos (seq-position decknix-sidebar-layout-dormant-cycle cur))
+         (next (nth (mod (1+ (or pos -1))
+                         (length decknix-sidebar-layout-dormant-cycle))
+                    decknix-sidebar-layout-dormant-cycle)))
+    (setq decknix-sidebar-layout-dormant-limit next)
+    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+      (agent-shell-workspace-sidebar-refresh))
+    (message "Dormant repos shown: %s" (or next "all"))))
+
 (defun decknix--layout-sessions ()
   "Return the live session snapshot, or nil."
   (and (fboundp 'decknix--hub-review-session-snapshot)

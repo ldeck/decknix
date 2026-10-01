@@ -66,6 +66,19 @@ Reading is cheap (a small JSON file) but still done off the render path via
          (setq decknix--repo-sync-read-pending nil)
          (when on-done (funcall on-done)))))))
 
+(defun decknix-repo-sync-toggle-show-behind ()
+  "Toggle whether repos merely falling behind are listed.
+
+Off leaves only the failures -- a stale lock or a broken fetch.  On adds
+the dirty and diverged checkouts, which are a backlog rather than a fault
+but were drifting 36 to 102 commits behind unreported."
+  (interactive)
+  (setq decknix-repo-sync-show-behind (not decknix-repo-sync-show-behind))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Repos: behind/dirty rows %s"
+           (if decknix-repo-sync-show-behind "shown" "hidden")))
+
 (defun decknix--repo-sync-run (args name on-done)
   "Run `decknix ARGS' asynchronously under NAME, calling ON-DONE with output."
   (let ((buffer (generate-new-buffer (format " *%s*" name))))
