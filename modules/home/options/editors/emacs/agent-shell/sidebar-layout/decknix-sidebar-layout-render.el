@@ -132,8 +132,20 @@ PR those filters exist to hide."
   (and (boundp 'decknix--hub-wip)
        (alist-get 'repos decknix--hub-wip)))
 
+(declare-function decknix--hub-wt-audit-refresh-if-stale "decknix-hub-wt-stale" ())
+
 (defun decknix--layout-worktrees ()
-  "Return cached worktree records, or nil when the audit has not run."
+  "Return cached worktree records, kicking an async audit when stale.
+
+The kick used to live inside `decknix--hub-render-wip', which this layout
+no longer calls -- so nothing refreshed the cache and every repo reported
+`0 wt' forever.  Measured straight after a switch: `wt-cache-ready' nil,
+0 rows, and the worktree a session was actually sitting in invisible.
+
+`-if-stale' is async and self-guarding (one subprocess at a time), so
+calling it from the render path cannot queue an audit per paint."
+  (when (fboundp 'decknix--hub-wt-audit-refresh-if-stale)
+    (ignore-errors (decknix--hub-wt-audit-refresh-if-stale)))
   (and (fboundp 'decknix-hub-wt-rows)
        (ignore-errors (decknix-hub-wt-rows))))
 
@@ -244,27 +256,81 @@ hiding the sharing."
                (left (format " %s  %s" (decknix--layout-state-glyph state) name))
                (right (or state ""))
                (pad (max 1 (- width (string-width left) (string-width right)))))
+          ;; Coloured by state, not just bolded on attention.  At 48 columns
+          ;; the trailing status word is off-screen, so colour and the
+          ;; left-hand glyph are the only state the user can actually read.
           (insert (propertize (concat left (make-string pad ?\s) right)
-                              'face (if (decknix--layout-attention-p state)
-                                        'warning 'default)
+                              'face (decknix--layout-state-face state)
                               'decknix-layout-session session
                               'decknix-layout-buffer (nth 0 session))
                   "\n")
           (setq line-num (1+ line-num))
           (dolist (claim (plist-get row :repos))
-            (let* ((left (format "     ⇡ %s" (plist-get claim :repo)))
-                   (right (format "%d pr %d wt"
-                                  (plist-get claim :prs)
-                                  (plist-get claim :worktrees)))
-                   (pad (max 1 (- width (string-width left) (string-width right)))))
-              (insert (propertize (concat left (make-string pad ?\s) right)
-                                  'face 'font-lock-comment-face
-                                  'decknix-layout-claim claim
-                                  'decknix-layout-session session)
-                      "\n")
-              (setq line-num (1+ line-num))))))
+            (setq line-num (decknix--layout-render-claim
+                            line-num width claim session)))))
       (setq line-num (decknix--layout-render-dormant
                       line-num width (plist-get tree :dormant)))))
+  line-num)
+
+(defvar decknix-sidebar-layout-items-per-repo 5
+  "Most PRs plus worktrees to list under one repo, or nil for all.
+
+Listing every item flat gave the two followupboss sessions eleven rows
+each.  A handful per repo restores the visibility the refactor lost without
+returning to that; the remainder is reported, never silently dropped.")
+
+(defun decknix--layout-render-claim (line-num width claim session)
+  "Render one repo CLAIM under SESSION, with its items.  Returns LINE-NUM.
+
+The repo line takes its colour from the WORST item beneath it, so a
+collapsed repo still shows that something in there is blocked."
+  (let* ((prs (plist-get claim :pr-items))
+         (wts (plist-get claim :wt-items))
+         (left (format "    ⇡ %s" (plist-get claim :repo)))
+         (right (format "%d pr %d wt" (plist-get claim :prs)
+                        (plist-get claim :worktrees)))
+         (pad (max 1 (- width (string-width left) (string-width right))))
+         (budget decknix-sidebar-layout-items-per-repo)
+         (shown-prs (if budget (seq-take prs budget) prs))
+         (left-budget (and budget (max 0 (- budget (length shown-prs)))))
+         (shown-wts (if budget (seq-take wts left-budget) wts))
+         (held (- (+ (length prs) (length wts))
+                  (+ (length shown-prs) (length shown-wts)))))
+    (insert (propertize (concat left (make-string pad ?\s) right)
+                        'face (decknix--layout-severity-face
+                               (plist-get claim :severity))
+                        'decknix-layout-claim claim
+                        'decknix-layout-session session)
+            "\n")
+    (setq line-num (1+ line-num))
+    (dolist (pr shown-prs)
+      (insert (propertize
+               (format "      %s #%s %s"
+                       (decknix--layout-pr-indicators pr)
+                       (plist-get pr :number)
+                       (or (plist-get pr :branch) ""))
+               'face (decknix--layout-severity-face
+                      (decknix--layout-pr-severity pr))
+               'decknix-hub-type 'wip
+               'decknix-hub-repo (plist-get pr :repo)
+               'decknix-hub-number (plist-get pr :number)
+               'decknix-hub-url (alist-get 'url (plist-get pr :pr)))
+              "\n")
+      (setq line-num (1+ line-num)))
+    (dolist (wt shown-wts)
+      (insert (propertize
+               (format "      %s%s" (decknix--layout-wt-indicators wt)
+                       (or (plist-get wt :branch) "?"))
+               'face (decknix--layout-severity-face
+                      (decknix--layout-wt-severity wt))
+               'decknix-layout-worktree wt)
+              "\n")
+      (setq line-num (1+ line-num)))
+    (when (> held 0)
+      (insert (propertize (format "      … %d more" held)
+                          'face 'font-lock-comment-face)
+              "\n")
+      (setq line-num (1+ line-num))))
   line-num)
 
 (defvar decknix-sidebar-layout-dormant-limit 12

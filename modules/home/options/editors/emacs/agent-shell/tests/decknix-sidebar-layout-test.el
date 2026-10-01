@@ -474,5 +474,160 @@ does -- so the prefix must be the LEADING hyphenated segment."
   (should-not (decknix--layout-pr-sessions
                decknix-layout-test--sessions "upside#99999")))
 
+
+;; --- state indicators -------------------------------------------------
+;;
+;; The refactor rendered session rows in `default' and nested work as a grey
+;; repo name.  At the sidebar's 48 columns the trailing status word is
+;; off-screen, so there was nothing left to read state from.
+
+(defun decknix-layout-test--pr (&rest kv)
+  "Build a WIP PR whose `:pr' is an ALIST, as the JSON feed parses it.
+Written as a plist first and converted, because a plist there silently
+reads as nil through `alist-get' -- which is how the first version of these
+tests \"passed\" the code it was meant to exercise."
+  (let (alist)
+    (while kv
+      (push (cons (pop kv) (pop kv)) alist))
+    (list :number 1 :branch "b" :repo "o/r" :pr (nreverse alist))))
+
+(ert-deftest decknix-layout--every-session-state-has-a-face ()
+  "A state rendering in `default' is a state the user cannot see."
+  (dolist (state '("netfail" "waiting" "asking" "working" "finished"
+                   "ready" "closing"))
+    (should-not (eq 'default (decknix--layout-state-face state)))))
+
+(ert-deftest decknix-layout--unknown-state-falls-back-not-errors ()
+  (should (eq 'default (decknix--layout-state-face "banana")))
+  (should (eq 'default (decknix--layout-state-face nil))))
+
+(ert-deftest decknix-layout--session-faces-agree-with-the-requests-indicator ()
+  "The first four are copied from `decknix--hub-request-session-faces' so a
+colour cannot mean one thing in the sidebar and another on a Request row."
+  (dolist (state '("netfail" "waiting" "asking" "working"))
+    (should (plist-get (decknix--layout-state-face state) :foreground))))
+
+;; --- PR severity ------------------------------------------------------
+
+(ert-deftest decknix-layout--a-blocked-pr-is-worst ()
+  "Conflict, failing CI and changes-requested all block the merge."
+  (should (= 0 (decknix--layout-pr-severity
+                (decknix-layout-test--pr 'mergeable "CONFLICTING"))))
+  (should (= 0 (decknix--layout-pr-severity
+                (decknix-layout-test--pr 'ci '((status . "fail"))))))
+  (should (= 0 (decknix--layout-pr-severity
+                (decknix-layout-test--pr 'review_decision "CHANGES_REQUESTED")))))
+
+(ert-deftest decknix-layout--unresolved-threads-want-me ()
+  (should (= 1 (decknix--layout-pr-severity
+                (decknix-layout-test--pr 'unresolved_total 2))))
+  (should (= 1 (decknix--layout-pr-severity
+                (decknix-layout-test--pr 'needs_reply t)))))
+
+(ert-deftest decknix-layout--blocked-outranks-wants-me ()
+  "A conflicted PR with unresolved threads is blocked first: the threads
+cannot be actioned into a merge while the conflict stands."
+  (should (= 0 (decknix--layout-pr-severity
+                (decknix-layout-test--pr 'mergeable "CONFLICTING"
+                                         'unresolved_total 3)))))
+
+(ert-deftest decknix-layout--an-approved-green-pr-reads-green ()
+  (should (= 3 (decknix--layout-pr-severity
+                (decknix-layout-test--pr 'review_decision "APPROVED"
+                                         'ci '((status . "pass")))))))
+
+(ert-deftest decknix-layout--a-draft-is-muted-but-not-if-blocked ()
+  "A draft is not asking for anything -- unless it is broken."
+  (should (= 4 (decknix--layout-pr-severity (decknix-layout-test--pr 'draft t))))
+  (should (= 0 (decknix--layout-pr-severity
+                (decknix-layout-test--pr 'draft t 'mergeable "CONFLICTING")))))
+
+;; --- PR indicators ----------------------------------------------------
+
+(ert-deftest decknix-layout--ci-and-review-use-different-symbols ()
+  "Both would otherwise read as a tick, and a row with two ticks says
+nothing about which of them passed."
+  (let ((ind (decknix--layout-pr-indicators
+              (decknix-layout-test--pr 'ci '((status . "pass"))
+                                       'review_decision "APPROVED"))))
+    (should (string-match-p "✓" ind))
+    (should (string-match-p "⊕" ind))))
+
+(ert-deftest decknix-layout--indicators-name-each-condition ()
+  (should (string-match-p "⑃" (decknix--layout-pr-indicators
+                               (decknix-layout-test--pr 'mergeable "CONFLICTING"))))
+  (should (string-match-p "β" (decknix--layout-pr-indicators
+                               (decknix-layout-test--pr 'draft t))))
+  (should (string-match-p "✗" (decknix--layout-pr-indicators
+                               (decknix-layout-test--pr 'ci '((status . "fail"))))))
+  (should (string-match-p "◴" (decknix--layout-pr-indicators
+                               (decknix-layout-test--pr 'ci '((status . "pending"))))))
+  (should (string-match-p "◆3" (decknix--layout-pr-indicators
+                                (decknix-layout-test--pr 'unresolved_total 3)))))
+
+(ert-deftest decknix-layout--thread-count-is-capped-to-one-column ()
+  "A three-digit count would shift every column on the row."
+  (should (string-match-p "◆9" (decknix--layout-pr-indicators
+                                (decknix-layout-test--pr 'unresolved_total 40)))))
+
+(ert-deftest decknix-layout--indicator-width-is-constant ()
+  "Columns must not shift between rows, or the list stops being scannable."
+  (let ((w (string-width (decknix--layout-pr-indicators
+                          (decknix-layout-test--pr)))))
+    (dolist (pr (list (decknix-layout-test--pr 'draft t)
+                      (decknix-layout-test--pr 'mergeable "CONFLICTING")
+                      (decknix-layout-test--pr 'ci '((status . "pass"))
+                                               'review_decision "APPROVED"
+                                               'unresolved_total 2)))
+      (should (= w (string-width (decknix--layout-pr-indicators pr)))))))
+
+;; --- worktree indicators ---------------------------------------------
+
+(ert-deftest decknix-layout--dirty-outranks-every-other-worktree-flag ()
+  "Uncommitted work is the only state here that can be LOST, so it must not
+be masked by a merged or orphaned flag."
+  (should (= 1 (decknix--layout-wt-severity '(:dirty t :merged t :orphan t))))
+  (should (equal "✎ " (decknix--layout-wt-indicators
+                       '(:dirty t :merged t :orphan t)))))
+
+(ert-deftest decknix-layout--worktree-states-are-distinguishable ()
+  (should (equal "● " (decknix--layout-wt-indicators '(:active t))))
+  (should (equal "✓ " (decknix--layout-wt-indicators '(:merged t))))
+  (should (equal "⑂ " (decknix--layout-wt-indicators '(:orphan t))))
+  (should (equal "◌ " (decknix--layout-wt-indicators '()))))
+
+;; --- repo rollup ------------------------------------------------------
+
+(ert-deftest decknix-layout--repo-row-takes-its-worst-child ()
+  "A collapsed repo must still show that something inside is blocked."
+  (should (= 0 (decknix--layout-worst-severity
+                (list (decknix-layout-test--pr 'review_decision "APPROVED"
+                                               'ci '((status . "pass")))
+                      (decknix-layout-test--pr 'mergeable "CONFLICTING"))
+                nil)))
+  (should (= 1 (decknix--layout-worst-severity nil '((:dirty t))))))
+
+(ert-deftest decknix-layout--a-repo-with-nothing-has-no-severity ()
+  (should-not (decknix--layout-worst-severity nil nil)))
+
+(ert-deftest decknix-layout--claims-carry-their-items-not-just-counts ()
+  "A count cannot say whether anything in there is blocked, which is the
+whole point of the indicators."
+  (let* ((s (decknix-layout-test--ws-session "*A*" "working" "/w/upside-wt/postman"))
+         (tree (decknix--layout-wip-tree (list s) decknix-layout-test--wip-repos
+                                         decknix-layout-test--worktrees))
+         (claim (car (plist-get (car (plist-get tree :sessions)) :repos))))
+    (should (plist-get claim :pr-items))
+    (should (plist-get claim :wt-items))
+    (should (numberp (plist-get claim :severity)))))
+
+(ert-deftest decknix-layout--worst-repo-sorts-first ()
+  "Within a session, the repo needing attention leads."
+  (let* ((claims (decknix--layout-group-claims
+                  '((:repo "o/clean" :branch "x"))
+                  (list (list :repo "o/broken" :number 1 :branch "y"
+                              :pr '((mergeable . "CONFLICTING")))))))
+    (should (equal "broken" (plist-get (car claims) :repo)))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here
