@@ -1910,6 +1910,24 @@ let
   # row per session was 40 lines before anything else -- which is why Live
   # became unreadable and the review board was the only usable view.  This
   # collapses them to one row per repo, expandable.
+  # Session Board: every live session in one lane, with bulk kill.  The fleet
+  # outgrew per-session browsing -- of 36 live sessions, 5 were reviewing PRs
+  # that named other reviewers and 16 PRs that had left the hub queries, and
+  # finding them meant cross-referencing three sources by hand.
+  decknix-session-board-model-el = mkEmacsTestedPackage {
+    pname = "decknix-session-board-model";
+    src = ./agent-shell/session-board;
+    packageRequires = [ ];
+    testFiles = [ "decknix-session-board-model-test.el" ];
+  };
+
+  decknix-session-board-el = mkEmacsTestedPackage {
+    pname = "decknix-session-board";
+    src = ./agent-shell/session-board;
+    packageRequires = [ decknix-session-board-model-el ];
+    testFiles = [ "decknix-session-board-test.el" ];
+  };
+
   decknix-sidebar-layout-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-layout";
     src = ./agent-shell/sidebar-layout;
@@ -3326,6 +3344,8 @@ in
           decknix-agent-resume-command-el
           decknix-agent-jump-target-el
           decknix-agent-input-ring-el
+          decknix-session-board-model-el
+          decknix-session-board-el
           decknix-sidebar-layout-el
           decknix-sidebar-layout-render-el
           decknix-browse-el
@@ -4336,6 +4356,9 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; already carries it upstream.
         (put 'browse-url-safari 'browse-url-browser-kind 'external)
 
+        (require 'decknix-session-board-model)
+        (require 'decknix-session-board)
+
         (require 'decknix-sidebar-layout)
         (require 'decknix-sidebar-layout-render)
         (decknix--layout-load-state)
@@ -5197,6 +5220,7 @@ ${optionalString cfg.tableOverlay.enable ''
                      ("v" . decknix-agent-review)
                      ("V" . decknix-agent-review-menu)
                      ("B" . decknix-review-board)
+                     ("S" . decknix-session-board)
                      ("u" . decknix-agent-session-pr-url)
                      ("w" . decknix-agent-watch-checks)
                      ("W" . decknix-agent-unwatch)))
@@ -5235,6 +5259,7 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c s D" "detach session (agent keeps running)"
             "C-c s R" "rename session"
             "C-c s r" "recent sessions"
+            "C-c s S" "session board"
             "C-c s s" "session picker"
             "C-c s b" "buffer switch"
             "C-c s g" "grep sessions"
