@@ -18,6 +18,7 @@
 ;;; Code:
 
 (require 'decknix-sidebar-layout)
+(require 'decknix-hub-icons)
 (require 'seq)
 
 (declare-function decknix--hub-review-session-snapshot "decknix-agent-shell-hub" ())
@@ -159,6 +160,15 @@ held back is always reported.")
     (when (fboundp 'agent-shell-workspace-sidebar-refresh)
       (agent-shell-workspace-sidebar-refresh))
     (message "Dormant repos shown: %s" (or next "all"))))
+
+(defun decknix--layout-sidebar-width ()
+  "Return the width of the sidebar window, falling back to the selected one.
+
+Resolved from the buffer rather than from `window-width' with no argument:
+the render runs with whatever window is selected, so the bare call answered
+for the wrong one and padded every row to it."
+  (let ((win (get-buffer-window (current-buffer))))
+    (if (window-live-p win) (window-width win) (window-width))))
 
 (defun decknix--layout-sessions ()
   "Return the live session snapshot, or nil."
@@ -371,6 +381,42 @@ hiding the sharing."
                       line-num width (plist-get tree :dormant)))))
   line-num)
 
+(defun decknix--layout-item-title (pr)
+  "Return PR\='s title, falling back to its branch then its number.
+
+The title rather than the branch: a branch name is mostly the ticket key
+repeated from the title, and the old sidebar showed titles."
+  (let ((raw (plist-get pr :pr)))
+    (or (alist-get 'title raw)
+        (plist-get pr :branch)
+        (format "#%s" (plist-get pr :number)))))
+
+(defun decknix--layout-pr-row (pr width)
+  "Return the rendered line for PR, fitted to WIDTH.
+
+Built from the hub\='s own icon vocabulary -- author provenance, primary
+state, activity -- each carrying its OWN colour, rather than one severity
+face painted over the whole row.  The row had become a uniformly coloured
+string of flat ASCII, which is legible only if you already know what you
+are looking at; the glyph colours are what make draft-versus-conflicting
+or human-versus-bot readable without decoding.
+
+The title is truncated rather than allowed to push the glyphs out of the
+window, since the glyphs are the part worth keeping when space runs out."
+  (let* ((raw (plist-get pr :pr))
+         (icons (concat (decknix--hub-author-icon raw)
+                        (decknix--hub-primary-status-icon raw 'wip)
+                        (decknix--hub-activity-icons raw)))
+         (age (decknix--hub-format-age (alist-get 'updated raw)))
+         (num (format "#%s" (plist-get pr :number)))
+         (lead (format "    %s %-3s %s " icons age num))
+         (room (max 1 (- width (string-width lead))))
+         (title (decknix--layout-item-title pr))
+         (title (if (> (string-width title) room)
+                    (concat (truncate-string-to-width title (max 1 (1- room))) "…")
+                  title)))
+    (concat lead (propertize title 'face 'shadow))))
+
 (defun decknix--layout-render-claim (line-num width claim session)
   "Render one repo CLAIM under SESSION, with its items.  Returns LINE-NUM.
 
@@ -397,12 +443,7 @@ collapsed repo still shows that something in there is blocked."
     (setq line-num (1+ line-num))
     (dolist (pr shown-prs)
       (insert (propertize
-               (format "      %s #%s %s"
-                       (decknix--layout-pr-indicators pr)
-                       (plist-get pr :number)
-                       (or (plist-get pr :branch) ""))
-               'face (decknix--layout-severity-face
-                      (decknix--layout-pr-severity pr))
+               (decknix--layout-pr-row pr width)
                'decknix-hub-type 'wip
                'decknix-hub-repo (plist-get pr :repo)
                'decknix-hub-number (plist-get pr :number)
@@ -411,10 +452,8 @@ collapsed repo still shows that something in there is blocked."
       (setq line-num (1+ line-num)))
     (dolist (wt shown-wts)
       (insert (propertize
-               (format "      %s%s" (decknix--layout-wt-indicators wt)
-                       (or (plist-get wt :branch) "?"))
-               'face (decknix--layout-severity-face
-                      (decknix--layout-wt-severity wt))
+               (format "    %s   wt %s" (decknix--layout-wt-glyph wt)
+                       (propertize (or (plist-get wt :branch) "?") 'face 'shadow))
                'decknix-layout-worktree wt)
               "\n")
       (setq line-num (1+ line-num)))

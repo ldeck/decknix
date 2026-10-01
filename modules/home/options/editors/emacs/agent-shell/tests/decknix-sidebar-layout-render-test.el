@@ -114,5 +114,77 @@ one can veto on its own."
   (should (equal "pilot/us" (decknix--layout-short-name "*Pi: pilot/us*")))
   (should (equal "" (decknix--layout-short-name nil))))
 
+
+;; --- row width and colour --------------------------------------------
+
+(ert-deftest decknix-layout-render--width-comes-from-the-sidebar-window ()
+  "`window-width' with no argument answers for whichever window is selected
+when the render runs.  Measured 95 against the sidebar's 48, which padded
+every row 47 columns too wide and pushed its right-hand value out of view."
+  (let ((buf (generate-new-buffer " sb")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((win (display-buffer-in-side-window buf '((side . left)))))
+            (should (window-live-p win))
+            (with-selected-window win
+              (ignore-errors (window-resize win (- 40 (window-width win)) t t)))
+            ;; Selected window is NOT the sidebar here, which is the case
+            ;; that broke: the bare call would answer for the other one.
+            (should (= (window-width win) (decknix--layout-sidebar-width)))))
+      (ignore-errors (delete-window (get-buffer-window buf)))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-layout-render--width-falls-back-when-undisplayed ()
+  "A render into a buffer no window is showing must not error."
+  (with-temp-buffer
+    (should (integerp (decknix--layout-sidebar-width)))))
+
+(ert-deftest decknix-layout-render--pr-row-is-not-one-uniform-face ()
+  "The whole row used to be painted a single severity face, which is what
+made draft-versus-conflicting and human-versus-bot unreadable without
+decoding the glyph shapes."
+  (let* ((pr (list :number 240 :repo "upside" :branch "b"
+                   :pr '((title . "ship scenario spec") (draft . t)
+                         (author_kind . "human")
+                         (ci . ((status . "pass"))))))
+         (row (decknix--layout-pr-row pr 48))
+         (faces (let (acc (i 0))
+                  (while (< i (length row))
+                    (push (get-text-property i 'face row) acc)
+                    (setq i (1+ i)))
+                  (delete-dups acc))))
+    (should (> (length faces) 1))))
+
+(ert-deftest decknix-layout-render--pr-row-prefers-the-title-over-the-branch ()
+  (let ((pr (list :number 240 :branch "enhancement/HX-1039-envelope"
+                  :pr '((title . "ship scenario spec")))))
+    (should (string-match-p "ship scenario spec"
+                            (decknix--layout-pr-row pr 60)))))
+
+(ert-deftest decknix-layout-render--pr-row-falls-back-to-the-branch ()
+  "A feed item with no title must still identify its row."
+  (let ((pr (list :number 240 :branch "my-branch" :pr nil)))
+    (should (string-match-p "my-branch" (decknix--layout-pr-row pr 60)))))
+
+(ert-deftest decknix-layout-render--pr-row-never-exceeds-its-width ()
+  "The glyphs are the part worth keeping when space runs out, so the title
+truncates rather than pushing them off the end."
+  (let ((pr (list :number 12345 :branch "b"
+                  :pr (list (cons 'title (make-string 300 ?x))))))
+    (dolist (w '(24 32 48 80))
+      (should (<= (string-width (decknix--layout-pr-row pr w)) w)))))
+
+(ert-deftest decknix-layout-render--worktree-glyph-carries-its-own-face ()
+  "Dirty must be distinguishable from orphaned by colour, not only shape."
+  (let ((dirty (decknix--layout-wt-glyph '(:dirty t)))
+        (orphan (decknix--layout-wt-glyph '(:orphan t))))
+    (should (eq 'warning (get-text-property 0 'face dirty)))
+    (should (eq 'error (get-text-property 0 'face orphan)))))
+
+(ert-deftest decknix-layout-render--dirty-outranks-every-other-condition ()
+  "Uncommitted work is the only state here that can be lost."
+  (should (eq 'dirty (decknix--layout-wt-condition
+                      '(:dirty t :merged t :orphan t :active t)))))
+
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here

@@ -564,30 +564,6 @@ merge, then something waiting on me, then work in flight, then green."
      ((equal decision "APPROVED") 3)
      (t 2))))
 
-(defun decknix--layout-pr-indicators (pr)
-  "Return the compact indicator string for WIP PR.
-
-Distinct symbol families on purpose: CI and review decision would otherwise
-both read as a tick, and a row showing two ticks says nothing about which
-passed."
-  (let* ((p (plist-get pr :pr))
-         (ci (alist-get 'status (alist-get 'ci p)))
-         (decision (alist-get 'review_decision p))
-         (unres (or (alist-get 'unresolved_total p) 0)))
-    (concat
-     (cond ((equal (alist-get 'mergeable p) "CONFLICTING") "⑃")
-           ((eq (alist-get 'draft p) t) "β")
-           (t " "))
-     (cond ((equal ci "pass") "✓")
-           ((equal ci "fail") "✗")
-           ((member ci '("pending" "running")) "◴")
-           (t " "))
-     (cond ((equal decision "APPROVED") "⊕")
-           ((equal decision "CHANGES_REQUESTED") "⊖")
-           ((equal decision "REVIEW_REQUIRED") "⊙")
-           (t " "))
-     (if (> unres 0) (format "◆%d" (min unres 9)) "  "))))
-
 (defun decknix--layout-wt-severity (wt)
   "Return the severity rank of worktree WT."
   (cond
@@ -608,6 +584,33 @@ be lost, so it must not be masked by a merged or orphaned flag."
    ((plist-get wt :merged) "✓ ")
    ((plist-get wt :orphan) "⑂ ")
    (t "◌ ")))
+
+(defconst decknix-sidebar-layout-wt-glyph-faces
+  '((dirty . warning) (active . success) (merged . shadow)
+    (orphan . error) (clean . shadow))
+  "Face per worktree condition.
+
+Each glyph carries its own colour so dirty-versus-orphaned is readable
+without decoding the shape; the row used to be painted a single severity
+face, which made every condition under one repo look alike.")
+
+(defun decknix--layout-wt-condition (wt)
+  "Return the condition symbol for worktree WT.
+
+Dirty outranks everything: uncommitted work is the only state here that
+can be lost, so it must not be masked by a merged or orphaned flag."
+  (cond ((plist-get wt :dirty) 'dirty)
+        ((plist-get wt :active) 'active)
+        ((plist-get wt :merged) 'merged)
+        ((plist-get wt :orphan) 'orphan)
+        (t 'clean)))
+
+(defun decknix--layout-wt-glyph (wt)
+  "Return WT\='s indicator glyph propertized with its own face."
+  (let ((cond- (decknix--layout-wt-condition wt)))
+    (propertize (string-trim-right (decknix--layout-wt-indicators wt))
+                'face (or (alist-get cond- decknix-sidebar-layout-wt-glyph-faces)
+                          'shadow))))
 
 (defun decknix--layout-worst-severity (prs worktrees)
   "Return the worst severity across PRS and WORKTREES, or nil when both empty."

@@ -544,45 +544,6 @@ cannot be actioned into a merge while the conflict stands."
 
 ;; --- PR indicators ----------------------------------------------------
 
-(ert-deftest decknix-layout--ci-and-review-use-different-symbols ()
-  "Both would otherwise read as a tick, and a row with two ticks says
-nothing about which of them passed."
-  (let ((ind (decknix--layout-pr-indicators
-              (decknix-layout-test--pr 'ci '((status . "pass"))
-                                       'review_decision "APPROVED"))))
-    (should (string-match-p "✓" ind))
-    (should (string-match-p "⊕" ind))))
-
-(ert-deftest decknix-layout--indicators-name-each-condition ()
-  (should (string-match-p "⑃" (decknix--layout-pr-indicators
-                               (decknix-layout-test--pr 'mergeable "CONFLICTING"))))
-  (should (string-match-p "β" (decknix--layout-pr-indicators
-                               (decknix-layout-test--pr 'draft t))))
-  (should (string-match-p "✗" (decknix--layout-pr-indicators
-                               (decknix-layout-test--pr 'ci '((status . "fail"))))))
-  (should (string-match-p "◴" (decknix--layout-pr-indicators
-                               (decknix-layout-test--pr 'ci '((status . "pending"))))))
-  (should (string-match-p "◆3" (decknix--layout-pr-indicators
-                                (decknix-layout-test--pr 'unresolved_total 3)))))
-
-(ert-deftest decknix-layout--thread-count-is-capped-to-one-column ()
-  "A three-digit count would shift every column on the row."
-  (should (string-match-p "◆9" (decknix--layout-pr-indicators
-                                (decknix-layout-test--pr 'unresolved_total 40)))))
-
-(ert-deftest decknix-layout--indicator-width-is-constant ()
-  "Columns must not shift between rows, or the list stops being scannable."
-  (let ((w (string-width (decknix--layout-pr-indicators
-                          (decknix-layout-test--pr)))))
-    (dolist (pr (list (decknix-layout-test--pr 'draft t)
-                      (decknix-layout-test--pr 'mergeable "CONFLICTING")
-                      (decknix-layout-test--pr 'ci '((status . "pass"))
-                                               'review_decision "APPROVED"
-                                               'unresolved_total 2)))
-      (should (= w (string-width (decknix--layout-pr-indicators pr)))))))
-
-;; --- worktree indicators ---------------------------------------------
-
 (ert-deftest decknix-layout--dirty-outranks-every-other-worktree-flag ()
   "Uncommitted work is the only state here that can be LOST, so it must not
 be masked by a merged or orphaned flag."
