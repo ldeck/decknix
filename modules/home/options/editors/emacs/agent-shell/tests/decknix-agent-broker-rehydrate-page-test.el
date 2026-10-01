@@ -137,5 +137,40 @@ commits.  Counting those marked all 13 live sessions as working."
   (should (decknix--agent-broker-inflight-p
            (decknix-page-test--log (decknix-page-test--chunk "first")))))
 
+
+;; --- the status check must never read a whole log ---------------------
+
+(ert-deftest decknix-tail--reads-only-the-end-of-the-file ()
+  "The status check runs once per session per sidebar refresh.  Reading
+whole logs cost 452 MB per refresh across 13 open sessions and made Emacs
+unresponsive; the largest single log took 6.8 seconds to read and split."
+  (let ((f (make-temp-file "dk-tail")))
+    (unwind-protect
+        (progn
+          (with-temp-file f
+            (dotimes (i 50000)
+              (insert (format "{\"n\":%d}\n" i))))
+          (let* ((size (file-attribute-size (file-attributes f)))
+                 (lines (decknix--agent-broker-read-log-tail f 4096)))
+            (should (> size 100000))
+            ;; Only the tail, so far fewer lines than the file holds.
+            (should (< (length lines) 1000))
+            ;; And it is the END of the file, not the start.
+            (should (string-match-p "4999" (car (last lines))))))
+      (delete-file f))))
+
+(ert-deftest decknix-tail--a-window-with-no-boundary-reads-as-working ()
+  "Over a bounded window that is the correct inference: a log whose last
+64 KB holds no committed turn has been producing output throughout it."
+  (should (decknix--agent-broker-inflight-p
+           (list (decknix-page-test--chunk "a")
+                 (decknix-page-test--chunk "b")))))
+
+(ert-deftest decknix-tail--an-empty-window-is-not-working ()
+  (should-not (decknix--agent-broker-inflight-p nil)))
+
+(ert-deftest decknix-tail--missing-file-is-nil-not-an-error ()
+  (should-not (decknix--agent-broker-read-log-tail "/nonexistent/x.log")))
+
 (provide 'decknix-agent-broker-rehydrate-page-test)
 ;;; decknix-agent-broker-rehydrate-page-test.el ends here
