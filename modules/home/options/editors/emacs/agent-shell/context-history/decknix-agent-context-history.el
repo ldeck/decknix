@@ -219,6 +219,15 @@ abort the render entirely."
     (skip-chars-backward "\n" body-start)
     (max body-start (point))))
 
+(defcustom decknix-agent-session-history-page-size 2
+  "Window size for `[' / `]' history paging when none was chosen at resume.
+
+Used when a session is resumed with history suppressed: nothing is
+rendered, but paging still needs a step size, and stepping by zero turns
+would make the key appear broken."
+  :type 'integer
+  :group 'decknix)
+
 (defun decknix--agent-session-prepopulate (session-id n)
   "Insert a collapsible Context section with the last N exchanges.
 Inserts just before the prompt, matching the ▶/▼ toggle style of
@@ -249,17 +258,57 @@ operates on the cache without re-reading the on-disk JSON."
                   (- total count) count total)))
     (when all
       (setq decknix--agent-history-cache all)
-      ;; Make N buffer-local so subsequent `[' / `]' paging steps
-      ;; by the same window size the user picked at resume time
-      ;; (e.g. `C-u 5 C-c A s' overrides the default 2).  The
-      ;; render helper reads the current value to compute the
-      ;; window slice, so a global setq here would leak into
-      ;; other buffers.
-      (setq-local decknix-agent-session-history-count count)
-      (decknix--agent-context-render-window cursor)
+      ;; The cache is seeded even at count 0 so `[' can still page history
+      ;; IN on demand: "do not load it" and "cannot reach it" are different
+      ;; asks, and the turns are already parsed by this point.
+      (if (<= count 0)
+          ;; Zero means NO history, not an empty Context header.  Rendering
+          ;; the window regardless inserted a header with nothing under it,
+          ;; which is worse than either outcome -- it looks like the
+          ;; transcript failed to load.  The buffer-local count falls back
+          ;; to the paging size so `[' has a sensible window to step by.
+          (setq-local decknix-agent-session-history-count
+                      (max 1 decknix-agent-session-history-page-size))
+        ;; Make N buffer-local so subsequent `[' / `]' paging steps
+        ;; by the same window size the user picked at resume time
+        ;; (e.g. `C-u 5 C-c A s' overrides the default 2).  The
+        ;; render helper reads the current value to compute the
+        ;; window slice, so a global setq here would leak into
+        ;; other buffers.
+        (setq-local decknix-agent-session-history-count count)
+        (decknix--agent-context-render-window cursor))
       ;; Move point to the prompt so the buffer is immediately
       ;; ready for input, not stuck at the Context header.
       (goto-char (point-max)))))
+
+(defcustom decknix-agent-session-history-cycle '(0 2 5 10)
+  "Values `decknix-agent-session-history-cycle-count' steps through.
+
+0 first, because \"reopen this and tell me nothing\" is a real intent --
+most often when returning to a long session whose history would bury the
+live tail."
+  :type '(repeat integer)
+  :group 'decknix)
+
+;;;###autoload
+(defun decknix-agent-session-history-cycle-count ()
+  "Cycle the default number of exchanges restored when resuming a session.
+
+This IS the workspace-reopen default: `decknix-agent-session-history-count'
+is what the resume path passes to `decknix--agent-session-prepopulate', so
+there is no second setting to keep in step.  A `C-u' prefix on the session
+picker still overrides it for one resume."
+  (interactive)
+  (let* ((cur decknix-agent-session-history-count)
+         (pos (seq-position decknix-agent-session-history-cycle cur))
+         (next (nth (mod (1+ (or pos -1))
+                         (length decknix-agent-session-history-cycle))
+                    decknix-agent-session-history-cycle)))
+    (setq decknix-agent-session-history-count next)
+    (message "Resume history: %s"
+             (if (<= next 0)
+                 "none (page in with `[')"
+               (format "%d exchange%s" next (if (= next 1) "" "s"))))))
 
 (provide 'decknix-agent-context-history)
 ;;; decknix-agent-context-history.el ends here

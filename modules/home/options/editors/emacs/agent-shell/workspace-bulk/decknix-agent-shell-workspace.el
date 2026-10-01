@@ -263,6 +263,7 @@
 (defvar decknix--hub-reviews)
 (defvar decknix-hub-eager-clone-probe)
 (defvar decknix--sidebar-previous-sessions)
+(defvar decknix-agent-session-history-count)
 (declare-function decknix--sidebar-previous-dedupe "decknix-sidebar-previous")
 (declare-function decknix--sidebar-previous-display-name "decknix-sidebar-previous")
 (declare-function decknix--sidebar-previous-history-record
@@ -1111,6 +1112,21 @@ keys.  Press `C-g' to abort."
   (interactive)
   (call-interactively #'decknix-sidebar-toggle-previous-auto-review))
 
+(transient-define-suffix decknix-sidebar-transient--resume-history ()
+  :key "9"
+  :description
+  (lambda ()
+    (format "resume hist   %s"
+            (propertize
+             (let ((n (bound-and-true-p decknix-agent-session-history-count)))
+               (if (or (null n) (<= n 0)) "[none]" (format "[%d]" n)))
+             'face (let ((n (bound-and-true-p decknix-agent-session-history-count)))
+                     (if (or (null n) (<= n 0))
+                         'font-lock-comment-face 'font-lock-constant-face)))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-agent-session-history-cycle-count))
+
 (transient-define-prefix decknix-sidebar-transient--worktrees ()
   "Worktree toggles (nested sub-menu)."
   [:description "Worktree Toggles"
@@ -1168,7 +1184,8 @@ pipeline) moved to Shared rather than disappearing with them."
     (decknix-sidebar-transient--wip-items)        ;; wip items (3)
     (decknix-sidebar-transient--dormant-limit)    ;; dormant (4)
     (decknix-sidebar-transient--repos-behind)     ;; repos behind (5)
-    (decknix-sidebar-transient--wt-hide-stale)]   ;; stale wt (6)
+    (decknix-sidebar-transient--wt-hide-stale)    ;; stale wt (6)
+    (decknix-sidebar-transient--resume-history)]  ;; resume hist (9)
    ["Requests"
     ;; Order matches the sidebar footer: alphabetical text labels
     ;; (age, bots, ci, layout, mention, reviewed, sort) then emoji-led

@@ -216,5 +216,37 @@ to keep the anchor visible."
       (should-not (get-text-property (1- prompt-start) 'invisible))
       (should-not (get-text-property (- prompt-start 2) 'invisible)))))
 
+
+;; --- resume history depth ---------------------------------------------
+;;
+;; Zero used to mean "a Context header with nothing under it", which reads
+;; as a transcript that failed to load rather than as a deliberate choice.
+
+(ert-deftest decknix-history-cycle--starts-at-none ()
+  "0 is first in the cycle because \"reopen this and tell me nothing\" is a
+real intent, most often on a long session whose history buries the live
+tail."
+  (should (= 0 (car decknix-agent-session-history-cycle))))
+
+(ert-deftest decknix-history-cycle--steps-through-and-wraps ()
+  (let ((decknix-agent-session-history-count 0))
+    (dolist (expected (append (cdr decknix-agent-session-history-cycle)
+                              (list (car decknix-agent-session-history-cycle))))
+      (decknix-agent-session-history-cycle-count)
+      (should (= expected decknix-agent-session-history-count)))))
+
+(ert-deftest decknix-history-cycle--an-off-cycle-value-still-advances ()
+  "A value set by `C-u' need not be in the cycle; cycling from it must not
+wedge."
+  (let ((decknix-agent-session-history-count 7))
+    (decknix-agent-session-history-cycle-count)
+    (should (member decknix-agent-session-history-count
+                    decknix-agent-session-history-cycle))))
+
+(ert-deftest decknix-history--paging-size-is-never-zero ()
+  "Suppressed history still needs a step size for `[', or the key looks
+broken."
+  (should (> (max 1 decknix-agent-session-history-page-size) 0)))
+
 (provide 'decknix-agent-context-history-test)
 ;;; decknix-agent-context-history-test.el ends here
