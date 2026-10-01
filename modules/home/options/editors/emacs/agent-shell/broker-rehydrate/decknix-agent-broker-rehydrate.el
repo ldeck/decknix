@@ -299,6 +299,58 @@ marker.  Returns the number of notifications replayed."
           (setq decknix--agent-broker-replay-depth turns)
           (decknix--agent-broker-replay-notifications (cdr page)))))))
 
+(defcustom decknix-agent-broker-inflight-stale-seconds 120
+  "How recently a broker log must have grown for its turn to count as live.
+
+An uncommitted turn alone does not mean the agent is working.  Measured on
+13 live sessions, two held an in-flight turn whose log had not moved in
+104 MINUTES -- a turn abandoned when the bridge went away, not one in
+progress.  Reporting those as `working\=' would be a permanent lie, which is
+worse than the `ready\=' it replaces, so staleness decides."
+  :type 'integer
+  :group 'decknix)
+
+(defun decknix--agent-broker-inflight-p (lines)
+  "Non-nil when LINES end in an uncommitted turn carrying visible content.
+
+Visible content is the test, not merely lines after the boundary: an idle
+session still emits usage and mode updates after its last turn committed,
+and counting those marks every session as working."
+  (let* ((vec (vconcat lines))
+         (n (length vec))
+         (boundary (decknix--agent-broker-boundary-before vec n)))
+    (let ((i (1+ boundary)) (found nil))
+      (while (and (< i n) (null found))
+        (when (decknix--agent-broker-visible-notification
+               (decknix--agent-broker-parse-json-line (aref vec i)))
+          (setq found t))
+        (setq i (1+ i)))
+      found)))
+
+(defun decknix--agent-broker-log-fresh-p (key)
+  "Non-nil when KEY\='s broker log grew within the staleness window."
+  (when-let* ((log (decknix--agent-broker-log-path key))
+              ((file-readable-p log))
+              (mtime (file-attribute-modification-time
+                      (file-attributes log))))
+    (< (float-time (time-subtract (current-time) mtime))
+       decknix-agent-broker-inflight-stale-seconds)))
+
+(defun decknix--agent-broker-working-p (&optional buffer)
+  "Non-nil when BUFFER\='s agent is mid-turn according to its broker log.
+
+Both conditions: an uncommitted turn with visible content, AND a log that
+has grown recently.  Either alone is not evidence -- see
+`decknix-agent-broker-inflight-stale-seconds\='."
+  (with-current-buffer (or buffer (current-buffer))
+    (when-let* (((bound-and-true-p decknix--agent-broker-key))
+                (key decknix--agent-broker-key)
+                ((decknix--agent-broker-live-p key))
+                ((decknix--agent-broker-log-fresh-p key))
+                (lines (decknix--agent-broker-read-log-lines
+                        (decknix--agent-broker-log-path key))))
+      (and (decknix--agent-broker-inflight-p lines) t))))
+
 (defun decknix--agent-broker-can-restore-p (&optional buffer)
   "Non-nil when BUFFER\='s history should come from the broker log.
 

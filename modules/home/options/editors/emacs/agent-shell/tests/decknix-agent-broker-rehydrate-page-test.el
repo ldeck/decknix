@@ -108,5 +108,34 @@ re-announce slash commands on every resume."
                "# client attached")))
     (should (= 1 (length (cdr (decknix--agent-broker-page log 5)))))))
 
+
+;; --- is the agent mid-turn? -------------------------------------------
+
+(ert-deftest decknix-inflight--visible-content-after-the-boundary-is-inflight ()
+  (should (decknix--agent-broker-inflight-p
+           (decknix-page-test--log
+            decknix-page-test--stop
+            (decknix-page-test--chunk "still going")))))
+
+(ert-deftest decknix-inflight--a-committed-turn-is-not-inflight ()
+  (should-not (decknix--agent-broker-inflight-p
+               (decknix-page-test--log
+                (decknix-page-test--chunk "done")
+                decknix-page-test--stop))))
+
+(ert-deftest decknix-inflight--meta-updates-after-a-turn-are-not-inflight ()
+  "An IDLE session keeps emitting usage and mode updates after its turn
+commits.  Counting those marked all 13 live sessions as working."
+  (should-not (decknix--agent-broker-inflight-p
+               (decknix-page-test--log
+                decknix-page-test--stop
+                "{\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"usage_update\"}}}"
+                "{\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"current_mode_update\"}}}"))))
+
+(ert-deftest decknix-inflight--a-log-with-no-boundary-at-all-is-inflight ()
+  "A first turn that has not committed yet."
+  (should (decknix--agent-broker-inflight-p
+           (decknix-page-test--log (decknix-page-test--chunk "first")))))
+
 (provide 'decknix-agent-broker-rehydrate-page-test)
 ;;; decknix-agent-broker-rehydrate-page-test.el ends here
