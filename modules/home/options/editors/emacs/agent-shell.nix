@@ -338,7 +338,11 @@ let
     src = ./agent-shell/review-board;
     # Hard dependency: the group-unanimity rule lives in review-status,
     # and the obvious fallback reports a partly-merged group as finished.
-    packageRequires = [ decknix-hub-review-status-el ];
+    # `session-lifecycle' owns the bulk quit/detach this board shares with
+    # the Session Board -- it is a `require' in decknix-review-board.el, so
+    # it has to be on the load path at build time too.
+    packageRequires = [ decknix-hub-review-status-el
+                        decknix-agent-session-lifecycle-el ];
     extraSiteFiles = [
       "decknix-review-board.el"
     ];
@@ -1914,11 +1918,27 @@ let
   # outgrew per-session browsing -- of 36 live sessions, 5 were reviewing PRs
   # that named other reviewers and 16 PRs that had left the hub queries, and
   # finding them meant cross-referencing three sources by hand.
+  # One implementation of bulk quit/detach, shared by both boards.  The two
+  # copies had already drifted: the Review Board suppressed
+  # `kill-buffer-query-functions' and the Session Board did not, so the same
+  # action prompted per buffer from one board and not the other.
+  decknix-agent-session-lifecycle-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-session-lifecycle";
+    src = ./agent-shell/session-lifecycle;
+    packageRequires = [ ];
+    testFiles = [ "decknix-agent-session-lifecycle-test.el" ];
+  };
+
   decknix-session-board-model-el = mkEmacsTestedPackage {
     pname = "decknix-session-board-model";
     src = ./agent-shell/session-board;
-    # trivialBuild compiles co-resident decknix-session-board.el too.
-    packageRequires = [ decknix-sidebar-layout-el ];
+    # trivialBuild compiles co-resident decknix-session-board.el too, so this
+    # package needs EVERY dependency that file requires -- not only the
+    # model's own.  The build guard caught exactly this: adding
+    # `session-lifecycle' to the sibling alone failed the model's buildPhase
+    # with "Cannot open load file: decknix-agent-session-lifecycle".
+    packageRequires = [ decknix-sidebar-layout-el
+                        decknix-agent-session-lifecycle-el ];
     testFiles = [ "decknix-session-board-model-test.el" ];
   };
 
@@ -1927,7 +1947,8 @@ let
     src = ./agent-shell/session-board;
     # The item-table uses `decknix--layout-pr-key' from the sidebar model.
     # Tests and runtime both need it loaded, not merely forward-declared.
-    packageRequires = [ decknix-session-board-model-el decknix-sidebar-layout-el ];
+    packageRequires = [ decknix-session-board-model-el decknix-sidebar-layout-el
+                        decknix-agent-session-lifecycle-el ];
     testFiles = [ "decknix-session-board-test.el" ];
   };
 
@@ -3347,6 +3368,7 @@ in
           decknix-agent-resume-command-el
           decknix-agent-jump-target-el
           decknix-agent-input-ring-el
+          decknix-agent-session-lifecycle-el
           decknix-session-board-model-el
           decknix-session-board-el
           decknix-sidebar-layout-el
@@ -4359,6 +4381,7 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; already carries it upstream.
         (put 'browse-url-safari 'browse-url-browser-kind 'external)
 
+        (require 'decknix-agent-session-lifecycle)
         (require 'decknix-session-board-model)
         (require 'decknix-session-board)
 

@@ -38,6 +38,7 @@
 ;;; Code:
 
 (require 'decknix-review-board-model)
+(require 'decknix-agent-session-lifecycle)
 
 (declare-function decknix--hub-review-pr-key "decknix-hub-review-identity" (repo number))
 (declare-function decknix--hub-review-find-item "decknix-hub-review-status" (items repo number))
@@ -663,25 +664,14 @@ reading before rather than after."
                 'quit (decknix-review-board--targets)))
          (bufs (decknix-review-board--session-buffers (car part))))
     (unless bufs (user-error "No live sessions to quit"))
-    (when (yes-or-no-p (format "Quit %d session%s and terminate their brokers? "
-                               (length bufs) (if (= 1 (length bufs)) "" "s")))
-      (let ((others (delq nil
-                          (mapcar (lambda (b)
-                                    (unless (memq b bufs)
-                                      (buffer-local-value 'decknix--agent-broker-key b)))
-                                  (agent-shell-buffers)))))
-        (dolist (buf bufs)
-          (let ((key (buffer-local-value 'decknix--agent-broker-key buf)))
-            ;; Same shared-broker guard the single-session quit uses, so
-            ;; a broker another buffer is attached to survives here too.
-            (when (and (fboundp 'decknix--agent-broker-stop-p)
-                       (decknix--agent-broker-stop-p key others))
-              (ignore-errors (decknix-agent-broker-stop key))))
-          (let ((kill-buffer-query-functions nil))
-            (kill-buffer buf))))
+    ;; Confirmation, the broker-stop rule and the kill all live in
+    ;; `decknix-agent-session-lifecycle', shared with the Session Board.  The
+    ;; two copies had already drifted -- this one suppressed
+    ;; `kill-buffer-query-functions' and the other did not.
+    (when-let ((n (decknix-session-lifecycle-quit bufs)))
       (decknix-review-board-unmark-all)
       (decknix-review-board-refresh)
-      (decknix-review-board--report "Quit" (length bufs) (length (cdr part))))))
+      (decknix-review-board--report "Quit" n (length (cdr part))))))
 
 (defun decknix-review-board-detach-sessions ()
   "Detach the target sessions, leaving their agents running.
@@ -691,12 +681,10 @@ No confirmation: detaching is reversible, and the agent keeps working."
                 'detach (decknix-review-board--targets)))
          (bufs (decknix-review-board--session-buffers (car part))))
     (unless bufs (user-error "No live sessions to detach"))
-    (dolist (buf bufs)
-      (let ((kill-buffer-query-functions nil))
-        (kill-buffer buf)))
-    (decknix-review-board-unmark-all)
-    (decknix-review-board-refresh)
-    (decknix-review-board--report "Detached" (length bufs) (length (cdr part)))))
+    (let ((n (decknix-session-lifecycle-detach bufs)))
+      (decknix-review-board-unmark-all)
+      (decknix-review-board-refresh)
+      (decknix-review-board--report "Detached" n (length (cdr part))))))
 
 (defvar decknix-review-board-merge-command "/merge-train"
   "Command the board hands a merge plan to.

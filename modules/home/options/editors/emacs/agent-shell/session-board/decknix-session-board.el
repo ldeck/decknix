@@ -26,6 +26,7 @@
 ;;; Code:
 
 (require 'decknix-session-board-model)
+(require 'decknix-agent-session-lifecycle)
 (require 'decknix-sidebar-layout)
 (require 'seq)
 (require 'subr-x)
@@ -103,7 +104,7 @@ Review Board does with its `%-28s' columns."
     (let ((summary (decknix-session-board-summary decknix-session-board--groups)))
       (insert (propertize (format " Sessions: %s\n" (or summary "none live"))
                           'face 'font-lock-keyword-face))
-      (insert (propertize " m mark  u unmark  M lane  k kill  K kill cleanup  RET jump  g refresh  ? help\n"
+      (insert (propertize " m/u mark  M lane  C cleanup  k kill  D detach  RET jump  g refresh  ? help\n"
                           'face 'font-lock-comment-face)))
     (dolist (group decknix-session-board--groups)
       (let ((lane (car group)) (rows (cdr group)))
@@ -245,25 +246,37 @@ than `kill-buffer'; a broker another live session is attached to survives."
                                         (plist-get r :lane)))
                                      rows))))
     (unless live (user-error "No live sessions selected"))
+    ;; Lanes are named in the prompt because the set may span them, and
+    ;; "quit 9 sessions" reads very differently from "quit 9 sessions
+    ;; (Orphaned)".  The quit itself is the shared implementation.
     (when (yes-or-no-p
            (format "Quit %d session%s (%s) and terminate their brokers? "
                    (length live) (if (= 1 (length live)) "" "s")
                    (string-join lanes ", ")))
-      (let ((others (delq nil
-                          (mapcar (lambda (b)
-                                    (unless (memq b live)
-                                      (buffer-local-value
-                                       'decknix--agent-broker-key b)))
-                                  (agent-shell-buffers)))))
-        (dolist (buf live)
-          (let ((key (buffer-local-value 'decknix--agent-broker-key buf)))
-            (when (and key (fboundp 'decknix--agent-broker-stop-p)
-                       (decknix--agent-broker-stop-p key others))
-              (ignore-errors (decknix-agent-broker-stop key))))
-          (remhash (buffer-name buf) (decknix-session-board--marks-table))
-          (ignore-errors (kill-buffer buf))))
-      (decknix-session-board--render)
-      (message "Quit %d session%s" (length live) (if (= 1 (length live)) "" "s")))))
+      (let ((names (mapcar #'buffer-name live))
+            (n (decknix-session-lifecycle-quit live t)))
+        (dolist (nm names) (remhash nm (decknix-session-board--marks-table)))
+        (decknix-session-board--render)
+        (message "Quit %d session%s" (or n 0) (if (= 1 (or n 0)) "" "s"))))))
+
+(defun decknix-session-board-detach ()
+  "Detach the marked sessions, or the one at point, leaving agents running.
+
+Free to offer now the implementation is shared: the Review Board already
+had `D' for this, and a session board without it would send the user back
+there for half a lifecycle."
+  (interactive)
+  (let* ((rows (decknix-session-board--targets))
+         (bufs (delq nil (mapcar (lambda (r) (get-buffer (plist-get r :buffer)))
+                                 rows)))
+         (names (mapcar (lambda (b) (buffer-name b))
+                        (seq-filter #'buffer-live-p bufs)))
+         (n (decknix-session-lifecycle-detach bufs)))
+    (when (zerop n) (user-error "No live sessions selected"))
+    (dolist (nm names) (remhash nm (decknix-session-board--marks-table)))
+    (decknix-session-board--render)
+    (message "Detached %d session%s (agents still running)"
+             n (if (= 1 n) "" "s"))))
 
 (defun decknix-session-board-help ()
   "Describe the lanes and keys."
@@ -294,6 +307,7 @@ than `kill-buffer'; a broker another live session is attached to survives."
     (define-key map (kbd "M") #'decknix-session-board-mark-lane)
     (define-key map (kbd "C") #'decknix-session-board-mark-cleanup)
     (define-key map (kbd "k") #'decknix-session-board-kill)
+    (define-key map (kbd "D") #'decknix-session-board-detach)
     (define-key map (kbd "g") #'decknix-session-board-refresh)
     (define-key map (kbd "q") #'quit-window)
     (define-key map (kbd "?") #'decknix-session-board-help)
