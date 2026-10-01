@@ -26,6 +26,7 @@
 ;;; Code:
 
 (require 'decknix-session-board-model)
+(require 'decknix-sidebar-layout)
 (require 'seq)
 (require 'subr-x)
 
