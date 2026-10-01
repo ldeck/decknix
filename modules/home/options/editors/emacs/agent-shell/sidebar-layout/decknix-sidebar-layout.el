@@ -431,25 +431,44 @@ which would hide the sharing."
                 :prs (seq-remove (lambda (p) (memq p claimed-prs)) all-prs)))))
 
 (defun decknix--layout-group-claims (worktrees prs)
-  "Return (:repo R :prs N :worktrees N) per repo across WORKTREES and PRS."
+  "Return per-repo claim groups across WORKTREES and PRS.
+
+Each group carries the ITEMS as well as their counts, because a count alone
+cannot say whether anything in there is blocked -- which is the whole point
+of the indicators."
   (let ((by-repo (make-hash-table :test 'equal)))
     (dolist (wt worktrees)
       (let* ((short (car (last (split-string (or (plist-get wt :repo) "?") "/" t))))
              (e (gethash short by-repo)))
         (puthash short (list :repo short
                              :worktrees (1+ (or (plist-get e :worktrees) 0))
-                             :prs (or (plist-get e :prs) 0))
+                             :prs (or (plist-get e :prs) 0)
+                             :wt-items (cons wt (plist-get e :wt-items))
+                             :pr-items (plist-get e :pr-items))
                  by-repo)))
     (dolist (pr prs)
       (let* ((short (car (last (split-string (or (plist-get pr :repo) "?") "/" t))))
              (e (gethash short by-repo)))
         (puthash short (list :repo short
                              :worktrees (or (plist-get e :worktrees) 0)
-                             :prs (1+ (or (plist-get e :prs) 0)))
+                             :prs (1+ (or (plist-get e :prs) 0))
+                             :wt-items (plist-get e :wt-items)
+                             :pr-items (cons pr (plist-get e :pr-items)))
                  by-repo)))
     (let (out)
-      (maphash (lambda (_k v) (push v out)) by-repo)
-      (sort out (lambda (a b) (string< (plist-get a :repo) (plist-get b :repo)))))))
+      (maphash (lambda (_k v)
+                 (push (plist-put v :severity
+                                  (decknix--layout-worst-severity
+                                   (plist-get v :pr-items)
+                                   (plist-get v :wt-items)))
+                       out))
+               by-repo)
+      (sort out (lambda (a b)
+                  (let ((sa (or (plist-get a :severity) 9))
+                        (sb (or (plist-get b :severity) 9)))
+                    (if (/= sa sb)
+                        (< sa sb)
+                      (string< (plist-get a :repo) (plist-get b :repo)))))))))
 
 (defun decknix--layout-dormant-by-repo (dormant)
   "Group DORMANT work by repo for rendering.
@@ -481,6 +500,120 @@ which belong together."
 (defun decknix--layout-pr-sessions (sessions key)
   "Return the SESSIONS whose review PRs include KEY."
   (seq-filter (lambda (s) (member key (decknix--layout-session-prs s))) sessions))
+
+;; --- state indicators -------------------------------------------------
+;;
+;; The refactor lost these.  Session rows rendered in `default' and nested
+;; work as a grey repo name, so at the sidebar's 48 columns -- where the
+;; trailing status word is off-screen -- there was nothing left to read state
+;; from.  Colour plus a left-hand glyph has to carry it.
+
+(defconst decknix-sidebar-layout-state-faces
+  '(("netfail"  . (:foreground "#ff5f5f" :weight bold))
+    ("waiting"  . (:foreground "#ff5f5f" :weight bold))
+    ("asking"   . (:foreground "#ffaf5f" :weight bold))
+    ("working"  . (:foreground "#d7af5f"))
+    ("finished" . (:foreground "#5fd7d7"))
+    ("ready"    . (:foreground "#87af87"))
+    ("closing"  . (:inherit font-lock-comment-face)))
+  "Face per session state.
+
+The first four are copied from `decknix--hub-request-session-faces' so the
+sidebar and the Requests row indicator cannot disagree about what a colour
+means; `finished', `ready' and `closing' extend it, because the sidebar
+shows idle sessions and that indicator does not.")
+
+(defun decknix--layout-state-face (state)
+  "Return the face for session STATE."
+  (or (alist-get state decknix-sidebar-layout-state-faces nil nil #'equal)
+      'default))
+
+;; Severity ranks, low is worse.  A repo row takes the worst rank among its
+;; children, which is how one line can stand in for several without hiding a
+;; problem.
+(defconst decknix-sidebar-layout-severity-faces
+  '((0 . (:foreground "#ff5f5f" :weight bold))   ; blocked
+    (1 . (:foreground "#ffaf5f" :weight bold))   ; wants me
+    (2 . (:foreground "#d7af5f"))                ; in flight
+    (3 . (:foreground "#87af87"))                ; green
+    (4 . (:inherit font-lock-comment-face)))     ; muted
+  "Face per severity rank.")
+
+(defun decknix--layout-severity-face (rank)
+  "Return the face for severity RANK."
+  (or (alist-get (or rank 4) decknix-sidebar-layout-severity-faces)
+      'default))
+
+(defun decknix--layout-pr-severity (pr)
+  "Return the severity rank of WIP PR, low being worse.
+
+Order of precedence is the order a human triages in: something blocking the
+merge, then something waiting on me, then work in flight, then green."
+  (let* ((p (plist-get pr :pr))
+         (draft (eq (alist-get 'draft p) t))
+         (conflict (equal (alist-get 'mergeable p) "CONFLICTING"))
+         (decision (alist-get 'review_decision p))
+         (ci (alist-get 'status (alist-get 'ci p)))
+         (unres (or (alist-get 'unresolved_total p) 0))
+         (needs (eq (alist-get 'needs_reply p) t)))
+    (cond
+     ((or conflict (equal ci "fail") (equal decision "CHANGES_REQUESTED")) 0)
+     ((or (> unres 0) needs) 1)
+     (draft 4)
+     ((or (equal ci "pending") (equal ci "running")) 2)
+     ((equal decision "APPROVED") 3)
+     (t 2))))
+
+(defun decknix--layout-pr-indicators (pr)
+  "Return the compact indicator string for WIP PR.
+
+Distinct symbol families on purpose: CI and review decision would otherwise
+both read as a tick, and a row showing two ticks says nothing about which
+passed."
+  (let* ((p (plist-get pr :pr))
+         (ci (alist-get 'status (alist-get 'ci p)))
+         (decision (alist-get 'review_decision p))
+         (unres (or (alist-get 'unresolved_total p) 0)))
+    (concat
+     (cond ((equal (alist-get 'mergeable p) "CONFLICTING") "⑃")
+           ((eq (alist-get 'draft p) t) "β")
+           (t " "))
+     (cond ((equal ci "pass") "✓")
+           ((equal ci "fail") "✗")
+           ((member ci '("pending" "running")) "◴")
+           (t " "))
+     (cond ((equal decision "APPROVED") "⊕")
+           ((equal decision "CHANGES_REQUESTED") "⊖")
+           ((equal decision "REVIEW_REQUIRED") "⊙")
+           (t " "))
+     (if (> unres 0) (format "◆%d" (min unres 9)) "  "))))
+
+(defun decknix--layout-wt-severity (wt)
+  "Return the severity rank of worktree WT."
+  (cond
+   ((plist-get wt :dirty) 1)
+   ((plist-get wt :active) 2)
+   ((plist-get wt :merged) 3)
+   ((plist-get wt :orphan) 4)
+   (t 2)))
+
+(defun decknix--layout-wt-indicators (wt)
+  "Return the indicator string for worktree WT.
+
+Dirty outranks everything: uncommitted work is the only state here that can
+be lost, so it must not be masked by a merged or orphaned flag."
+  (cond
+   ((plist-get wt :dirty) "✎ ")
+   ((plist-get wt :active) "● ")
+   ((plist-get wt :merged) "✓ ")
+   ((plist-get wt :orphan) "⑂ ")
+   (t "◌ ")))
+
+(defun decknix--layout-worst-severity (prs worktrees)
+  "Return the worst severity across PRS and WORKTREES, or nil when both empty."
+  (let ((ranks (append (mapcar #'decknix--layout-pr-severity prs)
+                       (mapcar #'decknix--layout-wt-severity worktrees))))
+    (when ranks (apply #'min ranks))))
 
 ;; --- labels -----------------------------------------------------------
 
