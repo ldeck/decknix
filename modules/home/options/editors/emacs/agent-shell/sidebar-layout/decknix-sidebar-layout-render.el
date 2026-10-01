@@ -356,7 +356,7 @@ hiding the sharing."
       (decknix--sidebar-render-section-header
        (format "WIP (%d)" (length wip)) 'wip-sessions)
       (setq line-num (1+ line-num))
-      (dolist (row (plist-get tree :sessions))
+      (dolist (row (decknix--layout-dedup-claims (plist-get tree :sessions)))
         (let* ((session (plist-get row :session))
                (state (nth 3 session))
                (name (decknix--layout-short-name (nth 0 session)))
@@ -422,6 +422,25 @@ window, since the glyphs are the part worth keeping when space runs out."
 
 The repo line takes its colour from the WORST item beneath it, so a
 collapsed repo still shows that something in there is blocked."
+  (if (plist-get claim :duplicate)
+      (decknix--layout-render-duplicate-claim line-num width claim session)
+    (decknix--layout-render-claim-1 line-num width claim session)))
+
+(defun decknix--layout-render-duplicate-claim (line-num width claim session)
+  "Render CLAIM as one line, its items having been shown under an earlier
+session.  Keeps the sharing visible without repeating the whole subtree."
+  (let* ((left (format "    ⇡ %s" (plist-get claim :repo)))
+         (right "shared ↑")
+         (pad (max 1 (- width (string-width left) (string-width right)))))
+    (insert (propertize (concat left (make-string pad ?\s) right)
+                        'face 'font-lock-comment-face
+                        'decknix-layout-claim claim
+                        'decknix-layout-session session)
+            "\n")
+    (1+ line-num)))
+
+(defun decknix--layout-render-claim-1 (line-num width claim session)
+  "Render CLAIM and its nested items.  Returns LINE-NUM."
   (let* ((prs (plist-get claim :pr-items))
          (wts (plist-get claim :wt-items))
          (left (format "    ⇡ %s" (plist-get claim :repo)))

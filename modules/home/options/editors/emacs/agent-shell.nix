@@ -1987,7 +1987,10 @@ let
     pname = "decknix-repo-sync";
     src = ./agent-shell/repo-sync;
     packageRequires = [ ];
-    testFiles = [ "decknix-repo-sync-test.el" ];
+    testFiles = [
+      "decknix-repo-sync-test.el"
+      "decknix-repo-sync-collapse-test.el"
+    ];
   };
 
   # Cache + remedies (clear stale lock, retry one repo, visit, resweep) and the

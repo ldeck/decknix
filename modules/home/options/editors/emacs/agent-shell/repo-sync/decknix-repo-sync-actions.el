@@ -189,6 +189,8 @@ full report with one row."
     ('failed 'decknix-repo-sync-failed-face)
     (_ 'font-lock-comment-face)))
 
+(defvar decknix--repo-sync-failed-expanded)
+
 (defun decknix--repo-sync-render (line-num)
   "Render the repo-sync problem section.  Returns the updated LINE-NUM.
 
@@ -196,8 +198,13 @@ Kicks off a cache refresh when the report has aged out, so the section is
 never rendered from the filesystem on the paint path."
   (when (decknix-repo-sync-report-stale-p)
     (decknix-repo-sync-refresh))
-  (let ((problems (decknix-repo-sync-problems)))
-    (when problems
+  (let* ((all (decknix-repo-sync-problems))
+         (split (decknix--repo-sync-collapse
+                 all decknix-repo-sync-collapse-failed
+                 decknix--repo-sync-failed-expanded))
+         (problems (car split))
+         (collapsed (cdr split)))
+    (when all
       (insert "\n")
       (setq line-num (1+ line-num))
       (decknix--sidebar-render-section-header
@@ -212,8 +219,29 @@ never rendered from the filesystem on the paint path."
                               'decknix-repo-sync-problem problem
                               'help-echo (or (plist-get problem :detail) ""))
                   "\n")
-          (setq line-num (1+ line-num))))))
+          (setq line-num (1+ line-num))))
+      (when collapsed
+        (insert (propertize
+                 (concat "  " (decknix--repo-sync-collapsed-label collapsed))
+                 'face (decknix--repo-sync-face 'failed)
+                 'decknix-repo-sync-collapsed collapsed
+                 'help-echo "RET to expand these repos")
+                "\n")
+        (setq line-num (1+ line-num)))))
   line-num)
+
+(defvar decknix--repo-sync-failed-expanded nil
+  "Non-nil when the collapsed `failed' rows are shown individually.")
+
+(defun decknix-repo-sync-toggle-failed-expanded ()
+  "Show or re-collapse the individual `failed' repo rows."
+  (interactive)
+  (setq decknix--repo-sync-failed-expanded
+        (not decknix--repo-sync-failed-expanded))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (ignore-errors (agent-shell-workspace-sidebar-refresh)))
+  (message "Sync failures: %s"
+           (if decknix--repo-sync-failed-expanded "expanded" "collapsed")))
 
 (defun decknix-repo-sync-problem-at-point ()
   "Return the repo-sync problem on the current row, or nil."

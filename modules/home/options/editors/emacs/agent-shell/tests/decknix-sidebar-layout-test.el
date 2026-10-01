@@ -598,5 +598,51 @@ whole point of the indicators."
   (should (equal "3 pr 2 wt" (decknix--layout-count-label 3 2)))
   (should (equal "" (decknix--layout-count-label 0 0))))
 
+
+;; --- shared repo claims -----------------------------------------------
+
+(ert-deftest decknix-layout--a-repo-claimed-twice-is-marked-not-repeated ()
+  "Two sessions sharing a workspace both claim its repos, and the full
+PR/worktree subtree was rendered once per session -- six identical rows
+twice."
+  (let* ((rows (list (list :repos (list (list :repo "upside")))
+                     (list :repos (list (list :repo "upside")))))
+         (out (decknix--layout-dedup-claims rows)))
+    (should-not (plist-get (car (plist-get (nth 0 out) :repos)) :duplicate))
+    (should (plist-get (car (plist-get (nth 1 out) :repos)) :duplicate))))
+
+(ert-deftest decknix-layout--the-duplicate-claim-is-kept-not-dropped ()
+  "The sharing is worth stating; the render collapses it to one line
+rather than hiding that two sessions are on the same repo."
+  (let* ((rows (list (list :repos (list (list :repo "upside")))
+                     (list :repos (list (list :repo "upside")))))
+         (out (decknix--layout-dedup-claims rows)))
+    (should (= 1 (length (plist-get (nth 1 out) :repos))))))
+
+(ert-deftest decknix-layout--distinct-repos-are-both-first ()
+  (let* ((rows (list (list :repos (list (list :repo "a")))
+                     (list :repos (list (list :repo "b")))))
+         (out (decknix--layout-dedup-claims rows)))
+    (should-not (plist-get (car (plist-get (nth 1 out) :repos)) :duplicate))))
+
+(ert-deftest decknix-layout--dedup-does-not-mutate-its-input ()
+  "The tree is rebuilt per render but shared with the model; marking the
+caller\='s plists would make the FIRST session show as a duplicate on the
+next paint."
+  (let* ((claim (list :repo "upside"))
+         (rows (list (list :repos (list claim))
+                     (list :repos (list claim)))))
+    (decknix--layout-dedup-claims rows)
+    (should-not (plist-get claim :duplicate))))
+
+(ert-deftest decknix-layout--dedup-is-stable-across-repeated-calls ()
+  "A render runs on every refresh; the second must mark the same claim."
+  (let* ((rows (list (list :repos (list (list :repo "upside")))
+                     (list :repos (list (list :repo "upside"))))))
+    (dotimes (_ 3)
+      (let ((out (decknix--layout-dedup-claims rows)))
+        (should-not (plist-get (car (plist-get (nth 0 out) :repos)) :duplicate))
+        (should (plist-get (car (plist-get (nth 1 out) :repos)) :duplicate))))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here

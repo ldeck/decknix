@@ -5405,6 +5405,8 @@ in-menu `S Session…' entry both route here."
 
 (declare-function decknix-repo-sync-row-action
                   "decknix-repo-sync-actions" ())
+(declare-function decknix-repo-sync-toggle-failed-expanded
+                  "decknix-repo-sync-actions" ())
 
 (defun decknix-sidebar-ret ()
   "Open the action menu for the row at point.
@@ -5418,6 +5420,8 @@ directly — see `decknix-sidebar-primary-action'."
          (type (alist-get 'decknix-hub-type ctx))
          (repo-problem (get-text-property (line-beginning-position)
                                           'decknix-repo-sync-problem))
+         (repo-collapsed (get-text-property (line-beginning-position)
+                                            'decknix-repo-sync-collapsed))
          (cmd (pcase type
                 ('review            #'decknix-sidebar-request-menu)
                 ('wip               #'decknix-sidebar-wip-menu)
@@ -5440,6 +5444,9 @@ directly — see `decknix-sidebar-primary-action'."
      ;; through to a goto that has no branch for them either -- RET on a
      ;; stale lock did nothing at all, while the remedies to offer had
      ;; been written and simply never bound.
+     ((and repo-collapsed
+           (fboundp 'decknix-repo-sync-toggle-failed-expanded))
+      (call-interactively #'decknix-repo-sync-toggle-failed-expanded))
      ((and repo-problem (fboundp 'decknix-repo-sync-row-action))
       (call-interactively #'decknix-repo-sync-row-action))
      (t
