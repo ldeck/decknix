@@ -1196,6 +1196,7 @@ pipeline) moved to Shared rather than disappearing with them."
     (decknix-sidebar-transient--ci-filter)        ;; ci (C)
     (decknix-sidebar-transient--requests-display-mode) ;; Layout (d)
     (decknix-sidebar-transient--mention-filter)   ;; mention (@)
+    (decknix-sidebar-transient--req-not-mine)     ;; not mine (r)
     (decknix-sidebar-transient--req-reviewed)     ;; reviewed (R)
     (decknix-sidebar-transient--req-sort)         ;; sort (s)
     (decknix-sidebar-transient--req-my-replies)   ;; ↩ (M)
