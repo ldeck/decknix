@@ -33,6 +33,8 @@
 
 ;;; Code:
 
+(require 'seq)
+
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -47,6 +49,35 @@
 (declare-function decknix--agent-session-derive-name
                   "decknix-agent-session-format"
                   (tags &optional workspace branch first-message sid))
+
+(defvar decknix-sidebar-show-previous nil
+  "When non-nil, render the Previous section in the sidebar.
+
+Off by default.  Previous is a history, not a queue: `C-c s s' finds any
+of it on demand, and at 40 entries the section was pushing the sections
+that need action off screen.  Toggle with `decknix-sidebar-toggle-previous'.")
+
+(defvar decknix-sidebar-previous-hide-auto-review t
+  "When non-nil (default), omit auto-dispatched review sessions from Previous.
+
+They are the bulk of it and the least worth resuming: 33 of 40 entries
+measured on a live workspace, each an `auto' review of a PR that has since
+moved on.  A session I started myself is the one I might want back.")
+
+(defun decknix--sidebar-previous-auto-review-p (entry)
+  "Return non-nil when ENTRY is an auto-dispatched review session.
+
+Requires BOTH `auto' and `review' tags.  `review' alone is a review
+session I started deliberately -- from the sidebar or a pasted URL -- and
+that is exactly the kind worth keeping in a history."
+  (let ((tags (alist-get 'tags entry)))
+    (and (member "auto" tags) (member "review" tags) t)))
+
+(defun decknix--sidebar-previous-visible (entries)
+  "Return ENTRIES filtered by the Previous display options."
+  (if decknix-sidebar-previous-hide-auto-review
+      (seq-remove #'decknix--sidebar-previous-auto-review-p entries)
+    entries))
 
 (defvar decknix--sidebar-previous-sessions nil
   "List of sessions that were live when Emacs last exited.
