@@ -24,7 +24,7 @@
 (defvar decknix--hub-reviews nil)
 
 (ert-deftest decknix-layout-render--feed-items-obey-the-request-filters ()
-  "Every item passes through all four filters, not none of them."
+  "Every item passes through all five filters, not none of them."
   (let ((decknix--hub-reviews
          '((items . (((repo . "o/a") (number . 1))
                      ((repo . "o/b") (number . 2))
@@ -36,6 +36,8 @@
               ((symbol-function 'decknix--hub-requests-draft-visible-p)
                (lambda (_i) t))
               ((symbol-function 'decknix--hub-requests-conflict-visible-p)
+               (lambda (_i) t))
+              ((symbol-function 'decknix--hub-requests-not-mine-visible-p)
                (lambda (_i) t)))
       (should (equal '(3) (mapcar (lambda (i) (alist-get 'number i))
                                   (decknix--layout-feed-items)))))))
@@ -46,7 +48,8 @@ one can veto on its own."
   (dolist (vetoer '(decknix--hub-requests-attention-visible-p
                     decknix--hub-requests-reviewed-visible-p
                     decknix--hub-requests-draft-visible-p
-                    decknix--hub-requests-conflict-visible-p))
+                    decknix--hub-requests-conflict-visible-p
+                    decknix--hub-requests-not-mine-visible-p))
     (let ((decknix--hub-reviews '((items . (((repo . "o/a") (number . 1)))))))
       (cl-letf (((symbol-function 'decknix--hub-requests-attention-visible-p)
                  (lambda (_i) t))
@@ -55,6 +58,8 @@ one can veto on its own."
                 ((symbol-function 'decknix--hub-requests-draft-visible-p)
                  (lambda (_i) t))
                 ((symbol-function 'decknix--hub-requests-conflict-visible-p)
+                 (lambda (_i) t))
+                ((symbol-function 'decknix--hub-requests-not-mine-visible-p)
                  (lambda (_i) t)))
         (should (= 1 (length (decknix--layout-feed-items))))
         (cl-letf (((symbol-function vetoer) (lambda (_i) nil)))
