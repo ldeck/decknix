@@ -416,6 +416,22 @@ workspace and dropped from the saved Sessions list."
   (message "Sessions: unresolved/vanished workspace rows %s"
            (if decknix--sidebar-sessions-hide-unknown "hidden" "shown")))
 
+(defun decknix-sidebar-toggle-previous ()
+  "Show or hide the Previous section."
+  (interactive)
+  (setq decknix-sidebar-show-previous (not decknix-sidebar-show-previous))
+  (decknix--sidebar-refresh-now)
+  (message "Previous: %s" (if decknix-sidebar-show-previous "shown" "hidden")))
+
+(defun decknix-sidebar-toggle-previous-auto-review ()
+  "Toggle whether auto-dispatched review sessions appear in Previous."
+  (interactive)
+  (setq decknix-sidebar-previous-hide-auto-review
+        (not decknix-sidebar-previous-hide-auto-review))
+  (decknix--sidebar-refresh-now)
+  (message "Previous: auto reviews %s"
+           (if decknix-sidebar-previous-hide-auto-review "hidden" "shown")))
+
 (defun decknix-sidebar-toggle-saved-sessions ()
   "Toggle visibility of the saved Sessions section in the sidebar."
   (interactive)

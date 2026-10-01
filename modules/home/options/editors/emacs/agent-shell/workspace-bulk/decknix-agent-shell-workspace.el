@@ -1083,6 +1083,34 @@ keys.  Press `C-g' to abort."
   (interactive)
   (call-interactively #'decknix-hub-wt-toggle-hide-stale))
 
+(transient-define-suffix decknix-sidebar-transient--show-previous ()
+  :key "7"
+  :description
+  (lambda ()
+    (format "previous      %s"
+            (propertize (if (bound-and-true-p decknix-sidebar-show-previous)
+                            "[shown]" "[hidden]")
+                        'face (if (bound-and-true-p decknix-sidebar-show-previous)
+                                  'font-lock-constant-face
+                                'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-sidebar-toggle-previous))
+
+(transient-define-suffix decknix-sidebar-transient--previous-auto-review ()
+  :key "8"
+  :description
+  (lambda ()
+    (format "prev reviews  %s"
+            (propertize
+             (if (bound-and-true-p decknix-sidebar-previous-hide-auto-review)
+                 "[hidden]" "[shown]")
+             'face (if (bound-and-true-p decknix-sidebar-previous-hide-auto-review)
+                       'font-lock-comment-face 'font-lock-constant-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-sidebar-toggle-previous-auto-review))
+
 (transient-define-prefix decknix-sidebar-transient--worktrees ()
   "Worktree toggles (nested sub-menu)."
   [:description "Worktree Toggles"
@@ -1189,7 +1217,9 @@ pipeline) moved to Shared rather than disappearing with them."
     (decknix-sidebar-transient--sessions-display-mode) ;; display (d)
     (decknix-sidebar-transient--sessions-hide-live)    ;; live-backed (V)
     (decknix-sidebar-transient--show-saved-sessions)   ;; saved (h)
-    (decknix-sidebar-transient--sessions-hide-unknown)];; unknown-ws (U)
+    (decknix-sidebar-transient--sessions-hide-unknown) ;; unknown-ws (U)
+    (decknix-sidebar-transient--show-previous)         ;; previous (7)
+    (decknix-sidebar-transient--previous-auto-review)] ;; prev reviews (8)
    ["Worktrees"
     ("w" "Worktrees..." decknix-sidebar-transient--worktrees)]]
   ["" ("?" "describe key" decknix-sidebar-toggles-describe-key)
@@ -6231,15 +6261,21 @@ Returns updated LINE-NUM."
          ;; OR conv-key — a live buffer may hold a newer snapshot
          ;; than the saved stored-sid), then collapse duplicates
          ;; sharing a conv-key down to one row.
-         (prev (decknix--sidebar-previous-dedupe
-                (seq-filter
-                 (lambda (entry)
-                   (let ((sid (alist-get 'session-id entry))
-                         (ck (alist-get 'conv-key entry)))
-                     (and (not (member sid live-sids))
-                          (not (and ck (member ck live-conv-keys))))))
-                 decknix--sidebar-previous-sessions))))
-    (when prev
+         ;; `-visible' drops auto-dispatched reviews (33 of 40 entries
+         ;; measured), applied AFTER the live/dup filters so it only ever
+         ;; removes rows that would otherwise have been rendered.
+         (prev (decknix--sidebar-previous-visible
+                (decknix--sidebar-previous-dedupe
+                 (seq-filter
+                  (lambda (entry)
+                    (let ((sid (alist-get 'session-id entry))
+                          (ck (alist-get 'conv-key entry)))
+                      (and (not (member sid live-sids))
+                           (not (and ck (member ck live-conv-keys))))))
+                  decknix--sidebar-previous-sessions)))))
+    ;; Off by default: Previous is a history, not a queue, and `C-c s s'
+    ;; finds any of it on demand.
+    (when (and decknix-sidebar-show-previous prev)
       (insert "\n")
       (setq line-num (1+ line-num))
       (decknix--sidebar-render-section-header

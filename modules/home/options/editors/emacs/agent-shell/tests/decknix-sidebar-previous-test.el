@@ -194,5 +194,49 @@ Also stubs `decknix--agent-session-derive-name' to join tags by \"/\"."
       (should (equal (decknix--sidebar-previous-display-name entry)
                      "only/these")))))
 
+
+;; --- Previous display options -----------------------------------------
+;;
+;; Previous had grown to 40 entries, of which 33 were auto-dispatched
+;; reviews of PRs that had since moved on.  It is a history, not a queue --
+;; `C-c s s' finds any of it on demand -- so the section is off by default
+;; and the auto reviews are dropped when it is on.
+
+(ert-deftest decknix-sidebar-previous--auto-review-needs-both-tags ()
+  "`review' ALONE is a review session started deliberately, from the
+sidebar or a pasted URL, and that is the kind worth keeping in a history."
+  (should (decknix--sidebar-previous-auto-review-p
+           '((tags "auto" "#21200" "upside" "review"))))
+  (should-not (decknix--sidebar-previous-auto-review-p
+               '((tags "review" "#99" "upside"))))
+  (should-not (decknix--sidebar-previous-auto-review-p
+               '((tags "auto" "nightly")))))
+
+(ert-deftest decknix-sidebar-previous--own-sessions-are-kept ()
+  (should-not (decknix--sidebar-previous-auto-review-p
+               '((tags "helix" "nix" "rea-integration"))))
+  (should-not (decknix--sidebar-previous-auto-review-p '((tags))))
+  (should-not (decknix--sidebar-previous-auto-review-p '((name . "x")))))
+
+(ert-deftest decknix-sidebar-previous--visible-drops-auto-reviews ()
+  (let ((decknix-sidebar-previous-hide-auto-review t)
+        (entries '(((tags "auto" "review" "#1"))
+                   ((tags "decknix" "nurturecloud"))
+                   ((tags "auto" "review" "#2")))))
+    (should (= 1 (length (decknix--sidebar-previous-visible entries))))))
+
+(ert-deftest decknix-sidebar-previous--visible-off-keeps-everything ()
+  "The toggle must genuinely restore the full history."
+  (let ((decknix-sidebar-previous-hide-auto-review nil)
+        (entries '(((tags "auto" "review" "#1"))
+                   ((tags "decknix")))))
+    (should (= 2 (length (decknix--sidebar-previous-visible entries))))))
+
+(ert-deftest decknix-sidebar-previous--section-is-off-by-default ()
+  "Asserted so turning it on becomes a deliberate change rather than a
+silent regression if someone flips the default."
+  (should-not (default-value 'decknix-sidebar-show-previous))
+  (should (default-value 'decknix-sidebar-previous-hide-auto-review)))
+
 (provide 'decknix-sidebar-previous-test)
 ;;; decknix-sidebar-previous-test.el ends here
