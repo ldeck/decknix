@@ -1955,7 +1955,10 @@ let
   decknix-sidebar-layout-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-layout";
     src = ./agent-shell/sidebar-layout;
-    packageRequires = [ ];
+    # `decknix-hub-icons' is required by the RENDER file in this same src
+    # dir, not by this one: `trivialBuild' compiles every `.el' it finds,
+    # so a sibling's dependency has to be declared here too.
+    packageRequires = [ decknix-hub-icons-el ];
     testFiles = [ "decknix-sidebar-layout-test.el" ];
   };
 
@@ -1963,7 +1966,12 @@ let
   decknix-sidebar-layout-render-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-layout-render";
     src = ./agent-shell/sidebar-layout;
-    packageRequires = [ decknix-sidebar-layout-el ];
+    # `decknix-hub-icons' for the per-attribute coloured glyphs on the
+    # nested PR rows.  The nested rows had their own flat ASCII
+    # indicators painted one severity colour, which lost the colour
+    # vocabulary the old sidebar read at a glance.  Pure formatting, so
+    # the dependency carries no side effects.
+    packageRequires = [ decknix-sidebar-layout-el decknix-hub-icons-el ];
     testFiles = [ "decknix-sidebar-layout-render-test.el" ];
   };
 
@@ -6444,7 +6452,13 @@ duration -- the most important number on this branch."
               ;; "which of these has nothing on it".
               (if (and (bound-and-true-p decknix-sidebar-layout-enable)
                        (fboundp 'decknix--layout-render-reviews))
-                  (let ((w (max 24 (1- (window-width)))))
+                  ;; The SIDEBAR window's width, not the selected one's.
+                  ;; `window-width' with no argument answers for whichever
+                  ;; window happens to be selected when the render runs --
+                  ;; measured 95 against the sidebar's 48 -- so every padded
+                  ;; row was 47 columns too wide and its right-hand value sat
+                  ;; off-screen.  That is the "numbers pushed out of view".
+                  (let ((w (max 24 (1- (decknix--layout-sidebar-width)))))
                     (setq line-num (decknix--layout-render-reviews line-num w))
                     ;; WIP nests my PRs and worktrees under the session
                     ;; working on them, and puts the rest in Dormant.  The
