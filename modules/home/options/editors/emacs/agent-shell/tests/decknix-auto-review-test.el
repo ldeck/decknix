@@ -400,5 +400,65 @@ individuals had been asked and the viewer had not."
                  '((team_requested . t)
                    (requested_reviewers . ("team:cloud-services")))))))
 
+
+;; -- the durable dismissal guard ---------------------------------------
+;;
+;; `decknix-auto-review--dispatched' is in-memory ("this session" per its own
+;; docstring) and the live-session guard lasts only as long as the buffer, so
+;; killing a review and waiting one 60-second poll re-dispatched it from
+;; scratch.  Three sessions quit by hand were back within the hour.
+
+(ert-deftest decknix-auto-review--a-prior-review-blocks-re-dispatch ()
+  "The whole fix: a conversation already on record for this PR counts."
+  (cl-letf (((symbol-function 'decknix--hub-review-pr-key)
+             (lambda (_r n) (format "upside#%s" n)))
+            ((symbol-function 'decknix--agent-conv-key-for-review-pr)
+             (lambda (k) (when (equal k "upside#1") (cons "ck" "sid")))))
+    (should (decknix-auto-review--already-handled-p
+             '((repo . "o/upside") (number . 1))))
+    (should-not (decknix-auto-review--already-handled-p
+                 '((repo . "o/upside") (number . 2))))))
+
+(ert-deftest decknix-auto-review--a-moved-pr-is-not-silenced-by-its-prior-review ()
+  "The exception is the point.  Without it, one review would suppress a PR
+forever, including after the author pushed over it."
+  (cl-letf (((symbol-function 'decknix--hub-review-pr-key)
+             (lambda (_r n) (format "upside#%s" n)))
+            ((symbol-function 'decknix--agent-conv-key-for-review-pr)
+             (lambda (_k) (cons "ck" "sid"))))
+    (dolist (field '(review_stale replies_to_me re_requested comment_mentioned))
+      (should-not (decknix-auto-review--already-handled-p
+                   (list (cons 'repo "o/upside") (cons 'number 1)
+                         (cons field t)))))))
+
+(ert-deftest decknix-auto-review--attention-fields-match-the-sidebar-resurfaces ()
+  "Same four the sidebar resurfaces a hidden row on, so the dispatcher and
+the sidebar cannot disagree about \"it changed since I looked\"."
+  (should (equal '(review_stale replies_to_me re_requested comment_mentioned)
+                 decknix-auto-review-attention-fields)))
+
+(ert-deftest decknix-auto-review--json-false-is-not-attention ()
+  "A JSON false must not read as \"wants me\", or every prior review would
+be overridden and the guard would do nothing."
+  (should-not (decknix-auto-review-pr-wants-attention-p
+               '((review_stale . :json-false) (replies_to_me . :json-false))))
+  (should-not (decknix-auto-review-pr-wants-attention-p '((number . 1)))))
+
+(ert-deftest decknix-auto-review--no-prior-review-dispatches-normally ()
+  "A PR nobody has looked at must still be picked up."
+  (cl-letf (((symbol-function 'decknix--hub-review-pr-key)
+             (lambda (_r n) (format "upside#%s" n)))
+            ((symbol-function 'decknix--agent-conv-key-for-review-pr)
+             (lambda (_k) nil)))
+    (should-not (decknix-auto-review--already-handled-p
+                 '((repo . "o/upside") (number . 9))))))
+
+(ert-deftest decknix-auto-review--a-missing-identity-layer-does-not-block ()
+  "Degrading to \"never reviewed\" keeps PRs flowing; degrading the other way
+would silently stop every dispatch."
+  (cl-letf (((symbol-function 'decknix--hub-review-pr-key) (lambda (&rest _) nil)))
+    (should-not (decknix-auto-review--previously-reviewed-p
+                 '((repo . "o/upside") (number . 1))))))
+
 (provide 'decknix-auto-review-test)
 ;;; decknix-auto-review-test.el ends here

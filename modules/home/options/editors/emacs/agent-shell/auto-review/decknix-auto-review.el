@@ -106,6 +106,8 @@ guard takes over once the buffer exists).")
 ;; the hub/model vars special so references compile as dynamic
 ;; varrefs against the live globals.
 (declare-function decknix--hub-bot-author-p "decknix-hub-mention-bot")
+(declare-function decknix--agent-conv-key-for-review-pr
+                  "decknix-agent-session-broker" (pr-key))
 (declare-function decknix--sidebar-state-write "decknix-agent-shell-workspace")
 (declare-function decknix--hub-review-pr-key
                   "decknix-hub-review-identity" (repo number))
@@ -337,6 +339,55 @@ work I have already reviewed, unprompted."
                   (decknix--hub-item-team-requested-p item))))
        t))
 
+(defconst decknix-auto-review-attention-fields
+  '(review_stale replies_to_me re_requested comment_mentioned)
+  "Feed fields that mean a reviewed PR has moved and wants me again.
+
+The same four `decknix--hub-requests-reviewed-visible-p' resurfaces a
+hidden row on, so the sidebar and the dispatcher cannot disagree about
+what \"it changed since I looked\" means:
+
+  review_stale       a commit landed after my review
+  replies_to_me      a human answered one of my threads
+  re_requested       the author asked me again
+  comment_mentioned  I was named in a comment")
+
+(defun decknix-auto-review-pr-wants-attention-p (item)
+  "Return non-nil when ITEM has changed since it was last reviewed.  Pure."
+  (and (seq-some (lambda (f) (eq (alist-get f item) t))
+                 decknix-auto-review-attention-fields)
+       t))
+
+(defun decknix-auto-review--previously-reviewed-p (item)
+  "Return non-nil when a conversation already on record reviewed ITEM's PR.
+
+The durable half of the dedup.  `decknix-auto-review--dispatched' is an
+in-memory hash -- its own docstring says \"this session\" -- and the live
+session guard lasts only as long as the buffer, so killing a review and
+letting the next 60-second poll come round re-dispatched it from scratch.
+Three sessions quit by hand this morning were back within the hour.
+
+`decknix--agent-conv-key-for-review-pr' reads the SAME store the launcher
+writes `reviewPr' into, keyed by the SAME `decknix--hub-review-pr-key', so
+the record survives a restart. It already existed for precisely this --
+its docstring describes this bug -- and nothing called it."
+  (and (fboundp 'decknix--agent-conv-key-for-review-pr)
+       (fboundp 'decknix--hub-review-pr-key)
+       (let ((key (decknix--hub-review-pr-key
+                   (alist-get 'repo item) (alist-get 'number item))))
+         (and key
+              (ignore-errors (decknix--agent-conv-key-for-review-pr key))
+              t))))
+
+(defun decknix-auto-review--already-handled-p (item)
+  "Return non-nil when ITEM was reviewed before and has not moved since.
+
+The exception is the point: a PR whose author pushed, answered a thread or
+re-requested me DOES want another look, so a prior review must not silence
+it forever."
+  (and (decknix-auto-review--previously-reviewed-p item)
+       (not (decknix-auto-review-pr-wants-attention-p item))))
+
 (defun decknix-auto-review--eligible-action (item)
   "Return the dispatch action for ITEM, or nil when it must not dispatch.
 
@@ -359,7 +410,10 @@ sessions to launch.  Same conditions as before, in the same order."
                (not (decknix-auto-review-dispatched-p key))
                ;; Already covered -- including by a GROUP session, since
                ;; `covers-p' tests membership of the recorded PR list.
-               (not (decknix--hub-request-has-live-session-p item)))
+               (not (decknix--hub-request-has-live-session-p item))
+               ;; Reviewed before and unchanged since: the durable guard,
+               ;; without which a dismissal lasted until the next poll.
+               (not (decknix-auto-review--already-handled-p item)))
       action)))
 
 (defvar decknix-auto-review-group-ship-command "/review-and-ship-bot-prs"
