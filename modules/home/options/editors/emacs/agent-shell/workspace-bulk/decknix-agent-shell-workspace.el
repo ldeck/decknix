@@ -1001,6 +1001,88 @@ keys.  Press `C-g' to abort."
                    ((member k '(nil "C-g")) "Describe: cancelled")
                    (t (format "No toggle bound to %s" k))))))
 
+(transient-define-suffix decknix-sidebar-transient--layout-enable ()
+  :key "1"
+  :description
+  (lambda ()
+    (format "layout        %s"
+            (propertize (if (bound-and-true-p decknix-sidebar-layout-enable)
+                            "[session-first]" "[previous]")
+                        'face (if (bound-and-true-p decknix-sidebar-layout-enable)
+                                  'font-lock-constant-face
+                                'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-layout-toggle-enable))
+
+(transient-define-suffix decknix-sidebar-transient--reviews-attention ()
+  :key "2"
+  :description
+  (lambda ()
+    (format "reviews       %s"
+            (propertize
+             (if (bound-and-true-p decknix-sidebar-layout-reviews-attention-only)
+                 "[wanting me]" "[all]")
+             'face (if (bound-and-true-p decknix-sidebar-layout-reviews-attention-only)
+                       'font-lock-constant-face 'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-layout-toggle-attention-only))
+
+(transient-define-suffix decknix-sidebar-transient--wip-items ()
+  :key "3"
+  :description
+  (lambda ()
+    (format "wip items     %s"
+            (propertize
+             (format "[%s]" (or (bound-and-true-p decknix-sidebar-layout-items-per-repo)
+                                "all"))
+             'face 'font-lock-constant-face)))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-layout-cycle-items-per-repo))
+
+(transient-define-suffix decknix-sidebar-transient--dormant-limit ()
+  :key "4"
+  :description
+  (lambda ()
+    (format "dormant       %s"
+            (propertize
+             (format "[%s]" (or (bound-and-true-p decknix-sidebar-layout-dormant-limit)
+                                "all"))
+             'face 'font-lock-constant-face)))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-layout-cycle-dormant-limit))
+
+(transient-define-suffix decknix-sidebar-transient--repos-behind ()
+  :key "5"
+  :description
+  (lambda ()
+    (format "repos behind  %s"
+            (propertize (if (bound-and-true-p decknix-repo-sync-show-behind)
+                            "[shown]" "[failures only]")
+                        'face (if (bound-and-true-p decknix-repo-sync-show-behind)
+                                  'font-lock-constant-face
+                                'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-repo-sync-toggle-show-behind))
+
+(transient-define-suffix decknix-sidebar-transient--wt-hide-stale ()
+  :key "6"
+  :description
+  (lambda ()
+    (format "stale wt      %s"
+            (propertize (if (bound-and-true-p decknix-hub-wt-hide-stale)
+                            "[hidden]" "[shown]")
+                        'face (if (bound-and-true-p decknix-hub-wt-hide-stale)
+                                  'font-lock-constant-face
+                                'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-hub-wt-toggle-hide-stale))
+
 (transient-define-prefix decknix-sidebar-transient--worktrees ()
   "Worktree toggles (nested sub-menu)."
   [:description "Worktree Toggles"
@@ -1021,10 +1103,17 @@ Suffixes within each section are ordered alphabetically by their
 display label (case-insensitive) to match the sidebar footer,
 which advertises toggles by label only (no keys).
 
-Sections are laid out as two rows of three columns so the
-transient popup stays compact instead of stretching into a
-single tall column.  Row 1: Global / Requests / Live.  Row 2:
-WIP / Sessions / Worktrees."
+Sections are laid out as rows of columns so the popup stays compact
+instead of stretching into a single tall column.  Row 1: Global /
+Shared / Requests / Live.  Row 2: WIP / Sessions / Worktrees.
+
+The Live and WIP columns appear only when `decknix-sidebar-layout-enable'
+is nil.  Under the session-first layout both of those renders are
+skipped, so every switch in them would change nothing -- and a toggle
+that does nothing is worse than a missing one, because it gets tried and
+then teaches distrust of the whole panel.  The four toggles from those
+columns that ARE read elsewhere (attention style, progress, symbols,
+pipeline) moved to Shared rather than disappearing with them."
   :transient-suffix 'transient--do-stay
   [["Global"
     (decknix-sidebar-transient--focus)            ;; focus (l)
@@ -1033,6 +1122,20 @@ WIP / Sessions / Worktrees."
     (decknix-sidebar-transient--hub-display-mode) ;; Layout (D)
     (decknix-sidebar-transient--org-filter)       ;; Org filter (O)
     (decknix-sidebar-transient--width)]           ;; Width (W)
+   ;; These four are read outside the Requests/Live renders (progress
+   ;; sidebar, hub icons, teamcity), so they survive the layout gating below
+   ;; rather than disappearing with the column they used to sit in.
+   ["Shared"
+    (decknix-sidebar-transient--attention-style)  ;; attention (v)
+    (decknix-sidebar-transient--show-progress)    ;; progress (p)
+    (decknix-sidebar-transient--symbol-style)     ;; symbols (y)
+    (decknix-sidebar-transient--deploy-indicator) ;; pipeline (P)
+    (decknix-sidebar-transient--layout-enable)    ;; layout (1)
+    (decknix-sidebar-transient--reviews-attention);; reviews (2)
+    (decknix-sidebar-transient--wip-items)        ;; wip items (3)
+    (decknix-sidebar-transient--dormant-limit)    ;; dormant (4)
+    (decknix-sidebar-transient--repos-behind)     ;; repos behind (5)
+    (decknix-sidebar-transient--wt-hide-stale)]   ;; stale wt (6)
    ["Requests"
     ;; Order matches the sidebar footer: alphabetical text labels
     ;; (age, bots, ci, layout, mention, reviewed, sort) then emoji-led
@@ -1051,27 +1154,32 @@ WIP / Sessions / Worktrees."
     (decknix-sidebar-transient--req-bot-pending)  ;; 🤖 (B)
     (decknix-sidebar-transient--req-conflict)     ;; ⚠ conflict (X)
     (decknix-sidebar-transient--req-draft)]       ;; 📝 draft (x)
+   ;; Hidden under the session-first layout: its render is skipped there, so
+   ;; every switch in this column would change nothing.  A toggle that does
+   ;; nothing is worse than a missing one -- it is tried, has no effect, and
+   ;; teaches distrust of the whole panel.
    ["Live"
-    (decknix-sidebar-transient--attention-style)  ;; attention (v)
+    :if-not (lambda () (bound-and-true-p decknix-sidebar-layout-enable))
     (decknix-sidebar-transient--live-display-mode) ;; Layout (d)
     (decknix-sidebar-transient--hidden-toggle)    ;; Hidden (H)
-    (decknix-sidebar-transient--show-progress)    ;; progress (p)
     (decknix-sidebar-transient--hide-completed-subagents) ;; sub-agents (K)
     (decknix-sidebar-transient--quick-switch)     ;; Quick-switch (S)
     (decknix-sidebar-transient--repo-name-cap)    ;; repo name (N)
     (decknix-sidebar-transient--expand-prs)       ;; session PRs (E)
-    (decknix-sidebar-transient--symbol-style)     ;; symbols (y)
     (decknix-sidebar-transient--tile-cycle)       ;; Tile cycle (t)
     (decknix-sidebar-transient--hide-request-linked-live) ;; request-linked (J)
     (decknix-sidebar-transient--session-group-mode) ;; group (G)
     (decknix-sidebar-transient--live-view-mode)]] ;; view (z)
+  ;; Also gated: these filter the PR-centric WIP render, which the
+  ;; session-first layout replaces with sessions-plus-nested-work.  Under it
+  ;; WIP is governed by `wip items' and `dormant' in Shared instead.
   [["WIP"
+    :if-not (lambda () (bound-and-true-p decknix-sidebar-layout-enable))
     (decknix-sidebar-transient--wip-bot-pending)  ;; bot review (u)
     (decknix-sidebar-transient--wip-needs-reply)  ;; comments (n)
     (decknix-sidebar-transient--wip-group-mode)   ;; group (g)
     (decknix-sidebar-transient--wip-hide-linked)  ;; hide linked (L)
     (decknix-sidebar-transient--wip-display-mode) ;; Layout (d)
-    (decknix-sidebar-transient--deploy-indicator) ;; pipeline (P)
     (decknix-sidebar-transient--wip-my-replies)   ;; replies (r)
     (decknix-sidebar-transient--wip-hide-terminal)] ;; stale (m)
    ["Sessions"
