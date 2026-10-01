@@ -112,6 +112,22 @@ their renders are skipped, so they would be switches that change nothing."
   (message "Sidebar layout: %s"
            (if decknix-sidebar-layout-enable "session-first" "previous")))
 
+;; Defined above their cyclers: a `setq' on a variable whose `defvar' comes
+;; later compiles as a free-variable assignment, which is a warning now and
+;; a lexical-binding trap the moment this file is reorganised.
+(defvar decknix-sidebar-layout-items-per-repo 5
+  "Most PRs plus worktrees to list under one repo, or nil for all.
+
+Listing every item flat gave the two followupboss sessions eleven rows
+each.  A handful per repo restores the visibility the refactor lost without
+returning to that; the remainder is reported, never silently dropped.")
+
+(defvar decknix-sidebar-layout-dormant-limit 12
+  "Most Dormant repo groups to render, or nil for all.
+Dormant is a backlog, not a queue; an unbounded list of every branch ever
+left behind pushes the sections that need action off screen.  The number
+held back is always reported.")
+
 (defconst decknix-sidebar-layout-items-cycle '(3 5 10 nil)
   "Cycle for `decknix-sidebar-layout-items-per-repo'; nil means all.")
 
@@ -171,6 +187,35 @@ PR those filters exist to hide."
       items)))
 
 (defvar decknix--hub-wip)
+(defvar decknix--agent-provider-id)
+
+(declare-function decknix--sidebar-render-subagents
+                  "decknix-agent-shell-workspace" (line-num session-id provider-id))
+(declare-function decknix--agent-buffer-session-id
+                  "decknix-agent-buffer-lookup" (&optional buf))
+
+(defun decknix--layout-render-subagents (line-num buffer-name)
+  "Render BUFFER-NAME's sub-agents under its row.  Returns LINE-NUM.
+
+Reuses the Live section's renderer, which the layout no longer calls --
+so sub-agents vanished from the sidebar entirely at the refactor. It
+colours each row by derived liveness (running / active / done) and honours
+`decknix--sidebar-hide-completed-subagents', both of which would have to be
+reimplemented to render them here instead.
+
+Needs a LIVE buffer: the renderer reads the session id and provider off
+buffer-locals, and treats the parent as live when classifying state."
+  (let ((buf (and buffer-name (get-buffer buffer-name))))
+    (when (and buf (buffer-live-p buf)
+               (fboundp 'decknix--sidebar-render-subagents))
+      (let ((sid (ignore-errors (decknix--agent-buffer-session-id buf)))
+            (provider (and (local-variable-p 'decknix--agent-provider-id buf)
+                           (buffer-local-value 'decknix--agent-provider-id buf))))
+        (when (and sid provider)
+          (setq line-num (ignore-errors
+                           (decknix--sidebar-render-subagents
+                            line-num sid provider)))))))
+  line-num)
 
 (defun decknix--layout-wip-repos ()
   "Return the hub WIP feed's repos list, or nil."
@@ -250,6 +295,11 @@ calling it from the render path cannot queue an audit per paint."
               ;; is the thing to act on.
               (let ((covering (decknix--layout-pr-sessions
                                sessions (plist-get pr :key))))
+                ;; One covering session: the PR row IS that session, so its
+                ;; sub-agents belong directly under it.
+                (when (= (length covering) 1)
+                  (setq line-num (decknix--layout-render-subagents
+                                  line-num (nth 0 (car covering)))))
                 (when (> (length covering) 1)
                   (dolist (cs covering)
                     (insert (propertize
@@ -260,7 +310,9 @@ calling it from the render path cannot queue an audit per paint."
                              'decknix-layout-session cs
                              'decknix-layout-buffer (nth 0 cs))
                             "\n")
-                    (setq line-num (1+ line-num)))))))))
+                    (setq line-num (1+ line-num))
+                    (setq line-num (decknix--layout-render-subagents
+                                    line-num (nth 0 cs))))))))))
       (when (> held 0)
         (insert (propertize
                  (format " ·  %d more in flight, nothing waiting" held)
@@ -310,19 +362,14 @@ hiding the sharing."
                               'decknix-layout-buffer (nth 0 session))
                   "\n")
           (setq line-num (1+ line-num))
+          (setq line-num (decknix--layout-render-subagents
+                          line-num (nth 0 session)))
           (dolist (claim (plist-get row :repos))
             (setq line-num (decknix--layout-render-claim
                             line-num width claim session)))))
       (setq line-num (decknix--layout-render-dormant
                       line-num width (plist-get tree :dormant)))))
   line-num)
-
-(defvar decknix-sidebar-layout-items-per-repo 5
-  "Most PRs plus worktrees to list under one repo, or nil for all.
-
-Listing every item flat gave the two followupboss sessions eleven rows
-each.  A handful per repo restores the visibility the refactor lost without
-returning to that; the remainder is reported, never silently dropped.")
 
 (defun decknix--layout-render-claim (line-num width claim session)
   "Render one repo CLAIM under SESSION, with its items.  Returns LINE-NUM.
@@ -378,11 +425,6 @@ collapsed repo still shows that something in there is blocked."
       (setq line-num (1+ line-num))))
   line-num)
 
-(defvar decknix-sidebar-layout-dormant-limit 12
-  "Most Dormant repo groups to render, or nil for all.
-Dormant is a backlog, not a queue; an unbounded list of every branch ever
-left behind pushes the sections that need action off screen.  The number
-held back is always reported.")
 
 (defun decknix--layout-render-dormant (line-num width dormant)
   "Render the Dormant section: work with no live session on it.

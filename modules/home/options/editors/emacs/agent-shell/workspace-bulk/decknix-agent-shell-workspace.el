@@ -1158,6 +1158,11 @@ pipeline) moved to Shared rather than disappearing with them."
     (decknix-sidebar-transient--show-progress)    ;; progress (p)
     (decknix-sidebar-transient--symbol-style)     ;; symbols (y)
     (decknix-sidebar-transient--deploy-indicator) ;; pipeline (P)
+    ;; Sub-agents render under WIP sessions now, not in Live, so this
+    ;; toggle has to be reachable with the layout on.  Of 110 sub-agents
+    ;; measured across three sessions, 108 were `done' -- the toggle is the
+    ;; difference between 2 rows and 110.
+    (decknix-sidebar-transient--hide-completed-subagents) ;; sub-agents (K)
     (decknix-sidebar-transient--layout-enable)    ;; layout (1)
     (decknix-sidebar-transient--reviews-attention);; reviews (2)
     (decknix-sidebar-transient--wip-items)        ;; wip items (3)
@@ -1190,7 +1195,6 @@ pipeline) moved to Shared rather than disappearing with them."
     :if-not (lambda () (bound-and-true-p decknix-sidebar-layout-enable))
     (decknix-sidebar-transient--live-display-mode) ;; Layout (d)
     (decknix-sidebar-transient--hidden-toggle)    ;; Hidden (H)
-    (decknix-sidebar-transient--hide-completed-subagents) ;; sub-agents (K)
     (decknix-sidebar-transient--quick-switch)     ;; Quick-switch (S)
     (decknix-sidebar-transient--repo-name-cap)    ;; repo name (N)
     (decknix-sidebar-transient--expand-prs)       ;; session PRs (E)
