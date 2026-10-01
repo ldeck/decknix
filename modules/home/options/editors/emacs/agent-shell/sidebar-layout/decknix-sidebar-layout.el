@@ -216,15 +216,28 @@ Highest number first because a PR raised later is the one still moving."
               (> (or (plist-get a :number) 0) (or (plist-get b :number) 0)))))))
 
 (defun decknix--layout-sort-groups (groups)
-  "Return GROUPS by attention count, then session count, then name."
+  "Return GROUPS most-urgent first.
+
+Order: sessions blocked on me, then PRs with no session at all, then
+session count, then name.
+
+Uncovered PRs rank ABOVE busy sessions because they are the only rows
+nothing is happening to.  They were not a sort key at all, so a repo with
+five untouched review requests sorted below one with two sessions already
+working -- the opposite of what a section headed by what-needs-attention
+should say."
   (sort (copy-sequence groups)
         (lambda (a b)
           (let ((aa (or (plist-get a :asking) 0))
-                (ab (or (plist-get b :asking) 0)))
+                (ab (or (plist-get b :asking) 0))
+                (ua (or (plist-get a :uncovered) 0))
+                (ub (or (plist-get b :uncovered) 0))
+                (sa (or (plist-get a :sessions) 0))
+                (sb (or (plist-get b :sessions) 0)))
             (cond
              ((/= aa ab) (> aa ab))
-             ((/= (or (plist-get a :sessions) 0) (or (plist-get b :sessions) 0))
-              (> (or (plist-get a :sessions) 0) (or (plist-get b :sessions) 0)))
+             ((/= ua ub) (> ua ub))
+             ((/= sa sb) (> sa sb))
              (t (string< (or (plist-get a :repo) "")
                          (or (plist-get b :repo) ""))))))))
 
@@ -611,6 +624,27 @@ can be lost, so it must not be masked by a merged or orphaned flag."
     (propertize (string-trim-right (decknix--layout-wt-indicators wt))
                 'face (or (alist-get cond- decknix-sidebar-layout-wt-glyph-faces)
                           'shadow))))
+
+(defun decknix--layout-claim-items (claim budget expanded)
+  "Return (PRS WTS HELD) to render for CLAIM under BUDGET.
+
+PRs are NEVER withheld.  An open PR -- draft or awaiting approval -- is
+work with a live obligation attached, so hiding one behind \"... 3 more\"
+loses the thing the sidebar exists to surface.  The budget applies to
+WORKTREES, which are a local artefact and the safe thing to elide.
+
+Previously the budget was spent on PRs first and worktrees got the
+remainder, so a repo with more than BUDGET PRs hid the surplus PRs.
+
+HELD is the number of worktrees not shown, so the caller can offer to
+expand rather than silently shrinking the list.  EXPANDED non-nil shows
+everything."
+  (let* ((prs (plist-get claim :pr-items))
+         (wts (plist-get claim :wt-items))
+         (shown-wts (if (or expanded (not (integerp budget)))
+                        wts
+                      (seq-take wts (max 0 budget)))))
+    (list prs shown-wts (- (length wts) (length shown-wts)))))
 
 (defun decknix--layout-dedup-claims (session-rows)
   "Mark a repo claim that a previous session in SESSION-ROWS already showed.

@@ -109,9 +109,12 @@ workspace, so recorded review PRs are the only reliable signal."
   "40 review sessions became 40 lines; one row per repo is the fix."
   (let ((groups (decknix--layout-review-groups decknix-layout-test--sessions
                                                 decknix-layout-test--items)))
-    ;; Order is attention first (upside 2, metabase 1), then session count
-    ;; (oneroof 1 > dapi 0) -- not alphabetical and not raw session count.
-    (should (equal '("upside" "metabase" "oneroof-integration" "dapi-contracts")
+    ;; Blocked sessions first (upside 2, metabase 1), then PRs with NO
+    ;; session (dapi 1), then session count (oneroof 1).  dapi outranks
+    ;; oneroof despite having no session precisely because it has none:
+    ;; nothing is happening to that PR, whereas oneroof's is already being
+    ;; worked.
+    (should (equal '("upside" "metabase" "dapi-contracts" "oneroof-integration")
                    (mapcar (lambda (g) (plist-get g :repo)) groups)))))
 
 (ert-deftest decknix-layout--a-pr-covered-twice-is-one-row ()
@@ -643,6 +646,57 @@ next paint."
       (let ((out (decknix--layout-dedup-claims rows)))
         (should-not (plist-get (car (plist-get (nth 0 out) :repos)) :duplicate))
         (should (plist-get (car (plist-get (nth 1 out) :repos)) :duplicate))))))
+
+
+;; --- an open PR is never withheld -------------------------------------
+
+(ert-deftest decknix-layout--prs-are-never-held-back ()
+  "An open PR -- draft or awaiting approval -- carries a live obligation.
+The budget used to be spent on PRs first, so a repo with more than the
+budget hid the surplus behind \"... 3 more\"."
+  (let* ((claim (list :pr-items (make-list 9 '(:number 1))
+                      :wt-items nil))
+         (split (decknix--layout-claim-items claim 5 nil)))
+    (should (= 9 (length (nth 0 split))))
+    (should (= 0 (nth 2 split)))))
+
+(ert-deftest decknix-layout--the-budget-elides-worktrees-not-prs ()
+  "A worktree is a local artefact and the safe thing to hide."
+  (let* ((claim (list :pr-items (make-list 4 '(:number 1))
+                      :wt-items (make-list 7 '(:branch "b"))))
+         (split (decknix--layout-claim-items claim 5 nil)))
+    (should (= 4 (length (nth 0 split))))
+    (should (= 5 (length (nth 1 split))))
+    (should (= 2 (nth 2 split)))))
+
+(ert-deftest decknix-layout--expanding-shows-every-worktree ()
+  (let* ((claim (list :pr-items nil :wt-items (make-list 7 '(:branch "b"))))
+         (split (decknix--layout-claim-items claim 2 t)))
+    (should (= 7 (length (nth 1 split))))
+    (should (= 0 (nth 2 split)))))
+
+;; --- Reviews ordering -------------------------------------------------
+
+(ert-deftest decknix-layout--uncovered-prs-outrank-busy-sessions ()
+  "They are the only rows nothing is happening to.  `:uncovered\=' was not a
+sort key, so five untouched review requests sorted below two sessions
+already working."
+  (let ((out (decknix--layout-sort-groups
+              (list (list :repo "busy" :asking 0 :sessions 2 :uncovered 0)
+                    (list :repo "idle" :asking 0 :sessions 0 :uncovered 5)))))
+    (should (equal "idle" (plist-get (car out) :repo)))))
+
+(ert-deftest decknix-layout--blocked-sessions-outrank-everything ()
+  (let ((out (decknix--layout-sort-groups
+              (list (list :repo "new" :asking 0 :sessions 0 :uncovered 9)
+                    (list :repo "blocked" :asking 1 :sessions 1 :uncovered 0)))))
+    (should (equal "blocked" (plist-get (car out) :repo)))))
+
+(ert-deftest decknix-layout--order-is-stable-on-a-tie ()
+  (let ((out (decknix--layout-sort-groups
+              (list (list :repo "zz" :asking 0 :sessions 1 :uncovered 0)
+                    (list :repo "aa" :asking 0 :sessions 1 :uncovered 0)))))
+    (should (equal "aa" (plist-get (car out) :repo)))))
 
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here
