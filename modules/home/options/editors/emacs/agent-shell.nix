@@ -1917,14 +1917,17 @@ let
   decknix-session-board-model-el = mkEmacsTestedPackage {
     pname = "decknix-session-board-model";
     src = ./agent-shell/session-board;
-    packageRequires = [ ];
+    # trivialBuild compiles co-resident decknix-session-board.el too.
+    packageRequires = [ decknix-sidebar-layout-el ];
     testFiles = [ "decknix-session-board-model-test.el" ];
   };
 
   decknix-session-board-el = mkEmacsTestedPackage {
     pname = "decknix-session-board";
     src = ./agent-shell/session-board;
-    packageRequires = [ decknix-session-board-model-el ];
+    # The item-table uses `decknix--layout-pr-key' from the sidebar model.
+    # Tests and runtime both need it loaded, not merely forward-declared.
+    packageRequires = [ decknix-session-board-model-el decknix-sidebar-layout-el ];
     testFiles = [ "decknix-session-board-test.el" ];
   };
 
