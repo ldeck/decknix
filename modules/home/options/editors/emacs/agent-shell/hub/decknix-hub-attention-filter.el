@@ -309,7 +309,13 @@ But a LIVE review session sitting on `asking' is a different question
 entirely -- it is blocked on the user, right now, and the review board
 lists it as such.  With this nil the two disagree: measured on a live
 feed, five PRs whose sessions were `asking' were hidden from Requests,
-which is what sent the user to the board to find them.")
+which is what sent the user to the board to find them.
+
+Scope: this overrides the \"waiting on someone else\" filters (bot-pending,
+i-replied-last) and `hide-reviewed'.  It deliberately does NOT override
+the DRAFT or CONFLICT filters.  Those say the PR is not reviewable yet,
+and a session asking about an unreviewable PR is obsolete, not urgent --
+overriding them made upside#17178 and #16823 reappear indefinitely.")
 
 (defun decknix--hub-requests-session-wants-me-p (item)
   "Return non-nil when ITEM's live review session is blocked on the user.
@@ -417,12 +423,14 @@ When `decknix--hub-requests-hide-conflict' is non-nil (default), hides
 PRs whose `mergeable' field is \"CONFLICTING\" (GitHub's merge-conflict
 marker).  A nil mergeable field (e.g. unknown/queued) is treated as
 non-conflicting so new PRs are not inadvertently suppressed."
+  ;; A live session does NOT override this, unlike the attention and
+  ;; reviewed filters.  It did briefly, on the argument that a session
+  ;; sitting on `asking' wants an answer -- but a conflicted PR cannot be
+  ;; reviewed at all until its author rebases, so the session asking about
+  ;; it is itself obsolete rather than a call on your time.  upside#17178
+  ;; and #16823 are both CONFLICTING and both kept reappearing because of
+  ;; that override.
   (or (not decknix--hub-requests-hide-conflict)
-      ;; A conflicted PR is not mergeable, but a session asking about it
-      ;; still needs an answer -- and the conflict may be what it is asking
-      ;; about.  Measured: upside#17178 and #16823 were both hidden here
-      ;; while their sessions sat on `asking'.
-      (decknix--hub-requests-session-wants-me-p item)
       (not (equal (alist-get 'mergeable item) "CONFLICTING"))))
 
 (defun decknix--hub-requests-draft-visible-p (item)
@@ -431,8 +439,9 @@ When `decknix--hub-requests-hide-draft' is non-nil (default), hides
 PRs whose `draft' field is t (GitHub's `isDraft' marker).  A nil,
 :json-false, or absent draft field is treated as non-draft so
 ready PRs are never inadvertently suppressed."
+  ;; Same as the conflict filter: a draft is not finished, so a session on
+  ;; it is premature rather than waiting on you.
   (or (not decknix--hub-requests-hide-draft)
-      (decknix--hub-requests-session-wants-me-p item)
       (not (eq (alist-get 'draft item) t))))
 
 (defun decknix--hub-wip-attention-visible-p (pr)

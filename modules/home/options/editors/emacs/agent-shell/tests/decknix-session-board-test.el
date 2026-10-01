@@ -83,7 +83,7 @@ to kill the lot."
 (ert-deftest decknix-sbb--cleanup-lanes-are-the-only-highlighted-ones ()
   "The warning face on a lane heading is the signal that bulk-killing it is
 expected; it must not appear on lanes holding real work."
-  (dolist (lane '(not-mine orphaned))
+  (dolist (lane '(stale not-mine orphaned))
     (should (memq lane (decknix-session-board-killable-lanes))))
   (dolist (lane '(human-review bot-review wip))
     (should-not (memq lane (decknix-session-board-killable-lanes)))))

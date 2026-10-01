@@ -21,11 +21,13 @@
 ;;   human-review  reviewing a human's PR -- the work that matters
 ;;   bot-review    reviewing a bot's PR (dependabot, augmentcode)
 ;;   wip           my own session, no review PR attached
+;;   stale         reviewing a PR that conflicts or is still a draft
 ;;   not-mine      reviewing a PR whose named reviewers do not include me
 ;;   orphaned      reviewing a PR absent from the feed: merged, closed, or no
 ;;                 longer requested of me
 ;;
-;; `not-mine' and `orphaned' are last because they are the kill candidates:
+;; `stale', `not-mine' and `orphaned' are last because they are the kill
+;; candidates:
 ;; everything above them is work, everything below is cleanup.
 ;;
 ;; Side-effecting render, marks and the quit action live in the board layer
@@ -37,13 +39,14 @@
 (require 'subr-x)
 
 (defconst decknix-session-board-lanes
-  '(human-review bot-review wip not-mine orphaned)
+  '(human-review bot-review wip stale not-mine orphaned)
   "Lanes in render order.")
 
 (defconst decknix-session-board-lane-titles
   '((human-review . "Human Reviews")
     (bot-review   . "Bot Reviews")
     (wip          . "WIP")
+    (stale        . "Stale")
     (not-mine     . "Not Mine")
     (orphaned     . "Orphaned"))
   "Human-readable lane titles.")
@@ -52,6 +55,7 @@
   '((human-review . "a colleague's PR")
     (bot-review   . "dependency bumps and bot PRs")
     (wip          . "my own sessions")
+    (stale        . "PR conflicts or is a draft -- not reviewable")
     (not-mine     . "named reviewers do not include me")
     (orphaned     . "PR merged, closed, or no longer requested"))
   "One-line explanation per lane, shown beside the count.
@@ -68,6 +72,15 @@ explain is a lane they will not trust enough to bulk-kill from.")
   (or (alist-get lane decknix-session-board-lane-hints) ""))
 
 ;; --- classification ---------------------------------------------------
+
+(defun decknix-session-board-not-reviewable-p (item)
+  "Return non-nil when ITEM cannot be reviewed as it stands.
+
+A conflicting diff or a draft.  Both are the author's move, not mine, and
+auto-review already refuses to dispatch on either -- so a LIVE session on
+one was started before the condition appeared and has outlived its reason."
+  (or (equal (alist-get 'mergeable item) "CONFLICTING")
+      (eq (alist-get 'draft item) t)))
 
 (defun decknix-session-board-classify (session item-for-key mine-p bot-p)
   "Return the lane for SESSION.
@@ -90,6 +103,10 @@ of work, and splitting it across lanes would offer to kill half of it."
          ;; because every other test needs an item to look at.
          ((null item) 'orphaned)
          ((not (funcall mine-p item)) 'not-mine)
+         ;; Before the bot/human split: an unreviewable PR is cleanup
+         ;; whoever wrote it, and leaving it in a review lane is what let
+         ;; upside#17178 keep presenting itself as work.
+         ((decknix-session-board-not-reviewable-p item) 'stale)
          ((funcall bot-p item) 'bot-review)
          (t 'human-review))))))
 
@@ -224,8 +241,12 @@ lost."
      " · ")))
 
 (defun decknix-session-board-killable-lanes ()
-  "Return the lanes whose sessions are cleanup rather than work."
-  '(not-mine orphaned))
+  "Return the lanes whose sessions are cleanup rather than work.
+
+`stale' joins them because a conflicted or draft PR cannot be reviewed
+until its author acts: the session is waiting on something only they can
+do, and auto-review will not re-dispatch it while that holds."
+  '(stale not-mine orphaned))
 
 (defun decknix-session-board-killable-p (row)
   "Return non-nil when ROW is in a cleanup lane.

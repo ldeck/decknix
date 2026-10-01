@@ -24,7 +24,13 @@
     ("upside#200" . ((repo . "UpsideRealty/upside") (number . 200)
                      (author . "dependabot[bot]") (author_kind . "bot")))
     ("upside#300" . ((repo . "UpsideRealty/upside") (number . 300)
-                     (author . "bob") (author_kind . "human")))))
+                     (author . "bob") (author_kind . "human")))
+    ("upside#400" . ((repo . "UpsideRealty/upside") (number . 400)
+                     (author . "carol") (author_kind . "human")
+                     (mergeable . "CONFLICTING")))
+    ("upside#500" . ((repo . "UpsideRealty/upside") (number . 500)
+                     (author . "dave") (author_kind . "human")
+                     (draft . t)))))
 
 (defun decknix-sb-test--item (key) (alist-get key decknix-sb-test--items nil nil #'equal))
 (defun decknix-sb-test--mine (item) (not (equal 300 (alist-get 'number item))))
@@ -142,12 +148,15 @@ shift a mark onto a different session."
 
 ;; --- cleanup lanes ----------------------------------------------------
 
-(ert-deftest decknix-sb--only-not-mine-and-orphaned-are-cleanup ()
-  "`C' marks these for bulk kill, so the set must not creep."
-  (should (equal '(not-mine orphaned) (decknix-session-board-killable-lanes)))
+(ert-deftest decknix-sb--cleanup-is-exactly-stale-not-mine-and-orphaned ()
+  "`C' marks these for bulk kill, so the set must not creep.  `stale' was
+added deliberately: a conflicted or draft PR is the author's move, and
+auto-review already refuses to dispatch on either."
+  (should (equal '(stale not-mine orphaned)
+                 (decknix-session-board-killable-lanes)))
   (dolist (lane '(human-review bot-review wip))
     (should-not (decknix-session-board-killable-p (list :lane lane))))
-  (dolist (lane '(not-mine orphaned))
+  (dolist (lane '(stale not-mine orphaned))
     (should (decknix-session-board-killable-p (list :lane lane)))))
 
 ;; --- labels -----------------------------------------------------------
@@ -232,6 +241,33 @@ exists to be scanned by."
            (label (decknix-session-board-row-label row nil w)))
       (should (= w (string-width label)))
       (should (string-suffix-p "working" label)))))
+
+(ert-deftest decknix-sb--a-conflicting-pr-is-stale-not-a-review ()
+  "upside#17178 conflicts and kept presenting itself as work to review."
+  (should (eq 'stale (decknix-sb-test--classify
+                      (decknix-sb-test--session "*C: c*" "asking" '("upside#400"))))))
+
+(ert-deftest decknix-sb--a-draft-pr-is-stale-not-a-review ()
+  (should (eq 'stale (decknix-sb-test--classify
+                      (decknix-sb-test--session "*C: d*" "asking" '("upside#500"))))))
+
+(ert-deftest decknix-sb--not-mine-outranks-stale ()
+  "If it was never mine, that is the more useful thing to say -- and it
+stays true after the author rebases."
+  (should (eq 'not-mine (decknix-sb-test--classify
+                         (decknix-sb-test--session "*C: e*" "asking"
+                                                   '("upside#300"))))))
+
+(ert-deftest decknix-sb--stale-is-a-cleanup-lane ()
+  "`C' then `k' must reach it: the session is waiting on something only
+the author can do."
+  (should (memq 'stale (decknix-session-board-killable-lanes)))
+  (should (decknix-session-board-killable-p '(:lane stale))))
+
+(ert-deftest decknix-sb--a-reviewable-pr-is-not-stale ()
+  (should-not (decknix-session-board-not-reviewable-p
+               '((mergeable . "MERGEABLE") (draft . :json-false))))
+  (should-not (decknix-session-board-not-reviewable-p '((number . 1)))))
 
 (provide 'decknix-session-board-model-test)
 ;;; decknix-session-board-model-test.el ends here

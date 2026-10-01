@@ -337,18 +337,33 @@ ready PRs are never inadvertently suppressed."
       (should (decknix--hub-requests-reviewed-visible-p
                '((my_review . "COMMENTED") (others_reviewed . t)))))))
 
-(ert-deftest decknix-hub-attention-filter--asking-session-beats-conflict ()
-  "A conflicted PR is not mergeable, but the session may be asking about
-exactly that conflict."
+(ert-deftest decknix-hub-attention-filter--a-session-does-not-beat-conflict ()
+  "Reversed deliberately.  A conflicted PR cannot be reviewed until its
+author rebases, so a session asking about it is obsolete rather than a call
+on your time -- and overriding this made upside#17178 and #16823 reappear
+indefinitely however often they were dismissed."
   (let ((decknix--hub-requests-hide-conflict t))
     (decknix-attention-test--with-session-state "asking"
-      (should (decknix--hub-requests-conflict-visible-p
-               '((mergeable . "CONFLICTING")))))))
+      (should-not (decknix--hub-requests-conflict-visible-p
+                   '((mergeable . "CONFLICTING")))))))
 
-(ert-deftest decknix-hub-attention-filter--asking-session-beats-draft ()
+(ert-deftest decknix-hub-attention-filter--a-session-does-not-beat-draft ()
+  "A draft is unfinished, so a session on it is premature, not urgent."
   (let ((decknix--hub-requests-hide-draft t))
     (decknix-attention-test--with-session-state "asking"
-      (should (decknix--hub-requests-draft-visible-p '((draft . t)))))))
+      (should-not (decknix--hub-requests-draft-visible-p '((draft . t)))))))
+
+(ert-deftest decknix-hub-attention-filter--the-override-still-covers-its-own-filters ()
+  "Narrowing the override must not disarm it where it was right: those
+filters mean \"waiting on someone else\", which a blocked session refutes."
+  (let ((decknix--hub-requests-hide-bot-pending t)
+        (decknix--hub-requests-hide-i-replied-last t)
+        (decknix--hub-requests-hide-reviewed 'hide-any))
+    (decknix-attention-test--with-session-state "asking"
+      (should (decknix--hub-requests-attention-visible-p
+               '((bot_pending . t) (i_replied_last . t))))
+      (should (decknix--hub-requests-reviewed-visible-p
+               '((my_review . "COMMENTED") (others_reviewed . t)))))))
 
 (ert-deftest decknix-hub-attention-filter--waiting-and-netfail-also-want-me ()
   "A permission prompt blocks a turn mid-flight and a dead turn needs a
