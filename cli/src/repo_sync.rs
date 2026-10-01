@@ -593,11 +593,15 @@ pub fn report_path() -> PathBuf {
 }
 
 fn write_report(results: &[SyncResult]) -> std::io::Result<()> {
+    let arr: Vec<_> = results.iter().map(result_json).collect();
+    write_report_rows(&arr)
+}
+
+fn write_report_rows(arr: &[serde_json::Value]) -> std::io::Result<()> {
     let path = report_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let arr: Vec<_> = results.iter().map(result_json).collect();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -609,6 +613,58 @@ fn write_report(results: &[SyncResult]) -> std::io::Result<()> {
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, serde_json::to_string_pretty(&body).unwrap_or_default())?;
     std::fs::rename(&tmp, &path)
+}
+
+/// Merge RESULTS into the existing report, replacing only their own rows.
+///
+/// A scoped (`--only') sync used to write no report at all, on the grounds
+/// that rewriting it with one row would erase the other 59.  But the sidebar
+/// renders FROM the report, so the row it had just fixed stayed on screen:
+/// `fix-lock' removed an abandoned lock, the scoped re-sync confirmed the
+/// repo was clean, and `upside' still showed "stale lock" because nothing
+/// rewrote its row.  Refreshing the view cannot help when the data behind it
+/// is unchanged.
+///
+/// Patching keeps both properties: other repos' rows survive, and the rows
+/// this run actually observed are current.  Rows are keyed on `path', which
+/// is what `result_json' emits and what the sidebar matches on.
+fn patch_report(results: &[SyncResult]) -> std::io::Result<()> {
+    let path = report_path();
+    let existing: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("repos").cloned())
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    let fresh: Vec<serde_json::Value> = results.iter().map(result_json).collect();
+    write_report_rows(&merge_rows(existing, fresh))
+}
+
+/// Replace rows in EXISTING that FRESH also covers, keyed on `path'.
+///
+/// Pure so the merge can be tested without a filesystem: the failure it
+/// guards against is losing the 59 rows a scoped sync did not look at.
+fn merge_rows(
+    existing: Vec<serde_json::Value>,
+    fresh: Vec<serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    let replaced: std::collections::HashSet<String> = fresh
+        .iter()
+        .filter_map(|r| r.get("path").and_then(|p| p.as_str()).map(str::to_owned))
+        .collect();
+
+    let mut merged: Vec<serde_json::Value> = existing
+        .into_iter()
+        .filter(|r| {
+            r.get("path")
+                .and_then(|p| p.as_str())
+                .map(|p| !replaced.contains(p))
+                .unwrap_or(true)
+        })
+        .collect();
+    merged.extend(fresh);
+    merged
 }
 
 /// Does any process currently hold LOCK open?
@@ -663,8 +719,16 @@ pub fn run(action: RepoAction) -> Result<()> {
             // retry: the sidebar renders from this file rather than shelling
             // out per paint, and a partial sweep must not overwrite the full
             // picture with one repo.
-            if !dry_run && only.is_none() {
-                if let Err(e) = write_report(&results) {
+            if !dry_run {
+                let wrote = if only.is_none() {
+                    write_report(&results)
+                } else {
+                    // Scoped: patch these rows into the existing report so a
+                    // fixed repo stops showing its old problem, without
+                    // discarding the rows this run did not look at.
+                    patch_report(&results)
+                };
+                if let Err(e) = wrote {
                     eprintln!("decknix: could not write repo-sync report: {e}");
                 }
             }
@@ -906,5 +970,49 @@ mod tests {
         assert!(out.iter().all(|r| r.org == "acme"));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    fn row(path: &str, outcome: &str) -> serde_json::Value {
+        serde_json::json!({ "path": path, "outcome": outcome })
+    }
+
+    #[test]
+    fn scoped_patch_keeps_the_rows_it_did_not_look_at() {
+        // The reason a scoped sync wrote no report at all: rewriting it with
+        // one row erased the other 59.
+        let existing = vec![row("/a", "fetched"), row("/b", "error-lock"), row("/c", "skipped")];
+        let fresh = vec![row("/b", "fetched")];
+        let merged = merge_rows(existing, fresh);
+        assert_eq!(merged.len(), 3);
+        let paths: Vec<&str> =
+            merged.iter().filter_map(|r| r["path"].as_str()).collect();
+        assert!(paths.contains(&"/a"));
+        assert!(paths.contains(&"/c"));
+    }
+
+    #[test]
+    fn scoped_patch_replaces_the_fixed_row() {
+        // The bug: `fix-lock' cleared upside's lock, the scoped re-sync saw a
+        // clean repo, and the sidebar still read "stale lock" because nothing
+        // rewrote the row.
+        let existing = vec![row("/upside", "error-lock")];
+        let fresh = vec![row("/upside", "fetched")];
+        let merged = merge_rows(existing, fresh);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0]["outcome"].as_str(), Some("fetched"));
+    }
+
+    #[test]
+    fn scoped_patch_into_an_empty_report_just_adds() {
+        let merged = merge_rows(vec![], vec![row("/a", "fetched")]);
+        assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn scoped_patch_keeps_rows_with_no_path() {
+        // A malformed row must not be silently dropped by the merge.
+        let existing = vec![serde_json::json!({ "outcome": "weird" })];
+        let merged = merge_rows(existing, vec![row("/a", "fetched")]);
+        assert_eq!(merged.len(), 2);
     }
 }
