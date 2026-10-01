@@ -590,5 +590,13 @@ whole point of the indicators."
                               :pr '((mergeable . "CONFLICTING")))))))
     (should (equal "broken" (plist-get (car claims) :repo)))))
 
+
+(ert-deftest decknix-layout--count-label-omits-a-zero-half ()
+  "A row reading \"0 pr 2 wt\" spends half its width on what is absent."
+  (should (equal "2 wt" (decknix--layout-count-label 0 2)))
+  (should (equal "3 pr" (decknix--layout-count-label 3 0)))
+  (should (equal "3 pr 2 wt" (decknix--layout-count-label 3 2)))
+  (should (equal "" (decknix--layout-count-label 0 0))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here

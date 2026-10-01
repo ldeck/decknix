@@ -630,6 +630,16 @@ can be lost, so it must not be masked by a merged or orphaned flag."
   (or (alist-get state decknix-sidebar-layout-state-glyphs nil nil #'equal)
       "·"))
 
+(defun decknix--layout-count-label (prs worktrees)
+  "Return a count label for PRS and WORKTREES, omitting a zero half.
+
+A row reading \"0 pr 2 wt\" spends half its width telling the user what is
+not there, and the Dormant section is mostly such rows."
+  (string-join
+   (delq nil (list (when (> prs 0) (format "%d pr" prs))
+                   (when (> worktrees 0) (format "%d wt" worktrees))))
+   " "))
+
 (defun decknix--layout-group-label (group width)
   "Return the collapsed one-line label for GROUP, padded to WIDTH.
 
