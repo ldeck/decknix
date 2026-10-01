@@ -80,10 +80,13 @@ shown, so the section never shrinks silently.")
   (gethash repo decknix--layout-expanded))
 
 (defun decknix-layout-toggle-expand ()
-  "Expand or collapse the Reviews group on this row."
+  "Expand or collapse the group or held-items row at point."
   (interactive)
-  (let ((repo (get-text-property (line-beginning-position) 'decknix-layout-repo)))
-    (unless repo (user-error "Not on a Reviews group row"))
+  (let ((repo (or (get-text-property (line-beginning-position)
+                                     'decknix-layout-repo)
+                  (get-text-property (line-beginning-position)
+                                     'decknix-layout-expand-key))))
+    (unless repo (user-error "Nothing to expand on this row"))
     (if (decknix--layout-expanded-p repo)
         (remhash repo decknix--layout-expanded)
       (puthash repo t decknix--layout-expanded))
@@ -451,12 +454,14 @@ session.  Keeps the sharing visible without repeating the whole subtree."
          (right (decknix--layout-count-label (plist-get claim :prs)
                                              (plist-get claim :worktrees)))
          (pad (max 1 (- width (string-width left) (string-width right))))
-         (budget decknix-sidebar-layout-items-per-repo)
-         (shown-prs (if budget (seq-take prs budget) prs))
-         (left-budget (and budget (max 0 (- budget (length shown-prs)))))
-         (shown-wts (if budget (seq-take wts left-budget) wts))
-         (held (- (+ (length prs) (length wts))
-                  (+ (length shown-prs) (length shown-wts)))))
+         (expand-key (concat "items:" (or (plist-get claim :repo) "")))
+         (split (decknix--layout-claim-items
+                 claim decknix-sidebar-layout-items-per-repo
+                 (decknix--layout-expanded-p expand-key)))
+         (shown-prs (nth 0 split))
+         (shown-wts (nth 1 split))
+         (held (nth 2 split)))
+    (ignore prs wts)
     (insert (propertize (concat left (make-string pad ?\s) right)
                         'face (decknix--layout-severity-face
                                (plist-get claim :severity))
@@ -481,8 +486,13 @@ session.  Keeps the sharing visible without repeating the whole subtree."
               "\n")
       (setq line-num (1+ line-num)))
     (when (> held 0)
-      (insert (propertize (format "      … %d more" held)
-                          'face 'font-lock-comment-face)
+      ;; Carries the expand key: without a property this row was inert, so
+      ;; RET on it did nothing and the held worktrees were unreachable.
+      (insert (propertize (format "      … %d more worktree%s"
+                                  held (if (= 1 held) "" "s"))
+                          'face 'font-lock-comment-face
+                          'decknix-layout-expand-key expand-key
+                          'help-echo "RET to show these worktrees")
               "\n")
       (setq line-num (1+ line-num))))
   line-num)

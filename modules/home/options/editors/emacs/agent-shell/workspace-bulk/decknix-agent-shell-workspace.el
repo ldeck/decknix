@@ -5408,6 +5408,8 @@ in-menu `S Session…' entry both route here."
                   "decknix-repo-sync-actions" ())
 (declare-function decknix-repo-sync-toggle-failed-expanded
                   "decknix-repo-sync-actions" ())
+(declare-function decknix-layout-toggle-expand
+                  "decknix-sidebar-layout-render" ())
 
 (defun decknix-sidebar-ret ()
   "Open the action menu for the row at point.
@@ -5423,6 +5425,8 @@ directly — see `decknix-sidebar-primary-action'."
                                           'decknix-repo-sync-problem))
          (repo-collapsed (get-text-property (line-beginning-position)
                                             'decknix-repo-sync-collapsed))
+         (expand-key (get-text-property (line-beginning-position)
+                                        'decknix-layout-expand-key))
          (cmd (pcase type
                 ('review            #'decknix-sidebar-request-menu)
                 ('wip               #'decknix-sidebar-wip-menu)
@@ -5445,6 +5449,9 @@ directly — see `decknix-sidebar-primary-action'."
      ;; through to a goto that has no branch for them either -- RET on a
      ;; stale lock did nothing at all, while the remedies to offer had
      ;; been written and simply never bound.
+     ;; A held-items row: the only thing on it is "show the rest".
+     ((and expand-key (fboundp 'decknix-layout-toggle-expand))
+      (call-interactively #'decknix-layout-toggle-expand))
      ((and repo-collapsed
            (fboundp 'decknix-repo-sync-toggle-failed-expanded))
       (call-interactively #'decknix-repo-sync-toggle-failed-expanded))
