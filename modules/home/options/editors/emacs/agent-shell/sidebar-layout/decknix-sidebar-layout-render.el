@@ -425,8 +425,8 @@ collapsed repo still shows that something in there is blocked."
   (let* ((prs (plist-get claim :pr-items))
          (wts (plist-get claim :wt-items))
          (left (format "    ⇡ %s" (plist-get claim :repo)))
-         (right (format "%d pr %d wt" (plist-get claim :prs)
-                        (plist-get claim :worktrees)))
+         (right (decknix--layout-count-label (plist-get claim :prs)
+                                             (plist-get claim :worktrees)))
          (pad (max 1 (- width (string-width left) (string-width right))))
          (budget decknix-sidebar-layout-items-per-repo)
          (shown-prs (if budget (seq-take prs budget) prs))
@@ -483,9 +483,9 @@ an agent is on, Dormant is work sitting there without one."
       (setq line-num (1+ line-num))
       (dolist (g shown)
         (let* ((left (format " ·  %s" (plist-get g :repo)))
-               (right (format "%d pr %d wt"
-                              (length (plist-get g :prs))
-                              (length (plist-get g :worktrees))))
+               (right (decknix--layout-count-label
+                       (length (plist-get g :prs))
+                       (length (plist-get g :worktrees))))
                (pad (max 1 (- width (string-width left) (string-width right)))))
           (insert (propertize (concat left (make-string pad ?\s) right)
                               'face 'font-lock-comment-face
