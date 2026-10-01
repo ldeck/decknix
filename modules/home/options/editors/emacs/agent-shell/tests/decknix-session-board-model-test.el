@@ -205,5 +205,33 @@ bulk-kill from."
     (should (string-match-p "1 Orphaned" s)))
   (should-not (decknix-session-board-summary nil)))
 
+(ert-deftest decknix-sb--a-long-name-is-truncated-not-allowed-to-overflow ()
+  "A grouped session covering three PRs overflowed the line, and the state
+it was there to show was the first thing lost off the end."
+  (let* ((row (decknix-session-board-row
+               (decknix-sb-test--session
+                "*C: g*" "asking"
+                '("oneroof-integration#190" "oneroof-integration#189"
+                  "oneroof-integration#188"))
+               'human-review))
+         (label (decknix-session-board-row-label row nil 48)))
+    (should (= 48 (string-width label)))
+    (should (string-suffix-p "asking" label))
+    (should (string-match-p "…" label))))
+
+(ert-deftest decknix-sb--truncation-keeps-the-state-readable ()
+  "At any plausible width the state survives; it is the column the board
+exists to be scanned by."
+  (dolist (w '(40 48 60 76))
+    (let* ((row (decknix-session-board-row
+                 (decknix-sb-test--session
+                  "*C: x*" "working"
+                  '("a-very-long-repository-name#123456"
+                    "another-long-repository-name#99"))
+                 'wip))
+           (label (decknix-session-board-row-label row nil w)))
+      (should (= w (string-width label)))
+      (should (string-suffix-p "working" label)))))
+
 (provide 'decknix-session-board-model-test)
 ;;; decknix-session-board-model-test.el ends here
