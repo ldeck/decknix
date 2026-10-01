@@ -178,6 +178,40 @@ that reads as \"a human has to look\".")
                            " · diverged from origin"))
               ('failed " · sync failed")))))
 
+(defcustom decknix-repo-sync-collapse-failed 3
+  "Collapse `failed\=' rows into one summary line past this many.
+
+A sweep that cannot reach the network fails every repo at once -- measured
+11 identical \"sync failed\" rows in red -- which crowds out the kinds that
+name a specific, fixable problem.  The rows say the same thing, so one
+line saying it once with a count carries the same information."
+  :type 'integer
+  :group 'decknix)
+
+(defun decknix--repo-sync-collapse (problems threshold expanded)
+  "Partition PROBLEMS into (KEPT . COLLAPSED) for rendering.
+
+COLLAPSED is the list of `failed\=' problems folded into a summary line, or
+nil when there is nothing to fold.  Folding applies only when EXPANDED is
+nil and the failed count exceeds THRESHOLD: below it the rows are worth
+reading individually, and a count of one is not a summary.
+
+Only `failed\=' folds.  Every other kind names a distinct remedy -- a stale
+lock, a dirty tree, a diverged branch -- so collapsing those would hide
+the actionable rows behind a number."
+  (let* ((failed (seq-filter (lambda (p) (eq 'failed (plist-get p :kind)))
+                             problems)))
+    (if (or expanded (not (integerp threshold))
+            (<= (length failed) threshold))
+        (cons problems nil)
+      (cons (seq-remove (lambda (p) (eq 'failed (plist-get p :kind)))
+                        problems)
+            failed))))
+
+(defun decknix--repo-sync-collapsed-label (collapsed)
+  "Return the summary line for COLLAPSED failed problems."
+  (format "⚠ %d repos · sync failed" (length collapsed)))
+
 (defun decknix--repo-sync-summary (problems)
   "Return a one-line count of PROBLEMS by kind, or nil when there are none."
   (let ((counts (mapcar (lambda (kind)

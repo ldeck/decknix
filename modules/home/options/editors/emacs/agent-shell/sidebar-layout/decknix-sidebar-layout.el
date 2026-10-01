@@ -612,6 +612,32 @@ can be lost, so it must not be masked by a merged or orphaned flag."
                 'face (or (alist-get cond- decknix-sidebar-layout-wt-glyph-faces)
                           'shadow))))
 
+(defun decknix--layout-dedup-claims (session-rows)
+  "Mark a repo claim that a previous session in SESSION-ROWS already showed.
+
+Two sessions sharing a workspace both claim its repos, and the full
+PR/worktree subtree was rendered once per session -- six identical rows
+twice, in a sidebar whose purpose is an uncluttered read.
+
+The sharing is still worth stating, so the claim is marked `:duplicate\='
+rather than dropped: the render collapses it to one line naming the repo
+instead of hiding it, which keeps \"two sessions are on this\" visible
+without paying for it twice."
+  (let ((seen (make-hash-table :test 'equal)))
+    (mapcar
+     (lambda (row)
+       (let ((claims
+              (mapcar
+               (lambda (claim)
+                 (let ((repo (plist-get claim :repo)))
+                   (if (and repo (gethash repo seen))
+                       (plist-put (copy-sequence claim) :duplicate t)
+                     (when repo (puthash repo t seen))
+                     claim)))
+               (plist-get row :repos))))
+         (plist-put (copy-sequence row) :repos claims)))
+     session-rows)))
+
 (defun decknix--layout-worst-severity (prs worktrees)
   "Return the worst severity across PRS and WORKTREES, or nil when both empty."
   (let ((ranks (append (mapcar #'decknix--layout-pr-severity prs)
