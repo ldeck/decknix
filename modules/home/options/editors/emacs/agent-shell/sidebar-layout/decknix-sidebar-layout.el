@@ -33,6 +33,7 @@
 
 (require 'cl-lib)
 (require 'seq)
+(require 'decknix-session-assoc)
 (require 'subr-x)
 
 (defconst decknix-sidebar-layout-attention-states '("waiting" "asking" "netfail")
@@ -362,6 +363,21 @@ PR; until then this is inference, not data."
   (seq-some (lambda (tag) (decknix--layout-tag-matches-repo-p tag repo))
             (nth 1 session)))
 
+(defun decknix--layout-session-observed-roots (session)
+  "Return the worktree roots SESSION has recently been working in.
+
+Observed from the paths its tool calls touch, so it is data rather than
+inference, and it is worktree-granular and crosses repos -- which the tag
+rule could not express.  Nil for a session that has run no tool calls
+yet, which is what keeps the tag fallback meaningful."
+  (let ((buf (get-buffer (or (nth 0 session) ""))))
+    (and (buffer-live-p buf)
+         (ignore-errors (decknix-session-assoc-current buf)))))
+
+(defun decknix--layout-session-observed-wt-p (roots wt)
+  "Return non-nil when WT is one of the observed ROOTS."
+  (decknix-session-assoc-claims-wt-p roots (decknix--layout-wt-path wt)))
+
 (defun decknix--layout-session-owns-wt-p (session wt)
   "Return non-nil when SESSION is working in worktree WT.
 
@@ -404,11 +420,24 @@ which would hide the sharing."
          (rows
           (mapcar
            (lambda (session)
-             (let* ((wts (seq-filter
+             (let* ((observed (decknix--layout-session-observed-roots session))
+                    (wts (seq-filter
                           (lambda (wt)
                             (or (decknix--layout-session-owns-wt-p session wt)
-                                (decknix--layout-session-claims-repo-p
-                                 session (or (plist-get wt :repo) ""))))
+                                ;; Observed association wins where it exists:
+                                ;; it names the WORKTREES this session has
+                                ;; actually been editing in, across repos.
+                                (and observed
+                                     (decknix--layout-session-observed-wt-p
+                                      observed wt))
+                                ;; Tags only when nothing was observed -- a
+                                ;; session that has run no tool calls yet.
+                                ;; Measured, the tag rule claimed every
+                                ;; worktree of one repo while missing the
+                                ;; three other repos the session was in.
+                                (and (null observed)
+                                     (decknix--layout-session-claims-repo-p
+                                      session (or (plist-get wt :repo) "")))))
                           worktrees))
                     ;; Two ways a PR is claimed, and both are needed.  BRANCH
                     ;; is the precise one: a session whose workspace IS a
@@ -423,8 +452,12 @@ which would hide the sharing."
                           (lambda (p)
                             (or (and (plist-get p :branch)
                                      (member (plist-get p :branch) branches))
-                                (decknix--layout-session-claims-repo-p
-                                 session (or (plist-get p :repo) ""))))
+                                ;; No repo-level fallback once the session has
+                                ;; been observed: claiming a repo's every PR
+                                ;; is what hid the one it was working on.
+                                (and (null observed)
+                                     (decknix--layout-session-claims-repo-p
+                                      session (or (plist-get p :repo) "")))))
                           all-prs)))
                (setq claimed-wts (append claimed-wts wts)
                      claimed-prs (append claimed-prs prs))
