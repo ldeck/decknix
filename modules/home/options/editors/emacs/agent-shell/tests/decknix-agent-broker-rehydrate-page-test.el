@@ -16,6 +16,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'decknix-agent-broker-rehydrate)
 
 (defun decknix-page-test--log (&rest lines) (apply #'list lines))
@@ -171,6 +172,110 @@ unresponsive; the largest single log took 6.8 seconds to read and split."
 
 (ert-deftest decknix-tail--missing-file-is-nil-not-an-error ()
   (should-not (decknix--agent-broker-read-log-tail "/nonexistent/x.log")))
+
+
+;; --- liveness probe must not fork ------------------------------------
+
+(ert-deftest decknix-live--probe-does-not-spawn-a-process ()
+  "`call-process' to `kill' ran once per session per status query and
+measured 0.33 s for 13 against 0.0000 s for the builtin -- the dominant
+cost of a status sweep, and what made the buffer picker lag."
+  (cl-letf (((symbol-function 'call-process)
+             (lambda (&rest _) (error "status probe must not fork"))))
+    ;; A real pidfile for a process we know is alive: this one.
+    (let* ((dir (make-temp-file "dk-brk" t))
+           (key "s-test")
+           (pf (expand-file-name (format "%s.sock.pid" key) dir)))
+      (unwind-protect
+          (progn
+            (with-temp-file pf (insert (number-to-string (emacs-pid))))
+            (cl-letf (((symbol-function 'decknix--agent-broker-dir)
+                       (lambda () dir)))
+              (should (decknix--agent-broker-live-p key))))
+        (delete-directory dir t)))))
+
+(ert-deftest decknix-live--a-dead-pid-is-not-live ()
+  (let* ((dir (make-temp-file "dk-brk2" t))
+         (key "s-dead")
+         (pf (expand-file-name (format "%s.sock.pid" key) dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file pf (insert "999999"))
+          (cl-letf (((symbol-function 'decknix--agent-broker-dir)
+                     (lambda () dir)))
+            (should-not (decknix--agent-broker-live-p key))))
+      (delete-directory dir t))))
+
+(ert-deftest decknix-live--a-missing-pidfile-is-not-live ()
+  (cl-letf (((symbol-function 'decknix--agent-broker-dir)
+             (lambda () "/nonexistent")))
+    (should-not (decknix--agent-broker-live-p "s-nope"))))
+
+;; --- the working-state cache -----------------------------------------
+
+(ert-deftest decknix-working-cache--one-ui-pass-probes-once-per-session ()
+  "The picker annotates every candidate and a completion front-end re-runs
+that per keystroke; without the cache one keystroke re-read 13 logs."
+  (let ((probes 0)
+        (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
+        (decknix-agent-broker-working-ttl 60)
+        (buf (generate-new-buffer " w")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'decknix--agent-broker-working-uncached-p)
+                   (lambda (_k) (setq probes (1+ probes)) t)))
+          (with-current-buffer buf
+            (setq-local decknix--agent-broker-key "s-x"))
+          (dotimes (_ 10) (decknix--agent-broker-working-p buf))
+          (should (= 1 probes)))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-working-cache--expires-so-a-finished-turn-shows-up ()
+  "A cache that never expired would pin a session at `working' forever."
+  (let ((probes 0)
+        (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
+        (decknix-agent-broker-working-ttl 0)
+        (buf (generate-new-buffer " w2")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'decknix--agent-broker-working-uncached-p)
+                   (lambda (_k) (setq probes (1+ probes)) t)))
+          (with-current-buffer buf
+            (setq-local decknix--agent-broker-key "s-y"))
+          (decknix--agent-broker-working-p buf)
+          (decknix--agent-broker-working-p buf)
+          (should (= 2 probes)))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-working-cache--caches-false-too ()
+  "Caching only the true case would re-probe every idle session on every
+pass, which is most of them."
+  (let ((probes 0)
+        (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
+        (decknix-agent-broker-working-ttl 60)
+        (buf (generate-new-buffer " w3")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'decknix--agent-broker-working-uncached-p)
+                   (lambda (_k) (setq probes (1+ probes)) nil)))
+          (with-current-buffer buf
+            (setq-local decknix--agent-broker-key "s-z"))
+          (dotimes (_ 5) (should-not (decknix--agent-broker-working-p buf)))
+          (should (= 1 probes)))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-working-cache--is-keyed-per-session ()
+  (let ((probes 0)
+        (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
+        (decknix-agent-broker-working-ttl 60)
+        (a (generate-new-buffer " wa"))
+        (b (generate-new-buffer " wb")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'decknix--agent-broker-working-uncached-p)
+                   (lambda (_k) (setq probes (1+ probes)) t)))
+          (with-current-buffer a (setq-local decknix--agent-broker-key "s-a"))
+          (with-current-buffer b (setq-local decknix--agent-broker-key "s-b"))
+          (decknix--agent-broker-working-p a)
+          (decknix--agent-broker-working-p b)
+          (should (= 2 probes)))
+      (kill-buffer a) (kill-buffer b))))
 
 (provide 'decknix-agent-broker-rehydrate-page-test)
 ;;; decknix-agent-broker-rehydrate-page-test.el ends here
