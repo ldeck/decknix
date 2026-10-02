@@ -1953,6 +1953,15 @@ let
     testFiles = [ "decknix-session-board-test.el" ];
   };
 
+  # What a session is actually working on, observed from the file paths its
+  # tool calls touch rather than inferred from its tags.
+  decknix-session-assoc-el = mkEmacsTestedPackage {
+    pname = "decknix-session-assoc";
+    src = ./agent-shell/session-assoc;
+    packageRequires = [ ];
+    testFiles = [ "decknix-session-assoc-test.el" ];
+  };
+
   # Bulk repo remedies, the repo counterpart to the Review and Session
   # Boards.  Split pure/side-effecting per AGENTS.md Rule 2.
   decknix-forge-board-model-el = mkEmacsTestedPackage {
@@ -3402,6 +3411,7 @@ in
           decknix-session-board-el
           decknix-forge-board-model-el
           decknix-forge-board-el
+          decknix-session-assoc-el
           decknix-sidebar-layout-el
           decknix-sidebar-layout-render-el
           decknix-browse-el
@@ -4419,6 +4429,7 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; command does not exist until something requires them.
         (require 'decknix-forge-board-model)
         (require 'decknix-forge-board)
+        (require 'decknix-session-assoc)
 
         (require 'decknix-sidebar-layout)
         (require 'decknix-sidebar-layout-render)
