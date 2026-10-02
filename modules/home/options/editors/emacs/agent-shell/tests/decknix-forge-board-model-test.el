@@ -188,5 +188,39 @@ mistaken for a bug."
 (ert-deftest decknix-fb--summary-of-nothing-is-nil ()
   (should-not (decknix-forge-board-summary nil)))
 
+
+;; --- hard reset -------------------------------------------------------
+
+(ert-deftest decknix-fb--reset-is-confined-to-the-dirty-lane ()
+  "A diverged repo is excluded deliberately: resetting one discards local
+COMMITS, not just uncommitted edits -- a larger loss than this verb is
+described as making."
+  (should (decknix-forge-board-resettable-p (decknix-fb-test--p 'dirty "a")))
+  (dolist (kind '(lock failed diverged))
+    (should-not (decknix-forge-board-resettable-p
+                 (decknix-fb-test--p kind "a")))))
+
+(ert-deftest decknix-fb--reset-never-touches-a-diverged-repo ()
+  "Pinned separately from the lane list because this is the case where the
+loss is worst and least expected."
+  (should-not (decknix-forge-board-filter-resettable
+               (list (decknix-fb-test--p 'diverged "a")))))
+
+(ert-deftest decknix-fb--filter-resettable-keeps-only-dirty ()
+  (let ((rows (list (decknix-fb-test--p 'dirty "a")
+                    (decknix-fb-test--p 'diverged "b")
+                    (decknix-fb-test--p 'dirty "c"))))
+    (should (equal '("a" "c")
+                   (mapcar (lambda (r) (plist-get r :name))
+                           (decknix-forge-board-filter-resettable rows))))))
+
+(ert-deftest decknix-fb--stash-and-reset-cover-the-same-lane ()
+  "They are alternatives on the same fault -- keep the work or discard it
+-- so a row offering one must offer the other."
+  (dolist (kind decknix-forge-board-lanes)
+    (let ((row (decknix-fb-test--p kind "a")))
+      (should (eq (decknix-forge-board-stashable-p row)
+                  (decknix-forge-board-resettable-p row))))))
+
 (provide 'decknix-forge-board-model-test)
 ;;; decknix-forge-board-model-test.el ends here

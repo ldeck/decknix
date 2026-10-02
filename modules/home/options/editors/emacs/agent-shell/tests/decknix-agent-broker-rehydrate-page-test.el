@@ -213,69 +213,104 @@ cost of a status sweep, and what made the buffer picker lag."
 
 ;; --- the working-state cache -----------------------------------------
 
-(ert-deftest decknix-working-cache--one-ui-pass-probes-once-per-session ()
-  "The picker annotates every candidate and a completion front-end re-runs
-that per keystroke; without the cache one keystroke re-read 13 logs."
-  (let ((probes 0)
+(ert-deftest decknix-working-cache--an-unchanged-log-is-not-re-read ()
+  "Keyed on the log\='s identity, not a clock.  Allocation is the reason:
+each miss reads 64 KB, splits it into hundreds of strings and JSON-parses
+each one, and at 13 sessions every 2 seconds that churn drives the GC
+that interrupts typing."
+  (let ((reads 0)
         (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
-        (decknix-agent-broker-working-ttl 60)
-        (buf (generate-new-buffer " w")))
+        (f (make-temp-file "dk-wc")))
     (unwind-protect
-        (cl-letf (((symbol-function 'decknix--agent-broker-working-uncached-p)
-                   (lambda (_k) (setq probes (1+ probes)) t)))
-          (with-current-buffer buf
-            (setq-local decknix--agent-broker-key "s-x"))
-          (dotimes (_ 10) (decknix--agent-broker-working-p buf))
-          (should (= 1 probes)))
-      (kill-buffer buf))))
+        (progn
+          (with-temp-file f (insert "{}\n"))
+          (cl-letf (((symbol-function 'decknix--agent-broker-log-path)
+                     (lambda (_k) f))
+                    ((symbol-function 'decknix--agent-broker-read-log-tail)
+                     (lambda (&rest _) (setq reads (1+ reads)) nil)))
+            (let ((attrs (file-attributes f)))
+              (dotimes (_ 20)
+                (decknix--agent-broker-inflight-cached-p "s-x" attrs))
+              (should (= 1 reads)))))
+      (delete-file f))))
 
-(ert-deftest decknix-working-cache--expires-so-a-finished-turn-shows-up ()
-  "A cache that never expired would pin a session at `working' forever."
-  (let ((probes 0)
+(ert-deftest decknix-working-cache--a-grown-log-is-re-read ()
+  "A log that grew may have changed what the last turn looks like, so the
+cached answer is no longer evidence."
+  (let ((reads 0)
         (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
-        (decknix-agent-broker-working-ttl 0)
-        (buf (generate-new-buffer " w2")))
+        (f (make-temp-file "dk-wc2")))
     (unwind-protect
-        (cl-letf (((symbol-function 'decknix--agent-broker-working-uncached-p)
-                   (lambda (_k) (setq probes (1+ probes)) t)))
-          (with-current-buffer buf
-            (setq-local decknix--agent-broker-key "s-y"))
-          (decknix--agent-broker-working-p buf)
-          (decknix--agent-broker-working-p buf)
-          (should (= 2 probes)))
-      (kill-buffer buf))))
-
-(ert-deftest decknix-working-cache--caches-false-too ()
-  "Caching only the true case would re-probe every idle session on every
-pass, which is most of them."
-  (let ((probes 0)
-        (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
-        (decknix-agent-broker-working-ttl 60)
-        (buf (generate-new-buffer " w3")))
-    (unwind-protect
-        (cl-letf (((symbol-function 'decknix--agent-broker-working-uncached-p)
-                   (lambda (_k) (setq probes (1+ probes)) nil)))
-          (with-current-buffer buf
-            (setq-local decknix--agent-broker-key "s-z"))
-          (dotimes (_ 5) (should-not (decknix--agent-broker-working-p buf)))
-          (should (= 1 probes)))
-      (kill-buffer buf))))
+        (cl-letf (((symbol-function 'decknix--agent-broker-log-path)
+                   (lambda (_k) f))
+                  ((symbol-function 'decknix--agent-broker-read-log-tail)
+                   (lambda (&rest _) (setq reads (1+ reads)) nil)))
+          (with-temp-file f (insert "{}\n"))
+          (decknix--agent-broker-inflight-cached-p "s-y" (file-attributes f))
+          ;; Same mtime resolution is possible, so change the SIZE too --
+          ;; which is exactly why size is part of the key.
+          (with-temp-file f (insert "{}\n{}\n{}\n"))
+          (decknix--agent-broker-inflight-cached-p "s-y" (file-attributes f))
+          (should (= 2 reads)))
+      (delete-file f))))
 
 (ert-deftest decknix-working-cache--is-keyed-per-session ()
-  (let ((probes 0)
+  (let ((reads 0)
         (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
-        (decknix-agent-broker-working-ttl 60)
-        (a (generate-new-buffer " wa"))
-        (b (generate-new-buffer " wb")))
+        (f (make-temp-file "dk-wc3")))
     (unwind-protect
-        (cl-letf (((symbol-function 'decknix--agent-broker-working-uncached-p)
-                   (lambda (_k) (setq probes (1+ probes)) t)))
-          (with-current-buffer a (setq-local decknix--agent-broker-key "s-a"))
-          (with-current-buffer b (setq-local decknix--agent-broker-key "s-b"))
-          (decknix--agent-broker-working-p a)
-          (decknix--agent-broker-working-p b)
-          (should (= 2 probes)))
-      (kill-buffer a) (kill-buffer b))))
+        (progn
+          (with-temp-file f (insert "{}\n"))
+          (cl-letf (((symbol-function 'decknix--agent-broker-log-path)
+                     (lambda (_k) f))
+                    ((symbol-function 'decknix--agent-broker-read-log-tail)
+                     (lambda (&rest _) (setq reads (1+ reads)) nil)))
+            (let ((attrs (file-attributes f)))
+              (decknix--agent-broker-inflight-cached-p "s-a" attrs)
+              (decknix--agent-broker-inflight-cached-p "s-b" attrs)
+              (should (= 2 reads)))))
+      (delete-file f))))
+
+(ert-deftest decknix-working-cache--caches-false-too ()
+  "Most sessions are idle; caching only the positive case would re-read
+nearly all of them on every pass."
+  (let ((reads 0)
+        (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
+        (f (make-temp-file "dk-wc4")))
+    (unwind-protect
+        (progn
+          (with-temp-file f (insert "{}\n"))
+          (cl-letf (((symbol-function 'decknix--agent-broker-log-path)
+                     (lambda (_k) f))
+                    ((symbol-function 'decknix--agent-broker-read-log-tail)
+                     (lambda (&rest _) (setq reads (1+ reads)) nil)))
+            (let ((attrs (file-attributes f)))
+              (dotimes (_ 5)
+                (should-not (decknix--agent-broker-inflight-cached-p "s-z" attrs)))
+              (should (= 1 reads)))))
+      (delete-file f))))
+
+(ert-deftest decknix-working-cache--staleness-is-not-cached ()
+  "Freshness depends on the clock: a fresh log goes stale with no file
+change, so caching that half would pin an abandoned turn at `working'."
+  (let* ((decknix--agent-broker-working-cache (make-hash-table :test 'equal))
+         (decknix-agent-broker-inflight-stale-seconds 0)
+         (buf (generate-new-buffer " st"))
+         (f (make-temp-file "dk-wc5")))
+    (unwind-protect
+        (progn
+          (with-temp-file f (insert "{}\n"))
+          (with-current-buffer buf (setq-local decknix--agent-broker-key "s-s"))
+          (cl-letf (((symbol-function 'decknix--agent-broker-log-path)
+                     (lambda (_k) f))
+                    ((symbol-function 'decknix--agent-broker-live-p)
+                     (lambda (_k) t))
+                    ((symbol-function 'decknix--agent-broker-read-log-tail)
+                     (lambda (&rest _) (list "x"))))
+            ;; Zero staleness window: nothing can be working, regardless of
+            ;; what the log tail holds.
+            (should-not (decknix--agent-broker-working-p buf))))
+      (kill-buffer buf) (delete-file f))))
 
 (provide 'decknix-agent-broker-rehydrate-page-test)
 ;;; decknix-agent-broker-rehydrate-page-test.el ends here

@@ -167,6 +167,41 @@ the repo stays behind indefinitely."
          (message "%s: stashed (git stash pop to restore) -- re-syncing" name)
          (decknix-repo-sync-retry problem on-done))))))
 
+(defun decknix-repo-sync-reset-hard (problem &optional on-done)
+  "Discard PROBLEM\='s uncommitted work, hard-resetting to its origin branch.
+
+DESTRUCTIVE and not recoverable: unlike `decknix-repo-sync-stash\=', the
+work is gone.  Offered because a primary checkout is not a workspace --
+work belongs in a worktree -- so uncommitted changes there are usually
+debris rather than anything wanted, and stashing them just moves the
+debris onto the stash list.
+
+Resets to `origin/BRANCH\=' rather than HEAD, because the point is to make
+the checkout match origin: a reset to HEAD would leave it still behind.
+`clean -fd\=' follows, since reset alone leaves untracked files, which is
+exactly what blocks the next checkout."
+  (let* ((path (plist-get problem :path))
+         (name (plist-get problem :name))
+         (branch (plist-get problem :branch)))
+    (unless path (user-error "No path recorded for this repo"))
+    (unless (and branch (not (string-empty-p branch)))
+      (user-error "No default branch recorded for %s -- refusing to reset" name))
+    (message "Resetting %s to origin/%s..." name branch)
+    (decknix--repo-sync-run-git
+     path (list "reset" "--hard" (concat "origin/" branch))
+     "decknix-repo-reset"
+     (lambda (ok output)
+       (if (not ok)
+           (progn
+             (message "%s: reset failed -- %s" name (string-trim (or output "")))
+             (when on-done (funcall on-done)))
+         (decknix--repo-sync-run-git
+          path (list "clean" "-fd")
+          "decknix-repo-clean"
+          (lambda (_ok2 _out2)
+            (message "%s: reset to origin/%s -- re-syncing" name branch)
+            (decknix-repo-sync-retry problem on-done))))))))
+
 (defun decknix-repo-sync-retry (problem &optional on-done)
   "Re-run the sweep for PROBLEM's repo only.
 
@@ -295,7 +330,7 @@ never rendered from the filesystem on the paint path."
 
 (defconst decknix--repo-sync-action-prompts
   '((lock . "%s: [c]lear stale lock  [r]etry sync  [v]isit repo  [q]uit ")
-    (dirty . "%s: [s]tash work  [v]isit repo  [r]etry sync  [q]uit ")
+    (dirty . "%s: [s]tash  [H]ard-reset (DESTROYS work)  [v]isit  [r]etry  [q]uit ")
     (diverged . "%s: [v]isit repo (push or rebase)  [r]etry sync  [q]uit ")
     (failed . "%s: [v]isit repo  [r]etry sync  [q]uit "))
   "Per-kind action prompt.
@@ -318,7 +353,7 @@ at all.")
                            name))
            (choices (pcase kind
                       ('lock '(?c ?r ?v ?q))
-                      ('dirty '(?s ?r ?v ?q))
+                      ('dirty '(?s ?H ?r ?v ?q))
                       (_ '(?r ?v ?q))))
            (refresh (lambda ()
                       (when (fboundp 'agent-shell-workspace-sidebar-refresh)
@@ -326,6 +361,11 @@ at all.")
       (pcase (read-char-choice prompt choices)
         (?c (decknix-repo-sync-clear-lock problem refresh))
         (?s (decknix-repo-sync-stash problem refresh))
+        (?H (if (yes-or-no-p
+                 (format "DISCARD all uncommitted work in %s? Not recoverable. "
+                         (plist-get problem :name)))
+                (decknix-repo-sync-reset-hard problem refresh)
+              (message "No action")))
         (?r (decknix-repo-sync-retry problem refresh))
         (?v (decknix-repo-sync-visit problem))
         (?q (message "No action"))))))

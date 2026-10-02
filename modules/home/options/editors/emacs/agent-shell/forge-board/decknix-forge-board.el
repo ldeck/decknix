@@ -21,9 +21,15 @@
 ;; never force-updates a dirty or diverged repo.  Stashing moves uncommitted
 ;; work onto the stash list, where `git stash pop' brings it back.
 ;;
-;; There is deliberately no `reset --hard': it is the one remedy here that
-;; destroys work outright, and nothing on this board should be able to do
-;; that to five marked repos at once.
+;; The one exception is `H' (hard reset), which destroys uncommitted work
+;; outright.  It exists because a primary checkout is not a workspace --
+;; work belongs in a worktree -- so uncommitted changes there are usually
+;; debris, and stashing debris just moves it onto the stash list.
+;;
+;; Because it is the only irreversible verb here, and the marks let it hit
+;; several repos at once, it is gated harder than the rest: the repos are
+;; named in the prompt and the confirmation is TYPED, not a keystroke.  A
+;; `y' sits next to the keys the user has just been pressing.
 
 ;;; Code:
 
@@ -38,6 +44,8 @@
 (declare-function decknix-repo-sync-retry "decknix-repo-sync-actions"
                   (problem &optional on-done))
 (declare-function decknix-repo-sync-stash "decknix-repo-sync-actions"
+                  (problem &optional on-done))
+(declare-function decknix-repo-sync-reset-hard "decknix-repo-sync-actions"
                   (problem &optional on-done))
 (declare-function decknix-repo-sync-resweep "decknix-repo-sync-actions"
                   (&optional on-done))
@@ -135,7 +143,7 @@ the cursor moved after marking."
       (insert "\n"))
     (insert (propertize
              "m mark  u unmark  U unmark all  c clear locks  s stash  r retry\n\
-v visit  t group by kind/org  G resweep all  g refresh  q quit"
+H hard-reset (DESTROYS work)  v visit  t kind/org  G resweep  g refresh  q quit"
              'face 'font-lock-comment-face)
             "\n")
     (goto-char (point-min))
@@ -246,6 +254,38 @@ there is nothing to stash in a clean tree."
                (if (> skipped 0)
                    (format " (%d skipped, nothing to stash)" skipped) ""))))))
 
+(defun decknix-forge-board-reset-hard ()
+  "Discard uncommitted work in every marked dirty repo.  NOT recoverable.
+
+Gated harder than every other verb on this board, because it is the only
+one that destroys work and the marks make it destroy work in several
+repos at once.  The repos are NAMED in the prompt, and the confirmation
+is typed rather than a keystroke: a `y\=' sits next to keys the user has
+just been pressing, and this is not a verb to trigger by muscle memory."
+  (interactive)
+  (let* ((targets (decknix-forge-board--targets))
+         (rows (decknix-forge-board-filter-resettable targets))
+         (skipped (- (length targets) (length rows)))
+         (names (mapcar (lambda (r) (plist-get r :name)) rows)))
+    (cond
+     ((null targets) (user-error "No repo marked or at point"))
+     ((null rows)
+      (user-error "Nothing to reset: no marked repo has uncommitted work"))
+     ((not (equal "reset"
+                  (read-string
+                   (format "DISCARD uncommitted work in %d repo%s (%s)? Type \"reset\" to confirm: "
+                           (length rows) (if (= 1 (length rows)) "" "s")
+                           (string-join names ", ")))))
+      (message "No action -- nothing was reset"))
+     (t
+      (let ((done (decknix-forge-board--after-each (length rows) "hard reset")))
+        (dolist (row rows)
+          (decknix-repo-sync-reset-hard (plist-get row :problem) done)))
+      (message "Resetting %d repo%s%s..."
+               (length rows) (if (= 1 (length rows)) "" "s")
+               (if (> skipped 0)
+                   (format " (%d skipped, nothing to reset)" skipped) ""))))))
+
 (defun decknix-forge-board-toggle-grouping ()
   "Switch between grouping by problem kind and by org.
 
@@ -294,6 +334,7 @@ it renders one heading and separates nothing."
     (define-key map (kbd "U") #'decknix-forge-board-unmark-all)
     (define-key map (kbd "c") #'decknix-forge-board-clear-locks)
     (define-key map (kbd "s") #'decknix-forge-board-stash)
+    (define-key map (kbd "H") #'decknix-forge-board-reset-hard)
     (define-key map (kbd "t") #'decknix-forge-board-toggle-grouping)
     (define-key map (kbd "r") #'decknix-forge-board-retry)
     (define-key map (kbd "v") #'decknix-forge-board-visit)

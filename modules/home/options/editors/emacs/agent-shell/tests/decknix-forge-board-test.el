@@ -115,5 +115,59 @@ messages for one action."
       (funcall done)
       (should (= 1 refreshed)))))
 
+
+;; --- the irreversible verb is gated harder ---------------------------
+
+(ert-deftest decknix-fbb--reset-requires-a-typed-confirmation ()
+  "A `y' sits next to the keys just pressed; this verb must not be
+reachable by muscle memory."
+  (let ((decknix-forge-board--marks (make-hash-table :test 'equal))
+        (decknix-forge-board--groups
+         (list (cons 'dirty (list (decknix-fbb-test--row 'dirty "a")))))
+        (reset nil))
+    (puthash "/repos/a" t decknix-forge-board--marks)
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "y"))
+              ((symbol-function 'decknix-repo-sync-reset-hard)
+               (lambda (&rest _) (setq reset t))))
+      (decknix-forge-board-reset-hard)
+      (should-not reset))))
+
+(ert-deftest decknix-fbb--reset-proceeds-on-the-exact-word ()
+  (let ((decknix-forge-board--marks (make-hash-table :test 'equal))
+        (decknix-forge-board--groups
+         (list (cons 'dirty (list (decknix-fbb-test--row 'dirty "a")))))
+        (reset 0))
+    (puthash "/repos/a" t decknix-forge-board--marks)
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "reset"))
+              ((symbol-function 'decknix-repo-sync-refresh)
+               (lambda (&optional cb) (when cb (funcall cb))))
+              ((symbol-function 'decknix-repo-sync-reset-hard)
+               (lambda (&rest _) (setq reset (1+ reset)))))
+      (decknix-forge-board-reset-hard)
+      (should (= 1 reset)))))
+
+(ert-deftest decknix-fbb--reset-names-the-repos-in-the-prompt ()
+  "Acting on marks means the user cannot see from the cursor what is about
+to be destroyed."
+  (let ((decknix-forge-board--marks (make-hash-table :test 'equal))
+        (decknix-forge-board--groups
+         (list (cons 'dirty (list (decknix-fbb-test--row 'dirty "alpha")
+                                  (decknix-fbb-test--row 'dirty "beta")))))
+        (prompt ""))
+    (puthash "/repos/alpha" t decknix-forge-board--marks)
+    (puthash "/repos/beta" t decknix-forge-board--marks)
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (p &rest _) (setq prompt p) "no")))
+      (decknix-forge-board-reset-hard)
+      (should (string-match-p "alpha" prompt))
+      (should (string-match-p "beta" prompt)))))
+
+(ert-deftest decknix-fbb--reset-refuses-when-nothing-is-resettable ()
+  (let ((decknix-forge-board--marks (make-hash-table :test 'equal))
+        (decknix-forge-board--groups
+         (list (cons 'diverged (list (decknix-fbb-test--row 'diverged "a"))))))
+    (puthash "/repos/a" t decknix-forge-board--marks)
+    (should-error (decknix-forge-board-reset-hard) :type 'user-error)))
+
 (provide 'decknix-forge-board-test)
 ;;; decknix-forge-board-test.el ends here
