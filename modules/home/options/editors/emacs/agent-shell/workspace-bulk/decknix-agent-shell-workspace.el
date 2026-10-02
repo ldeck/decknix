@@ -5411,6 +5411,65 @@ in-menu `S Session…' entry both route here."
 (declare-function decknix-layout-toggle-expand
                   "decknix-sidebar-layout-render" ())
 
+(declare-function decknix-session-assoc-launch-target
+                  "decknix-session-assoc" (row))
+(declare-function decknix-agent-session-new "decknix-agent-shell-main-session"
+                  (&optional quick default-ws default-tags))
+
+(defun decknix-sidebar--repo-path (repo)
+  "Return the checkout path for REPO under the workspace, or nil."
+  (when (and repo (stringp repo))
+    (let ((dir (expand-file-name
+                (car (last (split-string repo "/" t)))
+                (or (bound-and-true-p decknix-agent-workspace-root)
+                    (expand-file-name "~/Code/nurturecloud")))))
+      (and (file-directory-p dir) dir))))
+
+(defun decknix-sidebar--launch-row ()
+  "Return the (PATH . TAGS) a new session here should start from, or nil.
+
+Resolves whichever row kind is at point.  A worktree row carries its own
+path; a repo-sync row carries the repo path; a WIP repo claim carries the
+repo.  A PR row resolves through the worktree for its branch when there
+is one, falling back to the repo checkout -- a PR is not a directory, so
+something has to supply one."
+  (let ((bol (line-beginning-position)))
+    (or
+     ;; A worktree: the most specific thing a row can name.
+     (when-let* ((wt (get-text-property bol 'decknix-layout-worktree)))
+       (decknix-session-assoc-launch-target wt))
+     ;; A repo-sync problem row.
+     (when-let* ((p (get-text-property bol 'decknix-repo-sync-problem)))
+       (decknix-session-assoc-launch-target p))
+     ;; A WIP repo claim.
+     (when-let* ((claim (get-text-property bol 'decknix-layout-claim))
+                 (path (plist-get claim :path)))
+       (decknix-session-assoc-launch-target claim))
+     ;; A PR row: prefer the worktree checked out on its branch.
+     (when-let* ((repo (get-text-property bol 'decknix-hub-repo)))
+       (let* ((branch (get-text-property bol 'decknix-hub-branch))
+              (wt (and branch (fboundp 'decknix-hub-wt-rows)
+                       (seq-find (lambda (r)
+                                   (equal branch (alist-get 'branch r)))
+                                 (ignore-errors (decknix-hub-wt-rows)))))
+              (path (or (and wt (alist-get 'path wt))
+                        (decknix-sidebar--repo-path repo))))
+         (when path
+           (decknix-session-assoc-launch-target
+            (list :path path :branch branch))))))))
+
+(defun decknix-sidebar-launch-session ()
+  "Start a new agent session for the repo, worktree or PR at point.
+
+Seeds the workspace and suggests tags from the row; the provider,
+workspace and tag prompts all still run, so the row is a starting point
+rather than a decision."
+  (interactive)
+  (let ((target (decknix-sidebar--launch-row)))
+    (unless target
+      (user-error "No repo, worktree or PR on this row to start a session for"))
+    (decknix-agent-session-new nil (car target) (cdr target))))
+
 (defun decknix-sidebar-ret ()
   "Open the action menu for the row at point.
 Hub rows (Request, WIP, Task, Linked PR, Linked Repo) get a row-

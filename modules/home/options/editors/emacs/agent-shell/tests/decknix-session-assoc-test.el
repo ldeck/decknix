@@ -370,5 +370,45 @@ nothing until its next tool call."
     (unwind-protect (should-not (decknix-session-assoc-restore buf))
       (kill-buffer buf))))
 
+
+;; --- launching from a row ---------------------------------------------
+
+(ert-deftest dk-assoc--worktree-suggests-repo-and-ticket ()
+  "How these sessions are tagged by hand anyway."
+  (should (equal '("platform-cli" "CONN-1040")
+                 (decknix-session-assoc-suggest-tags
+                  "/w/platform-cli-worktrees/CONN-1040-generator-fixes"))))
+
+(ert-deftest dk-assoc--a-plain-repo-suggests-just-its-name ()
+  (should (equal '("rea-integration")
+                 (decknix-session-assoc-suggest-tags "/w/rea-integration"))))
+
+(ert-deftest dk-assoc--the-branch-supplies-the-ticket-when-the-dir-does-not ()
+  (should (equal '("platform-cli" "CONN-9")
+                 (decknix-session-assoc-suggest-tags
+                  "/w/platform-cli-worktrees/scratch" "CONN-9-thing"))))
+
+(ert-deftest dk-assoc--a-worktree-with-no-ticket-suggests-the-repo-only ()
+  (should (equal '("platform-cli")
+                 (decknix-session-assoc-suggest-tags
+                  "/w/platform-cli-worktrees/nix-jvm-privategar"))))
+
+(ert-deftest dk-assoc--a-trailing-slash-does-not-change-the-suggestion ()
+  "The worktree audit writes paths both ways."
+  (should (equal (decknix-session-assoc-suggest-tags "/w/platform-cli-worktrees/CONN-1040")
+                 (decknix-session-assoc-suggest-tags "/w/platform-cli-worktrees/CONN-1040/"))))
+
+(ert-deftest dk-assoc--launch-target-carries-path-and-tags ()
+  (let ((target (decknix-session-assoc-launch-target
+                 '(:path "/w/platform-cli-worktrees/CONN-1040" :branch "CONN-1040-x"))))
+    (should (equal "/w/platform-cli-worktrees/CONN-1040" (car target)))
+    (should (member "platform-cli" (cdr target)))))
+
+(ert-deftest dk-assoc--a-row-with-no-path-cannot-be-launched ()
+  "A session has to start somewhere; refusing is better than defaulting
+to whatever directory happened to be current."
+  (should-not (decknix-session-assoc-launch-target '(:branch "x")))
+  (should-not (decknix-session-assoc-launch-target '(:path ""))))
+
 (provide 'decknix-session-assoc-test)
 ;;; decknix-session-assoc-test.el ends here

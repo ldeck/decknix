@@ -2876,8 +2876,13 @@ conv-key of its own is left to path 1."
                         (setq-local decknix--agent-workspace-persisted t)))
                   (error nil))))
            t))))
-(defun decknix-agent-session-new (&optional quick)
+(defun decknix-agent-session-new (&optional quick default-ws default-tags)
   "Start a new agent session with guided setup.
+
+DEFAULT-WS seeds the workspace prompt and DEFAULT-TAGS the tags prompt,
+so a caller that already knows what the session is for -- launching from
+a worktree or PR row in the sidebar -- can offer that without taking the
+choice away.  Both are only defaults; every prompt still runs.
 Prompts for workspace directory and initial tags.  The buffer name is
 derived automatically via `decknix--agent-session-derive-name': tags
 joined by '/' if any were supplied, else <dir>/<branch> from the chosen
@@ -2887,18 +2892,20 @@ sessions, so live and resumed buffers are always consistently labelled.
 With prefix argument QUICK, skip prompts and use defaults:
 workspace = project root, no tags; name is still derived automatically."
   (interactive "P")
-  (let* ((default-ws (decknix--agent-detect-workspace))
+  (let* ((default-ws (or default-ws (decknix--agent-detect-workspace)))
          (provider (if quick decknix-agent-default-provider
                      (decknix-agent-provider-select)))
          (workspace (if quick default-ws
                       (read-directory-name "Workspace: " default-ws nil t)))
          (workspace (expand-file-name workspace))
          (branch (decknix--agent-detect-branch workspace))
-         (tags (unless quick
+         (tags (if quick default-tags
                  (let ((input (completing-read-multiple
                                "Tags (comma-separated): "
                                (decknix--agent-tags-all)
-                               nil nil)))
+                               nil nil
+                               (when default-tags
+                                 (string-join default-tags ",")))))
                    (mapcar #'string-trim
                            (seq-remove #'string-empty-p input)))))
          (name (decknix--agent-session-derive-name tags workspace branch nil nil))

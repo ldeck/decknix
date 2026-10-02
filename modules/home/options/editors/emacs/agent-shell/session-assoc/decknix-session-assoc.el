@@ -378,6 +378,46 @@ source tree, which nix copies on every `decknix switch\='."
            decknix--agent-assoc-turn
          0)))))
 
+;; --- launching work from a row ----------------------------------------
+
+(defun decknix-session-assoc-suggest-tags (path &optional branch)
+  "Return suggested session tags for work at PATH on BRANCH.
+
+The repo short name, plus the ticket key when the branch or worktree
+directory carries one.  `platform-cli-worktrees/CONN-1040-generator-fixes\='
+suggests (\"platform-cli\" \"CONN-1040\"), which is how these sessions are
+named by hand anyway.
+
+Suggestions only: every prompt still runs, so a wrong guess costs a
+keystroke rather than a mis-tagged session."
+  (let* ((path (and path (directory-file-name (expand-file-name path))))
+         (base (and path (file-name-nondirectory path)))
+         (parent (and path (file-name-nondirectory
+                            (directory-file-name
+                             (file-name-directory path)))))
+         ;; A worktree lives in `<repo>-worktrees/<branch>', so the repo is
+         ;; the parent with that suffix removed; otherwise PATH is the repo.
+         (repo (if (and parent (string-suffix-p "-worktrees" parent))
+                   (string-remove-suffix "-worktrees" parent)
+                 base))
+         (ticket (car (seq-keep
+                       (lambda (s)
+                         (and (stringp s)
+                              (string-match "\\b\\([A-Z][A-Z0-9]+-[0-9]+\\)" s)
+                              (match-string 1 s)))
+                       (list branch base)))))
+    (delq nil (list repo ticket))))
+
+(defun decknix-session-assoc-launch-target (row)
+  "Return (PATH . TAGS) to launch a session for sidebar ROW, or nil.
+
+ROW is a plist carrying at least `:path\=', optionally `:branch\='.  Returns
+nil when there is no path, since a session has to start somewhere."
+  (let ((path (plist-get row :path)))
+    (when (and path (stringp path) (not (string-empty-p path)))
+      (cons (expand-file-name path)
+            (decknix-session-assoc-suggest-tags path (plist-get row :branch))))))
+
 ;; --- restore + deferred backfill --------------------------------------
 
 (declare-function decknix--agent-broker-log-path
