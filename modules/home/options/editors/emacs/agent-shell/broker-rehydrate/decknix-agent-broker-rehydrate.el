@@ -404,47 +404,63 @@ and counting those marks every session as working."
     (< (float-time (time-subtract (current-time) mtime))
        decknix-agent-broker-inflight-stale-seconds)))
 
-(defcustom decknix-agent-broker-working-ttl 2
-  "Seconds a session\='s working-state is reused before re-probing.
-
-The status function is called once per session per query, and a single UI
-pass can query many times -- the buffer picker annotates every candidate,
-and a completion front-end re-runs that as the user types.  Without a
-cache, one keystroke re-read 13 logs.
-
-Short enough that a turn starting or ending shows up promptly, long
-enough that one command costs one sweep."
-  :type 'integer
-  :group 'decknix)
-
 (defvar decknix--agent-broker-working-cache (make-hash-table :test 'equal)
-  "Broker key -> (TIMESTAMP . WORKING-P), valid for the TTL.")
+  "Broker key -> (MTIME SIZE INFLIGHT-P): the last probe and what it saw.
 
-(defun decknix--agent-broker-working-uncached-p (key)
-  "Return non-nil when KEY\='s agent is mid-turn, probing the log now."
-  (and (decknix--agent-broker-live-p key)
-       (decknix--agent-broker-log-fresh-p key)
-       (decknix--agent-broker-inflight-p
-        (decknix--agent-broker-read-log-tail
-         (decknix--agent-broker-log-path key)))
-       t))
+Keyed on the log\='s MTIME and SIZE rather than on a wall-clock TTL.  A log
+that has not grown cannot have changed what the last turn looks like, so
+the answer is still valid however long ago it was computed -- and a TTL
+is guesswork against the tick interval besides.  The first attempt used a
+2 second TTL while two timers tick every 2 seconds, so it almost never
+hit.
+
+Allocation, not CPU, is why this matters.  Each miss reads 64 KB, splits
+it into hundreds of strings and JSON-parses each one; at 13 sessions
+every 2 seconds that churn drives the GC, and GC is what interrupts
+typing.  An unchanged log now costs one `file-attributes\=' and no
+allocation at all.")
+
+(defun decknix--agent-broker-inflight-cached-p (key attrs)
+  "Return whether KEY\='s log ends mid-turn, reusing the last probe if valid.
+
+ATTRS is KEY\='s log `file-attributes\='.  Re-reads only when the log has
+grown or been replaced."
+  (let* ((mtime (float-time (file-attribute-modification-time attrs)))
+         (size (file-attribute-size attrs))
+         (hit (gethash key decknix--agent-broker-working-cache)))
+    (if (and hit (equal mtime (nth 0 hit)) (equal size (nth 1 hit)))
+        (nth 2 hit)
+      (let ((val (and (decknix--agent-broker-inflight-p
+                       (decknix--agent-broker-read-log-tail
+                        (decknix--agent-broker-log-path key)))
+                      t)))
+        (puthash key (list mtime size val)
+                 decknix--agent-broker-working-cache)
+        val))))
 
 (defun decknix--agent-broker-working-p (&optional buffer)
   "Non-nil when BUFFER\='s agent is mid-turn according to its broker log.
 
 Both conditions: an uncommitted turn with visible content, AND a log that
 has grown recently.  Either alone is not evidence -- see
-`decknix-agent-broker-inflight-stale-seconds\='."
+`decknix-agent-broker-inflight-stale-seconds\='.
+
+Freshness is recomputed every call because it depends on the clock: a
+fresh log goes stale with no file change, so caching that half would pin
+an abandoned turn at `working\='.  Only the expensive half -- parsing the
+log tail -- is cached, and on the file\='s own identity."
   (with-current-buffer (or buffer (current-buffer))
     (when-let* (((bound-and-true-p decknix--agent-broker-key))
-                (key decknix--agent-broker-key))
-      (let* ((now (float-time (current-time)))
-             (hit (gethash key decknix--agent-broker-working-cache)))
-        (if (and hit (< (- now (car hit)) decknix-agent-broker-working-ttl))
-            (cdr hit)
-          (let ((val (decknix--agent-broker-working-uncached-p key)))
-            (puthash key (cons now val) decknix--agent-broker-working-cache)
-            val))))))
+                (key decknix--agent-broker-key)
+                (log (decknix--agent-broker-log-path key))
+                (attrs (file-attributes log)))
+      (and (decknix--agent-broker-live-p key)
+           ;; Cheap and clock-dependent, so computed from the stat we
+           ;; already have rather than re-stat'ing inside a helper.
+           (< (- (float-time (current-time))
+                 (float-time (file-attribute-modification-time attrs)))
+              decknix-agent-broker-inflight-stale-seconds)
+           (decknix--agent-broker-inflight-cached-p key attrs)))))
 
 (defun decknix--agent-broker-can-restore-p (&optional buffer)
   "Non-nil when BUFFER\='s history should come from the broker log.

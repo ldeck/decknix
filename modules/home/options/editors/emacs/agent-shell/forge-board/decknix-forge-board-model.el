@@ -95,6 +95,21 @@ divergence had been dealt with.")
   "Return the subset of ROWS `stash work\=' applies to."
   (seq-filter #'decknix-forge-board-stashable-p rows))
 
+(defconst decknix-forge-board-resettable-lanes '(dirty)
+  "Lanes whose rows `hard reset\=' may act on.
+
+Only `dirty\='.  A diverged repo is excluded deliberately: resetting one
+discards local COMMITS, not just uncommitted edits, which is a different
+and larger loss than this verb is described as making.")
+
+(defun decknix-forge-board-resettable-p (row)
+  "Return non-nil when `hard reset\=' applies to ROW."
+  (and (memq (plist-get row :kind) decknix-forge-board-resettable-lanes) t))
+
+(defun decknix-forge-board-filter-resettable (rows)
+  "Return the subset of ROWS `hard reset\=' applies to."
+  (seq-filter #'decknix-forge-board-resettable-p rows))
+
 (defun decknix-forge-board-clearable-p (row)
   "Return non-nil when `clear lock' applies to ROW."
   (and (memq (plist-get row :kind) decknix-forge-board-clearable-lanes) t))
