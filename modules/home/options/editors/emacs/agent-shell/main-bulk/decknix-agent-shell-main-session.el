@@ -1278,6 +1278,12 @@ dedupes against live buffers before calling here."
                    ;; above has already covered the history.
                    (when (fboundp 'decknix--agent-broker-rehydrate-buffer)
                      (decknix--agent-broker-rehydrate-buffer shell-buf))
+                   ;; Seed the worktree association from the store, so the
+                   ;; sidebar nests this session's work straight away rather
+                   ;; than waiting for its next tool call.
+                   (when (fboundp 'decknix-session-assoc-restore)
+                     (ignore-errors
+                       (decknix-session-assoc-restore shell-buf)))
                    ;; Seed `comint-input-ring' from the on-disk
                    ;; session so M-p / M-n in compose (and the
                    ;; agent buffer's own comint history nav) cycle

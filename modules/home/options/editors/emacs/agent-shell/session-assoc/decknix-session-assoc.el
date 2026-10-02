@@ -43,6 +43,7 @@
 
 (require 'seq)
 (require 'subr-x)
+(require 'json)
 
 (defcustom decknix-session-assoc-window 20
   "How many turns back a session's worktree association reaches.
@@ -77,14 +78,21 @@ first in the list."
   "Return the file paths an ACP session UPDATE reports touching.
 
 Reads `locations', which is where `tool_call' and `tool_call_update'
-carry them."
+carry them.
+
+Accepts a VECTOR as well as a list, because that is what the JSON
+actually parses to: `json-parse-string' renders arrays as vectors, so a
+`listp' test discarded every path.  Hand-written alist fixtures hid it --
+they pass a list -- while a real log yielded nothing at all."
   (let ((locs (alist-get 'locations update)))
     (delq nil
           (mapcar (lambda (loc)
-                    (and (listp loc)
-                         (let ((p (alist-get 'path loc)))
-                           (and (stringp p) (not (string-empty-p p)) p))))
-                  (if (listp locs) locs nil)))))
+                    (let ((p (and (or (listp loc) (vectorp loc))
+                                  (alist-get 'path loc))))
+                      (and (stringp p) (not (string-empty-p p)) p)))
+                  (cond ((vectorp locs) (append locs nil))
+                        ((listp locs) locs)
+                        (t nil))))))
 
 ;; --- the recency-bounded set ------------------------------------------
 
@@ -147,6 +155,50 @@ is precise, rather than by its repo, which is not."
                  roots)
        t))
 
+;; --- backfill from an existing log -----------------------------------
+
+(defun decknix-session-assoc-from-lines (lines roots)
+  "Return (TURN . ASSOC) built from broker-log LINES, resolved against ROOTS.
+
+TURN is the turn index the last line sits in, so the caller can seed a
+session\='s recency clock and have the window mean the same thing as it
+would had the capture run live.
+
+Turn boundaries are results carrying `stopReason\=', the same marker the
+replay uses.  Counted WITHIN the lines given: a bounded tail is all that
+can be read -- the largest live log measured 207 MB -- so the indices are
+relative to the start of that tail, which is exactly what the recency
+window needs.
+
+Pure, so a backfill can be verified against a real log without writing
+anything."
+  (let ((turn 0) (assoc nil))
+    (dolist (line lines)
+      (let ((obj (decknix--assoc-parse-line line)))
+        (cond
+         ((null obj) nil)
+         ((decknix--assoc-turn-boundary-p obj) (setq turn (1+ turn)))
+         (t
+          (let ((update (alist-get 'update (alist-get 'params obj))))
+            (dolist (path (decknix-session-assoc-paths-of update))
+              (when-let* ((root (decknix-session-assoc-resolve path roots)))
+                (setq assoc (decknix-session-assoc-touch assoc root turn)))))))))
+    (cons turn assoc)))
+
+(defun decknix--assoc-parse-line (line)
+  "Parse LINE as one ACP JSON object, or nil."
+  (when (and line (stringp line))
+    (let ((s (string-trim line)))
+      (when (and (> (length s) 0) (eq (aref s 0) ?{))
+        (ignore-errors
+          (json-parse-string s :object-type 'alist
+                             :null-object nil :false-object nil))))))
+
+(defun decknix--assoc-turn-boundary-p (obj)
+  "Non-nil when OBJ is a result carrying a `stopReason\=' -- a committed turn."
+  (let ((res (alist-get 'result obj)))
+    (and (listp res) (alist-get 'stopReason res))))
+
 ;; --- capture (side-effecting, kept here with its own pure core) -------
 
 (defvar decknix--agent-assoc-roots-cache nil
@@ -208,11 +260,113 @@ session had 24707 message chunks against 2400 tool calls."
       any)))
 
 (defun decknix-session-assoc-end-turn ()
-  "Advance this session\='s recency clock and prune what fell outside it."
+  "Advance this session\='s recency clock, prune, and persist.
+
+Persisted per TURN rather than per tool call: a turn boundary is rare
+(360 over the life of the session measured) while tool calls are not
+(2400), and writing the store on each would put a file write on the
+notification path."
   (setq decknix--agent-assoc-turn (1+ decknix--agent-assoc-turn))
   (setq decknix--agent-assoc
         (decknix-session-assoc-prune
-         decknix--agent-assoc decknix--agent-assoc-turn)))
+         decknix--agent-assoc decknix--agent-assoc-turn))
+  (when (and (local-variable-p 'decknix--agent-broker-key)
+             (bound-and-true-p decknix--agent-broker-key))
+    (ignore-errors
+      (decknix-session-assoc-remember
+       decknix--agent-broker-key decknix--agent-assoc-turn
+       decknix--agent-assoc))))
+
+(defcustom decknix-session-assoc-backfill-steps '(4 16)
+  "Tail sizes in MB to try when backfilling from a broker log.
+
+Escalating, stopping as soon as an association is found.  Measured on a
+76 MB log: a 4 MB tail covered only the last 15 turns, which happened to
+hold no file activity at all; 16 MB reached the work and produced the
+same answer as 48 MB, so there is nothing to gain past it.
+
+Cost is why this escalates rather than reading one large window: 4 MB
+parses in ~265 ms and 16 MB in ~1.7 s, and most logs are small enough
+that the first step answers."
+  :type '(repeat integer)
+  :group 'decknix)
+
+(defun decknix-session-assoc-backfill (log-path &optional roots)
+  "Return (TURN . ASSOC) for LOG-PATH, read from an escalating tail.
+
+Stops at the first window that yields an association, so a small log
+costs one small read.  Nil when the log is unreadable or nothing in it
+resolves to a known root."
+  (when (and log-path (file-readable-p log-path))
+    (let* ((roots (or roots (decknix-session-assoc-roots)))
+           (size (or (file-attribute-size (file-attributes log-path)) 0))
+           (result nil))
+      (catch 'done
+        (dolist (mb decknix-session-assoc-backfill-steps)
+          (let* ((window (* mb 1024 1024))
+                 (beg (max 0 (- size window)))
+                 (lines (with-temp-buffer
+                          (insert-file-contents log-path nil beg size)
+                          (split-string (buffer-string) "\n" t)))
+                 (res (decknix-session-assoc-from-lines lines roots)))
+            (when (cdr res) (setq result res) (throw 'done res))
+            ;; The whole file was already in this window; a larger one
+            ;; cannot help.
+            (when (<= beg 0) (throw 'done nil))))
+        nil)
+      result)))
+
+(defun decknix-session-assoc-apply (buffer turn assoc)
+  "Seed BUFFER\='s association with TURN and ASSOC."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq decknix--agent-assoc assoc)
+      (setq decknix--agent-assoc-turn turn))))
+
+;; --- persistence ------------------------------------------------------
+
+(defun decknix-session-assoc-state-file ()
+  "Return the file the association store lives in.
+
+Under the STATE dir, not `~/.config/decknix\=': that is the system flake\='s
+source tree, which nix copies on every `decknix switch\='."
+  (expand-file-name
+   "decknix/session-assoc.eld"
+   (or (getenv "XDG_STATE_HOME") (expand-file-name ".local/state" "~"))))
+
+(defvar decknix--agent-assoc-store nil
+  "Alist of (BROKER-KEY . (TURN . ASSOC)), loaded from disk.")
+
+(defun decknix-session-assoc-load ()
+  "Load the association store, returning it."
+  (setq decknix--agent-assoc-store
+        (or (ignore-errors
+              (let ((f (decknix-session-assoc-state-file)))
+                (when (file-readable-p f)
+                  (with-temp-buffer
+                    (insert-file-contents f)
+                    (read (current-buffer))))))
+            nil)))
+
+(defun decknix-session-assoc-save ()
+  "Write the association store to disk."
+  (ignore-errors
+    (let ((f (decknix-session-assoc-state-file)))
+      (make-directory (file-name-directory f) t)
+      (with-temp-file f (prin1 decknix--agent-assoc-store (current-buffer))))))
+
+(defun decknix-session-assoc-remember (key turn assoc)
+  "Record KEY\='s TURN and ASSOC in the store and persist it."
+  (when (and key (stringp key))
+    (setq decknix--agent-assoc-store
+          (cons (cons key (cons turn assoc))
+                (seq-remove (lambda (c) (equal (car c) key))
+                            decknix--agent-assoc-store)))
+    (decknix-session-assoc-save)))
+
+(defun decknix-session-assoc-recall (key)
+  "Return KEY\='s stored (TURN . ASSOC), or nil."
+  (cdr (assoc key decknix--agent-assoc-store)))
 
 (defun decknix-session-assoc-current (&optional buffer)
   "Return the worktree roots BUFFER is currently working in."
@@ -223,6 +377,107 @@ session had 24707 message chunks against 2400 tool calls."
        (if (local-variable-p 'decknix--agent-assoc-turn)
            decknix--agent-assoc-turn
          0)))))
+
+;; --- restore + deferred backfill --------------------------------------
+
+(declare-function decknix--agent-broker-log-path
+                  "decknix-agent-broker-rehydrate" (key))
+(defvar decknix--agent-broker-key)
+
+(defun decknix-session-assoc-restore (&optional buffer)
+  "Seed BUFFER\='s association from the store, returning non-nil on a hit.
+
+Called on resume so a reattached session shows the worktrees it was
+working in immediately, rather than nothing until its next tool call."
+  (with-current-buffer (or buffer (current-buffer))
+    (when-let* (((local-variable-p 'decknix--agent-broker-key))
+                (key decknix--agent-broker-key)
+                (hit (decknix-session-assoc-recall key)))
+      (decknix-session-assoc-apply (current-buffer) (car hit) (cdr hit))
+      t)))
+
+(defcustom decknix-session-assoc-backfill-idle 30
+  "Seconds of idle time before backfilling one session\='s association.
+
+Deferred and one-at-a-time because the parse is not cheap: a 16 MB tail
+measured ~1.7 s, and 13 sessions would be ~22 s.  Doing that on a switch
+would make the editor unusable exactly when the user is trying to start
+work.
+
+Each session is backfilled once ever -- the result is persisted -- so
+this runs a handful of times and then never again."
+  :type 'integer
+  :group 'decknix)
+
+(defvar decknix--agent-assoc-backfill-timer nil)
+
+(defun decknix-session-assoc-backfill-one (buffer)
+  "Backfill BUFFER\='s association from its broker log and persist it.
+
+Returns non-nil when something was recorded."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when-let* (((local-variable-p 'decknix--agent-broker-key))
+                  (key decknix--agent-broker-key)
+                  ((fboundp 'decknix--agent-broker-log-path))
+                  (log (decknix--agent-broker-log-path key))
+                  (res (decknix-session-assoc-backfill log)))
+        (decknix-session-assoc-apply buffer (car res) (cdr res))
+        (decknix-session-assoc-remember key (car res) (cdr res))
+        t))))
+
+(defun decknix-session-assoc-backfill-pending ()
+  "Return the live agent buffers with no association yet."
+  (when (fboundp 'agent-shell-buffers)
+    (seq-filter
+     (lambda (b)
+       (and (buffer-live-p b)
+            (with-current-buffer b
+              (and (local-variable-p 'decknix--agent-broker-key)
+                   decknix--agent-broker-key
+                   (null (decknix-session-assoc-recall
+                          decknix--agent-broker-key))))))
+     (ignore-errors (agent-shell-buffers)))))
+
+(defun decknix-session-assoc-backfill-tick ()
+  "Backfill ONE pending session, then stop until the next idle period.
+
+One per tick so a fleet of sessions cannot chain into a multi-second
+freeze: 13 of them at ~1.7 s each is ~22 s."
+  (when-let* ((buf (car (decknix-session-assoc-backfill-pending))))
+    (ignore-errors (decknix-session-assoc-backfill-one buf))))
+
+(defun decknix-session-assoc-start-backfill ()
+  "Begin backfilling associations on idle.  Idempotent."
+  (decknix-session-assoc-load)
+  (unless decknix--agent-assoc-backfill-timer
+    (setq decknix--agent-assoc-backfill-timer
+          (run-with-idle-timer decknix-session-assoc-backfill-idle t
+                               #'decknix-session-assoc-backfill-tick))))
+
+;;;###autoload
+(defun decknix-session-assoc-backfill-now ()
+  "Backfill every pending session\='s association now, reporting progress.
+
+The deferred path does this on idle; this is for when you want it done
+before the next idle period."
+  (interactive)
+  (decknix-session-assoc-load)
+  (let ((pending (decknix-session-assoc-backfill-pending)) (done 0))
+    (if (null pending)
+        (message "Session associations: nothing pending")
+      (dolist (buf pending)
+        (message "Backfilling %s..." (buffer-name buf))
+        (when (decknix-session-assoc-backfill-one buf)
+          (setq done (1+ done))))
+      (message "Session associations: %d of %d backfilled"
+               done (length pending))
+      (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+        (ignore-errors (agent-shell-workspace-sidebar-refresh))))))
+
+(declare-function agent-shell-buffers "agent-shell" ())
+(declare-function agent-shell-workspace-sidebar-refresh
+                  "agent-shell-workspace" ())
 
 (provide 'decknix-session-assoc)
 ;;; decknix-session-assoc.el ends here
