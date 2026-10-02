@@ -339,6 +339,15 @@ more than a bounded string append (`decknix--agent-turn-append-tail')."
              (setq decknix--agent-turn-plan
                    (decknix--agent-plan-progress
                     (map-nested-elt notification '(params update entries)))))
+            ;; Record which worktree this session is working in, from the
+            ;; paths the tool call reports.  Only these two kinds carry
+            ;; `locations', so the common case (a message chunk) does not
+            ;; reach the observer at all.
+            ((or "tool_call" "tool_call_update")
+             (when (fboundp 'decknix-session-assoc-observe)
+               (ignore-errors
+                 (decknix-session-assoc-observe
+                  (map-nested-elt notification '(params update))))))
             ("user_message_chunk"
              ;; A new turn begins: last turn's ask is answered by definition.
              (decknix-agent-turn-reset))
@@ -369,6 +378,8 @@ Runs once per turn, so the question scan is off any hot path."
     (let ((data (plist-get args :data)))
       (pcase (plist-get args :event)
         ('turn-complete
+         (when (fboundp 'decknix-session-assoc-end-turn)
+           (ignore-errors (decknix-session-assoc-end-turn)))
          (setq decknix--agent-turn-stop-reason (map-elt data :stop-reason))
          (setq decknix--agent-turn-question
                (decknix--agent-question-p decknix--agent-turn-message-tail))
