@@ -6908,6 +6908,10 @@ duration -- the most important number on this branch."
         ;; Override upstream keys: r, w, a now serve section navigation
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "r") #'decknix-sidebar-goto-requests)
+        ;; `N' starts a session for the row at point -- a repo, worktree or
+        ;; PR -- with its workspace seeded and tags suggested.
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "N") #'decknix-sidebar-launch-session)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "w") #'decknix-sidebar-goto-wip)
         (define-key agent-shell-workspace-sidebar-mode-map
