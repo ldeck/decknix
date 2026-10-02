@@ -4434,6 +4434,12 @@ ${optionalString cfg.tableOverlay.enable ''
         (require 'decknix-forge-board-model)
         (require 'decknix-forge-board)
         (require 'decknix-session-assoc)
+        ;; Load the store and begin backfilling associations on idle, so a
+        ;; reattached session shows the worktrees it was working in rather
+        ;; than nothing until its next tool call.  Deferred because a 16 MB
+        ;; log tail parses in ~1.7s and 13 sessions would be ~22s -- paid on
+        ;; a switch, that is the editor unusable exactly when work starts.
+        (decknix-session-assoc-start-backfill)
 
         (require 'decknix-sidebar-layout)
         (require 'decknix-sidebar-layout-render)

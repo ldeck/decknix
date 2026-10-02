@@ -26,6 +26,8 @@
 ;; test file a bare `let' created a lexical binding instead -- and the code
 ;; under test, which guards with `boundp', correctly saw nothing.
 (defvar decknix--hub-wt-facts nil)
+(defvar decknix--agent-assoc-store nil)
+(defvar decknix--agent-broker-key nil)
 
 (defconst dk-assoc-test--roots
   '("/w/platform-cli"
@@ -265,6 +267,108 @@ regressions here."
       (puthash "/w/b" '((path . "/w/b")) decknix--hub-wt-facts)
       (decknix-session-assoc-roots)
       (should (= 2 builds)))))
+
+
+;; --- real JSON shapes -------------------------------------------------
+
+(ert-deftest dk-assoc--locations-may-be-a-vector ()
+  "`json-parse-string' renders a JSON array as a VECTOR, so a `listp'
+test discarded every path.  Hand-written list fixtures passed while a
+real 76 MB log yielded nothing at all -- found only by running the
+backfill against one."
+  (should (equal '("/a/b.go")
+                 (decknix-session-assoc-paths-of
+                  '((locations . [((path . "/a/b.go"))]))))))
+
+(ert-deftest dk-assoc--a-vector-of-several-locations-is-read-whole ()
+  (should (equal '("/a.go" "/b.go")
+                 (decknix-session-assoc-paths-of
+                  '((locations . [((path . "/a.go")) ((path . "/b.go"))]))))))
+
+;; --- backfill from log lines ------------------------------------------
+
+(ert-deftest dk-assoc--backfill-counts-turns-and-records-roots ()
+  (let* ((lines (list
+                 "{\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"tool_call\",\"locations\":[{\"path\":\"/w/a/x.go\"}]}}}"
+                 "{\"id\":1,\"result\":{\"stopReason\":\"end_turn\"}}"
+                 "{\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"tool_call\",\"locations\":[{\"path\":\"/w/b/y.go\"}]}}}"))
+         (res (decknix-session-assoc-from-lines lines '("/w/a" "/w/b"))))
+    (should (= 1 (car res)))
+    (should (equal '("/w/b" "/w/a")
+                   (decknix-session-assoc-active (cdr res) (car res) 20)))))
+
+(ert-deftest dk-assoc--backfill-ignores-paths-outside-known-roots ()
+  "A log is full of /tmp scratch files; the first real sample found was
+`/tmp/nix-pipeline-architecture.dot'."
+  (let* ((lines (list
+                 "{\"method\":\"session/update\",\"params\":{\"update\":{\"locations\":[{\"path\":\"/tmp/scratch.dot\"}]}}}"))
+         (res (decknix-session-assoc-from-lines lines '("/w/a"))))
+    (should-not (cdr res))))
+
+(ert-deftest dk-assoc--backfill-of-empty-lines-is-turn-zero ()
+  (should (equal '(0) (decknix-session-assoc-from-lines nil '("/w/a")))))
+
+(ert-deftest dk-assoc--backfill-tolerates-a-torn-line ()
+  "A bounded tail starts mid-line by construction."
+  (let ((res (decknix-session-assoc-from-lines
+              (list "ions\":[{\"path\":\"/w/a/x.go\"}]}}}"
+                    "{\"method\":\"session/update\",\"params\":{\"update\":{\"locations\":[{\"path\":\"/w/a/y.go\"}]}}}")
+              '("/w/a"))))
+    (should (equal '("/w/a") (decknix-session-assoc-active (cdr res) (car res) 20)))))
+
+;; --- persistence ------------------------------------------------------
+
+(ert-deftest dk-assoc--store-round-trips ()
+  (let* ((tmp (make-temp-file "dk-assoc" nil ".eld"))
+         (decknix--agent-assoc-store nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'decknix-session-assoc-state-file)
+                   (lambda () tmp)))
+          (decknix-session-assoc-remember "s-k" 7 '(("/w/a" . 7)))
+          (setq decknix--agent-assoc-store nil)
+          (decknix-session-assoc-load)
+          (should (equal '(7 ("/w/a" . 7)) (decknix-session-assoc-recall "s-k"))))
+      (delete-file tmp))))
+
+(ert-deftest dk-assoc--remember-replaces-rather-than-appends ()
+  "Appending would grow the store without bound across turns -- 360 turns
+on the session measured."
+  (let* ((tmp (make-temp-file "dk-assoc2" nil ".eld"))
+         (decknix--agent-assoc-store nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'decknix-session-assoc-state-file)
+                   (lambda () tmp)))
+          (decknix-session-assoc-remember "s-k" 1 '(("/w/a" . 1)))
+          (decknix-session-assoc-remember "s-k" 2 '(("/w/a" . 2)))
+          (should (= 1 (length decknix--agent-assoc-store)))
+          (should (equal 2 (car (decknix-session-assoc-recall "s-k")))))
+      (delete-file tmp))))
+
+(ert-deftest dk-assoc--restore-seeds-a-reattached-session ()
+  "The point: a resumed session shows its worktrees immediately instead of
+nothing until its next tool call."
+  (let* ((buf (generate-new-buffer " rst"))
+         (decknix--agent-assoc-store '(("s-k" . (9 ("/w/a" . 9))))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf (setq-local decknix--agent-broker-key "s-k"))
+          (should (decknix-session-assoc-restore buf))
+          (should (equal '("/w/a") (decknix-session-assoc-current buf))))
+      (kill-buffer buf))))
+
+(ert-deftest dk-assoc--restore-of-an-unknown-session-is-nil ()
+  (let* ((buf (generate-new-buffer " rst2"))
+         (decknix--agent-assoc-store nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf (setq-local decknix--agent-broker-key "s-nope"))
+          (should-not (decknix-session-assoc-restore buf)))
+      (kill-buffer buf))))
+
+(ert-deftest dk-assoc--restore-without-a-broker-key-is-nil ()
+  (let ((buf (generate-new-buffer " rst3")))
+    (unwind-protect (should-not (decknix-session-assoc-restore buf))
+      (kill-buffer buf))))
 
 (provide 'decknix-session-assoc-test)
 ;;; decknix-session-assoc-test.el ends here
