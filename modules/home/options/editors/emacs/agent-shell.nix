@@ -5282,6 +5282,7 @@ ${optionalString cfg.tableOverlay.enable ''
                      ("V" . decknix-agent-review-menu)
                      ("B" . decknix-review-board)
                      ("S" . decknix-session-board)
+                     ("F" . decknix-forge-board)
                      ("u" . decknix-agent-session-pr-url)
                      ("w" . decknix-agent-watch-checks)
                      ("W" . decknix-agent-unwatch)))
@@ -5729,11 +5730,6 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         (define-key decknix-agent-command-map (kbd "e") 'decknix-agent-command-edit)   ; Edit
         (define-key decknix-agent-command-map (kbd "r") 'decknix-agent-review-pr)      ; PR review
         (define-key decknix-agent-command-map (kbd "B") 'decknix-agent-batch-process)  ; Batch
-        ;; Forge Board: repo problems in bulk.  The sidebar's row menu is
-        ;; one repo at a time, and a sweep that cannot reach the network
-        ;; fails every repo at once -- 11 measured -- which is 11
-        ;; interactions for one cause.
-        (define-key decknix-agent-command-map (kbd "F") 'decknix-forge-board)  ; Forge Board
         (define-key decknix-agent-command-map (kbd "l") 'decknix-agent-link-pr)        ; Link PR
         (define-key decknix-agent-command-map (kbd "L") 'decknix-agent-link-repo)      ; Link Repo
         (define-key decknix-agent-command-map (kbd "u") 'decknix-agent-unlink-pr)

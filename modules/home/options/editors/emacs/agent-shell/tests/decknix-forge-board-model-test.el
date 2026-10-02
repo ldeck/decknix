@@ -118,11 +118,64 @@ would shift onto a different repo."
     (should (string-prefix-p "*" (decknix-forge-board-row-label row t 40)))
     (should (string-prefix-p " " (decknix-forge-board-row-label row nil 40)))))
 
-(ert-deftest decknix-fb--the-dirty-hint-says-what-will-not-happen ()
-  "That lane is where a destructive verb would be most tempting, so the
-hint has to state the board will not touch the work."
-  (should (string-match-p "nothing here will touch it"
-                          (decknix-forge-board-lane-hint 'dirty))))
+(ert-deftest decknix-fb--the-dirty-hint-names-its-verb-and-that-it-is-safe ()
+  "That lane is where the user has most reason to hesitate, so the hint
+has to say both what clears it and that the work comes back."
+  (let ((hint (decknix-forge-board-lane-hint 'dirty)))
+    ;; Rendered as "[s]tash" -- the key is part of the hint, so match the
+    ;; bracketed form rather than the bare word.
+    (should (string-match-p "\\[s\\]tash" hint))
+    (should (string-match-p "recoverab" hint))))
+
+;; --- stashing ---------------------------------------------------------
+
+(ert-deftest decknix-fb--stashing-is-confined-to-the-dirty-lane ()
+  "There is nothing to stash in a clean tree, and on a diverged repo it
+would stash nothing while implying the divergence was dealt with."
+  (should (decknix-forge-board-stashable-p (decknix-fb-test--p 'dirty "a")))
+  (dolist (kind '(lock failed diverged))
+    (should-not (decknix-forge-board-stashable-p
+                 (decknix-fb-test--p kind "a")))))
+
+(ert-deftest decknix-fb--filter-stashable-keeps-only-dirty ()
+  (let ((rows (list (decknix-fb-test--p 'dirty "a")
+                    (decknix-fb-test--p 'lock "b")
+                    (decknix-fb-test--p 'dirty "c"))))
+    (should (equal '("a" "c")
+                   (mapcar (lambda (r) (plist-get r :name))
+                           (decknix-forge-board-filter-stashable rows))))))
+
+(ert-deftest decknix-fb--clear-and-stash-lanes-do-not-overlap ()
+  "A row must not accept both verbs: they are remedies for different
+faults, and a mark spanning both lanes should route each row once."
+  (dolist (kind decknix-forge-board-lanes)
+    (let ((row (decknix-fb-test--p kind "a")))
+      (should-not (and (decknix-forge-board-clearable-p row)
+                       (decknix-forge-board-stashable-p row))))))
+
+;; --- grouping by org --------------------------------------------------
+
+(ert-deftest decknix-fb--org-grouping-splits-by-org ()
+  (let ((groups (decknix-forge-board-group-by-org
+                 (list (append (decknix-fb-test--p 'dirty "a") '(:org "one"))
+                       (append (decknix-fb-test--p 'lock "b") '(:org "two"))
+                       (append (decknix-fb-test--p 'lock "c") '(:org "one"))))))
+    (should (equal '("one" "two") (mapcar #'car groups)))
+    (should (= 2 (length (cdr (assoc "one" groups)))))))
+
+(ert-deftest decknix-fb--org-grouping-with-one-org-is-a-single-heading ()
+  "Measured 59 of 60 rows in one org and all 8 problem rows in that one,
+so this axis separates nothing today.  Pinned so the behaviour is not
+mistaken for a bug."
+  (let ((groups (decknix-forge-board-group-by-org
+                 (list (append (decknix-fb-test--p 'dirty "a") '(:org "nc"))
+                       (append (decknix-fb-test--p 'lock "b") '(:org "nc"))))))
+    (should (= 1 (length groups)))))
+
+(ert-deftest decknix-fb--org-grouping-handles-a-missing-org ()
+  (let ((groups (decknix-forge-board-group-by-org
+                 (list (decknix-fb-test--p 'dirty "a")))))
+    (should (equal '("?") (mapcar #'car groups)))))
 
 (ert-deftest decknix-fb--summary-counts-every-lane ()
   (let ((groups (decknix-forge-board-group

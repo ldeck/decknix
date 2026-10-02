@@ -121,6 +121,52 @@ a lock was left alone."
            (message "%s: lock left alone -- %s" name reason)
            (when on-done (funcall on-done))))))))
 
+(defun decknix--repo-sync-run-git (path args name on-done)
+  "Run git ARGS in PATH asynchronously under NAME, calling ON-DONE with output."
+  (let ((buffer (generate-new-buffer (format " *%s*" name))))
+    (make-process
+     :name name
+     :buffer buffer
+     :noquery t
+     :command (append (list "git" "-C" (expand-file-name path)) args)
+     :sentinel
+     (lambda (proc event)
+       (when (string-match-p "\\`\\(finished\\|exited\\|deleted\\|failed\\)" event)
+         (let ((output (when (buffer-live-p buffer)
+                         (with-current-buffer buffer (buffer-string))))
+               (ok (and (eq (process-status proc) 'exit)
+                        (= 0 (process-exit-status proc)))))
+           (when (buffer-live-p buffer) (kill-buffer buffer))
+           (funcall on-done ok (or output ""))))))))
+
+(defun decknix-repo-sync-stash (problem &optional on-done)
+  "Stash PROBLEM\='s uncommitted work, then re-sync the repo.
+
+`stash push\=' rather than `reset --hard\=': this is the only remedy for a
+dirty repo that is RECOVERABLE.  The work lands on the stash list and
+`git stash pop\=' brings it back, so a wrong keystroke here costs a lookup
+rather than the work itself.  `-u\=' includes untracked files, since those
+are what most often block a checkout and the most painful to lose.
+
+Nothing else offers to clear a dirty tree, which is why this exists: the
+sweep refuses to fast-forward a dirty repo, so without a way to clear it
+the repo stays behind indefinitely."
+  (let ((path (plist-get problem :path))
+        (name (plist-get problem :name)))
+    (unless path (user-error "No path recorded for this repo"))
+    (message "Stashing %s..." name)
+    (decknix--repo-sync-run-git
+     path (list "stash" "push" "-u" "-m" "decknix: stashed before sync")
+     "decknix-repo-stash"
+     (lambda (ok output)
+       (if (not ok)
+           (progn
+             (message "%s: stash failed -- %s" name
+                      (string-trim (or output "")))
+             (when on-done (funcall on-done)))
+         (message "%s: stashed (git stash pop to restore) -- re-syncing" name)
+         (decknix-repo-sync-retry problem on-done))))))
+
 (defun decknix-repo-sync-retry (problem &optional on-done)
   "Re-run the sweep for PROBLEM's repo only.
 
@@ -249,7 +295,7 @@ never rendered from the filesystem on the paint path."
 
 (defconst decknix--repo-sync-action-prompts
   '((lock . "%s: [c]lear stale lock  [r]etry sync  [v]isit repo  [q]uit ")
-    (dirty . "%s: [v]isit repo (commit or stash)  [r]etry sync  [q]uit ")
+    (dirty . "%s: [s]tash work  [v]isit repo  [r]etry sync  [q]uit ")
     (diverged . "%s: [v]isit repo (push or rebase)  [r]etry sync  [q]uit ")
     (failed . "%s: [v]isit repo  [r]etry sync  [q]uit "))
   "Per-kind action prompt.
@@ -270,12 +316,16 @@ at all.")
            (prompt (format (or (alist-get kind decknix--repo-sync-action-prompts)
                                "%s: [v]isit  [r]etry  [q]uit ")
                            name))
-           (choices (if (eq kind 'lock) '(?c ?r ?v ?q) '(?r ?v ?q)))
+           (choices (pcase kind
+                      ('lock '(?c ?r ?v ?q))
+                      ('dirty '(?s ?r ?v ?q))
+                      (_ '(?r ?v ?q))))
            (refresh (lambda ()
                       (when (fboundp 'agent-shell-workspace-sidebar-refresh)
                         (ignore-errors (agent-shell-workspace-sidebar-refresh))))))
       (pcase (read-char-choice prompt choices)
         (?c (decknix-repo-sync-clear-lock problem refresh))
+        (?s (decknix-repo-sync-stash problem refresh))
         (?r (decknix-repo-sync-retry problem refresh))
         (?v (decknix-repo-sync-visit problem))
         (?q (message "No action"))))))
