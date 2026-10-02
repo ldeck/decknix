@@ -270,7 +270,14 @@ replaying a stale in-flight tail would be wrong."
                        (with-temp-buffer (insert-file-contents pf)
                                          (buffer-string)))))))
     (and (integerp pid) (> pid 0)
-         (= 0 (call-process "kill" nil nil nil "-0" (number-to-string pid))))))
+         ;; `signal-process' rather than `call-process' to "kill": this runs
+         ;; once per session per status query, and forking 13 `kill' processes
+         ;; measured 0.33 s against 0.0000 s for the builtin -- the dominant
+         ;; cost of a status sweep, and what made the buffer picker lag.
+         ;;
+         ;; Signal 0 probes without delivering.  A -1 means no such process
+         ;; (or not ours, which cannot happen for a broker we spawned).
+         (eq 0 (ignore-errors (signal-process pid 0))))))
 
 (defvar-local decknix--agent-broker-replay-window nil
   "Bytes from the end of the broker log this buffer has restored.
@@ -397,6 +404,31 @@ and counting those marks every session as working."
     (< (float-time (time-subtract (current-time) mtime))
        decknix-agent-broker-inflight-stale-seconds)))
 
+(defcustom decknix-agent-broker-working-ttl 2
+  "Seconds a session\='s working-state is reused before re-probing.
+
+The status function is called once per session per query, and a single UI
+pass can query many times -- the buffer picker annotates every candidate,
+and a completion front-end re-runs that as the user types.  Without a
+cache, one keystroke re-read 13 logs.
+
+Short enough that a turn starting or ending shows up promptly, long
+enough that one command costs one sweep."
+  :type 'integer
+  :group 'decknix)
+
+(defvar decknix--agent-broker-working-cache (make-hash-table :test 'equal)
+  "Broker key -> (TIMESTAMP . WORKING-P), valid for the TTL.")
+
+(defun decknix--agent-broker-working-uncached-p (key)
+  "Return non-nil when KEY\='s agent is mid-turn, probing the log now."
+  (and (decknix--agent-broker-live-p key)
+       (decknix--agent-broker-log-fresh-p key)
+       (decknix--agent-broker-inflight-p
+        (decknix--agent-broker-read-log-tail
+         (decknix--agent-broker-log-path key)))
+       t))
+
 (defun decknix--agent-broker-working-p (&optional buffer)
   "Non-nil when BUFFER\='s agent is mid-turn according to its broker log.
 
@@ -405,12 +437,14 @@ has grown recently.  Either alone is not evidence -- see
 `decknix-agent-broker-inflight-stale-seconds\='."
   (with-current-buffer (or buffer (current-buffer))
     (when-let* (((bound-and-true-p decknix--agent-broker-key))
-                (key decknix--agent-broker-key)
-                ((decknix--agent-broker-live-p key))
-                ((decknix--agent-broker-log-fresh-p key))
-                (lines (decknix--agent-broker-read-log-tail
-                        (decknix--agent-broker-log-path key))))
-      (and (decknix--agent-broker-inflight-p lines) t))))
+                (key decknix--agent-broker-key))
+      (let* ((now (float-time (current-time)))
+             (hit (gethash key decknix--agent-broker-working-cache)))
+        (if (and hit (< (- now (car hit)) decknix-agent-broker-working-ttl))
+            (cdr hit)
+          (let ((val (decknix--agent-broker-working-uncached-p key)))
+            (puthash key (cons now val) decknix--agent-broker-working-cache)
+            val))))))
 
 (defun decknix--agent-broker-can-restore-p (&optional buffer)
   "Non-nil when BUFFER\='s history should come from the broker log.
