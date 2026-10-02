@@ -21,12 +21,10 @@
 ;;   lock      an abandoned index.lock -- the one kind with a mechanical remedy
 ;;   failed    the sync errored; a retry may well be all it needs
 ;;   diverged  local and origin have both moved; only a human can choose
-;;   dirty     uncommitted work; only a human can decide what to keep
+;;   dirty     uncommitted work; stashable from here, recoverably
 ;;
 ;; `lock' and `failed' lead because a bulk verb can finish them.  `diverged'
-;; and `dirty' are last for the same reason the Session Board puts cleanup
-;; last: everything above can be resolved from here, everything below needs
-;; you to go and look.
+;; is last because nothing here can safely choose between two histories.
 ;;
 ;; Side-effecting render, marks and the bulk verbs live in the board layer
 ;; per AGENTS.md Rule 2.
@@ -50,13 +48,13 @@
   '((lock     . "abandoned index.lock -- clearable from here")
     (failed   . "sync errored -- a retry may be enough")
     (diverged . "local and origin both moved -- your call")
-    (dirty    . "uncommitted work -- nothing here will touch it"))
+    (dirty    . "uncommitted work -- [s]tash clears it, recoverably"))
   "One-line explanation per lane, shown beside the count.
 
 Carried here rather than in the render because a lane the user cannot
 explain is a lane they will not trust enough to run a bulk verb from.
-The `dirty' hint states what the board will NOT do, since that is the
-lane where a destructive verb would be most tempting and most costly.")
+The `dirty' hint names its verb AND that it is recoverable, because that
+is the lane where the user has most reason to hesitate.")
 
 (defun decknix-forge-board-lane-title (lane)
   "Return the display title for LANE."
@@ -81,6 +79,21 @@ uncommitted work, and on a failed row there is usually no lock at all.")
 Every lane: a re-sync is read-only with respect to local work -- the
 sweep never force-updates a dirty or diverged repo, it only fetches --
 so retrying one can correct a stale row without risking anything.")
+
+(defconst decknix-forge-board-stashable-lanes '(dirty)
+  "Lanes whose rows `stash work\=' may act on.
+
+Only `dirty\='.  There is nothing to stash in a repo whose tree is clean,
+and running it on a diverged repo would stash nothing while implying the
+divergence had been dealt with.")
+
+(defun decknix-forge-board-stashable-p (row)
+  "Return non-nil when `stash work\=' applies to ROW."
+  (and (memq (plist-get row :kind) decknix-forge-board-stashable-lanes) t))
+
+(defun decknix-forge-board-filter-stashable (rows)
+  "Return the subset of ROWS `stash work\=' applies to."
+  (seq-filter #'decknix-forge-board-stashable-p rows))
 
 (defun decknix-forge-board-clearable-p (row)
   "Return non-nil when `clear lock' applies to ROW."
@@ -129,6 +142,26 @@ whose whole purpose is to show what is there."
                     (when-let ((rows (gethash lane by-lane)))
                       (cons lane (decknix-forge-board-sort-rows rows))))
                   decknix-forge-board-lanes))))
+
+(defun decknix-forge-board-group-by-org (problems)
+  "Return (ORG . ROWS) pairs for PROBLEMS, orgs in name order.
+
+An alternative axis to `decknix-forge-board-group\='.  Grouping by problem
+KIND is the default because it is what decides which verb applies; org
+separates nothing when every repo belongs to one, which is the usual
+case -- measured 59 of 60 rows in a single org, and all 8 problem rows in
+that one.  Useful once more than one forge or org is in play."
+  (let ((by-org (make-hash-table :test 'equal))
+        (orgs nil))
+    (dolist (p problems)
+      (when (memq (plist-get p :kind) decknix-forge-board-lanes)
+        (let ((org (or (plist-get p :org) "?")))
+          (unless (gethash org by-org) (push org orgs))
+          (puthash org (cons (decknix-forge-board-row p) (gethash org by-org))
+                   by-org))))
+    (mapcar (lambda (org)
+              (cons org (decknix-forge-board-sort-rows (gethash org by-org))))
+            (sort orgs #'string<))))
 
 (defun decknix-forge-board-sort-rows (rows)
   "Return ROWS by name, so a re-render cannot reorder under a mark."

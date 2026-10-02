@@ -11,13 +11,19 @@
 ;; Session Boards.  Rows are repos the sweep found a problem with, grouped by
 ;; what is wrong, with marks so one verb can finish a whole lane.
 ;;
-;; Every verb here is NON-DESTRUCTIVE.  Clearing a lock deletes a file no
-;; process holds (the CLI re-checks with `lsof' and refuses otherwise), and a
-;; re-sync only ever fetches -- the sweep never force-updates a dirty or
-;; diverged repo.  There is deliberately no `reset' or `stash' verb: those
-;; destroy or hide uncommitted work, and a board built for bulk action is the
-;; worst possible place to put them, because the whole point of the marks is
-;; to act on many rows at once.  The `dirty' lane says so in its hint.
+;; Every verb here is RECOVERABLE, which is the bar a board built for bulk
+;; action has to meet: the whole point of the marks is to act on many rows at
+;; once, so a verb that cannot be undone would turn one keystroke into an
+;; unrecoverable mistake across a whole lane.
+;;
+;; Clearing a lock deletes a file no process holds (the CLI re-checks with
+;; `lsof' and refuses otherwise).  A re-sync only ever fetches -- the sweep
+;; never force-updates a dirty or diverged repo.  Stashing moves uncommitted
+;; work onto the stash list, where `git stash pop' brings it back.
+;;
+;; There is deliberately no `reset --hard': it is the one remedy here that
+;; destroys work outright, and nothing on this board should be able to do
+;; that to five marked repos at once.
 
 ;;; Code:
 
@@ -30,6 +36,8 @@
 (declare-function decknix-repo-sync-clear-lock "decknix-repo-sync-actions"
                   (problem &optional on-done))
 (declare-function decknix-repo-sync-retry "decknix-repo-sync-actions"
+                  (problem &optional on-done))
+(declare-function decknix-repo-sync-stash "decknix-repo-sync-actions"
                   (problem &optional on-done))
 (declare-function decknix-repo-sync-resweep "decknix-repo-sync-actions"
                   (&optional on-done))
@@ -45,6 +53,9 @@ window is to hand, and padding rows to a selected window's width is what
 pushed the Session Board's right-hand column out of view."
   :type 'integer
   :group 'decknix)
+
+(defvar decknix-forge-board-group-by 'kind
+  "Grouping axis: `kind' (default) or `org'.")
 
 (defvar decknix-forge-board--groups nil
   "Rendered (LANE . ROWS) pairs, so an action resolves what is on screen.")
@@ -94,7 +105,9 @@ the cursor moved after marking."
   "Redraw the board from the current sweep report."
   (let* ((problems (when (fboundp 'decknix-repo-sync-problems)
                      (decknix-repo-sync-problems)))
-         (groups (decknix-forge-board-group problems))
+         (groups (if (eq decknix-forge-board-group-by 'org)
+                     (decknix-forge-board-group-by-org problems)
+                   (decknix-forge-board-group problems)))
          (width decknix-forge-board-width)
          (inhibit-read-only t)
          (line (line-number-at-pos)))
@@ -106,7 +119,9 @@ the cursor moved after marking."
             "\n\n")
     (dolist (g groups)
       (insert (propertize
-               (decknix-forge-board-lane-header (car g) (cdr g) width)
+               (if (eq decknix-forge-board-group-by 'org)
+                   (format " %s (%d)" (car g) (length (cdr g)))
+                 (decknix-forge-board-lane-header (car g) (cdr g) width))
                'face (decknix-forge-board--lane-face (car g)))
               "\n")
       (dolist (row (cdr g))
@@ -119,8 +134,8 @@ the cursor moved after marking."
                 "\n"))
       (insert "\n"))
     (insert (propertize
-             "m mark  u unmark  U unmark all  c clear locks  r retry sync\n\
-v visit  G resweep all  g refresh  q quit"
+             "m mark  u unmark  U unmark all  c clear locks  s stash  r retry\n\
+v visit  t group by kind/org  G resweep all  g refresh  q quit"
              'face 'font-lock-comment-face)
             "\n")
     (goto-char (point-min))
@@ -203,6 +218,46 @@ dirty or diverged repo."
     (message "Re-syncing %d repo%s..."
              (length targets) (if (= 1 (length targets)) "" "s"))))
 
+(defun decknix-forge-board-stash ()
+  "Stash the uncommitted work in every marked dirty repo.
+
+Recoverable: the work goes onto each repo\='s stash list and `git stash
+pop\=' restores it.  Rows in other lanes are skipped rather than refused --
+there is nothing to stash in a clean tree."
+  (interactive)
+  (let* ((targets (decknix-forge-board--targets))
+         (stashable (decknix-forge-board-filter-stashable targets))
+         (skipped (- (length targets) (length stashable))))
+    (cond
+     ((null targets) (user-error "No repo marked or at point"))
+     ((null stashable)
+      (user-error "Nothing to stash: no marked repo has uncommitted work"))
+     ((not (yes-or-no-p
+            (format "Stash uncommitted work in %d repo%s (git stash pop restores)? "
+                    (length stashable) (if (= 1 (length stashable)) "" "s"))))
+      (message "No action"))
+     (t
+      (let ((done (decknix-forge-board--after-each
+                   (length stashable) "stash work")))
+        (dolist (row stashable)
+          (decknix-repo-sync-stash (plist-get row :problem) done)))
+      (message "Stashing %d repo%s%s..."
+               (length stashable) (if (= 1 (length stashable)) "" "s")
+               (if (> skipped 0)
+                   (format " (%d skipped, nothing to stash)" skipped) ""))))))
+
+(defun decknix-forge-board-toggle-grouping ()
+  "Switch between grouping by problem kind and by org.
+
+Kind is the default because it is what decides which verb applies.  Org
+is useful once more than one forge or org is in play; with a single org
+it renders one heading and separates nothing."
+  (interactive)
+  (setq decknix-forge-board-group-by
+        (if (eq decknix-forge-board-group-by 'kind) 'org 'kind))
+  (decknix-forge-board-render)
+  (message "Grouped by %s" decknix-forge-board-group-by))
+
 (defun decknix-forge-board-visit ()
   "Open the repo on this row in Dired."
   (interactive)
@@ -238,6 +293,8 @@ dirty or diverged repo."
     (define-key map (kbd "u") #'decknix-forge-board-unmark)
     (define-key map (kbd "U") #'decknix-forge-board-unmark-all)
     (define-key map (kbd "c") #'decknix-forge-board-clear-locks)
+    (define-key map (kbd "s") #'decknix-forge-board-stash)
+    (define-key map (kbd "t") #'decknix-forge-board-toggle-grouping)
     (define-key map (kbd "r") #'decknix-forge-board-retry)
     (define-key map (kbd "v") #'decknix-forge-board-visit)
     (define-key map (kbd "RET") #'decknix-forge-board-visit)
