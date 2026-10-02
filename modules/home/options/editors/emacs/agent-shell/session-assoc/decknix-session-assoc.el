@@ -147,5 +147,82 @@ is precise, rather than by its repo, which is not."
                  roots)
        t))
 
+;; --- capture (side-effecting, kept here with its own pure core) -------
+
+(defvar decknix--agent-assoc-roots-cache nil
+  "Cons of (WT-COUNT . ROOTS): the worktree roots and the table size they
+were derived from.
+
+Rebuilt only when the worktree table\='s SIZE changes.  Capture runs from
+the ACP notification handler, which fires on every streamed chunk, and
+`decknix-hub-wt-rows\=' walks a hash table and allocates a list -- calling
+it per tool call is the shape of defect that has already cost three
+performance regressions in this tree.
+
+A worktree replaced without changing the count is missed until the next
+count change.  That is accepted: the alternative is re-deriving the list
+on a hot path, and a stale root only delays an association.")
+
+(declare-function decknix-hub-wt-rows "decknix-hub-wt-stale" ())
+(defvar decknix--hub-wt-facts)
+
+(defun decknix-session-assoc-roots ()
+  "Return the known worktree and repo roots, cached on the table size."
+  (if (not (and (boundp 'decknix--hub-wt-facts)
+                (hash-table-p decknix--hub-wt-facts)
+                (fboundp 'decknix-hub-wt-rows)))
+      (cdr decknix--agent-assoc-roots-cache)
+    (let ((count (hash-table-count decknix--hub-wt-facts)))
+      (unless (and decknix--agent-assoc-roots-cache
+                   (equal count (car decknix--agent-assoc-roots-cache)))
+        (setq decknix--agent-assoc-roots-cache
+              (cons count
+                    (delq nil
+                          (mapcar (lambda (r)
+                                    (or (alist-get 'path r)
+                                        (plist-get r :path)))
+                                  (ignore-errors (decknix-hub-wt-rows)))))))
+      (cdr decknix--agent-assoc-roots-cache))))
+
+(defvar-local decknix--agent-assoc nil
+  "This session\='s (ROOT . LAST-TURN) alist of observed worktrees.")
+
+(defvar-local decknix--agent-assoc-turn 0
+  "This session\='s turn counter, used as the recency clock.")
+
+(defun decknix-session-assoc-observe (update)
+  "Record the worktrees an ACP session UPDATE touches, in the current buffer.
+
+Returns non-nil when something was recorded.  Does nothing for an update
+carrying no `locations\=', which is nearly all of them -- the measured
+session had 24707 message chunks against 2400 tool calls."
+  (when-let* ((paths (decknix-session-assoc-paths-of update)))
+    (let ((roots (decknix-session-assoc-roots))
+          (any nil))
+      (dolist (path paths)
+        (when-let* ((root (decknix-session-assoc-resolve path roots)))
+          (setq decknix--agent-assoc
+                (decknix-session-assoc-touch
+                 decknix--agent-assoc root decknix--agent-assoc-turn))
+          (setq any t)))
+      any)))
+
+(defun decknix-session-assoc-end-turn ()
+  "Advance this session\='s recency clock and prune what fell outside it."
+  (setq decknix--agent-assoc-turn (1+ decknix--agent-assoc-turn))
+  (setq decknix--agent-assoc
+        (decknix-session-assoc-prune
+         decknix--agent-assoc decknix--agent-assoc-turn)))
+
+(defun decknix-session-assoc-current (&optional buffer)
+  "Return the worktree roots BUFFER is currently working in."
+  (with-current-buffer (or buffer (current-buffer))
+    (when (local-variable-p 'decknix--agent-assoc)
+      (decknix-session-assoc-active
+       decknix--agent-assoc
+       (if (local-variable-p 'decknix--agent-assoc-turn)
+           decknix--agent-assoc-turn
+         0)))))
+
 (provide 'decknix-session-assoc)
 ;;; decknix-session-assoc.el ends here

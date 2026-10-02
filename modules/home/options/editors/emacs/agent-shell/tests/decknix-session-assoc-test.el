@@ -17,7 +17,15 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'decknix-session-assoc)
+
+;; Declared WITH a value so `let' below binds it dynamically.  A
+;; one-argument `defvar' (which is what the module under test uses) marks a
+;; variable special only within its own file, so in this `lexical-binding'
+;; test file a bare `let' created a lexical binding instead -- and the code
+;; under test, which guards with `boundp', correctly saw nothing.
+(defvar decknix--hub-wt-facts nil)
 
 (defconst dk-assoc-test--roots
   '("/w/platform-cli"
@@ -167,6 +175,96 @@ rea-integration worktrees, which a repo-granular rule cannot express."
                  "/w/rea-integration-worktrees/CONN-801")))
     (should (decknix-session-assoc-claims-wt-p roots "/w/platform-cli-worktrees/CONN-1040"))
     (should (decknix-session-assoc-claims-wt-p roots "/w/rea-integration-worktrees/CONN-801"))))
+
+
+;; --- capture ----------------------------------------------------------
+
+(ert-deftest dk-assoc--capture-records-the-resolved-worktree ()
+  (let ((buf (generate-new-buffer " cap")))
+    (unwind-protect
+        (with-current-buffer buf
+          (cl-letf (((symbol-function 'decknix-session-assoc-roots)
+                     (lambda () '("/w/platform-cli-worktrees/CONN-1040"))))
+            (should (decknix-session-assoc-observe
+                     '((sessionUpdate . "tool_call")
+                       (locations . (((path . "/w/platform-cli-worktrees/CONN-1040/x.go")))))))
+            (should (equal '("/w/platform-cli-worktrees/CONN-1040")
+                           (decknix-session-assoc-current buf)))))
+      (kill-buffer buf))))
+
+(ert-deftest dk-assoc--capture-ignores-an-update-with-no-locations ()
+  "This runs on EVERY streamed chunk -- 24707 message chunks against 2400
+tool calls on the measured session -- so the common case must do nothing."
+  (let ((buf (generate-new-buffer " cap2")) (roots-called 0))
+    (unwind-protect
+        (with-current-buffer buf
+          (cl-letf (((symbol-function 'decknix-session-assoc-roots)
+                     (lambda () (setq roots-called (1+ roots-called)) nil)))
+            (should-not (decknix-session-assoc-observe
+                         '((sessionUpdate . "agent_message_chunk"))))
+            ;; Not even the roots lookup may be reached.
+            (should (= 0 roots-called))))
+      (kill-buffer buf))))
+
+(ert-deftest dk-assoc--capture-ignores-a-path-outside-every-root ()
+  (let ((buf (generate-new-buffer " cap3")))
+    (unwind-protect
+        (with-current-buffer buf
+          (cl-letf (((symbol-function 'decknix-session-assoc-roots)
+                     (lambda () '("/w/known"))))
+            (should-not (decknix-session-assoc-observe
+                         '((locations . (((path . "/tmp/elsewhere/x.go")))))))
+            (should-not (decknix-session-assoc-current buf))))
+      (kill-buffer buf))))
+
+(ert-deftest dk-assoc--ending-a-turn-advances-the-recency-clock ()
+  "Without this the window never moves and association never decays."
+  (let ((buf (generate-new-buffer " cap4")))
+    (unwind-protect
+        (with-current-buffer buf
+          (cl-letf (((symbol-function 'decknix-session-assoc-roots)
+                     (lambda () '("/w/a"))))
+            (decknix-session-assoc-observe
+             '((locations . (((path . "/w/a/x.go"))))))
+            (should (equal '("/w/a") (decknix-session-assoc-current buf)))
+            ;; Push the touch outside the window.
+            (dotimes (_ (1+ decknix-session-assoc-window))
+              (decknix-session-assoc-end-turn))
+            (should-not (decknix-session-assoc-current buf))))
+      (kill-buffer buf))))
+
+(ert-deftest dk-assoc--a-session-that-never-captured-has-no-association ()
+  "Must be nil rather than an error: every session is asked, including
+ones that have run no tool calls at all."
+  (let ((buf (generate-new-buffer " cap5")))
+    (unwind-protect
+        (should-not (decknix-session-assoc-current buf))
+      (kill-buffer buf))))
+
+(ert-deftest dk-assoc--roots-are-not-rederived-per-call ()
+  "`decknix-hub-wt-rows' walks a hash table and allocates; calling it per
+tool call is the shape of defect that has already cost three performance
+regressions here."
+  (let ((builds 0)
+        (decknix--agent-assoc-roots-cache nil)
+        (decknix--hub-wt-facts (make-hash-table :test 'equal)))
+    (puthash "/w/a" '((path . "/w/a")) decknix--hub-wt-facts)
+    (cl-letf (((symbol-function 'decknix-hub-wt-rows)
+               (lambda () (setq builds (1+ builds)) '(((path . "/w/a"))))))
+      (dotimes (_ 50) (decknix-session-assoc-roots))
+      (should (= 1 builds)))))
+
+(ert-deftest dk-assoc--roots-rebuild-when-the-worktree-table-changes ()
+  (let ((builds 0)
+        (decknix--agent-assoc-roots-cache nil)
+        (decknix--hub-wt-facts (make-hash-table :test 'equal)))
+    (puthash "/w/a" '((path . "/w/a")) decknix--hub-wt-facts)
+    (cl-letf (((symbol-function 'decknix-hub-wt-rows)
+               (lambda () (setq builds (1+ builds)) '(((path . "/w/a"))))))
+      (decknix-session-assoc-roots)
+      (puthash "/w/b" '((path . "/w/b")) decknix--hub-wt-facts)
+      (decknix-session-assoc-roots)
+      (should (= 2 builds)))))
 
 (provide 'decknix-session-assoc-test)
 ;;; decknix-session-assoc-test.el ends here
