@@ -13,6 +13,7 @@
 
 (require 'ert)
 (require 'decknix-repo-sync)
+(require 'decknix-repo-sync-actions)
 
 (defun decknix-rsc-test--p (kind name) (list :kind kind :name name))
 
@@ -70,6 +71,27 @@ failures, since it is the one with a remedy."
 (ert-deftest decknix-rsc--label-states-the-count ()
   (should (string-match-p "11" (decknix--repo-sync-collapsed-label
                                 (make-list 11 '(:kind failed))))))
+
+
+;; --- reset targets ----------------------------------------------------
+
+(ert-deftest decknix-rsc--local-is-the-default-reset-target ()
+  "The launchd sweep keeps local in step with origin, so resetting to the
+LOCAL branch discards only uncommitted work and leaves a checkout pinned
+to a particular revision still pinned.  Resetting to origin would discard
+those commits -- a larger loss, so never the default."
+  (should (equal "main" (decknix-repo-sync-reset-ref 'local "main"))))
+
+(ert-deftest decknix-rsc--origin-target-is-the-remote-ref ()
+  (should (equal "origin/main" (decknix-repo-sync-reset-ref 'origin "main"))))
+
+(ert-deftest decknix-rsc--an-unknown-target-does-not-become-origin ()
+  "Falling back to the remote ref would discard local commits for a typo."
+  (should (equal "main" (decknix-repo-sync-reset-ref 'nonsense "main"))))
+
+(ert-deftest decknix-rsc--targets-differ-so-the-choice-is-meaningful ()
+  (should-not (equal (decknix-repo-sync-reset-ref 'local "develop")
+                     (decknix-repo-sync-reset-ref 'origin "develop"))))
 
 (provide 'decknix-repo-sync-collapse-test)
 ;;; decknix-repo-sync-collapse-test.el ends here
