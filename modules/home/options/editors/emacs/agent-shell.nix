@@ -1984,7 +1984,10 @@ let
     # `decknix-hub-icons' is required by the RENDER file in this same src
     # dir, not by this one: `trivialBuild' compiles every `.el' it finds,
     # so a sibling's dependency has to be declared here too.
-    packageRequires = [ decknix-hub-icons-el ];
+    #
+    # `decknix-session-assoc' supplies the observed worktree association
+    # the claim rule now prefers over tags.
+    packageRequires = [ decknix-hub-icons-el decknix-session-assoc-el ];
     testFiles = [ "decknix-sidebar-layout-test.el" ];
   };
 
@@ -1997,7 +2000,8 @@ let
     # indicators painted one severity colour, which lost the colour
     # vocabulary the old sidebar read at a glance.  Pure formatting, so
     # the dependency carries no side effects.
-    packageRequires = [ decknix-sidebar-layout-el decknix-hub-icons-el ];
+    packageRequires = [ decknix-sidebar-layout-el decknix-hub-icons-el
+                        decknix-session-assoc-el ];
     testFiles = [ "decknix-sidebar-layout-render-test.el" ];
   };
 

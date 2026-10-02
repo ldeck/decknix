@@ -12,6 +12,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'decknix-sidebar-layout)
 
 (defun decknix-layout-test--session (name state prs &optional tags)
@@ -697,6 +698,51 @@ already working."
               (list (list :repo "zz" :asking 0 :sessions 1 :uncovered 0)
                     (list :repo "aa" :asking 0 :sessions 1 :uncovered 0)))))
     (should (equal "aa" (plist-get (car out) :repo)))))
+
+
+;; --- observed association beats tags ---------------------------------
+
+(ert-deftest decknix-layout--observed-roots-claim-across-repos ()
+  "The case that prompted this: one session working in platform-cli AND
+rea-integration worktrees.  The tag rule is repo-granular and named only
+rea-integration, so the platform-cli PR appeared nowhere."
+  (let ((roots '("/w/platform-cli-worktrees/CONN-1040"
+                 "/w/rea-integration-worktrees/CONN-801")))
+    (should (decknix--layout-session-observed-wt-p
+             roots '(:path "/w/platform-cli-worktrees/CONN-1040")))
+    (should (decknix--layout-session-observed-wt-p
+             roots '(:path "/w/rea-integration-worktrees/CONN-801")))))
+
+(ert-deftest decknix-layout--observed-roots-do-not-claim-untouched-work ()
+  "The other half of the tag failure: claiming every worktree of a repo
+the session merely happens to be named after."
+  (should-not (decknix--layout-session-observed-wt-p
+               '("/w/rea-integration-worktrees/CONN-801")
+               '(:path "/w/rea-integration-worktrees/CONN-999"))))
+
+(ert-deftest decknix-layout--no-observation-means-no-claim-by-observation ()
+  "A session that has run no tool calls observes nothing, which is what
+keeps the tag fallback meaningful rather than dead code."
+  (should-not (decknix--layout-session-observed-wt-p
+               nil '(:path "/w/anything"))))
+
+(ert-deftest decknix-layout--observed-roots-come-from-the-session-buffer ()
+  "Resolved per session, so two sessions cannot inherit each other\='s work."
+  (let ((buf (generate-new-buffer "*Claude: obs*")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'decknix-session-assoc-current)
+                   (lambda (b) (when (eq b buf) '("/w/mine")))))
+          (should (equal '("/w/mine")
+                         (decknix--layout-session-observed-roots
+                          (list "*Claude: obs*" nil nil "ready" nil))))
+          (should-not (decknix--layout-session-observed-roots
+                       (list "*Claude: other*" nil nil "ready" nil))))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-layout--a-dead-session-buffer-observes-nothing ()
+  "The snapshot can name a buffer that has since been killed."
+  (should-not (decknix--layout-session-observed-roots
+               (list "*Claude: gone*" nil nil "ready" nil))))
 
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here
