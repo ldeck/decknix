@@ -167,28 +167,47 @@ the repo stays behind indefinitely."
          (message "%s: stashed (git stash pop to restore) -- re-syncing" name)
          (decknix-repo-sync-retry problem on-done))))))
 
-(defun decknix-repo-sync-reset-hard (problem &optional on-done)
-  "Discard PROBLEM\='s uncommitted work, hard-resetting to its origin branch.
+(defconst decknix-repo-sync-reset-targets
+  '((local  . "%s")
+    (origin . "origin/%s"))
+  "Ref format per reset target, keyed by symbol.
 
-DESTRUCTIVE and not recoverable: unlike `decknix-repo-sync-stash\=', the
-work is gone.  Offered because a primary checkout is not a workspace --
-work belongs in a worktree -- so uncommitted changes there are usually
-debris rather than anything wanted, and stashing them just moves the
-debris onto the stash list.
+`local\=' (the default) resets to the local primary branch, which discards
+uncommitted work but KEEPS local commits -- so a checkout pinned to a
+particular revision stays pinned.  The launchd sweep keeps local in step
+with origin anyway, so this is the right default and the smaller loss.
 
-Resets to `origin/BRANCH\=' rather than HEAD, because the point is to make
-the checkout match origin: a reset to HEAD would leave it still behind.
-`clean -fd\=' follows, since reset alone leaves untracked files, which is
-exactly what blocks the next checkout."
+`origin\=' resets to the remote branch, discarding local commits too.  A
+separate and larger loss, so it is never the default.")
+
+(defun decknix-repo-sync-reset-ref (target branch)
+  "Return the git ref to reset to for TARGET and BRANCH."
+  (format (or (alist-get target decknix-repo-sync-reset-targets) "%s") branch))
+
+(defun decknix-repo-sync-reset-hard (problem &optional on-done target)
+  "Discard PROBLEM\='s uncommitted work by hard-resetting it.
+
+TARGET is `local\=' (default) or `origin\='; see
+`decknix-repo-sync-reset-targets\=' for why local is the default.
+
+DESTRUCTIVE and not recoverable, unlike `decknix-repo-sync-stash\='.
+Offered because a primary checkout is not a workspace -- work belongs in
+a worktree -- so uncommitted changes there are usually debris, and
+stashing debris only moves it onto the stash list.
+
+`clean -fd\=' follows the reset, since reset alone leaves untracked files,
+which is exactly what blocks the next checkout."
   (let* ((path (plist-get problem :path))
          (name (plist-get problem :name))
-         (branch (plist-get problem :branch)))
+         (branch (plist-get problem :branch))
+         (target (or target 'local))
+         (ref (and branch (decknix-repo-sync-reset-ref target branch))))
     (unless path (user-error "No path recorded for this repo"))
     (unless (and branch (not (string-empty-p branch)))
       (user-error "No default branch recorded for %s -- refusing to reset" name))
-    (message "Resetting %s to origin/%s..." name branch)
+    (message "Resetting %s to %s..." name ref)
     (decknix--repo-sync-run-git
-     path (list "reset" "--hard" (concat "origin/" branch))
+     path (list "reset" "--hard" ref)
      "decknix-repo-reset"
      (lambda (ok output)
        (if (not ok)
@@ -199,8 +218,21 @@ exactly what blocks the next checkout."
           path (list "clean" "-fd")
           "decknix-repo-clean"
           (lambda (_ok2 _out2)
-            (message "%s: reset to origin/%s -- re-syncing" name branch)
+            (message "%s: reset to %s -- re-syncing" name ref)
             (decknix-repo-sync-retry problem on-done))))))))
+
+(defun decknix-repo-sync-read-reset-target (name)
+  "Ask which ref to reset NAME to.  Returns `local\=', `origin\=', or nil.
+
+Local is offered first and is what RET takes, because it keeps local
+commits; choosing origin is the larger loss and should be deliberate."
+  (pcase (read-char-choice
+          (format "%s: reset to [l]ocal branch (keeps commits) or [o]rigin (discards them)? "
+                  name)
+          '(?l ?o ?\r ?q))
+    ((or ?l ?\r) 'local)
+    (?o 'origin)
+    (_ nil)))
 
 (defun decknix-repo-sync-retry (problem &optional on-done)
   "Re-run the sweep for PROBLEM's repo only.
@@ -361,11 +393,15 @@ at all.")
       (pcase (read-char-choice prompt choices)
         (?c (decknix-repo-sync-clear-lock problem refresh))
         (?s (decknix-repo-sync-stash problem refresh))
-        (?H (if (yes-or-no-p
-                 (format "DISCARD all uncommitted work in %s? Not recoverable. "
-                         (plist-get problem :name)))
-                (decknix-repo-sync-reset-hard problem refresh)
-              (message "No action")))
+        (?H (let ((target (decknix-repo-sync-read-reset-target name)))
+              (cond
+               ((null target) (message "No action"))
+               ((yes-or-no-p
+                 (format "DISCARD uncommitted work in %s, resetting to %s? Not recoverable. "
+                         name (decknix-repo-sync-reset-ref
+                               target (or (plist-get problem :branch) "?"))))
+                (decknix-repo-sync-reset-hard problem refresh target))
+               (t (message "No action")))))
         (?r (decknix-repo-sync-retry problem refresh))
         (?v (decknix-repo-sync-visit problem))
         (?q (message "No action"))))))

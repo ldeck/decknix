@@ -46,7 +46,11 @@
 (declare-function decknix-repo-sync-stash "decknix-repo-sync-actions"
                   (problem &optional on-done))
 (declare-function decknix-repo-sync-reset-hard "decknix-repo-sync-actions"
-                  (problem &optional on-done))
+                  (problem &optional on-done target))
+(declare-function decknix-repo-sync-read-reset-target
+                  "decknix-repo-sync-actions" (name))
+(declare-function decknix-repo-sync-reset-ref "decknix-repo-sync-actions"
+                  (target branch))
 (declare-function decknix-repo-sync-resweep "decknix-repo-sync-actions"
                   (&optional on-done))
 
@@ -257,11 +261,15 @@ there is nothing to stash in a clean tree."
 (defun decknix-forge-board-reset-hard ()
   "Discard uncommitted work in every marked dirty repo.  NOT recoverable.
 
-Gated harder than every other verb on this board, because it is the only
-one that destroys work and the marks make it destroy work in several
-repos at once.  The repos are NAMED in the prompt, and the confirmation
-is typed rather than a keystroke: a `y\=' sits next to keys the user has
-just been pressing, and this is not a verb to trigger by muscle memory."
+Asks which ref first: the local primary branch (default -- keeps local
+commits) or origin (discards them too).  See
+`decknix-repo-sync-reset-targets\='.
+
+Gated harder than every other verb here, because it is the only one that
+destroys work and the marks make it do so across several repos at once.
+The repos are NAMED in the prompt and the confirmation is TYPED rather
+than a keystroke: a `y\=' sits next to keys the user has just been
+pressing, and this is not a verb to trigger by muscle memory."
   (interactive)
   (let* ((targets (decknix-forge-board--targets))
          (rows (decknix-forge-board-filter-resettable targets))
@@ -271,20 +279,29 @@ just been pressing, and this is not a verb to trigger by muscle memory."
      ((null targets) (user-error "No repo marked or at point"))
      ((null rows)
       (user-error "Nothing to reset: no marked repo has uncommitted work"))
-     ((not (equal "reset"
-                  (read-string
-                   (format "DISCARD uncommitted work in %d repo%s (%s)? Type \"reset\" to confirm: "
-                           (length rows) (if (= 1 (length rows)) "" "s")
-                           (string-join names ", ")))))
-      (message "No action -- nothing was reset"))
      (t
-      (let ((done (decknix-forge-board--after-each (length rows) "hard reset")))
-        (dolist (row rows)
-          (decknix-repo-sync-reset-hard (plist-get row :problem) done)))
-      (message "Resetting %d repo%s%s..."
-               (length rows) (if (= 1 (length rows)) "" "s")
-               (if (> skipped 0)
-                   (format " (%d skipped, nothing to reset)" skipped) ""))))))
+      (let ((ref-target (decknix-repo-sync-read-reset-target
+                         (format "%d repo%s" (length rows)
+                                 (if (= 1 (length rows)) "" "s")))))
+        (cond
+         ((null ref-target) (message "No action -- nothing was reset"))
+         ((not (equal "reset"
+                      (read-string
+                       (format "DISCARD uncommitted work in %d repo%s (%s), resetting to %s? Type \"reset\" to confirm: "
+                               (length rows) (if (= 1 (length rows)) "" "s")
+                               (string-join names ", ")
+                               (if (eq ref-target 'origin) "origin" "the local branch")))))
+          (message "No action -- nothing was reset"))
+         (t
+          (let ((done (decknix-forge-board--after-each
+                       (length rows) "hard reset")))
+            (dolist (row rows)
+              (decknix-repo-sync-reset-hard
+               (plist-get row :problem) done ref-target)))
+          (message "Resetting %d repo%s%s..."
+                   (length rows) (if (= 1 (length rows)) "" "s")
+                   (if (> skipped 0)
+                       (format " (%d skipped, nothing to reset)" skipped) "")))))))))
 
 (defun decknix-forge-board-toggle-grouping ()
   "Switch between grouping by problem kind and by org.

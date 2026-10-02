@@ -126,7 +126,9 @@ reachable by muscle memory."
          (list (cons 'dirty (list (decknix-fbb-test--row 'dirty "a")))))
         (reset nil))
     (puthash "/repos/a" t decknix-forge-board--marks)
-    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "y"))
+    (cl-letf (((symbol-function 'decknix-repo-sync-read-reset-target)
+               (lambda (&rest _) 'local))
+              ((symbol-function 'read-string) (lambda (&rest _) "y"))
               ((symbol-function 'decknix-repo-sync-reset-hard)
                (lambda (&rest _) (setq reset t))))
       (decknix-forge-board-reset-hard)
@@ -138,7 +140,9 @@ reachable by muscle memory."
          (list (cons 'dirty (list (decknix-fbb-test--row 'dirty "a")))))
         (reset 0))
     (puthash "/repos/a" t decknix-forge-board--marks)
-    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "reset"))
+    (cl-letf (((symbol-function 'decknix-repo-sync-read-reset-target)
+               (lambda (&rest _) 'local))
+              ((symbol-function 'read-string) (lambda (&rest _) "reset"))
               ((symbol-function 'decknix-repo-sync-refresh)
                (lambda (&optional cb) (when cb (funcall cb))))
               ((symbol-function 'decknix-repo-sync-reset-hard)
@@ -156,7 +160,9 @@ to be destroyed."
         (prompt ""))
     (puthash "/repos/alpha" t decknix-forge-board--marks)
     (puthash "/repos/beta" t decknix-forge-board--marks)
-    (cl-letf (((symbol-function 'read-string)
+    (cl-letf (((symbol-function 'decknix-repo-sync-read-reset-target)
+               (lambda (&rest _) 'local))
+              ((symbol-function 'read-string)
                (lambda (p &rest _) (setq prompt p) "no")))
       (decknix-forge-board-reset-hard)
       (should (string-match-p "alpha" prompt))
@@ -168,6 +174,42 @@ to be destroyed."
          (list (cons 'diverged (list (decknix-fbb-test--row 'diverged "a"))))))
     (puthash "/repos/a" t decknix-forge-board--marks)
     (should-error (decknix-forge-board-reset-hard) :type 'user-error)))
+
+
+(ert-deftest decknix-fbb--declining-the-target-aborts-the-reset ()
+  "Quitting the ref prompt must not fall through to a default and destroy
+work the user was in the middle of deciding about."
+  (let ((decknix-forge-board--marks (make-hash-table :test 'equal))
+        (decknix-forge-board--groups
+         (list (cons 'dirty (list (decknix-fbb-test--row 'dirty "a")))))
+        (reset nil))
+    (puthash "/repos/a" t decknix-forge-board--marks)
+    (cl-letf (((symbol-function 'decknix-repo-sync-read-reset-target)
+               (lambda (&rest _) nil))
+              ((symbol-function 'read-string)
+               (lambda (&rest _) (error "must not reach the confirm")))
+              ((symbol-function 'decknix-repo-sync-reset-hard)
+               (lambda (&rest _) (setq reset t))))
+      (decknix-forge-board-reset-hard)
+      (should-not reset))))
+
+(ert-deftest decknix-fbb--the-chosen-target-reaches-the-verb ()
+  "Choosing origin must actually reset to origin; passing `local' anyway
+would silently keep commits the user asked to discard."
+  (let ((decknix-forge-board--marks (make-hash-table :test 'equal))
+        (decknix-forge-board--groups
+         (list (cons 'dirty (list (decknix-fbb-test--row 'dirty "a")))))
+        (got nil))
+    (puthash "/repos/a" t decknix-forge-board--marks)
+    (cl-letf (((symbol-function 'decknix-repo-sync-read-reset-target)
+               (lambda (&rest _) 'origin))
+              ((symbol-function 'read-string) (lambda (&rest _) "reset"))
+              ((symbol-function 'decknix-repo-sync-refresh)
+               (lambda (&optional cb) (when cb (funcall cb))))
+              ((symbol-function 'decknix-repo-sync-reset-hard)
+               (lambda (_p _d target) (setq got target))))
+      (decknix-forge-board-reset-hard)
+      (should (eq 'origin got)))))
 
 (provide 'decknix-forge-board-test)
 ;;; decknix-forge-board-test.el ends here
