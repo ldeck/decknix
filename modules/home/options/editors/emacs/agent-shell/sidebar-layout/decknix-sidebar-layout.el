@@ -114,7 +114,70 @@ and both are live in the same workspace right now."
 
 ;; --- reviews, collapsed by repo --------------------------------------
 
+(defvar decknix--layout-groups-memo nil
+  "Cons of (SIGNATURE . GROUPS) from the last `decknix--layout-review-groups\='.
+
+The sidebar repaints every two seconds; the data behind it changes when
+the hub polls or a session changes state, which is far rarer.  Rebuilding
+regardless cost 92 ms a paint, and measured in isolation 51% of that was
+GC -- the function allocates two hash tables, a plist per PR row, and a
+`copy-sequence\=' per group.  That allocation, twice a second, is what the
+hitch report attributed to `decknix--sidebar-idle-tick\=' and
+`gcmh-idle-garbage-collect\='.
+
+Keyed on a signature of what the groups actually depend on, not a TTL:
+building it costs 0.19 ms and comparing it 0.01 ms, against 92 ms to
+recompute.")
+
+(defun decknix--layout-groups-signature (sessions items)
+  "Return a cheap value that changes exactly when the groups would.
+
+A rolling hash over each feed item\='s repo and number, and each session\='s
+name, state and PR keys.
+
+An integer rather than a list of keys: building that list cost 27 ms a
+paint, most of the saving it was meant to deliver.  This allocates
+nothing and folds the same facts.
+
+Each component is SCALED before being combined, because xor-ing them
+directly collided systematically rather than by luck: `sxhash-equal\=' maps
+sequential strings to sequential integers, so two repos one apart whose
+PR numbers are also one apart xor\='d to the SAME value -- the differences
+cancelled exactly.  A test pins that pair.
+
+The feed\='s LENGTH alone was not enough -- the sidebar filters items
+before grouping them, so two filter settings can yield the same count and
+would have reused the wrong groups."
+  (let ((h 0))
+    (dolist (i items)
+      (setq h (logxor (* 31 h)
+                      (+ (* 131 (sxhash-equal (alist-get 'repo i)))
+                         (or (alist-get 'number i) 0)))))
+    (dolist (sess sessions)
+      (setq h (logxor (* 31 h)
+                      (+ (* 131 (sxhash-equal (nth 0 sess)))
+                         (* 7 (sxhash-equal (nth 3 sess)))
+                         (sxhash-equal (nth 2 sess))))))
+    h))
+
+(defun decknix-layout-invalidate-groups ()
+  "Drop the memoised Reviews grouping.
+
+Called when something outside the signature changes the answer -- a
+filter toggle, for instance."
+  (setq decknix--layout-groups-memo nil))
+
 (defun decknix--layout-review-groups (sessions items)
+  "Return the Reviews grouping, reusing the last one when nothing moved."
+  (let ((sig (decknix--layout-groups-signature sessions items)))
+    (if (and decknix--layout-groups-memo
+             (equal sig (car decknix--layout-groups-memo)))
+        (cdr decknix--layout-groups-memo)
+      (let ((groups (decknix--layout-review-groups-1 sessions items)))
+        (setq decknix--layout-groups-memo (cons sig groups))
+        groups))))
+
+(defun decknix--layout-review-groups-1 (sessions items)
   "Return per-repo review groups from SESSIONS and feed ITEMS.
 
 Each group is a plist:

@@ -877,5 +877,56 @@ rather than claiming the work is over."
                   (decknix--layout-group-label
                    '(:repo "attom-integration" :asking 2 :humans 2 :bots 3) w))))))
 
+
+;; --- not recomputing what has not changed -----------------------------
+
+(ert-deftest decknix-layout--identical-input-reuses-the-grouping ()
+  "The sidebar repaints every two seconds while the data behind it changes
+when the hub polls.  Rebuilding regardless cost 92 ms a paint, 51% of it
+GC, which is what the hitch report blamed on the sidebar timers."
+  (let ((decknix--layout-groups-memo nil))
+    (let ((a (decknix--layout-review-groups decknix-layout-test--sessions
+                                            decknix-layout-test--items))
+          (b (decknix--layout-review-groups decknix-layout-test--sessions
+                                            decknix-layout-test--items)))
+      (should (eq a b)))))
+
+(ert-deftest decknix-layout--a-session-changing-state-rebuilds ()
+  "Reusing here would freeze the attention flags at whatever they were."
+  (let ((decknix--layout-groups-memo nil))
+    (let* ((a (decknix--layout-review-groups
+               (list (decknix-layout-test--session "s" "ready" '("r#1"))) nil))
+           (b (decknix--layout-review-groups
+               (list (decknix-layout-test--session "s" "asking" '("r#1"))) nil)))
+      (should-not (eq a b)))))
+
+(ert-deftest decknix-layout--a-session-appearing-rebuilds ()
+  (let ((decknix--layout-groups-memo nil))
+    (let* ((a (decknix--layout-review-groups
+               (list (decknix-layout-test--session "s" "ready" '("r#1"))) nil))
+           (b (decknix--layout-review-groups
+               (list (decknix-layout-test--session "s" "ready" '("r#1"))
+                     (decknix-layout-test--session "t" "ready" '("r#2")))
+               nil)))
+      (should-not (eq a b)))))
+
+(ert-deftest decknix-layout--a-different-feed-of-the-same-length-rebuilds ()
+  "The sidebar filters items before grouping, so two filter settings can
+yield the same COUNT.  Keying on length alone reused the wrong groups."
+  (let ((decknix--layout-groups-memo nil)
+        (one '(((repo . "o/a") (number . 1))))
+        (two '(((repo . "o/b") (number . 2)))))
+    (let ((a (decknix--layout-review-groups nil one))
+          (b (decknix--layout-review-groups nil two)))
+      (should-not (eq a b)))))
+
+(ert-deftest decknix-layout--invalidating-forces-a-rebuild ()
+  "The escape hatch for anything the signature cannot see."
+  (let ((decknix--layout-groups-memo nil))
+    (let ((a (decknix--layout-review-groups decknix-layout-test--sessions nil)))
+      (decknix-layout-invalidate-groups)
+      (should-not (eq a (decknix--layout-review-groups
+                         decknix-layout-test--sessions nil))))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here
