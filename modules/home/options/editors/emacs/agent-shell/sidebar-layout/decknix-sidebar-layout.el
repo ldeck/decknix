@@ -189,18 +189,34 @@ fixture rather than by reading the code:
                                        :state nil
                                        :item item)
                                  prs))))))))
-    (let (groups)
+    ;; Whether the feed told us anything at all.  With no data, a row with
+    ;; a session and no item means "not yet known", not "finished".
+    (let ((feed-known (and items t))
+          (groups nil))
       (maphash
        (lambda (repo entry)
-         (let ((covering (delete-dups (gethash repo repo-sessions))))
+         (let* ((covering (delete-dups (gethash repo repo-sessions)))
+                (prs (decknix--layout-mark-gone
+                      (decknix--layout-sort-prs (plist-get entry :prs))
+                      feed-known))
+                (live-keys (decknix--layout-live-pr-keys prs)))
            (push (list :repo repo
-                       :prs (decknix--layout-sort-prs (plist-get entry :prs))
+                       :prs prs
                        :uncovered (seq-count (lambda (p) (null (plist-get p :state)))
-                                             (plist-get entry :prs))
+                                             prs)
+                       ;; PRs a session is on that have LEFT the review feed:
+                       ;; merged, closed, or no longer requested of me.
+                       :gone (seq-count #'decknix--layout-pr-gone-p prs)
+                       :humans (seq-count #'decknix--layout-pr-human-p prs)
+                       :bots (seq-count #'decknix--layout-pr-bot-p prs)
                        :sessions (length covering)
-                       :asking (seq-count (lambda (s)
-                                            (decknix--layout-attention-p (nth 3 s)))
-                                          covering))
+                       :asking (seq-count
+                                (lambda (s)
+                                  (and (decknix--layout-attention-p (nth 3 s))
+                                       (or (not feed-known)
+                                           (decknix--layout-session-on-live-pr-p
+                                            s live-keys))))
+                                covering))
                  groups)))
        by-repo)
       (decknix--layout-sort-groups groups))))
@@ -215,6 +231,67 @@ Highest number first because a PR raised later is the one still moving."
             (if (/= ra rb)
                 (< ra rb)
               (> (or (plist-get a :number) 0) (or (plist-get b :number) 0)))))))
+
+(defun decknix--layout-pr-gone-p (pr)
+  "Return non-nil when PR\='s work is over -- merged, closed, or withdrawn.
+
+Reads the `:gone\=' mark set during group construction rather than deriving
+it, because deriving needs a fact only the caller has: whether the review
+feed had any data at all.
+
+With no feed -- before the first poll, or after a failed one -- EVERY row
+has a session and no item, so deriving here marked all work finished and
+silenced the whole section.  An empty feed means nothing is known, not
+that everything merged."
+  (and (plist-get pr :gone) t))
+
+(defun decknix--layout-mark-gone (prs feed-known)
+  "Mark rows in PRS whose PR has left the feed, when FEED-KNOWN.
+
+Measured live: of eight repos the sidebar flagged as needing attention,
+three were not in the feed at ALL and existed only because a session sat
+on a PR that had since merged."
+  (when feed-known
+    (dolist (p prs)
+      (when (and (plist-get p :state) (null (plist-get p :item)))
+        (plist-put p :gone t))))
+  prs)
+
+(defun decknix--layout-live-pr-keys (prs)
+  "Return the keys of PRS still present in the review feed."
+  (delq nil (mapcar (lambda (p)
+                      (and (plist-get p :item) (plist-get p :key)))
+                    prs)))
+
+(defun decknix--layout-session-on-live-pr-p (session live-keys)
+  "Return non-nil when SESSION covers any PR in LIVE-KEYS.
+
+A session whose every PR has left the feed is finished with work it has
+not noticed ending; counting it as asking is what inflated \"13 need
+you\".  A session with no recorded PR at all still counts -- absence of a
+record is not evidence the work is done."
+  (let ((keys (nth 2 session)))
+    (or (null keys)
+        (seq-some (lambda (k) (member k live-keys)) keys))))
+
+(defun decknix--layout-pr-author-kind (pr)
+  "Return PR\='s author kind as a symbol: `bot\=', `human\=', or nil when unknown."
+  (let* ((item (plist-get pr :item))
+         (kind (and item (alist-get 'author_kind item))))
+    (cond ((null kind) nil)
+          ((equal kind "bot") 'bot)
+          (t 'human))))
+
+(defun decknix--layout-pr-bot-p (pr)
+  "Return non-nil when PR was opened by a bot."
+  (eq 'bot (decknix--layout-pr-author-kind pr)))
+
+(defun decknix--layout-pr-human-p (pr)
+  "Return non-nil when PR was opened by a human.
+
+`bot_human\=' counts as human: a person has committed to it, so it is no
+longer a dependency bump nobody has looked at."
+  (eq 'human (decknix--layout-pr-author-kind pr)))
 
 (defun decknix--layout-sort-groups (groups)
   "Return GROUPS most-urgent first.
@@ -733,40 +810,91 @@ not there, and the Dormant section is mostly such rows."
                    (when (> worktrees 0) (format "%d wt" worktrees))))
    " "))
 
+(defconst decknix-sidebar-layout-kind-glyphs
+  '((human . "@") (bot . "π") (gone . "✓"))
+  "Glyph per review-row kind.
+
+`π\=' for a bot matches the author column the Requests rows already use, so
+the two sections do not invent different vocabularies for the same fact.
+`✓\=' marks work that is over -- merged, closed, or withdrawn.")
+
 (defun decknix--layout-group-label (group width)
   "Return the collapsed one-line label for GROUP, padded to WIDTH.
 
-The right column answers the question the row is for:
+The right column answers \"what is in here\", in the terms that decide
+whether to open it:
 
-  sessions present  \"18 14⚑\"  how many agents, how many blocked on me
-  no session        \"3 new\"    how many PRs are waiting for one
+  2@ 3π      two human PRs, three bot PRs
+  1@ ✓4      one human PR, and four sessions on work already finished
+  3 new      three PRs nothing has started on
 
-A bare session count of 0 was the first attempt and it told the user
-nothing -- the interesting fact about a repo with no sessions is the work
-sitting there, which is exactly the Requests content folded into this
-section."
+Counts used to read \"5 5⚑\" -- sessions and blocked sessions -- which
+said how many agents were running, not what they were running ON.  A
+dependabot bump and a colleague waiting on review are the same number
+there, and that is the distinction the section exists to draw."
   (let* ((repo (plist-get group :repo))
-         (sessions (or (plist-get group :sessions) 0))
          (asking (or (plist-get group :asking) 0))
          (uncovered (or (plist-get group :uncovered) 0))
-         (right (cond
-                 ((> asking 0) (format "%d %d⚑" sessions asking))
-                 ((> sessions 0) (format "%d" sessions))
-                 ((> uncovered 0) (format "%d new" uncovered))
-                 (t "")))
-         (glyph (cond ((> asking 0) "⚑") ((> sessions 0) "●") (t "·")))
+         (humans (or (plist-get group :humans) 0))
+         (bots (or (plist-get group :bots) 0))
+         (gone (or (plist-get group :gone) 0))
+         (right (decknix--layout-group-right humans bots gone uncovered))
+         (glyph (cond ((> asking 0) "⚑")
+                      ((> (or (plist-get group :sessions) 0) 0) "●")
+                      (t "·")))
          (left (format " %s  %s" glyph repo))
          (pad (max 1 (- width (string-width left) (string-width right)))))
     (concat left (make-string pad ?\s) right)))
 
-(defun decknix--layout-pr-label (pr)
-  "Return the expanded row label for PR."
-  (let ((state (plist-get pr :state)))
-    (format "    %s #%s%s"
-            (decknix--layout-state-glyph state)
-            (plist-get pr :number)
-            (cond (state (format "  %s" state))
-                  (t "  no session")))))
+(defun decknix--layout-group-right (humans bots gone uncovered)
+  "Return the right-hand summary for a Reviews group row."
+  (let ((parts (delq nil
+                     (list (when (> humans 0)
+                             (format "%d%s" humans
+                                     (alist-get 'human decknix-sidebar-layout-kind-glyphs)))
+                           (when (> bots 0)
+                             (format "%d%s" bots
+                                     (alist-get 'bot decknix-sidebar-layout-kind-glyphs)))
+                           (when (> gone 0)
+                             (format "%s%d"
+                                     (alist-get 'gone decknix-sidebar-layout-kind-glyphs)
+                                     gone))))))
+    (cond (parts (string-join parts " "))
+          ((> uncovered 0) (format "%d new" uncovered))
+          (t ""))))
+
+(defun decknix--layout-pr-author (pr)
+  "Return PR\='s author login, or nil."
+  (let ((item (plist-get pr :item)))
+    (and item (alist-get 'author item))))
+
+(defun decknix--layout-pr-label (pr &optional width)
+  "Return the expanded row label for PR, fitted to WIDTH.
+
+Names the AUTHOR, which is the fact that decides whether a row is worth
+opening: a dependabot bump and a colleague waiting read identically
+without it.  Kind glyph first, since bot-versus-human is the coarser
+question and answers most rows on its own.
+
+A PR a session is on that has left the feed reads `done\=' -- it has been
+merged, closed or withdrawn, whatever the session still says."
+  (let* ((state (plist-get pr :state))
+         (kind (decknix--layout-pr-author-kind pr))
+         (glyph (or (alist-get kind decknix-sidebar-layout-kind-glyphs) " "))
+         (author (decknix--layout-pr-author pr))
+         (status (cond ((decknix--layout-pr-gone-p pr) "done")
+                       (state state)
+                       (t "no session")))
+         (left (format "    %s %s #%s "
+                       (decknix--layout-state-glyph state)
+                       glyph (plist-get pr :number)))
+         (right (if author (format "%s  %s" author status) status))
+         (width (or width 48))
+         (room (max 1 (- width (string-width left)))))
+    (concat left
+            (if (> (string-width right) room)
+                (concat (truncate-string-to-width right (max 1 (1- room))) "…")
+              right))))
 
 (provide 'decknix-sidebar-layout)
 ;;; decknix-sidebar-layout.el ends here

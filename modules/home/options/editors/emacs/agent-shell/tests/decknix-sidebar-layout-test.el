@@ -148,12 +148,19 @@ overstated exactly the repos where grouped dispatch is working."
     (should (= 2 (length (plist-get g :prs))))))
 
 (ert-deftest decknix-layout--group-counts-sessions-and-attention ()
+  "Three distinct sessions touch upside and two are blocked, but one of
+those two sits on #17172, which the feed no longer carries -- merged,
+closed or withdrawn.  That session is finished with work it has not
+noticed ending, so it does not count as asking.
+
+Counting it did: measured live, three of eight flagged repos were not in
+the review feed at all."
   (let* ((groups (decknix--layout-review-groups decknix-layout-test--sessions
                                                  decknix-layout-test--items))
          (upside (seq-find (lambda (g) (equal "upside" (plist-get g :repo))) groups)))
-    ;; three distinct sessions touch upside, two of them blocked
     (should (= 3 (plist-get upside :sessions)))
-    (should (= 2 (plist-get upside :asking)))))
+    (should (= 1 (plist-get upside :asking)))
+    (should (= 1 (plist-get upside :gone)))))
 
 (ert-deftest decknix-layout--groups-sort-by-attention-then-sessions ()
   "A repo with a blocked session outranks a busier but quiet one."
@@ -164,13 +171,20 @@ overstated exactly the repos where grouped dispatch is working."
                  nil)))
     (should (equal '("loud" "quiet") (mapcar (lambda (g) (plist-get g :repo)) groups)))))
 
-(ert-deftest decknix-layout--group-label-shows-distinct-session-count ()
-  "The header count must match what expanding the group reveals."
-  (let* ((groups (decknix--layout-review-groups decknix-layout-test--sessions nil))
-         (g (seq-find (lambda (x) (equal "oneroof-integration" (plist-get x :repo)))
-                      groups)))
-    (should (string-match-p " 1\\'" (string-trim-right
-                                    (decknix--layout-group-label g 48))))))
+(ert-deftest decknix-layout--group-label-counts-match-what-expanding-shows ()
+  "The header must agree with the rows underneath it.  With a feed, the
+right column counts PRs by author kind, so it has to equal the number of
+rows of each kind the group holds."
+  (let* ((groups (decknix--layout-review-groups decknix-layout-test--sessions
+                                                decknix-layout-test--items))
+         (g (seq-find (lambda (x) (equal "upside" (plist-get x :repo))) groups))
+         (label (decknix--layout-group-label g 48))
+         (humans (seq-count #'decknix--layout-pr-human-p (plist-get g :prs)))
+         (bots (seq-count #'decknix--layout-pr-bot-p (plist-get g :prs))))
+    (should (= humans (plist-get g :humans)))
+    (should (= bots (plist-get g :bots)))
+    (when (> (plist-get g :gone) 0)
+      (should (string-match-p (format "✓%d" (plist-get g :gone)) label)))))
 
 (ert-deftest decknix-layout--an-uncovered-request-still-gets-a-row ()
   "This is what lets Requests fold in: a PR nobody has started is a row in
@@ -297,10 +311,14 @@ destroys the one-row-per-repo property the collapse exists for."
                                '(:repo "r" :sessions 0 :asking 0 :uncovered 1) 48))))
 
 (ert-deftest decknix-layout--a-quiet-but-covered-repo-shows-its-count ()
+  "A covered repo with nothing blocked gets the quiet glyph, and its right
+column reports WHAT is in there rather than how many agents are on it."
   (let ((label (decknix--layout-group-label
-                '(:repo "r" :sessions 2 :asking 0 :uncovered 0) 48)))
+                '(:repo "r" :sessions 2 :asking 0 :uncovered 0
+                        :humans 1 :bots 1) 48)))
     (should (string-match-p "●" label))
-    (should (string-match-p "2" label))
+    (should (string-match-p "1@" label))
+    (should (string-match-p "1π" label))
     (should-not (string-match-p "⚑" label))))
 
 
@@ -743,6 +761,121 @@ keeps the tag fallback meaningful rather than dead code."
   "The snapshot can name a buffer that has since been killed."
   (should-not (decknix--layout-session-observed-roots
                (list "*Claude: gone*" nil nil "ready" nil))))
+
+
+;; --- work that has already finished -----------------------------------
+
+(ert-deftest decknix-layout--a-pr-with-a-session-but-no-feed-item-is-gone ()
+  "The feed no longer carries it, so it has merged, closed, or stopped
+being requested -- whatever the session still says."
+  (let ((prs (list (list :state "asking" :item nil)
+                   (list :state "asking" :item '((number . 1)))
+                   (list :state nil :item nil))))
+    (decknix--layout-mark-gone prs t)
+    (should (decknix--layout-pr-gone-p (nth 0 prs)))
+    (should-not (decknix--layout-pr-gone-p (nth 1 prs)))
+    (should-not (decknix--layout-pr-gone-p (nth 2 prs)))))
+
+(ert-deftest decknix-layout--nothing-is-gone-when-the-feed-said-nothing ()
+  "Before the first poll every row has a session and no item.  Deriving
+`gone\=' there marked all work finished and silenced the whole section."
+  (let ((prs (list (list :state "asking" :item nil))))
+    (decknix--layout-mark-gone prs nil)
+    (should-not (decknix--layout-pr-gone-p (car prs)))))
+
+(ert-deftest decknix-layout--a-session-on-only-finished-prs-is-not-asking ()
+  "Measured live: three of eight flagged repos were not in the review feed
+at all and existed only because a session sat on a merged PR.  Counting
+those is what inflated \"13 need you\"."
+  (should-not (decknix--layout-session-on-live-pr-p
+               '("*a*" nil ("upside#1") "asking" nil) '("upside#2"))))
+
+(ert-deftest decknix-layout--a-session-on-any-live-pr-is-still-asking ()
+  "Partial completion must not silence a session that still has live work."
+  (should (decknix--layout-session-on-live-pr-p
+           '("*a*" nil ("upside#1" "upside#2") "asking" nil) '("upside#2"))))
+
+(ert-deftest decknix-layout--a-session-with-no-recorded-pr-still-counts ()
+  "Absence of a record is not evidence the work is done."
+  (should (decknix--layout-session-on-live-pr-p
+           '("*a*" nil nil "asking" nil) nil)))
+
+(ert-deftest decknix-layout--live-keys-come-only-from-feed-backed-rows ()
+  (should (equal '("a#1")
+                 (decknix--layout-live-pr-keys
+                  '((:key "a#1" :item ((number . 1)))
+                    (:key "a#2" :item nil))))))
+
+;; --- author and kind --------------------------------------------------
+
+(ert-deftest decknix-layout--author-kind-reads-the-feed-item ()
+  (should (eq 'bot (decknix--layout-pr-author-kind
+                    '(:item ((author_kind . "bot"))))))
+  (should (eq 'human (decknix--layout-pr-author-kind
+                      '(:item ((author_kind . "human")))))))
+
+(ert-deftest decknix-layout--a-human-committing-to-a-bot-pr-counts-as-human ()
+  "`bot_human\=' means a person has committed to it, so it is no longer a
+dependency bump nobody has looked at."
+  (should (decknix--layout-pr-human-p '(:item ((author_kind . "bot_human"))))))
+
+(ert-deftest decknix-layout--an-unknown-kind-is-neither ()
+  "A row with no feed item has no author to report."
+  (let ((pr '(:state "asking" :item nil)))
+    (should-not (decknix--layout-pr-bot-p pr))
+    (should-not (decknix--layout-pr-human-p pr))))
+
+(ert-deftest decknix-layout--the-pr-row-names-its-author ()
+  "A dependabot bump and a colleague waiting read identically without it."
+  (let ((label (decknix--layout-pr-label
+                '(:number 250 :state nil
+                          :item ((author . "dependabot[bot]")
+                                 (author_kind . "bot")))
+                60)))
+    (should (string-match-p "dependabot" label))
+    (should (string-match-p "π" label))))
+
+(ert-deftest decknix-layout--a-finished-pr-row-reads-done ()
+  (let ((prs (list (list :number 1 :state "asking" :item nil))))
+    (decknix--layout-mark-gone prs t)
+    (should (string-match-p "done" (decknix--layout-pr-label (car prs) 60)))))
+
+(ert-deftest decknix-layout--an-unmarked-row-keeps-its-session-state ()
+  "With no feed, the row must still report what the session is doing
+rather than claiming the work is over."
+  (should (string-match-p
+           "asking" (decknix--layout-pr-label '(:number 1 :state "asking") 60))))
+
+(ert-deftest decknix-layout--the-pr-row-never-exceeds-its-width ()
+  (let ((pr (list :number 12345 :state "asking"
+                  :item (list (cons 'author (make-string 200 ?x))
+                              (cons 'author_kind "human")))))
+    (dolist (w '(30 48 70))
+      (should (<= (string-width (decknix--layout-pr-label pr w)) w)))))
+
+;; --- the group right column -------------------------------------------
+
+(ert-deftest decknix-layout--group-right-splits-human-from-bot ()
+  "\"5 5⚑\" said how many agents were running, not what they ran ON."
+  (should (equal "2@ 3π" (decknix--layout-group-right 2 3 0 0))))
+
+(ert-deftest decknix-layout--group-right-reports-finished-work ()
+  (should (equal "1@ ✓4" (decknix--layout-group-right 1 0 4 0))))
+
+(ert-deftest decknix-layout--group-right-falls-back-to-new-count ()
+  (should (equal "3 new" (decknix--layout-group-right 0 0 0 3))))
+
+(ert-deftest decknix-layout--group-right-omits-a-zero-kind ()
+  (should (equal "4π" (decknix--layout-group-right 0 4 0 0))))
+
+(ert-deftest decknix-layout--group-right-of-nothing-is-empty ()
+  (should (equal "" (decknix--layout-group-right 0 0 0 0))))
+
+(ert-deftest decknix-layout--group-label-is-exactly-the-width ()
+  (dolist (w '(40 48 60))
+    (should (= w (string-width
+                  (decknix--layout-group-label
+                   '(:repo "attom-integration" :asking 2 :humans 2 :bots 3) w))))))
 
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here
