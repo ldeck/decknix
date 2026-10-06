@@ -88,5 +88,61 @@ expected; it must not appear on lanes holding real work."
   (dolist (lane '(human-review bot-review wip))
     (should-not (memq lane (decknix-session-board-killable-lanes)))))
 
+
+;; --- purging obsolete sessions ---------------------------------------
+
+(ert-deftest decknix-sbb--obsolete-rows-are-exactly-the-cleanup-lanes ()
+  "Shared with the board rather than re-derived, so a one-shot purge and
+the board can never disagree about what is obsolete."
+  (cl-letf (((symbol-function 'decknix-session-board--compute)
+             (lambda ()
+               (list (cons 'human-review (list (decknix-sbb-test--row "*h*" 'human-review)))
+                     (cons 'wip (list (decknix-sbb-test--row "*w*" 'wip)))
+                     (cons 'stale (list (decknix-sbb-test--row "*s*" 'stale)))
+                     (cons 'orphaned (list (decknix-sbb-test--row "*o*" 'orphaned)))))))
+    (should (equal '("*s*" "*o*")
+                   (mapcar (lambda (r) (plist-get r :buffer))
+                           (decknix-session-board-obsolete-rows))))))
+
+(ert-deftest decknix-sbb--real-work-is-never-obsolete ()
+  "The lanes above cleanup are work; purging them would end sessions the
+user is relying on."
+  (cl-letf (((symbol-function 'decknix-session-board--compute)
+             (lambda ()
+               (list (cons 'human-review (list (decknix-sbb-test--row "*h*" 'human-review)))
+                     (cons 'bot-review (list (decknix-sbb-test--row "*b*" 'bot-review)))
+                     (cons 'wip (list (decknix-sbb-test--row "*w*" 'wip)))))))
+    (should-not (decknix-session-board-obsolete-rows))))
+
+(ert-deftest decknix-sbb--purge-declined-ends-nothing ()
+  "The prompt is the last gate before ending sessions the user is not
+looking at."
+  (let ((ended nil))
+    (cl-letf (((symbol-function 'decknix-session-board--compute)
+               (lambda () (list (cons 'orphaned
+                                      (list (decknix-sbb-test--row "*o*" 'orphaned))))))
+              ((symbol-function 'with-help-window) (lambda (&rest _) nil))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil))
+              ((symbol-function 'decknix-session-lifecycle-quit)
+               (lambda (&rest _) (setq ended t))))
+      (decknix-session-purge-obsolete)
+      (should-not ended))))
+
+(ert-deftest decknix-sbb--purge-with-nothing-obsolete-does-not-prompt ()
+  "A prompt offering to end zero sessions trains the user to confirm
+without reading."
+  (cl-letf (((symbol-function 'decknix-session-board--compute) (lambda () nil))
+            ((symbol-function 'yes-or-no-p)
+             (lambda (&rest _) (error "must not prompt"))))
+    (decknix-session-purge-obsolete)))
+
+(ert-deftest decknix-sbb--purge-summary-tallies-each-lane ()
+  (let ((rows (list (decknix-sbb-test--row "*a*" 'orphaned)
+                    (decknix-sbb-test--row "*b*" 'orphaned)
+                    (decknix-sbb-test--row "*c*" 'stale))))
+    (let ((summary (decknix-session-board--obsolete-summary rows)))
+      (should (string-match-p "1 stale" summary))
+      (should (string-match-p "2 orphaned" summary)))))
+
 (provide 'decknix-session-board-test)
 ;;; decknix-session-board-test.el ends here

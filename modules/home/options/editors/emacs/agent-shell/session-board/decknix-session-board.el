@@ -91,6 +91,88 @@ Review Board does with its `%-28s' columns."
              (equal kind "bot")
            (decknix--hub-bot-author-p (alist-get 'author item))))))))
 
+(defun decknix-session-board-obsolete-rows ()
+  "Return the rows in cleanup lanes: sessions whose work is over.
+
+`orphaned\=' (the PR left both hub queries -- merged, closed, or no longer
+requested), `stale\=' (the PR conflicts or is a draft, so only its author
+can move it) and `not-mine\=' (named reviewers exclude me).
+
+Shared with the board rather than re-derived, so a one-shot purge and the
+board can never disagree about what is obsolete."
+  (let ((groups (decknix-session-board--compute)))
+    (apply #'append
+           (mapcar #'cdr
+                   (seq-filter (lambda (g)
+                                 (memq (car g)
+                                       (decknix-session-board-killable-lanes)))
+                               groups)))))
+
+(defun decknix-session-board--obsolete-summary (rows)
+  "Return a short per-lane tally of ROWS."
+  (string-join
+   (delq nil
+         (mapcar (lambda (lane)
+                   (let ((n (seq-count (lambda (r) (eq lane (plist-get r :lane)))
+                                       rows)))
+                     (when (> n 0)
+                       (format "%d %s" n
+                               (downcase (decknix-session-board-lane-title lane))))))
+                 (decknix-session-board-killable-lanes)))
+   ", "))
+
+;;;###autoload
+(defun decknix-session-purge-obsolete (&optional noconfirm)
+  "End every session whose work is over, naming them first.
+
+The sessions a review fleet leaves behind: measured on a live workspace,
+11 of 24 were sitting on PRs that had merged, closed, or stopped being
+requested.  They keep brokers alive and, until the Reviews counts were
+fixed, made the sidebar claim attention for finished work.
+
+Lists what it will end in a help buffer before asking, because the whole
+point is acting on sessions the user is not looking at -- a bare count
+gives nothing to check.  NOCONFIRM skips the prompt for callers that have
+already confirmed."
+  (interactive)
+  (let ((rows (decknix-session-board-obsolete-rows)))
+    (if (null rows)
+        (message "No obsolete sessions")
+      (let ((bufs (delq nil (mapcar (lambda (r) (get-buffer (plist-get r :buffer)))
+                                    rows))))
+        (unless noconfirm
+          (with-help-window "*decknix: obsolete sessions*"
+            (princ (format "%d obsolete session%s (%s)\n\n"
+                           (length rows) (if (= 1 (length rows)) "" "s")
+                           (decknix-session-board--obsolete-summary rows)))
+            (dolist (lane (decknix-session-board-killable-lanes))
+              (let ((in-lane (seq-filter (lambda (r) (eq lane (plist-get r :lane)))
+                                         rows)))
+                (when in-lane
+                  (princ (format "%s -- %s\n"
+                                 (decknix-session-board-lane-title lane)
+                                 (decknix-session-board-lane-hint lane)))
+                  (dolist (r in-lane)
+                    (princ (format "    %-46s %s\n"
+                                   (plist-get r :buffer)
+                                   (string-join (or (plist-get r :prs) '("-")) ","))))
+                  (princ "\n"))))))
+        (if (and (not noconfirm)
+                 (not (yes-or-no-p
+                       (format "End %d obsolete session%s? " (length bufs)
+                               (if (= 1 (length bufs)) "" "s")))))
+            (message "No action")
+          (let ((n (decknix-session-lifecycle-quit bufs t)))
+            (when (get-buffer "*decknix: obsolete sessions*")
+              (kill-buffer "*decknix: obsolete sessions*"))
+            (when (get-buffer decknix-session-board-buffer)
+              (with-current-buffer decknix-session-board-buffer
+                (ignore-errors (decknix-session-board-refresh))))
+            (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+              (ignore-errors (agent-shell-workspace-sidebar-refresh)))
+            (message "Ended %s obsolete session%s"
+                     (or n 0) (if (equal n 1) "" "s"))))))))
+
 ;; --- render -----------------------------------------------------------
 
 (defun decknix-session-board--render ()
