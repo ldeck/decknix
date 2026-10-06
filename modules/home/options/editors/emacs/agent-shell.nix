@@ -5304,6 +5304,10 @@ ${optionalString cfg.tableOverlay.enable ''
                      ("B" . decknix-review-board)
                      ("S" . decknix-session-board)
                      ("F" . decknix-forge-board)
+                     ;; `K' ends every session whose work is over.  A review
+                     ;; fleet leaves these behind: 11 of 24 measured on a
+                     ;; live workspace were on PRs that had merged or closed.
+                     ("K" . decknix-session-purge-obsolete)
                      ("u" . decknix-agent-session-pr-url)
                      ("w" . decknix-agent-watch-checks)
                      ("W" . decknix-agent-unwatch)))
