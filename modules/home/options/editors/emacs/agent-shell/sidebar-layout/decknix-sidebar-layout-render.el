@@ -294,7 +294,7 @@ calling it from the render path cannot queue an audit per paint."
           (setq line-num (1+ line-num))
           (when (decknix--layout-expanded-p repo)
             (dolist (pr (plist-get group :prs))
-              (insert (propertize (decknix--layout-pr-label pr)
+              (insert (propertize (decknix--layout-pr-label pr width)
                                   'face (if (decknix--layout-attention-p
                                              (plist-get pr :state))
                                             'warning 'font-lock-comment-face)
