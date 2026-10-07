@@ -1006,5 +1006,115 @@ had been working on them."
 (ert-deftest decknix-layout--a-pr-with-no-repo-is-not-claimed ()
   (should-not (decknix--layout-pr-in-repos-p '(:number 1) '("platform-cli"))))
 
+
+;; --- a guess must not look like a fact --------------------------------
+
+(ert-deftest decknix-layout--observation-is-evidence ()
+  (should (eq 'observed (decknix--layout-claim-provenance
+                         '("*a*" nil nil "ready" nil) '("/w/a")))))
+
+(ert-deftest decknix-layout--no-observation-yet-is-pending-not-inferred ()
+  "Before the backfill reaches a session, what is shown is a guess that
+will be REPLACED.  Saying so is the difference between \"not yet\" and
+\"this is all there is\" -- and the silent version is why an association
+that was inert for weeks looked like it was working."
+  (let ((buf (generate-new-buffer "*p*")))
+    (unwind-protect
+        (should (eq 'pending (decknix--layout-claim-provenance
+                              (list "*p*" nil nil "ready" nil) nil)))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-layout--backfilled-with-nothing-found-is-inferred ()
+  "The backfill ran and the session has no file activity, so its name is
+all there is and will remain all there is."
+  (let ((buf (generate-new-buffer "*i*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf (setq-local decknix--agent-assoc-backfilled t))
+          (should (eq 'inferred (decknix--layout-claim-provenance
+                                 (list "*i*" nil nil "ready" nil) nil))))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-layout--a-dead-session-buffer-is-not-pending ()
+  "Nothing is coming for it, so calling it pending would promise a refresh
+that never arrives."
+  (should (eq 'inferred (decknix--layout-claim-provenance
+                         '("*gone*" nil nil "ready" nil) nil))))
+
+(ert-deftest decknix-layout--each-provenance-has-a-distinct-mark ()
+  (let ((marks (mapcar #'decknix--layout-provenance-mark
+                       '(observed pending inferred))))
+    (should (equal marks (delete-dups (copy-sequence marks))))))
+
+(ert-deftest decknix-layout--only-observed-claims-get-the-full-face ()
+  "A guess must not compete visually with what the sidebar knows."
+  (should (eq 'default (decknix--layout-provenance-face 'observed)))
+  (dolist (p '(pending inferred))
+    (should-not (eq 'default (decknix--layout-provenance-face p)))))
+
+(ert-deftest decknix-layout--the-heading-counts-the-guesses ()
+  "Measured live: 6 of 9 sessions were guessing from tags, and the display
+gave no hint which."
+  (should (= 2 (decknix--layout-inferred-count
+                '((:provenance observed) (:provenance inferred)
+                  (:provenance pending))))))
+
+(ert-deftest decknix-layout--nothing-inferred-counts-zero ()
+  (should (= 0 (decknix--layout-inferred-count
+                '((:provenance observed) (:provenance observed))))))
+
+
+;; --- the WIP tree is not rebuilt on every paint -----------------------
+
+(ert-deftest decknix-layout--wip-tree-reuses-on-identical-input ()
+  "Measured at 96.6 ms a call with a GC on EVERY call -- the next largest
+cost on a repaint that averaged 833 ms."
+  (let ((decknix--layout-wip-memo nil))
+    (let ((a (decknix--layout-wip-tree nil nil nil))
+          (b (decknix--layout-wip-tree nil nil nil)))
+      (should (eq a b)))))
+
+(ert-deftest decknix-layout--wip-tree-rebuilds-when-a-worktree-appears ()
+  (let ((decknix--layout-wip-memo nil))
+    (let ((a (decknix--layout-wip-tree nil nil nil))
+          (b (decknix--layout-wip-tree nil nil '((:path "/w/a" :branch "b")))))
+      (should-not (eq a b)))))
+
+(ert-deftest decknix-layout--wip-tree-rebuilds-when-a-worktree-goes-dirty ()
+  "Dirty drives the glyph and the colour, so reusing here would show clean
+work that has uncommitted changes."
+  (let ((decknix--layout-wip-memo nil))
+    (let ((a (decknix--layout-wip-tree nil nil '((:path "/w/a" :branch "b"))))
+          (b (decknix--layout-wip-tree nil nil
+                                       '((:path "/w/a" :branch "b" :dirty t)))))
+      (should-not (eq a b)))))
+
+(ert-deftest decknix-layout--wip-tree-rebuilds-when-observation-arrives ()
+  "The backfill lands asynchronously.  A tree reused across that change
+would keep showing the TAG guess after the evidence had arrived -- which
+is the failure the provenance marks exist to make visible."
+  (let ((decknix--layout-wip-memo nil)
+        (observed nil))
+    (cl-letf (((symbol-function 'decknix--layout-session-observed-roots)
+               (lambda (_s) observed)))
+      (let* ((sess (list (decknix-layout-test--session "s" "ready" '("r#1"))))
+             (a (decknix--layout-wip-tree sess nil nil)))
+        (setq observed '("/w/a"))
+        (should-not (eq a (decknix--layout-wip-tree sess nil nil)))))))
+
+(ert-deftest decknix-layout--wip-tree-rebuilds-when-a-session-changes-state ()
+  (let ((decknix--layout-wip-memo nil))
+    (let ((a (decknix--layout-wip-tree
+              (list (decknix-layout-test--session "s" "ready" '("r#1"))) nil nil))
+          (b (decknix--layout-wip-tree
+              (list (decknix-layout-test--session "s" "asking" '("r#1"))) nil nil)))
+      (should-not (eq a b)))))
+
+(ert-deftest decknix-layout--invalidating-wip-forces-a-rebuild ()
+  (let ((decknix--layout-wip-memo nil))
+    (let ((a (decknix--layout-wip-tree nil nil nil)))
+      (decknix-layout-invalidate-wip)
+      (should-not (eq a (decknix--layout-wip-tree nil nil nil))))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here
