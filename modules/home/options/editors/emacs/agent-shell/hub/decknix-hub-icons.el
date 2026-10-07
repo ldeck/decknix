@@ -95,6 +95,49 @@ Shows the overall review status of the user's own PR:
       ("REVIEW_REQUIRED"   (decknix--hub-icon "◐" 'success))
       (_ ""))))
 
+(defun decknix--hub-pr-approved-p (item)
+  "Return non-nil when somebody has approved ITEM.
+
+Reads `approvers\=' as well as `review_decision\='.  GitHub leaves
+`review_decision\=' EMPTY while any requested reviewer is still
+outstanding, so an approved PR with a second reviewer pending reported
+no decision at all -- followupboss-integration#252 had
+approvers (jonathan-lo), review_decision empty, and rendered as though
+nothing were known about it."
+  (let ((approvers (alist-get 'approvers item)))
+    (or (and approvers (listp approvers) (> (length approvers) 0))
+        (equal (alist-get 'review_decision item) "APPROVED")
+        (equal (alist-get 'my_review item) "APPROVED"))))
+
+(defun decknix--hub-pr-unresolved (item)
+  "Return the number of unresolved HUMAN conversations on ITEM.
+
+Human rather than total: GitHub blocks a rebase-merge on an unresolved
+conversation, and a bot thread is not the one standing in the way."
+  (or (alist-get 'human_unresolved item)
+      (alist-get 'unresolved_threads item)
+      0))
+
+(defun decknix--hub-pr-blocked-by-threads-p (item)
+  "Return non-nil when ITEM is approved but cannot merge for a conversation.
+
+The state that had no representation at all: approved, CI green, and
+still unmergeable until a thread is resolved.  It is the owner\='s move,
+which is what makes it worth a glyph of its own."
+  (and (decknix--hub-pr-approved-p item)
+       (> (decknix--hub-pr-unresolved item) 0)))
+
+(defun decknix--hub-unresolved-icon (item)
+  "Return a marker for ITEM\='s unresolved conversations, or an empty string.
+
+Shown because it is the thing that actually blocks the merge, and it was
+invisible: followupboss-integration#252 had one unresolved human thread
+holding up a rebase-merge, with nothing in the row to say so."
+  (let ((n (decknix--hub-pr-unresolved item)))
+    (if (> n 0)
+        (decknix--hub-icon (format "◆%d" (min n 9)) 'warning)
+      "")))
+
 (defun decknix--hub-primary-status-icon (item kind &optional tc-status)
   "Return a primary status icon for ITEM of KIND.
 KIND is one of `wip', `review', `placeholder', or `done'.
@@ -128,31 +171,54 @@ reduce sidebar duplication."
      (conflicting
       (decknix--hub-icon "▣" 'error))
      (draft
+      ;; A draft asks nothing of anybody: the author has explicitly marked
+      ;; it not-ready.  So it is GREY unless its CI is actually broken --
+      ;; not green, which under the colour rule below means `nothing is
+      ;; needed and this is ready'.  Seven drafts rendering green beside
+      ;; an approved-and-mergeable PR is what made green meaningless.
       (let ((face (pcase classified
-                    ("pass"      'success)
-                    ("running"   'warning)
                     ("fail"      'error)
                     ("soft_fail" '(:foreground "orange" :weight bold))
+                    ("running"   'warning)
                     (_           'shadow))))
         (decknix--hub-icon "★" face)))
      (t
-      ;; Open PR: combine CI and Review status
-      (let* ((approved (equal decision "APPROVED"))
+      ;; Open PR.  The glyph answers WHERE IN ITS LIFE, and the colour
+      ;; answers WHOSE MOVE -- amber mine, green nothing-needed, grey
+      ;; waiting on somebody else.
+      ;;
+      ;; `review_decision' alone decided both before, which conflated two
+      ;; states that call for opposite actions: REVIEW_REQUIRED (nobody
+      ;; has looked -- chase a reviewer) rendered the same green as
+      ;; approved-and-mergeable.  Measured on followupboss-integration,
+      ;; eleven of twelve PRs were green and NONE of them were approved.
+      (let* ((approved (decknix--hub-pr-approved-p item))
+             (unresolved (decknix--hub-pr-unresolved item))
              (blocked (or (equal decision "CHANGES_REQUESTED")
                           (equal classified "fail")
                           tc-fail))
-             (ci-running (or (equal classified "running")
-                             tc-running))
-             ;; Phase 2.1: REVIEW_REQUIRED is green if everything else is green
-             ;; (i.e. not blocked and not running CI).
-             (awaiting (equal decision "REVIEW_REQUIRED"))
-             (face (cond (blocked    'error)
-                         (ci-running 'warning)
-                         (approved   'success)
-                         (awaiting   'success)
-                         ((equal decision "COMMENTED") '(:foreground "cyan" :weight bold))
-                         (t          'shadow)))
-             (glyph (if approved "●" "◐")))
+             (ci-running (or (equal classified "running") tc-running))
+             ;; Whose move it is depends on which side of the review the
+             ;; user is on: an unreviewed PR of MINE waits on a reviewer,
+             ;; while one sent TO me waits on me.
+             (mine (eq kind 'wip))
+             (glyph (cond (blocked "⊖")
+                          (ci-running "◴")
+                          ((and approved (> unresolved 0)) "◑")
+                          (approved "●")
+                          (t "◐")))
+             (face (cond
+                    (blocked 'error)
+                    (ci-running 'warning)
+                    ;; Approved but a conversation still blocks the merge:
+                    ;; the owner's move, so amber rather than green.
+                    ((and approved (> unresolved 0)) 'warning)
+                    (approved 'success)
+                    ;; Nobody has reviewed yet.  Grey on my own PR (I am
+                    ;; waiting on them); amber on one sent to me (they are
+                    ;; waiting on me).
+                    (mine 'shadow)
+                    (t 'warning))))
         (decknix--hub-icon glyph face))))))
 
 (defun decknix--hub-author-icon (item)

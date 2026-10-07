@@ -370,12 +370,16 @@ author column, so the leading glyph is no longer replaced by π."
                    "●"))))
 
 (ert-deftest decknix-hub-icons--primary-status-open-approved-tc-fail ()
-  "Approved but failing TeamCity build should be red."
+  "Approved but failing TeamCity build should be red.
+
+The glyph is the BLOCKED one, not the approved one: a PR that does not
+build is not ready for anything, whoever approved it, and the row should
+say what is wrong rather than what went right."
   (let ((item '((state . "OPEN") (review_decision . "APPROVED")))
         (tc '((status . "FAILURE"))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-primary-status-icon item 'wip tc))
-                   "●"))
+                   "⊖"))
     (should (equal (decknix-test--icon-face
                     (decknix--hub-primary-status-icon item 'wip tc))
                    'error))))
@@ -387,7 +391,15 @@ author column, so the leading glyph is no longer replaced by π."
                    "◐"))))
 
 
-(ert-deftest decknix-hub-icons--primary-status-open-needs-review-ci-pass-is-green ()
+(ert-deftest decknix-hub-icons--my-unreviewed-pr-is-not-green ()
+  "Superseded `...-needs-review-ci-pass-is-green', which pinned the rule
+that green meant `CI is fine'.
+
+Colour now answers WHOSE MOVE.  `REVIEW_REQUIRED' is nobody-has-looked-yet
+-- on my own PR that waits on a reviewer, so it is grey.  Painting it the
+same green as approved-and-mergeable is what emptied the colour of
+meaning: measured on followupboss-integration, eleven of twelve PRs were
+green and none were approved."
   (let ((item '((state . "OPEN")
                 (review_decision . "REVIEW_REQUIRED")
                 (ci . ((status . "pass"))))))
@@ -396,16 +408,28 @@ author column, so the leading glyph is no longer replaced by π."
                    "◐"))
     (should (equal (decknix-test--icon-face
                     (decknix--hub-primary-status-icon item 'wip))
-                   'success))))
+                   'shadow))))
+
+(ert-deftest decknix-hub-icons--a-pr-sent-to-me-unreviewed-is-amber ()
+  "Same facts, opposite side: it waits on ME."
+  (let ((item '((state . "OPEN")
+                (review_decision . "REVIEW_REQUIRED")
+                (ci . ((status . "pass"))))))
+    (should (equal (decknix-test--icon-face
+                    (decknix--hub-primary-status-icon item 'review))
+                   'warning))))
 
 (ert-deftest decknix-hub-icons--primary-status-open-approved-ci-fail ()
-  "Approved but failing CI should be red."
+  "Approved but failing CI should be red, and read as BLOCKED.
+
+An approved PR that does not build is not ready for anything; showing the
+approved glyph in red said the opposite of what the row means."
   (let ((item '((state . "OPEN")
                  (review_decision . "APPROVED")
                  (ci . ((status . "fail"))))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-primary-status-icon item 'wip))
-                   "●"))
+                   "⊖"))
     (should (equal (decknix-test--icon-face
                     (decknix--hub-primary-status-icon item 'wip))
                    'error))))
