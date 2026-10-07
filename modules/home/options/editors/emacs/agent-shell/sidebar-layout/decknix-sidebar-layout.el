@@ -898,10 +898,19 @@ which belong together."
 
 (defconst decknix-sidebar-layout-state-faces
   '(("netfail"  . (:foreground "#ff5f5f" :weight bold))
-    ("waiting"  . (:foreground "#ff5f5f" :weight bold))
-    ("asking"   . (:foreground "#ffaf5f" :weight bold))
+    ;; PURPLE for the two states that want the user.  Colour on a PR row
+    ;; reports the build; on a session row there is no build, so it
+    ;; reports progress -- yellow moving, green done, red broken.  An
+    ;; agent paused on a question is none of those: it is not failing and
+    ;; it is not progressing, it is waiting on a person.  Purple says that
+    ;; without borrowing a colour that means something else, and it is the
+    ;; single most actionable row the sidebar can show.
+    ("waiting"  . (:foreground "#c678dd" :weight bold))
+    ("asking"   . (:foreground "#c678dd" :weight bold))
+    ;; Yellow for in-progress, matching a building PR.
     ("working"  . (:foreground "#d7af5f"))
-    ("finished" . (:foreground "#5fd7d7"))
+    ;; Green for complete, matching a passing build.
+    ("finished" . (:foreground "#87af87"))
     ("ready"    . (:foreground "#87af87"))
     ("closing"  . (:inherit font-lock-comment-face)))
   "Face per session state.
@@ -1075,9 +1084,26 @@ without paying for it twice."
 ;; --- labels -----------------------------------------------------------
 
 (defconst decknix-sidebar-layout-state-glyphs
-  '(("asking"   . "●") ("waiting" . "●") ("netfail" . "●")
-    ("working"  . "◐") ("finished" . "◑") ("ready" . "○") ("closing" . "◌"))
-  "Glyph per session state.  A filled dot means the session wants you.")
+  '(("asking"   . "◐") ("waiting" . "◐") ("netfail" . "◐")
+    ("working"  . "◐")
+    ("finished" . "●") ("ready"   . "●")
+    ("closing"  . "◌"))
+  "Glyph per session state, in the same shape family as everything else.
+
+SHAPE says how complete a unit of work is, whichever kind of row it sits
+on.  HALF is in flight -- an agent mid-task, a draft PR.  FULL is a
+complete unit -- an agent done, a PR raised and open.  HOLLOW is the
+earliest stage -- a worktree, a session winding down.
+
+The shapes previously meant unrelated things at session level: a FILLED
+circle was `the agent wants you', which is the same glyph a PR uses for
+`open and raised'.  Sharing shapes across row kinds is fine -- the
+indentation ties each glyph to its row -- but only while the shape means
+the same KIND of thing.  It did not.
+
+An agent mid-task and an agent paused on a question are both half
+circles, because both are in flight; what separates them is the colour,
+which is where `whose move' lives for a session.")
 
 (defun decknix--layout-state-glyph (state)
   "Return the row glyph for STATE; a middot when there is no session."
