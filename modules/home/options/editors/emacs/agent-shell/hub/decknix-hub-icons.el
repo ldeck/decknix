@@ -127,6 +127,37 @@ which is what makes it worth a glyph of its own."
   (and (decknix--hub-pr-approved-p item)
        (> (decknix--hub-pr-unresolved item) 0)))
 
+(defun decknix--hub-discussion-icon (item)
+  "Return a marker for how much conversation ITEM carries, or empty.
+
+Counts RESOLVED threads -- the unresolved ones have their own marker and
+are a different fact.  Shown because discussion volume distinguishes
+otherwise identical rows: eleven followupboss PRs rendered the same, and
+one had no conversation at all while another had ten resolved threads.
+
+Dim, because settled discussion is context rather than a call to act."
+  (let* ((total (or (alist-get 'total_threads item) 0))
+         (unres (decknix--hub-pr-unresolved item))
+         (settled (max 0 (- total unres))))
+    (if (> settled 0)
+        (decknix--hub-icon (format "‥%d" (min settled 9)) 'shadow)
+      "")))
+
+(defun decknix--hub-awaiting-my-reply-p (item)
+  "Return non-nil when the last word on ITEM was somebody else\='s.
+
+`needs_reply\=' from the feed: the latest comment or review came from
+someone other than me.  On my own PR that is my move, and it was
+invisible -- ten of eleven followupboss PRs carried it and not one showed
+anything."
+  (eq (alist-get 'needs_reply item) t))
+
+(defun decknix--hub-reply-icon (item)
+  "Return a marker when ITEM is waiting on a reply from me, or empty."
+  (if (decknix--hub-awaiting-my-reply-p item)
+      (decknix--hub-icon "↩" 'warning)
+    ""))
+
 (defun decknix--hub-unresolved-icon (item)
   "Return a marker for ITEM\='s unresolved conversations, or an empty string.
 

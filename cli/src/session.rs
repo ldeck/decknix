@@ -1586,6 +1586,8 @@ struct SessionConfig {
     archive_after: std::time::Duration,
     trash_after: std::time::Duration,
     compression_level: i32,
+    /// How long a DEAD broker's log is kept before gc removes it.
+    broker_log_after: std::time::Duration,
 }
 
 fn session_config() -> SessionConfig {
@@ -1596,6 +1598,11 @@ fn session_config() -> SessionConfig {
         // archives small batches, so this is plenty. Raise via settings.toml for
         // maximum ratio at the cost of a slower run.
         compression_level: 12,
+        // A week.  Short, because once a broker exits nothing reads its log:
+        // replay, status and association backfill all require a LIVE broker.
+        // The window exists only so a session that ended an hour ago can
+        // still be inspected.
+        broker_log_after: std::time::Duration::from_secs(7 * 24 * 3600),
     };
     let path = home().join(".config/decknix/settings.toml");
     if let Ok(s) = fs::read_to_string(&path) {
@@ -1609,6 +1616,9 @@ fn session_config() -> SessionConfig {
                 }
                 if let Some(l) = sec.get("compression_level").and_then(|x| x.as_integer()) {
                     cfg.compression_level = l as i32;
+                }
+                if let Some(d) = sec.get("broker_log_after").and_then(|x| x.as_str()).and_then(|s| crate::parse_duration(s).ok()) {
+                    cfg.broker_log_after = d;
                 }
             }
         }
@@ -1852,12 +1862,117 @@ fn cmd_gc(paths: &Paths, dry_run: bool, json: bool) -> Result<()> {
         }
     }
 
+    // 3. broker runtime files whose broker is gone.
+    let (n_logs, bytes) = gc_broker_logs(cfg.broker_log_after, dry_run, json)?;
+
     if json {
-        println!("{}", serde_json::to_string(&json!({"archived": n_archived, "trashed": n_trashed, "dryRun": dry_run}))?);
+        println!("{}", serde_json::to_string(&json!({
+            "archived": n_archived, "trashed": n_trashed,
+            "brokerLogs": n_logs, "brokerBytes": bytes,
+            "dryRun": dry_run
+        }))?);
     } else {
-        eprintln!("gc: {} archived, {} trashed{}", n_archived, n_trashed, if dry_run { " (dry-run)" } else { "" });
+        eprintln!("gc: {} archived, {} trashed, {} broker logs ({:.1} MB){}",
+                  n_archived, n_trashed, n_logs,
+                  bytes as f64 / 1_048_576.0,
+                  if dry_run { " (dry-run)" } else { "" });
     }
     Ok(())
+}
+
+/// Where the broker keeps sockets, pidfiles and ACP logs.
+///
+/// A STATE dir, not `~/.config/decknix': that is the system flake's source
+/// tree, which nix copies on every switch, and a live unix socket there
+/// aborts the build.  Must stay in step with the Emacs side.
+fn broker_dir() -> PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".local/state"))
+        .join("decknix/agent-sockets")
+}
+
+/// Is the broker recorded in PIDFILE still running?
+fn broker_alive(pidfile: &Path) -> bool {
+    fs::read_to_string(pidfile)
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .map(|pid| pid > 0 && unsafe { libc::kill(pid, 0) } == 0)
+        .unwrap_or(false)
+}
+
+/// Remove broker logs, pidfiles and sockets left behind by dead brokers.
+///
+/// Nothing pruned these, and they are append-only records of whole agent
+/// sessions: measured at 1.2 GB across 331 files, of which 589.8 MB in 299
+/// files belonged to brokers that had exited.  One single LIVE log had
+/// reached 207 MB, which is what made three separate whole-file reads in the
+/// Emacs layer catastrophic rather than merely wasteful.
+///
+/// Only DEAD brokers are touched.  A live broker's log is still being
+/// appended to and is read on reattach (replay, status, association
+/// backfill); truncating it under the writer would corrupt the very history
+/// the session needs.  Capping those belongs in the broker itself, which
+/// owns the file descriptor.
+///
+/// Retention is measured from the log's mtime, so a session that ended
+/// recently stays readable for as long as the window allows.
+fn gc_broker_logs(after: std::time::Duration, dry_run: bool, quiet: bool) -> Result<(usize, u64)> {
+    let dir = broker_dir();
+    if !dir.is_dir() {
+        return Ok((0, 0));
+    }
+    let now = SystemTime::now();
+    let mut n = 0usize;
+    let mut bytes = 0u64;
+
+    let entries = match fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Ok((0, 0)),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("log") {
+            continue;
+        }
+        let key = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(k) => k.to_string(),
+            None => continue,
+        };
+        let pidfile = dir.join(format!("{key}.sock.pid"));
+        if broker_alive(&pidfile) {
+            continue;
+        }
+        let meta = match fs::metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let old_enough = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .map(|age| age >= after)
+            .unwrap_or(false);
+        if !old_enough {
+            continue;
+        }
+        n += 1;
+        bytes += meta.len();
+        if !quiet {
+            // The whole key: `short' truncates to its first eight characters,
+            // which for a broker key is the shared `s-2026MM' prefix and
+            // identifies nothing.
+            println!("  {} prune broker {} ({:.1} MB)",
+                     if dry_run { "would" } else { "did" },
+                     key, meta.len() as f64 / 1_048_576.0);
+        }
+        if !dry_run {
+            let _ = fs::remove_file(&path);
+            let _ = fs::remove_file(&pidfile);
+            let _ = fs::remove_file(dir.join(format!("{key}.sock")));
+        }
+    }
+    Ok((n, bytes))
 }
 
 // ---------------------------------------------------------------------------

@@ -153,5 +153,46 @@ rendering green beside an approved PR is what made it meaningless."
                                    '((draft . t) (ci . ((status . "fail"))))
                                    'wip)))))
 
+
+;; --- what distinguishes otherwise identical rows ----------------------
+
+(ert-deftest dk-lc--settled-discussion-is-shown ()
+  "Eleven followupboss PRs rendered identically: same glyph, same colour,
+same everything.  One had no conversation at all and another had ten
+resolved threads, and nothing said so."
+  (should (string-match-p "‥9" (decknix--hub-discussion-icon
+                                '((total_threads . 10) (human_unresolved . 1))))))
+
+(ert-deftest dk-lc--no-discussion-shows-nothing ()
+  (should (equal "" (decknix--hub-discussion-icon '((total_threads . 0))))))
+
+(ert-deftest dk-lc--unresolved-threads-are-not-counted-twice ()
+  "They have their own marker and are a different fact: one is a blocker,
+the other is settled context."
+  (should (equal "" (decknix--hub-discussion-icon
+                     '((total_threads . 2) (human_unresolved . 2))))))
+
+(ert-deftest dk-lc--settled-discussion-is-dim ()
+  "Context, not a call to act."
+  (should (eq 'shadow (get-text-property
+                       0 'face (decknix--hub-discussion-icon
+                                '((total_threads . 3)))))))
+
+(ert-deftest dk-lc--awaiting-my-reply-is-shown ()
+  "`needs_reply\=' means the last word was somebody else\='s.  Ten of eleven
+PRs carried it and not one showed anything."
+  (should (decknix--hub-awaiting-my-reply-p '((needs_reply . t))))
+  (should (string-match-p "↩" (decknix--hub-reply-icon '((needs_reply . t))))))
+
+(ert-deftest dk-lc--not-awaiting-a-reply-shows-nothing ()
+  "#256 was the one PR of eleven not waiting on me, and that difference
+was invisible."
+  (should (equal "" (decknix--hub-reply-icon '((needs_reply . nil))))))
+
+(ert-deftest dk-lc--awaiting-my-reply-is-amber ()
+  "It is my move."
+  (should (eq 'warning (get-text-property
+                        0 'face (decknix--hub-reply-icon '((needs_reply . t)))))))
+
 (provide 'decknix-hub-lifecycle-test)
 ;;; decknix-hub-lifecycle-test.el ends here
