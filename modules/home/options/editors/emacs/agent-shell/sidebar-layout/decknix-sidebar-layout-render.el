@@ -266,7 +266,11 @@ calling it from the render path cannot queue an audit per paint."
   "Render the Reviews section.  Returns the updated LINE-NUM."
   (let* ((sessions (decknix--layout-sessions))
          (items (decknix--layout-feed-items))
-         (all-groups (decknix--layout-review-groups sessions items))
+         ;; The unfiltered feed, so a PR the filters hide is not mistaken
+         ;; for one that has left the review queue entirely.
+         (all-items (and (boundp 'decknix--hub-reviews)
+                         (alist-get 'items decknix--hub-reviews)))
+         (all-groups (decknix--layout-review-groups sessions items all-items))
          (split (decknix--layout-filter-groups
                  all-groups decknix-sidebar-layout-reviews-attention-only))
          (groups (car split))
