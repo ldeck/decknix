@@ -8,26 +8,26 @@
 # fails closed if a release asset is ever re-cut under the same tag.
 
 let
-  version = "0.63.8";
+  version = "0.64.7";
 
   # sha256 values transcribed from
   # https://github.com/zzet/gortex/releases/download/v${version}/checksums.txt
   sources = {
     aarch64-darwin = {
       asset = "gortex_darwin_arm64.tar.gz";
-      hash = "sha256-RuRIpeurFlicqRoKhdvgLWMzD4/8c7e+UhJDKwCM+aI=";
+      hash = "sha256-u3t+FQG6fDkVAfUzgHfYneHzk8Ya1LeGzynXC3eJaQQ=";
     };
     x86_64-darwin = {
       asset = "gortex_darwin_amd64.tar.gz";
-      hash = "sha256-X8qL8VGhhtqP5VIIMqJ9EF7l7FKXg4Wx+yL2G33eYHQ=";
+      hash = "sha256-j+5uxxfQakrZeg/Try3m94hNsQO05SQ1n76rdT8Whw8=";
     };
     x86_64-linux = {
       asset = "gortex_linux_amd64.tar.gz";
-      hash = "sha256-6dcotr3HuDFk8GMxj27wftI34/LEpTF4whZDSuvzc0M=";
+      hash = "sha256-XYeJTZ+gnWX460hlfRTdFu1c4Q3VoDB3zHmY+4V0ANQ=";
     };
     aarch64-linux = {
       asset = "gortex_linux_arm64.tar.gz";
-      hash = "sha256-xXaU9kMHOJeSZll1uKy8/+HxaHjIy59ICA7o1wwrL/Y=";
+      hash = "sha256-27FrZndsTTlMBdRkZ6kdIpx3+om4JibivFgc0pm026M=";
     };
   };
 

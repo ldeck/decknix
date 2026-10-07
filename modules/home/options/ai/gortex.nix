@@ -79,6 +79,15 @@ let
 
     GORTEX=${gortexBin}
 
+    # Indexer/control RPCs can wait on daemon checkout admission even for
+    # `untrack' (observed >20 minutes on a removed checkout).  A graph is
+    # optional; a switch must never wait indefinitely for its roster.
+    reconcile() {
+      if ! timeout --kill-after=2s 8s "$GORTEX" "$@"; then
+        echo "gortex: $1 did not complete within 8s; retry on next switch" >&2
+      fi
+    }
+
     # A repo is "primary" when .git is a directory; a linked worktree carries
     # a .git *file*.  -prune stops the descent so we never walk node_modules
     # or a repo's own worktrees looking for nested checkouts.
@@ -107,12 +116,22 @@ let
     # `repos` reports the tracked set as JSON (`[]` when nothing is tracked or
     # no daemon is up, rather than an error) — so a first run reconciles from
     # empty and `track` simply writes config for the daemon's next start.
-    have=$("$GORTEX" repos --json 2>/dev/null | jq -r '.[].path' 2>/dev/null | sort -u || true)
+    # Do not mistake an unresponsive daemon for an empty roster and try to
+    # re-track every repo.  The outer activation deadline is a final guard.
+    if ! have_json=$(timeout --kill-after=2s 8s "$GORTEX" repos --json 2>/dev/null); then
+      echo "gortex: roster read timed out; leaving tracking unchanged" >&2
+      exit 0
+    fi
+    if ! printf '%s' "$have_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      echo "gortex: invalid roster response; leaving tracking unchanged" >&2
+      exit 0
+    fi
+    have=$(printf '%s' "$have_json" | jq -r '.[].path' | sort -u)
 
     for repo in $want; do
       if ! printf '%s\n' "$have" | grep -qxF -e "$repo"; then
         echo "gortex: track $repo"
-        "$GORTEX" track "$repo" ${optionalString (cfg.roster.worktrees == "independent") "--as-worktree"} || true
+        reconcile track "$repo" ${optionalString (cfg.roster.worktrees == "independent") "--as-worktree"}
       fi
     done
 
@@ -120,7 +139,7 @@ let
       for repo in $have; do
         if ! printf '%s\n' "$want" | grep -qxF -e "$repo"; then
           echo "gortex: untrack $repo (no longer under a configured root)"
-          "$GORTEX" untrack "$repo" || true
+          reconcile untrack "$repo"
         fi
       done
     ''}
@@ -130,17 +149,17 @@ let
       # reload after any new `track`/`untrack` changes before assigning slugs.
       # Otherwise a freshly tracked repo can still look unknown until the next
       # daemon refresh and the activation emits noisy but harmless errors.
-      "$GORTEX" daemon reload >/dev/null 2>&1 || true
+      timeout --kill-after=2s 8s "$GORTEX" daemon reload >/dev/null 2>&1 || true
 
       # Slugs recorded globally so no `.gortex.yaml` lands in a shared repo.
       # Normalize repo keys to absolute paths first; gortex matches against the
       # tracked absolute path, not the user-facing `~/...` spelling.
       ${concatStringsSep "\n" (mapAttrsToList (repo: slug: ''
-        "$GORTEX" workspace set ${escapeShellArg (expandTilde repo)} ${escapeShellArg slug} --global || true
+        reconcile workspace set ${escapeShellArg (expandTilde repo)} ${escapeShellArg slug} --global
       '') cfg.workspaceSlugs)}
     ''}
 
-    "$GORTEX" daemon reload >/dev/null 2>&1 || true
+    timeout --kill-after=2s 8s "$GORTEX" daemon reload >/dev/null 2>&1 || true
   '';
 in
 {
@@ -150,8 +169,9 @@ in
       default = true;
       description = ''
         Index tracked repositories into a Gortex knowledge graph and serve it
-        to every configured agent over MCP.  On by default: the daemon is a
-        single shared process and agents only pay for it when they query.
+        to every configured agent over MCP.  On by default: one shared
+        daemon, but initial and watched indexing consume CPU and disk even
+        if agents do not issue queries.
       '';
     };
 
@@ -368,11 +388,13 @@ in
     {
       home.packages = [ cfg.package ];
 
-      # Reconcile the tracked roster on every switch.  Idempotent, and a no-op
-      # when the daemon is down beyond writing config for its next start.
+      # Bounded best-effort reconciliation: never strand a system switch
+      # behind an optional graph daemon.  A failed run retries next switch.
       home.activation.gortexRoster =
         config.lib.dag.entryAfter [ "writeBoundary" ] ''
-          $DRY_RUN_CMD ${rosterScript}
+          if ! $DRY_RUN_CMD ${pkgs.coreutils}/bin/timeout --kill-after=3s 60s ${rosterScript}; then
+            echo "gortex: roster sync exceeded 60s; continuing activation" >&2
+          fi
         '';
     }
 

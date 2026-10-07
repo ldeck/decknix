@@ -354,10 +354,14 @@ decknix.ai.gortex = {
 The launchd service defaults on only once the roster is non-empty — a daemon
 holding an empty graph is a resident process answering nothing.
 
-If CPU is the concern, the daemon process itself is not the expensive part;
-the indexer work is. Keep `roster.roots` narrow, prefer `canonical` worktrees,
-and leave `daemon.enable = false` if you only want the CLI and not a live MCP
-service.
+Indexing and watching tracked repositories consume CPU and disk even when
+agents do not query the graph. Keep `roster.roots` narrow, prefer `canonical`
+worktrees, and leave `daemon.enable = false` if you only want the CLI and not a
+live MCP service. Set `decknix.ai.gortex.enable = false` to opt out of the
+daemon, roster reconciliation, and agent integrations entirely; this does not
+delete the existing graph. `gortex savings` shows recorded source-reading
+savings, not every possible graph query, so a zero there alone does not prove
+no agent uses the graph.
 
 ### Worktrees
 
@@ -414,3 +418,7 @@ Note that `~/.gortex/config.yaml` is owned by **gortex**, not by Nix: `track`,
 from an activation script rather than generating the file, which would fight
 the daemon for ownership. The activation reloads the daemon before assigning
 workspace slugs so freshly tracked repos are visible to `workspace set`.
+Every roster CLI request has an eight-second deadline and the whole optional
+roster step is capped at 60 seconds. If a busy daemon cannot complete an
+operation, switch continues and the next switch retries; no configuration
+activation should wait indefinitely for an indexer RPC.
