@@ -223,5 +223,49 @@ was invisible."
   (should (eq 'warning (get-text-property
                         0 'face (decknix--hub-reply-icon '((needs_reply . t)))))))
 
+
+;; --- an approval a push has invalidated -------------------------------
+
+(ert-deftest dk-lc--a-push-after-the-review-unapproves-it ()
+  "Reported: PRs read as approved while GitHub disagreed, the approval
+having been invalidated by updates pushed since.
+
+GitHub only formally DISMISSES a review when branch protection says to,
+so `approvers\=' can still name somebody while the approval means nothing.
+`review_stale\=' is the hub\='s own signal -- a commit landed after the
+latest review -- and it was not consulted at all."
+  (should-not (decknix--hub-pr-approved-p
+               '((approvers . ("abatten187")) (review_stale . t)))))
+
+(ert-deftest dk-lc--a-stale-decision-is-also-not-an-approval ()
+  (should-not (decknix--hub-pr-approved-p
+               '((review_decision . "APPROVED") (review_stale . t)))))
+
+(ert-deftest dk-lc--a-fresh-approval-still-counts ()
+  "The guard must not swallow real approvals."
+  (should (decknix--hub-pr-approved-p
+           '((approvers . ("x")) (review_stale . nil)))))
+
+(ert-deftest dk-lc--a-stale-approval-is-not-silently-unapproved ()
+  "The work HAS been reviewed; what it needs is a RE-review, not a first
+one.  Dropping it to plain unapproved would lose that."
+  (should (decknix--hub-pr-stale-approval-p
+           '((approvers . ("x")) (review_stale . t))))
+  (should (string-match-p "↻" (decknix--hub-stale-approval-icon
+                               '((approvers . ("x")) (review_stale . t))))))
+
+(ert-deftest dk-lc--a-never-reviewed-pr-is-not-a-stale-approval ()
+  "Stale means an approval was invalidated, not that none exists."
+  (should-not (decknix--hub-pr-stale-approval-p '((review_stale . t))))
+  (should (equal "" (decknix--hub-stale-approval-icon '((review_stale . t))))))
+
+(ert-deftest dk-lc--a-stale-approval-is-not-bold ()
+  "Weight means approved, and this one no longer is."
+  (let ((icon (decknix--hub-primary-status-icon
+               '((approvers . ("x")) (review_stale . t)
+                 (ci . ((status . "pass"))))
+               'wip)))
+    (should-not (dk-lc--boldp icon))))
+
 (provide 'decknix-hub-lifecycle-test)
 ;;; decknix-hub-lifecycle-test.el ends here

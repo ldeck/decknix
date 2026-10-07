@@ -145,10 +145,36 @@ outstanding, so an approved PR with a second reviewer pending reported
 no decision at all -- followupboss-integration#252 had
 approvers (jonathan-lo), review_decision empty, and rendered as though
 nothing were known about it."
-  (let ((approvers (alist-get 'approvers item)))
-    (or (and approvers (listp approvers) (> (length approvers) 0))
-        (equal (alist-get 'review_decision item) "APPROVED")
-        (equal (alist-get 'my_review item) "APPROVED"))))
+  (and
+   ;; A push landed after the latest review, so whatever was approved is
+   ;; not what is there now.  GitHub only formally DISMISSES the review
+   ;; when branch protection says to, so `approvers\=' can still name
+   ;; somebody while the approval means nothing -- which is how a PR kept
+   ;; reading as approved after updates were pushed to it.
+   (not (eq (alist-get 'review_stale item) t))
+   (let ((approvers (alist-get 'approvers item)))
+     (or (and approvers (listp approvers) (> (length approvers) 0))
+         (equal (alist-get 'review_decision item) "APPROVED")
+         (equal (alist-get 'my_review item) "APPROVED")))))
+
+(defun decknix--hub-pr-stale-approval-p (item)
+  "Return non-nil when ITEM was approved and a push has since invalidated it.
+
+Worth saying out loud rather than silently dropping to unapproved: the
+work HAS been reviewed, and what it needs is a re-review, not a first
+one."
+  (and (eq (alist-get 'review_stale item) t)
+       (let ((approvers (alist-get 'approvers item)))
+         (or (and approvers (listp approvers) (> (length approvers) 0))
+             (equal (alist-get 'review_decision item) "APPROVED")
+             (equal (alist-get 'my_review item) "APPROVED")))
+       t))
+
+(defun decknix--hub-stale-approval-icon (item)
+  "Return a marker when ITEM\='s approval has been invalidated by a push."
+  (if (decknix--hub-pr-stale-approval-p item)
+      (decknix--hub-icon "↻" 'warning)
+    ""))
 
 (defun decknix--hub-pr-unresolved (item)
   "Return the number of unresolved HUMAN conversations on ITEM.
