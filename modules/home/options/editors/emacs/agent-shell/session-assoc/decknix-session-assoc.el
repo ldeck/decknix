@@ -72,7 +72,28 @@ first in the list."
                  (len (length dir)))
             (when (and (> len best-len) (string-prefix-p dir path))
               (setq best root best-len len)))))
-      best)))
+      (or best (decknix-session-assoc-resolve-removed path roots)))))
+
+(defun decknix-session-assoc-resolve-removed (path roots)
+  "Resolve PATH to its REPO when the worktree it named is gone.
+
+A worktree lives at `<repo>-worktrees/<branch>\=', and once the work merges
+the worktree is removed -- so its paths match no root, and a session whose
+recent work was there resolves to nothing at all.  Measured: the session
+this was built for had its last activity in
+platform-cli-worktrees/CONN-1040-generator-fixes, which no longer exists.
+
+The repo outlives the worktree and still carries the PRs, so attributing
+to it keeps the association that matters.  Derived from the path alone,
+by the naming convention, and only accepted when that repo IS a known
+root."
+  (when (string-match "\\`\\(.*\\)-worktrees/" path)
+    (let ((repo (match-string 1 path)))
+      (seq-find (lambda (r)
+                  (and (stringp r)
+                       (string= (file-name-as-directory r)
+                                (file-name-as-directory repo))))
+                roots))))
 
 (defun decknix-session-assoc-paths-of (update)
   "Return the file paths an ACP session UPDATE reports touching.
@@ -113,11 +134,19 @@ exists to handle."
 
 Sorted most-recent first, so the sidebar shows the work in hand at the
 top of a session's subtree."
-  (let ((window (or window decknix-session-assoc-window)))
+  (let* ((window (or window decknix-session-assoc-window))
+         (ranked (sort (copy-sequence assoc)
+                       (lambda (a b) (> (cdr a) (cdr b)))))
+         ;; Measured from the last turn that touched a FILE, not from the
+         ;; current turn.  A session that has been discussing rather than
+         ;; editing is still working on what it last edited: the session
+         ;; this was built for had its file activity at turn 44 of 64, so a
+         ;; window counted from 64 found nothing and the sidebar fell back
+         ;; to tags -- which is the whole failure this replaces.
+         (latest (if ranked (cdar ranked) turn)))
     (mapcar #'car
-            (sort (seq-filter (lambda (cell) (> (cdr cell) (- turn window)))
-                              (copy-sequence assoc))
-                  (lambda (a b) (> (cdr a) (cdr b)))))))
+            (seq-filter (lambda (cell) (> (cdr cell) (- latest window)))
+                        ranked))))
 
 (defun decknix-session-assoc-prune (assoc turn &optional window)
   "Return ASSOC without roots older than WINDOW turns before TURN.
@@ -218,23 +247,72 @@ on a hot path, and a stale root only delays an association.")
 (declare-function decknix-hub-wt-rows "decknix-hub-wt-stale" ())
 (defvar decknix--hub-wt-facts)
 
+(defcustom decknix-session-assoc-repo-report
+  (expand-file-name "~/.config/decknix/repo-sync.json")
+  "Report listing every repo checkout in the workspace.
+
+Needed because the worktree audit lists only WORKTREES.  A session
+editing in a primary checkout resolved against nothing and recorded no
+association at all -- measured, the session this was built for had edited
+decknix-config and platform-cli themselves."
+  :type 'file
+  :group 'decknix)
+
+(defvar decknix--agent-assoc-repo-roots-cache nil
+  "Cons of (MTIME . PATHS) read from `decknix-session-assoc-repo-report'.")
+
+(defun decknix-session-assoc-repo-roots ()
+  "Return every repo checkout path, cached on the report's mtime."
+  (let* ((f decknix-session-assoc-repo-report)
+         (attrs (and (file-readable-p f) (file-attributes f)))
+         (mtime (and attrs (float-time
+                            (file-attribute-modification-time attrs)))))
+    (cond
+     ((null mtime) (cdr decknix--agent-assoc-repo-roots-cache))
+     ((and decknix--agent-assoc-repo-roots-cache
+           (equal mtime (car decknix--agent-assoc-repo-roots-cache)))
+      (cdr decknix--agent-assoc-repo-roots-cache))
+     (t
+      (let ((paths
+             (ignore-errors
+               (let* ((json (with-temp-buffer (insert-file-contents f)
+                                              (buffer-string)))
+                      (data (json-parse-string json :object-type 'alist
+                                               :array-type 'list
+                                               :null-object nil
+                                               :false-object nil)))
+                 (delq nil (mapcar (lambda (r) (alist-get 'path r))
+                                   (alist-get 'repos data)))))))
+        (setq decknix--agent-assoc-repo-roots-cache (cons mtime paths))
+        paths)))))
+
 (defun decknix-session-assoc-roots ()
-  "Return the known worktree and repo roots, cached on the table size."
-  (if (not (and (boundp 'decknix--hub-wt-facts)
-                (hash-table-p decknix--hub-wt-facts)
-                (fboundp 'decknix-hub-wt-rows)))
-      (cdr decknix--agent-assoc-roots-cache)
-    (let ((count (hash-table-count decknix--hub-wt-facts)))
-      (unless (and decknix--agent-assoc-roots-cache
-                   (equal count (car decknix--agent-assoc-roots-cache)))
-        (setq decknix--agent-assoc-roots-cache
-              (cons count
-                    (delq nil
-                          (mapcar (lambda (r)
-                                    (or (alist-get 'path r)
-                                        (plist-get r :path)))
-                                  (ignore-errors (decknix-hub-wt-rows)))))))
-      (cdr decknix--agent-assoc-roots-cache))))
+  "Return the known worktree AND repo-checkout roots.
+
+Both, because a session works in whichever it happens to be in.  The
+worktree audit alone left a session editing a primary checkout resolving
+against nothing.
+
+Resolution takes the LONGEST match, so a file inside a worktree still
+attributes to that worktree rather than to the repo whose path is also a
+prefix of it."
+  (append
+   (decknix-session-assoc-repo-roots)
+   (if (not (and (boundp 'decknix--hub-wt-facts)
+                 (hash-table-p decknix--hub-wt-facts)
+                 (fboundp 'decknix-hub-wt-rows)))
+       (cdr decknix--agent-assoc-roots-cache)
+     (let ((count (hash-table-count decknix--hub-wt-facts)))
+       (unless (and decknix--agent-assoc-roots-cache
+                    (equal count (car decknix--agent-assoc-roots-cache)))
+         (setq decknix--agent-assoc-roots-cache
+               (cons count
+                     (delq nil
+                           (mapcar (lambda (r)
+                                     (or (alist-get 'path r)
+                                         (plist-get r :path)))
+                                   (ignore-errors (decknix-hub-wt-rows)))))))
+       (cdr decknix--agent-assoc-roots-cache)))))
 
 (defvar-local decknix--agent-assoc nil
   "This session\='s (ROOT . LAST-TURN) alist of observed worktrees.")
@@ -461,13 +539,28 @@ Returns non-nil when something was recorded."
                   (key decknix--agent-broker-key)
                   ((fboundp 'decknix--agent-broker-log-path))
                   (log (decknix--agent-broker-log-path key))
+                  (_ (setq decknix--agent-assoc-backfilled t))
                   (res (decknix-session-assoc-backfill log)))
         (decknix-session-assoc-apply buffer (car res) (cdr res))
         (decknix-session-assoc-remember key (car res) (cdr res))
         t))))
 
+(defvar-local decknix--agent-assoc-backfilled nil
+  "Non-nil once a backfill has been ATTEMPTED for this buffer.
+
+Separate from whether it found anything, so a session that genuinely has
+no association is not retried forever while one never tried still gets
+its turn.")
+
 (defun decknix-session-assoc-backfill-pending ()
-  "Return the live agent buffers with no association yet."
+  "Return the live agent buffers still awaiting a backfill.
+
+A stored association that is EMPTY counts as pending.  Live capture
+persists on every turn boundary, including when it has recorded nothing,
+so within a turn of startup it wrote (TURN . nil) for each session -- and
+treating any stored entry as done excluded every one of them from the
+backfill permanently.  Measured: all 13 stored associations held zero
+roots, which is the whole feature doing nothing."
   (when (fboundp 'agent-shell-buffers)
     (seq-filter
      (lambda (b)
@@ -475,8 +568,9 @@ Returns non-nil when something was recorded."
             (with-current-buffer b
               (and (local-variable-p 'decknix--agent-broker-key)
                    decknix--agent-broker-key
-                   (null (decknix-session-assoc-recall
-                          decknix--agent-broker-key))))))
+                   (not decknix--agent-assoc-backfilled)
+                   (null (cdr (decknix-session-assoc-recall
+                               decknix--agent-broker-key)))))))
      (ignore-errors (agent-shell-buffers)))))
 
 (defun decknix-session-assoc-backfill-tick ()

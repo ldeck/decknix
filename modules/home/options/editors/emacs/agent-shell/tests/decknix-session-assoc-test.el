@@ -66,13 +66,34 @@ depend on the audit's ordering."
   (should-not (decknix-session-assoc-resolve "/tmp/scratch/x.go"
                                              dk-assoc-test--roots)))
 
-(ert-deftest dk-assoc--a-sibling-with-a-shared-prefix-does-not-match ()
-  "`/w/platform-cli' must not claim `/w/platform-cli-worktrees/...' by
-string prefix alone -- that is why resolution compares directories."
-  (should-not (equal "/w/platform-cli"
-                     (decknix-session-assoc-resolve
-                      "/w/platform-cli-worktrees/CONN-1040/x.go"
-                      '("/w/platform-cli")))))
+(ert-deftest dk-assoc--a-known-worktree-always-beats-its-repo ()
+  "Directories are compared, not string prefixes, so the repo never wins
+over a worktree the audit knows about."
+  (should (equal "/w/platform-cli-worktrees/CONN-1040"
+                 (decknix-session-assoc-resolve
+                  "/w/platform-cli-worktrees/CONN-1040/x.go"
+                  '("/w/platform-cli" "/w/platform-cli-worktrees/CONN-1040")))))
+
+(ert-deftest dk-assoc--a-removed-worktree-falls-back-to-its-repo ()
+  "Once work merges the worktree is removed, so its paths match no root and
+a session whose recent work was there resolved to NOTHING.  Measured: the
+session this was built for last worked in a platform-cli worktree since
+deleted.  The repo outlives it and still carries the PRs."
+  (should (equal "/w/platform-cli"
+                 (decknix-session-assoc-resolve
+                  "/w/platform-cli-worktrees/CONN-1040/x.go"
+                  '("/w/platform-cli")))))
+
+(ert-deftest dk-assoc--the-fallback-needs-the-repo-to-be-known ()
+  "Deriving a repo from the path is a convention, not evidence it exists."
+  (should-not (decknix-session-assoc-resolve
+               "/w/platform-cli-worktrees/CONN-1040/x.go"
+               '("/w/something-else"))))
+
+(ert-deftest dk-assoc--the-fallback-only-applies-to-worktree-paths ()
+  "A path outside the `-worktrees' convention must not acquire a repo."
+  (should-not (decknix-session-assoc-resolve
+               "/w/platform-cli-scratch/x.go" '("/w/platform-cli"))))
 
 (ert-deftest dk-assoc--no-roots-is-nil-not-an-error ()
   (should-not (decknix-session-assoc-resolve "/w/x/y.go" nil)))
