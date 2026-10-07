@@ -549,6 +549,37 @@ yet, which is what keeps the tag fallback meaningful."
     (and (buffer-live-p buf)
          (ignore-errors (decknix-session-assoc-current buf)))))
 
+(defun decknix--layout-observed-repo-names (roots worktrees)
+  "Return the repo short names among ROOTS that are not WORKTREES.
+
+An observed root is either a worktree the session edited in or a repo
+checkout it edited in directly -- the latter also being what a REMOVED
+worktree resolves to, since the worktree is deleted once its work merges.
+
+Needed because a PR is otherwise claimed only through the branch of a
+claimed worktree.  With the root being a repo, no worktree matches, so
+the branch list is empty and the session claims NO PRs at all -- which is
+why platform-cli\='s PRs stayed invisible under the session that had been
+working on them.
+
+This is repo-level claiming, which tags also did, but on a different
+footing: the session was OBSERVED editing there, which is evidence rather
+than a guess from its name."
+  (let ((wt-paths (delq nil (mapcar #'decknix--layout-wt-path worktrees))))
+    (delq nil
+          (mapcar
+           (lambda (root)
+             (let ((dir (file-name-as-directory (expand-file-name root))))
+               (unless (member dir wt-paths)
+                 (downcase (file-name-nondirectory
+                            (directory-file-name dir))))))
+           roots))))
+
+(defun decknix--layout-pr-in-repos-p (pr repo-names)
+  "Return non-nil when PR belongs to one of REPO-NAMES."
+  (let ((repo (car (last (split-string (or (plist-get pr :repo) "") "/" t)))))
+    (and repo (member (downcase repo) repo-names) t)))
+
 (defun decknix--layout-session-observed-wt-p (roots wt)
   "Return non-nil when WT is one of the observed ROOTS."
   (decknix-session-assoc-claims-wt-p roots (decknix--layout-wt-path wt)))
@@ -623,13 +654,25 @@ which would hide the sharing."
                     ;; the case where the association is actually known.
                     (branches (delq nil (mapcar (lambda (wt) (plist-get wt :branch))
                                                 wts)))
+                    (observed-repos
+                     (and observed
+                          (decknix--layout-observed-repo-names
+                           observed worktrees)))
                     (prs (seq-filter
                           (lambda (p)
                             (or (and (plist-get p :branch)
                                      (member (plist-get p :branch) branches))
-                                ;; No repo-level fallback once the session has
-                                ;; been observed: claiming a repo's every PR
-                                ;; is what hid the one it was working on.
+                                ;; Observed to be editing in the repo itself,
+                                ;; which is also what a removed worktree
+                                ;; resolves to.  Without this a session whose
+                                ;; worktree has been deleted claims nothing.
+                                (and observed-repos
+                                     (decknix--layout-pr-in-repos-p
+                                      p observed-repos))
+                                ;; Tag matching only where nothing was
+                                ;; observed: guessing from a name claimed
+                                ;; every PR of one repo and missed the three
+                                ;; other repos the session was actually in.
                                 (and (null observed)
                                      (decknix--layout-session-claims-repo-p
                                       session (or (plist-get p :repo) "")))))

@@ -970,5 +970,41 @@ supplies the unfiltered feed."
     (decknix--layout-mark-gone prs t '("r#2"))
     (should (equal '("r#2") (decknix--layout-live-pr-keys prs)))))
 
+
+;; --- a repo the session was observed editing in -----------------------
+
+(ert-deftest decknix-layout--an-observed-root-that-is-a-repo-is-named ()
+  "A removed worktree resolves to its repo, so the observed root is a repo
+checkout rather than a worktree."
+  (should (equal '("platform-cli")
+                 (decknix--layout-observed-repo-names
+                  '("/w/platform-cli")
+                  '((:path "/w/platform-cli-worktrees/CONN-1" :branch "b"))))))
+
+(ert-deftest decknix-layout--an-observed-worktree-is-not-a-repo-claim ()
+  "It is claimed precisely, by its own path, so it must not ALSO widen to
+the whole repo."
+  (should-not (decknix--layout-observed-repo-names
+               '("/w/platform-cli-worktrees/CONN-1")
+               '((:path "/w/platform-cli-worktrees/CONN-1" :branch "b")))))
+
+(ert-deftest decknix-layout--a-pr-of-an-observed-repo-is-claimed ()
+  "Without this a session whose worktree has been deleted claims no PRs at
+all, which is why platform-cli\='s stayed invisible under the session that
+had been working on them."
+  (should (decknix--layout-pr-in-repos-p
+           '(:repo "UpsideRealty/platform-cli" :number 57) '("platform-cli"))))
+
+(ert-deftest decknix-layout--a-pr-of-another-repo-is-not-claimed ()
+  (should-not (decknix--layout-pr-in-repos-p
+               '(:repo "UpsideRealty/upside" :number 1) '("platform-cli"))))
+
+(ert-deftest decknix-layout--repo-claiming-is-case-insensitive ()
+  (should (decknix--layout-pr-in-repos-p
+           '(:repo "UpsideRealty/Platform-CLI") '("platform-cli"))))
+
+(ert-deftest decknix-layout--a-pr-with-no-repo-is-not-claimed ()
+  (should-not (decknix--layout-pr-in-repos-p '(:number 1) '("platform-cli"))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here
