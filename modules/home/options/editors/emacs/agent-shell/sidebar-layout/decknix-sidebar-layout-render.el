@@ -365,7 +365,15 @@ hiding the sharing."
       (insert "\n")
       (setq line-num (1+ line-num))
       (decknix--sidebar-render-section-header
-       (format "WIP (%d)" (length wip)) 'wip-sessions)
+       (let ((guessed (decknix--layout-inferred-count
+                       (plist-get tree :sessions))))
+         ;; Naming the guesses in the heading, because a wrong guess that
+         ;; renders like a fact is the defect every sidebar bug this week
+         ;; turned out to be.
+         (if (> guessed 0)
+             (format "WIP (%d — %d inferred)" (length wip) guessed)
+           (format "WIP (%d)" (length wip))))
+       'wip-sessions)
       (setq line-num (1+ line-num))
       (dolist (row (decknix--layout-dedup-claims (plist-get tree :sessions)))
         (let* ((session (plist-get row :session))
@@ -387,7 +395,8 @@ hiding the sharing."
                           line-num (nth 0 session)))
           (dolist (claim (plist-get row :repos))
             (setq line-num (decknix--layout-render-claim
-                            line-num width claim session)))))
+                            line-num width claim session
+                            (plist-get row :provenance))))))
       (setq line-num (decknix--layout-render-dormant
                       line-num width (plist-get tree :dormant)))))
   line-num)
@@ -428,14 +437,15 @@ window, since the glyphs are the part worth keeping when space runs out."
                   title)))
     (concat lead (propertize title 'face 'shadow))))
 
-(defun decknix--layout-render-claim (line-num width claim session)
+(defun decknix--layout-render-claim (line-num width claim session
+                                             &optional provenance)
   "Render one repo CLAIM under SESSION, with its items.  Returns LINE-NUM.
 
 The repo line takes its colour from the WORST item beneath it, so a
 collapsed repo still shows that something in there is blocked."
   (if (plist-get claim :duplicate)
       (decknix--layout-render-duplicate-claim line-num width claim session)
-    (decknix--layout-render-claim-1 line-num width claim session)))
+    (decknix--layout-render-claim-1 line-num width claim session provenance)))
 
 (defun decknix--layout-render-duplicate-claim (line-num width claim session)
   "Render CLAIM as one line, its items having been shown under an earlier
@@ -450,11 +460,16 @@ session.  Keeps the sharing visible without repeating the whole subtree."
             "\n")
     (1+ line-num)))
 
-(defun decknix--layout-render-claim-1 (line-num width claim session)
-  "Render CLAIM and its nested items.  Returns LINE-NUM."
+(defun decknix--layout-render-claim-1 (line-num width claim session
+                                               &optional provenance)
+  "Render CLAIM and its nested items.  Returns LINE-NUM.
+
+PROVENANCE marks whether this association is evidence or a guess."
   (let* ((prs (plist-get claim :pr-items))
          (wts (plist-get claim :wt-items))
-         (left (format "    ⇡ %s" (plist-get claim :repo)))
+         (left (format "   %s⇡ %s"
+                       (decknix--layout-provenance-mark provenance)
+                       (plist-get claim :repo)))
          (right (decknix--layout-count-label (plist-get claim :prs)
                                              (plist-get claim :worktrees)))
          (pad (max 1 (- width (string-width left) (string-width right))))
@@ -467,9 +482,14 @@ session.  Keeps the sharing visible without repeating the whole subtree."
          (held (nth 2 split)))
     (ignore prs wts)
     (insert (propertize (concat left (make-string pad ?\s) right)
-                        'face (decknix--layout-severity-face
-                               (plist-get claim :severity))
+                        'face (if (eq provenance 'observed)
+                                  (decknix--layout-severity-face
+                                   (plist-get claim :severity))
+                                ;; A guess must not compete with what the
+                                ;; sidebar actually knows.
+                                (decknix--layout-provenance-face provenance))
                         'decknix-layout-claim claim
+                        'decknix-layout-provenance provenance
                         'decknix-layout-session session)
             "\n")
     (setq line-num (1+ line-num))

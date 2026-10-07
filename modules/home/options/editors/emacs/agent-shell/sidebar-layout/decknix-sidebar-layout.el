@@ -34,6 +34,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'decknix-session-assoc)
+(defvar decknix--agent-assoc-backfilled)
 (require 'subr-x)
 
 (defconst decknix-sidebar-layout-attention-states '("waiting" "asking" "netfail")
@@ -549,6 +550,52 @@ yet, which is what keeps the tag fallback meaningful."
     (and (buffer-live-p buf)
          (ignore-errors (decknix-session-assoc-current buf)))))
 
+(defconst decknix-sidebar-layout-provenance-marks
+  '((observed . " ") (pending . "?") (inferred . "~"))
+  "Mark per claim provenance.
+
+A row claimed from OBSERVED file activity and one GUESSED from the
+session\='s name rendered identically, so a wrong guess was
+indistinguishable from a fact.  Every sidebar defect found in one working
+session was of that shape: counts that were fiction, a conflicted PR
+reported as finished, an association silently inert for weeks.  The panel
+exists so the user does not have to audit it.")
+
+(defun decknix--layout-claim-provenance (session observed)
+  "Return how SESSION\='s claims were arrived at.
+
+`observed\=' -- from the files its tool calls touched, which is evidence.
+`pending\='  -- nothing observed YET; the backfill has not reached it, so
+             what is shown is a guess that will be replaced.
+`inferred\=' -- the backfill ran and found nothing, so the name is all
+             there is and will remain all there is."
+  (cond
+   (observed 'observed)
+   ((decknix--layout-session-backfill-pending-p session) 'pending)
+   (t 'inferred)))
+
+(defun decknix--layout-session-backfill-pending-p (session)
+  "Return non-nil when SESSION\='s association has not been computed yet."
+  (let ((buf (get-buffer (or (nth 0 session) ""))))
+    (and (buffer-live-p buf)
+         (not (buffer-local-value 'decknix--agent-assoc-backfilled buf))
+         t)))
+
+(defun decknix--layout-provenance-mark (provenance)
+  "Return the one-character mark for PROVENANCE."
+  (or (alist-get provenance decknix-sidebar-layout-provenance-marks) " "))
+
+(defun decknix--layout-provenance-face (provenance)
+  "Return the face for a claim of PROVENANCE.
+
+Inferred and pending claims are dimmed: they are the sidebar\='s guesses,
+and they should not compete visually with what it actually knows."
+  (if (eq provenance 'observed) 'default 'font-lock-comment-face))
+
+(defun decknix--layout-inferred-count (rows)
+  "Return how many session ROWS are showing guesses rather than evidence."
+  (seq-count (lambda (r) (not (eq 'observed (plist-get r :provenance)))) rows))
+
 (defun decknix--layout-observed-repo-names (roots worktrees)
   "Return the repo short names among ROOTS that are not WORKTREES.
 
@@ -594,7 +641,61 @@ and some without, which is the normalisation bug that once hid
         (wp (decknix--layout-wt-path wt)))
     (and ws wp (string= ws wp))))
 
+(defvar decknix--layout-wip-memo nil
+  "Cons of (SIGNATURE . TREE) from the last `decknix--layout-wip-tree\='.
+
+Measured on the live workspace at 96.6 ms a call with a GC on EVERY call
+-- the same shape as the Reviews grouping before it was memoised, and the
+next largest cost on a repaint that averaged 833 ms in the hitch report.
+
+Keyed on what the tree depends on, including each session\='s OBSERVED
+roots: those change when the backfill lands or a turn ends, and a tree
+reused across that change would keep showing the tag guess after the
+evidence arrived.")
+
+(defun decknix--layout-wip-signature (sessions wip-repos worktrees)
+  "Return a cheap value that changes exactly when the WIP tree would.
+
+An allocation-free rolling hash.  Components are SCALED before being
+combined: `sxhash-equal\=' maps sequential strings to sequential integers,
+so xor-ing them directly cancelled their differences and two distinct
+inputs hashed the same -- which froze the Reviews grouping on stale data
+until a test caught it."
+  (let ((h 0))
+    (dolist (sess sessions)
+      (setq h (logxor (* 31 h)
+                      (+ (* 131 (sxhash-equal (nth 0 sess)))
+                         (* 7 (sxhash-equal (nth 3 sess)))
+                         (sxhash-equal
+                          (decknix--layout-session-observed-roots sess))))))
+    (dolist (r wip-repos)
+      (setq h (logxor (* 31 h)
+                      (+ (* 131 (sxhash-equal (alist-get 'repo r)))
+                         (sxhash-equal
+                          (mapcar (lambda (p) (alist-get 'number p))
+                                  (alist-get 'prs r)))))))
+    (dolist (wt worktrees)
+      (setq h (logxor (* 31 h)
+                      (+ (* 131 (sxhash-equal (plist-get wt :path)))
+                         (* 7 (sxhash-equal (plist-get wt :branch)))
+                         (if (plist-get wt :dirty) 3 1)))))
+    h))
+
+(defun decknix-layout-invalidate-wip ()
+  "Drop the memoised WIP tree."
+  (setq decknix--layout-wip-memo nil))
+
 (defun decknix--layout-wip-tree (sessions wip-repos worktrees)
+  "Return the WIP tree, reusing the last one when nothing moved."
+  (let ((sig (decknix--layout-wip-signature sessions wip-repos worktrees)))
+    (if (and decknix--layout-wip-memo
+             (equal sig (car decknix--layout-wip-memo)))
+        (cdr decknix--layout-wip-memo)
+      (let ((tree (decknix--layout-wip-tree-1 sessions wip-repos worktrees)))
+        (setq decknix--layout-wip-memo (cons sig tree))
+        tree))))
+
+(defun decknix--layout-wip-tree-1 (sessions wip-repos worktrees)
   "Return (:sessions LIST :dormant PLIST) nesting work under its owning session.
 
 Each entry of :sessions is (:session S :worktrees WTS :prs PRS).  A session
@@ -687,6 +788,7 @@ which would hide the sharing."
                ;; states the same association in a tenth of the space, and is
                ;; honest about the granularity the data actually supports.
                (list :session session :worktrees wts :prs prs
+                     :provenance (decknix--layout-claim-provenance session observed)
                      :repos (decknix--layout-group-claims wts prs))))
            sessions)))
     (list :sessions rows
