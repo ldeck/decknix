@@ -372,14 +372,13 @@ author column, so the leading glyph is no longer replaced by π."
 (ert-deftest decknix-hub-icons--primary-status-open-approved-tc-fail ()
   "Approved but failing TeamCity build should be red.
 
-The glyph is the BLOCKED one, not the approved one: a PR that does not
-build is not ready for anything, whoever approved it, and the row should
-say what is wrong rather than what went right."
+Both facts survive the split: the SHAPE still says approved, the COLOUR
+says the build is broken.  Neither has to be sacrificed to the other."
   (let ((item '((state . "OPEN") (review_decision . "APPROVED")))
         (tc '((status . "FAILURE"))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-primary-status-icon item 'wip tc))
-                   "⊖"))
+                   "●"))
     (should (equal (decknix-test--icon-face
                     (decknix--hub-primary-status-icon item 'wip tc))
                    'error))))
@@ -391,15 +390,14 @@ say what is wrong rather than what went right."
                    "◐"))))
 
 
-(ert-deftest decknix-hub-icons--my-unreviewed-pr-is-not-green ()
-  "Superseded `...-needs-review-ci-pass-is-green', which pinned the rule
-that green meant `CI is fine'.
+(ert-deftest decknix-hub-icons--a-happy-build-is-green-whatever-the-review ()
+  "Colour means BUILD HEALTH; the shape carries review progress.
 
-Colour now answers WHOSE MOVE.  `REVIEW_REQUIRED' is nobody-has-looked-yet
--- on my own PR that waits on a reviewer, so it is grey.  Painting it the
-same green as approved-and-mergeable is what emptied the colour of
-meaning: measured on followupboss-integration, eleven of twelve PRs were
-green and none were approved."
+This has been rewritten twice.  It first pinned green = CI is fine, then
+briefly green = nothing is needed of me, and is back to the first --
+because the two facts are independent and each needs its own channel.
+The middle version could not express `approved and still building' at
+all."
   (let ((item '((state . "OPEN")
                 (review_decision . "REVIEW_REQUIRED")
                 (ci . ((status . "pass"))))))
@@ -408,28 +406,29 @@ green and none were approved."
                    "◐"))
     (should (equal (decknix-test--icon-face
                     (decknix--hub-primary-status-icon item 'wip))
-                   'shadow))))
+                   'success))))
 
-(ert-deftest decknix-hub-icons--a-pr-sent-to-me-unreviewed-is-amber ()
-  "Same facts, opposite side: it waits on ME."
+(ert-deftest decknix-hub-icons--colour-is-the-same-on-either-side-of-a-review ()
+  "Whose court it is in is carried by the SECTION, not the glyph."
   (let ((item '((state . "OPEN")
                 (review_decision . "REVIEW_REQUIRED")
                 (ci . ((status . "pass"))))))
-    (should (equal (decknix-test--icon-face
-                    (decknix--hub-primary-status-icon item 'review))
-                   'warning))))
+    (should (eq (decknix-test--icon-face
+                 (decknix--hub-primary-status-icon item 'wip))
+                (decknix-test--icon-face
+                 (decknix--hub-primary-status-icon item 'review))))))
 
 (ert-deftest decknix-hub-icons--primary-status-open-approved-ci-fail ()
-  "Approved but failing CI should be red, and read as BLOCKED.
+  "Approved but failing CI should be red, and still read as approved.
 
-An approved PR that does not build is not ready for anything; showing the
-approved glyph in red said the opposite of what the row means."
+Both facts survive the split: the SHAPE says approved, the COLOUR says
+the build is broken."
   (let ((item '((state . "OPEN")
                  (review_decision . "APPROVED")
                  (ci . ((status . "fail"))))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-primary-status-icon item 'wip))
-                   "⊖"))
+                   "●"))
     (should (equal (decknix-test--icon-face
                     (decknix--hub-primary-status-icon item 'wip))
                    'error))))

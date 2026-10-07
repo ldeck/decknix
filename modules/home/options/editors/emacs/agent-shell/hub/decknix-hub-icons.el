@@ -202,55 +202,50 @@ reduce sidebar duplication."
      (conflicting
       (decknix--hub-icon "▣" 'error))
      (draft
-      ;; A draft asks nothing of anybody: the author has explicitly marked
-      ;; it not-ready.  So it is GREY unless its CI is actually broken --
-      ;; not green, which under the colour rule below means `nothing is
-      ;; needed and this is ready'.  Seven drafts rendering green beside
-      ;; an approved-and-mergeable PR is what made green meaningless.
+      ;; A draft is a SHAPE of its own, so its colour means what every
+      ;; other colour here means: how the build is going.  Not-ready and
+      ;; building-fine are different facts and each gets its own channel.
       (let ((face (pcase classified
                     ("fail"      'error)
                     ("soft_fail" '(:foreground "orange" :weight bold))
                     ("running"   'warning)
+                    ("pass"      'success)
                     (_           'shadow))))
         (decknix--hub-icon "★" face)))
      (t
-      ;; Open PR.  The glyph answers WHERE IN ITS LIFE, and the colour
-      ;; answers WHOSE MOVE -- amber mine, green nothing-needed, grey
-      ;; waiting on somebody else.
+      ;; Two independent facts, two independent channels.
       ;;
-      ;; `review_decision' alone decided both before, which conflated two
-      ;; states that call for opposite actions: REVIEW_REQUIRED (nobody
-      ;; has looked -- chase a reviewer) rendered the same green as
-      ;; approved-and-mergeable.  Measured on followupboss-integration,
-      ;; eleven of twelve PRs were green and NONE of them were approved.
+      ;;   SHAPE  how far through review:  ◐ awaiting  ⊖ changes asked
+      ;;                                   ● approved
+      ;;   COLOUR how the build is:        green pass  yellow running
+      ;;                                   red fail    grey no CI
+      ;;
+      ;; Colour previously meant WHOSE MOVE, which conflated a failing
+      ;; build with an urgent review and left no way to say
+      ;; "approved and still building".  Under this split that is simply a
+      ;; yellow full circle: the shape says approved, the colour says
+      ;; building.
+      ;;
+      ;; Whose court it is in is already carried by the SECTION -- Reviews
+      ;; holds what was sent to me, WIP what is mine -- so the glyph
+      ;; repeating it bought nothing and cost the build status.  What the
+      ;; user owes beyond that rides on its own markers: `↩' a reply, `◆N'
+      ;; an unresolved thread.
       (let* ((approved (decknix--hub-pr-approved-p item))
-             (unresolved (decknix--hub-pr-unresolved item))
-             (blocked (or (equal decision "CHANGES_REQUESTED")
-                          (equal classified "fail")
-                          tc-fail))
-             (ci-running (or (equal classified "running") tc-running))
-             ;; Whose move it is depends on which side of the review the
-             ;; user is on: an unreviewed PR of MINE waits on a reviewer,
-             ;; while one sent TO me waits on me.
-             (mine (eq kind 'wip))
-             (glyph (cond (blocked "⊖")
-                          (ci-running "◴")
-                          ((and approved (> unresolved 0)) "◑")
+             (changes (equal decision "CHANGES_REQUESTED"))
+             (shape (cond (changes "⊖")
                           (approved "●")
                           (t "◐")))
              (face (cond
-                    (blocked 'error)
-                    (ci-running 'warning)
-                    ;; Approved but a conversation still blocks the merge:
-                    ;; the owner's move, so amber rather than green.
-                    ((and approved (> unresolved 0)) 'warning)
-                    (approved 'success)
-                    ;; Nobody has reviewed yet.  Grey on my own PR (I am
-                    ;; waiting on them); amber on one sent to me (they are
-                    ;; waiting on me).
-                    (mine 'shadow)
-                    (t 'warning))))
-        (decknix--hub-icon glyph face))))))
+                    ((or tc-fail (equal classified "fail")) 'error)
+                    ((equal classified "soft_fail")
+                     '(:foreground "orange" :weight bold))
+                    ((or tc-running (equal classified "running")) 'warning)
+                    ((equal classified "pass") 'success)
+                    ;; No checks reported at all -- rare (2 PRs of 42
+                    ;; measured), and genuinely unknown rather than fine.
+                    (t 'shadow))))
+        (decknix--hub-icon shape face))))))
 
 (defun decknix--hub-author-icon (item)
   "Return the author-provenance glyph for a Requests row ITEM.
