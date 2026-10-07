@@ -167,17 +167,23 @@ Called when something outside the signature changes the answer -- a
 filter toggle, for instance."
   (setq decknix--layout-groups-memo nil))
 
-(defun decknix--layout-review-groups (sessions items)
-  "Return the Reviews grouping, reusing the last one when nothing moved."
+(defun decknix--layout-review-groups (sessions items &optional all-items)
+  "Return the Reviews grouping, reusing the last one when nothing moved.
+
+ITEMS is the FILTERED feed -- what the user has asked to see.  ALL-ITEMS
+is the unfiltered feed, used only to tell a PR that has LEFT the review
+queue from one the filters are merely hiding.  Without that distinction a
+conflicted PR, which the filters hide by default, was indistinguishable
+from a merged one and reported itself `done\='."
   (let ((sig (decknix--layout-groups-signature sessions items)))
     (if (and decknix--layout-groups-memo
              (equal sig (car decknix--layout-groups-memo)))
         (cdr decknix--layout-groups-memo)
-      (let ((groups (decknix--layout-review-groups-1 sessions items)))
+      (let ((groups (decknix--layout-review-groups-1 sessions items all-items)))
         (setq decknix--layout-groups-memo (cons sig groups))
         groups))))
 
-(defun decknix--layout-review-groups-1 (sessions items)
+(defun decknix--layout-review-groups-1 (sessions items &optional all-items)
   "Return per-repo review groups from SESSIONS and feed ITEMS.
 
 Each group is a plist:
@@ -255,13 +261,20 @@ fixture rather than by reading the code:
     ;; Whether the feed told us anything at all.  With no data, a row with
     ;; a session and no item means "not yet known", not "finished".
     (let ((feed-known (and items t))
+          ;; Keys the UNFILTERED feed carries, so a PR the filters hide is
+          ;; not mistaken for one that has left the queue.
+          (raw-keys (delq nil
+                          (mapcar (lambda (i)
+                                    (decknix--layout-pr-key
+                                     (alist-get 'repo i) (alist-get 'number i)))
+                                  all-items)))
           (groups nil))
       (maphash
        (lambda (repo entry)
          (let* ((covering (delete-dups (gethash repo repo-sessions)))
                 (prs (decknix--layout-mark-gone
                       (decknix--layout-sort-prs (plist-get entry :prs))
-                      feed-known))
+                      feed-known raw-keys))
                 (live-keys (decknix--layout-live-pr-keys prs)))
            (push (list :repo repo
                        :prs prs
@@ -270,6 +283,7 @@ fixture rather than by reading the code:
                        ;; PRs a session is on that have LEFT the review feed:
                        ;; merged, closed, or no longer requested of me.
                        :gone (seq-count #'decknix--layout-pr-gone-p prs)
+                       :filtered (seq-count #'decknix--layout-pr-filtered-p prs)
                        :humans (seq-count #'decknix--layout-pr-human-p prs)
                        :bots (seq-count #'decknix--layout-pr-bot-p prs)
                        :sessions (length covering)
@@ -308,22 +322,43 @@ silenced the whole section.  An empty feed means nothing is known, not
 that everything merged."
   (and (plist-get pr :gone) t))
 
-(defun decknix--layout-mark-gone (prs feed-known)
-  "Mark rows in PRS whose PR has left the feed, when FEED-KNOWN.
+(defun decknix--layout-mark-gone (prs feed-known &optional raw-keys)
+  "Mark rows in PRS by why they carry no feed item, when FEED-KNOWN.
 
-Measured live: of eight repos the sidebar flagged as needing attention,
-three were not in the feed at ALL and existed only because a session sat
-on a PR that had since merged."
+`:gone\=' when the PR has left the review queue entirely -- merged, closed,
+or no longer requested.  Measured live: of eight repos the sidebar flagged
+as needing attention, three were not in the feed at ALL and existed only
+because a session sat on a PR that had since merged.
+
+`:filtered\=' when the PR is still in the queue but the user\='s filters hide
+it -- conflicted or draft, both hidden by default.  That is NOT done: the
+work is live and waiting on its author.  Conflating the two reported
+reapit-service#244, which has a merge conflict, as finished.
+
+RAW-KEYS is the unfiltered feed\='s key set; without it nothing can be
+distinguished and only `:gone\=' is marked, as before."
   (when feed-known
     (dolist (p prs)
       (when (and (plist-get p :state) (null (plist-get p :item)))
-        (plist-put p :gone t))))
+        (if (and raw-keys (member (plist-get p :key) raw-keys))
+            (plist-put p :filtered t)
+          (plist-put p :gone t)))))
   prs)
 
+(defun decknix--layout-pr-filtered-p (pr)
+  "Return non-nil when PR is live but hidden by a display filter."
+  (and (plist-get pr :filtered) t))
+
 (defun decknix--layout-live-pr-keys (prs)
-  "Return the keys of PRS still present in the review feed."
+  "Return the keys of PRS that are actionable right now.
+
+A PR the filters hide is excluded along with one that has left the queue:
+a conflicted PR is waiting on its author, so a session sitting on it is
+not work the user can act on and must not raise the repo\='s flag."
   (delq nil (mapcar (lambda (p)
-                      (and (plist-get p :item) (plist-get p :key)))
+                      (and (plist-get p :item)
+                           (not (decknix--layout-pr-filtered-p p))
+                           (plist-get p :key)))
                     prs)))
 
 (defun decknix--layout-session-on-live-pr-p (session live-keys)
@@ -946,6 +981,10 @@ merged, closed or withdrawn, whatever the session still says."
          (glyph (or (alist-get kind decknix-sidebar-layout-kind-glyphs) " "))
          (author (decknix--layout-pr-author pr))
          (status (cond ((decknix--layout-pr-gone-p pr) "done")
+                       ;; Live but hidden by a filter -- conflicted or
+                       ;; draft.  Saying `done' here reported a PR with a
+                       ;; merge conflict as finished.
+                       ((decknix--layout-pr-filtered-p pr) "not reviewable")
                        (state state)
                        (t "no session")))
          (left (format "    %s %s #%s "

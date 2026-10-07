@@ -928,5 +928,47 @@ yield the same COUNT.  Keying on length alone reused the wrong groups."
       (should-not (eq a (decknix--layout-review-groups
                          decknix-layout-test--sessions nil))))))
 
+
+;; --- hidden by a filter is not the same as finished -------------------
+
+(ert-deftest decknix-layout--a-filtered-pr-is-not-done ()
+  "reapit-service#244 has a MERGE CONFLICT.  Conflicted and draft PRs are
+hidden by default, so the grouping saw no feed item for it and reported
+the work finished.  It is not: it is waiting on its author."
+  (let ((prs (list (list :key "r#244" :state "asking" :item nil))))
+    (decknix--layout-mark-gone prs t '("r#244"))
+    (should (decknix--layout-pr-filtered-p (car prs)))
+    (should-not (decknix--layout-pr-gone-p (car prs)))
+    (should (string-match-p "not reviewable"
+                            (decknix--layout-pr-label (car prs) 60)))))
+
+(ert-deftest decknix-layout--a-pr-absent-from-the-raw-feed-is-done ()
+  "The other half: genuinely merged, closed, or no longer requested."
+  (let ((prs (list (list :key "r#1" :state "asking" :item nil))))
+    (decknix--layout-mark-gone prs t '("r#999"))
+    (should (decknix--layout-pr-gone-p (car prs)))
+    (should-not (decknix--layout-pr-filtered-p (car prs)))))
+
+(ert-deftest decknix-layout--a-filtered-pr-does-not-raise-the-flag ()
+  "A conflicted PR is waiting on its author, so a session sitting on it is
+not work the user can act on."
+  (let ((prs (list (list :key "r#244" :state "asking" :item nil))))
+    (decknix--layout-mark-gone prs t '("r#244"))
+    (should-not (decknix--layout-live-pr-keys prs))))
+
+(ert-deftest decknix-layout--without-the-raw-feed-everything-reads-gone ()
+  "Degrades to the previous behaviour rather than erroring when no caller
+supplies the unfiltered feed."
+  (let ((prs (list (list :key "r#1" :state "asking" :item nil))))
+    (decknix--layout-mark-gone prs t nil)
+    (should (decknix--layout-pr-gone-p (car prs)))))
+
+(ert-deftest decknix-layout--an-actionable-pr-still-raises-the-flag ()
+  "The guard must not silence real work."
+  (let ((prs (list (list :key "r#2" :state "asking"
+                         :item '((number . 2))))))
+    (decknix--layout-mark-gone prs t '("r#2"))
+    (should (equal '("r#2") (decknix--layout-live-pr-keys prs)))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here
