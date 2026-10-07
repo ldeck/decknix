@@ -13,6 +13,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'decknix-agent-session-broker)
 
 (ert-deftest decknix-broker/wrap-command ()
@@ -58,6 +59,17 @@ ACP bridge for the broker to hold."
     (should (decknix--agent-broker-should-wrap-p 'pi)))
   (let ((decknix-agent-broker-enable nil))
     (should-not (decknix--agent-broker-should-wrap-p 'pi))))
+
+(ert-deftest decknix-broker/live-resume-does-not-scan-transcript ()
+  "A surviving broker already holds the model context and event log.
+Re-reading a 50 MB Claude JSONL on the daemon thread for EACH broker
+blocks the server socket for minutes on cold startup.  Dead or absent
+brokers still need transcript history on ordinary resume."
+  (cl-letf (((symbol-function 'decknix--agent-broker-live-p)
+             (lambda (key) (equal key "live"))))
+    (should (decknix--agent-broker-resume-from-live-p "live"))
+    (should-not (decknix--agent-broker-resume-from-live-p "dead"))
+    (should-not (decknix--agent-broker-resume-from-live-p nil))))
 
 ;; --- quit terminates the broker; detach deliberately does not ---
 ;;

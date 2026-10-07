@@ -130,6 +130,16 @@ opens a separate Emacs.app instance. A status probe is capped at two seconds;
 `-s` reports an initializing or busy daemon rather than hanging in
 `emacsclient` or calling it stopped.
 
+On startup, surviving ACP brokers are reattached from their bounded event
+logs. Re-reading entire 50 MB or larger session transcripts on the Emacs main
+thread for each broker can leave the server socket unresponsive for minutes;
+a live broker already holds its model context, so automatic reattach skips
+that transcript scan and its continuation primer. The broker log restores
+visible recent turns. Historical `M-p` input-ring entries and the transcript-derived `asking`
+flag are not seeded on this fast automatic reattach path; a normal resume
+without a live broker still restores them from the transcript. Check the
+live conversation itself before relying on its `asking` badge after restart.
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `services.emacs.decknix.enable` | `true` | Enable Emacs daemon |
