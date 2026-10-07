@@ -624,7 +624,19 @@ than a guess from its name."
 
 (defun decknix--layout-pr-in-repos-p (pr repo-names)
   "Return non-nil when PR belongs to one of REPO-NAMES."
-  (let ((repo (car (last (split-string (or (plist-get pr :repo) "") "/" t)))))
+  (decknix--layout-item-in-repos-p pr repo-names))
+
+(defun decknix--layout-wt-in-repos-p (wt repo-names)
+  "Return non-nil when worktree WT belongs to one of REPO-NAMES."
+  (decknix--layout-item-in-repos-p wt repo-names))
+
+(defun decknix--layout-item-in-repos-p (item repo-names)
+  "Return non-nil when ITEM\='s `:repo\=' names one of REPO-NAMES.
+
+Shared by PRs and worktrees so the two cannot drift: a session observed
+editing a repo claims both its PRs and its worktrees, and claiming only
+one of them was an asymmetry with no reason behind it."
+  (let ((repo (car (last (split-string (or (plist-get item :repo) "") "/" t)))))
     (and repo (member (downcase repo) repo-names) t)))
 
 (defun decknix--layout-session-observed-wt-p (roots wt)
@@ -728,6 +740,10 @@ which would hide the sharing."
           (mapcar
            (lambda (session)
              (let* ((observed (decknix--layout-session-observed-roots session))
+                    (observed-repos
+                     (and observed
+                          (decknix--layout-observed-repo-names
+                           observed worktrees)))
                     (wts (seq-filter
                           (lambda (wt)
                             (or (decknix--layout-session-owns-wt-p session wt)
@@ -737,6 +753,16 @@ which would hide the sharing."
                                 (and observed
                                      (decknix--layout-session-observed-wt-p
                                       observed wt))
+                                ;; Observed to be editing the REPO itself, so
+                                ;; its worktrees are this session's work too.
+                                ;; PRs already claimed this way; worktrees did
+                                ;; not, so a session working in a primary
+                                ;; checkout showed its PRs and none of its
+                                ;; worktrees -- an asymmetry with no reason
+                                ;; behind it.
+                                (and observed-repos
+                                     (decknix--layout-wt-in-repos-p
+                                      wt observed-repos))
                                 ;; Tags only when nothing was observed -- a
                                 ;; session that has run no tool calls yet.
                                 ;; Measured, the tag rule claimed every
@@ -755,10 +781,6 @@ which would hide the sharing."
                     ;; the case where the association is actually known.
                     (branches (delq nil (mapcar (lambda (wt) (plist-get wt :branch))
                                                 wts)))
-                    (observed-repos
-                     (and observed
-                          (decknix--layout-observed-repo-names
-                           observed worktrees)))
                     (prs (seq-filter
                           (lambda (p)
                             (or (and (plist-get p :branch)

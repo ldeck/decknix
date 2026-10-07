@@ -1116,5 +1116,30 @@ is the failure the provenance marks exist to make visible."
       (decknix-layout-invalidate-wip)
       (should-not (eq a (decknix--layout-wip-tree nil nil nil))))))
 
+
+;; --- an observed repo claims BOTH its PRs and its worktrees -----------
+
+(ert-deftest decknix-layout--an-observed-repo-claims-its-worktrees ()
+  "PRs already claimed this way and worktrees did not, so a session
+working in a primary checkout showed its PRs and none of its worktrees."
+  (should (decknix--layout-wt-in-repos-p
+           '(:repo "ldeck/decknix" :path "/w/decknix-spec" :branch "spec")
+           '("decknix"))))
+
+(ert-deftest decknix-layout--prs-and-worktrees-use-one-rule ()
+  "They must not drift: the same repo claim governs both."
+  (let ((repos '("platform-cli")))
+    (should (eq (and (decknix--layout-pr-in-repos-p
+                      '(:repo "UpsideRealty/platform-cli") repos) t)
+                (and (decknix--layout-wt-in-repos-p
+                      '(:repo "UpsideRealty/platform-cli") repos) t)))))
+
+(ert-deftest decknix-layout--a-worktree-of-another-repo-is-not-claimed ()
+  (should-not (decknix--layout-wt-in-repos-p
+               '(:repo "UpsideRealty/upside") '("platform-cli"))))
+
+(ert-deftest decknix-layout--a-worktree-with-no-repo-is-not-claimed ()
+  (should-not (decknix--layout-wt-in-repos-p '(:path "/w/x") '("decknix"))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here
