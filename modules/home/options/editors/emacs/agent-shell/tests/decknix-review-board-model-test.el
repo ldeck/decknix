@@ -536,5 +536,71 @@ duplicate-reviewer problem the board exists to remove."
   (should-not (decknix-review-board--parse-urls nil)))
 
 
+
+;; --- my own review settles the row ------------------------------------
+
+(ert-deftest decknix-rb--my-approval-marks-the-row-reviewed ()
+  "Approving a PR from the board left its row exactly as before: the
+classifier asked only whether SOMEBODY ELSE had reviewed.  Measured on
+attom-integration#325 -- my_review APPROVED, others_reviewed nil,
+review_decision empty -- which classified as nil, still wanted."
+  (should (eq 'reviewed
+              (decknix--hub-review-status
+               '((my_review . "APPROVED") (others_reviewed . nil)
+                 (review_decision . ""))
+               t))))
+
+(ert-deftest decknix-rb--my-changes-requested-also-settles ()
+  (should (eq 'reviewed
+              (decknix--hub-review-status
+               '((my_review . "CHANGES_REQUESTED")) t))))
+
+(ert-deftest decknix-rb--my-review-outranks-someone-elses ()
+  "Once I have decided, the row wants nothing from me whatever the others
+are doing."
+  (should (eq 'reviewed
+              (decknix--hub-review-status
+               '((my_review . "APPROVED") (others_reviewed . t)) t))))
+
+(ert-deftest decknix-rb--a-stale-pr-outranks-my-review ()
+  "The author pushed, so my approval is against a diff that no longer
+exists -- telling me the analysis is void is more useful."
+  (should (eq 'stale
+              (decknix--hub-review-status
+               '((review_stale . t) (my_review . "APPROVED")) t))))
+
+(ert-deftest decknix-rb--a-merged-pr-still-outranks-my-review ()
+  (should (eq 'gone (decknix--hub-review-status
+                     '((my_review . "APPROVED")) nil))))
+
+(ert-deftest decknix-rb--an-unreviewed-pr-is-still-wanted ()
+  (should-not (decknix--hub-review-status
+               '((my_review . "") (review_decision . "REVIEW_REQUIRED")) t)))
+
+(ert-deftest decknix-rb--a-reviewed-row-leaves-the-active-lanes ()
+  "An approved PR sat in `doing\=' as though still mid-flight."
+  (should (eq 'finished (decknix-review-board--lane t nil 'reviewed nil))))
+
+(ert-deftest decknix-rb--a-blocked-session-still-wants-me-after-my-review ()
+  "My approving the PR does not answer whatever the agent is asking."
+  (should (eq 'needs-you (decknix-review-board--lane t t 'reviewed nil))))
+
+(ert-deftest decknix-rb--a-group-is-reviewed-only-when-all-of-it-is ()
+  "A group where I have decided one PR and not another still wants me."
+  (should (eq 'reviewed (decknix--hub-review-status-aggregate
+                         '(reviewed reviewed))))
+  (should-not (decknix--hub-review-status-aggregate '(reviewed nil))))
+
+(ert-deftest decknix-rb--mixed-mine-and-theirs-aggregates-to-answered ()
+  (should (eq 'answered (decknix--hub-review-status-aggregate
+                         '(reviewed answered)))))
+
+(ert-deftest decknix-rb--reviewed-has-its-own-badge ()
+  "It must not read as somebody else\='s response."
+  (let ((mine (decknix--hub-review-status-glyph 'reviewed))
+        (theirs (decknix--hub-review-status-glyph 'answered)))
+    (should mine)
+    (should-not (equal (car mine) (car theirs)))))
+
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here

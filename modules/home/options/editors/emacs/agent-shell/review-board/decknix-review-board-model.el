@@ -103,6 +103,14 @@ Precedence is deliberate and only partly obvious:
    ;; recoverable.
    ((and has-session (eq status 'gone)) 'finished)
    ((and has-session attention) 'needs-you)
+   ;; I have already decided this one, so no review is wanted and the row
+   ;; belongs with the finished work -- not sitting in `doing' as though
+   ;; it were still mid-flight, which is where an approved PR stayed.
+   ;;
+   ;; Placed AFTER attention, unlike `gone': a merged PR's question is
+   ;; moot, but my approving a PR does not answer whatever the agent is
+   ;; asking me.  A blocked session still wants me.
+   ((and has-session (eq status 'reviewed)) 'finished)
    ;; Any live session that is neither blocked nor gone is IN PROGRESS,
    ;; whoever authored the PR.  A dispatched bot session is one session
    ;; doing work -- you want to watch its progress, so it shows
@@ -116,13 +124,13 @@ Precedence is deliberate and only partly obvious:
    (bot-p 'grouped)
    (t 'idle)))
 
-(defconst decknix-review-board-covered-statuses '(answered stale)
+(defconst decknix-review-board-covered-statuses '(reviewed answered stale)
   "Statuses that make a blocked row less than urgent.
 
-`answered' means somebody else approved or reviewed it, so the work may
-already be covered.  `stale' means the author pushed, so the analysis is
-void until it is re-run.  Neither is finished -- the row is still yours --
-but neither should compete visually with a review nobody has looked at.")
+`reviewed' means I decided it myself, `answered' that somebody else did,
+so the work may already be covered.  `stale' means the author pushed, so
+the analysis is void until it is re-run.  None should compete visually
+with a review nobody has looked at.")
 
 (defun decknix-review-board--row-face (attention status)
   "Return the urgency face for a row, or nil.  Pure.

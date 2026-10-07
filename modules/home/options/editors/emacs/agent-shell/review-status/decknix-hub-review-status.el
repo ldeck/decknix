@@ -51,10 +51,15 @@
   "Classify a review session's usefulness.  Pure.
 
 ITEM is its entry from the reviews feed (an alist) and FOUND whether the
-PR was in the feed at all.  Returns `gone', `stale', `answered', or nil
-when the session is still straightforwardly wanted.
+PR was in the feed at all.  Returns `gone', `stale', `reviewed',
+`answered', or nil when the session is still straightforwardly wanted.
 
-Precedence is `gone' > `stale' > `answered', and the middle one is a
+`reviewed' is MY decision and outranks `answered', which is somebody
+else's: once I have approved or requested changes the row wants nothing
+further from me, while another reviewer responding only MIGHT make mine
+redundant.
+
+Precedence is `gone' > `stale' > `reviewed' > `answered', and the stale one is a
 judgement call worth stating.  A session can be both stale and answered:
 the author pushed AND someone else reviewed.  `stale' wins because it
 says something concrete about the WORK -- the diff under review changed,
@@ -65,6 +70,14 @@ more actionable than telling you it might be redundant."
    ((not found) 'gone)
    ((null item) 'gone)
    ((eq (map-elt item 'review_stale) t) 'stale)
+   ;; MY review, which outranks anyone else's: once I have decided, the
+   ;; row wants nothing from me whatever the others are doing.  This was
+   ;; absent entirely -- the classifier asked only whether SOMEBODY ELSE
+   ;; had reviewed -- so approving a PR from the board left its row
+   ;; sitting in the active lanes exactly as before.
+   ((member (map-elt item 'my_review)
+            decknix--hub-review-settled-decisions)
+    'reviewed)
    ((eq (map-elt item 'others_reviewed) t) 'answered)
    ((member (map-elt item 'review_decision)
             decknix--hub-review-settled-decisions)
@@ -92,7 +105,11 @@ qualifying to say about it."
      ((null statuses) nil)
      ((null live) 'gone)
      ((memq 'stale live) 'stale)
-     ((seq-every-p (lambda (s) (eq s 'answered)) live) 'answered)
+     ;; Unanimity for both settled kinds, and `reviewed' only when every
+     ;; live member is mine: a group where I have decided one PR and not
+     ;; another still wants me.
+     ((seq-every-p (lambda (s) (eq s 'reviewed)) live) 'reviewed)
+     ((seq-every-p (lambda (s) (memq s '(reviewed answered))) live) 'answered)
      (t nil))))
 
 (defun decknix--hub-review-status-glyph (status)
@@ -104,6 +121,7 @@ glance beside the existing state glyphs."
   (pcase status
     ('gone     (cons "⊘" '(:foreground "#6b727e")))
     ('stale    (cons "↻" '(:foreground "#e5c07b" :weight bold)))
+    ('reviewed (cons "✔" '(:foreground "#98c379" :weight bold)))
     ('answered (cons "☑" '(:foreground "#61afef")))
     (_ nil)))
 
@@ -112,6 +130,7 @@ glance beside the existing state glyphs."
   (pcase status
     ('gone     "PR left your review queue (merged, closed or de-requested) — session is finished work")
     ('stale    "Author has pushed since — this session's analysis is out of date")
+    ('reviewed "You have already reviewed this — nothing further is wanted from you")
     ('answered "Another reviewer has responded — your review may be redundant")
     (_ nil)))
 
