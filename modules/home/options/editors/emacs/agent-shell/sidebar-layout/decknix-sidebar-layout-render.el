@@ -427,6 +427,8 @@ window, since the glyphs are the part worth keeping when space runs out."
          (icons (concat (decknix--hub-author-icon raw)
                         (decknix--hub-primary-status-icon raw 'wip)
                         (decknix--hub-unresolved-icon raw)
+                        (decknix--hub-reply-icon raw)
+                        (decknix--hub-discussion-icon raw)
                         (decknix--hub-activity-icons raw)))
          (age (decknix--hub-format-age (alist-get 'updated raw)))
          (num (format "#%s" (plist-get pr :number)))
