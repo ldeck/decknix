@@ -507,7 +507,8 @@ PROVENANCE marks whether this association is evidence or a guess."
       (setq line-num (1+ line-num)))
     (dolist (wt shown-wts)
       (insert (propertize
-               (format "    %s   wt %s" (decknix--layout-wt-glyph wt)
+               (format "    %s %-3s %s" (decknix--layout-wt-glyph wt)
+                       (decknix--layout-wt-markers wt)
                        (propertize (or (plist-get wt :branch) "?") 'face 'shadow))
                'decknix-layout-worktree wt)
               "\n")

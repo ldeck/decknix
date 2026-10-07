@@ -95,6 +95,46 @@ Shows the overall review status of the user's own PR:
       ("REVIEW_REQUIRED"   (decknix--hub-icon "◐" 'success))
       (_ ""))))
 
+(defconst decknix-lifecycle-shapes
+  '((worktree-new . "◌")   ; nothing built yet -- dotted, says "no state"
+    (worktree     . "○")   ; a worktree, coloured by its build
+    (draft        . "★")   ; a draft PR
+    (draft-pr     . "◐")   ; a draft PR (circle family)
+    (open         . "●")   ; an open PR
+    (closed       . "■")   ; merged or closed
+    (conflict     . "⊗"))  ; cannot merge
+  "One shape family across worktrees and PRs.
+
+SHAPE says what a thing is and how far along: hollow for a worktree, half
+for a draft, full for an open PR, square for closed, crossed for a
+conflict.  COLOUR says how its build is: green it can land, yellow
+building, red it cannot, grey nothing reported.
+
+Two channels for two independent facts.  They were one channel before,
+which is why `approved and still building\=' had no representation -- the
+colour was already spent saying whose move it was -- and why `●\=' meant
+both an approved PR and an active worktree, the same glyph for unrelated
+things.
+
+`⊗\=' for conflict rather than `⊘\=': that is taken by the review-status
+badge for a PR that has left the review queue.")
+
+(defun decknix-lifecycle-shape (kind)
+  "Return the glyph for lifecycle KIND."
+  (or (alist-get kind decknix-lifecycle-shapes) "·"))
+
+(defconst decknix-build-faces
+  '((pass . success) (running . warning) (fail . error) (none . shadow))
+  "Face per build outcome, shared by every shape.
+
+Grey is `nothing reported\=', which is rare and genuinely unknown rather
+than fine -- measured at 2 PRs of 42.  A worktree has no CI at all, so
+grey is its resting state until something records a local build.")
+
+(defun decknix-build-face (outcome)
+  "Return the face for build OUTCOME."
+  (or (alist-get outcome decknix-build-faces) 'shadow))
+
 (defun decknix--hub-pr-approved-p (item)
   "Return non-nil when somebody has approved ITEM.
 
@@ -196,22 +236,25 @@ reduce sidebar duplication."
      ((eq kind 'placeholder)
       (decknix--hub-icon "○" 'shadow))
      ((string= state "MERGED")
-      (decknix--hub-icon "■" 'success))
+      (decknix--hub-icon (decknix-lifecycle-shape 'closed) 'success))
      ((string= state "CLOSED")
-      (decknix--hub-icon "■" 'shadow))
+      (decknix--hub-icon (decknix-lifecycle-shape 'closed) 'shadow))
      (conflicting
-      (decknix--hub-icon "▣" 'error))
+      ;; Crossed, not filled: it says CANNOT MERGE rather than borrowing a
+      ;; shape from the review ladder.  `⊘' is taken by the review-status
+      ;; badge for a PR that has left the queue.
+      (decknix--hub-icon (decknix-lifecycle-shape 'conflict) 'error))
      (draft
-      ;; A draft is a SHAPE of its own, so its colour means what every
-      ;; other colour here means: how the build is going.  Not-ready and
-      ;; building-fine are different facts and each gets its own channel.
+      ;; HALF a circle: a draft is half way to an open PR, one stage past a
+      ;; worktree.  Its colour means what every other colour here means --
+      ;; how the build is going.
       (let ((face (pcase classified
                     ("fail"      'error)
                     ("soft_fail" '(:foreground "orange" :weight bold))
                     ("running"   'warning)
                     ("pass"      'success)
                     (_           'shadow))))
-        (decknix--hub-icon "★" face)))
+        (decknix--hub-icon (decknix-lifecycle-shape 'draft-pr) face)))
      (t
       ;; Two independent facts, two independent channels.
       ;;
@@ -233,9 +276,14 @@ reduce sidebar duplication."
       ;; an unresolved thread.
       (let* ((approved (decknix--hub-pr-approved-p item))
              (changes (equal decision "CHANGES_REQUESTED"))
+             ;; FULL circle: an open PR.  The shape channel says what KIND
+             ;; of thing this is -- worktree, draft, open, closed -- so
+             ;; approval cannot also live there, and colour is spent on the
+             ;; build.  It rides on WEIGHT instead: a bold full circle is
+             ;; approved.  Changes-requested keeps its own shape, being a
+             ;; blocker rather than a degree of progress.
              (shape (cond (changes "⊖")
-                          (approved "●")
-                          (t "◐")))
+                          (t (decknix-lifecycle-shape 'open))))
              (face (cond
                     ((or tc-fail (equal classified "fail")) 'error)
                     ((equal classified "soft_fail")
@@ -245,7 +293,21 @@ reduce sidebar duplication."
                     ;; No checks reported at all -- rare (2 PRs of 42
                     ;; measured), and genuinely unknown rather than fine.
                     (t 'shadow))))
-        (decknix--hub-icon shape face))))))
+        (decknix--hub-icon shape (decknix--hub-weight-for face approved)))))))
+
+(defun decknix--hub-weight-for (face approved)
+  "Return FACE, emboldened when APPROVED.
+
+Weight carries approval because the other two channels are taken: shape
+says what KIND of thing a row is, colour how its build is going.  A bold
+full circle is an approved PR whose build is whatever the colour says --
+including yellow, which is the `approved and still building\=' case that
+had no representation when one channel carried both facts."
+  (if (not approved)
+      face
+    (if (symbolp face)
+        (list :inherit face :weight 'bold)
+      (append face '(:weight bold)))))
 
 (defun decknix--hub-author-icon (item)
   "Return the author-provenance glyph for a Requests row ITEM.

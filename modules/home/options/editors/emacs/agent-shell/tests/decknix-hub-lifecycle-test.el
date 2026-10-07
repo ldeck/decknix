@@ -64,52 +64,55 @@ outstanding, so #252 reported no decision despite being approved."
   (should-not (decknix--hub-pr-blocked-by-threads-p
                '((human_unresolved . 2)))))
 
-;; --- shape = review progress, colour = build health ------------------
 
-(ert-deftest dk-lc--a-happy-build-awaiting-review-is-a-green-half-circle ()
-  "The expectation the previous scheme broke: colour meant WHOSE MOVE, so
-a passing build on an unreviewed PR of mine rendered grey."
-  (let ((icon (decknix--hub-primary-status-icon
-               '((review_decision . "REVIEW_REQUIRED") (ci . ((status . "pass"))))
-               'wip)))
-    (should (equal "◐" (dk-lc--glyph icon)))
-    (should (eq 'success (dk-lc--face icon)))))
+;; --- one shape family, colour always the build ------------------------
 
-(ert-deftest dk-lc--a-building-pr-is-a-yellow-half-circle ()
-  (let ((icon (decknix--hub-primary-status-icon
-               '((review_decision . "REVIEW_REQUIRED") (ci . ((status . "running"))))
-               'wip)))
-    (should (equal "◐" (dk-lc--glyph icon)))
-    (should (eq 'warning (dk-lc--face icon)))))
+(defun dk-lc--boldp (icon)
+  (let ((f (get-text-property 0 'face icon)))
+    (and (listp f) (eq 'bold (plist-get f :weight)))))
 
-(ert-deftest dk-lc--approved-and-happy-is-a-green-full-circle ()
-  (let ((icon (decknix--hub-primary-status-icon
-               '((approvers . ("x")) (ci . ((status . "pass")))) 'wip)))
-    (should (equal "●" (dk-lc--glyph icon)))
-    (should (eq 'success (dk-lc--face icon)))))
+(ert-deftest dk-lc--shape-says-what-kind-of-thing-it-is ()
+  "Worktree, draft, open, closed, conflict -- one family, so the full
+circle can no longer mean both an approved PR and an active worktree."
+  (let ((shapes (mapcar #'decknix-lifecycle-shape
+                        '(worktree-new worktree draft-pr open closed conflict))))
+    (should (equal shapes (delete-dups (copy-sequence shapes))))))
 
-(ert-deftest dk-lc--approved-and-still-building-is-unambiguous ()
-  "The case that has no answer when one channel carries both facts: the
-SHAPE says approved, the COLOUR says building."
-  (let ((icon (decknix--hub-primary-status-icon
-               '((approvers . ("x")) (ci . ((status . "running")))) 'wip)))
-    (should (equal "●" (dk-lc--glyph icon)))
-    (should (eq 'warning (dk-lc--face icon)))))
+(ert-deftest dk-lc--an-open-pr-is-a-full-circle ()
+  (should (equal "●" (dk-lc--glyph (decknix--hub-primary-status-icon
+                                    '((review_decision . "REVIEW_REQUIRED")
+                                      (ci . ((status . "pass"))))
+                                    'wip)))))
 
-(ert-deftest dk-lc--approved-with-a-failing-build-is-red-and-still-approved ()
-  "Both facts survive: it IS approved, and it does NOT build."
-  (let ((icon (decknix--hub-primary-status-icon
-               '((approvers . ("x")) (ci . ((status . "fail")))) 'wip)))
-    (should (equal "●" (dk-lc--glyph icon)))
-    (should (eq 'error (dk-lc--face icon)))))
+(ert-deftest dk-lc--a-draft-is-a-half-circle ()
+  "Half way to an open PR, one stage past a worktree."
+  (should (equal "◐" (dk-lc--glyph (decknix--hub-primary-status-icon
+                                    '((draft . t) (ci . ((status . "pass"))))
+                                    'wip)))))
 
-(ert-deftest dk-lc--changes-requested-has-its-own-shape ()
-  "A review outcome, so it belongs to the shape channel, not the colour."
-  (let ((icon (decknix--hub-primary-status-icon
-               '((review_decision . "CHANGES_REQUESTED") (ci . ((status . "pass"))))
-               'wip)))
-    (should (equal "⊖" (dk-lc--glyph icon)))
-    (should (eq 'success (dk-lc--face icon)))))
+(ert-deftest dk-lc--a-conflict-is-crossed ()
+  "Says CANNOT MERGE rather than borrowing from the review ladder."
+  (should (equal "⊗" (dk-lc--glyph (decknix--hub-primary-status-icon
+                                    '((mergeable . "CONFLICTING")) 'wip)))))
+
+(ert-deftest dk-lc--a-closed-pr-is-a-square ()
+  (should (equal "■" (dk-lc--glyph (decknix--hub-primary-status-icon
+                                    '((state . "MERGED")) 'wip)))))
+
+(ert-deftest dk-lc--a-happy-build-is-green-whatever-the-shape ()
+  "The expectation the previous scheme broke: colour meant whose move, so
+a passing build on an unreviewed PR rendered grey."
+  (dolist (item '(((review_decision . "REVIEW_REQUIRED") (ci . ((status . "pass"))))
+                  ((draft . t) (ci . ((status . "pass"))))))
+    (should (eq 'success (dk-lc--face (decknix--hub-primary-status-icon item 'wip))))))
+
+(ert-deftest dk-lc--a-building-pr-is-yellow ()
+  (should (eq 'warning (dk-lc--face (decknix--hub-primary-status-icon
+                                     '((ci . ((status . "running")))) 'wip)))))
+
+(ert-deftest dk-lc--a-failing-build-is-red ()
+  (should (eq 'error (dk-lc--face (decknix--hub-primary-status-icon
+                                   '((ci . ((status . "fail")))) 'wip)))))
 
 (ert-deftest dk-lc--no-ci-at-all-is-grey ()
   "Rare -- 2 PRs of 42 measured -- and genuinely unknown rather than fine."
@@ -117,42 +120,42 @@ SHAPE says approved, the COLOUR says building."
                                     '((review_decision . "REVIEW_REQUIRED"))
                                     'wip)))))
 
+(ert-deftest dk-lc--approved-is-bold ()
+  "Shape says what KIND of thing it is and colour how its build goes, so
+approval rides on the one channel left."
+  (should (dk-lc--boldp (decknix--hub-primary-status-icon
+                         '((approvers . ("x")) (ci . ((status . "pass")))) 'wip))))
+
+(ert-deftest dk-lc--unapproved-is-not-bold ()
+  (should-not (dk-lc--boldp (decknix--hub-primary-status-icon
+                             '((review_decision . "REVIEW_REQUIRED")
+                               (ci . ((status . "pass")))) 'wip))))
+
+(ert-deftest dk-lc--approved-and-still-building-says-both ()
+  "The case with no representation when one channel carried both facts:
+bold says approved, yellow says building."
+  (let ((icon (decknix--hub-primary-status-icon
+               '((approvers . ("x")) (ci . ((status . "running")))) 'wip)))
+    (should (equal "●" (dk-lc--glyph icon)))
+    (should (dk-lc--boldp icon))))
+
+(ert-deftest dk-lc--approved-with-a-failing-build-stays-red-and-bold ()
+  "Both facts survive: it IS approved, and it does NOT build."
+  (let ((icon (decknix--hub-primary-status-icon
+               '((approvers . ("x")) (ci . ((status . "fail")))) 'wip)))
+    (should (dk-lc--boldp icon))))
+
+(ert-deftest dk-lc--changes-requested-keeps-its-own-shape ()
+  "A blocker, not a degree of progress."
+  (should (equal "⊖" (dk-lc--glyph (decknix--hub-primary-status-icon
+                                    '((review_decision . "CHANGES_REQUESTED"))
+                                    'wip)))))
+
 (ert-deftest dk-lc--colour-no-longer-depends-on-whose-pr-it-is ()
-  "Which court it is in is carried by the SECTION -- Reviews holds what
-was sent to me, WIP what is mine -- so the glyph repeating it bought
-nothing and cost the build status."
+  "Which court it is in is carried by the SECTION."
   (let ((item '((review_decision . "REVIEW_REQUIRED") (ci . ((status . "pass"))))))
     (should (eq (dk-lc--face (decknix--hub-primary-status-icon item 'wip))
                 (dk-lc--face (decknix--hub-primary-status-icon item 'review))))))
-
-(ert-deftest dk-lc--a-conflict-still-outranks-everything ()
-  (should (equal "▣" (dk-lc--glyph
-                      (decknix--hub-primary-status-icon
-                       '((mergeable . "CONFLICTING") (approvers . ("x"))) 'wip)))))
-
-(ert-deftest dk-lc--a-draft-is-still-a-draft ()
-  (should (equal "★" (dk-lc--glyph
-                      (decknix--hub-primary-status-icon
-                       '((draft . t) (approvers . ("x"))) 'wip)))))
-
-;; --- a draft asks nothing of anybody ----------------------------------
-
-(ert-deftest dk-lc--a-draft-is-coloured-by-its-build-like-everything-else ()
-  "Not-ready is the SHAPE.  Once shape carries that, the colour is free to
-mean what it means everywhere else, and a draft whose build is fine says
-so instead of being dimmed for a reason the colour channel no longer
-expresses."
-  (let ((icon (decknix--hub-primary-status-icon
-               '((draft . t) (ci . ((status . "pass")))) 'wip)))
-    (should (equal "★" (dk-lc--glyph icon)))
-    (should (eq 'success (dk-lc--face icon)))))
-
-(ert-deftest dk-lc--a-broken-draft-still-says-so ()
-  "Not-ready does not excuse not-building."
-  (should (eq 'error (dk-lc--face (decknix--hub-primary-status-icon
-                                   '((draft . t) (ci . ((status . "fail"))))
-                                   'wip)))))
-
 
 ;; --- what distinguishes otherwise identical rows ----------------------
 
