@@ -278,11 +278,39 @@ destroys the one-row-per-repo property the collapse exists for."
   (should (string-match-p "⚑" (decknix--layout-group-label
                                '(:repo "r" :sessions 2 :asking 1) 48))))
 
-(ert-deftest decknix-layout--filled-glyph-means-wants-you ()
-  (dolist (s '("asking" "waiting" "netfail"))
+(ert-deftest decknix-layout--shape-means-completeness-on-a-session-too ()
+  "Supersedes `filled-glyph-means-wants-you'.
+
+Shape says how complete a unit of work is on EVERY row kind: half in
+flight, full a complete unit.  A filled circle used to mean `the agent
+wants you', which is the glyph a PR row uses for `open and raised' --
+the same shape for unrelated things.  Sharing shapes across row kinds is
+fine, the indentation ties each to its row, but only while the shape
+means the same KIND of thing."
+  (dolist (s '("asking" "waiting" "netfail" "working"))
+    (should (equal "◐" (decknix--layout-state-glyph s))))
+  (dolist (s '("finished" "ready"))
     (should (equal "●" (decknix--layout-state-glyph s))))
-  (should (equal "○" (decknix--layout-state-glyph "ready")))
+  (should (equal "◌" (decknix--layout-state-glyph "closing")))
   (should (equal "·" (decknix--layout-state-glyph nil))))
+
+(ert-deftest decknix-layout--colour-separates-the-in-flight-states ()
+  "An agent mid-task and one paused on a question are both half circles,
+so the colour has to carry the difference: yellow moving, purple waiting
+on a person."
+  (should-not (equal (decknix--layout-state-face "working")
+                     (decknix--layout-state-face "asking"))))
+
+(ert-deftest decknix-layout--wanting-the-user-is-its-own-colour ()
+  "Not failing and not progressing -- waiting on a person, which is the
+most actionable row the sidebar can show."
+  (dolist (s '("asking" "waiting"))
+    (should (equal '(:foreground "#c678dd" :weight bold)
+                   (decknix--layout-state-face s)))))
+
+(ert-deftest decknix-layout--a-complete-session-reads-like-a-passing-build ()
+  (dolist (s '("finished" "ready"))
+    (should (equal '(:foreground "#87af87") (decknix--layout-state-face s)))))
 
 (ert-deftest decknix-layout--pr-label-says-when-nothing-is-on-it ()
   (should (string-match-p "no session"
