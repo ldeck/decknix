@@ -101,8 +101,7 @@ Shows the overall review status of the user's own PR:
     (draft        . "★")   ; a draft PR
     (draft-pr     . "◐")   ; a draft PR (circle family)
     (open         . "●")   ; an open PR
-    (closed       . "■")   ; merged or closed
-    (conflict     . "⊗"))  ; cannot merge
+    (closed       . "■"))  ; merged or closed
   "One shape family across worktrees and PRs.
 
 SHAPE says what a thing is and how far along: hollow for a worktree, half
@@ -116,8 +115,10 @@ colour was already spent saying whose move it was -- and why `●\=' meant
 both an approved PR and an active worktree, the same glyph for unrelated
 things.
 
-`⊗\=' for conflict rather than `⊘\=': that is taken by the review-status
-badge for a PR that has left the review queue.")
+A conflict is NOT a shape.  It is orthogonal to how far along a PR is --
+a conflicted draft and a conflicted open PR are different things -- and
+spending the shape on it erased that distinction.  It rides as a marker
+instead, like dirty and orphan do on a worktree.")
 
 (defun decknix-lifecycle-shape (kind)
   "Return the glyph for lifecycle KIND."
@@ -166,6 +167,20 @@ still unmergeable until a thread is resolved.  It is the owner\='s move,
 which is what makes it worth a glyph of its own."
   (and (decknix--hub-pr-approved-p item)
        (> (decknix--hub-pr-unresolved item) 0)))
+
+(defun decknix--hub-conflict-icon (item)
+  "Return a marker when ITEM cannot merge, or an empty string.
+
+A conflict is orthogonal to how far through review a PR is, so it does
+not take the shape: a conflicted draft and a conflicted open PR are
+different things and both deserve saying.  It does not take the colour
+either, which is spent on the build -- a conflicted PR can build
+perfectly well and still be unmergeable.
+
+Red and loud, because nothing lands until the author rebases."
+  (if (equal (alist-get 'mergeable item) "CONFLICTING")
+      (decknix--hub-icon "!" 'error)
+    ""))
 
 (defun decknix--hub-discussion-icon (item)
   "Return a marker for how much conversation ITEM carries, or empty.
@@ -220,8 +235,6 @@ reduce sidebar duplication."
   (let* ((state (alist-get 'state item))
          (draft (eq (alist-get 'draft item) t))
          (ci (alist-get 'ci item))
-         (mergeable (alist-get 'mergeable item))
-         (conflicting (equal mergeable "CONFLICTING"))
          (classified (decknix--hub-ci-classify ci))
          (tc-fail (member (alist-get 'status tc-status) '("FAILURE" "ERROR")))
          (tc-running (string= (alist-get 'state tc-status) "running"))
@@ -239,11 +252,6 @@ reduce sidebar duplication."
       (decknix--hub-icon (decknix-lifecycle-shape 'closed) 'success))
      ((string= state "CLOSED")
       (decknix--hub-icon (decknix-lifecycle-shape 'closed) 'shadow))
-     (conflicting
-      ;; Crossed, not filled: it says CANNOT MERGE rather than borrowing a
-      ;; shape from the review ladder.  `⊘' is taken by the review-status
-      ;; badge for a PR that has left the queue.
-      (decknix--hub-icon (decknix-lifecycle-shape 'conflict) 'error))
      (draft
       ;; HALF a circle: a draft is half way to an open PR, one stage past a
       ;; worktree.  Its colour means what every other colour here means --

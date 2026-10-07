@@ -90,10 +90,36 @@ circle can no longer mean both an approved PR and an active worktree."
                                     '((draft . t) (ci . ((status . "pass"))))
                                     'wip)))))
 
-(ert-deftest dk-lc--a-conflict-is-crossed ()
-  "Says CANNOT MERGE rather than borrowing from the review ladder."
-  (should (equal "⊗" (dk-lc--glyph (decknix--hub-primary-status-icon
+(ert-deftest dk-lc--a-conflict-is-a-marker-not-a-shape ()
+  "As a shape it REPLACED how far along the PR was, so a conflicted draft
+and a conflicted open PR rendered identically.  As a marker both facts
+survive."
+  (should (string-match-p "!" (decknix--hub-conflict-icon
+                               '((mergeable . "CONFLICTING")))))
+  (should (equal "" (decknix--hub-conflict-icon '((mergeable . "MERGEABLE"))))))
+
+(ert-deftest dk-lc--a-conflicted-draft-still-reads-as-a-draft ()
+  (should (equal "◐" (dk-lc--glyph (decknix--hub-primary-status-icon
+                                    '((draft . t) (mergeable . "CONFLICTING"))
+                                    'wip)))))
+
+(ert-deftest dk-lc--a-conflicted-open-pr-still-reads-as-open ()
+  (should (equal "●" (dk-lc--glyph (decknix--hub-primary-status-icon
                                     '((mergeable . "CONFLICTING")) 'wip)))))
+
+(ert-deftest dk-lc--a-conflict-does-not-recolour-the-build ()
+  "A conflicted PR can build perfectly well and still be unmergeable, so
+the colour keeps reporting the build and the marker carries the rest."
+  (should (eq 'success (dk-lc--face (decknix--hub-primary-status-icon
+                                     '((mergeable . "CONFLICTING")
+                                       (ci . ((status . "pass"))))
+                                     'wip)))))
+
+(ert-deftest dk-lc--the-conflict-marker-is-red ()
+  "Nothing lands until the author rebases."
+  (should (eq 'error (get-text-property
+                      0 'face (decknix--hub-conflict-icon
+                               '((mergeable . "CONFLICTING")))))))
 
 (ert-deftest dk-lc--a-closed-pr-is-a-square ()
   (should (equal "■" (dk-lc--glyph (decknix--hub-primary-status-icon

@@ -441,15 +441,24 @@ the build is broken."
       (should (equal 'error (if (listp f) (plist-get f :inherit) f))))))
 
 (ert-deftest decknix-hub-icons--primary-status-conflicting ()
-  "Conflicting PRs use the square-with-dot glyph."
+  "A conflict no longer takes the shape OR the colour.
+
+It is orthogonal to how far along a PR is -- a conflicted draft and a
+conflicted open PR are different things, and spending the shape on it
+erased the difference.  It is orthogonal to the build too: a conflicted
+PR can compile perfectly well.  So the shape stays `open', the colour
+keeps reporting the build (grey here, no CI), and a red `!' carries the
+conflict."
   (let ((item '((state . "OPEN")
                  (mergeable . "CONFLICTING"))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-primary-status-icon item 'wip))
-                   "⊗"))
+                   "●"))
     (should (equal (decknix-test--icon-face
                     (decknix--hub-primary-status-icon item 'wip))
-                   'error))))
+                   'shadow))
+    (should (equal "!" (substring-no-properties
+                        (decknix--hub-conflict-icon item))))))
 
 (ert-deftest decknix-hub-icons--primary-status-merged ()
   (let ((item '((state . "MERGED"))))
