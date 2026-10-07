@@ -179,17 +179,42 @@ truncates rather than pushing them off the end."
     (dolist (w '(24 32 48 80))
       (should (<= (string-width (decknix--layout-pr-row pr w)) w)))))
 
-(ert-deftest decknix-layout-render--worktree-glyph-carries-its-own-face ()
-  "Dirty must be distinguishable from orphaned by colour, not only shape."
-  (let ((dirty (decknix--layout-wt-glyph '(:dirty t)))
-        (orphan (decknix--layout-wt-glyph '(:orphan t))))
-    (should (eq 'warning (get-text-property 0 'face dirty)))
-    (should (eq 'error (get-text-property 0 'face orphan)))))
+(ert-deftest decknix-layout-render--a-worktree-is-a-hollow-shape ()
+  "Hollow, because a worktree is the stage before a PR.  Dotted while
+nothing is known about its build -- which is every worktree today, since
+the audit records no build status at all."
+  (should (equal "◌" (substring-no-properties
+                      (decknix--layout-wt-glyph '(:branch "b"))))))
 
-(ert-deftest decknix-layout-render--dirty-outranks-every-other-condition ()
-  "Uncommitted work is the only state here that can be lost."
-  (should (eq 'dirty (decknix--layout-wt-condition
-                      '(:dirty t :merged t :orphan t :active t)))))
+(ert-deftest decknix-layout-render--a-worktree-is-grey-until-a-build-is-known ()
+  "Grey means nothing reported, which is honest: nothing runs or records
+a per-worktree build."
+  (should (eq 'shadow (get-text-property
+                       0 'face (decknix--layout-wt-glyph '(:branch "b"))))))
+
+(ert-deftest decknix-layout-render--a-merged-worktree-is-a-square ()
+  (should (equal "■" (substring-no-properties
+                      (decknix--layout-wt-glyph '(:merged t))))))
+
+(ert-deftest decknix-layout-render--dirty-and-orphan-are-markers-not-the-shape ()
+  "Both can be true at once.  As a single glyph one hid the other, and
+uncommitted work is the state here that can actually be lost; as separate
+markers both are visible."
+  (let ((m (substring-no-properties
+            (decknix--layout-wt-markers '(:dirty t :orphan t)))))
+    (should (string-match-p "✎" m))
+    (should (string-match-p "⑂" m))))
+
+(ert-deftest decknix-layout-render--a-clean-worktree-has-no-markers ()
+  (should (equal "" (substring-no-properties
+                     (decknix--layout-wt-markers '(:branch "b"))))))
+
+(ert-deftest decknix-layout-render--dirty-is-amber-and-orphan-is-red ()
+  "They mean different things and must not read alike."
+  (let ((d (decknix--layout-wt-markers '(:dirty t)))
+        (o (decknix--layout-wt-markers '(:orphan t))))
+    (should (eq 'warning (get-text-property 0 'face d)))
+    (should (eq 'error (get-text-property 0 'face o)))))
 
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here

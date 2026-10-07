@@ -349,7 +349,7 @@ author column, so the leading glyph is no longer replaced by π."
   (let ((item '((state . "OPEN")
                 (author . "dependabot[bot]")
                 (review_decision . "REVIEW_REQUIRED"))))
-    (should (equal "◐" (decknix-test--icon-glyph
+    (should (equal "●" (decknix-test--icon-glyph
                         (decknix--hub-primary-status-icon item 'review))))))
 
 (ert-deftest decknix-hub-icons--primary-status-placeholder ()
@@ -358,10 +358,12 @@ author column, so the leading glyph is no longer replaced by π."
                  "○")))
 
 (ert-deftest decknix-hub-icons--primary-status-draft ()
+  "A HALF circle: half way to an open PR, one stage past a worktree.  The
+star belonged to a scheme where shape did not form a progression."
   (let ((item '((state . "OPEN") (draft . t) (ci . ((status . "running"))))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-primary-status-icon item 'wip))
-                   "★"))))
+                   "◐"))))
 
 (ert-deftest decknix-hub-icons--primary-status-open-approved ()
   (let ((item '((state . "OPEN") (review_decision . "APPROVED"))))
@@ -379,15 +381,19 @@ says the build is broken.  Neither has to be sacrificed to the other."
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-primary-status-icon item 'wip tc))
                    "●"))
-    (should (equal (decknix-test--icon-face
-                    (decknix--hub-primary-status-icon item 'wip tc))
-                   'error))))
+    ;; Approved, so the face is emboldened: weight carries approval now
+    ;; that shape says what it is and colour how it builds.
+    (let ((f (decknix-test--icon-face
+              (decknix--hub-primary-status-icon item 'wip tc))))
+      (should (equal 'error (if (listp f) (plist-get f :inherit) f))))))
 
 (ert-deftest decknix-hub-icons--primary-status-open-needs-review ()
+  "A FULL circle: the shape says what kind of thing this is -- open PR --
+not how far through review it is.  The half circle is a draft now."
   (let ((item '((state . "OPEN") (review_decision . "REVIEW_REQUIRED"))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-primary-status-icon item 'wip))
-                   "◐"))))
+                   "●"))))
 
 
 (ert-deftest decknix-hub-icons--a-happy-build-is-green-whatever-the-review ()
@@ -403,7 +409,7 @@ all."
                 (ci . ((status . "pass"))))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-primary-status-icon item 'wip))
-                   "◐"))
+                   "●"))
     (should (equal (decknix-test--icon-face
                     (decknix--hub-primary-status-icon item 'wip))
                    'success))))
@@ -429,9 +435,10 @@ the build is broken."
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-primary-status-icon item 'wip))
                    "●"))
-    (should (equal (decknix-test--icon-face
-                    (decknix--hub-primary-status-icon item 'wip))
-                   'error))))
+    ;; Approved, so emboldened; the colour underneath is still the build.
+    (let ((f (decknix-test--icon-face
+              (decknix--hub-primary-status-icon item 'wip))))
+      (should (equal 'error (if (listp f) (plist-get f :inherit) f))))))
 
 (ert-deftest decknix-hub-icons--primary-status-conflicting ()
   "Conflicting PRs use the square-with-dot glyph."
@@ -439,7 +446,7 @@ the build is broken."
                  (mergeable . "CONFLICTING"))))
     (should (equal (decknix-test--icon-glyph
                     (decknix--hub-primary-status-icon item 'wip))
-                   "▣"))
+                   "⊗"))
     (should (equal (decknix-test--icon-face
                     (decknix--hub-primary-status-icon item 'wip))
                    'error))))

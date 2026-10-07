@@ -973,32 +973,51 @@ be lost, so it must not be masked by a merged or orphaned flag."
    ((plist-get wt :orphan) "⑂ ")
    (t "◌ ")))
 
-(defconst decknix-sidebar-layout-wt-glyph-faces
-  '((dirty . warning) (active . success) (merged . shadow)
-    (orphan . error) (clean . shadow))
-  "Face per worktree condition.
+(defun decknix--layout-wt-build (wt)
+  "Return worktree WT\='s build outcome: `pass\=', `running\=', `fail\=' or `none\='.
 
-Each glyph carries its own colour so dirty-versus-orphaned is readable
-without decoding the shape; the row used to be painted a single severity
-face, which made every condition under one repo look alike.")
+`none\=' for every worktree today: the audit records active, age, branch,
+dirty, merged, orphan and path, and nothing about builds.  Nothing runs
+or records a per-worktree build, so claiming otherwise would be
+invention.  The shapes are in place for when a source exists."
+  (or (plist-get wt :build) 'none))
 
-(defun decknix--layout-wt-condition (wt)
-  "Return the condition symbol for worktree WT.
+(defun decknix--layout-wt-shape (wt)
+  "Return the lifecycle shape for worktree WT.
 
-Dirty outranks everything: uncommitted work is the only state here that
-can be lost, so it must not be masked by a merged or orphaned flag."
-  (cond ((plist-get wt :dirty) 'dirty)
-        ((plist-get wt :active) 'active)
-        ((plist-get wt :merged) 'merged)
-        ((plist-get wt :orphan) 'orphan)
-        (t 'clean)))
+Hollow, because a worktree is the stage before a PR.  Dotted while
+nothing is known about its build, which is every worktree until
+something records one."
+  (cond
+   ((plist-get wt :merged) (decknix-lifecycle-shape 'closed))
+   ((eq (decknix--layout-wt-build wt) 'none)
+    (decknix-lifecycle-shape 'worktree-new))
+   (t (decknix-lifecycle-shape 'worktree))))
 
 (defun decknix--layout-wt-glyph (wt)
-  "Return WT\='s indicator glyph propertized with its own face."
-  (let ((cond- (decknix--layout-wt-condition wt)))
-    (propertize (string-trim-right (decknix--layout-wt-indicators wt))
-                'face (or (alist-get cond- decknix-sidebar-layout-wt-glyph-faces)
-                          'shadow))))
+  "Return WT\='s lifecycle glyph, coloured by its build."
+  (propertize (decknix--layout-wt-shape wt)
+              'face (decknix-build-face (decknix--layout-wt-build wt))))
+
+(defconst decknix-sidebar-layout-wt-markers
+  '((dirty  . ("✎" . warning))
+    (orphan . ("⑂" . error)))
+  "Markers appended after a worktree\='s shape.
+
+Dirty and orphaned are neither lifecycle nor build, so they do not
+compete for the primary glyph -- the same reason unresolved threads and
+an owed reply ride as markers on a PR row.  Both can be true at once, and
+as separate markers both can be seen; as a single glyph one hid the
+other, and uncommitted work is the state here that can actually be lost.")
+
+(defun decknix--layout-wt-markers (wt)
+  "Return the marker string for worktree WT."
+  (mapconcat
+   (lambda (cell)
+     (if (plist-get wt (intern (concat ":" (symbol-name (car cell)))))
+         (propertize (car (cdr cell)) 'face (cdr (cdr cell)))
+       ""))
+   decknix-sidebar-layout-wt-markers ""))
 
 (defun decknix--layout-claim-items (claim budget expanded)
   "Return (PRS WTS HELD) to render for CLAIM under BUDGET.
