@@ -152,6 +152,19 @@ was recorded."
         (decknix--agent-broker-key-for-conv-key conv-key)
         (decknix--agent-broker-generate-key))))
 
+(declare-function decknix--agent-broker-live-p
+                  "decknix-agent-broker-rehydrate" (key))
+
+(defun decknix--agent-broker-resume-from-live-p (key)
+  "Return non-nil if KEY has a surviving broker holding session context.
+A live broker's event log is the source for display history.  Re-reading
+its entire Claude/Pi transcript on the Emacs main thread during startup
+can block every emacsclient request for minutes.  A missing or dead
+broker still needs the usual transcript-backed resume."
+  (and key
+       (fboundp 'decknix--agent-broker-live-p)
+       (decknix--agent-broker-live-p key)))
+
 (defun decknix--agent-broker-save-key-for-conv-key (conv-key key)
   "Persist broker KEY for CONV-KEY in agent-sessions.json."
   (when (and conv-key key)

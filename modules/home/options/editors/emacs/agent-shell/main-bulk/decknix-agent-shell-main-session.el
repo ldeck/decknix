@@ -47,6 +47,8 @@
 (require 'decknix-agent-conv-resolve)
 (require 'decknix-agent-session-restart)
 (require 'decknix-agent-spawn-queue)
+(declare-function decknix--agent-broker-resume-from-live-p
+                  "decknix-agent-session-broker" (key))
 
 ;; Forward declarations for upstream agent-shell + shell-maker + consult.
 (declare-function agent-shell-start "ext:agent-shell")
@@ -1075,6 +1077,12 @@ dedupes against live buffers before calling here."
          ;; a fresh broker and orphan the in-flight turn).
          (broker-key (decknix--agent-broker-key-for-resume
                       provider conv-key session-id))
+         ;; A surviving broker already holds the model context, and its
+         ;; bounded event log rehydrates the buffer below.  Do not parse
+         ;; the entire transcript (often 50 MB) on the daemon thread for
+         ;; each of dozens of brokers: that blocks the server socket.
+         (broker-live (and (fboundp 'decknix--agent-broker-resume-from-live-p)
+                           (decknix--agent-broker-resume-from-live-p broker-key)))
          (augmented-cmd
           (decknix--agent-broker-wrap-command
            (decknix--agent-command-build
@@ -1136,10 +1144,10 @@ dedupes against live buffers before calling here."
     ;; so a restart resets it and nothing recomputes it (observed on two
     ;; review sessions across a `decknix switch', 2026-09-10).
     ;;
-    ;; Unconditional, unlike the primer below: every provider loses the
-    ;; flag on restart, not only the ones whose model context needs
-    ;; priming.
-    (when (buffer-live-p shell-buf)
+    ;; Historical resumes restore it from the transcript.  A live-broker
+    ;; reattach must not parse the full transcript on the daemon thread;
+    ;; its bounded broker replay handles the visible turn instead.
+    (when (and (buffer-live-p shell-buf) (not broker-live))
       (when-let* ((turns (ignore-errors
                            (decknix--agent-session-extract-all-turns session-id)))
                   (facts (decknix-agent-turn-restored-facts turns)))
@@ -1161,10 +1169,13 @@ dedupes against live buffers before calling here."
     ;; declares no `:resume-needs-primer' and never reaches here.  We
     ;; build the primer synchronously (one JSON read for the last turn)
     ;; and auto-send it once the resumed session reports ready, so the
-    ;; model knows it is continuing an earlier conversation.  Follow-up
+    ;; model knows it is continuing an earlier conversation.  Do NOT
+    ;; send this to a live broker: it already holds the model context
+    ;; and would see the primer as a new user turn.  Follow-up
     ;; (#143): resume via ACP `session/load' so the transcript is
     ;; restored natively instead of re-read by the model.
     (when (and (buffer-live-p shell-buf)
+               (not broker-live)
                decknix-agent-resume-primer-enable
                (decknix--agent-resume-primer-needed-p provider))
       (let* ((turns (ignore-errors
@@ -1196,6 +1207,7 @@ dedupes against live buffers before calling here."
     ;; Use a timer to rename and prepopulate once the process is ready.
     (let ((sid session-id)
           (n history-count)
+          (live-broker broker-live)
           (buf shell-buf)
           (bname display-name)
           (ws workspace)
@@ -1263,7 +1275,8 @@ dedupes against live buffers before calling here."
                    ;; collapsed -- correct for a session that has actually
                    ;; ended, wrong for one that is still running, which is
                    ;; why every reattached session looked dormant.
-                   (unless (or (and (fboundp 'decknix--agent-broker-can-restore-p)
+                   (unless (or ,live-broker
+                               (and (fboundp 'decknix--agent-broker-can-restore-p)
                                     (decknix--agent-broker-can-restore-p shell-buf))
                                (decknix--agent-resume-bridge-replays-p
                                 (bound-and-true-p
@@ -1288,8 +1301,13 @@ dedupes against live buffers before calling here."
                    ;; session so M-p / M-n in compose (and the
                    ;; agent buffer's own comint history nav) cycle
                    ;; through this conversation's previous prompts
-                   ;; instead of finding an empty ring.
-                   (decknix--agent-session-restore-input-ring ,sid)
+                   ;; instead of finding an empty ring.  A live broker
+                   ;; reattaches during startup: the unbounded jq scan of
+                   ;; its transcript must not hold the server socket for
+                   ;; seconds per broker.  Keep that ring empty for now;
+                   ;; the broker log still restores visible history.
+                   (unless ,live-broker
+                     (decknix--agent-session-restore-input-ring ,sid))
                    ;; If a search term was provided (grep flow),
                    ;; jump to the first match; otherwise keep the
                    ;; default behaviour of showing the prompt.
