@@ -858,32 +858,56 @@ of the indicators."
                         (< sa sb)
                       (string< (plist-get a :repo) (plist-get b :repo)))))))))
 
-(defun decknix--layout-dormant-by-repo (dormant)
-  "Group DORMANT work by repo for rendering.
+(defun decknix--layout-wt-wants-you-p (wt)
+  "Return non-nil when worktree WT wants a decision from the reader.
 
-Returns a list of (:repo R :worktrees WTS :prs PRS), repo-sorted.  Grouped
-because an ungrouped list of 20-odd branches and PR numbers gives no clue
-which belong together."
-  (let ((by-repo (make-hash-table :test 'equal)))
-    (dolist (wt (plist-get dormant :worktrees))
-      (let* ((repo (or (plist-get wt :repo) "?"))
-             (short (car (last (split-string repo "/" t))))
-             (e (gethash short by-repo)))
-        (puthash short (list :repo short
-                             :worktrees (cons wt (plist-get e :worktrees))
-                             :prs (plist-get e :prs))
-                 by-repo)))
-    (dolist (pr (plist-get dormant :prs))
-      (let* ((repo (or (plist-get pr :repo) "?"))
-             (short (car (last (split-string repo "/" t))))
-             (e (gethash short by-repo)))
-        (puthash short (list :repo short
-                             :worktrees (plist-get e :worktrees)
-                             :prs (cons pr (plist-get e :prs)))
-                 by-repo)))
-    (let (out)
-      (maphash (lambda (_k v) (push v out)) by-repo)
-      (sort out (lambda (a b) (string< (plist-get a :repo) (plist-get b :repo)))))))
+Dirty only.  Uncommitted work is the one state in this section that can
+be LOST, so it earns a row of its own.
+
+Orphaned deliberately does NOT: the branch being gone from origin means
+the work merged or was abandoned, so the remedy is `remove the worktree\='
+in bulk rather than a decision per item.  Measured live: 20 unattended
+worktrees, 14 of them orphaned.  Giving each a row made the section
+bigger than the uninformative repo tally it replaced, which is how the
+first attempt at this went wrong."
+  (and (plist-get wt :dirty) t))
+
+(defun decknix--layout-dormant-pr-actionable-p (pr)
+  "Return non-nil when dormant PR wants something doing.
+
+Anything not a draft: a PR nobody has a session on and that is open is
+either waiting on a reviewer or blocked, and both want attention.  A
+draft is the author saying not yet."
+  (let ((item (plist-get pr :pr)))
+    (and item (not (eq (alist-get 'draft item) t)) t)))
+
+(defun decknix--layout-dormant-split (dormant)
+  "Return a plist describing unattended DORMANT work.
+
+  :worktrees  dirty worktrees -- a row each
+  :prs        open non-draft PRs -- a row each
+  :orphans    count of worktrees whose branch is gone from origin
+  :quiet      count of everything else
+
+The section used to render one row per repo with a bare tally -- `2 wt\=',
+`1 pr 3 wt\=' -- which said nothing about whether any of it wanted you.
+
+Three buckets rather than two because the middle one is real: an orphan
+IS worth knowing about, but collectively, as `14 to prune\=', not as 14
+rows each asking to be read.  Rows are reserved for the states where the
+reader has a decision to make and something to lose by not making it."
+  (let* ((wts (plist-get dormant :worktrees))
+         (prs (plist-get dormant :prs))
+         (live-wts (seq-filter #'decknix--layout-wt-wants-you-p wts))
+         (orphans (seq-filter (lambda (w) (and (plist-get w :orphan)
+                                               (not (plist-get w :dirty))))
+                              wts))
+         (live-prs (seq-filter #'decknix--layout-dormant-pr-actionable-p prs)))
+    (list :worktrees live-wts
+          :prs live-prs
+          :orphans (length orphans)
+          :quiet (+ (- (length wts) (length live-wts) (length orphans))
+                    (- (length prs) (length live-prs))))))
 
 (defun decknix--layout-pr-sessions (sessions key)
   "Return the SESSIONS whose review PRs include KEY."

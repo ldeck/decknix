@@ -129,10 +129,13 @@ each.  A handful per repo restores the visibility the refactor lost without
 returning to that; the remainder is reported, never silently dropped.")
 
 (defvar decknix-sidebar-layout-dormant-limit 12
-  "Most Dormant repo groups to render, or nil for all.
-Dormant is a backlog, not a queue; an unbounded list of every branch ever
-left behind pushes the sections that need action off screen.  The number
-held back is always reported.")
+  "Most unattended items to render, or nil for all.
+Items, not repo groups: the section lists the individual worktrees and PRs
+that want something, having previously listed one row per repo with a
+tally that said nothing about whether any of it wanted you.  Unattended
+work is a backlog, not a queue, so it stays bounded -- an unbounded list
+of every branch ever left behind pushes the sections that need action off
+screen.  The number held back is always reported.")
 
 (defconst decknix-sidebar-layout-items-cycle '(3 5 10 nil)
   "Cycle for `decknix-sidebar-layout-items-per-repo'; nil means all.")
@@ -154,7 +157,7 @@ held back is always reported.")
   "Cycle for `decknix-sidebar-layout-dormant-limit'; nil means all.")
 
 (defun decknix-layout-cycle-dormant-limit ()
-  "Cycle how many Dormant repo groups are listed."
+  "Cycle how many unattended items are listed."
   (interactive)
   (let* ((cur decknix-sidebar-layout-dormant-limit)
          (pos (seq-position decknix-sidebar-layout-dormant-cycle cur))
@@ -164,7 +167,7 @@ held back is always reported.")
     (setq decknix-sidebar-layout-dormant-limit next)
     (when (fboundp 'agent-shell-workspace-sidebar-refresh)
       (agent-shell-workspace-sidebar-refresh))
-    (message "Dormant repos shown: %s" (or next "all"))))
+    (message "Unattended items shown: %s" (or next "all"))))
 
 (defun decknix--layout-sidebar-width ()
   "Return the width of the sidebar window, falling back to the selected one.
@@ -533,34 +536,73 @@ PROVENANCE marks whether this association is evidence or a guess."
 
 
 (defun decknix--layout-render-dormant (line-num width dormant)
-  "Render the Dormant section: work with no live session on it.
+  "Render the Unattended section: work with no live session, that wants one.
 
-Separate from WIP because the distinction is the whole point -- WIP is work
-an agent is on, Dormant is work sitting there without one."
-  (let* ((groups (decknix--layout-dormant-by-repo dormant))
-         (shown (if decknix-sidebar-layout-dormant-limit
-                    (seq-take groups decknix-sidebar-layout-dormant-limit)
-                  groups))
-         (held (- (length groups) (length shown))))
-    (when groups
+Only states with a decision in them get a row -- dirty worktrees and open
+non-draft PRs.  The section used to list one line per repo with a bare
+tally (`2 wt\=', `1 pr 3 wt\=') which said nothing about whether any of it
+wanted the reader.
+
+Orphans and drafts are counted, not listed.  Live numbers while building
+this: 20 unattended worktrees and 7 PRs, of which 6 dirty and 4 open --
+so listing every item produced 24 rows, THREE TIMES the 8 it replaced,
+while 14 of those rows said only `this branch is gone from origin\=', whose
+remedy is a bulk prune.  Counting them keeps the section honest without
+making it the biggest thing on screen."
+  (let* ((split (decknix--layout-dormant-split dormant))
+         (all-prs (plist-get split :prs))
+         (all-wts (plist-get split :worktrees))
+         (orphans (plist-get split :orphans))
+         (quiet (plist-get split :quiet))
+         (n (+ (length all-wts) (length all-prs)))
+         (limit decknix-sidebar-layout-dormant-limit)
+         ;; PRs claim the budget first: someone else is waiting on a PR,
+         ;; where a dirty worktree is only waiting on me.
+         (prs (if limit (seq-take all-prs limit) all-prs))
+         (wts (if limit (seq-take all-wts (max 0 (- limit (length prs)))) all-wts))
+         (held (- n (length prs) (length wts))))
+    (when (or (> n 0) (> orphans 0) (> quiet 0))
       (insert "\n")
       (setq line-num (1+ line-num))
       (decknix--sidebar-render-section-header
-       (format "Dormant (%d)" (length groups)) 'dormant)
+       (if (> n 0) (format "Unattended (%d)" n) "Unattended") 'dormant)
       (setq line-num (1+ line-num))
-      (dolist (g shown)
-        (let* ((left (format " ·  %s" (plist-get g :repo)))
-               (right (decknix--layout-count-label
-                       (length (plist-get g :prs))
-                       (length (plist-get g :worktrees))))
-               (pad (max 1 (- width (string-width left) (string-width right)))))
-          (insert (propertize (concat left (make-string pad ?\s) right)
-                              'face 'font-lock-comment-face
-                              'decknix-layout-dormant g)
-                  "\n")
-          (setq line-num (1+ line-num))))
+      (dolist (pr prs)
+        (insert (propertize
+                 (decknix--layout-pr-row pr width)
+                 'decknix-hub-type 'wip
+                 'decknix-hub-repo (plist-get pr :repo)
+                 'decknix-hub-number (plist-get pr :number)
+                 'decknix-hub-url (alist-get 'url (plist-get pr :pr)))
+                "\n")
+        (setq line-num (1+ line-num)))
+      (dolist (wt wts)
+        (insert (propertize
+                 (format "    %s %-3s %s" (decknix--layout-wt-glyph wt)
+                         (decknix--layout-wt-markers wt)
+                         (propertize (or (plist-get wt :branch) "?") 'face 'shadow))
+                 'decknix-layout-worktree wt)
+                "\n")
+        (setq line-num (1+ line-num)))
+      ;; Every tail is NAMED.  A section that drops rows silently reads as
+      ;; "that is all of it", which is the way this one already misled.
       (when (> held 0)
-        (insert (propertize (format " ·  %d more repos dormant" held)
+        (insert (propertize (format "      … %d more over the limit" held)
+                            'face 'font-lock-comment-face
+                            'help-echo "raise `unattended' in the sidebar transient")
+                "\n")
+        (setq line-num (1+ line-num)))
+      (when (> orphans 0)
+        ;; Names its remedy: a count whose action the reader has to go and
+        ;; remember is the same dead end as the repo tally.
+        (insert (propertize (format "      ⑂ %d orphaned, prune from the board"
+                                    orphans)
+                            'face 'font-lock-comment-face
+                            'help-echo "C-c s F -- branch gone from origin")
+                "\n")
+        (setq line-num (1+ line-num)))
+      (when (> quiet 0)
+        (insert (propertize (format "      · %d quiet, nothing wanted" quiet)
                             'face 'font-lock-comment-face)
                 "\n")
         (setq line-num (1+ line-num)))))
