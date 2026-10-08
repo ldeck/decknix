@@ -1685,6 +1685,11 @@ struct PrDetails {
     i_replied_last: Option<bool>,
     total_threads: Option<u32>,
     unresolved_threads: Option<u32>,
+    /// Both triggers, same as the review feed: a commit landed after the
+    /// latest review, OR changes were asked for and every thread is now
+    /// resolved.  Absent here before, so on my own PRs a push that
+    /// invalidated an approval left the row reading approved.
+    review_stale: Option<bool>,
     unresolved_total: Option<u32>,
     human_unresolved: Option<u32>,
     bot_unresolved: Option<u32>,
@@ -1703,7 +1708,7 @@ impl Default for PrDetails {
             branch: None, ci: None, mergeable: None, review_decision: None,
             needs_reply: None, bot_pending: None, replies_to_me: None,
             bot_replies_to_me: None, i_replied_last: None,
-            total_threads: None, unresolved_threads: None,
+            total_threads: None, unresolved_threads: None, review_stale: None,
             unresolved_total: None, human_unresolved: None, bot_unresolved: None, human_said_something: None,
             merged_at: None,
             authors: Vec::new(), requested_reviewers: Vec::new(),
@@ -1863,7 +1868,7 @@ async fn fetch_pr_details(
                 branch: d.head_ref_name,
                 ci: summarise_ci(&d.status_check_rollup),
                 mergeable: d.mergeable,
-                review_decision: d.review_decision,
+                review_decision: d.review_decision.clone(),
                 needs_reply,
                 human_said_something,
                 bot_pending,
@@ -1872,6 +1877,23 @@ async fn fetch_pr_details(
                 i_replied_last,
                 total_threads: threads.as_ref().map(|t| t.total),
                 unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
+                // BOTH triggers now.  `reviews' and `commits' were
+                // already in this query and simply unused, so a push that
+                // invalidated an approval on a PR of mine left the row
+                // reading approved.
+                review_stale: Some(compute_review_stale(
+                    d.commits.as_ref()
+                        .and_then(|cs| cs.iter()
+                                  .filter_map(|c| c.committed_date.clone()).max())
+                        .as_deref(),
+                    d.reviews.as_ref()
+                        .and_then(|rs| rs.iter()
+                                  .filter_map(|r| r.submitted_at.clone()).max())
+                        .as_deref(),
+                    d.review_decision.as_deref(),
+                    threads.as_ref().map(|t| t.total).unwrap_or(0),
+                    threads.as_ref().map(|t| t.unresolved_to_me).unwrap_or(0),
+                )),
             unresolved_total: threads.as_ref().map(|t| t.unresolved_total),
             human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
             bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
@@ -1884,6 +1906,7 @@ async fn fetch_pr_details(
         }
         Err(_) => PrDetails {
             total_threads: threads.as_ref().map(|t| t.total),
+            review_stale: None,
             unresolved_threads: threads.as_ref().map(|t| t.unresolved_to_me),
             unresolved_total: threads.as_ref().map(|t| t.unresolved_total),
             human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
@@ -2041,21 +2064,8 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
             mergeable: details.mergeable,
             branch: details.branch,
             updated: updated_ts,
-            review_stale: Some(compute_review_stale(
-                // The push-after-review trigger needs commit and review
-                // timestamps, which this path does not fetch.  The
-                // changes-addressed one needs only what `details' already
-                // has, and is the case that was misreporting: a PR of mine
-                // with CHANGES_REQUESTED and every thread resolved read as
-                // "a reviewer is blocking you" when the work was done and
-                // it was waiting on a re-review.
-                None,
-                None,
-                details.review_decision.as_deref(),
-                details.total_threads.unwrap_or(0),
-                details.unresolved_threads.unwrap_or(0),
-            )),
-            review_decision: details.review_decision.clone(),
+            review_stale: details.review_stale,
+            review_decision: details.review_decision,
             needs_reply: details.needs_reply,
             unresolved_total: details.unresolved_total,
             human_unresolved: details.human_unresolved,
