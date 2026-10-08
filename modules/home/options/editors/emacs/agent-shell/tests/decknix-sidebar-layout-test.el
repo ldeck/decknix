@@ -1169,5 +1169,41 @@ working in a primary checkout showed its PRs and none of its worktrees."
 (ert-deftest decknix-layout--a-worktree-with-no-repo-is-not-claimed ()
   (should-not (decknix--layout-wt-in-repos-p '(:path "/w/x") '("decknix"))))
 
+
+;; --- the Reviews section says what is in it ---------------------------
+
+(ert-deftest decknix-layout--a-repo-with-prs-waiting-is-not-inert ()
+  "Every row rendered `default\=' unless a session was blocked, so five
+repos holding eight bot PRs awaiting review looked like nothing at all."
+  (should (eq 'new (decknix--layout-group-state
+                    '(:repo "r" :uncovered 3 :sessions 0 :asking 0))))
+  (should-not (eq 'default (decknix--layout-group-face
+                            '(:repo "r" :uncovered 3)))))
+
+(ert-deftest decknix-layout--a-blocked-pr-makes-its-repo-red ()
+  "Changes requested or a conflict means something in there cannot move."
+  (dolist (item '(((review_decision . "CHANGES_REQUESTED"))
+                  ((mergeable . "CONFLICTING"))))
+    (should (eq 'blocked (decknix--layout-group-state
+                          (list :prs (list (list :item item))))))))
+
+(ert-deftest decknix-layout--a-session-blocked-on-me-outranks-the-rest ()
+  (should (eq 'asking (decknix--layout-group-state
+                       '(:asking 1 :uncovered 2
+                         :prs ((:item ((review_decision . "CHANGES_REQUESTED")))))))))
+
+(ert-deftest decknix-layout--a-repo-merely-being-worked-is-amber-not-green ()
+  (should (eq 'doing (decknix--layout-group-state
+                      '(:sessions 2 :asking 0 :uncovered 0)))))
+
+(ert-deftest decknix-layout--an-empty-repo-has-no-state ()
+  (should-not (decknix--layout-group-state '(:repo "r"))))
+
+(ert-deftest decknix-layout--each-group-state-has-its-own-face ()
+  (let ((faces (mapcar #'decknix--layout-group-face
+                       '((:asking 1) (:prs ((:item ((mergeable . "CONFLICTING")))))
+                         (:uncovered 1) (:sessions 1)))))
+    (should (equal faces (delete-dups (copy-sequence faces))))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here

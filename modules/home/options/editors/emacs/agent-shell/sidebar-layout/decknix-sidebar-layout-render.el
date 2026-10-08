@@ -276,7 +276,11 @@ calling it from the render path cannot queue an audit per paint."
          (groups (car split))
          (held (cdr split))
          (dups (decknix--layout-duplicate-prs sessions))
-         (total (apply #'+ (mapcar (lambda (g) (or (plist-get g :sessions) 0))
+         ;; PRs, not sessions.  The heading counted live review SESSIONS,
+         ;; so it read "Reviews (0)" above five repos holding eight PRs
+         ;; genuinely awaiting review -- the count said nothing was there
+         ;; while the rows said otherwise.
+         (total (apply #'+ (mapcar (lambda (g) (length (plist-get g :prs)))
                                    all-groups)))
          (asking (apply #'+ (mapcar (lambda (g) (or (plist-get g :asking) 0))
                                     all-groups))))
@@ -290,8 +294,7 @@ calling it from the render path cannot queue an audit per paint."
       (dolist (group groups)
         (let ((repo (plist-get group :repo)))
           (insert (propertize (decknix--layout-group-label group width)
-                              'face (if (> (or (plist-get group :asking) 0) 0)
-                                        'warning 'default)
+                              'face (decknix--layout-group-face group)
                               'decknix-layout-repo repo
                               'decknix-layout-group group)
                   "\n")

@@ -1128,6 +1128,46 @@ not there, and the Dormant section is mostly such rows."
 the two sections do not invent different vocabularies for the same fact.
 `✓\=' marks work that is over -- merged, closed, or withdrawn.")
 
+(defun decknix--layout-group-state (group)
+  "Return what GROUP is waiting on: `asking\=', `blocked\=', `new\=', `doing\=' or nil.
+
+The Reviews rows carried only two faces -- amber if a session was blocked
+on the user, plain white otherwise -- so a repo with eight bot PRs
+awaiting review looked exactly like one with nothing in it.  Every row in
+the section rendered `default\=' unless something was already shouting."
+  (let ((prs (plist-get group :prs)))
+    (cond
+     ((> (or (plist-get group :asking) 0) 0) 'asking)
+     ((seq-some (lambda (p)
+                  (let ((item (plist-get p :item)))
+                    (and item
+                         (or (equal (alist-get 'review_decision item)
+                                    "CHANGES_REQUESTED")
+                             (equal (alist-get 'mergeable item) "CONFLICTING")))))
+                prs)
+      'blocked)
+     ((> (or (plist-get group :uncovered) 0) 0) 'new)
+     ((> (or (plist-get group :sessions) 0) 0) 'doing)
+     (t nil))))
+
+(defconst decknix-sidebar-layout-group-faces
+  '((asking  . warning)
+    (blocked . error)
+    (new     . (:foreground "#87af87"))
+    (doing   . (:foreground "#d7af5f")))
+  "Face per Reviews group state.
+
+Green for work waiting on a reviewer, amber for a session mid-flight or
+blocked on the user, red for a PR that cannot proceed.  Nothing in the
+section was coloured before unless a session was blocked, so a repo with
+PRs waiting read as inert.")
+
+(defun decknix--layout-group-face (group)
+  "Return the face for GROUP\='s row."
+  (or (alist-get (decknix--layout-group-state group)
+                 decknix-sidebar-layout-group-faces)
+      'font-lock-comment-face))
+
 (defun decknix--layout-group-label (group width)
   "Return the collapsed one-line label for GROUP, padded to WIDTH.
 
