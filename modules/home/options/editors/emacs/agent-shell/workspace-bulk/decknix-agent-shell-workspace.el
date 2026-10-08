@@ -5486,6 +5486,8 @@ directly — see `decknix-sidebar-primary-action'."
                                             'decknix-repo-sync-collapsed))
          (expand-key (get-text-property (line-beginning-position)
                                         'decknix-layout-expand-key))
+         (orphan-prune (get-text-property (line-beginning-position)
+                                          'decknix-layout-orphan-prune))
          (cmd (pcase type
                 ('review            #'decknix-sidebar-request-menu)
                 ('wip               #'decknix-sidebar-wip-menu)
@@ -5511,6 +5513,10 @@ directly — see `decknix-sidebar-primary-action'."
      ;; A held-items row: the only thing on it is "show the rest".
      ((and expand-key (fboundp 'decknix-layout-toggle-expand))
       (call-interactively #'decknix-layout-toggle-expand))
+     ;; The orphaned-worktrees count: its whole purpose is to reach the
+     ;; sweep that clears them, so RET goes there rather than nowhere.
+     ((and orphan-prune (fboundp 'decknix-worktree-picker))
+      (call-interactively #'decknix-worktree-picker))
      ((and repo-collapsed
            (fboundp 'decknix-repo-sync-toggle-failed-expanded))
       (call-interactively #'decknix-repo-sync-toggle-failed-expanded))

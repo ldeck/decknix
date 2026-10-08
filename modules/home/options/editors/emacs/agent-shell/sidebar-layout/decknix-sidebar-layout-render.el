@@ -593,12 +593,14 @@ making it the biggest thing on screen."
                 "\n")
         (setq line-num (1+ line-num)))
       (when (> orphans 0)
-        ;; Names its remedy: a count whose action the reader has to go and
-        ;; remember is the same dead end as the repo tally.
-        (insert (propertize (format "      ⑂ %d orphaned, prune from the board"
-                                    orphans)
+        ;; Carries its own remedy rather than naming one.  The repo rows
+        ;; this section replaced had no property at all, so RET on them
+        ;; did nothing -- a count the reader has to go and act on
+        ;; elsewhere is the same dead end in a smaller space.
+        (insert (propertize (format "      ⑂ %d orphaned, RET to prune" orphans)
                             'face 'font-lock-comment-face
-                            'help-echo "C-c s F -- branch gone from origin")
+                            'decknix-layout-orphan-prune t
+                            'help-echo "branch gone from origin -- RET opens the worktree picker")
                 "\n")
         (setq line-num (1+ line-num)))
       (when (> quiet 0)
