@@ -194,16 +194,40 @@ which is what makes it worth a glyph of its own."
   (and (decknix--hub-pr-approved-p item)
        (> (decknix--hub-pr-unresolved item) 0)))
 
-(defun decknix--hub-changes-icon (item)
-  "Return a marker when a reviewer has asked ITEM for changes.
+(defun decknix--hub-changes-outstanding-p (item)
+  "Return non-nil when a reviewer is still waiting on ITEM for changes.
 
-The colour already says the PR cannot proceed; this says WHY, the way
-`!\=' distinguishes a conflict from a failing build.  Without it a red row
-could be a broken build or a waiting reviewer, which call for different
-work."
-  (if (equal (alist-get 'review_decision item) "CHANGES_REQUESTED")
-      (decknix--hub-icon "⊖" 'error)
-    ""))
+CHANGES_REQUESTED alone does not mean that.  GitHub holds the decision at
+CHANGES_REQUESTED until the blocking reviewer submits a NEW review, so a
+PR whose every thread has been resolved still reports it while waiting on
+somebody else entirely.  followupboss#255 read as `a reviewer is blocking
+you\=' with 0 of 9 threads unresolved and a re-review already requested.
+
+`review_stale\=' is the hub\='s own name for that -- it is set when changes
+were asked for and every thread is now resolved."
+  (and (equal (alist-get 'review_decision item) "CHANGES_REQUESTED")
+       (not (eq (alist-get 'review_stale item) t))))
+
+(defun decknix--hub-awaiting-rereview-p (item)
+  "Return non-nil when ITEM\='s requested changes have all been addressed.
+
+The work is done and the block is procedural until somebody looks again,
+which is a different call on the user\='s time from `go and fix this\='."
+  (and (equal (alist-get 'review_decision item) "CHANGES_REQUESTED")
+       (eq (alist-get 'review_stale item) t)))
+
+(defun decknix--hub-changes-icon (item)
+  "Return a marker for ITEM\='s review block, or an empty string.
+
+`⊖\=' a reviewer is waiting on changes -- the user\='s move.
+`↻\=' the changes are made and a re-review is owed -- somebody else\='s.
+
+The colour says the PR cannot proceed; this says why, the way `!\='
+distinguishes a conflict from a failing build."
+  (cond
+   ((decknix--hub-changes-outstanding-p item) (decknix--hub-icon "⊖" 'error))
+   ((decknix--hub-awaiting-rereview-p item) (decknix--hub-icon "↻" 'warning))
+   (t "")))
 
 (defun decknix--hub-conflict-icon (item)
   "Return a marker when ITEM cannot merge, or an empty string.
@@ -320,7 +344,6 @@ reduce sidebar duplication."
       ;; user owes beyond that rides on its own markers: `↩' a reply, `◆N'
       ;; an unresolved thread.
       (let* ((approved (decknix--hub-pr-approved-p item))
-             (changes (equal decision "CHANGES_REQUESTED"))
              ;; FULL circle: an open PR.  The shape channel says what KIND
              ;; of thing this is -- worktree, draft, open, closed -- so
              ;; nothing else may take it.  Changes-requested had, which
@@ -330,12 +353,12 @@ reduce sidebar duplication."
              ;; reasons already live, and a marker says which.
              (shape (decknix-lifecycle-shape 'open))
              (face (cond
-                    ;; BLOCKED, whatever the build says.  A reviewer asking
-                    ;; for changes stops the PR exactly as a red build does,
-                    ;; and followupboss#255 -- CHANGES_REQUESTED with CI
-                    ;; passing -- rendered green while a reviewer was
-                    ;; waiting on it.
-                    (changes 'error)
+                    ;; BLOCKED, whatever the build says -- but only while
+                    ;; the reviewer is actually waiting.  Once every thread
+                    ;; is resolved the work is done and the PR is waiting on
+                    ;; a re-review, which is somebody else's move and must
+                    ;; not read as "go and fix this".
+                    ((decknix--hub-changes-outstanding-p item) 'error)
                     ((or tc-fail (equal classified "fail")) 'error)
                     ((equal classified "soft_fail")
                      '(:foreground "orange" :weight bold))

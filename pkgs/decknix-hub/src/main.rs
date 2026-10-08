@@ -270,6 +270,12 @@ struct WipPr {
     updated: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     review_decision: Option<String>, // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"
+    // Computed for MY OWN PRs as well as ones sent to me.  It was only ever
+    // set on the review feed, so on a PR of mine `CHANGES_REQUESTED' with
+    // every thread resolved looked identical to one where a reviewer is
+    // still waiting on a fix -- and a stale APPROVED stayed bold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    review_stale: Option<bool>, // a commit landed after the latest review, or CHANGES_REQUESTED with all threads resolved
     #[serde(skip_serializing_if = "Option::is_none")]
     needs_reply: Option<bool>, // true when latest comment/review is from someone else (bot or human)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2035,7 +2041,21 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
             mergeable: details.mergeable,
             branch: details.branch,
             updated: updated_ts,
-            review_decision: details.review_decision,
+            review_stale: Some(compute_review_stale(
+                // The push-after-review trigger needs commit and review
+                // timestamps, which this path does not fetch.  The
+                // changes-addressed one needs only what `details' already
+                // has, and is the case that was misreporting: a PR of mine
+                // with CHANGES_REQUESTED and every thread resolved read as
+                // "a reviewer is blocking you" when the work was done and
+                // it was waiting on a re-review.
+                None,
+                None,
+                details.review_decision.as_deref(),
+                details.total_threads.unwrap_or(0),
+                details.unresolved_threads.unwrap_or(0),
+            )),
+            review_decision: details.review_decision.clone(),
             needs_reply: details.needs_reply,
             unresolved_total: details.unresolved_total,
             human_unresolved: details.human_unresolved,

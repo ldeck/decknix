@@ -294,5 +294,45 @@ one.  Dropping it to plain unapproved would lose that."
                'wip)))
     (should-not (dk-lc--boldp icon))))
 
+
+;; --- changes asked for, versus changes already made -------------------
+
+(ert-deftest dk-lc--an-outstanding-block-is-red-and-mine ()
+  (let ((item '((review_decision . "CHANGES_REQUESTED")
+                (review_stale . nil) (ci . ((status . "pass"))))))
+    (should (decknix--hub-changes-outstanding-p item))
+    (should (eq 'error (dk-lc--face (decknix--hub-primary-status-icon item 'wip))))
+    (should (string-match-p "⊖" (decknix--hub-changes-icon item)))))
+
+(ert-deftest dk-lc--changes-already-made-is-not-my-move ()
+  "followupboss#255: CHANGES_REQUESTED with 0 of 9 threads unresolved and
+a re-review already requested, reading as `a reviewer is blocking you\='.
+
+GitHub holds the decision at CHANGES_REQUESTED until the blocking
+reviewer submits a NEW review, so the decision alone cannot tell the two
+apart."
+  (let ((item '((review_decision . "CHANGES_REQUESTED")
+                (review_stale . t) (ci . ((status . "pass"))))))
+    (should-not (decknix--hub-changes-outstanding-p item))
+    (should (decknix--hub-awaiting-rereview-p item))
+    (should-not (eq 'error (dk-lc--face (decknix--hub-primary-status-icon item 'wip))))))
+
+(ert-deftest dk-lc--awaiting-a-rereview-says-so ()
+  "A different call on the user\='s time from `go and fix this\='."
+  (should (string-match-p "↻" (decknix--hub-changes-icon
+                               '((review_decision . "CHANGES_REQUESTED")
+                                 (review_stale . t))))))
+
+(ert-deftest dk-lc--the-two-blocks-do-not-share-a-marker ()
+  (should-not (equal (decknix--hub-changes-icon
+                      '((review_decision . "CHANGES_REQUESTED")))
+                     (decknix--hub-changes-icon
+                      '((review_decision . "CHANGES_REQUESTED")
+                        (review_stale . t))))))
+
+(ert-deftest dk-lc--an-unblocked-pr-has-neither-marker ()
+  (should (equal "" (decknix--hub-changes-icon
+                     '((review_decision . "REVIEW_REQUIRED"))))))
+
 (provide 'decknix-hub-lifecycle-test)
 ;;; decknix-hub-lifecycle-test.el ends here
