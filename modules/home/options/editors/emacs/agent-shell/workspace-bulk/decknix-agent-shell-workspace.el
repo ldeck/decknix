@@ -1047,7 +1047,7 @@ keys.  Press `C-g' to abort."
   :key "4"
   :description
   (lambda ()
-    (format "dormant       %s"
+    (format "unattended    %s"
             (propertize
              (format "[%s]" (or (bound-and-true-p decknix-sidebar-layout-dormant-limit)
                                 "all"))

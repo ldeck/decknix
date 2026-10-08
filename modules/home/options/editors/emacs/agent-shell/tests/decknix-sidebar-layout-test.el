@@ -506,12 +506,82 @@ does -- so the prefix must be the LEADING hyphenated segment."
     (should-not (plist-get (car (plist-get tree :sessions)) :worktrees))
     (should (= 3 (length (plist-get (plist-get tree :dormant) :worktrees))))))
 
-(ert-deftest decknix-layout--dormant-groups-by-repo ()
-  (let* ((tree (decknix--layout-wip-tree nil decknix-layout-test--wip-repos
-                                         decknix-layout-test--worktrees))
-         (groups (decknix--layout-dormant-by-repo (plist-get tree :dormant))))
-    (should (equal '("decknix" "platform-cli" "upside")
-                   (mapcar (lambda (g) (plist-get g :repo)) groups)))))
+;; --- what unattended work is worth a row ------------------------------
+;;
+;; The section used to render one row per repo with a bare tally -- `2 wt\=',
+;; `1 pr 3 wt\=' -- and was reported as saying nothing actionable.  The first
+;; replacement listed every unattended item and was worse: live numbers were
+;; 20 worktrees and 7 PRs, so 24 rows against the 8 it replaced, 14 of them
+;; orphans whose only remedy is a bulk prune.  So the split is what decides
+;; whether this section informs or buries, and these pin it.
+
+(ert-deftest decknix-layout--dormant-gives-a-dirty-worktree-a-row ()
+  "Dirty is uncommitted work: the one state here that can be LOST."
+  (let ((split (decknix--layout-dormant-split
+                (list :worktrees (list (list :branch "a" :dirty t))))))
+    (should (= 1 (length (plist-get split :worktrees))))
+    (should (= 0 (plist-get split :orphans)))
+    (should (= 0 (plist-get split :quiet)))))
+
+(ert-deftest decknix-layout--dormant-counts-orphans-instead-of-listing-them ()
+  "14 rows saying `branch gone from origin\=' is how the first attempt made
+the section three times bigger than the tally it replaced."
+  (let ((split (decknix--layout-dormant-split
+                (list :worktrees (list (list :branch "a" :orphan t)
+                                       (list :branch "b" :orphan t))))))
+    (should-not (plist-get split :worktrees))
+    (should (= 2 (plist-get split :orphans)))
+    (should (= 0 (plist-get split :quiet)))))
+
+(ert-deftest decknix-layout--dormant-prefers-dirty-over-orphan ()
+  "An orphaned worktree that is ALSO dirty still holds work that can be
+lost, so it must not be swept into the prune count."
+  (let ((split (decknix--layout-dormant-split
+                (list :worktrees (list (list :branch "a" :orphan t :dirty t))))))
+    (should (= 1 (length (plist-get split :worktrees))))
+    (should (= 0 (plist-get split :orphans)))))
+
+(ert-deftest decknix-layout--dormant-drops-a-clean-tracking-worktree ()
+  "Nothing to decide, so it costs a row and earns nothing."
+  (let ((split (decknix--layout-dormant-split
+                (list :worktrees (list (list :branch "a"))))))
+    (should-not (plist-get split :worktrees))
+    (should (= 1 (plist-get split :quiet)))))
+
+(ert-deftest decknix-layout--dormant-gives-a-non-draft-pr-a-row ()
+  "Open and sessionless means it is waiting on a reviewer or blocked."
+  (let ((split (decknix--layout-dormant-split
+                (list :prs (list (list :number 1 :pr '((draft . :json-false))))))))
+    (should (= 1 (length (plist-get split :prs))))))
+
+(ert-deftest decknix-layout--dormant-counts-a-draft-pr-as-quiet ()
+  "A draft is the author saying not yet."
+  (let ((split (decknix--layout-dormant-split
+                (list :prs (list (list :number 1 :pr '((draft . t))))))))
+    (should-not (plist-get split :prs))
+    (should (= 1 (plist-get split :quiet)))))
+
+(ert-deftest decknix-layout--dormant-buckets-account-for-every-item ()
+  "Rows plus orphans plus quiet must equal the input, or the section is
+dropping work silently -- the failure it already had once."
+  (let* ((wts (list (list :branch "a" :dirty t)
+                    (list :branch "b" :orphan t)
+                    (list :branch "c")))
+         (prs (list (list :number 1 :pr '((draft . t)))
+                    (list :number 2 :pr '((draft . :json-false)))))
+         (split (decknix--layout-dormant-split (list :worktrees wts :prs prs))))
+    (should (= (+ (length wts) (length prs))
+               (+ (length (plist-get split :worktrees))
+                  (length (plist-get split :prs))
+                  (plist-get split :orphans)
+                  (plist-get split :quiet))))))
+
+(ert-deftest decknix-layout--dormant-split-handles-an-empty-section ()
+  (let ((split (decknix--layout-dormant-split nil)))
+    (should-not (plist-get split :worktrees))
+    (should-not (plist-get split :prs))
+    (should (= 0 (plist-get split :orphans)))
+    (should (= 0 (plist-get split :quiet)))))
 
 ;; --- sessions covering one PR -----------------------------------------
 
