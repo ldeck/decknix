@@ -208,6 +208,19 @@ were asked for and every thread is now resolved."
   (and (equal (alist-get 'review_decision item) "CHANGES_REQUESTED")
        (not (eq (alist-get 'review_stale item) t))))
 
+(defun decknix--hub-review-blocked-p (item)
+  "Return non-nil when a reviewer\='s decision is blocking ITEM.
+
+CHANGES_REQUESTED, regardless of what has been pushed since.  GitHub
+holds the decision there until the blocking reviewer submits a NEW
+review, so the PR cannot merge either way and the colour must say so.
+
+Whose move it is -- fix something, or wait for a re-read -- is carried by
+`decknix--hub-changes-icon\=', not by the colour.  Conflating the two is
+how followupboss#255 rendered green: every thread was resolved, so the
+block read as cleared, and the face fell through to the passing build."
+  (equal (alist-get 'review_decision item) "CHANGES_REQUESTED"))
+
 (defun decknix--hub-awaiting-rereview-p (item)
   "Return non-nil when ITEM\='s requested changes have all been addressed.
 
@@ -353,12 +366,17 @@ reduce sidebar duplication."
              ;; reasons already live, and a marker says which.
              (shape (decknix-lifecycle-shape 'open))
              (face (cond
-                    ;; BLOCKED, whatever the build says -- but only while
-                    ;; the reviewer is actually waiting.  Once every thread
-                    ;; is resolved the work is done and the PR is waiting on
-                    ;; a re-review, which is somebody else's move and must
-                    ;; not read as "go and fix this".
-                    ((decknix--hub-changes-outstanding-p item) 'error)
+                    ;; BLOCKED, whatever the build says, and whatever has
+                    ;; been pushed since.  GitHub will not merge this PR
+                    ;; until the blocking reviewer submits a new review, so
+                    ;; the colour tracks THAT and nothing else; `⊖' versus
+                    ;; `↻' is what says whose move it is.
+                    ;;
+                    ;; Softening it once the threads were resolved is how
+                    ;; followupboss#255 came out green while GitHub had it
+                    ;; at CHANGES_REQUESTED: the row said "ready to ship"
+                    ;; about a PR that could not be merged.
+                    ((decknix--hub-review-blocked-p item) 'error)
                     ((or tc-fail (equal classified "fail")) 'error)
                     ((equal classified "soft_fail")
                      '(:foreground "orange" :weight bold))
@@ -367,7 +385,15 @@ reduce sidebar duplication."
                     ;; No checks reported at all -- rare (2 PRs of 42
                     ;; measured), and genuinely unknown rather than fine.
                     (t 'shadow))))
-        (decknix--hub-icon shape (decknix--hub-weight-for face approved)))))))
+        ;; Approval-weight is suppressed while a reviewer is blocking.  One
+        ;; approval plus a later CHANGES_REQUESTED are both true facts, but
+        ;; bold is the row's "ship it" channel, and GitHub will not merge
+        ;; this -- so the approval is reported by the Reviews section rather
+        ;; than by emboldening a row that cannot proceed.
+        (decknix--hub-icon shape
+                           (decknix--hub-weight-for
+                            face (and approved
+                                      (not (decknix--hub-review-blocked-p item))))))))))
 
 (defun decknix--hub-weight-for (face approved)
   "Return FACE, emboldened when APPROVED.

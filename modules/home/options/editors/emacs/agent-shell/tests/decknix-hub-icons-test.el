@@ -811,5 +811,53 @@ going silent across the board."
     (should (string-match-p "\\." icons))))
 
 
+;; --- a blocked PR stays red --------------------------------------------
+;;
+;; followupboss#255: GitHub at CHANGES_REQUESTED, 0 of 9 threads
+;; unresolved, build passing.  It rendered a GREEN full circle -- "approved
+;; and ready to ship" -- about a PR GitHub would not merge.  The cause was
+;; the colour trying to carry whose-move as well as can-this-merge.
+
+(ert-deftest decknix-hub-icons--changes-requested-is-red ()
+  (let ((icon (decknix--hub-primary-status-icon
+               '((state . "OPEN") (review_decision . "CHANGES_REQUESTED")
+                 (checks_state . "pass"))
+               'wip)))
+    (should (eq 'error (get-text-property 0 'face icon)))))
+
+(ert-deftest decknix-hub-icons--resolving-every-thread-does-not-turn-it-green ()
+  "The exact #255 shape: stale, passing build, nothing unresolved.  GitHub
+still holds the decision until the reviewer looks again."
+  (let ((icon (decknix--hub-primary-status-icon
+               '((state . "OPEN") (review_decision . "CHANGES_REQUESTED")
+                 (review_stale . t) (unresolved . 0) (checks_state . "pass"))
+               'wip)))
+    (should (eq 'error (get-text-property 0 'face icon)))))
+
+(ert-deftest decknix-hub-icons--whose-move-rides-on-the-marker-not-the-colour ()
+  "Both are red; the marker is what separates `go and fix this\=' from
+`somebody owes you a re-read\='."
+  (let ((outstanding '((state . "OPEN") (review_decision . "CHANGES_REQUESTED")))
+        (stale '((state . "OPEN") (review_decision . "CHANGES_REQUESTED")
+                 (review_stale . t))))
+    (should (equal "⊖" (substring-no-properties
+                        (decknix--hub-changes-icon outstanding))))
+    (should (equal "↻" (substring-no-properties
+                        (decknix--hub-changes-icon stale))))
+    (should (eq 'error (get-text-property
+                        0 'face (decknix--hub-primary-status-icon stale 'wip))))
+    (should (eq 'error (get-text-property
+                        0 'face (decknix--hub-primary-status-icon outstanding 'wip))))))
+
+(ert-deftest decknix-hub-icons--a-blocked-pr-is-not-reported-approved ()
+  "An earlier approval plus a later CHANGES_REQUESTED must not carry the
+approval weight: bold is the row\='s `ship it\=' channel, and GitHub will not
+merge a PR whose decision sits at CHANGES_REQUESTED."
+  (let ((icon (decknix--hub-primary-status-icon
+               '((state . "OPEN") (review_decision . "CHANGES_REQUESTED")
+                 (approvers . ("someone")) (checks_state . "pass"))
+               'wip)))
+    (should (eq 'error (get-text-property 0 'face icon)))))
+
 (provide 'decknix-hub-icons-test)
 ;;; decknix-hub-icons-test.el ends here
