@@ -216,5 +216,54 @@ markers both are visible."
     (should (eq 'warning (get-text-property 0 'face d)))
     (should (eq 'error (get-text-property 0 'face o)))))
 
+;; --- the unattended section's summary rows ---------------------------
+;;
+;; The repo rows this section replaced carried NO text property, so RET on
+;; one did nothing.  A count row that cannot reach its own remedy repeats
+;; that in a smaller space, which is why the property is pinned here.
+
+(defun decknix-lr-test--render-dormant (dormant)
+  "Return the rendered Unattended section for DORMANT."
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'decknix--sidebar-render-section-header)
+               (lambda (title &rest _) (insert title "\n"))))
+      (decknix--layout-render-dormant 0 48 dormant))
+    (buffer-string)))
+
+(ert-deftest decknix-layout-render--orphan-count-can-reach-its-remedy ()
+  (let* ((out (decknix-lr-test--render-dormant
+               (list :worktrees (list (list :branch "a" :orphan t)))))
+         (pos (string-match "orphaned" out)))
+    (should pos)
+    (should (get-text-property pos 'decknix-layout-orphan-prune out))))
+
+(ert-deftest decknix-layout-render--a-clean-worktree-gets-no-row ()
+  "Only the counted summary, so the section cannot fill up with rows that
+hold no decision."
+  (let ((out (decknix-lr-test--render-dormant
+              (list :worktrees (list (list :branch "quiet-branch"))))))
+    (should-not (string-match-p "quiet-branch" out))
+    (should (string-match-p "1 quiet" out))))
+
+(ert-deftest decknix-layout-render--a-dirty-worktree-is-named ()
+  "Uncommitted work is the one thing here that can be lost, so it is never
+reduced to a count."
+  (let ((out (decknix-lr-test--render-dormant
+              (list :worktrees (list (list :branch "has-work" :dirty t))))))
+    (should (string-match-p "has-work" out))))
+
+(ert-deftest decknix-layout-render--nothing-unattended-renders-nothing ()
+  (should (equal "" (decknix-lr-test--render-dormant nil))))
+
+(ert-deftest decknix-layout-render--the-limit-bounds-rows-and-names-the-tail ()
+  (let* ((decknix-sidebar-layout-dormant-limit 2)
+         (out (decknix-lr-test--render-dormant
+               (list :worktrees (list (list :branch "w1" :dirty t)
+                                      (list :branch "w2" :dirty t)
+                                      (list :branch "w3" :dirty t))))))
+    (should (string-match-p "w1" out))
+    (should-not (string-match-p "w3" out))
+    (should (string-match-p "1 more over the limit" out))))
+
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here
