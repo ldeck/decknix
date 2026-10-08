@@ -426,6 +426,7 @@ window, since the glyphs are the part worth keeping when space runs out."
   (let* ((raw (plist-get pr :pr))
          (icons (concat (decknix--hub-author-icon raw)
                         (decknix--hub-primary-status-icon raw 'wip)
+                        (decknix--hub-changes-icon raw)
                         (decknix--hub-conflict-icon raw)
                         (decknix--hub-stale-approval-icon raw)
                         (decknix--hub-unresolved-icon raw)

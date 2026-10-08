@@ -171,11 +171,38 @@ bold says approved, yellow says building."
                '((approvers . ("x")) (ci . ((status . "fail")))) 'wip)))
     (should (dk-lc--boldp icon))))
 
-(ert-deftest dk-lc--changes-requested-keeps-its-own-shape ()
-  "A blocker, not a degree of progress."
-  (should (equal "⊖" (dk-lc--glyph (decknix--hub-primary-status-icon
+(ert-deftest dk-lc--a-blocking-reviewer-makes-the-row-red ()
+  "followupboss#255: CHANGES_REQUESTED with CI PASSING rendered green,
+because colour reported only the build.  A reviewer asking for changes
+stops the PR exactly as a red build does."
+  (should (eq 'error (dk-lc--face (decknix--hub-primary-status-icon
+                                   '((review_decision . "CHANGES_REQUESTED")
+                                     (ci . ((status . "pass"))))
+                                   'wip)))))
+
+(ert-deftest dk-lc--changes-requested-does-not-take-the-shape ()
+  "A reviewer blocking is not a stage of progress.  As a shape it erased
+whether the PR was a draft or open, the same fault a conflict had."
+  (should (equal "●" (dk-lc--glyph (decknix--hub-primary-status-icon
                                     '((review_decision . "CHANGES_REQUESTED"))
+                                    'wip))))
+  (should (equal "◐" (dk-lc--glyph (decknix--hub-primary-status-icon
+                                    '((draft . t)
+                                      (review_decision . "CHANGES_REQUESTED"))
                                     'wip)))))
+
+(ert-deftest dk-lc--a-red-row-says-why-it-is-red ()
+  "A broken build and a waiting reviewer call for different work, so the
+colour alone is not enough."
+  (should (string-match-p "⊖" (decknix--hub-changes-icon
+                               '((review_decision . "CHANGES_REQUESTED")))))
+  (should (equal "" (decknix--hub-changes-icon
+                     '((review_decision . "REVIEW_REQUIRED"))))))
+
+(ert-deftest dk-lc--a-failing-build-is-red-without-the-reviewer-marker ()
+  (let ((item '((ci . ((status . "fail"))))))
+    (should (eq 'error (dk-lc--face (decknix--hub-primary-status-icon item 'wip))))
+    (should (equal "" (decknix--hub-changes-icon item)))))
 
 (ert-deftest dk-lc--colour-no-longer-depends-on-whose-pr-it-is ()
   "Which court it is in is carried by the SECTION."

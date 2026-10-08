@@ -194,6 +194,17 @@ which is what makes it worth a glyph of its own."
   (and (decknix--hub-pr-approved-p item)
        (> (decknix--hub-pr-unresolved item) 0)))
 
+(defun decknix--hub-changes-icon (item)
+  "Return a marker when a reviewer has asked ITEM for changes.
+
+The colour already says the PR cannot proceed; this says WHY, the way
+`!\=' distinguishes a conflict from a failing build.  Without it a red row
+could be a broken build or a waiting reviewer, which call for different
+work."
+  (if (equal (alist-get 'review_decision item) "CHANGES_REQUESTED")
+      (decknix--hub-icon "⊖" 'error)
+    ""))
+
 (defun decknix--hub-conflict-icon (item)
   "Return a marker when ITEM cannot merge, or an empty string.
 
@@ -312,13 +323,19 @@ reduce sidebar duplication."
              (changes (equal decision "CHANGES_REQUESTED"))
              ;; FULL circle: an open PR.  The shape channel says what KIND
              ;; of thing this is -- worktree, draft, open, closed -- so
-             ;; approval cannot also live there, and colour is spent on the
-             ;; build.  It rides on WEIGHT instead: a bold full circle is
-             ;; approved.  Changes-requested keeps its own shape, being a
-             ;; blocker rather than a degree of progress.
-             (shape (cond (changes "⊖")
-                          (t (decknix-lifecycle-shape 'open))))
+             ;; nothing else may take it.  Changes-requested had, which
+             ;; broke that for the same reason a conflict did: a reviewer
+             ;; blocking is not a stage of progress, it is a reason the PR
+             ;; cannot proceed.  It moves to the colour, where the other
+             ;; reasons already live, and a marker says which.
+             (shape (decknix-lifecycle-shape 'open))
              (face (cond
+                    ;; BLOCKED, whatever the build says.  A reviewer asking
+                    ;; for changes stops the PR exactly as a red build does,
+                    ;; and followupboss#255 -- CHANGES_REQUESTED with CI
+                    ;; passing -- rendered green while a reviewer was
+                    ;; waiting on it.
+                    (changes 'error)
                     ((or tc-fail (equal classified "fail")) 'error)
                     ((equal classified "soft_fail")
                      '(:foreground "orange" :weight bold))
