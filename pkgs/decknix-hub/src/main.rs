@@ -5,6 +5,7 @@
 // Emacs, CLI, and other consumers read those files (file-notify for live updates).
 
 mod jira;
+mod quota;
 mod teamcity;
 
 use chrono::{DateTime, Utc};
@@ -92,6 +93,7 @@ struct HubConfig {
     github: GitHubConfig,
     jira: jira::JiraConfig,
     teamcity: teamcity::TeamCityConfig,
+    quotas: quota::QuotaConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -116,6 +118,7 @@ impl Default for HubConfig {
             github: GitHubConfig::default(),
             jira: jira::JiraConfig::default(),
             teamcity: teamcity::TeamCityConfig::default(),
+            quotas: quota::QuotaConfig::default(),
         }
     }
 }
@@ -2283,6 +2286,16 @@ async fn main() {
         eprintln!("hub: teamcity proxy: {}", config.teamcity.proxy_url);
         handles.push(tokio::spawn(teamcity::run_teamcity_adapter(
             config.teamcity,
+            dir.clone(),
+            meta.clone(),
+            cli.once,
+        )));
+    }
+
+    if config.quotas.enabled {
+        eprintln!("hub: token-quotas adapter: every {}s", config.quotas.interval_secs);
+        handles.push(tokio::spawn(quota::run_quota_adapter(
+            config.quotas,
             dir.clone(),
             meta.clone(),
             cli.once,

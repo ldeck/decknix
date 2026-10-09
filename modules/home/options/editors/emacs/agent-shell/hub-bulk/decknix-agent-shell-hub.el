@@ -277,6 +277,14 @@ Returns nil on any error (file missing, parse failure, etc.)."
   (setq decknix--hub-deploys
         (decknix--hub-read-json "teamcity-deploys.json")))
 
+(defvar decknix--hub-token-quotas nil
+  "Parsed token-quotas.json data (alist): remaining model quota per account.")
+
+(defun decknix--hub-refresh-token-quotas ()
+  "Re-read token-quotas.json."
+  (setq decknix--hub-token-quotas
+        (decknix--hub-read-json "token-quotas.json")))
+
 (defun decknix--hub-refresh-all ()
   "Re-read all hub JSON files."
   (decknix--hub-refresh-reviews)
@@ -284,7 +292,8 @@ Returns nil on any error (file missing, parse failure, etc.)."
   (decknix--hub-refresh-meta)
   (decknix--hub-refresh-jira)
   (decknix--hub-refresh-teamcity)
-  (decknix--hub-refresh-deploys))
+  (decknix--hub-refresh-deploys)
+  (decknix--hub-refresh-token-quotas))
 
 (defun decknix--hub-on-file-change (event)
   "Handle a file-notify EVENT for the hub directory.
@@ -304,6 +313,7 @@ backend surfaces first."
         ("jira-tasks.json"      (decknix--hub-refresh-jira))
         ("teamcity-builds.json" (decknix--hub-refresh-teamcity))
         ("teamcity-deploys.json" (decknix--hub-refresh-deploys))
+        ("token-quotas.json"    (decknix--hub-refresh-token-quotas))
         (_ nil))
       ;; Refresh the sidebar (COALESCED) if it exists.  The hub daemon
       ;; writes its JSON files in bursts -- a single poll can rewrite

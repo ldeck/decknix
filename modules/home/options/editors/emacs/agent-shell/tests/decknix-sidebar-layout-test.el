@@ -583,6 +583,48 @@ dropping work silently -- the failure it already had once."
     (should (= 0 (plist-get split :orphans)))
     (should (= 0 (plist-get split :quiet)))))
 
+;; --- token quotas ---------------------------------------------------
+
+(defconst decknix-layout-test--now (date-to-time "2026-10-09T06:00:00Z"))
+
+(ert-deftest decknix-layout--quota-until-is-compact ()
+  (should (equal "42m" (decknix--layout-quota-until "2026-10-09T06:42:00Z" decknix-layout-test--now)))
+  (should (equal "3h05" (decknix--layout-quota-until "2026-10-09T09:05:00Z" decknix-layout-test--now)))
+  (should (equal "5d" (decknix--layout-quota-until "2026-10-14T07:00:00Z" decknix-layout-test--now)))
+  (should-not (decknix--layout-quota-until nil decknix-layout-test--now)))
+
+(ert-deftest decknix-layout--quota-reset-shows-only-when-it-matters ()
+  "A reset time beside 16% is noise; beside 95% it is what you wait for."
+  (should (equal "5h 16%" (decknix--layout-quota-window
+                           '((name . "5h") (used_percent . 16) (resets_at . "2026-10-09T08:00:00Z"))
+                           decknix-layout-test--now)))
+  (should (equal "5h 95% ↻2h00" (decknix--layout-quota-window
+                                 '((name . "5h") (used_percent . 95) (resets_at . "2026-10-09T08:00:00Z"))
+                                 decknix-layout-test--now))))
+
+(ert-deftest decknix-layout--quota-face-says-whether-a-prompt-would-go-through ()
+  (should (eq 'success (decknix--layout-quota-face '((windows . (((used_percent . 9))))))))
+  (should (eq 'warning (decknix--layout-quota-face '((windows . (((used_percent . 85))))))))
+  (should (eq 'error (decknix--layout-quota-face '((limit_reached . t)))))
+  (should (eq 'error (decknix--layout-quota-face '((error . "token expired"))))))
+
+(ert-deftest decknix-layout--a-refusing-account-is-not-green-at-low-usage ()
+  "Anthropic at 16% with extra usage off refused Pi outright."
+  (should (eq 'warning (decknix--layout-quota-face
+                        '((windows . (((used_percent . 16))))
+                          (note . "extra usage off: refuses third-party apps"))))))
+
+(ert-deftest decknix-layout--quota-lines-fit-and-carry-the-reason ()
+  (let ((lines (decknix--layout-quota-lines
+                '((label . "claude") (plan . "max 20x")
+                  (windows . (((name . "5h") (used_percent . 16)) ((name . "week") (used_percent . 10))))
+                  (note . "extra usage off: refuses third-party apps"))
+                decknix-layout-test--now 47)))
+    (should (= 2 (length lines)))
+    (should (string-match-p "claude.*5h 16%.*week 10%" (car lines)))
+    (should (string-match-p "extra usage off" (cadr lines)))
+    (dolist (l lines) (should (<= (string-width l) 47)))))
+
 ;; --- worktree labels ------------------------------------------------
 ;;
 ;; A review worktree is checked out detached at the PR head, so its branch

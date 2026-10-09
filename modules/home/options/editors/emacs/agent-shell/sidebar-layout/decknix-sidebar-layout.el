@@ -34,6 +34,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'decknix-session-assoc)
+(require 'decknix-hub-icons)
 (defvar decknix--agent-assoc-backfilled)
 (require 'subr-x)
 
@@ -1026,6 +1027,78 @@ something records one."
    ((eq (decknix--layout-wt-build wt) 'none)
     (decknix-lifecycle-shape 'worktree-new))
    (t (decknix-lifecycle-shape 'worktree))))
+
+;; --- token quotas ----------------------------------------------------
+;;
+;; One row per model account: plan, then each usage window as `NAME PCT%'
+;; with the time until it resets when it is the one holding things up.  A
+;; Pi session spent an afternoon failing one provider at a time -- Codex
+;; over its limit, the Anthropic login lapsed and then refused for want of
+;; extra usage, the Gemini key on free tier -- with nothing anywhere saying
+;; which accounts had room.
+
+(defun decknix--layout-quota-time (iso)
+  "Return ISO as an Emacs time, or nil."
+  (and (stringp iso) (ignore-errors (date-to-time iso))))
+
+(defun decknix--layout-quota-until (iso now)
+  "Return a compact time from NOW until ISO: `42m\=', `3h05\=', `5d\='."
+  (let ((at (decknix--layout-quota-time iso)))
+    (when at
+      (let ((secs (max 0 (floor (float-time (time-subtract at now))))))
+        (cond ((< secs 3600) (format "%dm" (max 1 (/ secs 60))))
+              ((< secs 86400) (format "%dh%02d" (/ secs 3600) (/ (% secs 3600) 60)))
+              (t (format "%dd" (/ secs 86400))))))))
+
+(defun decknix--layout-quota-worst (account)
+  "Return ACCOUNT\='s highest window usage in percent, 100 when refused."
+  (if (alist-get 'limit_reached account)
+      100
+    (apply #'max 0 (mapcar (lambda (w) (or (alist-get 'used_percent w) 0))
+                           (alist-get 'windows account)))))
+
+(defun decknix--layout-quota-face (account)
+  "Return the face for ACCOUNT: can it take a prompt right now?
+
+A note counts against it: Anthropic at 16% with extra usage off refuses Pi
+outright, and green beside it would say the opposite of what happens."
+  (let ((worst (decknix--layout-quota-worst account)))
+    (cond ((or (alist-get 'error account) (>= worst 100)) 'error)
+          ((or (>= worst 80) (alist-get 'note account)) 'warning)
+          (t 'success))))
+
+(defun decknix--layout-quota-window (w now)
+  "Return window W as `5h 16%\=', adding `↻3h05\=' once it is nearly spent.
+The reset time is only worth the width when it is what you are waiting on."
+  (let* ((pct (round (or (alist-get 'used_percent w) 0)))
+         (until (and (>= pct 80)
+                     (decknix--layout-quota-until (alist-get 'resets_at w) now))))
+    (concat (format "%s %d%%" (alist-get 'name w) pct)
+            (if until (format " ↻%s" until) ""))))
+
+(defun decknix--layout-quota-lines (account now width)
+  "Return the rendered lines for ACCOUNT at NOW, each at most WIDTH wide.
+
+The first line is the label, plan and windows, coloured by whether the
+account can take a prompt.  A second, dimmer line carries the note or
+error, since those are the reason an account with room still refuses."
+  (let* ((face (decknix--layout-quota-face account))
+         (glyph (decknix-lifecycle-shape (if (eq face 'error) 'closed 'open)))
+         (left (format " %s  %-7s %s" glyph (alist-get 'label account)
+                       (or (alist-get 'plan account) "")))
+         (right (mapconcat (lambda (w) (decknix--layout-quota-window w now))
+                           (alist-get 'windows account) "  "))
+         (pad (max 1 (- width (string-width left) (string-width right))))
+         (main (propertize (truncate-string-to-width
+                            (concat left (make-string pad ?\s) right) width)
+                           'face face))
+         (detail (or (alist-get 'error account) (alist-get 'note account))))
+    (delq nil
+          (list main
+                (and detail
+                     (propertize (truncate-string-to-width
+                                  (concat "      " detail) width nil nil "…")
+                                 'face 'font-lock-comment-face))))))
 
 (defun decknix--layout-hash-p (s)
   "Return non-nil when S looks like an abbreviated or full commit hash."
