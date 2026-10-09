@@ -69,7 +69,7 @@ let
     temp=$(${pkgs.coreutils}/bin/mktemp "$config.XXXXXX")
     trap '${pkgs.coreutils}/bin/rm -f "$temp"' EXIT
     ${pkgs.jq}/bin/jq --arg bin ${escapeShellArg piBin} '.bin = $bin' "$config" > "$temp"
-    if ! ${pkgs.coreutils}/bin/cmp -s "$config" "$temp"; then
+    if ! ${pkgs.diffutils}/bin/cmp -s "$config" "$temp"; then
       ${pkgs.coreutils}/bin/chmod --reference="$config" "$temp"
       ${pkgs.coreutils}/bin/mv -f "$temp" "$config"
     fi
