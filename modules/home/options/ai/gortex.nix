@@ -54,6 +54,27 @@ let
     ${builtins.readFile ./gortex-orphan-cleanup.sh}
   '';
 
+  piBin = if cfg.daemon.enable then pkgs.writeShellScript "gortex-pi-managed" ''
+    export GORTEX_PACKAGE_BIN=${escapeShellArg gortexBin}
+    ${builtins.readFile ./gortex-pi-bin.sh}
+  '' else gortexBin;
+
+  piConfig = pkgs.writeShellScript "gortex-pi-config" ''
+    set -euo pipefail
+    config=${escapeShellArg "${home}/.pi/agent/extensions/gortex.json"}
+    if [ ! -f "$config" ]; then
+      echo "gortex: Pi package configuration is missing" >&2
+      exit 1
+    fi
+    temp=$(${pkgs.coreutils}/bin/mktemp "$config.XXXXXX")
+    trap '${pkgs.coreutils}/bin/rm -f "$temp"' EXIT
+    ${pkgs.jq}/bin/jq --arg bin ${escapeShellArg piBin} '.bin = $bin' "$config" > "$temp"
+    if ! ${pkgs.coreutils}/bin/cmp -s "$config" "$temp"; then
+      ${pkgs.coreutils}/bin/chmod --reference="$config" "$temp"
+      ${pkgs.coreutils}/bin/mv -f "$temp" "$config"
+    fi
+  '';
+
   # The MCP client every agent spawns.  `--proxy` makes the absence of a
   # daemon a hard error rather than a silent fall back to an embedded,
   # single-repo graph that reports itself as DEGRADED: a quietly worse answer
@@ -381,9 +402,11 @@ in
           `~/.pi/agent/extensions/gortex.json` configuration, driven by a
           tightly-scoped `gortex install --agents=pi`.
 
-          `--no-claude-md --no-hooks` keep that invocation to the Pi package
-          and its ~/.pi/agent/extensions/gortex.json configuration; without
-          them the same command would also merge a rule block into
+          With the managed daemon enabled, Pi's `daemon start --detach` call
+          is suppressed; launchd owns the daemon and Pi still forwards every
+          MCP request. `--no-claude-md --no-hooks` keep installation to the Pi
+          package and its ~/.pi/agent/extensions/gortex.json configuration;
+          without them the same command would also merge a rule block into
           ~/.claude/CLAUDE.md and install user-level hooks, both of which are
           agentSync's to own.
         '';
@@ -465,8 +488,12 @@ in
     (mkIf cfg.agents.pi {
       home.activation.gortexPiExtension =
         config.lib.dag.entryAfter [ "writeBoundary" ] ''
-          $DRY_RUN_CMD ${gortexBin} install --agents=pi \
-            --no-claude-md --no-hooks >/dev/null 2>&1 || true
+          if ! $DRY_RUN_CMD ${gortexBin} install --agents=pi \
+            --no-claude-md --no-hooks >/dev/null 2>&1; then
+            echo "gortex: Pi integration install failed" >&2
+          elif ! $DRY_RUN_CMD ${piConfig}; then
+            echo "gortex: Pi integration configuration failed" >&2
+          fi
         '';
     })
   ]);

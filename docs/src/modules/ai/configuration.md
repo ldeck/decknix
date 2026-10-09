@@ -411,8 +411,11 @@ Pi is the one that surprises people: its help mentions MCP nowhere and its
 settings carry no `mcpServers` key, which is why gortex's Pi adapter installs
 the `pi-gortex` package and writes `~/.pi/agent/extensions/gortex.json` for
 its runtime configuration. That JSON file is not itself an extension; Pi loads
-the package's `index.ts`. Declaring an MCP entry for Pi looks right in Nix
-and does nothing.
+the package's `index.ts`. When launchd manages Gortex, decknix sets the Pi
+package's binary to a wrapper that skips its unconditional detached daemon
+start but forwards its MCP requests. This prevents Pi session reloads from
+creating another daemon while the managed service is still opening its graph.
+Declaring an MCP entry for Pi looks right in Nix and does nothing.
 
 ### Workspace slugs
 
