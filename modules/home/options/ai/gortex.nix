@@ -49,6 +49,11 @@ let
 
   gortexBin = "${cfg.package}/bin/gortex";
 
+  orphanCleanup = pkgs.writeShellScript "gortex-orphan-cleanup" ''
+    export PATH=${makeBinPath [ pkgs.coreutils pkgs.gawk ]}:$PATH
+    ${builtins.readFile ./gortex-orphan-cleanup.sh}
+  '';
+
   # The MCP client every agent spawns.  `--proxy` makes the absence of a
   # daemon a hard error rather than a silent fall back to an embedded,
   # single-repo graph that reports itself as DEGRADED: a quietly worse answer
@@ -399,6 +404,14 @@ in
     }
 
     (mkIf cfg.daemon.enable {
+      home.activation.gortexOrphanCleanup =
+        config.lib.dag.entryAfter [ "gortexRoster" "setupLaunchAgents" ] ''
+          if ! $DRY_RUN_CMD ${pkgs.coreutils}/bin/timeout --kill-after=2s 12s \
+            ${orphanCleanup} ${escapeShellArg gortexBin} "$(${pkgs.coreutils}/bin/id -u)"; then
+            echo "gortex: orphan cleanup failed or timed out; check old daemons" >&2
+          fi
+        '';
+
       launchd.agents.gortex = {
         enable = true;
         config = {
