@@ -615,5 +615,23 @@ branch is gone from origin\', whose remedy is a bulk prune."
         (setq line-num (1+ line-num)))))
   line-num)
 
+(defun decknix--layout-render-tokens (line-num width)
+  "Render the Tokens section: remaining quota per model account.
+Returns LINE-NUM.  Reads what the hub daemon last wrote, so painting it
+costs no network; an absent file renders nothing rather than a guess."
+  (let ((accounts (and (boundp 'decknix--hub-token-quotas)
+                       (alist-get 'accounts decknix--hub-token-quotas))))
+    (when accounts
+      (insert "\n")
+      (setq line-num (1+ line-num))
+      (decknix--sidebar-render-section-header "Tokens" 'tokens)
+      (setq line-num (1+ line-num))
+      (let ((now (current-time)))
+        (dolist (account accounts)
+          (dolist (line (decknix--layout-quota-lines account now width))
+            (insert (propertize line 'decknix-layout-quota account) "\n")
+            (setq line-num (1+ line-num)))))))
+  line-num)
+
 (provide 'decknix-sidebar-layout-render)
 ;;; decknix-sidebar-layout-render.el ends here

@@ -1981,9 +1981,11 @@ let
   decknix-sidebar-layout-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-layout";
     src = ./agent-shell/sidebar-layout;
-    # `decknix-hub-icons' is required by the RENDER file in this same src
-    # dir, not by this one: `trivialBuild' compiles every `.el' it finds,
-    # so a sibling's dependency has to be declared here too.
+    # `decknix-hub-icons' supplies the lifecycle shapes for worktree and
+    # quota glyphs, and must be `require'd, not just listed: listing puts it
+    # on the load path but loads nothing, and the quota tests failed in
+    # isolation with void-function `decknix-lifecycle-shape' while passing
+    # in a session that had already loaded it.
     #
     # `decknix-session-assoc' supplies the observed worktree association
     # the claim rule now prefers over tags.
@@ -6543,6 +6545,12 @@ duration -- the most important number on this branch."
               ;; ── Hub: Tasks (Jira) ──
               (when (fboundp 'decknix--hub-render-tasks)
                 (setq line-num (decknix--hub-render-tasks line-num)))
+
+              ;; ── Tokens: remaining quota per model account ──
+              (when (and (bound-and-true-p decknix-sidebar-layout-enable)
+                         (fboundp 'decknix--layout-render-tokens))
+                (setq line-num (decknix--layout-render-tokens
+                                line-num (max 24 (1- (decknix--layout-sidebar-width))))))
 
               ;; Pre-warm: kick off async fetches for all linked PRs
               ;; before rendering so they run concurrently rather than
