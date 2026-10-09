@@ -352,7 +352,14 @@ decknix.ai.gortex = {
 ```
 
 The launchd service defaults on only once the roster is non-empty — a daemon
-holding an empty graph is a resident process answering nothing.
+holding an empty graph is a resident process answering nothing. After the
+launchd service starts on `decknix switch`, activation stops orphaned Gortex
+daemons from older Nix versions owned by the same user. It verifies that the
+current-version launchd daemon is running first, leaves MCP clients and the
+managed daemon untouched, and escalates from SIGTERM to SIGKILL after three
+seconds if an old daemon does not exit. Cleanup is bounded and never deletes
+graph data; if the managed daemon is unavailable, it leaves the old process
+alone rather than risk taking down the only working daemon.
 
 Indexing and watching tracked repositories consume CPU and disk even when
 agents do not query the graph. Keep `roster.roots` narrow, prefer `canonical`
