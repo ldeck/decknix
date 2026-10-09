@@ -305,9 +305,12 @@ calling it from the render path cannot queue an audit per paint."
           (when (decknix--layout-expanded-p repo)
             (dolist (pr (plist-get group :prs))
               (insert (propertize (decknix--layout-pr-label pr width)
-                                  'face (if (decknix--layout-attention-p
-                                             (plist-get pr :state))
-                                            'warning 'font-lock-comment-face)
+                                  'face (cond ((decknix--layout-attention-p
+                                                (plist-get pr :state))
+                                               'warning)
+                                              ((eq 'updated (decknix--layout-review-phase pr))
+                                               (alist-get 'updated decknix-sidebar-layout-group-faces))
+                                              (t 'font-lock-comment-face))
                                   'decknix-layout-pr pr
                                   'decknix-hub-type 'request
                                   'decknix-hub-repo (alist-get 'repo (plist-get pr :item))
