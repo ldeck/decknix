@@ -376,14 +376,16 @@ in
 
           Unlike the others this is NOT an MCP entry: Pi does not speak MCP at
           all (its help mentions it nowhere, and its settings carry no
-          `mcpServers` key) — it loads *extensions*.  So gortex's Pi adapter
-          installs `~/.pi/agent/extensions/gortex/index.ts` instead, which we
-          drive with a tightly-scoped `gortex install --agents=pi`.
+          `mcpServers` key) — it loads *extensions*.  Gortex's Pi adapter
+          installs the `pi-gortex` package and writes its
+          `~/.pi/agent/extensions/gortex.json` configuration, driven by a
+          tightly-scoped `gortex install --agents=pi`.
 
-          `--no-claude-md --no-hooks` keep that invocation to the single Pi
-          file; without them the same command would also merge a rule block
-          into ~/.claude/CLAUDE.md and install user-level hooks, both of which
-          are agentSync's to own.
+          `--no-claude-md --no-hooks` keep that invocation to the Pi package
+          and its ~/.pi/agent/extensions/gortex.json configuration; without
+          them the same command would also merge a rule block into
+          ~/.claude/CLAUDE.md and install user-level hooks, both of which are
+          agentSync's to own.
         '';
       };
     };
@@ -434,13 +436,10 @@ in
           StandardOutPath = "${home}/.gortex/launchd.out.log";
           StandardErrorPath = "${home}/.gortex/launchd.err.log";
           EnvironmentVariables = {
-            # A service supervisor starts with a near-empty environment; the
-            # daemon otherwise resolves a different config/store root than the
-            # shell does and would silently index into the wrong place.
+            # Keep the daemon on the same ~/.gortex store and socket as agents
+            # started without XDG_* variables. Setting those only here makes
+            # a healthy launchd service invisible to its own MCP clients.
             HOME = home;
-            XDG_CONFIG_HOME = "${home}/.config";
-            XDG_DATA_HOME = "${home}/.local/share";
-            XDG_CACHE_HOME = "${home}/.cache";
           } // optionalAttrs (cfg.daemon.httpAuthTokenEnv != null) {
             # Named indirection only: the variable is resolved from the
             # daemon's environment at run time, so no token reaches the store.

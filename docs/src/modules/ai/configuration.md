@@ -359,7 +359,12 @@ current-version launchd daemon is running first, leaves MCP clients and the
 managed daemon untouched, and escalates from SIGTERM to SIGKILL after three
 seconds if an old daemon does not exit. Cleanup is bounded and never deletes
 graph data; if the managed daemon is unavailable, it leaves the old process
-alone rather than risk taking down the only working daemon.
+alone rather than risk taking down the only working daemon. The service
+sets `HOME` but does not set `XDG_*`: agents started from Emacs or a shell
+usually have no `XDG_*` variables, and Gortex then uses `~/.gortex` for its
+graph and daemon socket. Setting `XDG_*` only for launchd creates a second,
+empty graph and leaves the clients trying to start a detached daemon on a
+different socket. Keep the service and clients on the same store.
 
 Indexing and watching tracked repositories consume CPU and disk even when
 agents do not query the graph. Keep `roster.roots` narrow, prefer `canonical`
@@ -400,12 +405,14 @@ wired through the seam decknix already manages for it:
 |-------|-----|-----|
 | Claude Code | `decknix.ai.claude.mcpServers` | jq-merges only `.mcpServers`, leaving runtime keys alone |
 | Augment | `decknix.cli.auggie.mcpServers` | hand-written: gortex ships no Augment adapter, but Augment speaks MCP |
-| Pi | `gortex install --agents=pi` | Pi does **not** speak MCP — it loads extensions |
+| Pi | `gortex install --agents=pi` | Pi does **not** speak MCP — it loads the `pi-gortex` package |
 
 Pi is the one that surprises people: its help mentions MCP nowhere and its
 settings carry no `mcpServers` key, which is why gortex's Pi adapter installs
-`~/.pi/agent/extensions/gortex/index.ts` instead. Declaring an MCP entry for
-Pi looks right in Nix and does nothing.
+the `pi-gortex` package and writes `~/.pi/agent/extensions/gortex.json` for
+its runtime configuration. That JSON file is not itself an extension; Pi loads
+the package's `index.ts`. Declaring an MCP entry for Pi looks right in Nix
+and does nothing.
 
 ### Workspace slugs
 
