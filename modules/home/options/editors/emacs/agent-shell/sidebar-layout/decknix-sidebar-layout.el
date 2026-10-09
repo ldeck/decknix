@@ -1027,6 +1027,38 @@ something records one."
     (decknix-lifecycle-shape 'worktree-new))
    (t (decknix-lifecycle-shape 'worktree))))
 
+(defun decknix--layout-hash-p (s)
+  "Return non-nil when S looks like an abbreviated or full commit hash."
+  (and (stringp s) (string-match-p "\\`[0-9a-f]\\{7,40\\}\\'" s)))
+
+(defun decknix--layout-wt-review-number (wt)
+  "Return the PR number when WT is a review worktree (`.../pr-N'), else nil."
+  (let ((dir (and (plist-get wt :path)
+                  (file-name-nondirectory
+                   (directory-file-name (plist-get wt :path))))))
+    (and dir (string-match "\\`pr-\\([0-9]+\\)\\'" dir)
+         (string-to-number (match-string 1 dir)))))
+
+(defun decknix--layout-wt-label (wt &optional title-fn)
+  "Return the human label for worktree WT.
+
+Its branch, unless that is a bare commit hash: a review worktree is checked
+out detached at the PR head, so its \"branch\" was the HEAD hash and the row
+read `dfebdad\', which identifies nothing.  Such a worktree is labelled by
+the PR it reviews, with the title when TITLE-FN can supply one (called with
+the repo and number), and anything else detached falls back to its
+directory name."
+  (let ((branch (plist-get wt :branch)))
+    (if (and branch (not (decknix--layout-hash-p branch)))
+        branch
+      (let ((n (decknix--layout-wt-review-number wt)))
+        (cond
+         (n (let ((title (and title-fn (funcall title-fn (plist-get wt :repo) n))))
+              (if title (format "review #%d %s" n title) (format "review #%d" n))))
+         ((plist-get wt :path)
+          (file-name-nondirectory (directory-file-name (plist-get wt :path))))
+         (t (or branch "?")))))))
+
 (defun decknix--layout-wt-glyph (wt)
   "Return WT\='s lifecycle glyph, coloured by its build."
   (propertize (decknix--layout-wt-shape wt)
