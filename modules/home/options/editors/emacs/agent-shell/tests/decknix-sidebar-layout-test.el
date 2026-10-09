@@ -179,12 +179,13 @@ rows of each kind the group holds."
                                                 decknix-layout-test--items))
          (g (seq-find (lambda (x) (equal "upside" (plist-get x :repo))) groups))
          (label (decknix--layout-group-label g 48))
-         (humans (seq-count #'decknix--layout-pr-human-p (plist-get g :prs)))
-         (bots (seq-count #'decknix--layout-pr-bot-p (plist-get g :prs))))
+         (waiting (seq-filter #'decknix--layout-pr-waiting-p (plist-get g :prs)))
+         (humans (seq-count #'decknix--layout-pr-human-p waiting))
+         (bots (seq-count #'decknix--layout-pr-bot-p waiting)))
     (should (= humans (plist-get g :humans)))
     (should (= bots (plist-get g :bots)))
     (when (> (plist-get g :gone) 0)
-      (should (string-match-p (format "✓%d" (plist-get g :gone)) label)))))
+      (should (string-match-p (format "✗%d" (plist-get g :gone)) label)))))
 
 (ert-deftest decknix-layout--an-uncovered-request-still-gets-a-row ()
   "This is what lets Requests fold in: a PR nobody has started is a row in
@@ -342,7 +343,7 @@ most actionable row the sidebar can show."
   "A covered repo with nothing blocked gets the quiet glyph, and its right
 column reports WHAT is in there rather than how many agents are on it."
   (let ((label (decknix--layout-group-label
-                '(:repo "r" :sessions 2 :asking 0 :uncovered 0
+                '(:repo "r" :sessions 2 :doing 2 :asking 0 :uncovered 0
                         :humans 1 :bots 1) 48)))
     (should (string-match-p "●" label))
     (should (string-match-p "1@" label))
@@ -582,6 +583,88 @@ dropping work silently -- the failure it already had once."
     (should-not (plist-get split :prs))
     (should (= 0 (plist-get split :orphans)))
     (should (= 0 (plist-get split :quiet)))))
+
+;; --- where a PR stands relative to my review ---------------------------
+;;
+;; Nothing in Reviews changed after a response: an approved PR whose session
+;; had auto-closed came back as `new\=', and one left open after `LGTM + 1
+;; comment\=' looked the same whether or not the author had since pushed.
+
+(defun decknix-layout-test--rpr (item &optional state gone)
+  (list :number 1 :state state :item item :gone gone))
+
+(ert-deftest decknix-layout--an-unreviewed-pr-has-no-phase ()
+  (should-not (decknix--layout-review-phase
+               (decknix-layout-test--rpr '((review_requested_of_me . t))))))
+
+(ert-deftest decknix-layout--an-approval-with-nothing-since-is-responded ()
+  (should (eq 'responded (decknix--layout-review-phase
+                          (decknix-layout-test--rpr
+                           '((my_review . "APPROVED") (pushed_since_my_review . :false)))))))
+
+(ert-deftest decknix-layout--a-push-after-my-review-is-updated ()
+  (let ((pr (decknix-layout-test--rpr
+             '((my_review . "COMMENTED") (pushed_since_my_review . t)))))
+    (should (eq 'updated (decknix--layout-review-phase pr)))
+    (should (equal "pushed" (decknix--layout-review-update-reason pr)))))
+
+(ert-deftest decknix-layout--a-reply-to-me-is-updated ()
+  (let ((pr (decknix-layout-test--rpr '((my_review . "COMMENTED") (replies_to_me . t)))))
+    (should (eq 'updated (decknix--layout-review-phase pr)))
+    (should (equal "replied" (decknix--layout-review-update-reason pr)))))
+
+(ert-deftest decknix-layout--a-dismissed-review-is-updated ()
+  (should (eq 'updated (decknix--layout-review-phase
+                        (decknix-layout-test--rpr '((my_review . "DISMISSED")))))))
+
+(ert-deftest decknix-layout--a-pending-draft-review-is-not-a-response ()
+  (should-not (decknix--layout-review-phase
+               (decknix-layout-test--rpr '((my_review . "PENDING"))))))
+
+(ert-deftest decknix-layout--a-merged-pr-is-obsolete-whatever-i-said ()
+  (should (eq 'obsolete (decknix--layout-review-phase
+                         (decknix-layout-test--rpr '((my_review . "APPROVED")) "ready" t)))))
+
+(ert-deftest decknix-layout--a-responded-pr-with-no-session-is-not-new ()
+  "The reported fault: LGTM, session auto-closed, repo flagged new again."
+  (let* ((items '(((repo . "o/r") (number . 7) (author . "pat")
+                   (my_review . "APPROVED") (pushed_since_my_review . :false))))
+         (g (car (decknix--layout-review-groups nil items items))))
+    (should (= 0 (plist-get g :uncovered)))
+    (should (= 1 (plist-get g :responded)))
+    (should (eq 'responded (decknix--layout-group-state g)))
+    (should-not (decknix--layout-group-wants-me-p g))
+    (should (string-match-p "✓1" (decknix--layout-group-label g 48)))))
+
+(ert-deftest decknix-layout--a-pr-that-moved-since-my-review-wants-me ()
+  (let* ((items '(((repo . "o/r") (number . 7) (author . "pat")
+                   (my_review . "APPROVED") (pushed_since_my_review . t))))
+         (g (car (decknix--layout-review-groups nil items items))))
+    (should (= 1 (plist-get g :updated)))
+    (should (eq 'updated (decknix--layout-group-state g)))
+    (should (decknix--layout-group-wants-me-p g))
+    (should (string-match-p "↻1" (decknix--layout-group-label g 48)))))
+
+(ert-deftest decknix-layout--a-session-left-open-after-responding-goes-quiet ()
+  "LGTM + 1 comment, session kept open: not `doing\=' until the author moves."
+  (let* ((items '(((repo . "o/r") (number . 7) (author . "pat")
+                   (my_review . "COMMENTED") (pushed_since_my_review . :false))))
+         (g (list :repo "r" :asking 0 :uncovered 0 :sessions 1 :doing 0 :responded 1)))
+    (ignore items)
+    (should (eq 'responded (decknix--layout-group-state g)))
+    (should (string-match-p "✓" (decknix--layout-group-label g 48)))))
+
+(ert-deftest decknix-layout--a-tick-never-sits-beside-waiting-prs ()
+  (let ((label (decknix--layout-group-label
+                '(:repo "upside" :asking 0 :uncovered 8 :doing 0 :responded 1 :humans 8) 48)))
+    (should-not (string-match-p "\\`  ?✓" label))
+    (should (string-match-p "✓1" label))))
+
+(ert-deftest decknix-layout--a-responded-pr-row-says-what-i-said ()
+  (should (string-match-p "✓ approved"
+                          (decknix--layout-pr-label
+                           (decknix-layout-test--rpr '((my_review . "APPROVED")) "ready")
+                           60))))
 
 ;; --- token quotas ---------------------------------------------------
 
@@ -1004,10 +1087,11 @@ dependency bump nobody has looked at."
     (should (string-match-p "dependabot" label))
     (should (string-match-p "π" label))))
 
-(ert-deftest decknix-layout--a-finished-pr-row-reads-done ()
+(ert-deftest decknix-layout--a-finished-pr-with-a-session-reads-obsolete ()
+  "The session is still open on work that is over."
   (let ((prs (list (list :number 1 :state "asking" :item nil))))
     (decknix--layout-mark-gone prs t)
-    (should (string-match-p "done" (decknix--layout-pr-label (car prs) 60)))))
+    (should (string-match-p "obsolete" (decknix--layout-pr-label (car prs) 60)))))
 
 (ert-deftest decknix-layout--an-unmarked-row-keeps-its-session-state ()
   "With no feed, the row must still report what the session is doing
@@ -1029,7 +1113,7 @@ rather than claiming the work is over."
   (should (equal "2@ 3π" (decknix--layout-group-right 2 3 0 0))))
 
 (ert-deftest decknix-layout--group-right-reports-finished-work ()
-  (should (equal "1@ ✓4" (decknix--layout-group-right 1 0 4 0))))
+  (should (equal "1@ ✗4" (decknix--layout-group-right 1 0 4 0))))
 
 (ert-deftest decknix-layout--group-right-falls-back-to-new-count ()
   (should (equal "3 new" (decknix--layout-group-right 0 0 0 3))))
@@ -1335,7 +1419,7 @@ repos holding eight bot PRs awaiting review looked like nothing at all."
 
 (ert-deftest decknix-layout--a-repo-merely-being-worked-is-amber-not-green ()
   (should (eq 'doing (decknix--layout-group-state
-                      '(:sessions 2 :asking 0 :uncovered 0)))))
+                      '(:sessions 2 :doing 2 :asking 0 :uncovered 0)))))
 
 (ert-deftest decknix-layout--an-empty-repo-has-no-state ()
   (should-not (decknix--layout-group-state '(:repo "r"))))

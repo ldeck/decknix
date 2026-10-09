@@ -184,6 +184,11 @@ struct ReviewRequest {
     others_reviewed: Option<bool>, // true when another human's latest review is APPROVED/CHANGES_REQUESTED/COMMENTED
     #[serde(skip_serializing_if = "Option::is_none")]
     review_stale: Option<bool>, // true when a commit landed after the latest review, or CHANGES_REQUESTED with all threads resolved
+    /// A commit landed after MY latest submitted review. `review_stale`
+    /// compares against anyone's review, so it cannot say whether the PR
+    /// changed since I last looked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pushed_since_my_review: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     team_requested: Option<bool>, // true when one of user's teams was requested as reviewer
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -818,6 +823,13 @@ fn compute_others_reviewed(latest_reviews: &[GhReview], my_login: Option<&str>) 
 ///   (b) changes were requested and every inline thread is now resolved.
 /// Timestamps are ISO-8601 UTC strings, which sort lexicographically, so
 /// `>' is a valid chronological comparison.
+/// Whether a commit landed after `review_ts`.  `None` when there is no
+/// review to compare with: "not reviewed" must not read as "unchanged".
+fn pushed_after(latest_commit_ts: Option<&str>, review_ts: Option<&str>) -> Option<bool> {
+    let r = review_ts?;
+    Some(matches!(latest_commit_ts, Some(c) if c > r))
+}
+
 fn compute_review_stale(
     latest_commit_ts: Option<&str>,
     latest_review_ts: Option<&str>,
@@ -1025,6 +1037,7 @@ struct ReviewPrDetails {
     comment_mentioned: Option<bool>,
     others_reviewed: Option<bool>,
     review_stale: Option<bool>,
+    pushed_since_my_review: Option<bool>,
     team_requested: Option<bool>,
     others_requested: Option<bool>,
     needs_reply: Option<bool>,
@@ -1054,7 +1067,7 @@ impl Default for ReviewPrDetails {
         Self {
             ci: None, mergeable: None, my_review: None, mentioned: None,
             re_requested: None, comment_mentioned: None, others_reviewed: None,
-            review_stale: None,
+            review_stale: None, pushed_since_my_review: None,
             team_requested: None, others_requested: None, needs_reply: None,
             bot_pending: None, replies_to_me: None, bot_replies_to_me: None,
             i_replied_last: None, total_threads: None,
@@ -1391,6 +1404,16 @@ async fn fetch_pr_ci(
             let review_stale = compute_review_stale(
                 latest_commit_ts.as_deref(), latest_review_ts.as_deref(),
                 view.review_decision.as_deref(), total_t, unresolved_t);
+            let my_review_ts = my_login.and_then(|login| {
+                view.reviews.as_ref()?.iter()
+                    .filter(|r| r.author.as_ref()
+                        .map(|a| a.login.eq_ignore_ascii_case(login))
+                        .unwrap_or(false))
+                    .filter_map(|r| r.submitted_at.clone())
+                    .max()
+            });
+            let pushed_since_my_review =
+                pushed_after(latest_commit_ts.as_deref(), my_review_ts.as_deref());
             // People involved: authors (PR author + human committers),
             // pending reviewers, approvers, and blockers.
             let commit_logins = view.commits.as_deref()
@@ -1409,6 +1432,7 @@ async fn fetch_pr_ci(
                 comment_mentioned: Some(comment_mentioned),
                 others_reviewed: Some(others_reviewed),
                 review_stale: Some(review_stale),
+                pushed_since_my_review,
                 team_requested: Some(team_requested),
                 others_requested: Some(others_requested),
                 needs_reply: Some(needs_reply),
@@ -1624,6 +1648,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             comment_mentioned: details.comment_mentioned,
             others_reviewed: details.others_reviewed,
             review_stale: details.review_stale,
+            pushed_since_my_review: details.pushed_since_my_review,
             // `details.team_requested' only records THAT a team is requested.
             // Reading it as "one of MY teams" is an inference licensed by the
             // request query's own constraint, which the follow-up source does
@@ -2325,6 +2350,15 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pushed_after_compares_against_my_review_only() {
+        use super::pushed_after;
+        assert_eq!(pushed_after(Some("2026-10-09T05:00:00Z"), Some("2026-10-09T04:00:00Z")), Some(true));
+        assert_eq!(pushed_after(Some("2026-10-09T03:00:00Z"), Some("2026-10-09T04:00:00Z")), Some(false));
+        assert_eq!(pushed_after(None, Some("2026-10-09T04:00:00Z")), Some(false));
+        assert_eq!(pushed_after(Some("2026-10-09T05:00:00Z"), None), None);
+    }
+
     /// Build a review-thread node as the GraphQL query returns it.
     fn thread(resolved: bool, last_commenter: &str) -> serde_json::Value {
         serde_json::json!({

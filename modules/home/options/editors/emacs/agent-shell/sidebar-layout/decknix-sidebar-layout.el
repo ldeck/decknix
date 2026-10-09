@@ -280,14 +280,26 @@ fixture rather than by reading the code:
                 (live-keys (decknix--layout-live-pr-keys prs)))
            (push (list :repo repo
                        :prs prs
-                       :uncovered (seq-count (lambda (p) (null (plist-get p :state)))
+                       :uncovered (seq-count (lambda (p) (and (null (plist-get p :state))
+                                                              (decknix--layout-pr-waiting-p p)))
                                              prs)
+                       :updated (seq-count (lambda (p) (eq 'updated (decknix--layout-review-phase p)))
+                                           prs)
+                       :responded (seq-count (lambda (p) (eq 'responded (decknix--layout-review-phase p)))
+                                             prs)
+                       :doing (seq-count (lambda (p) (and (plist-get p :state)
+                                                          (decknix--layout-pr-waiting-p p)))
+                                         prs)
                        ;; PRs a session is on that have LEFT the review feed:
                        ;; merged, closed, or no longer requested of me.
                        :gone (seq-count #'decknix--layout-pr-gone-p prs)
                        :filtered (seq-count #'decknix--layout-pr-filtered-p prs)
-                       :humans (seq-count #'decknix--layout-pr-human-p prs)
-                       :bots (seq-count #'decknix--layout-pr-bot-p prs)
+                       :humans (seq-count (lambda (p) (and (decknix--layout-pr-waiting-p p)
+                                                           (decknix--layout-pr-human-p p)))
+                                          prs)
+                       :bots (seq-count (lambda (p) (and (decknix--layout-pr-waiting-p p)
+                                                         (decknix--layout-pr-bot-p p)))
+                                        prs)
                        :sessions (length covering)
                        :asking (seq-count
                                 (lambda (s)
@@ -382,6 +394,47 @@ record is not evidence the work is done."
           ((equal kind "bot") 'bot)
           (t 'human))))
 
+(defun decknix--layout-review-phase (pr)
+  "Return where PR stands relative to MY review: `obsolete\=', `updated\=',
+`responded\=' or nil.
+
+  obsolete   it has left the feed: merged, closed, or no longer asked of me
+  updated    I reviewed, and since then a commit landed, someone replied to
+             me, I was re-requested, or my review was dismissed
+  responded  I reviewed and nothing has moved since
+  nil        not reviewed by me yet
+
+Nothing in Reviews changed after a response.  An approved PR whose session
+had auto-closed even came back as `new\=', since it had no session and so
+counted as uncovered: the sidebar asked for a review just given."
+  (let* ((item (plist-get pr :item))
+         (mine (alist-get 'my_review item)))
+    (cond
+     ((decknix--layout-pr-gone-p pr) 'obsolete)
+     ((and item mine (not (equal mine "PENDING")))
+      (if (or (equal mine "DISMISSED")
+              (eq (alist-get 'pushed_since_my_review item) t)
+              (eq (alist-get 'replies_to_me item) t)
+              (eq (alist-get 're_requested item) t))
+          'updated
+        'responded))
+     (t nil))))
+
+(defun decknix--layout-review-update-reason (pr)
+  "Return why PR\='s phase is `updated\=', briefly."
+  (let ((item (plist-get pr :item)))
+    (cond ((eq (alist-get 're_requested item) t) "re-requested")
+          ((equal (alist-get 'my_review item) "DISMISSED") "dismissed")
+          ((eq (alist-get 'pushed_since_my_review item) t)
+           (if (eq (alist-get 'replies_to_me item) t) "pushed + replied" "pushed"))
+          ((eq (alist-get 'replies_to_me item) t) "replied")
+          (t "updated"))))
+
+(defun decknix--layout-pr-waiting-p (pr)
+  "Return non-nil when PR still wants a first review from me.
+Responded and obsolete PRs are not waiting, whatever their session says."
+  (null (decknix--layout-review-phase pr)))
+
 (defun decknix--layout-pr-bot-p (pr)
   "Return non-nil when PR was opened by a bot."
   (eq 'bot (decknix--layout-pr-author-kind pr)))
@@ -433,7 +486,10 @@ the top competes with the rows that do want something.  Expanding is still
 how you look at it -- see `decknix--layout-filter-groups', which reports how
 many were held back rather than dropping them silently."
   (or (> (or (plist-get group :asking) 0) 0)
-      (> (or (plist-get group :uncovered) 0) 0)))
+      (> (or (plist-get group :uncovered) 0) 0)
+      ;; Moved since I reviewed it: the third reason, and the one a
+      ;; response used to make invisible.
+      (> (or (plist-get group :updated) 0) 0)))
 
 (defun decknix--layout-filter-groups (groups attention-only)
   "Return (VISIBLE . HIDDEN-COUNT) for GROUPS.
@@ -1250,12 +1306,14 @@ not there, and the Dormant section is mostly such rows."
    " "))
 
 (defconst decknix-sidebar-layout-kind-glyphs
-  '((human . "@") (bot . "π") (gone . "✓"))
+  '((human . "@") (bot . "π") (gone . "✗") (responded . "✓") (updated . "↻"))
   "Glyph per review-row kind.
 
 `π\=' for a bot matches the author column the Requests rows already use, so
 the two sections do not invent different vocabularies for the same fact.
-`✓\=' marks work that is over -- merged, closed, or withdrawn.")
+`✗\=' marks work that is over -- merged, closed, or withdrawn -- so a
+session still on it is obsolete.  `✓\=' marks a PR I have reviewed that has
+not moved since, and `↻\=' one that has moved and wants another look.")
 
 (defun decknix--layout-group-state (group)
   "Return what GROUP is waiting on: `asking\=', `blocked\=', `new\=', `doing\=' or nil.
@@ -1267,6 +1325,7 @@ the section rendered `default\=' unless something was already shouting."
   (let ((prs (plist-get group :prs)))
     (cond
      ((> (or (plist-get group :asking) 0) 0) 'asking)
+     ((> (or (plist-get group :updated) 0) 0) 'updated)
      ((seq-some (lambda (p)
                   (let ((item (plist-get p :item)))
                     (and item
@@ -1276,14 +1335,17 @@ the section rendered `default\=' unless something was already shouting."
                 prs)
       'blocked)
      ((> (or (plist-get group :uncovered) 0) 0) 'new)
-     ((> (or (plist-get group :sessions) 0) 0) 'doing)
+     ((> (or (plist-get group :doing) 0) 0) 'doing)
+     ((> (or (plist-get group :responded) 0) 0) 'responded)
      (t nil))))
 
 (defconst decknix-sidebar-layout-group-faces
   '((asking  . warning)
+    (updated . (:foreground "#5fafd7" :weight bold))
     (blocked . error)
     (new     . (:foreground "#87af87"))
-    (doing   . (:foreground "#d7af5f")))
+    (doing   . (:foreground "#d7af5f"))
+    (responded . font-lock-comment-face))
   "Face per Reviews group state.
 
 Green for work waiting on a reviewer, amber for a session mid-flight or
@@ -1317,23 +1379,40 @@ there, and that is the distinction the section exists to draw."
          (humans (or (plist-get group :humans) 0))
          (bots (or (plist-get group :bots) 0))
          (gone (or (plist-get group :gone) 0))
-         (right (decknix--layout-group-right humans bots gone uncovered))
+         (right (decknix--layout-group-right
+                 humans bots gone uncovered
+                 (or (plist-get group :updated) 0)
+                 (or (plist-get group :responded) 0)))
          (glyph (cond ((> asking 0) "⚑")
-                      ((> (or (plist-get group :sessions) 0) 0) "●")
+                      ((> (or (plist-get group :updated) 0) 0) "↻")
+                      ((> (or (plist-get group :doing) 0) 0) "●")
+                      ;; Only when nothing else is waiting: a tick beside eight
+                      ;; unreviewed PRs read as "all done" in a live test.
+                      ((and (> (or (plist-get group :responded) 0) 0)
+                            (= uncovered 0))
+                       "✓")
                       (t "·")))
          (left (format " %s  %s" glyph repo))
          (pad (max 1 (- width (string-width left) (string-width right)))))
     (concat left (make-string pad ?\s) right)))
 
-(defun decknix--layout-group-right (humans bots gone uncovered)
-  "Return the right-hand summary for a Reviews group row."
+(defun decknix--layout-group-right (humans bots gone uncovered
+                                         &optional updated responded)
+  "Return the right-hand summary for a Reviews group row.
+UPDATED and RESPONDED count PRs I have reviewed: moved since, and not."
   (let ((parts (delq nil
-                     (list (when (> humans 0)
+                     (list (when (> (or updated 0) 0)
+                             (format "%s%d" (alist-get 'updated decknix-sidebar-layout-kind-glyphs)
+                                     updated))
+                           (when (> humans 0)
                              (format "%d%s" humans
                                      (alist-get 'human decknix-sidebar-layout-kind-glyphs)))
                            (when (> bots 0)
                              (format "%d%s" bots
                                      (alist-get 'bot decknix-sidebar-layout-kind-glyphs)))
+                           (when (> (or responded 0) 0)
+                             (format "%s%d" (alist-get 'responded decknix-sidebar-layout-kind-glyphs)
+                                     responded))
                            (when (> gone 0)
                              (format "%s%d"
                                      (alist-get 'gone decknix-sidebar-layout-kind-glyphs)
@@ -1361,7 +1440,13 @@ merged, closed or withdrawn, whatever the session still says."
          (kind (decknix--layout-pr-author-kind pr))
          (glyph (or (alist-get kind decknix-sidebar-layout-kind-glyphs) " "))
          (author (decknix--layout-pr-author pr))
-         (status (cond ((decknix--layout-pr-gone-p pr) "done")
+         (phase (decknix--layout-review-phase pr))
+         (status (cond ((eq phase 'obsolete) (if state "✗ obsolete" "✗ done"))
+                       ((eq phase 'updated)
+                        (concat "↻ " (decknix--layout-review-update-reason pr)))
+                       ((eq phase 'responded)
+                        (concat "✓ " (downcase (or (alist-get 'my_review (plist-get pr :item))
+                                                    "reviewed"))))
                        ;; Live but hidden by a filter -- conflicted or
                        ;; draft.  Saying `done' here reported a PR with a
                        ;; merge conflict as finished.
