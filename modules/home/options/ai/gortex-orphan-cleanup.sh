@@ -47,3 +47,10 @@ while read -r pid binary; do
     env kill -KILL "$pid" 2>/dev/null || true
   fi
 done <<< "$candidates"
+sleep 1
+while read -r pid binary; do
+  if still_old "$pid" "$binary"; then
+    printf 'gortex: orphaned daemon %s is still running\n' "$pid" >&2
+    exit 1
+  fi
+done <<< "$candidates"

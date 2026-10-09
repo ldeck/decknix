@@ -16,6 +16,9 @@ cat > "$tmp/ps" <<'EOF'
 if [[ "$1" == -p && "$2" == 50 ]]; then
   printf '/nix/store/new-gortex-0.64.7/bin/gortex daemon start --log-level warn\n'
 elif [[ "$1" == -p ]]; then
+  if [[ "${STUCK:-0}" != 1 && -f "${SIGNAL_LOG:-/dev/null}" ]] && grep -q -- '-KILL 51' "$SIGNAL_LOG"; then
+    exit 1
+  fi
   printf '/nix/store/old-gortex-0.63.8/bin/gortex daemon start\n'
 else
   printf '50 1 501 /nix/store/new-gortex-0.64.7/bin/gortex daemon start --log-level warn\n'
@@ -42,6 +45,10 @@ actual="$(PATH="$tmp:$PATH" bash "$script" "$expected" 501 --candidates)"
 SIGNAL_LOG="$tmp/signals" PATH="$tmp:$PATH" bash "$script" "$expected" 501
 actual="$(< "$tmp/signals")"
 [[ "$actual" == $'-TERM 51\n-KILL 51' ]] || { printf 'Unexpected signals: %s\n' "$actual" >&2; exit 1; }
+if STUCK=1 SIGNAL_LOG="$tmp/stuck-signals" PATH="$tmp:$PATH" bash "$script" "$expected" 501; then
+  echo 'Did not report an orphan surviving SIGKILL' >&2
+  exit 1
+fi
 
 cat > "$tmp/launchctl" <<'EOF'
 #!/usr/bin/env bash
