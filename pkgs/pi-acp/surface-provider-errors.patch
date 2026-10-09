@@ -1,0 +1,92 @@
+diff --git a/src/acp/session.ts b/src/acp/session.ts
+index d2fae68..87c5fb2 100644
+--- a/src/acp/session.ts
++++ b/src/acp/session.ts
+@@ -823,6 +823,28 @@ export class PiAcpSession {
+         break
+       }
+ 
++      case 'message_end': {
++        // A provider failure (quota, auth, overload) ends the assistant message
++        // with stopReason 'error' and no content. ACP has no error stop reason
++        // for a prompt, and the turn still settles as end_turn, so without this
++        // the client sees a turn that finished cleanly and said nothing.
++        const msg = (ev as any).message
++        if (msg?.role === 'assistant' && msg.stopReason === 'error' && !this.cancelRequested) {
++          const detail = typeof msg.errorMessage === 'string' && msg.errorMessage.trim()
++            ? msg.errorMessage.trim()
++            : 'the model provider returned an error'
++          const where = [msg.provider, msg.model].filter(Boolean).join('/')
++          this.emit({
++            sessionUpdate: 'agent_message_chunk',
++            content: {
++              type: 'text',
++              text: `\n\n**Pi error${where ? ` (${where})` : ''}:** ${detail}\n`
++            } satisfies ContentBlock
++          })
++        }
++        break
++      }
++
+       case 'turn_end': {
+         // pi uses `turn_end` for sub-steps (e.g. tool_use) and will often start another turn.
+         // Do NOT resolve the ACP `session/prompt` here; wait for `agent_settled`.
+diff --git a/test/component/session-events.test.ts b/test/component/session-events.test.ts
+index 2148ce8..860995f 100644
+--- a/test/component/session-events.test.ts
++++ b/test/component/session-events.test.ts
+@@ -900,3 +900,54 @@ test('PiAcpSession: defaults notify severity to info when notifyType is absent',
+     piAcp: { notify: { level: 'info' } }
+   })
+ })
++
++function newSession() {
++  const conn = new FakeAgentSideConnection()
++  const proc = new FakePiRpcProcess()
++  new PiAcpSession({
++    sessionId: 's1',
++    cwd: process.cwd(),
++    mcpServers: [],
++    proc: proc as any,
++    conn: asAgentConn(conn),
++    fileCommands: []
++  })
++  return { conn, proc }
++}
++
++test('PiAcpSession: surfaces a provider error instead of an empty turn', async () => {
++  const { conn, proc } = newSession()
++  proc.emit({
++    type: 'message_end',
++    message: {
++      role: 'assistant',
++      content: [],
++      stopReason: 'error',
++      errorMessage: 'Codex error: The usage limit has been reached',
++      provider: 'openai-codex',
++      model: 'gpt-6-sol'
++    }
++  })
++  await new Promise(r => setTimeout(r, 0))
++  assert.equal(conn.updates.length, 1)
++  const u = conn.updates[0]!.update as any
++  assert.equal(u.sessionUpdate, 'agent_message_chunk')
++  assert.match(u.content.text, /usage limit has been reached/)
++  assert.match(u.content.text, /openai-codex\/gpt-6-sol/)
++})
++
++test('PiAcpSession: an error with no message still says something', async () => {
++  const { conn, proc } = newSession()
++  proc.emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error' } })
++  await new Promise(r => setTimeout(r, 0))
++  assert.equal(conn.updates.length, 1)
++  assert.match((conn.updates[0]!.update as any).content.text, /provider returned an error/)
++})
++
++test('PiAcpSession: a normal message_end emits nothing extra', async () => {
++  const { conn, proc } = newSession()
++  proc.emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop' } })
++  proc.emit({ type: 'message_end', message: { role: 'user', content: [] } })
++  await new Promise(r => setTimeout(r, 0))
++  assert.equal(conn.updates.length, 0)
++})

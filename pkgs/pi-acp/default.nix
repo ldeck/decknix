@@ -13,7 +13,13 @@ buildNpmPackage rec {
 
   npmDepsHash = "sha256-/fX79XucKojL/6gZbK5eizEfrXso8rlTgiHfJffmDuY=";
 
-  patches = [ ./optimise-startup.patch ];
+  patches = [
+    ./optimise-startup.patch
+    # Pi reports a provider failure (quota, auth, overload) as an empty
+    # assistant message with stopReason "error"; pi-acp settled the turn as
+    # end_turn and dropped the error, so the prompt appeared to be ignored.
+    ./surface-provider-errors.patch
+  ];
 
   nativeBuildInputs = [ makeWrapper ];
 
