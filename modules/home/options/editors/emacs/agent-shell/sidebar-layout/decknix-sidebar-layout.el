@@ -653,48 +653,35 @@ and they should not compete visually with what it actually knows."
   "Return how many session ROWS are showing guesses rather than evidence."
   (seq-count (lambda (r) (not (eq 'observed (plist-get r :provenance)))) rows))
 
-(defun decknix--layout-observed-repo-names (roots worktrees)
-  "Return the repo short names among ROOTS that are not WORKTREES.
+(defun decknix--layout-observed-gone-worktrees (roots worktrees)
+  "Return (REPO . DIR) for each of ROOTS naming a worktree not in WORKTREES.
 
-An observed root is either a worktree the session edited in or a repo
-checkout it edited in directly -- the latter also being what a REMOVED
-worktree resolves to, since the worktree is deleted once its work merges.
-
-Needed because a PR is otherwise claimed only through the branch of a
-claimed worktree.  With the root being a repo, no worktree matches, so
-the branch list is empty and the session claims NO PRs at all -- which is
-why platform-cli\='s PRs stayed invisible under the session that had been
-working on them.
-
-This is repo-level claiming, which tags also did, but on a different
-footing: the session was OBSERVED editing there, which is evidence rather
-than a guess from its name."
+That is a worktree the session worked in that has since been removed, or
+was created after the audit last ran.  DIR is its directory name, which by
+the worktree naming convention is also its branch, so it still identifies
+the session\='s PR."
   (let ((wt-paths (delq nil (mapcar #'decknix--layout-wt-path worktrees))))
     (delq nil
           (mapcar
            (lambda (root)
              (let ((dir (file-name-as-directory (expand-file-name root))))
-               (unless (member dir wt-paths)
-                 (downcase (file-name-nondirectory
-                            (directory-file-name dir))))))
+               (when (and (not (member dir wt-paths))
+                          (string-match "\\([^/]+\\)-worktrees/\\([^/]+\\)/\\'" dir))
+                 (cons (downcase (match-string 1 dir)) (match-string 2 dir)))))
            roots))))
 
-(defun decknix--layout-pr-in-repos-p (pr repo-names)
-  "Return non-nil when PR belongs to one of REPO-NAMES."
-  (decknix--layout-item-in-repos-p pr repo-names))
-
-(defun decknix--layout-wt-in-repos-p (wt repo-names)
-  "Return non-nil when worktree WT belongs to one of REPO-NAMES."
-  (decknix--layout-item-in-repos-p wt repo-names))
-
-(defun decknix--layout-item-in-repos-p (item repo-names)
-  "Return non-nil when ITEM\='s `:repo\=' names one of REPO-NAMES.
-
-Shared by PRs and worktrees so the two cannot drift: a session observed
-editing a repo claims both its PRs and its worktrees, and claiming only
-one of them was an asymmetry with no reason behind it."
-  (let ((repo (car (last (split-string (or (plist-get item :repo) "") "/" t)))))
-    (and repo (member (downcase repo) repo-names) t)))
+(defun decknix--layout-pr-on-gone-worktree-p (pr gone)
+  "Return non-nil when PR\='s branch is one of the GONE worktree directories.
+A branch `enhancement/HX-974-x\=' matches a directory `HX-974-x\='."
+  (let ((repo (downcase (or (car (last (split-string (or (plist-get pr :repo) "") "/" t))) "")))
+        (branch (plist-get pr :branch)))
+    (and branch
+         (seq-some (lambda (g)
+                     (and (equal repo (car g))
+                          (or (equal branch (cdr g))
+                              (string-suffix-p (concat "/" (cdr g)) branch))))
+                   gone)
+         t)))
 
 (defun decknix--layout-session-observed-wt-p (roots wt)
   "Return non-nil when WT is one of the observed ROOTS."
@@ -797,9 +784,9 @@ which would hide the sharing."
           (mapcar
            (lambda (session)
              (let* ((observed (decknix--layout-session-observed-roots session))
-                    (observed-repos
+                    (observed-gone
                      (and observed
-                          (decknix--layout-observed-repo-names
+                          (decknix--layout-observed-gone-worktrees
                            observed worktrees)))
                     (wts (seq-filter
                           (lambda (wt)
@@ -810,16 +797,11 @@ which would hide the sharing."
                                 (and observed
                                      (decknix--layout-session-observed-wt-p
                                       observed wt))
-                                ;; Observed to be editing the REPO itself, so
-                                ;; its worktrees are this session's work too.
-                                ;; PRs already claimed this way; worktrees did
-                                ;; not, so a session working in a primary
-                                ;; checkout showed its PRs and none of its
-                                ;; worktrees -- an asymmetry with no reason
-                                ;; behind it.
-                                (and observed-repos
-                                     (decknix--layout-wt-in-repos-p
-                                      wt observed-repos))
+                                ;; A primary checkout claims NOTHING.  It is a
+                                ;; read-only reference, and treating a read
+                                ;; there as work gave one session an
+                                ;; unrelated upside PR and seven unrelated
+                                ;; worktrees because it had opened AGENTS.md.
                                 ;; Tags only when nothing was observed -- a
                                 ;; session that has run no tool calls yet.
                                 ;; Measured, the tag rule claimed every
@@ -842,13 +824,14 @@ which would hide the sharing."
                           (lambda (p)
                             (or (and (plist-get p :branch)
                                      (member (plist-get p :branch) branches))
-                                ;; Observed to be editing in the repo itself,
-                                ;; which is also what a removed worktree
-                                ;; resolves to.  Without this a session whose
-                                ;; worktree has been deleted claims nothing.
-                                (and observed-repos
-                                     (decknix--layout-pr-in-repos-p
-                                      p observed-repos))
+                                ;; A worktree the session worked in that is
+                                ;; gone, or newer than the audit: its
+                                ;; directory is its branch, so it still names
+                                ;; exactly one PR.  This replaces crediting
+                                ;; the whole repo, which claimed every PR in it.
+                                (and observed-gone
+                                     (decknix--layout-pr-on-gone-worktree-p
+                                      p observed-gone))
                                 ;; Tag matching only where nothing was
                                 ;; observed: guessing from a name claimed
                                 ;; every PR of one repo and missed the three

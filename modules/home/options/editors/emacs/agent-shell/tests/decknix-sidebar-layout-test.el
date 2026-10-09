@@ -1224,40 +1224,64 @@ supplies the unfiltered feed."
     (should (equal '("r#2") (decknix--layout-live-pr-keys prs)))))
 
 
-;; --- a repo the session was observed editing in -----------------------
+;; --- what an observed session claims ---------------------------------
+;;
+;; Repo-wide claiming gave one session an unrelated upside PR and seven
+;; unrelated upside worktrees: it had read AGENTS.md in the primary checkout,
+;; and its own upside worktree had since been removed, which the resolver
+;; also mapped to the repo.  These go through the real tree, because the old
+;; tests checked the helpers in isolation and never the claim.
 
-(ert-deftest decknix-layout--an-observed-root-that-is-a-repo-is-named ()
-  "A removed worktree resolves to its repo, so the observed root is a repo
-checkout rather than a worktree."
-  (should (equal '("platform-cli")
-                 (decknix--layout-observed-repo-names
-                  '("/w/platform-cli")
-                  '((:path "/w/platform-cli-worktrees/CONN-1" :branch "b"))))))
+(defun decknix-layout-test--claims (roots wip-repos worktrees)
+  "Return (WT-BRANCHES . PR-NUMBERS) one session observed in ROOTS claims."
+  (cl-letf (((symbol-function 'decknix--layout-session-observed-roots)
+             (lambda (_s) roots)))
+    (let* ((decknix--layout-wip-memo nil)
+           (row (car (plist-get (decknix--layout-wip-tree-1
+                                 (list '("*s*" nil nil "working" nil))
+                                 wip-repos worktrees)
+                                :sessions))))
+      (cons (mapcar (lambda (w) (plist-get w :branch)) (plist-get row :worktrees))
+            (mapcar (lambda (p) (plist-get p :number)) (plist-get row :prs))))))
 
-(ert-deftest decknix-layout--an-observed-worktree-is-not-a-repo-claim ()
-  "It is claimed precisely, by its own path, so it must not ALSO widen to
-the whole repo."
-  (should-not (decknix--layout-observed-repo-names
-               '("/w/platform-cli-worktrees/CONN-1")
-               '((:path "/w/platform-cli-worktrees/CONN-1" :branch "b")))))
+(defconst decknix-layout-test--upside-wip
+  '(((repo . "UpsideRealty/upside")
+     (prs . (((number . 20511) (branch . "CONN-1006-extraction-spec"))
+             ((number . 20600) (branch . "enhancement/HX-1062-acker"))))))
+  "Two of my upside PRs: one unrelated, one on the session's own branch.")
 
-(ert-deftest decknix-layout--a-pr-of-an-observed-repo-is-claimed ()
-  "Without this a session whose worktree has been deleted claims no PRs at
-all, which is why platform-cli\='s stayed invisible under the session that
-had been working on them."
-  (should (decknix--layout-pr-in-repos-p
-           '(:repo "UpsideRealty/platform-cli" :number 57) '("platform-cli"))))
+(defconst decknix-layout-test--upside-wts
+  '((:repo "upsiderealty/upside" :branch "CONN-1006-extraction-spec"
+     :path "/w/upside-worktrees/CONN-1006-extraction-spec")
+    (:repo "upsiderealty/upside" :branch "CONN-1080-rectify"
+     :path "/w/upside-worktrees/CONN-1080-rectify")))
 
-(ert-deftest decknix-layout--a-pr-of-another-repo-is-not-claimed ()
-  (should-not (decknix--layout-pr-in-repos-p
-               '(:repo "UpsideRealty/upside" :number 1) '("platform-cli"))))
+(ert-deftest decknix-layout--a-primary-checkout-claims-nothing ()
+  "Reading AGENTS.md in the primary is not working on the repo."
+  (should (equal '(nil . nil)
+                 (decknix-layout-test--claims '("/w/upside")
+                                              decknix-layout-test--upside-wip
+                                              decknix-layout-test--upside-wts))))
 
-(ert-deftest decknix-layout--repo-claiming-is-case-insensitive ()
-  (should (decknix--layout-pr-in-repos-p
-           '(:repo "UpsideRealty/Platform-CLI") '("platform-cli"))))
+(ert-deftest decknix-layout--a-removed-worktree-claims-only-its-own-pr ()
+  "Its directory is its branch, so it names one PR and nothing else."
+  (should (equal '(nil . (20600))
+                 (decknix-layout-test--claims '("/w/upside-worktrees/HX-1062-acker")
+                                              decknix-layout-test--upside-wip
+                                              decknix-layout-test--upside-wts))))
 
-(ert-deftest decknix-layout--a-pr-with-no-repo-is-not-claimed ()
-  (should-not (decknix--layout-pr-in-repos-p '(:number 1) '("platform-cli"))))
+(ert-deftest decknix-layout--a-live-worktree-claims-itself-and-its-pr-only ()
+  (should (equal '(("CONN-1006-extraction-spec") . (20511))
+                 (decknix-layout-test--claims '("/w/upside-worktrees/CONN-1006-extraction-spec")
+                                              decknix-layout-test--upside-wip
+                                              decknix-layout-test--upside-wts))))
+
+(ert-deftest decknix-layout--a-gone-worktree-of-another-repo-claims-nothing-here ()
+  "Matching the branch alone would cross repos that reuse a ticket key."
+  (should (equal '(nil . nil)
+                 (decknix-layout-test--claims '("/w/envoy-worktrees/HX-1062-acker")
+                                              decknix-layout-test--upside-wip
+                                              decknix-layout-test--upside-wts))))
 
 
 ;; --- a guess must not look like a fact --------------------------------
@@ -1368,31 +1392,6 @@ is the failure the provenance marks exist to make visible."
     (let ((a (decknix--layout-wip-tree nil nil nil)))
       (decknix-layout-invalidate-wip)
       (should-not (eq a (decknix--layout-wip-tree nil nil nil))))))
-
-
-;; --- an observed repo claims BOTH its PRs and its worktrees -----------
-
-(ert-deftest decknix-layout--an-observed-repo-claims-its-worktrees ()
-  "PRs already claimed this way and worktrees did not, so a session
-working in a primary checkout showed its PRs and none of its worktrees."
-  (should (decknix--layout-wt-in-repos-p
-           '(:repo "ldeck/decknix" :path "/w/decknix-spec" :branch "spec")
-           '("decknix"))))
-
-(ert-deftest decknix-layout--prs-and-worktrees-use-one-rule ()
-  "They must not drift: the same repo claim governs both."
-  (let ((repos '("platform-cli")))
-    (should (eq (and (decknix--layout-pr-in-repos-p
-                      '(:repo "UpsideRealty/platform-cli") repos) t)
-                (and (decknix--layout-wt-in-repos-p
-                      '(:repo "UpsideRealty/platform-cli") repos) t)))))
-
-(ert-deftest decknix-layout--a-worktree-of-another-repo-is-not-claimed ()
-  (should-not (decknix--layout-wt-in-repos-p
-               '(:repo "UpsideRealty/upside") '("platform-cli"))))
-
-(ert-deftest decknix-layout--a-worktree-with-no-repo-is-not-claimed ()
-  (should-not (decknix--layout-wt-in-repos-p '(:path "/w/x") '("decknix"))))
 
 
 ;; --- the Reviews section says what is in it ---------------------------

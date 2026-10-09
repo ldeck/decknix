@@ -74,15 +74,19 @@ over a worktree the audit knows about."
                   "/w/platform-cli-worktrees/CONN-1040/x.go"
                   '("/w/platform-cli" "/w/platform-cli-worktrees/CONN-1040")))))
 
-(ert-deftest dk-assoc--a-removed-worktree-falls-back-to-its-repo ()
-  "Once work merges the worktree is removed, so its paths match no root and
-a session whose recent work was there resolved to NOTHING.  Measured: the
-session this was built for last worked in a platform-cli worktree since
-deleted.  The repo outlives it and still carries the PRs."
-  (should (equal "/w/platform-cli"
+(ert-deftest dk-assoc--a-removed-worktree-keeps-its-own-directory ()
+  "Crediting the repo instead gave the session every PR and worktree in it."
+  (should (equal "/w/platform-cli-worktrees/CONN-1040"
                  (decknix-session-assoc-resolve
                   "/w/platform-cli-worktrees/CONN-1040/x.go"
                   '("/w/platform-cli")))))
+
+(ert-deftest dk-assoc--a-worktree-created-after-the-roots-is-still-itself ()
+  "Same case from the other side: the root list predates the worktree."
+  (should (equal "/w/envoy-worktrees/HX-1293-acker"
+                 (decknix-session-assoc-resolve
+                  "/w/envoy-worktrees/HX-1293-acker/src/main.go"
+                  '("/w/envoy" "/w/upside")))))
 
 (ert-deftest dk-assoc--the-fallback-needs-the-repo-to-be-known ()
   "Deriving a repo from the path is a convention, not evidence it exists."

@@ -75,25 +75,29 @@ first in the list."
       (or best (decknix-session-assoc-resolve-removed path roots)))))
 
 (defun decknix-session-assoc-resolve-removed (path roots)
-  "Resolve PATH to its REPO when the worktree it named is gone.
+  "Resolve PATH to its WORKTREE directory when that worktree is no root.
 
-A worktree lives at `<repo>-worktrees/<branch>\=', and once the work merges
-the worktree is removed -- so its paths match no root, and a session whose
-recent work was there resolves to nothing at all.  Measured: the session
-this was built for had its last activity in
-platform-cli-worktrees/CONN-1040-generator-fixes, which no longer exists.
+A worktree lives at `<repo>-worktrees/<dir>\=' and is missing from ROOTS in
+two cases: it has been removed since its work merged, or it was created
+after ROOTS was taken.  Either way PATH matches no root.
 
-The repo outlives the worktree and still carries the PRs, so attributing
-to it keeps the association that matters.  Derived from the path alone,
-by the naming convention, and only accepted when that repo IS a known
-root."
-  (when (string-match "\\`\\(.*\\)-worktrees/" path)
-    (let ((repo (match-string 1 path)))
-      (seq-find (lambda (r)
-                  (and (stringp r)
-                       (string= (file-name-as-directory r)
-                                (file-name-as-directory repo))))
-                roots))))
+This used to answer with the REPO, and the sidebar then gave the session
+every PR and worktree in that repo.  Measured: a session whose upside
+worktree had been removed was credited with all of upside -- an unrelated
+PR and seven unrelated worktrees -- and its work in a worktree created
+mid-session was credited to envoy-auth-sidecar as a whole.  The worktree
+directory is the precise fact: by the naming convention it is also the
+branch, so it still identifies the session\='s PR after the worktree is
+gone.  Accepted only when the repo IS a known root."
+  (when (string-match "\\`\\(.*\\)-worktrees/\\([^/]+\\)" path)
+    (let ((repo (match-string 1 path))
+          (dir (match-string 0 path)))
+      (when (seq-find (lambda (r)
+                        (and (stringp r)
+                             (string= (file-name-as-directory r)
+                                      (file-name-as-directory repo))))
+                      roots)
+        dir))))
 
 (defun decknix-session-assoc-paths-of (update)
   "Return the file paths an ACP session UPDATE reports touching.
@@ -408,8 +412,12 @@ resolves to a known root."
 
 Under the STATE dir, not `~/.config/decknix\=': that is the system flake\='s
 source tree, which nix copies on every `decknix switch\='."
+  ;; v2: roots resolved before the worktree-directory fix name whole repos
+  ;; and cannot be repaired in place.  A new file leaves every session's
+  ;; store empty, which is what makes the backfill re-derive it from the
+  ;; broker log with the current resolver.
   (expand-file-name
-   "decknix/session-assoc.eld"
+   "decknix/session-assoc-v2.eld"
    (or (getenv "XDG_STATE_HOME") (expand-file-name ".local/state" "~"))))
 
 (defvar decknix--agent-assoc-store nil
