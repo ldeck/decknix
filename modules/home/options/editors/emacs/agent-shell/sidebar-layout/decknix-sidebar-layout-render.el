@@ -367,7 +367,7 @@ hiding the sharing."
          (wip (decknix--layout-wip-sessions sessions))
          (tree (decknix--layout-wip-tree wip (decknix--layout-wip-repos)
                                          (decknix--layout-worktrees))))
-    (when wip
+    (when (or wip (decknix--layout-unattended-p (plist-get tree :dormant)))
       (insert "\n")
       (setq line-num (1+ line-num))
       (decknix--sidebar-render-section-header
@@ -518,7 +518,8 @@ PROVENANCE marks whether this association is evidence or a guess."
       (insert (propertize
                (format "    %s %-3s %s" (decknix--layout-wt-glyph wt)
                        (decknix--layout-wt-markers wt)
-                       (propertize (or (plist-get wt :branch) "?") 'face 'shadow))
+                       (propertize (decknix--layout-wt-label wt #'decknix--layout-review-title)
+                                   'face 'shadow))
                'decknix-layout-worktree wt)
               "\n")
       (setq line-num (1+ line-num)))
@@ -535,20 +536,38 @@ PROVENANCE marks whether this association is evidence or a guess."
   line-num)
 
 
+(defun decknix--layout-review-title (repo number)
+  "Return the title of review request REPO#NUMBER from the reviews feed.
+REPO is compared case-insensitively: the worktree audit reports it
+lower-cased, the feed as GitHub spells it."
+  (when (boundp 'decknix--hub-reviews)
+    (let ((item (seq-find
+                 (lambda (i)
+                   (and (equal number (alist-get 'number i))
+                        (string-equal-ignore-case (or repo "")
+                                                  (or (alist-get 'repo i) ""))))
+                 (alist-get 'items decknix--hub-reviews))))
+      (alist-get 'title item))))
+
+(defun decknix--layout-unattended-p (dormant)
+  "Return non-nil when DORMANT holds anything the WIP group would show."
+  (let ((split (decknix--layout-dormant-split dormant)))
+    (or (plist-get split :prs) (plist-get split :worktrees)
+        (> (plist-get split :orphans) 0) (> (plist-get split :quiet) 0))))
+
 (defun decknix--layout-render-dormant (line-num width dormant)
-  "Render the Unattended section: work with no live session, that wants one.
+  "Render unattended work as the last group of WIP.  Returns LINE-NUM.
 
-Only states with a decision in them get a row -- dirty worktrees and open
-non-draft PRs.  The section used to list one line per repo with a bare
-tally (`2 wt\=', `1 pr 3 wt\=') which said nothing about whether any of it
-wanted the reader.
+Work no live session is on: dirty worktrees and open non-draft PRs.  It
+used to be a section of its own whose rows named a PR or branch with no
+repo beside them, which was reported as unrecognisable.  As a WIP group it
+takes WIP\='s structure: a `no session\' row standing where a session would,
+then one `⇡ repo\' row per repo coloured by its worst item, then the items.
 
-Orphans and drafts are counted, not listed.  Live numbers while building
-this: 20 unattended worktrees and 7 PRs, of which 6 dirty and 4 open --
-so listing every item produced 24 rows, THREE TIMES the 8 it replaced,
-while 14 of those rows said only `this branch is gone from origin\=', whose
-remedy is a bulk prune.  Counting them keeps the section honest without
-making it the biggest thing on screen."
+Orphans and drafts are counted, not listed.  Live numbers when this was
+first built: 27 unattended worktrees and 7 PRs, of which 6 dirty and 4
+open.  Listing every item produced 24 rows, 14 of them only saying `this
+branch is gone from origin\', whose remedy is a bulk prune."
   (let* ((split (decknix--layout-dormant-split dormant))
          (all-prs (plist-get split :prs))
          (all-wts (plist-get split :worktrees))
@@ -560,51 +579,37 @@ making it the biggest thing on screen."
          ;; where a dirty worktree is only waiting on me.
          (prs (if limit (seq-take all-prs limit) all-prs))
          (wts (if limit (seq-take all-wts (max 0 (- limit (length prs)))) all-wts))
-         (held (- n (length prs) (length wts))))
+         (held (- n (length prs) (length wts)))
+         (claims (decknix--layout-group-claims wts prs)))
     (when (or (> n 0) (> orphans 0) (> quiet 0))
-      (insert "\n")
-      (setq line-num (1+ line-num))
-      (decknix--sidebar-render-section-header
-       (if (> n 0) (format "Unattended (%d)" n) "Unattended") 'dormant)
-      (setq line-num (1+ line-num))
-      (dolist (pr prs)
-        (insert (propertize
-                 (decknix--layout-pr-row pr width)
-                 'decknix-hub-type 'wip
-                 'decknix-hub-repo (plist-get pr :repo)
-                 'decknix-hub-number (plist-get pr :number)
-                 'decknix-hub-url (alist-get 'url (plist-get pr :pr)))
+      (let* ((left (format " %s  no session" (decknix-lifecycle-shape 'worktree-new)))
+             (right (if (> n 0) (format "%d unattended" n) "unattended"))
+             (pad (max 1 (- width (string-width left) (string-width right)))))
+        (insert (propertize (concat left (make-string pad ?\s) right)
+                            'face 'font-lock-comment-face
+                            'decknix-layout-unattended t)
                 "\n")
         (setq line-num (1+ line-num)))
-      (dolist (wt wts)
-        (insert (propertize
-                 (format "    %s %-3s %s" (decknix--layout-wt-glyph wt)
-                         (decknix--layout-wt-markers wt)
-                         (propertize (or (plist-get wt :branch) "?") 'face 'shadow))
-                 'decknix-layout-worktree wt)
-                "\n")
-        (setq line-num (1+ line-num)))
+      (dolist (claim claims)
+        (setq line-num (decknix--layout-render-claim-1
+                        line-num width claim nil 'observed)))
       ;; Every tail is NAMED.  A section that drops rows silently reads as
       ;; "that is all of it", which is the way this one already misled.
       (when (> held 0)
-        (insert (propertize (format "      … %d more over the limit" held)
+        (insert (propertize (format "    … %d more over the limit" held)
                             'face 'font-lock-comment-face
                             'help-echo "raise `unattended' in the sidebar transient")
                 "\n")
         (setq line-num (1+ line-num)))
       (when (> orphans 0)
-        ;; Carries its own remedy rather than naming one.  The repo rows
-        ;; this section replaced had no property at all, so RET on them
-        ;; did nothing -- a count the reader has to go and act on
-        ;; elsewhere is the same dead end in a smaller space.
-        (insert (propertize (format "      ⑂ %d orphaned, RET to prune" orphans)
+        (insert (propertize (format "    ⑂ %d orphaned, RET to prune" orphans)
                             'face 'font-lock-comment-face
                             'decknix-layout-orphan-prune t
                             'help-echo "branch gone from origin -- RET opens the worktree picker")
                 "\n")
         (setq line-num (1+ line-num)))
       (when (> quiet 0)
-        (insert (propertize (format "      · %d quiet, nothing wanted" quiet)
+        (insert (propertize (format "    · %d quiet, nothing wanted" quiet)
                             'face 'font-lock-comment-face)
                 "\n")
         (setq line-num (1+ line-num)))))

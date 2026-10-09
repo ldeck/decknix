@@ -223,11 +223,9 @@ markers both are visible."
 ;; that in a smaller space, which is why the property is pinned here.
 
 (defun decknix-lr-test--render-dormant (dormant)
-  "Return the rendered Unattended section for DORMANT."
+  "Return the rendered unattended WIP group for DORMANT."
   (with-temp-buffer
-    (cl-letf (((symbol-function 'decknix--sidebar-render-section-header)
-               (lambda (title &rest _) (insert title "\n"))))
-      (decknix--layout-render-dormant 0 48 dormant))
+    (decknix--layout-render-dormant 0 48 dormant)
     (buffer-string)))
 
 (ert-deftest decknix-layout-render--orphan-count-can-reach-its-remedy ()
@@ -264,6 +262,28 @@ reduced to a count."
     (should (string-match-p "w1" out))
     (should-not (string-match-p "w3" out))
     (should (string-match-p "1 more over the limit" out))))
+
+(ert-deftest decknix-layout-render--unattended-items-sit-under-their-repo ()
+  "Unattended rows used to name a PR or branch with no repo beside it."
+  (let ((out (decknix-lr-test--render-dormant
+              (list :worktrees (list (list :branch "has-work" :dirty t
+                                           :repo "upsiderealty/attom-integration"))))))
+    (should (string-match-p "no session" out))
+    (should (string-match-p "⇡ attom-integration" out))
+    (should (< (string-match "attom-integration" out) (string-match "has-work" out)))))
+
+(ert-deftest decknix-layout-render--a-review-worktree-row-names-its-pr ()
+  (let ((out (decknix-lr-test--render-dormant
+              (list :worktrees (list (list :branch "dfebdad" :dirty t :repo "o/r"
+                                           :path "/r/x-worktrees/pr-301"))))))
+    (should (string-match-p "review #301" out))
+    (should-not (string-match-p "dfebdad" out))))
+
+(ert-deftest decknix-layout-render--review-title-matches-repo-case-insensitively ()
+  (let ((decknix--hub-reviews
+         '((items . (((repo . "UpsideRealty/upside") (number . 20742) (title . "Tidy")))))))
+    (should (equal "Tidy" (decknix--layout-review-title "upsiderealty/upside" 20742)))
+    (should-not (decknix--layout-review-title "upsiderealty/upside" 1))))
 
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here

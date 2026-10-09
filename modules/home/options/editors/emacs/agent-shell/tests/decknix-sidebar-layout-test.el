@@ -583,6 +583,35 @@ dropping work silently -- the failure it already had once."
     (should (= 0 (plist-get split :orphans)))
     (should (= 0 (plist-get split :quiet)))))
 
+;; --- worktree labels ------------------------------------------------
+;;
+;; A review worktree is checked out detached at the PR head, so its branch
+;; is the HEAD hash.  Rows read `dfebdad\', `f95dad0\', `69ad4fa\' and were
+;; reported as unrecognisable.
+
+(ert-deftest decknix-layout--a-named-branch-is-its-own-label ()
+  (should (equal "HX-1062-acker" (decknix--layout-wt-label (list :branch "HX-1062-acker")))))
+
+(ert-deftest decknix-layout--a-review-worktree-is-labelled-by-its-pr ()
+  (should (equal "review #301"
+                 (decknix--layout-wt-label
+                  (list :branch "dfebdad" :path "/r/attom-integration-worktrees/pr-301")))))
+
+(ert-deftest decknix-layout--a-review-worktree-carries-the-pr-title-when-known ()
+  (should (equal "review #301 Fix the thing"
+                 (decknix--layout-wt-label
+                  (list :branch "dfebdad" :repo "o/r" :path "/r/x/pr-301/")
+                  (lambda (repo n) (and (equal repo "o/r") (= n 301) "Fix the thing"))))))
+
+(ert-deftest decknix-layout--other-detached-worktrees-fall-back-to-the-directory ()
+  (should (equal "spike-dir"
+                 (decknix--layout-wt-label (list :branch "abc1234" :path "/r/spike-dir")))))
+
+(ert-deftest decknix-layout--a-hash-is-recognised-and-a-word-is-not ()
+  (should (decknix--layout-hash-p "dfebdad"))
+  (should-not (decknix--layout-hash-p "feature"))
+  (should-not (decknix--layout-hash-p "deadbeefcafe-branch")))
+
 ;; --- sessions covering one PR -----------------------------------------
 
 (ert-deftest decknix-layout--pr-sessions-finds-every-cover ()
