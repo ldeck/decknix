@@ -101,5 +101,46 @@ This is the leak the reaper was added for (09df9ff)."
   (should-not (decknix-agent--reapable-bridge-p "1" 4242 999 "/usr/bin/ssh-agent"))
   (should-not (decknix-agent--reapable-bridge-p "1" 4242 999 "node /some/other/thing.js")))
 
+(require 'cl-lib)
+
+(defmacro decknix-restart-test--with-session (key &rest body)
+  "Run BODY in a fake agent-shell buffer whose broker key is KEY.
+Records broker stops and resumes in `stopped' and `resumed', in order."
+  (declare (indent 1))
+  `(let ((buf (generate-new-buffer "*Pi: restart-test*"))
+         (events nil))
+     (unwind-protect
+         (with-current-buffer buf
+           (setq major-mode 'agent-shell-mode)
+           (when ,key (setq-local decknix--agent-broker-key ,key))
+           (cl-letf (((symbol-function 'derived-mode-p) (lambda (&rest _) t))
+                     ((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                     ((symbol-function 'decknix--agent-buffer-session-id) (lambda (_) "sid-1"))
+                     ((symbol-function 'decknix--agent-current-conv-key) (lambda () "conv-1"))
+                     ((symbol-function 'decknix--agent-latest-session-id-for-conv-key) (lambda (_) "sid-1"))
+                     ((symbol-function 'decknix--agent-tags-for-buffer) (lambda (_) nil))
+                     ((symbol-function 'decknix-agent-broker-stop)
+                      (lambda (k) (push (list 'stop k (buffer-live-p buf)) events) 4242))
+                     ((symbol-function 'decknix--agent-session-resume)
+                      (lambda (&rest _) (push (list 'resume (buffer-live-p buf)) events))))
+             ,@body))
+       (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest decknix-agent-session-restart--stops-the-broker-before-resuming ()
+  "Killing the buffer only detaches it, so without this the resume
+reattached to the same agent process -- a Pi session whose gortex bridge
+had failed at startup stayed broken across a restart."
+  (decknix-restart-test--with-session "s-1"
+    (decknix-agent-session-restart)
+    (setq events (nreverse events))
+    (should (equal '(stop "s-1" t) (nth 0 events)))
+    (should (eq 'resume (car (nth 1 events))))))
+
+(ert-deftest decknix-agent-session-restart--a-buffer-with-no-broker-still-restarts ()
+  "No key means nothing to stop; the restart must not error on it."
+  (decknix-restart-test--with-session nil
+    (decknix-agent-session-restart)
+    (should (equal '((resume nil)) events))))
+
 (provide 'decknix-agent-session-restart-test)
 ;;; decknix-agent-session-restart-test.el ends here
