@@ -54,10 +54,46 @@ let
     ${builtins.readFile ./gortex-orphan-cleanup.sh}
   '';
 
+  # Launches an agent's MCP client: waits for launchd's daemon, then proxies
+  # with autostart off.  See gortex-client.sh for the measurements behind it.
+  gortexClient = pkgs.writeShellScript "gortex-client" ''
+    export GORTEX_PACKAGE_BIN=${escapeShellArg gortexBin}
+    ${builtins.readFile ./gortex-client.sh}
+  '';
+
+  # `gortex hook' with the stop-and-never-fall-back wording removed.
+  gortexHook = pkgs.writeShellScript "gortex-hook" ''
+    export GORTEX_PACKAGE_BIN=${escapeShellArg gortexBin}
+    export PATH=${makeBinPath [ pkgs.perl ]}:$PATH
+    ${builtins.readFile ./gortex-hook.sh}
+  '';
+
   piBin = if cfg.daemon.enable then pkgs.writeShellScript "gortex-pi-managed" ''
     export GORTEX_PACKAGE_BIN=${escapeShellArg gortexBin}
+    export GORTEX_CLIENT=${escapeShellArg gortexClient}
+    export GORTEX_HOOK=${escapeShellArg gortexHook}
     ${builtins.readFile ./gortex-pi-bin.sh}
   '' else gortexBin;
+
+  # Claude Code hooks, `enrich' mode only.  It never denies a tool; it adds
+  # graph context beside Read/Grep/Glob.  In 30 days Claude had gortex
+  # connected in 368 of 416 sessions and called it 3 times, so offering the
+  # tools was not enough.  Scoped to the three tools the graph can answer for
+  # rather than gortex's own `*' matcher, which would add ~200ms to every
+  # Bash and Edit call too.  Its Stop hook (5s of diagnostics after every
+  # turn) is left out for the same reason.
+  claudeHookEvents = optionalAttrs cfg.agents.claudeHooks (
+    let
+      hook = timeout: [{
+        type = "command";
+        command = "${gortexHook} --mode=${cfg.agents.hookMode}";
+        inherit timeout;
+      }];
+    in {
+      SessionStart = [{ hooks = hook 5; }];
+      PreToolUse = [{ matcher = "Read|Grep|Glob"; hooks = hook 3; }];
+      PostToolUse = [{ matcher = "Read|Grep|Glob"; hooks = hook 3; }];
+    });
 
   piConfig = pkgs.writeShellScript "gortex-pi-config" ''
     set -euo pipefail
@@ -79,7 +115,12 @@ let
   # daemon a hard error rather than a silent fall back to an embedded,
   # single-repo graph that reports itself as DEGRADED: a quietly worse answer
   # is harder to notice than a missing one.
-  mcpServerEntry = {
+  mcpServerEntry = if cfg.daemon.enable then {
+    type = "stdio";
+    command = "${gortexClient}";
+    args = [ ];
+    env = { };
+  } else {
     type = "stdio";
     command = gortexBin;
     args = [ "mcp" "--proxy" ];
@@ -376,6 +417,28 @@ in
         default = true;
         description = "Wire the gortex MCP server into Claude Code (~/.claude.json).";
       };
+      claudeHooks = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Install gortex hooks into Claude Code (~/.claude/settings.json):
+          graph context at session start and beside Read/Grep/Glob.
+
+          Merged by key rather than written by `gortex install`, which would
+          take over the whole hooks block of a file Claude itself rewrites.
+          Turning this off removes the entries again.
+        '';
+      };
+      hookMode = mkOption {
+        type = types.enum [ "enrich" "nudge" ];
+        default = "enrich";
+        description = ''
+          Hook posture.  `enrich' never blocks a tool and adds graph context;
+          `nudge' soft-denies every third consecutive raw read.  `deny' and
+          `consult-unlock' are deliberately not offered: they block reads, so
+          a gortex outage would stop agents from reading code at all.
+        '';
+      };
       augment = mkOption {
         type = types.bool;
         default = true;
@@ -477,6 +540,34 @@ in
     # runtime (OAuth tokens, skillUsage, caches), and that option jq-merges
     # only the `.mcpServers` key while leaving every other one alone.  Going
     # through `settings` would hand the whole file to a second writer.
+    {
+      # Always runs, so turning claudeHooks off also removes our entries.
+      # Ours are recognised by the gortex-hook store path in the command.
+      home.activation.gortexClaudeHooks =
+        config.lib.dag.entryAfter [ "writeBoundary" ] ''
+          CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+          if [ -f "$CLAUDE_SETTINGS" ]; then
+            TMP="$(${pkgs.coreutils}/bin/mktemp)"
+            if ${pkgs.jq}/bin/jq --argjson add ${escapeShellArg (builtins.toJSON claudeHookEvents)} \
+                 'def ours: (.hooks // []) | any(.command // "" | test("-gortex-hook "));
+                  .hooks = ((.hooks // {}) | with_entries(.value |= map(select(ours | not))))
+                  | reduce ($add | to_entries[]) as $e (.; .hooks[$e.key] = ((.hooks[$e.key] // []) + $e.value))
+                  | .hooks |= with_entries(select(.value | length > 0))
+                  | if .hooks == {} then del(.hooks) else . end' \
+                 "$CLAUDE_SETTINGS" > "$TMP"; then
+              if ! ${pkgs.diffutils}/bin/cmp -s "$TMP" "$CLAUDE_SETTINGS"; then
+                $DRY_RUN_CMD ${pkgs.coreutils}/bin/mv "$TMP" "$CLAUDE_SETTINGS"
+              else
+                ${pkgs.coreutils}/bin/rm -f "$TMP"
+              fi
+            else
+              ${pkgs.coreutils}/bin/rm -f "$TMP"
+              echo "gortex: could not update Claude hooks in $CLAUDE_SETTINGS" >&2
+            fi
+          fi
+        '';
+    }
+
     (mkIf cfg.agents.claude {
       decknix.ai.claude.mcpServers.gortex = mcpServerEntry;
     })
