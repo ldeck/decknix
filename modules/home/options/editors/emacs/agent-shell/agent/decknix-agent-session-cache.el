@@ -112,10 +112,25 @@ the others or the refresh path that fired the hook."
        (message "decknix session-cache refresh hook %s failed: %s"
                 fn (error-message-string err))))))
 
-(defvar decknix--agent-session-cache-max-files 200
-  "Maximum number of session JSON files to consider per refresh (newest first).
-With 1000+ session files this limits the mtime-diff scan to the most
-recently active sessions.  Nil scans all files.")
+(defvar decknix--agent-session-cache-max-files nil
+  "Maximum number of session files to LIST per refresh, newest first.
+Nil lists them all, which is the default.
+
+This was 200, and it hid every older session from the picker: with 418
+Claude transcripts, a session last used three weeks earlier was the
+332nd newest and could not be found in `C-c s s\=', while `decknix
+session list\=' showed it at once.  Listing is not the expensive part.
+Every one of those older files was already in the persisted metadata
+cache, and stat-ing all 418 took 3.5ms.  What can be expensive is
+PARSING uncached files, which `decknix--agent-session-sync-parse-max\='
+bounds instead.")
+
+(defvar decknix--agent-session-sync-parse-max 200
+  "Most uncached session files a synchronous refresh will parse.
+Matters on a cold cache (a new machine, a deleted cache file), where
+every transcript is uncached and parsing them all would freeze the
+picker.  The newest are parsed at once; the rest go to the background
+refresh, which runs jq in a subprocess.  Nil parses everything.")
 
 (defvar decknix--agent-sessions-dir
   (expand-file-name "~/.augment/sessions")
@@ -608,6 +623,11 @@ and the persistent cache is saved if any new entries were written."
             (push hit cached-data)
           (push path new-files))))
     (setq new-files (nreverse new-files))
+    ;; Newest first, so a cold cache still shows recent sessions at once.
+    (when (and decknix--agent-session-sync-parse-max
+               (> (length new-files) decknix--agent-session-sync-parse-max))
+      (setq new-files (seq-take new-files decknix--agent-session-sync-parse-max))
+      (run-at-time 0 nil #'decknix--agent-session-refresh-async provider-id))
     (let* ((before (hash-table-count decknix--session-meta-cache))
            (new-data (when new-files
                        (decknix--session-refresh-parse-files provider-id new-files))))

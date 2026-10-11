@@ -48,12 +48,67 @@
 
 (ert-deftest decknix-agent-session-cache--jq-cmd-shape ()
   (decknix-agent-session-cache-test--with-provider
-    (let ((decknix--agent-session-cache-max-files 200)
-          (cmd (decknix--agent-session-jq-cmd 'test-auggie)))
+    (let* ((decknix--agent-session-cache-max-files 200)
+           (cmd (decknix--agent-session-jq-cmd 'test-auggie)))
       (should (string-match-p "ls -t1" cmd))
       (should (string-match-p "test-sessions" cmd))
       (should (string-match-p "\\.json" cmd))
       (should (string-match-p "head -200" cmd)))))
+
+;; ---------------------------------------------------------------------------
+;; listing is uncapped; synchronous parsing is not
+;;
+;; A 200-file listing cap hid every older session from the picker: the one
+;; being looked for was the 332nd newest of 418 Claude transcripts, while
+;; the CLI found it at once.  All 218 beyond the cap were already cached.
+
+(defmacro decknix-agent-session-cache-test--with-files (n cached &rest body)
+  "Run BODY over N fake session files, CACHED of them already parsed.
+Binds `parsed\=' to the files parsed synchronously and `deferred\=' to
+whether the background refresh was scheduled."
+  (declare (indent 2))
+  `(let ((parsed nil) (deferred nil))
+     (cl-letf (((symbol-function 'decknix--session-list-files-with-mtimes)
+                (lambda (_p max)
+                  (let ((all (cl-loop for i below ,n
+                                      collect (cons (float i) (format "/s/%04d.jsonl" i)))))
+                    (if max (seq-take all max) all))))
+               ((symbol-function 'decknix--session-cache-hit)
+                (lambda (_entry mtime)
+                  (when (< mtime ,cached) (list (cons 'sessionId (format "s%d" mtime))))))
+               ((symbol-function 'decknix--session-refresh-parse-files)
+                (lambda (_p files) (setq parsed files)
+                  (mapcar (lambda (f) (list (cons 'sessionId f))) files)))
+               ((symbol-function 'decknix--session-store-parsed) #'ignore)
+               ((symbol-function 'decknix--session-meta-cache-save) #'ignore)
+               ((symbol-function 'decknix--session-rows-for-provider) (lambda (rows &rest _) rows))
+               ((symbol-function 'decknix--session-cache-merge) (lambda (_old new _p) new))
+               ((symbol-function 'run-at-time) (lambda (&rest _) (setq deferred t))))
+       ,@body)))
+
+(ert-deftest decknix-agent-session-cache--old-cached-sessions-are-listed ()
+  (decknix-agent-session-cache-test--with-provider
+    (decknix-agent-session-cache-test--with-files 418 418
+      (should (= 418 (length (decknix--agent-session-refresh-sync 'test-auggie))))
+      (should-not parsed)
+      (should-not deferred))))
+
+(ert-deftest decknix-agent-session-cache--a-cold-cache-parses-only-the-newest-at-once ()
+  "Parsing every transcript synchronously would freeze the picker."
+  (decknix-agent-session-cache-test--with-provider
+    (let ((decknix--agent-session-sync-parse-max 200))
+      (decknix-agent-session-cache-test--with-files 418 0
+        (decknix--agent-session-refresh-sync 'test-auggie)
+        (should (= 200 (length parsed)))
+        (should (equal "/s/0000.jsonl" (car parsed)))
+        (should deferred)))))
+
+(ert-deftest decknix-agent-session-cache--a-few-new-files-parse-without-deferring ()
+  (decknix-agent-session-cache-test--with-provider
+    (decknix-agent-session-cache-test--with-files 418 410
+      (decknix--agent-session-refresh-sync 'test-auggie)
+      (should (= 8 (length parsed)))
+      (should-not deferred))))
 
 ;; ---------------------------------------------------------------------------
 ;; claude-code :session-jq-filter — crash-safety + first-text-block extraction
