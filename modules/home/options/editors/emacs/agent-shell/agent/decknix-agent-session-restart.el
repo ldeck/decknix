@@ -49,6 +49,9 @@
 (declare-function decknix--agent-session-derive-name
                   "decknix-agent-session-format"
                   (tags &optional workspace branch first-message sid))
+(declare-function decknix-agent-broker-stop "ext:decknix-agent-session-broker")
+(defvar decknix--agent-broker-key)
+
 (declare-function decknix--agent-session-resume
                   "decknix-agent-shell-main"
                   (session-id history-count &optional display-name
@@ -157,6 +160,14 @@ already exited."
       ;; are reviving, so leaving it alive would make resume dedupe
       ;; straight back onto it; killing also frees the name so the
       ;; revived session reclaims it instead of getting a `<2>' suffix.
+      ;; Stop the broker first.  Killing the buffer only DETACHES it -- the
+      ;; broker and its agent process live on -- so resume reattached to the
+      ;; very process being restarted.  A Pi session whose gortex bridge had
+      ;; failed at startup stayed broken across `R' for that reason.
+      (let ((key (and (local-variable-p 'decknix--agent-broker-key buf)
+                      (buffer-local-value 'decknix--agent-broker-key buf))))
+        (when (and key (fboundp 'decknix-agent-broker-stop))
+          (decknix-agent-broker-stop key)))
       (let ((kill-buffer-query-functions nil))
         (kill-buffer buf))
       (decknix--agent-session-resume sid history-count
