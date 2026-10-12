@@ -34,6 +34,7 @@
 (defconst decknix-review-board-lane-help
   '((needs-you . "agent is blocked on you")
     (doing     . "in progress — working, or done and dismissable")
+    (on-hold   . "PR back in draft — waiting on the author")
     (finished  . "PR merged or closed — safe to quit")
     (grouped   . "bot PRs, folded per service")
     (idle      . "no session yet — nobody is on these"))
@@ -47,6 +48,7 @@ stale sessions to clean up, which is the opposite of what they are.")
 (defconst decknix-review-board-lanes
   '((needs-you . "Needs you")
     (doing     . "In progress")
+    (on-hold   . "On hold")
     (finished  . "Finished")
     (grouped   . "Grouped")
     (idle      . "Idle"))
@@ -102,6 +104,10 @@ Precedence is deliberate and only partly obvious:
    ;; `finished'; a needs-you lane you have learned to distrust is not
    ;; recoverable.
    ((and has-session (eq status 'gone)) 'finished)
+   ;; Ahead of attention for the same reason as `gone': a question about
+   ;; a PR the author has taken back to draft is not a call on your time
+   ;; yet.  The row returns by itself when the PR is marked ready again.
+   ((and has-session (eq status 'draft)) 'on-hold)
    ((and has-session attention) 'needs-you)
    ;; I have already decided this one, so no review is wanted and the row
    ;; belongs with the finished work -- not sitting in `doing' as though
@@ -415,6 +421,7 @@ cannot be recovered from afterwards:
   (cond
    ((eq status 'stale) "author pushed since review")
    ((eq status 'gone) "already merged or closed")
+   ((eq status 'draft) "PR is a draft")
    ((null (plist-get row :prs)) "no PR")
    ;; Bot PRs do NOT go through merge-train.  The house process is
    ;; `/ship' or `/review-and-ship-bot-pr', which runs a pre-merge
