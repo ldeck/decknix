@@ -14,6 +14,25 @@
 with lib;
 
 let
+  # The tests run as part of the build: the replay that tuned the guard
+  # found the first version blocking quoted text and heredoc bodies, and a
+  # regression there would deny ordinary commands in every session.
+  waitGuardTested = pkgs.runCommand "claude-wait-guard-tests" { } ''
+    cp ${./claude-wait-guard.py} claude-wait-guard.py
+    cp ${./claude-wait-guard_test.py} claude-wait-guard_test.py
+    ${pkgs.python3}/bin/python3 claude-wait-guard_test.py
+    touch $out
+  '';
+  waitGuard = pkgs.writeShellScript "claude-wait-guard" ''
+    # ${waitGuardTested}
+    exec ${pkgs.python3}/bin/python3 ${./claude-wait-guard.py}
+  '';
+  waitGuardHooks = optionalAttrs cfg.waitGuard {
+    PreToolUse = [{
+      matcher = "Bash";
+      hooks = [{ type = "command"; command = "${waitGuard}"; timeout = 5; }];
+    }];
+  };
   cfg = config.decknix.ai.claude;
 
   home = config.home.homeDirectory;
@@ -97,6 +116,24 @@ in {
           independent guard regardless of what is (or isn't) denied here.
         '';
       };
+    };
+
+    waitGuard = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Refuse Bash calls that wait in the foreground: a `sleep` of 30s or
+        more, a loop sleeping 5s or more a pass, or a command known to run
+        for minutes (gradle, nix build, decknix switch, PR-wait scripts).
+        The refusal tells the agent to background the call instead.
+
+        Over three weeks of sessions, foreground sleeps came to 33 hours and
+        232 calls ran into the 2-minute tool timeout.  Replaying three
+        weeks of real calls through the guard: 280 blocks covering 7.1
+        hours of waiting, 16 of them on calls that finished in under 20
+        seconds anyway.  An agent can still wait deliberately with an
+        explicit `timeout` of at least 5 minutes or `# allow-foreground`.
+      '';
     };
 
     disableAutoUpdate = mkOption {
@@ -243,6 +280,34 @@ in {
     # Merged with jq for the same reason as the permissions block: Claude
     # mutates this file at runtime, so a whole-file deploy would clobber its
     # keys.  Only `.env.DISABLE_AUTOUPDATER' is touched.
+    # Merged by key, like the gortex hooks: Claude rewrites this file at
+    # runtime, so only entries naming the claude-wait-guard store path are
+    # ours to add or remove.  Always runs, so turning waitGuard off removes
+    # them again.
+    home.activation.claude-wait-guard =
+      lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+        if [ -f "$CLAUDE_SETTINGS" ]; then
+          TMP="$(${pkgs.coreutils}/bin/mktemp)"
+          if ${pkgs.jq}/bin/jq --argjson add ${escapeShellArg (builtins.toJSON waitGuardHooks)} \
+               'def ours: (.hooks // []) | any(.command // "" | test("-claude-wait-guard$"));
+                .hooks = ((.hooks // {}) | with_entries(.value |= map(select(ours | not))))
+                | reduce ($add | to_entries[]) as $e (.; .hooks[$e.key] = ((.hooks[$e.key] // []) + $e.value))
+                | .hooks |= with_entries(select(.value | length > 0))
+                | if .hooks == {} then del(.hooks) else . end' \
+               "$CLAUDE_SETTINGS" > "$TMP"; then
+            if ! ${pkgs.diffutils}/bin/cmp -s "$TMP" "$CLAUDE_SETTINGS"; then
+              $DRY_RUN_CMD ${pkgs.coreutils}/bin/mv "$TMP" "$CLAUDE_SETTINGS"
+            else
+              ${pkgs.coreutils}/bin/rm -f "$TMP"
+            fi
+          else
+            ${pkgs.coreutils}/bin/rm -f "$TMP"
+            echo "  [claude-wait-guard] could not update $CLAUDE_SETTINGS" >&2
+          fi
+        fi
+      '';
+
     home.activation.claude-disable-autoupdate = mkIf cfg.disableAutoUpdate
       (lib.hm.dag.entryAfter [ "writeBoundary" ] ''
         CLAUDE_SETTINGS="$HOME/.claude/settings.json"
