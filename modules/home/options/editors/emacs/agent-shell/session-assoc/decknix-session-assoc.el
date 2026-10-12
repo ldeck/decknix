@@ -41,6 +41,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
 (require 'json)
@@ -70,7 +71,10 @@ first in the list."
         (when (and (stringp root) (not (string-empty-p root)))
           (let* ((dir (file-name-as-directory root))
                  (len (length dir)))
-            (when (and (> len best-len) (string-prefix-p dir path))
+            (when (and (> len best-len)
+                       ;; The root itself counts: `cd /w/repo-worktrees/X'
+                       ;; names the directory, with no trailing slash.
+                       (string-prefix-p dir (file-name-as-directory path)))
               (setq best root best-len len)))))
       (or best (decknix-session-assoc-resolve-removed path roots)))))
 
@@ -99,25 +103,58 @@ gone.  Accepted only when the repo IS a known root."
                       roots)
         dir))))
 
+(defconst decknix-session-assoc-path-re
+  "\\(?:^\\|[^[:alnum:]_.~/-]\\)\\(/\\(?:Users\\|home\\|private\\|tmp\\|var\\|opt\\)/[^][:space:]\"'`;|&<>(){}*?$,]+\\)"
+  "Matches an absolute path inside a tool call's input text.")
+
+(defun decknix-session-assoc-input-paths (input)
+  "Return absolute paths named anywhere in a tool call's INPUT.
+
+INPUT is the parsed `rawInput\=': an alist (or vector) of strings.  Every
+string is searched, because the path a Bash call works in lives only in
+its command text -- `cd /w/repo-worktrees/X; git ...\=' -- with
+`locations\=' left null.  The OUTPUT is deliberately not read: command
+output names any number of paths the session merely looked at."
+  (let (out)
+    (cl-labels ((walk (v)
+                  (cond ((stringp v)
+                         (let ((start 0))
+                           (while (string-match decknix-session-assoc-path-re v start)
+                             (push (directory-file-name (match-string 1 v)) out)
+                             (setq start (match-end 1)))))
+                        ((vectorp v) (mapc #'walk v))
+                        ((consp v)
+                         (if (and (atom (car v)) (not (consp (cdr v))))
+                             (walk (cdr v))
+                           (mapc #'walk v))))))
+      (walk input))
+    (nreverse (delete-dups out))))
+
 (defun decknix-session-assoc-paths-of (update)
   "Return the file paths an ACP session UPDATE reports touching.
 
-Reads `locations', which is where `tool_call' and `tool_call_update'
-carry them.
+Reads `locations\=', which is where file tools carry them, and the tool
+call\='s input, which is the only place a Bash call names its paths.
+Reading `locations\=' alone missed a session that did all its work in a
+helix-foundations worktree through subagent Bash calls: 35 touches, none
+recorded, and the PR it was shepherding showed as Unattended.
 
 Accepts a VECTOR as well as a list, because that is what the JSON
 actually parses to: `json-parse-string' renders arrays as vectors, so a
 `listp' test discarded every path.  Hand-written alist fixtures hid it --
 they pass a list -- while a real log yielded nothing at all."
   (let ((locs (alist-get 'locations update)))
-    (delq nil
-          (mapcar (lambda (loc)
-                    (let ((p (and (or (listp loc) (vectorp loc))
-                                  (alist-get 'path loc))))
-                      (and (stringp p) (not (string-empty-p p)) p)))
-                  (cond ((vectorp locs) (append locs nil))
-                        ((listp locs) locs)
-                        (t nil))))))
+    (delete-dups
+     (append
+      (delq nil
+            (mapcar (lambda (loc)
+                      (let ((p (and (or (listp loc) (vectorp loc))
+                                    (alist-get 'path loc))))
+                        (and (stringp p) (not (string-empty-p p)) p)))
+                    (cond ((vectorp locs) (append locs nil))
+                          ((listp locs) locs)
+                          (t nil))))
+      (decknix-session-assoc-input-paths (alist-get 'rawInput update))))))
 
 ;; --- the recency-bounded set ------------------------------------------
 

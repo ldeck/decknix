@@ -435,5 +435,42 @@ to whatever directory happened to be current."
   (should-not (decknix-session-assoc-launch-target '(:branch "x")))
   (should-not (decknix-session-assoc-launch-target '(:path ""))))
 
+;; --- paths named only in a tool call's input --------------------------
+;;
+;; A session did all its helix-foundations work through subagent Bash calls:
+;; 35 touches, `locations' null on every one, the path only in the command
+;; text.  None was recorded and the PR it was shepherding showed Unattended.
+
+(ert-deftest dk-assoc--a-bash-command-names-its-working-directory ()
+  (should (equal '("/Users/me/w/hf-worktrees/CONN-1163-x")
+                 (decknix-session-assoc-paths-of
+                  '((kind . "execute")
+                    (rawInput . ((command . "cd /Users/me/w/hf-worktrees/CONN-1163-x; git grep -n y | head"))))))))
+
+(ert-deftest dk-assoc--input-paths-come-from-every-field ()
+  (should (equal '("/Users/me/w/a.kt" "/Users/me/w/b")
+                 (decknix-session-assoc-input-paths
+                  '((file_path . "/Users/me/w/a.kt") (nested . [((cwd . "/Users/me/w/b"))]))))))
+
+(ert-deftest dk-assoc--a-url-is-not-a-path ()
+  (should-not (decknix-session-assoc-input-paths
+               '((command . "gh pr view https://github.com/o/r/pull/1051")))))
+
+(ert-deftest dk-assoc--locations-and-input-are-combined-once ()
+  (should (equal '("/Users/me/w/a.kt")
+                 (decknix-session-assoc-paths-of
+                  '((locations . [((path . "/Users/me/w/a.kt"))])
+                    (rawInput . ((file_path . "/Users/me/w/a.kt"))))))))
+
+(ert-deftest dk-assoc--a-root-named-without-a-trailing-slash-resolves ()
+  "`cd /w/repo-worktrees/X' names the directory itself."
+  (should (equal "/w/repo-worktrees/X"
+                 (decknix-session-assoc-resolve
+                  "/w/repo-worktrees/X" '("/w/repo" "/w/repo-worktrees/X")))))
+
+(ert-deftest dk-assoc--a-sibling-with-a-shared-prefix-is-not-the-root ()
+  "/w/repo-old is not inside /w/repo."
+  (should-not (decknix-session-assoc-resolve "/w/repo-old/x" '("/w/repo"))))
+
 (provide 'decknix-session-assoc-test)
 ;;; decknix-session-assoc-test.el ends here
