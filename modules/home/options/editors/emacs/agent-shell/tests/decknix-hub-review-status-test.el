@@ -180,5 +180,26 @@ One member still plainly wanted means there is work here, and saying
   (dolist (s '(gone stale answered nil))
     (should (eq s (decknix--hub-review-status-aggregate (list s))))))
 
+(ert-deftest decknix-review-status--a-draft-is-on-hold ()
+  (should (eq 'draft (decknix--hub-review-status '((draft . t)) t))))
+
+(ert-deftest decknix-review-status--a-ready-pr-is-not-draft ()
+  (should-not (decknix--hub-review-status '((draft . :false)) t)))
+
+(ert-deftest decknix-review-status--a-merged-draft-is-gone ()
+  (should (eq 'gone (decknix--hub-review-status nil nil))))
+
+(ert-deftest decknix-review-status--draft-outranks-stale ()
+  "Pushes to a draft are the author still working, not a review to redo."
+  (should (eq 'draft (decknix--hub-review-status '((draft . t) (review_stale . t)) t))))
+
+(ert-deftest decknix-review-status--a-group-is-on-hold-only-if-every-member-is ()
+  (should (eq 'draft (decknix--hub-review-status-aggregate '(draft draft gone))))
+  (should-not (decknix--hub-review-status-aggregate '(draft nil))))
+
+(ert-deftest decknix-review-status--draft-has-a-glyph-and-help ()
+  (should (decknix--hub-review-status-glyph 'draft))
+  (should (decknix--hub-review-status-help 'draft)))
+
 (provide 'decknix-hub-review-status-test)
 ;;; decknix-hub-review-status-test.el ends here

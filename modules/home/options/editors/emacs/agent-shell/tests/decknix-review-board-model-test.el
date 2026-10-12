@@ -189,9 +189,10 @@ would reappear as idle rows and invite a second dispatch."
     (should (= 0 (decknix-review-board-count model)))))
 
 (ert-deftest decknix-rb--lane-order-is-fixed ()
-  "Lifecycle order: blocked on you, then in progress, then done, then the
-un-started backlog.  The lanes you clear stay high, not buried."
-  (should (equal '(needs-you doing finished grouped idle)
+  "Lifecycle order: blocked on you, then in progress, then waiting on the
+author, then done, then the un-started backlog.  The lanes you clear stay
+high, not buried."
+  (should (equal '(needs-you doing on-hold finished grouped idle)
                  (mapcar #'car decknix-review-board-lanes))))
 
 (ert-deftest decknix-rb--rows-sort-by-priority-within-a-lane ()
@@ -601,6 +602,35 @@ exists -- telling me the analysis is void is more useful."
         (theirs (decknix--hub-review-status-glyph 'answered)))
     (should mine)
     (should-not (equal (car mine) (car theirs)))))
+
+;; --- a PR taken back to draft ----------------------------------------
+;;
+;; attom-integration#341: marked ready at 04:30, auto-review dispatched a
+;; session, converted back to draft at 04:36.  The session sat in Needs
+;; you as though a review were wanted.
+
+(ert-deftest decknix-rb--a-draft-pr-puts-its-session-on-hold ()
+  (should (eq 'on-hold (decknix-review-board--lane t nil 'draft nil))))
+
+(ert-deftest decknix-rb--draft-outranks-attention ()
+  "An agent asking about a PR the author has withdrawn is not a call on
+your time yet."
+  (should (eq 'on-hold (decknix-review-board--lane t t 'draft nil))))
+
+(ert-deftest decknix-rb--merged-still-outranks-draft ()
+  (should (eq 'finished (decknix-review-board--lane t t 'gone nil))))
+
+(ert-deftest decknix-rb--a-draft-with-no-session-stays-where-it-was ()
+  "On hold is about a session; an undispatched request keeps its lane."
+  (should (eq 'idle (decknix-review-board--lane nil nil 'draft nil))))
+
+(ert-deftest decknix-rb--on-hold-is-a-rendered-lane ()
+  (should (assq 'on-hold decknix-review-board-lanes))
+  (should (assq 'on-hold decknix-review-board-lane-help)))
+
+(ert-deftest decknix-rb--a-draft-cannot-be-merged ()
+  (should (equal "PR is a draft"
+                 (decknix-review-board-merge-blocker '(:prs ("r#1")) 'draft))))
 
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here

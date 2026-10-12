@@ -69,6 +69,12 @@ more actionable than telling you it might be redundant."
   (cond
    ((not found) 'gone)
    ((null item) 'gone)
+   ;; Back in draft: the author has said "not yet", so nothing a reviewer
+   ;; does now counts.  attom-integration#341 was marked ready at 04:30,
+   ;; auto-review dispatched a session, and at 04:36 the author converted
+   ;; it back to draft -- yet the session sat in the board's Needs you
+   ;; lane as though the review were wanted.
+   ((eq (map-elt item 'draft) t) 'draft)
    ((eq (map-elt item 'review_stale) t) 'stale)
    ;; MY review, which outranks anyone else's: once I have decided, the
    ;; row wants nothing from me whatever the others are doing.  This was
@@ -104,6 +110,9 @@ qualifying to say about it."
     (cond
      ((null statuses) nil)
      ((null live) 'gone)
+     ;; Unanimity, like `gone': one member still ready for review keeps the
+     ;; whole group wanted.
+     ((seq-every-p (lambda (s) (eq s 'draft)) live) 'draft)
      ((memq 'stale live) 'stale)
      ;; Unanimity for both settled kinds, and `reviewed' only when every
      ;; live member is mine: a group where I have decided one PR and not
@@ -120,6 +129,7 @@ sidebar already carries a lot of colour, and these have to read at a
 glance beside the existing state glyphs."
   (pcase status
     ('gone     (cons "⊘" '(:foreground "#6b727e")))
+    ('draft    (cons "◐" '(:foreground "#6b727e")))
     ('stale    (cons "↻" '(:foreground "#e5c07b" :weight bold)))
     ('reviewed (cons "✔" '(:foreground "#98c379" :weight bold)))
     ('answered (cons "☑" '(:foreground "#61afef")))
@@ -129,6 +139,7 @@ glance beside the existing state glyphs."
   "Return help-echo text for STATUS, or nil."
   (pcase status
     ('gone     "PR left your review queue (merged, closed or de-requested) — session is finished work")
+    ('draft    "PR is back in draft — on hold until the author marks it ready")
     ('stale    "Author has pushed since — this session's analysis is out of date")
     ('reviewed "You have already reviewed this — nothing further is wanted from you")
     ('answered "Another reviewer has responded — your review may be redundant")
