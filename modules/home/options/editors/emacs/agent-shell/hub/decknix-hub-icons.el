@@ -242,6 +242,22 @@ distinguishes a conflict from a failing build."
    ((decknix--hub-awaiting-rereview-p item) (decknix--hub-icon "↻" 'warning))
    (t "")))
 
+(defun decknix--hub-approved-icon (item)
+  "Return a green tick when ITEM is approved and nothing blocks it.
+
+Approval had been carried by weight alone -- a bold circle -- which does
+not read at a glance: a green circle meaning only \"the build passes\" was
+reported as looking approved.  Every other review fact already has its
+own marker beside the circle (`⊖\=' changes requested, `↻\=' approval
+gone stale, `!\=' conflict), so approval gets one too.
+
+Same conditions as the bold: not while a reviewer is blocking, and not
+once later pushes have made the approval stale."
+  (if (and (decknix--hub-pr-approved-p item)
+           (not (decknix--hub-review-blocked-p item)))
+      (decknix--hub-icon "✓" 'success)
+    ""))
+
 (defun decknix--hub-conflict-icon (item)
   "Return a marker when ITEM cannot merge, or an empty string.
 

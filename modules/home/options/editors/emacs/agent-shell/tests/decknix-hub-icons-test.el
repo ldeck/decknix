@@ -859,5 +859,26 @@ merge a PR whose decision sits at CHANGES_REQUESTED."
                'wip)))
     (should (eq 'error (get-text-property 0 'face icon)))))
 
+;; --- approval has its own marker ----------------------------------------
+
+(ert-deftest decknix-hub-icons--an-approved-pr-gets-a-tick ()
+  (should (equal "✓" (substring-no-properties
+                      (decknix--hub-approved-icon
+                       '((state . "OPEN") (review_decision . "APPROVED") (approvers . ("jo"))))))))
+
+(ert-deftest decknix-hub-icons--a-passing-build-alone-gets-no-tick ()
+  "The reported confusion: green meant only that CI passed."
+  (should (equal "" (decknix--hub-approved-icon
+                     '((state . "OPEN") (review_decision . "REVIEW_REQUIRED") (checks_state . "pass"))))))
+
+(ert-deftest decknix-hub-icons--a-dismissed-approval-gets-no-tick ()
+  "followupboss#279: approval dismissed, REVIEW_REQUIRED, no approvers."
+  (should (equal "" (decknix--hub-approved-icon
+                     '((state . "OPEN") (review_decision . "REVIEW_REQUIRED") (review_stale . t))))))
+
+(ert-deftest decknix-hub-icons--a-blocked-pr-gets-no-tick ()
+  (should (equal "" (decknix--hub-approved-icon
+                     '((state . "OPEN") (review_decision . "CHANGES_REQUESTED") (approvers . ("jo")))))))
+
 (provide 'decknix-hub-icons-test)
 ;;; decknix-hub-icons-test.el ends here
