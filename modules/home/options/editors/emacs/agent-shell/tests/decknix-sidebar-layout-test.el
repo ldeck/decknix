@@ -666,6 +666,38 @@ dropping work silently -- the failure it already had once."
                            (decknix-layout-test--rpr '((my_review . "APPROVED")) "ready")
                            60))))
 
+;; --- memos see a refreshed feed -------------------------------------
+;;
+;; Both signatures hashed only repo and PR numbers, so a feed refresh that
+;; changed a PR's state but not its number reused the old tree.
+;; followupboss#279 rendered approved after its approval was dismissed.
+
+(ert-deftest decknix-layout--a-refreshed-wip-feed-changes-the-signature ()
+  (let ((before (list (list (cons 'repo "o/r")
+                            (cons 'prs (list (list (cons 'number 279) (cons 'review_decision "APPROVED")))))))
+        (after (list (list (cons 'repo "o/r")
+                           (cons 'prs (list (list (cons 'number 279) (cons 'review_decision "REVIEW_REQUIRED"))))))))
+    (should-not (= (decknix--layout-wip-signature nil before nil)
+                   (decknix--layout-wip-signature nil after nil)))))
+
+(ert-deftest decknix-layout--the-same-wip-feed-keeps-its-signature ()
+  "The memo must still serve every paint between refreshes."
+  (let ((feed (list (list (cons 'repo "o/r") (cons 'prs (list (list (cons 'number 1))))))))
+    (should (= (decknix--layout-wip-signature nil feed nil)
+               (decknix--layout-wip-signature nil feed nil)))))
+
+(ert-deftest decknix-layout--a-refreshed-review-feed-changes-the-signature ()
+  (let ((a (list (list (cons 'repo "o/r") (cons 'number 7) (cons 'my_review nil))))
+        (b (list (list (cons 'repo "o/r") (cons 'number 7) (cons 'my_review "APPROVED")))))
+    (should-not (= (decknix--layout-groups-signature nil a)
+                   (decknix--layout-groups-signature nil b)))))
+
+(ert-deftest decknix-layout--a-freshly-filtered-list-of-the-same-items-hits ()
+  "The sidebar filters into a NEW list every paint; the items are the same."
+  (let ((items (list (list (cons 'repo "o/r") (cons 'number 7)))))
+    (should (= (decknix--layout-groups-signature nil (copy-sequence items))
+               (decknix--layout-groups-signature nil (copy-sequence items))))))
+
 ;; --- token quotas ---------------------------------------------------
 
 (defconst decknix-layout-test--now (date-to-time "2026-10-09T06:00:00Z"))

@@ -154,7 +154,12 @@ would have reused the wrong groups."
     (dolist (i items)
       (setq h (logxor (* 31 h)
                       (+ (* 131 (sxhash-equal (alist-get 'repo i)))
-                         (or (alist-get 'number i) 0)))))
+                         (or (alist-get 'number i) 0)
+                         ;; The item OBJECT, so a re-read feed invalidates.
+                         ;; Repo and number alone froze every row's state --
+                         ;; approval, CI, my response -- until a PR came or
+                         ;; went.  See `decknix--layout-wip-signature\='.
+                         (* 17 (sxhash-eq i))))))
     (dolist (sess sessions)
       (setq h (logxor (* 31 h)
                       (+ (* 131 (sxhash-equal (nth 0 sess)))
@@ -729,7 +734,17 @@ until a test caught it."
                       (+ (* 131 (sxhash-equal (alist-get 'repo r)))
                          (sxhash-equal
                           (mapcar (lambda (p) (alist-get 'number p))
-                                  (alist-get 'prs r)))))))
+                                  (alist-get 'prs r))))))
+      ;; Each PR's OBJECT identity as well.  Hashing only the numbers kept
+      ;; the tree -- and the PR alists inside it -- across feed refreshes,
+      ;; so a dismissed approval went on rendering as approved:
+      ;; followupboss#279 stayed bold after jonathan-lo's approval was
+      ;; dismissed.  The hub replaces every item when it re-reads the
+      ;; feed, so identity changes exactly once per refresh and the memo
+      ;; still serves every paint in between.  `sxhash-equal\=' on the
+      ;; contents would not do: it hashes a bounded depth and length.
+      (dolist (p (alist-get 'prs r))
+        (setq h (logxor (* 31 h) (sxhash-eq p)))))
     (dolist (wt worktrees)
       (setq h (logxor (* 31 h)
                       (+ (* 131 (sxhash-equal (plist-get wt :path)))
