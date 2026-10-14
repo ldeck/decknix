@@ -100,5 +100,44 @@ age-and-not-held guard lives there."
   (should-error (decknix-repo-sync-clear-lock '(:name "upside"))
                 :type 'user-error))
 
+(ert-deftest decknix-repo-sync-actions--a-removed-checkout-leaves-the-list ()
+  "The report is only rewritten every three hours; a checkout removed by
+hand went on showing as `sync failed' until then."
+  (let* ((gone (make-temp-name "/tmp/dk-gone-"))
+         (here (make-temp-file "dk-here-" t))
+         (decknix--repo-sync-present-memo (make-hash-table :test 'equal))
+         (decknix-repo-sync-show-behind nil)
+         (decknix--repo-sync-cache
+          (list :problems (list (list :kind 'failed :name "gone" :path gone)
+                                (list :kind 'failed :name "here" :path here)))))
+    (unwind-protect
+        (should (equal '("here") (mapcar (lambda (p) (plist-get p :name))
+                                         (decknix-repo-sync-problems))))
+      (delete-directory here))))
+
+(ert-deftest decknix-repo-sync-actions--removal-refuses-when-work-would-be-lost ()
+  (let* ((dir (make-temp-file "dk-repo-" t))
+         (moved nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'decknix--repo-sync-git-output)
+                   (lambda (_p &rest args) (if (equal (car args) "status") " M x\n" "")))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                  ((symbol-function 'rename-file) (lambda (&rest _) (setq moved t))))
+          (decknix-repo-sync-remove-checkout (list :name "r" :path dir))
+          (should-not moved))
+      (delete-directory dir))))
+
+(ert-deftest decknix-repo-sync-actions--removal-moves-a-safe-checkout-to-the-trash ()
+  (let* ((dir (make-temp-file "dk-repo-" t))
+         (dest nil) (done nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'decknix--repo-sync-git-output) (lambda (&rest _) ""))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                  ((symbol-function 'rename-file) (lambda (_from to) (setq dest to))))
+          (decknix-repo-sync-remove-checkout (list :name "r" :path dir) (lambda () (setq done t)))
+          (should (string-prefix-p (expand-file-name "~/.Trash/") dest))
+          (should done))
+      (delete-directory dir))))
+
 (provide 'decknix-repo-sync-actions-test)
 ;;; decknix-repo-sync-actions-test.el ends here

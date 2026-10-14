@@ -153,6 +153,24 @@ recreate the bug this module exists for."
              (t (string< (or (plist-get a :name) "")
                          (or (plist-get b :name) ""))))))))
 
+(defun decknix--repo-sync-removal-blocker (status unpushed worktrees)
+  "Return why a checkout must NOT be removed, or nil when it is safe.  Pure.
+
+STATUS is `git status --porcelain\=', UNPUSHED `git log --branches --not
+--remotes --oneline\=', WORKTREES `git worktree list --porcelain\='.
+Anything that exists only in this checkout blocks it: uncommitted work,
+commits on no remote, and linked worktrees, which share its object store
+and would be orphaned."
+  (let ((wts (length (seq-filter (lambda (l) (string-prefix-p "worktree " l))
+                                 (split-string (or worktrees "") "\n" t)))))
+    (cond ((not (string-empty-p (string-trim (or status ""))))
+           "it has uncommitted changes")
+          ((not (string-empty-p (string-trim (or unpushed ""))))
+           (format "it has %d commit(s) on no remote"
+                   (length (split-string (string-trim unpushed) "\n" t))))
+          ((> wts 1) (format "it has %d linked worktree(s)" (1- wts)))
+          (t nil))))
+
 (defun decknix--repo-sync-visible-p (problem)
   "Return non-nil when PROBLEM should be rendered."
   (or decknix-repo-sync-show-behind
