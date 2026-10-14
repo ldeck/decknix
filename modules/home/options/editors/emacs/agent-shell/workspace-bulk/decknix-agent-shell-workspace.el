@@ -5488,6 +5488,8 @@ directly — see `decknix-sidebar-primary-action'."
                                         'decknix-layout-expand-key))
          (orphan-prune (get-text-property (line-beginning-position)
                                           'decknix-layout-orphan-prune))
+         (subagent (get-text-property (line-beginning-position)
+                                      'decknix-layout-subagent))
          (cmd (pcase type
                 ('review            #'decknix-sidebar-request-menu)
                 ('wip               #'decknix-sidebar-wip-menu)
@@ -5510,6 +5512,9 @@ directly — see `decknix-sidebar-primary-action'."
      ;; through to a goto that has no branch for them either -- RET on a
      ;; stale lock did nothing at all, while the remedies to offer had
      ;; been written and simply never bound.
+     ;; A sub-agent row: what it was asked to do and what it last said.
+     ((and subagent (fboundp 'decknix-layout-subagent-show))
+      (decknix-layout-subagent-show subagent))
      ;; A held-items row: the only thing on it is "show the rest".
      ((and expand-key (fboundp 'decknix-layout-toggle-expand))
       (call-interactively #'decknix-layout-toggle-expand))

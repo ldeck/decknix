@@ -514,4 +514,41 @@ field name has not been verified."
   (should (equal "" (decknix--context-viewer-format-stamp 'not-a-string))))
 
 
+(ert-deftest decknix-agent-session-history--a-subagent-carries-its-type-and-task ()
+  "Read from the meta.json Claude writes beside each sub-agent transcript."
+  (let* ((dir (make-temp-file "dk-subs-" t))
+         (f (expand-file-name "agent-a1.jsonl" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "agent-a1.meta.json" dir)
+            (insert "{\"agentType\":\"pr-implementer\",\"description\":\"Contacts 01.2 to ready\",\"stoppedByUser\":true}"))
+          (let ((d (decknix--agent-subagent-with-task '((slug . "s")) f)))
+            (should (equal "pr-implementer" (alist-get 'agentType d)))
+            (should (equal "Contacts 01.2 to ready" (alist-get 'description d)))
+            (should (eq t (alist-get 'stoppedByUser d)))
+            (should (equal f (alist-get 'filePath d)))
+            (should (equal "s" (alist-get 'slug d)))))
+      (delete-directory dir t))))
+
+(ert-deftest decknix-agent-session-history--a-subagent-without-meta-is-unchanged ()
+  (let ((d (decknix--agent-subagent-with-task '((slug . "s")) "/nonexistent/agent-x.jsonl")))
+    (should-not (alist-get 'agentType d))
+    (should (equal "s" (alist-get 'slug d)))))
+
+(ert-deftest decknix-agent-session-history--an-unchanged-meta-is-not-re-read ()
+  (let* ((dir (make-temp-file "dk-subs-" t))
+         (meta (expand-file-name "agent-a2.meta.json" dir))
+         (reads 0)
+         (decknix--agent-subagent-task-cache (make-hash-table :test 'equal)))
+    (unwind-protect
+        (progn
+          (with-temp-file meta (insert "{\"agentType\":\"x\"}"))
+          (cl-letf* ((orig (symbol-function 'decknix--agent-subagent-task-read))
+                     ((symbol-function 'decknix--agent-subagent-task-read)
+                      (lambda (f) (setq reads (1+ reads)) (funcall orig f))))
+            (decknix--agent-subagent-task meta)
+            (decknix--agent-subagent-task meta)
+            (should (= 1 reads))))
+      (delete-directory dir t))))
+
 (provide 'decknix-agent-session-history-test)

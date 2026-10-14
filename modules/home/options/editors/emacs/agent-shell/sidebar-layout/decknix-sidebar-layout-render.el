@@ -19,6 +19,7 @@
 
 (require 'decknix-sidebar-layout)
 (require 'decknix-hub-icons)
+(require 'cl-lib)
 (require 'seq)
 
 (declare-function decknix--hub-review-session-snapshot "decknix-agent-shell-hub" ())
@@ -214,28 +215,142 @@ PR those filters exist to hide."
 (declare-function decknix--agent-buffer-session-id
                   "decknix-agent-buffer-lookup" (&optional buf))
 
-(defun decknix--layout-render-subagents (line-num buffer-name)
-  "Render BUFFER-NAME's sub-agents under its row.  Returns LINE-NUM.
+(defvar decknix-sidebar-layout-subagent-limit 10
+  "Most sub-agents listed when a session\'s summary row is expanded.")
 
-Reuses the Live section's renderer, which the layout no longer calls --
-so sub-agents vanished from the sidebar entirely at the refactor. It
-colours each row by derived liveness (running / active / done) and honours
-`decknix--sidebar-hide-completed-subagents', both of which would have to be
-reimplemented to render them here instead.
-
-Needs a LIVE buffer: the renderer reads the session id and provider off
-buffer-locals, and treats the parent as live when classifying state."
+(defun decknix--layout-subagents-of (buffer-name)
+  "Return ((SUB . STATE) ...) for BUFFER-NAME\'s sub-agents, newest first."
   (let ((buf (and buffer-name (get-buffer buffer-name))))
     (when (and buf (buffer-live-p buf)
-               (fboundp 'decknix--sidebar-render-subagents))
+               (fboundp 'decknix--agent-session-subagents)
+               (fboundp 'decknix--agent-subagent-state))
       (let ((sid (ignore-errors (decknix--agent-buffer-session-id buf)))
             (provider (and (local-variable-p 'decknix--agent-provider-id buf)
-                           (buffer-local-value 'decknix--agent-provider-id buf))))
+                           (buffer-local-value 'decknix--agent-provider-id buf)))
+            (now (float-time)))
         (when (and sid provider)
-          (setq line-num (ignore-errors
-                           (decknix--sidebar-render-subagents
-                            line-num sid provider)))))))
+          (mapcar (lambda (s)
+                    (cons s (decknix--layout-subagent-state
+                             s (decknix--agent-subagent-state s now t))))
+                  (ignore-errors (decknix--agent-session-subagents sid provider))))))))
+
+(defun decknix--layout-subagent-row (sub state indent width)
+  "Return the row for one SUB in STATE at INDENT, fitted to WIDTH."
+  (let* ((age (and (alist-get 'modified sub)
+                   (fboundp 'decknix--hub-format-age)
+                   (decknix--hub-format-age (alist-get 'modified sub))))
+         (left (format "%s↳ %s " indent (decknix--layout-subagent-glyph state)))
+         (right (or age ""))
+         (room (max 1 (- width (string-width left) (string-width right) 1)))
+         (label (decknix--layout-subagent-label sub))
+         (label (if (> (string-width label) room)
+                    (concat (truncate-string-to-width label (max 1 (1- room))) "…")
+                  label)))
+    (concat left label
+            (make-string (max 1 (- width (string-width left) (string-width label)
+                                   (string-width right)))
+                         ?\s)
+            (propertize right 'face 'shadow))))
+
+(defun decknix--layout-render-subagents (line-num buffer-name &optional width)
+  "Render BUFFER-NAME\'s sub-agents under its row.  Returns LINE-NUM.
+
+One child is shown as itself.  Several collapse to one summary row,
+`↳ 6 agents ◐2 ■1 ●3\', expanding on RET to a row per child named by its
+type and task.  Each child row opens its details on RET.
+
+They had rendered one row per child, every one reading `↳ C\' and the
+PARENT\'s name, so six children took six rows and said nothing about which
+was doing what.  Finished children still honour
+`decknix--sidebar-hide-completed-subagents\' in the expanded list; the
+summary counts them all."
+  (let* ((width (or width 48))
+         (pairs (decknix--layout-subagents-of buffer-name))
+         (shown (if (bound-and-true-p decknix--sidebar-hide-completed-subagents)
+                    (seq-remove (lambda (p) (memq (cdr p) '(done stopped))) pairs)
+                  pairs))
+         (key (concat "subagents:" (or buffer-name ""))))
+    (cl-flet ((child (pair indent)
+                (insert (propertize (decknix--layout-subagent-row (car pair) (cdr pair) indent width)
+                                    'decknix-layout-subagent (car pair)
+                                    'help-echo "RET for this agent's details")
+                        "\n")
+                (setq line-num (1+ line-num))))
+      (cond
+       ((null pairs))
+       ((= 1 (length pairs)) (child (car pairs) "    "))
+       (t
+        (insert (propertize (concat "    ↳ " (decknix--layout-subagent-summary (mapcar #'cdr pairs)))
+                            'decknix-layout-expand-key key
+                            'help-echo "RET to list these agents")
+                "\n")
+        (setq line-num (1+ line-num))
+        (when (decknix--layout-expanded-p key)
+          ;; Capped: one session had run 156.  Newest first, so the cap
+          ;; keeps the ones still likely to matter.
+          (dolist (pair (seq-take shown decknix-sidebar-layout-subagent-limit))
+            (child pair "      "))
+          (when (> (length shown) decknix-sidebar-layout-subagent-limit)
+            (insert (propertize (format "        … %d more"
+                                        (- (length shown) decknix-sidebar-layout-subagent-limit))
+                                'face 'font-lock-comment-face)
+                    "\n")
+            (setq line-num (1+ line-num))))))))
   line-num)
+
+(defvar-local decknix--layout-subagent-file nil
+  "Transcript file of the sub-agent shown in this buffer.")
+
+(defun decknix--layout-subagent-last-text (file)
+  "Return the last assistant text in sub-agent transcript FILE, or nil.
+Reads only the file\'s tail: a sub-agent transcript can run to megabytes."
+  (when (and file (file-readable-p file))
+    (let* ((size (file-attribute-size (file-attributes file)))
+           (start (max 0 (- size 262144)))
+           (last nil))
+      (with-temp-buffer
+        (insert-file-contents file nil start size)
+        (dolist (line (split-string (buffer-string) "\n" t))
+          (let ((o (ignore-errors
+                     (json-parse-string line :object-type 'alist :array-type 'list
+                                        :null-object nil :false-object nil))))
+            (when (equal "assistant" (alist-get 'role (alist-get 'message o)))
+              (let ((text (mapconcat (lambda (c) (or (and (equal "text" (alist-get 'type c))
+                                                           (alist-get 'text c))
+                                                      ""))
+                                     (let ((c (alist-get 'content (alist-get 'message o))))
+                                       (if (listp c) c nil))
+                                     "")))
+                (unless (string-empty-p (string-trim text)) (setq last text)))))))
+      last)))
+
+(defun decknix-layout-subagent-show (sub)
+  "Show SUB\'s details: what it was asked to do, its state, and its last word."
+  (interactive (list (get-text-property (line-beginning-position) 'decknix-layout-subagent)))
+  (unless sub (user-error "No sub-agent on this row"))
+  (let* ((file (alist-get 'filePath sub))
+         (buf (get-buffer-create (format "*Agent: %s*" (decknix--layout-subagent-label sub)))))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize (decknix--layout-subagent-label sub) 'face 'bold) "\n\n")
+        (dolist (row `(("Type" . ,(alist-get 'agentType sub))
+                       ("Task" . ,(alist-get 'description sub))
+                       ("Stopped by you" . ,(and (eq (alist-get 'stoppedByUser sub) t) "yes"))
+                       ("Last active" . ,(alist-get 'modified sub))
+                       ("Transcript" . ,(and file (abbreviate-file-name file)))))
+          (when (cdr row) (insert (format "%-15s %s\n" (car row) (cdr row)))))
+        (insert "\n" (propertize "Last message" 'face 'bold) "\n\n"
+                (or (decknix--layout-subagent-last-text file) "(none yet)") "\n"
+                "\n" (propertize "o open transcript   q quit" 'face 'shadow) "\n"))
+      (special-mode)
+      (setq-local decknix--layout-subagent-file file)
+      (local-set-key (kbd "o") (lambda () (interactive)
+                                 (if decknix--layout-subagent-file
+                                     (find-file-read-only decknix--layout-subagent-file)
+                                   (user-error "No transcript recorded"))))
+      (goto-char (point-min)))
+    (pop-to-buffer buf)))
 
 (defun decknix--layout-wip-repos ()
   "Return the hub WIP feed's repos list, or nil."
@@ -329,7 +444,7 @@ calling it from the render path cannot queue an audit per paint."
                 ;; sub-agents belong directly under it.
                 (when (= (length covering) 1)
                   (setq line-num (decknix--layout-render-subagents
-                                  line-num (nth 0 (car covering)))))
+                                  line-num (nth 0 (car covering)) width)))
                 (when (> (length covering) 1)
                   (dolist (cs covering)
                     (insert (propertize
@@ -342,7 +457,7 @@ calling it from the render path cannot queue an audit per paint."
                             "\n")
                     (setq line-num (1+ line-num))
                     (setq line-num (decknix--layout-render-subagents
-                                    line-num (nth 0 cs))))))))))
+                                    line-num (nth 0 cs) width)))))))))
       (when (> held 0)
         (insert (propertize
                  (format " ·  %d more in flight, nothing waiting" held)
@@ -401,7 +516,7 @@ hiding the sharing."
                   "\n")
           (setq line-num (1+ line-num))
           (setq line-num (decknix--layout-render-subagents
-                          line-num (nth 0 session)))
+                          line-num (nth 0 session) width))
           (dolist (claim (plist-get row :repos))
             (setq line-num (decknix--layout-render-claim
                             line-num width claim session
