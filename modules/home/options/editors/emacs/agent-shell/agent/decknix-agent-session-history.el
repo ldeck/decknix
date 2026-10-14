@@ -436,6 +436,51 @@ seconds so repeated sidebar repaints reuse them; see
                  decknix--agent-session-subagents-cache)
         result))))
 
+(defvar decknix--agent-subagent-task-cache (make-hash-table :test 'equal)
+  "META-FILE -> (MTIME . TASK), so a refresh re-reads only what changed.
+One session had 156 sub-agents; re-reading every meta.json on every
+refresh would cost 156 file reads per sidebar cycle.")
+
+(defun decknix--agent-subagent-task (meta-file)
+  "Return (TYPE DESCRIPTION STOPPED) from META-FILE, or nil.
+
+Claude writes `<agent>.meta.json\=' beside each sub-agent transcript:
+`{\"agentType\": \"pr-implementer\", \"description\": \"Contacts 01.2 to
+ready\", \"stoppedByUser\": true}\='.  Without it every child rendered as
+its PARENT\'s name -- six rows of `↳ C mvp/followupboss/us\=' -- with
+nothing to say which was doing what."
+  (let* ((attrs (file-attributes meta-file))
+         (mtime (and attrs (float-time (file-attribute-modification-time attrs))))
+         (hit (gethash meta-file decknix--agent-subagent-task-cache)))
+    (cond
+     ((null mtime) nil)
+     ((and hit (equal (car hit) mtime)) (cdr hit))
+     (t (let ((task (decknix--agent-subagent-task-read meta-file)))
+          (puthash meta-file (cons mtime task) decknix--agent-subagent-task-cache)
+          task)))))
+
+(defun decknix--agent-subagent-task-read (meta-file)
+  "Parse META-FILE into (TYPE DESCRIPTION STOPPED), or nil."
+  (when (file-readable-p meta-file)
+    (let ((m (ignore-errors
+               (json-parse-string
+                (with-temp-buffer (insert-file-contents meta-file) (buffer-string))
+                :object-type 'alist :null-object nil :false-object nil))))
+      (when m
+        (list (alist-get 'agentType m)
+              (alist-get 'description m)
+              (eq (alist-get 'stoppedByUser m) t))))))
+
+(defun decknix--agent-subagent-with-task (data file)
+  "Return sub-agent DATA with the type and task from FILE\='s meta.json."
+  (let ((task (decknix--agent-subagent-task
+               (concat (file-name-sans-extension file) ".meta.json"))))
+    (append (list (cons 'filePath file)
+                  (cons 'agentType (nth 0 task))
+                  (cons 'description (nth 1 task))
+                  (cons 'stoppedByUser (nth 2 task)))
+            data)))
+
 (defun decknix--agent-session-subagents-compute (session-id p-id)
   "Walk the sub-agent transcripts for SESSION-ID under provider P-ID.
 Uncached core of `decknix--agent-session-subagents'.
@@ -468,7 +513,8 @@ to the main session transcript."
                   ;; from the file mtime -- no per-paint `jq' re-parse for a
                   ;; streaming sub-agent.
                   (let ((data (decknix--agent-subagent-meta p-id f)))
-                    (when data (push data subagents))))
+                    (when data
+                      (push (decknix--agent-subagent-with-task data f) subagents))))
                 (sort subagents
                       (lambda (a b)
                         (string> (or (alist-get 'modified a) "")

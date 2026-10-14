@@ -1104,6 +1104,53 @@ something records one."
               ((< secs 86400) (format "%dh%02d" (/ secs 3600) (/ (% secs 3600) 60)))
               (t (format "%dd" (/ secs 86400))))))))
 
+;; --- sub-agents --------------------------------------------------------
+;;
+;; A session that fans out -- mvp/followupboss/us ran six -- listed one row
+;; per child, every row reading `↳ C mvp/followupboss/us\=': the PARENT\'s
+;; name, so the rows took the space and said nothing about which child was
+;; doing what.  Now one row summarises them by state, expanding to one row
+;; per child named by its type and task.
+
+(defconst decknix-sidebar-layout-subagent-states
+  '((running . ("◐" . success)) (active . ("◐" . warning))
+    (stopped . ("■" . shadow)) (done . ("●" . shadow)))
+  "Glyph and face per sub-agent state, in display order.")
+
+(defun decknix--layout-subagent-state (sub state)
+  "Return SUB\='s display state: STATE, or `stopped\' when the user stopped it."
+  (if (and (eq (alist-get 'stoppedByUser sub) t) (not (eq state 'running)))
+      'stopped
+    state))
+
+(defun decknix--layout-subagent-label (sub)
+  "Return what SUB is doing: `TYPE: TASK\', falling back to its slug."
+  (let ((type (alist-get 'agentType sub))
+        (task (alist-get 'description sub)))
+    (cond ((and type task) (format "%s: %s" type task))
+          (task task)
+          (type type)
+          (t (or (alist-get 'slug sub) "agent")))))
+
+(defun decknix--layout-subagent-counts (states)
+  "Return ((STATE . N) ...) for STATES, in display order, zero counts dropped."
+  (delq nil (mapcar (lambda (entry)
+                      (let ((n (seq-count (lambda (s) (eq s (car entry))) states)))
+                        (and (> n 0) (cons (car entry) n))))
+                    decknix-sidebar-layout-subagent-states)))
+
+(defun decknix--layout-subagent-glyph (state)
+  "Return STATE\'s glyph, coloured."
+  (let ((g (or (alist-get state decknix-sidebar-layout-subagent-states) '("·" . shadow))))
+    (propertize (car g) 'face (cdr g))))
+
+(defun decknix--layout-subagent-summary (states)
+  "Return the one-line summary for sub-agents in STATES: `6 agents  ◐2 ●4\'."
+  (concat (format "%d agent%s " (length states) (if (= 1 (length states)) "" "s"))
+          (mapconcat (lambda (c) (concat (decknix--layout-subagent-glyph (car c))
+                                         (number-to-string (cdr c))))
+                     (decknix--layout-subagent-counts states) " ")))
+
 (defconst decknix-sidebar-layout-quota-stale-secs 900
   "Age past which the Tokens data is called stale.
 The hub polls every five minutes, so three missed polls means it has

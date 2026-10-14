@@ -285,5 +285,66 @@ reduced to a count."
     (should (equal "Tidy" (decknix--layout-review-title "upsiderealty/upside" 20742)))
     (should-not (decknix--layout-review-title "upsiderealty/upside" 1))))
 
+;; --- sub-agent rows ----------------------------------------------------
+
+(defun decknix-lr-test--render-subagents (pairs &optional expanded)
+  (cl-letf (((symbol-function 'decknix--layout-subagents-of) (lambda (_b) pairs))
+            ((symbol-function 'decknix--layout-expanded-p) (lambda (_k) expanded)))
+    (with-temp-buffer
+      (decknix--layout-render-subagents 0 "*parent*" 48)
+      (buffer-string))))
+
+(defconst decknix-lr-test--subs
+  (list (cons '((agentType . "pr-implementer") (description . "Contacts 01.2 to ready")) 'running)
+        (cons '((agentType . "pr-shepherd") (description . "dry draft-to-ready #1051")) 'done)
+        (cons '((agentType . "Explore") (description . "find the enqueuer")) 'stopped)))
+
+(ert-deftest decknix-layout-render--several-subagents-take-one-row ()
+  (let ((out (decknix-lr-test--render-subagents decknix-lr-test--subs)))
+    (should (= 1 (length (split-string out "\n" t))))
+    (should (string-match-p "3 agents" out))
+    (should-not (string-match-p "pr-implementer" out))))
+
+(ert-deftest decknix-layout-render--expanded-subagents-say-what-each-is-doing ()
+  (let ((out (decknix-lr-test--render-subagents decknix-lr-test--subs t)))
+    (should (= 4 (length (split-string out "\n" t))))
+    (should (string-match-p "pr-implementer: Contacts 01.2" out))
+    (should (string-match-p "pr-shepherd: dry draft-to-ready" out))
+    (should (string-match-p "Explore: find the enqueuer" out))
+    (should-not (string-match-p "?" out))))
+
+(ert-deftest decknix-layout-render--one-subagent-is-shown-as-itself ()
+  (let ((out (decknix-lr-test--render-subagents (list (car decknix-lr-test--subs)))))
+    (should (= 1 (length (split-string out "\n" t))))
+    (should (string-match-p "pr-implementer: Contacts" out))))
+
+(ert-deftest decknix-layout-render--subagent-rows-never-exceed-the-width ()
+  (let ((out (decknix-lr-test--render-subagents
+              (list (cons '((agentType . "pr-implementer")
+                            (description . "an extremely long task description that cannot possibly fit"))
+                          'running)))))
+    (dolist (l (split-string out "\n" t)) (should (<= (string-width l) 48)))))
+
+(ert-deftest decknix-layout-render--the-last-assistant-message-is-read-from-the-tail ()
+  (let ((f (make-temp-file "dk-sub-" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file f
+            (insert (json-encode '((message . ((role . "user") (content . "go"))))) "\n"
+                    (json-encode '((message . ((role . "assistant") (content . [((type . "text") (text . "first"))]))))) "\n"
+                    (json-encode '((message . ((role . "assistant") (content . [((type . "text") (text . "PR #1051 is ready"))]))))) "\n"))
+          (should (equal "PR #1051 is ready" (decknix--layout-subagent-last-text f))))
+      (delete-file f))))
+
+(ert-deftest decknix-layout-render--a-long-subagent-list-is-capped ()
+  "One session had run 156."
+  (let* ((decknix-sidebar-layout-subagent-limit 10)
+         (many (cl-loop for i below 25
+                        collect (cons `((agentType . "x") (description . ,(format "task %d" i))) 'done)))
+         (out (decknix-lr-test--render-subagents many t)))
+    (should (= 12 (length (split-string out "\n" t))))
+    (should (string-match-p "25 agents" out))
+    (should (string-match-p "15 more" out))))
+
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here

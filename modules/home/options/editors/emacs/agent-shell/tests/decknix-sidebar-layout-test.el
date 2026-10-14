@@ -752,6 +752,33 @@ dropping work silently -- the failure it already had once."
                  (decknix--layout-quota-heading "2026-10-09T05:20:00Z" decknix-layout-test--now)))
   (should (cdr (decknix--layout-quota-heading nil decknix-layout-test--now))))
 
+;; --- sub-agents --------------------------------------------------------
+
+(ert-deftest decknix-layout--a-subagent-is-named-by-type-and-task ()
+  "Not by its parent: six rows read `↳ C mvp/followupboss/us'."
+  (should (equal "pr-implementer: Contacts 01.2 to ready"
+                 (decknix--layout-subagent-label
+                  '((agentType . "pr-implementer") (description . "Contacts 01.2 to ready")
+                    (slug . "mvp/followupboss/us"))))))
+
+(ert-deftest decknix-layout--a-subagent-without-meta-falls-back-to-its-slug ()
+  (should (equal "s" (decknix--layout-subagent-label '((slug . "s")))))
+  (should (equal "agent" (decknix--layout-subagent-label nil))))
+
+(ert-deftest decknix-layout--a-user-stopped-subagent-reads-stopped ()
+  (should (eq 'stopped (decknix--layout-subagent-state '((stoppedByUser . t)) 'done)))
+  (should (eq 'running (decknix--layout-subagent-state '((stoppedByUser . t)) 'running)))
+  (should (eq 'done (decknix--layout-subagent-state nil 'done))))
+
+(ert-deftest decknix-layout--subagent-counts-come-in-display-order ()
+  (should (equal '((running . 2) (stopped . 1) (done . 3))
+                 (decknix--layout-subagent-counts '(done running stopped done running done)))))
+
+(ert-deftest decknix-layout--subagent-summary-counts-every-child ()
+  (should (equal "6 agents ◐2 ■1 ●3"
+                 (substring-no-properties
+                  (decknix--layout-subagent-summary '(done running stopped done running done))))))
+
 ;; --- worktree labels ------------------------------------------------
 ;;
 ;; A review worktree is checked out detached at the PR head, so its branch
