@@ -251,14 +251,63 @@ async fn get_json(
     resp.json::<Value>().await.map_err(|e| e.to_string())
 }
 
-async fn anthropic_account(client: &reqwest::Client, cred: &Value) -> Account {
+/// Claude Code's keychain record, in the `{access, expires}` shape Pi's
+/// auth.json uses, so one code path reads either.
+pub fn claude_code_cred(record: &Value) -> Option<Value> {
+    let o = record.get("claudeAiOauth")?;
+    let access = o.get("accessToken")?.as_str()?;
+    Some(serde_json::json!({
+        "access": access,
+        "expires": o.get("expiresAt").and_then(Value::as_i64),
+    }))
+}
+
+/// Read Claude Code's login from the macOS keychain, or None.
+///
+/// Preferred over Pi's copy of the same account: Claude Code is in use all
+/// day and keeps its token fresh, while Pi's expires within hours of Pi
+/// last running, which left the row reading "token expired" while the
+/// account was fine.  Bounded, so a locked keychain cannot stall a poll.
+async fn keychain_claude_code() -> Option<Value> {
+    let out = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::process::Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let record: Value = serde_json::from_slice(&out.stdout).ok()?;
+    claude_code_cred(&record)
+}
+
+/// Which credential to use: the first one that has not expired, else the
+/// first one at all, so an all-expired state still reports the error.
+pub fn pick_credential<'a>(
+    candidates: &'a [(&'static str, Value)],
+    now: DateTime<Utc>,
+) -> Option<&'a (&'static str, Value)> {
+    candidates
+        .iter()
+        .find(|(_, c)| !token_expired(c, now))
+        .or_else(|| candidates.first())
+}
+
+async fn anthropic_account(client: &reqwest::Client, cred: &Value, source: &str) -> Account {
     let mut acct = Account {
         provider: "anthropic".into(),
         label: "claude".into(),
         ..Default::default()
     };
     if token_expired(cred, Utc::now()) {
-        acct.error = Some("token expired: run `pi`, then /login".into());
+        acct.error = Some(match source {
+            "claude-code" => "token expired: open Claude Code to refresh it".into(),
+            _ => "token expired: run `pi`, then /login".into(),
+        });
         return acct;
     }
     let Some(token) = cred.get("access").and_then(Value::as_str) else {
@@ -351,7 +400,15 @@ fn gemini_account(sessions_dir: &Path) -> Option<Account> {
         plan: Some("free tier".into()),
         limit_reached: still_blocked,
         windows,
-        note: Some(format!("no usage API: last refusal {}", at.format("%d %b %H:%MZ"))),
+        // The refusal's date only matters while it is in force, and then the
+        // window above carries its reset time.  Shown afterwards, "last
+        // refusal 09 Oct" sat beside a green dot five days later and read
+        // as current.
+        note: Some(if still_blocked {
+            format!("no usage API: refused at {}", at.format("%H:%MZ"))
+        } else {
+            "no usage API".to_string()
+        }),
         ..Default::default()
     })
 }
@@ -379,8 +436,15 @@ pub async fn poll_quotas(config: &QuotaConfig) -> Result<QuotasFile, String> {
         .unwrap_or(Value::Null);
 
     let mut accounts = vec![];
-    if let Some(cred) = auth.get("anthropic") {
-        accounts.push(anthropic_account(&client, cred).await);
+    let mut anthropic: Vec<(&'static str, Value)> = vec![];
+    if let Some(c) = keychain_claude_code().await {
+        anthropic.push(("claude-code", c));
+    }
+    if let Some(c) = auth.get("anthropic") {
+        anthropic.push(("pi", c.clone()));
+    }
+    if let Some((source, cred)) = pick_credential(&anthropic, Utc::now()) {
+        accounts.push(anthropic_account(&client, cred, source).await);
     }
     if let Some(cred) = auth.get("openai-codex") {
         accounts.push(codex_account(&client, cred).await);
@@ -428,6 +492,29 @@ pub async fn run_quota_adapter(config: QuotaConfig, dir: PathBuf, meta: SharedMe
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn claude_code_keychain_record_maps_to_the_pi_shape() {
+        let rec = json!({"claudeAiOauth": {"accessToken": "t", "expiresAt": 2000000000000_i64, "subscriptionType": "max"}, "mcpOAuth": {}});
+        let c = claude_code_cred(&rec).unwrap();
+        assert_eq!(c["access"], "t");
+        assert_eq!(c["expires"], 2000000000000_i64);
+        assert!(claude_code_cred(&json!({"mcpOAuth": {}})).is_none());
+    }
+
+    #[test]
+    fn the_first_unexpired_credential_wins() {
+        // Pi's copy had expired while Claude Code's was fresh, and the row
+        // reported the expiry instead of the usage.
+        let now = Utc.timestamp_opt(2_000_000_000, 0).unwrap();
+        let fresh = json!({"access": "a", "expires": 2_000_000_100_000_i64});
+        let stale = json!({"access": "b", "expires": 1_000_000_000_000_i64});
+        let both = [("pi", stale.clone()), ("claude-code", fresh.clone())];
+        assert_eq!(pick_credential(&both, now).unwrap().0, "claude-code");
+        let none_fresh = [("claude-code", stale.clone()), ("pi", stale)];
+        assert_eq!(pick_credential(&none_fresh, now).unwrap().0, "claude-code");
+        assert!(pick_credential(&[], now).is_none());
+    }
 
     #[test]
     fn anthropic_windows_read_utilisation_and_reset() {

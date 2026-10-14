@@ -628,8 +628,13 @@ costs no network; an absent file renders nothing rather than a guess."
     (when accounts
       (insert "\n")
       (setq line-num (1+ line-num))
-      (decknix--sidebar-render-section-header "Tokens" 'tokens)
-      (setq line-num (1+ line-num))
+      (let* ((now (current-time))
+             (heading (decknix--layout-quota-heading
+                       (alist-get 'updated decknix--hub-token-quotas) now)))
+        (decknix--sidebar-render-section-header
+         (if (cdr heading) (propertize (car heading) 'face 'warning) (car heading))
+         'tokens)
+        (setq line-num (1+ line-num)))
       (let ((now (current-time)))
         (dolist (account accounts)
           (dolist (line (decknix--layout-quota-lines account now width))

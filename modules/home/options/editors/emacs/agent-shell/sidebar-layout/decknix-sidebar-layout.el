@@ -1104,6 +1104,27 @@ something records one."
               ((< secs 86400) (format "%dh%02d" (/ secs 3600) (/ (% secs 3600) 60)))
               (t (format "%dd" (/ secs 86400))))))))
 
+(defconst decknix-sidebar-layout-quota-stale-secs 900
+  "Age past which the Tokens data is called stale.
+The hub polls every five minutes, so three missed polls means it has
+stopped, and the numbers on screen are no longer the account\='s.")
+
+(defun decknix--layout-quota-heading (updated now)
+  "Return (TEXT . STALE-P) for the Tokens heading, given UPDATED at NOW.
+
+The age is in the heading because the section was reported as not
+refreshing: with no timestamp on screen there was no way to tell a stale
+reading from a current one."
+  (let* ((at (decknix--layout-quota-time updated))
+         (age (and at (max 0 (floor (float-time (time-subtract now at))))))
+         (label (cond ((null age) "?")
+                      ((< age 60) "now")
+                      ((< age 3600) (format "%dm" (/ age 60)))
+                      (t (format "%dh" (/ age 3600)))))
+         (stale (or (null age) (> age decknix-sidebar-layout-quota-stale-secs))))
+    (cons (if stale (format "Tokens · stale %s" label) (format "Tokens · %s" label))
+          stale)))
+
 (defun decknix--layout-quota-worst (account)
   "Return ACCOUNT\='s highest window usage in percent, 100 when refused."
   (if (alist-get 'limit_reached account)
