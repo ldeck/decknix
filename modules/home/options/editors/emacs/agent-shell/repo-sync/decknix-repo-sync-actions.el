@@ -30,9 +30,28 @@
 (defvar decknix--repo-sync-read-pending nil
   "Non-nil while a report read is in flight.")
 
+(defvar decknix--repo-sync-present-memo (make-hash-table :test 'equal)
+  "PATH -> (CHECKED-AT . PRESENT-P), so a paint costs no filesystem call.")
+
+(defun decknix--repo-sync-present-p (path)
+  "Return non-nil when PATH still exists, re-checking at most every 5s.
+
+The report is rewritten only by the sync, every three hours, so a
+checkout removed by hand went on showing as `sync failed\=' until then."
+  (or (null path)
+      (let* ((now (float-time))
+             (hit (gethash path decknix--repo-sync-present-memo)))
+        (if (and hit (< (- now (car hit)) 5))
+            (cdr hit)
+          (let ((present (file-directory-p path)))
+            (puthash path (cons now present) decknix--repo-sync-present-memo)
+            present)))))
+
 (defun decknix-repo-sync-problems ()
-  "Return the cached, visible repo-sync problems."
-  (seq-filter #'decknix--repo-sync-visible-p
+  "Return the cached, visible repo-sync problems whose checkout still exists."
+  (seq-filter (lambda (p)
+                (and (decknix--repo-sync-visible-p p)
+                     (decknix--repo-sync-present-p (plist-get p :path))))
               (plist-get decknix--repo-sync-cache :problems)))
 
 (defun decknix-repo-sync-summary ()
@@ -360,11 +379,50 @@ never rendered from the filesystem on the paint path."
   "Return the repo-sync problem on the current row, or nil."
   (get-text-property (line-beginning-position) 'decknix-repo-sync-problem))
 
+(defun decknix--repo-sync-git-output (path &rest args)
+  "Return git ARGS' output in PATH, or nil when git fails."
+  (with-temp-buffer
+    (when (zerop (apply #'call-process "git" nil t nil "-C" path args))
+      (buffer-string))))
+
+(defun decknix-repo-sync-remove-checkout (problem &optional on-done)
+  "Move PROBLEM\='s checkout to the Trash, if nothing would be lost.
+
+For a repo that has stopped syncing because it is gone on GitHub or no
+longer wanted: there was no way to drop one from the sidebar, and the
+row stayed until the next sync three hours later.  To the Trash rather
+than deleted, so a wrong keystroke is recoverable, and only after git
+confirms nothing exists solely in this checkout."
+  (let* ((path (plist-get problem :path))
+         (name (plist-get problem :name)))
+    (cond
+     ((null path) (user-error "No path recorded for this repo"))
+     ((not (file-directory-p path))
+      (message "%s is already gone" name)
+      (when on-done (funcall on-done)))
+     (t
+      (let ((blocker (decknix--repo-sync-removal-blocker
+                      (decknix--repo-sync-git-output path "status" "--porcelain")
+                      (decknix--repo-sync-git-output path "log" "--branches" "--not" "--remotes" "--oneline")
+                      (decknix--repo-sync-git-output path "worktree" "list" "--porcelain"))))
+        (cond
+         (blocker (message "Not removing %s: %s" name blocker))
+         ((yes-or-no-p (format "Move %s to the Trash? " (abbreviate-file-name path)))
+          (let ((dest (expand-file-name
+                       (format "%s-%s" (file-name-nondirectory (directory-file-name path))
+                               (format-time-string "%Y%m%d-%H%M%S"))
+                       "~/.Trash")))
+            (rename-file (directory-file-name path) dest)
+            (remhash path decknix--repo-sync-present-memo)
+            (message "%s moved to the Trash" name)
+            (when on-done (funcall on-done))))
+         (t (message "No action"))))))))
+
 (defconst decknix--repo-sync-action-prompts
-  '((lock . "%s: [c]lear stale lock  [r]etry sync  [v]isit repo  [q]uit ")
+  '((lock . "%s: [c]lear stale lock  [r]etry sync  [v]isit repo  [x] remove checkout  [q]uit ")
     (dirty . "%s: [s]tash  [H]ard-reset (DESTROYS work)  [v]isit  [r]etry  [q]uit ")
-    (diverged . "%s: [v]isit repo (push or rebase)  [r]etry sync  [q]uit ")
-    (failed . "%s: [v]isit repo  [r]etry sync  [q]uit "))
+    (diverged . "%s: [v]isit repo (push or rebase)  [r]etry sync  [x] remove checkout  [q]uit ")
+    (failed . "%s: [v]isit repo  [r]etry sync  [x] remove checkout  [q]uit "))
   "Per-kind action prompt.
 
 Only `lock' offers clearing, because it is the only kind with a mechanical
@@ -384,9 +442,11 @@ at all.")
                                "%s: [v]isit  [r]etry  [q]uit ")
                            name))
            (choices (pcase kind
-                      ('lock '(?c ?r ?v ?q))
+                      ('lock '(?c ?r ?v ?x ?q))
+                      ;; Not offered on dirty: the check would refuse it,
+                      ;; and stash or reset is the remedy there.
                       ('dirty '(?s ?H ?r ?v ?q))
-                      (_ '(?r ?v ?q))))
+                      (_ '(?r ?v ?x ?q))))
            (refresh (lambda ()
                       (when (fboundp 'agent-shell-workspace-sidebar-refresh)
                         (ignore-errors (agent-shell-workspace-sidebar-refresh))))))
@@ -404,6 +464,7 @@ at all.")
                (t (message "No action")))))
         (?r (decknix-repo-sync-retry problem refresh))
         (?v (decknix-repo-sync-visit problem))
+        (?x (decknix-repo-sync-remove-checkout problem refresh))
         (?q (message "No action"))))))
 
 (provide 'decknix-repo-sync-actions)

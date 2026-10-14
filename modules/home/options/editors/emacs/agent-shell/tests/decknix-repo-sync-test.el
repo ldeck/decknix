@@ -157,5 +157,22 @@ sidebar renders week-old problems as current."
       (should (equal '(lock failed)
                      (mapcar (lambda (p) (plist-get p :kind)) visible))))))
 
+;; --- removing a checkout ----------------------------------------------
+
+(ert-deftest decknix-repo-sync--a-clean-pushed-checkout-can-go ()
+  (should-not (decknix--repo-sync-removal-blocker "" "" "worktree /w/r\nHEAD abc\nbranch refs/heads/main\n")))
+
+(ert-deftest decknix-repo-sync--uncommitted-work-blocks-removal ()
+  (should (string-match-p "uncommitted" (decknix--repo-sync-removal-blocker " M a.kt\n" "" ""))))
+
+(ert-deftest decknix-repo-sync--unpushed-commits-block-removal ()
+  (should (string-match-p "2 commit" (decknix--repo-sync-removal-blocker "" "abc one\ndef two\n" ""))))
+
+(ert-deftest decknix-repo-sync--linked-worktrees-block-removal ()
+  "They share this checkout's object store."
+  (should (string-match-p "1 linked worktree"
+                          (decknix--repo-sync-removal-blocker
+                           "" "" "worktree /w/r\nbranch x\n\nworktree /w/r-worktrees/X\nbranch y\n"))))
+
 (provide 'decknix-repo-sync-test)
 ;;; decknix-repo-sync-test.el ends here
