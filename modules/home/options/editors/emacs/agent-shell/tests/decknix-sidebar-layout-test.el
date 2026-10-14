@@ -740,6 +740,18 @@ dropping work silently -- the failure it already had once."
     (should (string-match-p "extra usage off" (cadr lines)))
     (dolist (l lines) (should (<= (string-width l) 47)))))
 
+(ert-deftest decknix-layout--quota-heading-says-how-old-the-data-is ()
+  (should (equal '("Tokens · now" . nil)
+                 (decknix--layout-quota-heading "2026-10-09T05:59:30Z" decknix-layout-test--now)))
+  (should (equal '("Tokens · 3m" . nil)
+                 (decknix--layout-quota-heading "2026-10-09T05:57:00Z" decknix-layout-test--now))))
+
+(ert-deftest decknix-layout--quota-heading-flags-a-hub-that-stopped ()
+  "Three missed five-minute polls."
+  (should (equal '("Tokens · stale 40m" . t)
+                 (decknix--layout-quota-heading "2026-10-09T05:20:00Z" decknix-layout-test--now)))
+  (should (cdr (decknix--layout-quota-heading nil decknix-layout-test--now))))
+
 ;; --- worktree labels ------------------------------------------------
 ;;
 ;; A review worktree is checked out detached at the PR head, so its branch
