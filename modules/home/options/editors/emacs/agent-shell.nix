@@ -2264,6 +2264,15 @@ let
   # rows instead of the flat `shadow' face.  Render side-effects stay
   # in workspace-bulk per AGENTS.md Rule 2; this module only decides
   # (no deps beyond built-in time-date).
+  # Winner undo that discards layouts it can no longer restore, rather than
+  # erroring on "Attempt to delete main window" when the sidebar is open.
+  decknix-winner-safe-el = mkEmacsTestedPackage {
+    pname = "decknix-winner-safe";
+    src = ./agent-shell/winner-safe;
+    packageRequires = [ ];
+    testFiles = [ "decknix-winner-safe-test.el" ];
+  };
+
   decknix-agent-subagent-state-el = mkEmacsTestedPackage {
     pname = "decknix-agent-subagent-state";
     src = ./agent-shell/subagent-state;
@@ -3454,6 +3463,7 @@ in
           decknix-support-dashboard-el
           decknix-support-workflow-el
           decknix-dos-board-el
+          decknix-winner-safe-el
           decknix-agent-subagent-state-el
           decknix-agent-resourcing-el
           decknix-agent-rg-search-command-el
@@ -4902,6 +4912,8 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; the sidebar sub-agent row renderer (workspace-bulk) to
         ;; colourise running / active / done sub-agents.
         (require 'decknix-agent-subagent-state)
+        (require 'decknix-winner-safe)
+        (decknix-winner-safe-enable)
         (declare-function decknix--agent-subagent-state
                           "decknix-agent-subagent-state"
                           (subagent now &optional parent-live-p))
