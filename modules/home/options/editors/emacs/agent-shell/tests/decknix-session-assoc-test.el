@@ -472,5 +472,49 @@ to whatever directory happened to be current."
   "/w/repo-old is not inside /w/repo."
   (should-not (decknix-session-assoc-resolve "/w/repo-old/x" '("/w/repo"))))
 
+;; --- PRs a session created ---------------------------------------------
+
+(defconst dk-assoc-test--create-cmd (concat "cd /w/r && gh pr " "create --draft --title x"))
+
+(ert-deftest dk-assoc--a-creating-call-is-paired-with-its-result ()
+  (let ((pending (make-hash-table :test 'equal)) (created nil))
+    (setq created (decknix-session-assoc-note-created
+                   `((toolCallId . "t1") (rawInput . ((command . ,dk-assoc-test--create-cmd)))) pending created))
+    (should-not created)
+    (setq created (decknix-session-assoc-note-created
+                   '((toolCallId . "t1") (rawOutput . "https://github.com/UpsideRealty/rea-integration/pull/89")) pending created))
+    (should (equal '("UpsideRealty/rea-integration#89") created))))
+
+(ert-deftest dk-assoc--a-pr-url-from-another-command-is-not-a-creation ()
+  "gh pr view, a comment, or a body mentioning a PR all print URLs."
+  (let ((pending (make-hash-table :test 'equal)))
+    (should-not (decknix-session-assoc-note-created
+                 '((toolCallId . "t2") (rawInput . ((command . "gh pr view 89"))) ) pending nil))
+    (should-not (decknix-session-assoc-note-created
+                 '((toolCallId . "t2") (rawOutput . "https://github.com/o/r/pull/89")) pending nil))))
+
+(ert-deftest dk-assoc--created-prs-are-read-from-log-lines ()
+  (let* ((call `((sessionUpdate . "tool_call_update") (toolCallId . "a")
+                 (rawInput . ((command . ,dk-assoc-test--create-cmd)))))
+         (result '((sessionUpdate . "tool_call_update") (toolCallId . "a")
+                   (rawOutput . "https://github.com/nc-helix/platform-cli/pull/61")))
+         (lines (list (json-encode `((params . ((update . ,call)))))
+                      (json-encode `((params . ((update . ,result))))))))
+    (should (equal '("nc-helix/platform-cli#61")
+                   (decknix-session-assoc-created-from-lines lines)))))
+
+(ert-deftest dk-assoc--created-prs-persist-and-reload ()
+  (let* ((dir (make-temp-file "dk-created-" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" dir) process-environment))
+         (decknix--agent-created-store 'unloaded))
+    (unwind-protect
+        (progn
+          (decknix-session-assoc-remember-created "s-1" '("o/r#1"))
+          (setq decknix--agent-created-store 'unloaded)
+          (should (equal '("o/r#1") (decknix-session-assoc-created "s-1")))
+          (should (decknix-session-assoc-created-known-p "s-1"))
+          (should-not (decknix-session-assoc-created-known-p "s-2")))
+      (delete-directory dir t))))
+
 (provide 'decknix-session-assoc-test)
 ;;; decknix-session-assoc-test.el ends here

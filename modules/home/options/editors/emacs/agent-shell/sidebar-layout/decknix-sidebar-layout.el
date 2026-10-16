@@ -612,6 +612,29 @@ yet, which is what keeps the tag fallback meaningful."
     (and (buffer-live-p buf)
          (ignore-errors (decknix-session-assoc-current buf)))))
 
+(defun decknix--layout-session-created-prs (session)
+  "Return the PRs SESSION created, as `owner/repo#N\=' strings.
+
+Kept apart from the recency-bounded roots: helix/nix/rea-integration raised
+rea-integration#89 and platform-cli#61, moved on to a benchmark, and showed
+no PRs at all."
+  (let ((buf (get-buffer (or (nth 0 session) ""))))
+    (and (buffer-live-p buf)
+         (fboundp 'decknix-session-assoc-created)
+         (local-variable-p 'decknix--agent-broker-key buf)
+         (ignore-errors
+           (decknix-session-assoc-created
+            (buffer-local-value 'decknix--agent-broker-key buf))))))
+
+(defun decknix--layout-pr-created-p (pr created)
+  "Return non-nil when PR is one of CREATED (`owner/repo#N\=' strings)."
+  (and created (plist-get pr :repo) (plist-get pr :number)
+       (seq-some (lambda (c)
+                   (string-equal-ignore-case
+                    c (format "%s#%s" (plist-get pr :repo) (plist-get pr :number))))
+                 created)
+       t))
+
 (defconst decknix-sidebar-layout-provenance-marks
   '((observed . " ") (pending . "?") (inferred . "~"))
   "Mark per claim provenance.
@@ -728,7 +751,8 @@ until a test caught it."
                       (+ (* 131 (sxhash-equal (nth 0 sess)))
                          (* 7 (sxhash-equal (nth 3 sess)))
                          (sxhash-equal
-                          (decknix--layout-session-observed-roots sess))))))
+                          (decknix--layout-session-observed-roots sess))
+                         (* 3 (sxhash-equal (decknix--layout-session-created-prs sess)))))))
     (dolist (r wip-repos)
       (setq h (logxor (* 31 h)
                       (+ (* 131 (sxhash-equal (alist-get 'repo r)))
@@ -803,6 +827,7 @@ which would hide the sharing."
                      (and observed
                           (decknix--layout-observed-gone-worktrees
                            observed worktrees)))
+                    (created (decknix--layout-session-created-prs session))
                     (wts (seq-filter
                           (lambda (wt)
                             (or (decknix--layout-session-owns-wt-p session wt)
@@ -839,6 +864,9 @@ which would hide the sharing."
                           (lambda (p)
                             (or (and (plist-get p :branch)
                                      (member (plist-get p :branch) branches))
+                                ;; A PR this session raised is its work for as
+                                ;; long as the PR is open, however long ago.
+                                (decknix--layout-pr-created-p p created)
                                 ;; A worktree the session worked in that is
                                 ;; gone, or newer than the audit: its
                                 ;; directory is its branch, so it still names
@@ -1311,20 +1339,40 @@ The sharing is still worth stating, so the claim is marked `:duplicate\='
 rather than dropped: the render collapses it to one line naming the repo
 instead of hiding it, which keeps \"two sessions are on this\" visible
 without paying for it twice."
+  ;; By ITEM, not by repo.  Keyed on the repo name it assumed two sessions
+  ;; claiming one repo claimed the same work, true only while claims were
+  ;; repo-wide.  Once each session claimed just its own items,
+  ;; followupboss-integration#334 vanished: HX-1338's row read `shared ↑\'
+  ;; because HX-1337, above it, showed a different PR in the same repo.
   (let ((seen (make-hash-table :test 'equal)))
-    (mapcar
-     (lambda (row)
-       (let ((claims
-              (mapcar
-               (lambda (claim)
-                 (let ((repo (plist-get claim :repo)))
-                   (if (and repo (gethash repo seen))
-                       (plist-put (copy-sequence claim) :duplicate t)
-                     (when repo (puthash repo t seen))
-                     claim)))
-               (plist-get row :repos))))
-         (plist-put (copy-sequence row) :repos claims)))
-     session-rows)))
+    (cl-flet ((pr-key (p) (format "%s#%s" (plist-get p :repo) (plist-get p :number)))
+              (wt-key (w) (or (plist-get w :path) (plist-get w :branch))))
+      (mapcar
+       (lambda (row)
+         (let ((claims
+                (mapcar
+                 (lambda (claim)
+                   (let* ((prs (seq-remove (lambda (p) (gethash (cons 'pr (pr-key p)) seen))
+                                           (plist-get claim :pr-items)))
+                          (wts (seq-remove (lambda (w) (gethash (cons 'wt (wt-key w)) seen))
+                                           (plist-get claim :wt-items)))
+                          (had (or (plist-get claim :pr-items) (plist-get claim :wt-items))))
+                     (dolist (p prs) (puthash (cons 'pr (pr-key p)) t seen))
+                     (dolist (w wts) (puthash (cons 'wt (wt-key w)) t seen))
+                     (cond
+                      ((and had (null prs) (null wts))
+                       (plist-put (copy-sequence claim) :duplicate t))
+                      ((and (equal prs (plist-get claim :pr-items))
+                            (equal wts (plist-get claim :wt-items)))
+                       claim)
+                      (t (let ((c (copy-sequence claim)))
+                           (setq c (plist-put c :pr-items prs))
+                           (setq c (plist-put c :wt-items wts))
+                           (setq c (plist-put c :prs (length prs)))
+                           (plist-put c :worktrees (length wts)))))))
+                 (plist-get row :repos))))
+           (plist-put (copy-sequence row) :repos claims)))
+       session-rows))))
 
 (defun decknix--layout-worst-severity (prs worktrees)
   "Return the worst severity across PRS and WORKTREES, or nil when both empty."

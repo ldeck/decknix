@@ -347,6 +347,11 @@ more than a bounded string append (`decknix--agent-turn-append-tail')."
              (when (fboundp 'decknix-session-assoc-observe)
                (ignore-errors
                  (decknix-session-assoc-observe
+                  (map-nested-elt notification '(params update)))))
+             ;; And any PR it creates, which stays its work while open.
+             (when (fboundp 'decknix-session-assoc-observe-created)
+               (ignore-errors
+                 (decknix-session-assoc-observe-created
                   (map-nested-elt notification '(params update))))))
             ("user_message_chunk"
              ;; A new turn begins: last turn's ask is answered by definition.

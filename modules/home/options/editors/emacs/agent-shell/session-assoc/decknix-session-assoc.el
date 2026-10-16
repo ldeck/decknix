@@ -43,6 +43,7 @@
 
 (require 'cl-lib)
 (require 'seq)
+(require 'map)
 (require 'subr-x)
 (require 'json)
 
@@ -442,6 +443,123 @@ resolves to a known root."
       (setq decknix--agent-assoc assoc)
       (setq decknix--agent-assoc-turn turn))))
 
+;; --- PRs a session created -------------------------------------------
+;;
+;; The association above is RECENCY-bounded: a session claims what it has
+;; touched lately.  So a session that raised PRs and moved on lost them --
+;; helix/nix/rea-integration raised rea-integration#89 and platform-cli#61,
+;; then spent its later turns on a benchmark, and showed no PRs at all.  A
+;; PR a session raised is its work for as long as the PR is open, so the
+;; PRs it created are recorded separately and never age out.
+
+(defconst decknix-session-assoc-pr-url-re
+  "https://github\\.com/\\([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\)/pull/\\([0-9]+\\)"
+  "Matches a GitHub PR URL, capturing owner/repo and number.")
+
+(defun decknix-session-assoc-creating-call-p (update)
+  "Return non-nil when UPDATE is a tool call that runs `gh pr create\='."
+  (let ((cmd (alist-get 'command (alist-get 'rawInput update))))
+    (and (stringp cmd) (string-match-p "\\bgh[ \t]+pr[ \t]+create\\b" cmd))))
+
+(defun decknix-session-assoc-output-pr (update)
+  "Return `owner/repo#N\=' for the first PR URL in UPDATE\='s output, or nil.
+`gh pr create\=' prints the new PR\'s URL as its result."
+  (let ((text (format "%s" (or (alist-get 'rawOutput update) (alist-get 'content update) ""))))
+    (when (string-match decknix-session-assoc-pr-url-re text)
+      (format "%s#%s" (match-string 1 text) (match-string 2 text)))))
+
+(defun decknix-session-assoc-note-created (update pending created)
+  "Fold UPDATE into PENDING (a hash of tool-call ids) and CREATED (a list).
+Returns the new CREATED.  A creating call\'s id is remembered; when an
+update for that id carries a PR URL, the PR is added."
+  (let ((id (alist-get 'toolCallId update)))
+    (when (and id (decknix-session-assoc-creating-call-p update))
+      (puthash id t pending))
+    (let ((pr (and id (gethash id pending) (decknix-session-assoc-output-pr update))))
+      (if (and pr (not (member pr created)))
+          (progn (remhash id pending) (append created (list pr)))
+        created))))
+
+(defun decknix-session-assoc-created-from-lines (lines)
+  "Return the PRs created in broker-log LINES, as `owner/repo#N\=' strings."
+  (let ((pending (make-hash-table :test 'equal)) (created nil))
+    (dolist (line lines)
+      (let ((update (map-nested-elt (decknix--assoc-parse-line line) '(params update))))
+        (when update
+          (setq created (decknix-session-assoc-note-created update pending created)))))
+    created))
+
+(defvar-local decknix--agent-assoc-creating nil
+  "Tool-call ids of this session\'s in-flight `gh pr create\' calls.")
+
+(defun decknix-session-assoc-observe-created (update)
+  "Record a PR this session just created, from live UPDATE.  Returns it or nil."
+  (unless decknix--agent-assoc-creating
+    (setq decknix--agent-assoc-creating (make-hash-table :test 'equal)))
+  (let* ((key (and (local-variable-p 'decknix--agent-broker-key)
+                   (bound-and-true-p decknix--agent-broker-key)))
+         (before (and key (decknix-session-assoc-created key)))
+         (after (decknix-session-assoc-note-created
+                 update decknix--agent-assoc-creating before)))
+    (when (and key (not (equal before after)))
+      (decknix-session-assoc-remember-created key after)
+      (car (last after)))))
+
+(defun decknix-session-assoc-created-file ()
+  "Return the file recording which PRs each session created."
+  (expand-file-name
+   "decknix/session-prs.eld"
+   (or (getenv "XDG_STATE_HOME") (expand-file-name ".local/state" "~"))))
+
+(defvar decknix--agent-created-store 'unloaded
+  "Alist of (BROKER-KEY . PR-KEYS), or `unloaded\'.")
+
+(defun decknix--session-assoc-created-store ()
+  "Return the created-PR store, loading it on first use."
+  (when (eq decknix--agent-created-store 'unloaded)
+    (setq decknix--agent-created-store
+          (or (ignore-errors
+                (let ((f (decknix-session-assoc-created-file)))
+                  (when (file-readable-p f)
+                    (with-temp-buffer (insert-file-contents f) (read (current-buffer))))))
+              nil)))
+  decknix--agent-created-store)
+
+(defun decknix-session-assoc-created (key)
+  "Return the PRs session KEY created, as `owner/repo#N\=' strings."
+  (cdr (assoc key (decknix--session-assoc-created-store))))
+
+(defun decknix-session-assoc-created-known-p (key)
+  "Return non-nil when session KEY\'s created PRs have been recorded at all."
+  (and (assoc key (decknix--session-assoc-created-store)) t))
+
+(defun decknix-session-assoc-remember-created (key prs)
+  "Record that session KEY created PRS, and persist."
+  (when (stringp key)
+    (setq decknix--agent-created-store
+          (cons (cons key prs)
+                (seq-remove (lambda (c) (equal (car c) key))
+                            (decknix--session-assoc-created-store))))
+    (ignore-errors
+      (let ((f (decknix-session-assoc-created-file)))
+        (make-directory (file-name-directory f) t)
+        (with-temp-file f (prin1 decknix--agent-created-store (current-buffer)))))))
+
+(defun decknix-session-assoc-created-from-log (log-path)
+  "Return the PRs created in broker log LOG-PATH.
+
+Reads only the lines that could matter, via grep: logs run past 100 MB,
+and a creation can be anywhere in one, not just the recent tail the
+association backfill reads."
+  (when (and log-path (file-readable-p log-path))
+    (with-temp-buffer
+      (when (memq (call-process "grep" nil t nil "-a" "-E"
+                                "gh pr create|github\\.com/[^/]+/[^/]+/pull/[0-9]+"
+                                (expand-file-name log-path))
+                  '(0 1))
+        (decknix-session-assoc-created-from-lines
+         (split-string (buffer-string) "\n" t))))))
+
 ;; --- persistence ------------------------------------------------------
 
 (defun decknix-session-assoc-state-file ()
@@ -618,13 +736,37 @@ roots, which is the whole feature doing nothing."
                                decknix--agent-broker-key)))))))
      (ignore-errors (agent-shell-buffers)))))
 
+(defun decknix-session-assoc-created-pending ()
+  "Return a live agent buffer whose created PRs were never recorded, or nil."
+  (when (fboundp 'agent-shell-buffers)
+    (seq-find
+     (lambda (b)
+       (and (buffer-live-p b)
+            (with-current-buffer b
+              (and (local-variable-p 'decknix--agent-broker-key)
+                   decknix--agent-broker-key
+                   (not (decknix-session-assoc-created-known-p decknix--agent-broker-key))))))
+     (ignore-errors (agent-shell-buffers)))))
+
+(defun decknix-session-assoc-created-backfill-one (buffer)
+  "Record which PRs BUFFER\'s session created, from its broker log."
+  (with-current-buffer buffer
+    (let* ((key decknix--agent-broker-key)
+           (log (and (fboundp 'decknix--agent-broker-log-path)
+                     (decknix--agent-broker-log-path key))))
+      (decknix-session-assoc-remember-created
+       key (or (and log (decknix-session-assoc-created-from-log log)) nil)))))
+
 (defun decknix-session-assoc-backfill-tick ()
   "Backfill ONE pending session, then stop until the next idle period.
 
 One per tick so a fleet of sessions cannot chain into a multi-second
-freeze: 13 of them at ~1.7 s each is ~22 s."
-  (when-let* ((buf (car (decknix-session-assoc-backfill-pending))))
-    (ignore-errors (decknix-session-assoc-backfill-one buf))))
+freeze: 13 of them at ~1.7 s each is ~22 s.  The association comes first;
+once none is pending, one session\'s created PRs are recorded instead."
+  (if-let* ((buf (car (decknix-session-assoc-backfill-pending))))
+      (ignore-errors (decknix-session-assoc-backfill-one buf))
+    (when-let* ((buf (decknix-session-assoc-created-pending)))
+      (ignore-errors (decknix-session-assoc-created-backfill-one buf)))))
 
 (defun decknix-session-assoc-start-backfill ()
   "Begin backfilling associations on idle.  Idempotent."

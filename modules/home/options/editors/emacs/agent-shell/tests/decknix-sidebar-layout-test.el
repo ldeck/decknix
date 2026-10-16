@@ -779,6 +779,30 @@ dropping work silently -- the failure it already had once."
                  (substring-no-properties
                   (decknix--layout-subagent-summary '(done running stopped done running done))))))
 
+;; --- PRs a session created ---------------------------------------------
+
+(ert-deftest decknix-layout--a-created-pr-is-recognised-case-insensitively ()
+  (should (decknix--layout-pr-created-p '(:repo "UpsideRealty/rea-integration" :number 89)
+                                        '("upsiderealty/rea-integration#89")))
+  (should-not (decknix--layout-pr-created-p '(:repo "UpsideRealty/rea-integration" :number 8)
+                                            '("UpsideRealty/rea-integration#89")))
+  (should-not (decknix--layout-pr-created-p '(:repo "o/r" :number 1) nil)))
+
+(ert-deftest decknix-layout--a-session-keeps-the-prs-it-created ()
+  "Even with no recent activity anywhere near them."
+  (cl-letf (((symbol-function 'decknix--layout-session-observed-roots)
+             (lambda (_s) '("/w/followupboss-integration-worktrees/CONN-1088-bench")))
+            ((symbol-function 'decknix--layout-session-created-prs)
+             (lambda (_s) '("UpsideRealty/rea-integration#89"))))
+    (let* ((decknix--layout-wip-memo nil)
+           (wip '(((repo . "UpsideRealty/rea-integration")
+                   (prs . (((number . 89) (branch . "CONN-1140-nix-pilot"))
+                           ((number . 90) (branch . "someone-else")))))))
+           (row (car (plist-get (decknix--layout-wip-tree-1
+                                 (list '("*s*" nil nil "ready" nil)) wip nil)
+                                :sessions))))
+      (should (equal '(89) (mapcar (lambda (p) (plist-get p :number)) (plist-get row :prs)))))))
+
 ;; --- worktree labels ------------------------------------------------
 ;;
 ;; A review worktree is checked out detached at the PR head, so its branch
@@ -950,8 +974,8 @@ whole point of the indicators."
   "Two sessions sharing a workspace both claim its repos, and the full
 PR/worktree subtree was rendered once per session -- six identical rows
 twice."
-  (let* ((rows (list (list :repos (list (list :repo "upside")))
-                     (list :repos (list (list :repo "upside")))))
+  (let* ((rows (list (list :repos (list (list :repo "upside" :pr-items (list (list :repo "o/upside" :number 1)))))
+                     (list :repos (list (list :repo "upside" :pr-items (list (list :repo "o/upside" :number 1)))))))
          (out (decknix--layout-dedup-claims rows)))
     (should-not (plist-get (car (plist-get (nth 0 out) :repos)) :duplicate))
     (should (plist-get (car (plist-get (nth 1 out) :repos)) :duplicate))))
@@ -959,10 +983,29 @@ twice."
 (ert-deftest decknix-layout--the-duplicate-claim-is-kept-not-dropped ()
   "The sharing is worth stating; the render collapses it to one line
 rather than hiding that two sessions are on the same repo."
-  (let* ((rows (list (list :repos (list (list :repo "upside")))
-                     (list :repos (list (list :repo "upside")))))
+  (let* ((rows (list (list :repos (list (list :repo "upside" :pr-items (list (list :repo "o/upside" :number 1)))))
+                     (list :repos (list (list :repo "upside" :pr-items (list (list :repo "o/upside" :number 1)))))))
          (out (decknix--layout-dedup-claims rows)))
     (should (= 1 (length (plist-get (nth 1 out) :repos))))))
+
+(ert-deftest decknix-layout--different-prs-in-one-repo-are-both-shown ()
+  "followupboss-integration#334 vanished: HX-1338 read `shared' because
+HX-1337 showed a DIFFERENT PR in the same repo."
+  (let* ((rows (list (list :repos (list (list :repo "fub" :prs 1 :pr-items (list (list :repo "o/fub" :number 330)))))
+                     (list :repos (list (list :repo "fub" :prs 1 :pr-items (list (list :repo "o/fub" :number 334)))))))
+         (out (decknix--layout-dedup-claims rows))
+         (second (car (plist-get (nth 1 out) :repos))))
+    (should-not (plist-get second :duplicate))
+    (should (equal '(334) (mapcar (lambda (p) (plist-get p :number)) (plist-get second :pr-items))))))
+
+(ert-deftest decknix-layout--a-partly-shared-claim-lists-only-the-new-items ()
+  (let* ((rows (list (list :repos (list (list :repo "fub" :pr-items (list (list :repo "o/fub" :number 1)))))
+                     (list :repos (list (list :repo "fub" :prs 2
+                                              :pr-items (list (list :repo "o/fub" :number 1)
+                                                              (list :repo "o/fub" :number 2)))))))
+         (second (car (plist-get (nth 1 (decknix--layout-dedup-claims rows)) :repos))))
+    (should (equal '(2) (mapcar (lambda (p) (plist-get p :number)) (plist-get second :pr-items))))
+    (should (= 1 (plist-get second :prs)))))
 
 (ert-deftest decknix-layout--distinct-repos-are-both-first ()
   (let* ((rows (list (list :repos (list (list :repo "a")))
@@ -982,8 +1025,8 @@ next paint."
 
 (ert-deftest decknix-layout--dedup-is-stable-across-repeated-calls ()
   "A render runs on every refresh; the second must mark the same claim."
-  (let* ((rows (list (list :repos (list (list :repo "upside")))
-                     (list :repos (list (list :repo "upside"))))))
+  (let* ((rows (list (list :repos (list (list :repo "upside" :pr-items (list (list :repo "o/upside" :number 1)))))
+                     (list :repos (list (list :repo "upside" :pr-items (list (list :repo "o/upside" :number 1))))))))
     (dotimes (_ 3)
       (let ((out (decknix--layout-dedup-claims rows)))
         (should-not (plist-get (car (plist-get (nth 0 out) :repos)) :duplicate))
