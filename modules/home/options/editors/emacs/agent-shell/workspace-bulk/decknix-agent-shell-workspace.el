@@ -5059,7 +5059,7 @@ the full `magit-status' interface."
 (transient-define-suffix decknix--sb-act-clean-fork-remotes ()
   "Clean orphan fork remotes from all live clones.
 Prefix arg runs `--dry-run' (shows what would be removed without acting)."
-  :description "Clean fork remotes"
+  :description "Fork remotes: remove stale ones"
   (interactive)
   (let* ((dry-run current-prefix-arg)
          (args (append (list "clean-fork-remotes")
@@ -5103,7 +5103,7 @@ Prefix arg runs `--dry-run' (shows what would be removed without acting)."
 (transient-define-suffix decknix--hyg-audit ()
   "Dry-run report: stale / dirty / orphan-fork / branch-deleted-upstream.
 Calls `decknix wt audit'; output appears in *decknix wt audit* buffer."
-  :description "Audit (dry-run report)"
+  :description "Audit: every worktree's state (report)"
   (interactive)
   (message "Running audit…")
   (decknix--wt-cli-async
@@ -5114,7 +5114,7 @@ Calls `decknix wt audit'; output appears in *decknix wt audit* buffer."
 (transient-define-suffix decknix--hyg-orphans ()
   "List worktrees whose upstream branch has been deleted.
 Calls `decknix wt orphans'; output appears in *decknix wt orphans* buffer."
-  :description "List orphan branches"
+  :description "Orphans: branch gone upstream (report)"
   (interactive)
   (message "Checking for orphan branches…")
   (decknix--wt-cli-async
@@ -5128,7 +5128,7 @@ Prompts for the age threshold in days (default 7).  Requires
 --apply to actually delete; prefix arg runs a --dry-run preview first.
 The underlying CLI skips any worktree that is dirty, has live session
 activity, or whose branch is not fully merged (§3.6.6 interlock)."
-  :description "Clean old worktrees (N days)"
+  :description "Old merged: in main and idle N days"
   (interactive)
   (let* ((dry-run current-prefix-arg)
          (days (read-number
@@ -5155,34 +5155,95 @@ activity, or whose branch is not fully merged (§3.6.6 interlock)."
 
 (transient-define-suffix decknix--hyg-sweep ()
   "Full sweep of all stale worktrees (dir + branch + metadata + remotes)."
-  :description "Sweep stale worktrees (full)"
+  :description "Sweep: branch in main or gone upstream"
   (interactive)
   (decknix--wt-run-prune-sweep nil "Sweep all stale worktrees (merged/orphan)? "))
 
 (transient-define-suffix decknix--hyg-prune-all ()
   "Prune dead worktree metadata across all repos."
-  :description "Prune metadata only (all repos)"
+  :description "Metadata: forget worktrees deleted from disk"
   (interactive)
   (if (or current-prefix-arg (yes-or-no-p "Prune all dead worktree metadata? "))
-      (decknix--wt-cli-async '("wt" "prune-metadata")
+      ;; Not '("wt" ...): the runner already prefixes `decknix wt', so this
+      ;; ran `decknix wt wt prune-metadata' and failed every time.
+      (decknix--wt-cli-async '("prune-metadata")
                             (lambda (out) (message "Prune: %s" (string-trim (or out "")))))
     (message "Cancelled")))
 
+
+(defun decknix--hyg-finished-render (plan)
+  "Return the preview text for PLAN, the parsed `decknix wt finished --json'."
+  (let ((home (expand-file-name "~/")))
+    (mapconcat
+     (lambda (section)
+       (let ((rows (seq-filter (lambda (p) (equal (alist-get 'action (alist-get 'decision p)) (car section)))
+                               plan)))
+         (when rows
+           (concat (format "%s (%d)\n" (cdr section) (length rows))
+                   (mapconcat (lambda (p)
+                                (format "  %-62s %s"
+                                        (string-replace home "~/" (alist-get 'path p))
+                                        (alist-get 'reason (alist-get 'decision p))))
+                              rows "\n")
+                   "\n\n"))))
+     '(("remove" . "Remove") ("keep" . "Keep, because something would be lost")
+       ("skip" . "Not finished, or no PR"))
+     "")))
+
+(transient-define-suffix decknix--hyg-finished ()
+  "Remove worktrees whose PR is merged or closed, after a preview.
+
+The other verbs judge a worktree by git alone and missed both kinds of
+finished work: review worktrees sit on a detached HEAD with no branch to
+test, and a squash- or rebase-merged or closed PR of your own never shows
+as merged into main.  Of 34 worktrees, 14 were finished and every other
+verb kept them.  This asks GitHub for each PR\'s state instead, keeps
+anything with uncommitted changes, commits not in the PR, or a live
+session, and shows the whole plan before removing anything."
+  :description "Finished work: PR merged or closed"
+  (interactive)
+  (message "Checking each worktree's PR on GitHub…")
+  (decknix--wt-cli-async
+   (list "finished" "--json")
+   (lambda (out)
+     (let* ((data (ignore-errors
+                    (json-parse-string out :object-type 'alist :array-type 'list
+                                       :null-object nil :false-object nil)))
+            (plan (alist-get 'plan data))
+            (n (seq-count (lambda (p) (equal "remove" (alist-get 'action (alist-get 'decision p))))
+                          plan)))
+       (decknix--hyg-display-output "*decknix wt finished*" (decknix--hyg-finished-render plan))
+       (if (zerop n)
+           (message "Finished work: nothing to remove")
+         (if (yes-or-no-p (format "Remove the %d finished worktree(s) listed? " n))
+             (decknix--wt-cli-async
+              (list "finished" "--apply" "--json")
+              (lambda (out2)
+                (let* ((r (ignore-errors
+                            (json-parse-string out2 :object-type 'alist :array-type 'list
+                                               :null-object nil :false-object nil)))
+                       (fails (alist-get 'failures r)))
+                  (when (fboundp 'decknix--hub-wt-audit-refresh)
+                    (ignore-errors (decknix--hub-wt-audit-refresh)))
+                  (message "Removed %s worktree(s)%s" (alist-get 'removed r)
+                           (if fails (format "; %d failed: %s" (length fails) (car fails)) "")))))
+           (message "Cancelled")))))))
 
 (transient-define-prefix decknix-worktree-hygiene ()
   "Cross-worktree hygiene transient (spec §3.6.11).
 Read-only verbs (a, o) produce reports; mutating verbs (p, c, f)
 gate on a C-u dry-run or yes-or-no-p prompt.
 Also accessible as `M-x decknix-worktree-hygiene' from any buffer."
-  ["Audit"
+  ["Clean up"
+   ("d" decknix--hyg-finished)
+   ("p" decknix--hyg-sweep)
+   ("c" decknix--hyg-clean)
+   ("M" decknix--hyg-prune-all)
+   ("f" decknix--sb-act-clean-fork-remotes)]
+  ["Look first"
    ("a" decknix--hyg-audit)
    ("o" decknix--hyg-orphans)
-   ("s" "Select worktrees to clean…" decknix-worktree-picker)]
-  ["Prune"
-   ("p" decknix--hyg-sweep)
-   ("M" decknix--hyg-prune-all)
-   ("c" decknix--hyg-clean)
-   ("f" decknix--sb-act-clean-fork-remotes)]
+   ("s" "Pick worktrees by hand…" decknix-worktree-picker)]
   [("q" "Cancel" transient-quit-all)])
 
 (transient-define-prefix decknix-sidebar-worktree-menu ()
