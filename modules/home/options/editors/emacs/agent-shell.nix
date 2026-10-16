@@ -8125,6 +8125,12 @@ returns a fresh plist so the caller's is not mutated."
                     ;; Override C-c C-v / C-c C-m so model + permission-mode
                     ;; changes are persisted to agent-sessions.json and
                     ;; survive session resume/fork.
+                    ;; Comint binds C-M-l to `comint-show-output', which
+                    ;; would shadow the global "line to bottom" key in the
+                    ;; buffers it is most used in.  `comint-show-output'
+                    ;; stays on its standard C-c C-r.
+                    (local-set-key (kbd "C-M-l") 'decknix-recenter-bottom)
+                    (local-set-key (kbd "C-S-l") 'decknix-recenter-top)
                     (local-set-key (kbd "C-c C-v") 'decknix-agent-set-session-model)
                     (local-set-key (kbd "C-c C-m") 'decknix-agent-set-session-mode)
                     (local-set-key (kbd "C-c b") 'decknix-agent-switch-buffer)
