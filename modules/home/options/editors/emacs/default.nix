@@ -314,6 +314,68 @@ stops finding any is visible rather than assumed fixed."
         ;; == Window management ==
         (winner-mode 1)
 
+        ;; Layout history per TAB.  `winner' keeps one history per frame, so
+        ;; C-c <left> walked back through layouts from every tab in the order
+        ;; they were visited, when the usual intent is "the previous layout
+        ;; of THIS tab".  `tab-bar-history-mode' keeps one per tab, and
+        ;; restores with `set-window-configuration', which never deletes a
+        ;; window, so it cannot hit winner's "delete main window" error.
+        ;; The default limit of 10 layouts per tab is raised to 50.
+        (setq tab-bar-history-limit 50)
+        (tab-bar-history-mode 1)
+
+        (defun decknix-window-back (&optional global)
+          "Go back to this tab's previous window layout.
+With a prefix argument GLOBAL, or without tab-bar, step back through
+every tab's layouts instead, as `winner-undo' does."
+          (interactive "P")
+          (if (or global (not (bound-and-true-p tab-bar-mode)))
+              (progn
+                ;; winner continues a run of undos, and only allows redo,
+                ;; when the previous command WAS `winner-undo'.
+                (setq this-command 'winner-undo)
+                (winner-undo))
+            (tab-bar-history-back)))
+
+        (defun decknix-window-forward (&optional global)
+          "Go forward to this tab's next window layout.
+With a prefix argument GLOBAL, or without tab-bar, redo across tabs."
+          (interactive "P")
+          (if (or global (not (bound-and-true-p tab-bar-mode)))
+              (progn (setq this-command 'winner-redo) (winner-redo))
+            (tab-bar-history-forward)))
+
+        (defun decknix-window-back-global ()
+          "Step back through every tab's window layouts (`winner-undo')."
+          (interactive)
+          (decknix-window-back t))
+
+        (defun decknix-window-forward-global ()
+          "Step forward through every tab's window layouts (`winner-redo')."
+          (interactive)
+          (decknix-window-forward t))
+
+        (with-eval-after-load 'winner
+          (define-key winner-mode-map (kbd "C-c <left>") #'decknix-window-back)
+          (define-key winner-mode-map (kbd "C-c <right>") #'decknix-window-forward))
+        (global-set-key (kbd "C-c S-<left>") #'decknix-window-back-global)
+        (global-set-key (kbd "C-c S-<right>") #'decknix-window-forward-global)
+
+        ;; After C-x 1 the line of interest is rarely where it is wanted.
+        ;; C-M-l puts the current line at the BOTTOM of the window (as
+        ;; C-u -1 C-l) and C-S-l at the TOP (as C-u 0 C-l; C-u 1 C-l would
+        ;; leave it one row down).  C-M-l replaces `reposition-window'.
+        (defun decknix-recenter-bottom ()
+          "Put the current line at the bottom of the window."
+          (interactive)
+          (recenter -1))
+        (defun decknix-recenter-top ()
+          "Put the current line at the top of the window."
+          (interactive)
+          (recenter 0))
+        (global-set-key (kbd "C-M-l") #'decknix-recenter-bottom)
+        (global-set-key (kbd "C-S-l") #'decknix-recenter-top)
+
         ;; == Yes/No prompts ==
         (setq use-short-answers t)  ; 'y' or 'n' instead of 'yes' or 'no'
 
