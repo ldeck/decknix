@@ -90,6 +90,41 @@ written entries.  When `decknix--agent-tags-read' sees a stored
 `_canonicalKeyVersion' lower than this constant it runs
 `decknix--agent-tags--canonicalize-keys' once and bumps the flag.")
 
+(defvar decknix-agent-tags-changed-functions nil
+  "Functions called with the conv-keys whose TAGS changed in a write.
+
+Tags were written by a couple of dozen paths and none renamed the live
+buffer, so a session named after its first prompt kept that name in the
+sidebar after it was tagged.  The rename belongs to a higher layer, so
+the store only reports what changed.")
+
+(defvar decknix--agent-tags-snapshot nil
+  "conv-key -> copy of its tags, as of the last read or write.
+A copy because callers edit the cached store in place before writing it,
+so at write time the cache already holds the new tags.")
+
+(defun decknix--agent-tags-snapshot-of (store)
+  "Return conv-key -> tags for STORE, copied."
+  (let ((out (make-hash-table :test 'equal))
+        (convs (and (hash-table-p store) (gethash "conversations" store))))
+    (when (hash-table-p convs)
+      (maphash (lambda (k v)
+                 (when (hash-table-p v)
+                   (puthash k (copy-sequence (gethash "tags" v)) out)))
+               convs))
+    out))
+
+(defun decknix--agent-tags-changed-keys (old new)
+  "Return the conv-keys whose tags differ between snapshots OLD and NEW.  Pure.
+A conversation new in NEW counts as changed only if it has tags."
+  (let (changed)
+    (maphash (lambda (k tags)
+               (unless (equal tags (and old (gethash k old)))
+                 (when (or tags (and old (gethash k old)))
+                   (push k changed))))
+             new)
+    (nreverse changed)))
+
 (defun decknix--agent-tags-read ()
   "Read the tag store, returning an in-memory cached hash-table.
 Re-reads from disk only if the file has been modified externally.
@@ -136,6 +171,8 @@ or walking the store for orphaned v1 entries."
                          (message "Warning: No backup available. Starting with empty store.")
                          (make-hash-table :test 'equal)))))
                 (make-hash-table :test 'equal)))
+        (setq decknix--agent-tags-snapshot
+              (decknix--agent-tags-snapshot-of decknix--agent-tags-cache))
         (setq decknix--agent-tags-cache-mtime current-mtime)))
     (let ((store decknix--agent-tags-cache))
       ;; Ensure root keys exist.
@@ -279,7 +316,18 @@ Maintains a rolling backup at `agent-sessions.json.bak'."
           (setq decknix--agent-tags-cache store
                 decknix--agent-tags-cache-mtime
                 (file-attribute-modification-time
-                 (file-attributes file))))
+                 (file-attributes file)))
+          (let* ((now (decknix--agent-tags-snapshot-of store))
+                 (changed (and decknix--agent-tags-snapshot
+                               (decknix--agent-tags-changed-keys
+                                decknix--agent-tags-snapshot now))))
+            (setq decknix--agent-tags-snapshot now)
+            (when changed
+              ;; Never let a listener fail the write it is reacting to.
+              (condition-case err
+                  (run-hook-with-args 'decknix-agent-tags-changed-functions changed)
+                (error (message "decknix: tags-changed listener failed: %s"
+                                (error-message-string err)))))))
       (error
        (when (file-exists-p tmp-file) (delete-file tmp-file))
        (signal (car err) (cdr err)))))))
