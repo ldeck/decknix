@@ -1892,6 +1892,32 @@ fn broker_dir() -> PathBuf {
         .join("decknix/agent-sockets")
 }
 
+/// Workspaces that have a LIVE agent session, i.e. a running broker.
+///
+/// `agent-sessions.json' records every conversation ever started, so
+/// "has a conversation in this directory" meant "was ever worked in": the
+/// four review worktrees of merged PRs read as having an open session
+/// weeks after their reviews ended.
+pub fn live_workspaces() -> std::collections::HashSet<PathBuf> {
+    let mut out = std::collections::HashSet::new();
+    let Ok(text) = fs::read_to_string(home().join(".config/decknix/agent-sessions.json")) else {
+        return out;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else { return out };
+    let Some(convs) = json.get("conversations").and_then(|c| c.as_object()) else { return out };
+    let dir = broker_dir();
+    for conv in convs.values() {
+        let (Some(ws), Some(key)) = (
+            conv.get("workspace").and_then(|v| v.as_str()),
+            conv.get("brokerKey").and_then(|v| v.as_str()),
+        ) else { continue };
+        if broker_alive(&dir.join(format!("{key}.sock.pid"))) {
+            out.insert(PathBuf::from(ws.trim_end_matches('/')));
+        }
+    }
+    out
+}
+
 /// Is the broker recorded in PIDFILE still running?
 fn broker_alive(pidfile: &Path) -> bool {
     fs::read_to_string(pidfile)

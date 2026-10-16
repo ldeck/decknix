@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH, Duration};
 mod session;
 mod session_archive;
 mod repo_sync;
+mod wt_finished;
 
 // 1. Static Core Commands
 #[derive(Parser)]
@@ -168,6 +169,22 @@ enum WtAction {
         #[arg(long)]
         clean: bool,
         /// Actually perform the deletion (only meaningful with --clean)
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Remove worktrees whose PR is merged or closed (by GitHub's PR state)
+    ///
+    /// Covers review worktrees (`pr-N`, detached) and squash- or rebase-merged
+    /// or closed PRs of your own, which the git-based verbs cannot see.  Keeps
+    /// anything with uncommitted changes, commits not in the PR, or an open
+    /// session.  Previews unless --apply is given.
+    Finished {
+        /// Output the plan as JSON
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        filter: WtFilter,
+        /// Actually remove the worktrees marked for removal
         #[arg(long)]
         apply: bool,
     },
@@ -2037,6 +2054,63 @@ fn main() -> anyhow::Result<()> {
                                 let status = if issues.is_empty() { "[OK]".to_string() } else { issues.join(", ") };
                                 println!("  \u{2514}\u{2500} {} -> {} [{}]", styled_str(branch, &[Style::Dim]), path.display(), status);
                             }
+                        }
+                    }
+                }
+                WtAction::Finished { json, filter, apply } => {
+                    let compiled = compile_filter(&filter)?;
+                    let registry = load_registry()?;
+                    let sessions = session::live_workspaces();
+                    let now = SystemTime::now();
+                    let mut candidates = Vec::new();
+                    for entry in &registry {
+                        if !entry.primary.exists() { continue; }
+                        for (branch, path) in &entry.worktrees {
+                            if path == &entry.primary || !path.exists() { continue; }
+                            if !filter_matches(&compiled, &entry.repo, path, mtime_age(path, now)) { continue; }
+                            candidates.push((entry.repo.clone(), entry.primary.clone(), branch.clone(), path.clone()));
+                        }
+                    }
+                    let plan = wt_finished::plan(candidates, &sessions);
+                    let mut removed = 0;
+                    let mut failures = Vec::new();
+                    if apply {
+                        for p in plan.iter().filter(|p| matches!(p.decision, wt_finished::Decision::Remove(_))) {
+                            match wt_finished::remove(p) {
+                                Ok(()) => removed += 1,
+                                Err(e) => failures.push(format!("{}: {e}", p.path.display())),
+                            }
+                        }
+                    }
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                            "applied": apply, "removed": removed, "failures": failures, "plan": plan,
+                        }))?);
+                    } else {
+                        for (label, pick) in [("Remove", 0), ("Keep", 1), ("Skip", 2)] {
+                            let rows: Vec<_> = plan.iter().filter(|p| match (&p.decision, pick) {
+                                (wt_finished::Decision::Remove(_), 0) | (wt_finished::Decision::Keep(_), 1)
+                                | (wt_finished::Decision::Skip(_), 2) => true,
+                                _ => false,
+                            }).collect();
+                            if rows.is_empty() { continue; }
+                            println!("{} ({})", styled_str(label, &[Style::B]), rows.len());
+                            for p in rows {
+                                let why = match &p.decision {
+                                    wt_finished::Decision::Remove(r) | wt_finished::Decision::Keep(r)
+                                    | wt_finished::Decision::Skip(r) => r,
+                                };
+                                let home = dirs::home_dir().unwrap_or_default();
+                                let shown = p.path.strip_prefix(&home).map(|r| format!("~/{}", r.display()))
+                                    .unwrap_or_else(|_| p.path.display().to_string());
+                                println!("  {}  {}", shown, styled_str(why, &[Style::Dim]));
+                            }
+                        }
+                        if apply {
+                            println!("Removed {removed} worktree(s).");
+                            for f in &failures { eprintln!("  failed: {f}"); }
+                        } else {
+                            println!("Dry run: pass --apply to remove the worktrees listed under Remove.");
                         }
                     }
                 }
