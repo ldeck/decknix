@@ -3261,6 +3261,26 @@ in
   };
 
   config = mkIf cfg.enable {
+    # agent-shell writes session transcripts into `<cwd>/.agent-shell/' and
+    # tries to hide them by appending to `info/exclude' under
+    # `git rev-parse --git-dir'.  In a linked worktree that is the
+    # worktree's private git dir, whose exclude file git never reads, so the
+    # folder showed as untracked: 4 of 11 "dirty" worktrees were dirty only
+    # for that, and every cleanup verb skipped them as unsafe to remove.
+    # The global excludes file covers checkouts and worktrees alike.  Only
+    # the line is ensured: Claude Code writes its own entries in that file,
+    # so it is appended to rather than owned.
+    home.activation.agentShellGitIgnore =
+      lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        excludes="$(${pkgs.git}/bin/git config --global --get core.excludesFile || true)"
+        excludes="''${excludes:-''${XDG_CONFIG_HOME:-$HOME/.config}/git/ignore}"
+        excludes="''${excludes/#\~/$HOME}"
+        if ! ${pkgs.gnugrep}/bin/grep -qxF '.agent-shell/' "$excludes" 2>/dev/null; then
+          $DRY_RUN_CMD ${pkgs.coreutils}/bin/mkdir -p "$(${pkgs.coreutils}/bin/dirname "$excludes")"
+          $DRY_RUN_CMD ${pkgs.bash}/bin/bash -c 'printf "%s\n" ".agent-shell/" >> "$1"' _ "$excludes"
+        fi
+      '';
+
     # Runtime CLI deps for the C-c x copy-as-format / export feature.
     # pandoc backs both the HTML copy and the PDF export; a PDF engine
     # (typst by default) backs `C-c x P'.  Shipping them here means the
