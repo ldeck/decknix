@@ -407,5 +407,64 @@ ENTRIES is an alist of (KEY . PLIST) where PLIST may contain
         ;; Should have moved corrupted file to .corrupt-<ts>
         (should (directory-files (file-name-directory file) nil "\\.corrupt-"))))))
 
+;; --- reporting tag changes -----------------------------------------------
+;;
+;; A session named after its first prompt kept that name in the sidebar
+;; after it was tagged: no tag command renamed the buffer.
+
+(defun dk-tags-test--store (alist)
+  "Build a store from ALIST of (CONV-KEY . TAGS)."
+  (let ((store (make-hash-table :test 'equal))
+        (convs (make-hash-table :test 'equal)))
+    (dolist (e alist)
+      (let ((h (make-hash-table :test 'equal)))
+        (puthash "tags" (cdr e) h)
+        (puthash (car e) h convs)))
+    (puthash "conversations" convs store)
+    store))
+
+(ert-deftest decknix-agent-tags--changed-keys-are-the-ones-whose-tags-differ ()
+  (let ((old (decknix--agent-tags-snapshot-of (dk-tags-test--store '(("a" "x") ("b" "y")))))
+        (new (decknix--agent-tags-snapshot-of (dk-tags-test--store '(("a" "x") ("b" "y" "z") ("c" "w") ("d"))))))
+    (should (equal '("b" "c") (decknix--agent-tags-changed-keys old new)))))
+
+(ert-deftest decknix-agent-tags--a-write-reports-tag-changes-only ()
+  "A model or recency write must not rename anything."
+  (let* ((decknix--agent-tags-file (make-temp-file "dk-tags-" nil ".json"))
+         (decknix--agent-tags-cache nil)
+         (decknix--agent-tags-snapshot nil)
+         (seen nil)
+         (decknix-agent-tags-changed-functions (list (lambda (keys) (push keys seen)))))
+    (unwind-protect
+        (let ((store (dk-tags-test--store '(("a" "first prompt words")))))
+          (with-temp-file decknix--agent-tags-file (insert (json-encode store)))
+          (let ((s (decknix--agent-tags-read)))
+            ;; Unrelated field: no report.
+            (puthash "model" "opus" (gethash "a" (gethash "conversations" s)))
+            (decknix--agent-tags-write s)
+            (should-not seen)
+            ;; Edited in place, as the real callers do.
+            (puthash "tags" '("followupboss" "us" "HX-1337")
+                     (gethash "a" (gethash "conversations" s)))
+            (decknix--agent-tags-write s)
+            (should (equal '(("a")) seen))))
+      (dolist (f (list decknix--agent-tags-file (concat decknix--agent-tags-file ".bak")))
+        (when (file-exists-p f) (delete-file f))))))
+
+(ert-deftest decknix-agent-tags--a-failing-listener-does-not-fail-the-write ()
+  (let* ((decknix--agent-tags-file (make-temp-file "dk-tags-" nil ".json"))
+         (decknix--agent-tags-cache nil)
+         (decknix--agent-tags-snapshot nil)
+         (decknix-agent-tags-changed-functions (list (lambda (_) (error "boom")))))
+    (unwind-protect
+        (progn
+          (with-temp-file decknix--agent-tags-file (insert (json-encode (dk-tags-test--store '(("a" "x"))))))
+          (let ((s (decknix--agent-tags-read)))
+            (puthash "tags" '("y") (gethash "a" (gethash "conversations" s)))
+            (decknix--agent-tags-write s)
+            (should (string-match-p "\"y\"" (with-temp-buffer (insert-file-contents decknix--agent-tags-file) (buffer-string))))))
+      (dolist (f (list decknix--agent-tags-file (concat decknix--agent-tags-file ".bak")))
+        (when (file-exists-p f) (delete-file f))))))
+
 (provide 'decknix-agent-tags-store-test)
 ;;; decknix-agent-tags-store-test.el ends here

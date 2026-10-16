@@ -663,6 +663,29 @@ resolvable conversation."
       (setq shell-maker--buffer-name-override (buffer-name)))
     (buffer-name)))
 
+(defun decknix--agent-rename-buffers-for-convs (conv-keys)
+  "Re-derive the names of live buffers whose conversation is in CONV-KEYS.
+
+Runs from `decknix-agent-tags-changed-functions\=': a session named after
+its first prompt -- `Own HX-1337 contact ID round-trip in ...\' -- kept
+that name in the sidebar after it was tagged, because no tag command
+renamed the buffer.  Only buffers whose tags actually changed are touched,
+so nothing is renamed by an unrelated write such as a model change."
+  (let ((renamed 0))
+    (dolist (buf (buffer-list))
+      (with-current-buffer buf
+        (when (and (derived-mode-p 'agent-shell-mode)
+                   (bound-and-true-p decknix--agent-conv-key)
+                   (member decknix--agent-conv-key conv-keys))
+          (let ((before (buffer-name)))
+            (ignore-errors (decknix--agent-rename-current-buffer-from-tags))
+            (unless (equal before (buffer-name)) (setq renamed (1+ renamed)))))))
+    (when (and (> renamed 0) (fboundp 'agent-shell-workspace-sidebar-refresh))
+      (ignore-errors (agent-shell-workspace-sidebar-refresh)))
+    renamed))
+
+(add-hook 'decknix-agent-tags-changed-functions #'decknix--agent-rename-buffers-for-convs)
+
 (defun decknix-agent-session-rename-from-tags ()
   "Re-derive the current buffer's name from its live tag-store tags.
 Renames the current agent-shell buffer to the canonical
