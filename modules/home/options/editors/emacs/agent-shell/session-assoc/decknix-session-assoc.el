@@ -778,7 +778,7 @@ once none is pending, one session\'s created PRs are recorded instead."
 
 ;;;###autoload
 (defun decknix-session-assoc-backfill-now ()
-  "Backfill every pending session\='s association now, reporting progress.
+  "Backfill every pending session\='s association and created PRs now.
 
 The deferred path does this on idle; this is for when you want it done
 before the next idle period."
@@ -792,9 +792,22 @@ before the next idle period."
         (when (decknix-session-assoc-backfill-one buf)
           (setq done (1+ done))))
       (message "Session associations: %d of %d backfilled"
-               done (length pending))
-      (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-        (ignore-errors (agent-shell-workspace-sidebar-refresh))))))
+               done (length pending)))
+    ;; And the PRs each session created.  The idle path does one session
+    ;; per 30 idle seconds, so after a switch a dozen sessions took a dozen
+    ;; pauses before their PRs appeared.
+    (let ((n 0) (tried nil) buf)
+      ;; `tried' stops a session whose recording fails -- and so stays
+      ;; pending -- from being retried forever.
+      (while (and (setq buf (decknix-session-assoc-created-pending))
+                  (not (memq buf tried)))
+        (push buf tried)
+        (message "Reading PRs %s created..." (buffer-name buf))
+        (ignore-errors (decknix-session-assoc-created-backfill-one buf))
+        (setq n (1+ n)))
+      (when (> n 0) (message "Recorded the PRs %d session(s) created" n)))
+    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+      (ignore-errors (agent-shell-workspace-sidebar-refresh)))))
 
 (declare-function agent-shell-buffers "agent-shell" ())
 (declare-function agent-shell-workspace-sidebar-refresh
