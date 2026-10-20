@@ -1,12 +1,29 @@
+diff --git a/src/acp/agent.ts b/src/acp/agent.ts
+index f3ce031..ea4b52f 100644
 --- a/src/acp/agent.ts
 +++ b/src/acp/agent.ts
-@@ -342 +342,2 @@
+@@ -356,7 +356,8 @@ export class PiAcpAgent implements ACPAgent {
+     const { configOptions, models, modes } = configuration
+ 
+     const quietStartup = getQuietStartup(params.cwd)
 -    const updateNotice = buildUpdateNotice()
 +    const installedVersion = quietStartup && updateChecksDisabled() ? null : readPiVersion()
 +    const updateNotice = buildUpdateNotice(installedVersion)
-@@ -352,0 +354 @@
+ 
+     // If quietStartup is enabled, suppress the full "startup info" prelude, but still surface
+     // the "New version available" notice (if any) since it's high-signal and actionable.
+@@ -367,6 +368,7 @@ export class PiAcpAgent implements ACPAgent {
+       : buildStartupInfo({
+           cwd: params.cwd,
+           fileCommands,
 +          installedVersion,
-@@ -1389,3 +1391,9 @@
+           updateNotice
+         })
+ 
+@@ -1451,18 +1453,33 @@ function compareSemver(a: string, b: string): number {
+   return 0
+ }
+ 
 -function buildUpdateNotice(): string | null {
 -  // Best-effort update check against npm registry.
 -  // Important: keep it fast to not slow down session/new.
@@ -19,23 +36,39 @@
 +}
 +
 +function readPiVersion(): string | null {
-@@ -1397,0 +1406,5 @@
+   try {
+     const piVersion = spawnSync('pi', ['--version'], { encoding: 'utf-8' })
+     const installed = (String(piVersion.stdout ?? '').trim() || String(piVersion.stderr ?? '').trim()).replace(
+       /^v/i,
+       ''
+     )
 +    return installed || null
 +  } catch {
 +    return null
 +  }
 +}
-@@ -1399 +1412,4 @@
+ 
 -    if (!installed || !isSemver(installed)) return null
 +function buildUpdateNotice(installed: string | null): string | null {
 +  // Best-effort update check against npm registry.
 +  // Important: keep it fast to not slow down session/new.
 +  if (updateChecksDisabled() || !installed || !isSemver(installed)) return null
-@@ -1400,0 +1417 @@
+ 
 +  try {
-@@ -1420,0 +1438 @@
+     const latestRes = spawnSync('npm', ['view', '@earendil-works/pi-coding-agent', 'version'], {
+       encoding: 'utf-8',
+       timeout: 800
+@@ -1483,26 +1500,18 @@ function buildUpdateNotice(): string | null {
+ function buildStartupInfo(opts: {
+   cwd: string
+   fileCommands: ReturnType<typeof loadSlashCommands>
 +  installedVersion: string | null
-@@ -1427,14 +1445,5 @@
+   updateNotice: string | null
+ }): string {
+   void opts.fileCommands
+ 
+   const md: string[] = []
+ 
 -  // pi version header
 -  try {
 -    const piVersion = spawnSync('pi', ['--version'], { encoding: 'utf-8' })
@@ -55,28 +88,54 @@
 +    md.push(`pi v${opts.installedVersion}`)
 +    md.push('---')
 +    md.push('')
+   }
+ 
+   const addSection = (title: string, items: string[]) => {
+diff --git a/test/unit/startup-info-env.test.ts b/test/unit/startup-info-env.test.ts
+index fc485cc..690b3f8 100644
 --- a/test/unit/startup-info-env.test.ts
 +++ b/test/unit/startup-info-env.test.ts
-@@ -14,0 +15,2 @@
+@@ -12,14 +12,23 @@ class FakeSessions {
+ 
+ test('PiAcpAgent: quietStartup=true disables startup info generation/emission', async () => {
+   const prevAgentDir = process.env.PI_CODING_AGENT_DIR
 +  const prevSkipVersionCheck = process.env.PI_SKIP_VERSION_CHECK
 +  const prevPath = process.env.PATH
-@@ -17 +19 @@
+ 
+   // Force quietStartup in pi settings by pointing PI_CODING_AGENT_DIR at a temp dir.
 -  const { mkdtempSync, writeFileSync } = await import('node:fs')
 +  const { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } = await import('node:fs')
-@@ -20,0 +23,5 @@
+   const { tmpdir } = await import('node:os')
+   const { join } = await import('node:path')
+   const dir = mkdtempSync(join(tmpdir(), 'pi-acp-quietstartup-'))
 +  const binDir = join(dir, 'bin')
 +  const piMarker = join(dir, 'pi-was-spawned')
 +  mkdirSync(binDir)
 +  writeFileSync(join(binDir, 'pi'), `#!/bin/sh\ntouch "${piMarker}"\nprintf '0.83.0\\n'\n`, 'utf-8')
 +  chmodSync(join(binDir, 'pi'), 0o755)
-@@ -22,0 +30,2 @@
+   writeFileSync(join(dir, 'settings.json'), JSON.stringify({ quietStartup: true }, null, 2), 'utf-8')
+   process.env.PI_CODING_AGENT_DIR = dir
 +  process.env.PI_SKIP_VERSION_CHECK = '1'
 +  process.env.PATH = `${binDir}:${prevPath ?? ''}`
-@@ -64,0 +74,2 @@
+ 
+   // Spy on setTimeout calls (agent schedules startup info + available commands)
+   const realSetTimeout = globalThis.setTimeout
+@@ -65,6 +74,8 @@ test('PiAcpAgent: quietStartup=true disables startup info generation/emission',
+ 
+     const startupInfo = res?._meta?.piAcp?.startupInfo ?? null
+ 
 +    assert.equal(existsSync(piMarker), false, 'offline quiet startup must not spawn pi --version')
 +
-@@ -79,0 +91,4 @@
+     // When quietStartup=true the full prelude is suppressed. However, an update notice
+     // (if one exists) is still surfaced because it's high-signal and actionable.
+     // The test must tolerate both cases since the live npm check may or may not find an update.
+@@ -80,5 +91,9 @@ test('PiAcpAgent: quietStartup=true disables startup info generation/emission',
+     ;(globalThis as any).setTimeout = realSetTimeout
+     if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR
+     else process.env.PI_CODING_AGENT_DIR = prevAgentDir
 +    if (prevSkipVersionCheck == null) delete process.env.PI_SKIP_VERSION_CHECK
 +    else process.env.PI_SKIP_VERSION_CHECK = prevSkipVersionCheck
 +    if (prevPath == null) delete process.env.PATH
 +    else process.env.PATH = prevPath
+   }
+ })

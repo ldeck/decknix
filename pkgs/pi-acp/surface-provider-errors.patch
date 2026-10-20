@@ -1,8 +1,8 @@
 diff --git a/src/acp/session.ts b/src/acp/session.ts
-index d2fae68..87c5fb2 100644
+index 1c97b24..abfb5b6 100644
 --- a/src/acp/session.ts
 +++ b/src/acp/session.ts
-@@ -823,6 +823,28 @@ export class PiAcpSession {
+@@ -889,6 +889,28 @@ export class PiAcpSession {
          break
        }
  
@@ -32,12 +32,12 @@ index d2fae68..87c5fb2 100644
          // pi uses `turn_end` for sub-steps (e.g. tool_use) and will often start another turn.
          // Do NOT resolve the ACP `session/prompt` here; wait for `agent_settled`.
 diff --git a/test/component/session-events.test.ts b/test/component/session-events.test.ts
-index 2148ce8..860995f 100644
+index c30373c..315207f 100644
 --- a/test/component/session-events.test.ts
 +++ b/test/component/session-events.test.ts
-@@ -900,3 +900,54 @@ test('PiAcpSession: defaults notify severity to info when notifyType is absent',
-     piAcp: { notify: { level: 'info' } }
-   })
+@@ -1100,3 +1100,54 @@ test('PiAcpSession: cancelled turn still reports cancelled after usage publish',
+     [{ sessionUpdate: 'usage_update', used: 42, size: 100 }]
+   )
  })
 +
 +function newSession() {
