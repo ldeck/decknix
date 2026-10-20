@@ -462,5 +462,74 @@ and not on every streamed chunk."
                                 (cons "please re-review" "Looking again.")))
                          :answered)))
 
+;; ---------------------------------------------------------------------
+;; Quick replies: always confirmed, refused when the key was not offered
+;; ---------------------------------------------------------------------
+
+(defmacro decknix-turn-test--with-reply (closing confirm &rest body)
+  "Run BODY in a session whose last turn closed on CLOSING.
+Confirmation answers CONFIRM; `prompts' and `sent' record what happened."
+  (declare (indent 2))
+  `(let ((prompts nil) (sent nil))
+     (with-temp-buffer
+       (rename-buffer "pr-123" t)
+       (setq decknix--agent-turn-closing-text ,closing)
+       (cl-letf (((symbol-function 'y-or-n-p)
+                  (lambda (p) (push p prompts) ,confirm)))
+         (let ((decknix-agent-turn-reply-send-function
+                (lambda (buf text) (push (cons buf text) sent) t)))
+           ,@body)))))
+
+(ert-deftest decknix-turn-quick-reply--digit-confirms-then-sends-the-number ()
+  (decknix-turn-test--with-reply decknix-fixture-gate-choose-one t
+    (should (decknix-agent-turn-quick-reply (current-buffer) 1))
+    (should (equal "1" (cdr (car sent))))
+    (should (eq (current-buffer) (car (car sent))))
+    (should (= 1 (length prompts)))
+    (should (string-match-p "\"1\"" (car prompts)))
+    (should (string-match-p (regexp-quote (buffer-name)) (car prompts)))
+    (should (string-match-p "submit approval \\+ 2 nits" (car prompts)))
+    (should (string-match-p "APPROVE" (car prompts)))))
+
+(ert-deftest decknix-turn-quick-reply--declined-sends-nothing ()
+  (decknix-turn-test--with-reply decknix-fixture-gate-choose-one nil
+    (should-not (decknix-agent-turn-quick-reply (current-buffer) 1))
+    (should (= 1 (length prompts)))
+    (should-not sent)))
+
+(ert-deftest decknix-turn-quick-reply--a-digit-out-of-range-is-refused-unasked ()
+  (decknix-turn-test--with-reply decknix-fixture-gate-choose-one t
+    (should-error (decknix-agent-turn-quick-reply (current-buffer) 4) :type 'user-error)
+    (should-not prompts)
+    (should-not sent)))
+
+(ert-deftest decknix-turn-quick-reply--y-sends-yes-to-a-yes-question ()
+  (decknix-turn-test--with-reply decknix-fixture-gate-yes-edit-cancel t
+    (should (decknix-agent-turn-quick-reply (current-buffer) 'yes))
+    (should (equal "yes" (cdr (car sent))))
+    (should (= 1 (length prompts)))))
+
+(ert-deftest decknix-turn-quick-reply--wrong-kind-of-key-is-refused ()
+  "y on a numbered choice, a digit on a yes/edit/cancel, or anything on a
+session that asks nothing, all refuse before confirming."
+  (decknix-turn-test--with-reply decknix-fixture-gate-choose-one t
+    (should-error (decknix-agent-turn-quick-reply (current-buffer) 'yes) :type 'user-error))
+  (decknix-turn-test--with-reply decknix-fixture-gate-yes-edit-cancel t
+    (should-error (decknix-agent-turn-quick-reply (current-buffer) 1) :type 'user-error))
+  (decknix-turn-test--with-reply decknix-fixture-posted t
+    (should-error (decknix-agent-turn-quick-reply (current-buffer) 'yes) :type 'user-error)
+    (should-not prompts)))
+
+(ert-deftest decknix-turn-quick-reply--busy-session-reports-not-sent ()
+  (decknix-turn-test--with-reply decknix-fixture-gate-choose-one t
+    (let ((decknix-agent-turn-reply-send-function (lambda (_b _t) nil)))
+      (should-not (decknix-agent-turn-quick-reply (current-buffer) 1)))))
+
+(ert-deftest decknix-turn-quick-reply--keys ()
+  (should (eq 'yes (decknix-agent-turn-reply-key ?y)))
+  (should (= 3 (decknix-agent-turn-reply-key ?3)))
+  (should-not (decknix-agent-turn-reply-key ?0))
+  (should-not (decknix-agent-turn-reply-key ?n)))
+
 (provide 'decknix-agent-turn-signals-test)
 ;;; decknix-agent-turn-signals-test.el ends here

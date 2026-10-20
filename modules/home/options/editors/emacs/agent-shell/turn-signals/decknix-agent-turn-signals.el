@@ -570,5 +570,51 @@ session -- see `decknix-agent-turn-status'."
                      (decknix-agent-turn-facts buffer)))
       raw)))
 
+;; ---------------------------------------------------------------------------
+;; Quick replies -- answering a closing question from a list of sessions.
+;; ---------------------------------------------------------------------------
+
+(declare-function decknix--compose-submit-after-wait
+                  "decknix-agent-shell-main-compose" (target input))
+
+(defvar decknix-agent-turn-reply-send-function #'decknix--compose-submit-after-wait
+  "Function (BUFFER TEXT) submitting TEXT as BUFFER's next prompt.
+Returns non-nil only when it was sent.  The compose path's submit, the
+same one a typed prompt and the bulk send use, so a quick reply goes
+through `shell-maker-submit' and is refused while the agent is busy.")
+
+(defun decknix-agent-turn-reply-prompt (buffer plan ask)
+  "Return the confirmation prompt for sending PLAN's text to BUFFER.  Pure.
+Names the session, the exact text, what it means and the verdict at
+stake, because the answer is what posts the review."
+  (format "Send %S to %s (%s)%s? "
+          (plist-get plan :text) (buffer-name buffer) (plist-get plan :label)
+          (if-let* ((v (plist-get ask :verdict))) (format ", posting %s" v) "")))
+
+(defun decknix-agent-turn-quick-reply (buffer key)
+  "Answer BUFFER's closing question with KEY, after asking you to confirm.
+
+KEY is `yes' or a digit 1-9 (see `decknix-agent-turn-ask-quick-reply').
+Refuses, with the reason, a key the question did not offer.  ALWAYS
+confirms: these answers trigger the agent's next action, which on a
+review gate is posting to GitHub, and a stray key must never do that.
+Returns non-nil when the reply was sent."
+  (unless (buffer-live-p buffer) (user-error "No session here"))
+  (let* ((ask (decknix-agent-turn-closing-ask buffer))
+         (plan (decknix-agent-turn-ask-quick-reply ask key)))
+    (cond
+     ((plist-get plan :error)
+      (user-error "%s: %s" (buffer-name buffer) (plist-get plan :error)))
+     ((not (y-or-n-p (decknix-agent-turn-reply-prompt buffer plan ask)))
+      (message "Not sent") nil)
+     ((funcall decknix-agent-turn-reply-send-function buffer (plist-get plan :text))
+      (message "Sent %S to %s" (plist-get plan :text) (buffer-name buffer)) t)
+     (t (message "%s is busy; nothing sent" (buffer-name buffer)) nil))))
+
+(defun decknix-agent-turn-reply-key (event)
+  "Return the quick-reply key for input EVENT: `yes' for y, a digit 1-9, or nil."
+  (cond ((memq event '(?y ?Y)) 'yes)
+        ((and (integerp event) (<= ?1 event ?9)) (- event ?0))))
+
 (provide 'decknix-agent-turn-signals)
 ;;; decknix-agent-turn-signals.el ends here

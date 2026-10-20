@@ -7055,6 +7055,13 @@ duration -- the most important number on this branch."
         ;; `i' shows what the session at point is asking, as on the Review Board.
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "i") #'decknix-layout-inspect)
+        ;; `y' / `1'-`9' answer it, as on the Review Board: always after a
+        ;; confirmation naming the session and the exact text sent.
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "y") #'decknix-layout-reply)
+        (dotimes (i 9)
+          (define-key agent-shell-workspace-sidebar-mode-map
+            (kbd (number-to-string (1+ i))) #'decknix-layout-reply))
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "a") (lambda () (interactive)
                       (decknix--sidebar-call-transient #'decknix-sidebar-actions)))

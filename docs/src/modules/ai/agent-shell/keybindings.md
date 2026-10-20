@@ -163,8 +163,10 @@ each has waited, whichever section it would otherwise sit in. A review
 session whose PR has since merged or closed is still listed, dimmed and
 marked `PR gone`: it is still waiting on a prompt, though the answer is
 usually to close it. Under each, one dimmed line says what it is asking: the
-permission it wants, or the question its last turn ended on. The header line
-opens with the same count.
+permission it wants, or the question its last turn ended on, followed by the
+reply it expects (`reply 1-3, rec 1`, `reply yes/edit/cancel`, `reply
+yes/no`) when `y` or a digit can send it. The header line opens with the
+same count.
 
 Pressed inside the Agents sidebar itself. The header line names the few
 keys that do most of the work, dropping hints from the right as the sidebar
@@ -175,6 +177,8 @@ narrows; `?` is always the last to go, and opens the full reference.
 | `j` | Move to the next session that needs you (`netfail`, then `waiting`, then `asking`, then the longest wait); again for the one after |
 | `J` | Go straight to that session |
 | `i` | What the session at point is asking: its state and wait, the question, its whole last message and the tail of the session. `RET` there goes to it |
+| `y` | Answer the session at point "yes", when it asks yes/no or offers yes among its words. Always asks first, naming the session and the exact text |
+| `1`-`9` | Send that option's number to the session at point, when its question ends in a numbered list (`CHOOSE ONE`). Confirms first, showing the option; refused when the list has no such number |
 | `n` / `p` | Next / previous row that has an action, skipping headers and counts |
 | `o` | Restore a previous session (was `p`) |
 | `RET` | Session rows: go to the session. Reviews PR rows: go to the session covering the PR, ask which when several do, or open the PR's action menu when none does |
@@ -185,6 +189,45 @@ narrows; `?` is always the last to go, and opens the full reference.
 | `G` | Repo-sync action for the row at point |
 | `T` | Toggles |
 | `?` / `h` | Every sidebar key |
+
+## Review Board Keys
+
+`C-c s B` opens the Review Board: every live review session and every
+review request, in lanes. Each session row leads with where its review is
+in `/review-service-pr`, which assesses the PR, stops at a confirmation
+gate, then posts once you answer:
+
+| Glyph | Phase | Meaning |
+|-------|-------|---------|
+| `⚑` | awaiting you | The plan is presented. The row shows the verdict and the reply wanted, e.g. `APPROVE · reply 1-3, rec 1`. Listed under Needs you |
+| `⚑` | asking / permission / netfail | Blocked on you for anything else |
+| `◐` | assessing | Reading the PR; you have not answered it yet |
+| `◐` | revising | Changing the plan after you asked for an edit |
+| `◑` | posting | Acting on your go-ahead, with the verdict being posted |
+| `✓` | posted | The review is on GitHub (the session linked it, or the feed has your review). Filed under Finished |
+| `●` | idle | Settled, nothing in flight |
+
+| Key | Action |
+|-----|--------|
+| `n` / `p`, `TAB` | Next / previous row |
+| `RET` / `o` | Open the PR in the browser |
+| `i` | Inspect: the session's state, phase and last lines, or the PR detail |
+| `j` | Go to the session |
+| `y` | Send "yes" to the session at point, when it asks yes/no or `(yes / edit / cancel)`. Always confirms first |
+| `1`-`9` | Send that number to the session at point, when it offers a numbered choice. Confirms first, naming the option and the verdict at stake; refused when out of range |
+| `m` / `u` / `U` / `M` | Mark, unmark, unmark all, mark the lane |
+| `d` | Dispatch review sessions for the marked rows |
+| `k` / `D` | Quit (terminating the broker) or detach the marked sessions |
+| `s` | Merge via `/merge-train`, behind a manifest (`C-u s` dry run) |
+| `r` | Review PR url(s) pasted from anywhere |
+| `A` / `x` / `f` | Cycle auto-review, toggle auto-dismiss, toggle filters |
+| `g` / `?` | Refresh / full help |
+
+The reply keys act on the row at point only, never the marked set: one key
+answering several gates would post several reviews. The board also
+repaints itself a second after any session's turn ends or starts, so a
+review reaching its gate moves to Needs you without waiting for the
+reviews feed.
 
 ## Model & Mode
 
