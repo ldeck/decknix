@@ -554,6 +554,11 @@ PR merged."
                   (&optional buffer))
 (declare-function decknix-agent-turn-question-excerpt "decknix-agent-turn-signals"
                   (text))
+(declare-function decknix-agent-turn-closing-ask "decknix-agent-turn-signals"
+                  (&optional buffer))
+(declare-function decknix-agent-turn-ask-reply-label "decknix-agent-turn-ask" (reply))
+(declare-function decknix-agent-turn-quick-reply "decknix-agent-turn-signals" (buffer key))
+(declare-function decknix-agent-turn-reply-key "decknix-agent-turn-signals" (event))
 (defvar agent-shell-attention--pending)
 
 (defun decknix--layout-permission-label (buf)
@@ -576,6 +581,16 @@ so it costs no buffer scan and no I/O on the paint path."
              (fboundp 'decknix-agent-turn-question-excerpt)
              (decknix-agent-turn-question-excerpt
               (decknix-agent-turn-closing-text buf))))))
+
+(defun decknix-layout-session-reply-hint (buf)
+  "Return the reply session BUF's question wants, e.g. \"1-3, rec 1\", or nil.
+From the closing turn turn-signals has already parsed, so no I/O.  Nil
+for a free-text question, which no quick key answers."
+  (when-let* (((fboundp 'decknix-agent-turn-closing-ask))
+              ((fboundp 'decknix-agent-turn-ask-reply-label))
+              (reply (plist-get (decknix-agent-turn-closing-ask buf) :reply))
+              ((not (eq (plist-get reply :kind) 'open))))
+    (decknix-agent-turn-ask-reply-label reply)))
 
 (defun decknix--layout-ask-row (session text width)
   "Return the dimmed one-line TEXT shown under SESSION, fitted to WIDTH."
@@ -616,7 +631,7 @@ likely to close it."
                 'decknix-layout-buffer (nth 0 session)
                 'decknix-layout-needs-you t
                 'agent-shell-workspace-buffer buf
-                'help-echo "RET go to it · j next · i what it asks")))
+                'help-echo "RET go to it · j next · i what it asks · y/1-9 answer")))
 
 (defun decknix--layout-render-needs-you (line-num width)
   "Render every session blocked on the user, first.  Returns LINE-NUM.
@@ -637,11 +652,15 @@ blocked on you must never be hidden by a judgement about its PR."
         (dolist (session live)
           (insert (decknix--layout-needs-you-row session width raw-keys) "\n")
           (setq line-num (1+ line-num))
-          ;; What it asks, so most can be triaged without opening them.
-          (let ((ask (decknix-layout-session-ask
-                      (decknix--layout-session-buffer session) (nth 3 session))))
+          ;; What it asks, so most can be triaged without opening them,
+          ;; and the reply it wants, which `y' or a digit can send.
+          (let* ((buf (decknix--layout-session-buffer session))
+                 (ask (decknix-layout-session-ask buf (nth 3 session)))
+                 (hint (decknix-layout-session-reply-hint buf)))
             (when (and ask (not (string-empty-p ask)))
-              (insert (decknix--layout-ask-row session ask width) "\n")
+              (insert (decknix--layout-ask-row
+                       session (if hint (concat ask "  · reply " hint) ask) width)
+                      "\n")
               (setq line-num (1+ line-num)))))
         (insert "\n")
         (setq line-num (1+ line-num)))))
@@ -695,6 +714,20 @@ blocked on you must never be hidden by a judgement about its PR."
 
 (define-derived-mode decknix-layout-inspect-mode special-mode "Inspect"
   "What a session is asking.  RET goes to it, q closes this.")
+
+(defun decknix-layout-reply ()
+  "Answer the question of the session at point with the key just pressed.
+`y' for yes, `1'-`9' for a numbered option; always confirms first.  See
+`decknix-agent-turn-quick-reply', shared with the Review Board."
+  (interactive)
+  (let ((buf (car (decknix-layout--call-in-sidebar
+                   (lambda () (decknix-layout-row-buffers (line-beginning-position))))))
+        (key (and (fboundp 'decknix-agent-turn-reply-key)
+                  (decknix-agent-turn-reply-key last-command-event))))
+    (unless (buffer-live-p buf) (user-error "No session on this row"))
+    (unless (and key (fboundp 'decknix-agent-turn-quick-reply))
+      (user-error "Not a reply key"))
+    (decknix-agent-turn-quick-reply buf key)))
 
 (defun decknix-layout-inspect ()
   "Show what the session at point is asking, without leaving the sidebar.

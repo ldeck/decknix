@@ -736,5 +736,41 @@ the feed next notices."
     (should (eq 'finished (plist-get row :lane)))
     (should (eq 'posted (plist-get row :phase)))))
 
+;; --- answering from the board ---
+
+(require 'decknix-review-board)
+(require 'decknix-agent-turn-signals)
+
+(ert-deftest decknix-rb--reply-keys-answer-only-the-row-at-point ()
+  "The digit pressed goes to the session on the row at point, once."
+  (let ((calls nil) (session (generate-new-buffer "pr-1")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert (propertize "row\n" 'decknix-review-board-row
+                              (list :buffer session :session t)))
+          (goto-char (point-min))
+          (cl-letf (((symbol-function 'decknix-agent-turn-quick-reply)
+                     (lambda (buf key) (push (cons buf key) calls) nil)))
+            (let ((last-command-event ?2))
+              (decknix-review-board-reply))
+            (let ((last-command-event ?y))
+              (decknix-review-board-reply)))
+          (should (equal (list (cons session 'yes) (cons session 2)) calls)))
+      (kill-buffer session))))
+
+(ert-deftest decknix-rb--reply-keys-need-a-session ()
+  (with-temp-buffer
+    (insert (propertize "row\n" 'decknix-review-board-row (list :session nil)))
+    (goto-char (point-min))
+    (let ((last-command-event ?1))
+      (should-error (decknix-review-board-reply) :type 'user-error))))
+
+(ert-deftest decknix-rb--reply-keys-are-bound ()
+  (should (eq #'decknix-review-board-reply
+              (lookup-key decknix-review-board-mode-map (kbd "y"))))
+  (dolist (d '("1" "5" "9"))
+    (should (eq #'decknix-review-board-reply
+                (lookup-key decknix-review-board-mode-map (kbd d))))))
+
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here

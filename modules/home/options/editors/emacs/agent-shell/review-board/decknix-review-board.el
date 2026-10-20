@@ -57,6 +57,8 @@
 (declare-function decknix-agent-turn-closing-ask "decknix-agent-turn-signals" (&optional buffer))
 (declare-function decknix-agent-turn-closing-text "decknix-agent-turn-signals" (&optional buffer))
 (declare-function decknix-agent-turn-answered "decknix-agent-turn-signals" (&optional buffer))
+(declare-function decknix-agent-turn-quick-reply "decknix-agent-turn-signals" (buffer key))
+(declare-function decknix-agent-turn-reply-key "decknix-agent-turn-signals" (event))
 (declare-function decknix-review-board-activity-verb "decknix-review-board-model" (tags))
 (defvar decknix--agent-turn-plan)
 (declare-function agent-shell-buffers "ext:agent-shell")
@@ -470,6 +472,7 @@ pick up."
             ;; read-only screen need to be readable without asking.
             (propertize
              (concat "  n/p move   RET open   i inspect   c copy   j jump   m mark   M lane\n"
+                     "  y / 1-9 answer the session at point (asks first)\n"
                      "  d dispatch  k quit   D detach  s merge  A auto-review  x auto-dismiss  f filters  g refresh  ? help\n"
                      "  r review a PR url not listed here\n")
              'face 'font-lock-comment-face)
@@ -919,6 +922,12 @@ MARK  (verbs act on the marked set, or the row at point when none marked)
   m / u           mark / unmark          U  unmark all
   M               mark every row in this lane
 
+ANSWER  (the row at point only; always asks first)
+  y               send \"yes\" to a session asking yes/no or yes/edit/cancel
+  1-9             send that number to a session offering a numbered choice;
+                  refused when it offered no such option
+  The row says what each wants: `reply yes/edit/cancel', `reply 1-3, rec 1'.
+
 ACT
   d               dispatch review sessions (a Grouped row launches ONE
                   session for the whole service, which is the point)
@@ -1101,6 +1110,24 @@ answering it from a screen that shows only a row."
                             (window-height . 0.45)
                             (inhibit-same-window . t))))))
 
+(defun decknix-review-board-reply ()
+  "Answer the question of the session at point with the key just pressed.
+
+`y' sends \"yes\" to a session asking yes or no (or offering yes among
+its words); `1'-`9' send that option's number to one offering a numbered
+choice.  The row at point only, never the marked set: one keystroke
+answering several gates at once would post several reviews.  Always asks
+first, naming the session, the text and the option, and refuses a key
+the question did not offer (see `decknix-agent-turn-quick-reply')."
+  (interactive)
+  (let* ((row (decknix-review-board--row-at-point))
+         (buf (and row (plist-get row :buffer)))
+         (key (decknix-agent-turn-reply-key last-command-event)))
+    (unless (buffer-live-p buf) (user-error "No session on this row"))
+    (unless key (user-error "Not a reply key"))
+    (when (decknix-agent-turn-quick-reply buf key)
+      (decknix-review-board-schedule-refresh))))
+
 (defun decknix-review-board-toggle-auto-dismiss ()
   "Toggle whether finished sessions drop off the board automatically.
 See `decknix-review-board-auto-dismiss'."
@@ -1152,6 +1179,9 @@ a setting kept somewhere else."
     (define-key map (kbd "x") #'decknix-review-board-toggle-auto-dismiss)
     (define-key map (kbd "f") #'decknix-review-board-toggle-filters)
     (define-key map (kbd "i") #'decknix-review-board-inspect)
+    (define-key map (kbd "y") #'decknix-review-board-reply)
+    (dotimes (i 9)
+      (define-key map (kbd (number-to-string (1+ i))) #'decknix-review-board-reply))
     (define-key map (kbd "?") #'decknix-review-board-help)
     (define-key map (kbd ".") #'decknix-review-board-help)
     (define-key map (kbd "q") #'quit-window)
@@ -1160,6 +1190,9 @@ a setting kept somewhere else."
 
 `k' and `D' mirror `C-c s q' and `C-c s D' so the quit/detach
 distinction is learned once rather than twice.
+
+`y' and the digits answer the session at point, behind a confirmation
+naming what is sent: on a review gate the answer is what posts.
 
 `s' merges, behind a manifest and an explicit confirmation.  There is no
 `approve': `submit-pr-review' is deprecated and approval now happens
