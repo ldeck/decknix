@@ -2271,6 +2271,7 @@ let
     src = ./agent-shell/turn-signals;
     packageRequires = [ ];
     testFiles = [
+      "decknix-review-gate-fixtures.el"
       "decknix-agent-turn-signals-test.el"
       "decknix-agent-turn-working-test.el"
     ];

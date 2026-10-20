@@ -113,6 +113,21 @@ those twelve transcripts and every one was genuinely idle, so the verb
 list must stay specific -- a bare \"waiting on your\" would misreport all
 five as blocked.")
 
+(defconst decknix--agent-question-line-regexp
+  (rx "?" (* (any "*_`")) (* blank)
+      (? (or (seq "(" (* (not (any "()\n"))) ")")
+             (seq "[" (* (not (any "[]\n"))) "]")))
+      (* (any "*_`")) (* blank) eol)
+  "A line that ends on a question, allowing what agents put after the mark.
+
+The bare \"ends in `?'\" test missed the confirmation gate
+`/review-service-pr' prescribes word for word, \"Ready to submit? (yes /
+edit / cancel)\": the line ends in a parenthesis.  Over 350 closing turns
+of real review sessions, every gate the predicate missed had that shape,
+and 34 sessions were sitting at one reading `ready'.  So a parenthesised
+or bracketed hint may follow the mark, as may markdown emphasis closing
+round the question (\"**Proceed?**\").")
+
 (defun decknix--agent-question-p (text)
   "Return non-nil when TEXT ends a turn by soliciting an answer.
 
@@ -124,7 +139,8 @@ fenced code has been stripped:
     for any message offering the user options, so it is an exact marker
     rather than a guess);
   - a closing `Reply with ...' instruction, that block's final line;
-  - any line ending in a question mark;
+  - any line ending in a question mark, optionally followed by a hint
+    such as \"(yes / edit / cancel)\" (`decknix--agent-question-line-regexp');
   - a restated pending choice (`decknix--agent-question-restated-regexp'),
     the shape a resumed session uses instead of a fresh decision block.
 
@@ -142,7 +158,7 @@ per this file's Commentary."
       (and (not (string-empty-p tail))
            (or (string-match-p "^[ \t]*choose one[ \t]*$" tail)
                (string-match-p "^[ \t]*reply with\\b" tail)
-               (string-match-p "\\?[ \t]*$" tail)
+               (string-match-p decknix--agent-question-line-regexp tail)
                (string-match-p decknix--agent-question-restated-regexp tail))
            t))))
 
@@ -168,7 +184,10 @@ narrow sidebar row, not rendered."
            (case-fold-search t)
            (choose (seq-position tail "choose one"
                                  (lambda (l k) (string-match-p (concat "\\`" k "\\'") l))))
-           (pick (or (car (last (seq-filter (lambda (l) (string-match-p "\\?\\'" l)) tail)))
+           (pick (or (car (last (seq-filter
+                                 (lambda (l)
+                                   (string-match-p decknix--agent-question-line-regexp l))
+                                 tail)))
                      (and choose (> choose 0) (nth (1- choose) tail))
                      (car (last tail)))))
       (and pick
