@@ -3609,6 +3609,7 @@ in
         (require 'agent-shell-anthropic)
         (require 'agent-shell-pi)
         (require 'agent-shell-google)
+        (require 'agent-shell-openai)
         (require 'agent-shell-opencode)
         (require 'agent-shell-goose)
         (require 'agent-shell-qwen)
@@ -3748,6 +3749,26 @@ in
             :session-file-extension ".json"
             :label "Gemini"
             :glyph "G"
+            :supports-workspace-root nil))
+
+        ;; OpenAI Codex via the separate `codex-acp' bridge (upstream
+        ;; agent-shell-openai.el; enable `decknix.ai.codex.enable' to
+        ;; install pkgs.unstable.codex + codex-acp).  Auth defaults to
+        ;; ChatGPT login (`agent-shell-openai-authentication' :login);
+        ;; run `codex login' once standalone.  Flagless like Gemini: no
+        ;; `:model-launch-flag', and no `:session-modes' because Codex's
+        ;; mode ids (read-only/agent/...) are not Claude's.  Codex keeps
+        ;; rollouts under ~/.codex/sessions/YYYY/MM/DD with its own
+        ;; schema, so the saved-session picker/resume is best-effort.
+        (decknix-agent-register-provider 'codex
+          '(:make-config-fn agent-shell-openai-make-codex-config
+            :acp-command-var agent-shell-openai-codex-acp-command
+            :auth-var agent-shell-openai-authentication
+            :env-var agent-shell-openai-codex-environment
+            :sessions-dir "~/.codex/sessions"
+            :session-file-extension ".jsonl"
+            :label "Codex"
+            :glyph "X"
             :supports-workspace-root nil))
 
         ;; == Phase-1 ACP agents (built-in ACP; no separate bridge) ==

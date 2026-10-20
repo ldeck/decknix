@@ -131,6 +131,10 @@
                 overlays = [ (_: _: {
                   inherit (currentPkgs) claude-code pi-coding-agent tabularis omniwm;
                   gemini-cli = currentPkgs.callPackage ./pkgs/gemini-cli/default.nix { };
+                  # Codex and its ACP bridge (pkgs/codex-acp) are absent on
+                  # the shared pin; the bridge bakes in this same codex.
+                  inherit (currentPkgs) codex;
+                  codex-acp = currentPkgs.callPackage ./pkgs/codex-acp/default.nix { };
                 }) ];
               };
             };

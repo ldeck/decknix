@@ -603,6 +603,7 @@ registry (`decknix-agent-provider.el`).
 | Claude Code | `claude-code` | `C` | ⚠️ Needs ACP bridge | `claude-agent-acp` (see below) |
 | Pi | `pi` | `P` | ⚠️ Needs ACP bridge | `pi-acp` (see below) |
 | Gemini CLI | `gemini` | `G` | ✅ Working (new sessions) | built into `gemini --acp` |
+| Codex | `codex` | `X` | ⚠️ Needs ACP bridge (new sessions) | `codex-acp` (see below) |
 | OpenCode | `opencode` | `O` | ✅ Working (new sessions) | built into `opencode acp` |
 | Goose | `goose` | `🪿` | ✅ Working (new sessions) | built into `goose acp` |
 | Qwen Code | `qwen-code` | `Q` | ✅ Working (new sessions) | built into `qwen --experimental-acp` |
@@ -631,6 +632,21 @@ ACP bridge via Nix — no manual npm steps required after `decknix switch`.
 Sessions live in `~/.pi/sessions/`. Session file format will be discovered on
 first use; the `:session-jq-filter` in the registry is pending (sessions won't
 appear in `C-c A s` until the field is populated).
+
+#### Codex — Setup
+
+The `decknix.ai.codex` module (`decknix.ai.codex.enable = true`) installs
+`pkgs.unstable.codex` and the `codex-acp` bridge
+(`@agentclientprotocol/codex-acp`, the TypeScript successor to
+zed-industries/codex-acp; see `pkgs/codex-acp`), both from the
+nixpkgs-current pin. The bridge's `CODEX_PATH` is baked to that same
+`codex`, so the CLI and the bridge never drift. Provided by upstream
+`agent-shell-openai.el` (buffer name "Codex").
+
+Authentication defaults to ChatGPT login (`agent-shell-openai-authentication`
+`:login t`); run `codex login` once standalone. Codex keeps rollouts under
+`~/.codex/sessions/YYYY/MM/DD/` with its own schema, so the saved-session
+picker/resume is best-effort; new sessions via `C-c A n` work fully.
 
 #### OpenCode / Goose / Qwen Code — Setup
 
@@ -661,8 +677,6 @@ registry (verified against the pinned nixpkgs, nixos-25.11 rev `d030887`,
   enough (this caused "pi not installed").
 - **goose** → `goose-cli` (binary `goose`), NOT the unrelated `goose` package.
 - **qwen** → `qwen-code` (binary `qwen`); **opencode** → `opencode`.
-- **codex** → `codex` CLI is in nixpkgs, but the bridge `codex-acp` is a **Rust**
-  project (github.com/zed-industries/codex-acp), not npm.
 - **cursor** → `cursor-cli`; bridge `@blowmage/cursor-agent-acp` (npm).
 - **droid** (Factory) → CLI not in nixpkgs (curl installer); bridge `droid-acp` (npm).
 - **mistral vibe** → CLI via `uv`; bridge `vibe-acp` (not on npm).
@@ -723,7 +737,6 @@ work is the ACP bridge and/or packaging the CLI.
 
 | Provider | Upstream module | ACP entrypoint | CLI in nixpkgs | Bridge work | Tier |
 |----------|-----------------|----------------|----------------|-------------|------|
-| **Codex** | `agent-shell-openai` | separate `codex-acp` (Rust, zed-industries) | ✅ `codex` | package Rust bridge | 2 |
 | **Cursor** | `agent-shell-cursor` | separate `cursor-agent-acp` | ✅ `cursor-cli` | package npm bridge (`@blowmage/cursor-agent-acp`) | 2 |
 | **Factory Droid** | `agent-shell-droid` | separate `droid-acp` | ❌ (curl/npm) | npm bridge (`droid-acp`) + source CLI | 3 |
 | **Mistral Vibe** | `agent-shell-mistral` | separate `vibe-acp` | ❌ (uv) | bridge not on npm + source CLI | 3 |
@@ -734,10 +747,10 @@ work is the ACP bridge and/or packaging the CLI.
 **Ollama** is not a provider (no ACP interface) — run local models through
 Goose/OpenCode pointed at `http://localhost:11434` (see the Setup note above).
 
-Glyphs to assign when these land (avoid collisions): Codex `〉`, Cursor `⼕`,
-Kiro `👻` (Claude=`C`, Gemini/Goose=`G`/`🪿`, Kimi=`K` already taken).
+Glyphs to assign when these land (avoid collisions): Cursor `⼕`,
+Kiro `👻` (Claude=`C`, Gemini/Goose=`G`/`🪿`, Codex=`X`, Kimi=`K` already taken).
 
-(**Auggie, Claude, Pi, Gemini, OpenCode, Goose, Qwen Code** are registered —
+(**Auggie, Claude, Pi, Gemini, Codex, OpenCode, Goose, Qwen Code** are registered —
 see *Supported Providers* above.)
 
 To register a new provider, add an entry in `agent-shell.nix` matching the
