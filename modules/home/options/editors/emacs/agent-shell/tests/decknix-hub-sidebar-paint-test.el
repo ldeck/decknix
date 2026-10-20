@@ -27,7 +27,12 @@
   (declare (indent 0))
   `(let ((decknix--sidebar-paint-timer nil)
          (decknix--sidebar-paint-in-progress nil)
-         (decknix-sidebar-paint-idle-delay 0.3))
+         (decknix-sidebar-paint-idle-delay 0.3)
+         (decknix--sidebar-paint-last-duration 0)
+         (decknix--sidebar-paint-last-end 0)
+         (decknix--sidebar-paint-pending nil)
+         (decknix--sidebar-idle-last-fingerprint 'unset)
+         (decknix--sidebar-idle-last-paint 0))
      ,@body))
 
 ;; -- Guard predicate ------------------------------------------------
@@ -386,6 +391,152 @@ straight after the paint had computed them all."
                 ((symbol-function 'decknix--sidebar-state-write) #'ignore))
         (decknix--sidebar-paint-now #'ignore))
       (should (= 8 decknix--sidebar-paint-generation)))))
+
+;; -- Paint pacing ---------------------------------------------------
+
+(defmacro decknix-sidebar-pace-test--tick (spec &rest body)
+  "Run BODY with paint-now, schedule and run-with-timer recorded per SPEC.
+SPEC is (PAINTED SCHEDULED TIMED)."
+  (declare (indent 1))
+  (let ((painted (nth 0 spec)) (scheduled (nth 1 spec)) (timed (nth 2 spec)))
+    `(let ((,painted nil) (,scheduled nil) (,timed nil))
+       (cl-letf (((symbol-function 'input-pending-p) (lambda (&rest _) nil))
+                 ((symbol-function 'active-minibuffer-window) (lambda () nil))
+                 ((symbol-function 'decknix--sidebar-paint-now)
+                  (lambda (fn) (setq ,painted fn)))
+                 ((symbol-function 'decknix--sidebar-schedule-paint)
+                  (lambda (fn) (setq ,scheduled fn)))
+                 ((symbol-function 'run-with-timer)
+                  (lambda (secs _rep fn &rest args)
+                    (setq ,timed (list secs fn args)) 'gap-timer)))
+         ,@body))))
+
+(ert-deftest decknix-sidebar-pace--a-hidden-sidebar-is-marked-not-painted ()
+  "A sidebar in another tab was repainted in full every couple of seconds."
+  (decknix-sidebar-paint-test--isolated
+    (let ((decknix-sidebar-idle-force-interval 60)
+          (decknix--sidebar-idle-last-paint (float-time)))
+      (decknix-sidebar-pace-test--tick (painted scheduled timed)
+        (cl-letf (((symbol-function 'decknix--sidebar-paint-hidden-p) (lambda () t)))
+          (decknix--sidebar-paint-tick)
+          (should-not painted)
+          (should-not scheduled)
+          (should-not timed)
+          (should decknix--sidebar-paint-pending))))))
+
+(ert-deftest decknix-sidebar-pace--a-hidden-sidebar-still-paints-per-force-interval ()
+  "Its side effects (linked-prs.json, persisted toggles) must not go stale
+for as long as it stays hidden."
+  (decknix-sidebar-paint-test--isolated
+    (let ((decknix-sidebar-idle-force-interval 60)
+          (decknix--sidebar-idle-last-paint (- (float-time) 61)))
+      (decknix-sidebar-pace-test--tick (painted _scheduled _timed)
+        (cl-letf (((symbol-function 'decknix--sidebar-paint-hidden-p) (lambda () t)))
+          (decknix--sidebar-paint-tick)
+          (should painted))))))
+
+(ert-deftest decknix-sidebar-pace--a-pending-paint-lands-when-shown ()
+  (decknix-sidebar-paint-test--isolated
+    (let ((decknix--sidebar-paint-pending t)
+          (refreshed nil))
+      (cl-letf (((symbol-function 'decknix--sidebar-paint-hidden-p) (lambda () nil))
+                ((symbol-function 'agent-shell-workspace-sidebar-refresh)
+                 (lambda () (setq refreshed t)))
+                ((symbol-function 'decknix--sidebar-idle-fingerprint)
+                 (lambda () (error "No fingerprint needed for a pending paint"))))
+        (decknix--sidebar-idle-tick)
+        (should refreshed)))))
+
+(ert-deftest decknix-sidebar-pace--a-slow-paint-spaces-out-the-next ()
+  "A two-second paint re-armed on every pause left no idle time unpainted."
+  (decknix-sidebar-paint-test--isolated
+    (let ((decknix-sidebar-paint-spacing-factor 3)
+          (decknix-sidebar-paint-max-spacing 10)
+          (decknix--sidebar-paint-last-duration 2.0)
+          (decknix--sidebar-paint-last-end (- (float-time) 1.0)))
+      (decknix-sidebar-pace-test--tick (painted _scheduled timed)
+        (cl-letf (((symbol-function 'decknix--sidebar-paint-hidden-p) (lambda () nil)))
+          (decknix--sidebar-paint-tick)
+          (should-not painted)
+          ;; 3 x 2 s after it ended, of which 1 s has passed.
+          (should (< 4.9 (nth 0 timed) 5.1))
+          ;; And then it waits for idle again, never painting off a plain timer.
+          (should (eq #'decknix--sidebar-schedule-paint (nth 1 timed)))
+          (should (eq 'gap-timer decknix--sidebar-paint-timer)))))))
+
+(ert-deftest decknix-sidebar-pace--the-gap-is-capped ()
+  (decknix-sidebar-paint-test--isolated
+    (let ((decknix-sidebar-paint-spacing-factor 3)
+          (decknix-sidebar-paint-max-spacing 10)
+          (decknix--sidebar-paint-last-duration 60.0)
+          (decknix--sidebar-paint-last-end 100.0))
+      (should (= 10 (decknix--sidebar-paint-wait 100.0)))
+      (should (= 0 (decknix--sidebar-paint-wait 111.0))))))
+
+(ert-deftest decknix-sidebar-pace--a-fast-paint-adds-no-gap ()
+  (decknix-sidebar-paint-test--isolated
+    (let ((decknix--sidebar-paint-last-duration 0.01)
+          (decknix--sidebar-paint-last-end (- (float-time) 0.6)))
+      (decknix-sidebar-pace-test--tick (painted _scheduled _timed)
+        (cl-letf (((symbol-function 'decknix--sidebar-paint-hidden-p) (lambda () nil)))
+          (decknix--sidebar-paint-tick)
+          (should painted))))))
+
+(ert-deftest decknix-sidebar-pace--checkpoint-throws-only-on-input-in-a-paint ()
+  (cl-letf (((symbol-function 'input-pending-p) (lambda (&rest _) t)))
+    (let ((decknix--sidebar-paint-abortable nil))
+      (should-not (catch 'decknix--sidebar-paint-abort
+                    (decknix--sidebar-paint-checkpoint) nil)))
+    (let ((decknix--sidebar-paint-abortable t))
+      (should (catch 'decknix--sidebar-paint-abort
+                (decknix--sidebar-paint-checkpoint) nil))))
+  (cl-letf (((symbol-function 'input-pending-p) (lambda (&rest _) nil)))
+    (let ((decknix--sidebar-paint-abortable t))
+      (should-not (catch 'decknix--sidebar-paint-abort
+                    (decknix--sidebar-paint-checkpoint) nil)))))
+
+(ert-deftest decknix-sidebar-pace--an-abandoned-render-leaves-the-sidebar-alone ()
+  "Half a paint must never reach the screen."
+  (let ((target (generate-new-buffer " pace-target"))
+        (decknix--sidebar-paint-aborted nil)
+        (decknix--sidebar-paint-abortable t))
+    (unwind-protect
+        (cl-letf (((symbol-function 'input-pending-p) (lambda (&rest _) t)))
+          (with-current-buffer target (insert "old\n"))
+          (with-current-buffer target
+            (decknix--sidebar-diff-render
+             (lambda ()
+               (insert "new first section\n")
+               (decknix--sidebar-paint-checkpoint)
+               (insert "never reached\n"))))
+          (should decknix--sidebar-paint-aborted)
+          (should (equal "old\n" (with-current-buffer target (buffer-string)))))
+      (kill-buffer target))))
+
+(ert-deftest decknix-sidebar-pace--an-abandoned-paint-is-retried-not-recorded ()
+  (decknix-sidebar-paint-test--isolated
+    (let ((scheduled nil) (wrote nil) (fp nil))
+      (cl-letf (((symbol-function 'decknix--sidebar-schedule-paint)
+                 (lambda (fn) (setq scheduled fn)))
+                ((symbol-function 'decknix--sidebar-state-write)
+                 (lambda () (setq wrote t)))
+                ((symbol-function 'decknix--sidebar-idle-fingerprint)
+                 (lambda () (setq fp t) 'fp)))
+        (decknix--sidebar-paint-now
+         (lambda () (setq decknix--sidebar-paint-aborted t)))
+        (should (eq scheduled #'decknix--sidebar-paint-tick))
+        (should-not fp)
+        (should-not wrote)
+        (should (eq 'unset decknix--sidebar-idle-last-fingerprint))
+        (should (= 0 decknix--sidebar-paint-last-duration))))))
+
+(ert-deftest decknix-sidebar-pace--a-completed-paint-records-its-duration ()
+  (decknix-sidebar-paint-test--isolated
+    (cl-letf (((symbol-function 'decknix--sidebar-state-write) #'ignore)
+              ((symbol-function 'decknix--sidebar-idle-fingerprint) (lambda () 'fp)))
+      (decknix--sidebar-paint-now (lambda () (sleep-for 0.02)))
+      (should (>= decknix--sidebar-paint-last-duration 0.015))
+      (should (eq 'fp decknix--sidebar-idle-last-fingerprint)))))
 
 (provide 'decknix-hub-sidebar-paint-test)
 ;;; decknix-hub-sidebar-paint-test.el ends here
