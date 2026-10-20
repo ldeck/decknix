@@ -1049,9 +1049,26 @@ Order: `hide' → `show' → `mentioned' → `hide'.  See
 (defvar decknix--hub-review-session-snapshot-at 0
   "`float-time' when `decknix--hub-review-session-snapshot' was built.")
 (defconst decknix--hub-review-session-snapshot-ttl 0.5
-  "Seconds a session snapshot stays fresh.
-Long enough to cover one sidebar render pass -- which is the point -- and
-short enough that a session opened or closed shows up immediately.")
+  "Seconds a session snapshot stays fresh outside a sidebar paint.
+Short enough that a session opened or closed shows up immediately.  It
+was also meant to cover one render pass, but a paint measured over two
+seconds, so the snapshot was rebuilt several times inside one.  Within a
+paint it is now reused for the paint's whole length instead; see
+`decknix--hub-review-session-snapshot-fresh-p'.")
+(defvar decknix--hub-review-session-snapshot-generation nil
+  "`decknix--sidebar-paint-generation' the snapshot was built in, or nil.")
+(defvar decknix--sidebar-paint-in-progress)
+(defvar decknix--sidebar-paint-generation)
+
+(defun decknix--hub-review-session-snapshot-fresh-p (now)
+  "Non-nil when the memoised session snapshot can be returned at NOW.
+Built during the paint in progress, or younger than the TTL."
+  (or (and (bound-and-true-p decknix--sidebar-paint-in-progress)
+           (boundp 'decknix--sidebar-paint-generation)
+           (eql decknix--hub-review-session-snapshot-generation
+                decknix--sidebar-paint-generation))
+      (< (- now decknix--hub-review-session-snapshot-at)
+         decknix--hub-review-session-snapshot-ttl)))
 
 (defun decknix--hub-review-session-snapshot ()
   "Return the live agent sessions as (BUFFER-NAME TAGS REVIEW-PR) triples.
@@ -1065,10 +1082,12 @@ performance work exists precisely to keep costs like this out.
 
 Hoisting the per-session reads here makes it O(sessions) store work plus
 O(requests x sessions) pure comparisons; `covers-p' itself is ~3us."
-  (if (< (- (float-time) decknix--hub-review-session-snapshot-at)
-         decknix--hub-review-session-snapshot-ttl)
+  (if (decknix--hub-review-session-snapshot-fresh-p (float-time))
       decknix--hub-review-session-snapshot
     (setq decknix--hub-review-session-snapshot-at (float-time)
+          decknix--hub-review-session-snapshot-generation
+          (and (bound-and-true-p decknix--sidebar-paint-in-progress)
+               (bound-and-true-p decknix--sidebar-paint-generation))
           decknix--hub-review-session-snapshot
           (when (fboundp 'agent-shell-buffers)
             (delq nil

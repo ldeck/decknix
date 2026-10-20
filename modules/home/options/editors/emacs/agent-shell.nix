@@ -2684,6 +2684,7 @@ let
       "decknix-hub-worktree-cache-test.el"
       "decknix-hub-worktree-badge-test.el"
       "decknix-hub-worktree-workspace-roots-test.el"
+      "decknix-hub-session-snapshot-test.el"
     ];
   };
 
@@ -7407,6 +7408,18 @@ ${optionalString cfg.hub.priority.enable ''
                           "decknix-hub-sidebar-paint")
         (declare-function decknix--sidebar-diff-render
                           "decknix-hub-sidebar-paint" (orig-fn &rest args))
+        (declare-function decknix--agent-status-memo-advice
+                          "decknix-hub-sidebar-paint" (orig buffer &rest args))
+
+        ;; One status per session per paint: the memo is only live inside a
+        ;; paint (see `decknix--sidebar-with-status-memo'), so outside one
+        ;; every caller still gets a fresh answer.  Depth -100 so it is the
+        ;; OUTERMOST status advice whatever order the watch, net-error,
+        ;; heartbeat and turn-signal advices were added in: it must memoise
+        ;; their combined answer, not short-circuit some of them.
+        (with-eval-after-load 'agent-shell-workspace
+          (advice-add 'agent-shell-workspace--buffer-status :around
+                      #'decknix--agent-status-memo-advice '((depth . -100))))
 
         ;; Incremental diff paint: wrap the sidebar `--render' (our
         ;; `:override' above) so it renders into a scratch buffer and only
