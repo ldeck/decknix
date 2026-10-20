@@ -397,5 +397,70 @@ and not on every streamed chunk."
         (decknix--agent-turn-observe-event :event 'tool-call-update :data nil)
         (should (= 2 runs))))))
 
+;; ---------------------------------------------------------------------
+;; What the turn asks, and which gate the next prompt answered
+;; ---------------------------------------------------------------------
+
+(ert-deftest decknix-turn-ask--only-when-the-turn-asks ()
+  (should (equal "APPROVE"
+                 (plist-get (decknix-agent-turn-ask decknix-fixture-gate-choose-one)
+                            :verdict)))
+  (should-not (decknix-agent-turn-ask decknix-fixture-posted))
+  (should-not (decknix-agent-turn-ask decknix-fixture-statement)))
+
+(ert-deftest decknix-turn-answered--recorded-at-input-and-kept-for-the-turn ()
+  "Answering a gate is remembered through the turn that acts on it."
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'derived-mode-p) (lambda (&rest _) t)))
+      (setq decknix--agent-turn-message-tail decknix-fixture-gate-choose-one)
+      (decknix--agent-turn-observe-event :event 'turn-complete :data nil)
+      (decknix--agent-turn-observe-event :event 'input-submitted
+                                         :data '((:prompt . "1")))
+      (should (equal "1" (plist-get (decknix-agent-turn-answered) :reply)))
+      (should (equal "APPROVE"
+                     (plist-get (plist-get (decknix-agent-turn-answered) :ask) :verdict)))
+      ;; An echoed user message resets again with no closing text left.
+      (decknix--agent-turn-observe-notification
+       :state `((:buffer . ,(current-buffer)))
+       :acp-notification '((method . "session/update")
+                           (params (update (sessionUpdate . "user_message_chunk")))))
+      (should (decknix-agent-turn-answered)))))
+
+(ert-deftest decknix-turn-answered--a-non-gate-answer-clears-it ()
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'derived-mode-p) (lambda (&rest _) t)))
+      (setq decknix--agent-turn-answered '(:ask (:verdict "APPROVE") :reply "1"))
+      (setq decknix--agent-turn-message-tail decknix-fixture-posted-then-asks)
+      (decknix--agent-turn-observe-event :event 'turn-complete :data nil)
+      (decknix--agent-turn-observe-event :event 'input-submitted
+                                         :data '((:prompt . "please re-review")))
+      (should-not (decknix-agent-turn-answered)))))
+
+(ert-deftest decknix-turn-closing-ask--parsed-once-per-text ()
+  (with-temp-buffer
+    (setq decknix--agent-turn-closing-text decknix-fixture-gate-yes-edit-cancel)
+    (let ((first (decknix-agent-turn-closing-ask)))
+      (should (eq 'words (plist-get (plist-get first :reply) :kind)))
+      (cl-letf (((symbol-function 'decknix-agent-turn-ask)
+                 (lambda (_) (error "Parsed again"))))
+        (should (eq first (decknix-agent-turn-closing-ask)))))
+    (setq decknix--agent-turn-closing-text nil)
+    (should-not (decknix-agent-turn-closing-ask))))
+
+(ert-deftest decknix-turn-restore--answered-gate-survives-a-restart ()
+  "Restarted while posting: the last prompt answered the turn before it."
+  (let ((facts (decknix-agent-turn-restored-facts
+                (list (cons "/review-service-pr https://example/pull/1"
+                            decknix-fixture-gate-choose-one)
+                      (cons "1" "Submitting the review now.")))))
+    (should (equal "1" (plist-get (plist-get facts :answered) :reply))))
+  (should-not (plist-get (decknix-agent-turn-restored-facts
+                          (list (cons "go" decknix-fixture-gate-choose-one)))
+                         :answered))
+  (should-not (plist-get (decknix-agent-turn-restored-facts
+                          (list (cons "go" decknix-fixture-posted)
+                                (cons "please re-review" "Looking again.")))
+                         :answered)))
+
 (provide 'decknix-agent-turn-signals-test)
 ;;; decknix-agent-turn-signals-test.el ends here

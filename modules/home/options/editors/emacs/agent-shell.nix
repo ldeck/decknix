@@ -2270,10 +2270,16 @@ let
     pname = "decknix-agent-turn-signals";
     src = ./agent-shell/turn-signals;
     packageRequires = [ ];
+    # What a closing question expects (verdict, reply kind), required by
+    # turn-signals itself, so it ships in the same derivation.
+    extraSiteFiles = [
+      "decknix-agent-turn-ask.el"
+    ];
     testFiles = [
       "decknix-review-gate-fixtures.el"
       "decknix-agent-turn-signals-test.el"
       "decknix-agent-turn-working-test.el"
+      "decknix-agent-turn-ask-test.el"
     ];
   };
 
