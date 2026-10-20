@@ -1296,8 +1296,14 @@ they mean in the sidebar itself (cycle layout / worktree menu)."
    ("R" "Review menu…"    decknix-sidebar-open-review-menu)
    ("S" "Session menu…"   decknix-sidebar-open-session-menu)
    ("v" "Review at point" decknix-sidebar-review-at-point)
+   ("N" "New session for this row" decknix-sidebar-launch-session)
+   ("G" "Repo-sync action" decknix-repo-sync-row-action)
    ("H" "Worktree hygiene (cross-repo)" decknix-worktree-hygiene)
    ("D" "Cycle layout"    decknix-sidebar-toggle-hub-display-mode)]
+  ["Layout"
+   :if (lambda () (bound-and-true-p decknix-sidebar-layout-enable))
+   ("TAB" "Expand / collapse" decknix-layout-toggle-expand)
+   ("A"   "Reviews: wanted / all" decknix-layout-toggle-attention-only)]
   ["Actions (a …)"
    ("a r" "Restart"       agent-shell-workspace-sidebar-restart)
    ("a R" "Rename"        agent-shell-workspace-sidebar-rename)

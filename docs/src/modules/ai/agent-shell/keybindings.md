@@ -156,12 +156,20 @@ Navigate / Quick / Actions plus `T` for the toggles sub-transient.
 
 ## Sidebar Keys
 
-Pressed inside the Agents sidebar itself.
+Pressed inside the Agents sidebar itself. The header line names the few
+keys that do most of the work, dropping hints from the right as the sidebar
+narrows; `?` is always the last to go, and opens the full reference.
 
 | Key | Action |
 |-----|--------|
 | `RET` | Session rows: go to the session. Reviews PR rows: go to the session covering the PR, ask which when several do, or open the PR's action menu when none does |
 | `M-RET` | Primary action: open the row's PR in the browser |
+| `TAB` | Expand or collapse the Reviews group, or held items, at point |
+| `A` | Reviews: only what wants you, or everything |
+| `N` | New session for the repo, worktree or PR at point |
+| `G` | Repo-sync action for the row at point |
+| `T` | Toggles |
+| `?` / `h` | Every sidebar key |
 
 ## Model & Mode
 

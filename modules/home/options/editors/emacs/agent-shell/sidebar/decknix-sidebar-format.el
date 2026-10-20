@@ -57,6 +57,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'iso8601)
 
 ;; Forward declaration for the heredoc-resident toggle global.
@@ -84,6 +85,39 @@ filter is off and dropped when a cutoff is active."
                  (age (float-time (time-subtract (current-time) then))))
             (<= age decknix--sidebar-sessions-age-filter))
         (error t)))))
+
+;; -- Sidebar header line ---------------------------------------------
+
+(defvar decknix-sidebar-header-hints
+  '(("RET" . "open") ("TAB" . "expand") ("?" . "keys"))
+  "Key hints the sidebar header offers, in display order.
+
+The sidebar had dozens of keys and the only pointer to any of them was
+`?', which a new user has no reason to press.  The hints name the few
+that do most of the work.")
+
+(defun decknix--sidebar-header-hint (hint)
+  "Return HINT, a (KEY . LABEL) cons, as `KEY label'."
+  (concat (propertize (car hint) 'face 'font-lock-keyword-face)
+          " " (propertize (cdr hint) 'face 'shadow)))
+
+(defun decknix--sidebar-header-line (counts hints width)
+  "Return COUNTS followed by as many of HINTS as fit in WIDTH.
+
+Hints are dropped from the right, except `?', which is kept whenever it
+fits: the rest of the keys are one press away from it."
+  (let ((keep (copy-sequence hints)))
+    (catch 'done
+      (while t
+        (let ((out (if keep
+                       (concat counts "  "
+                               (mapconcat #'decknix--sidebar-header-hint keep " · "))
+                     counts)))
+          (when (or (null keep) (<= (string-width out) width))
+            (throw 'done out))
+          (let ((victim (car (last (seq-remove (lambda (h) (equal (car h) "?"))
+                                               keep)))))
+            (setq keep (if victim (delq victim keep) nil))))))))
 
 ;; -- Sidebar render: section headers + key-help groups --
 
