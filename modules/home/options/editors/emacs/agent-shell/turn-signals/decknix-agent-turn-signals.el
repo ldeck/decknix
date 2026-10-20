@@ -55,6 +55,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'rx)
+(require 'decknix-agent-turn-ask)
 
 (declare-function agent-shell--state "ext:agent-shell")
 (declare-function agent-shell--content-block-to-markdown "ext:agent-shell" (content))
@@ -196,6 +197,26 @@ narrow sidebar row, not rendered."
              "\\`\\(?:[#>*-]+\\|[0-9]+[.)]\\)[ \t]*" ""
              (replace-regexp-in-string "\\*\\*\\|__\\|`" "" pick)))))))
 
+(defun decknix-agent-turn-ask (text)
+  "Return what the turn closing on TEXT asks, or nil when it asks nothing.
+
+A plist: `:verdict', the review verdict its plan presents (nil outside a
+review gate), and `:reply', the answer it expects (see
+`decknix-agent-turn-ask-reply')."
+  (when (decknix--agent-question-p text)
+    (list :verdict (decknix-agent-turn-ask-verdict text)
+          :reply (decknix-agent-turn-ask-reply text))))
+
+(defun decknix-agent-turn-answered-gate (closing reply)
+  "Return the gate REPLY answered, given the turn's CLOSING text, or nil.
+
+Only a review GATE -- a question whose plan names a verdict -- counts.
+Answering anything else leaves no phase to report, and keeping it would
+label the next turn `posting' after you merely said \"stop\"."
+  (when-let* ((ask (decknix-agent-turn-ask closing))
+              ((plist-get ask :verdict)))
+    (list :ask ask :reply (or reply ""))))
+
 (defun decknix--agent-plan-progress (entries)
   "Return a progress plist for ACP plan ENTRIES, or nil when there are none.
 
@@ -296,7 +317,15 @@ not need."
           ;; The closing text too, so a restored session can still say
           ;; WHAT it is asking, not merely that it is.
           :text (and (stringp last-assistant)
-                     (decknix--agent-turn-append-tail nil last-assistant)))))
+                     (decknix--agent-turn-append-tail nil last-assistant))
+          ;; Whether the last prompt answered a gate the turn before it
+          ;; put, so a session restarted mid-posting still reads as acting
+          ;; on your answer rather than starting its review over.
+          :answered (let ((prev (cdr (car (last turns 2)))))
+                      (and (cdr turns) (stringp prev)
+                           (decknix-agent-turn-answered-gate
+                            (decknix--agent-turn-append-tail nil prev)
+                            (car (car (last turns)))))))))
 
 (defun decknix-agent-turn-broker-facts (buffer)
   "Return turn facts BUFFER\='s broker log can supply, or nil.
@@ -358,6 +387,15 @@ evidence for a turn this buffer did not start, which is what it is for."
 (defvar-local decknix--agent-turn-ended nil
   "Non-nil from this buffer's `turn-complete' until its next turn starts.")
 
+(defvar-local decknix--agent-turn-answered nil
+  "The review gate this buffer's last prompt answered, or nil.
+A plist (:ask ASK :reply TEXT), see `decknix-agent-turn-answered-gate'.
+Set when input is submitted; unlike the closing text it survives the
+turn it starts, which is the turn that acts on the answer.")
+
+(defvar-local decknix--agent-turn-ask-memo nil
+  "(TEXT . ASK) for the closing text last parsed, compared with `eq'.")
+
 (defvar-local decknix--agent-turn-closing-text nil
   "Trailing text of the last completed turn's message, or nil.
 Kept until the next turn starts, so the sidebar can say what a session
@@ -368,6 +406,27 @@ that is `asking' actually asked without reading its buffer.")
   (let ((buf (or buffer (current-buffer))))
     (and (buffer-live-p buf)
          (buffer-local-value 'decknix--agent-turn-closing-text buf))))
+
+(defun decknix-agent-turn-closing-ask (&optional buffer)
+  "Return what BUFFER's last turn asks, as `decknix-agent-turn-ask'.  No I/O.
+
+Parsed once per closing text: the board and sidebar ask on every
+rebuild, and the text only changes at a turn boundary."
+  (let ((buf (or buffer (current-buffer))))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (let ((text decknix--agent-turn-closing-text))
+          (if (and decknix--agent-turn-ask-memo
+                   (eq text (car decknix--agent-turn-ask-memo)))
+              (cdr decknix--agent-turn-ask-memo)
+            (cdr (setq decknix--agent-turn-ask-memo
+                       (cons text (and text (decknix-agent-turn-ask text)))))))))))
+
+(defun decknix-agent-turn-answered (&optional buffer)
+  "Return the review gate BUFFER's last prompt answered, or nil.  No I/O."
+  (let ((buf (or buffer (current-buffer))))
+    (and (buffer-live-p buf)
+         (buffer-local-value 'decknix--agent-turn-answered buf))))
 
 (defun decknix-agent-turn-facts (&optional buffer)
   "Return the turn-end facts plist for BUFFER (default `current-buffer')."
@@ -454,6 +513,13 @@ For views that show session state and are not otherwise told it moved:
 the Review Board rebuilds from the reviews feed, which a review reaching
 its gate does not touch.  Runs once per turn boundary, never per chunk.")
 
+(defun decknix--agent-turn-run-settled-hook ()
+  "Run `decknix-agent-turn-settled-hook', never letting it fail the event.
+It runs inside advice on `agent-shell--emit-event', where a signal would
+stop the event reaching agent-shell's own subscribers."
+  (with-demoted-errors "decknix-agent-turn-settled-hook: %S"
+    (run-hooks 'decknix-agent-turn-settled-hook)))
+
 (defun decknix--agent-turn-observe-event (&rest args)
   "Settle turn-end facts from an agent-shell event.
 Installed as `:before' advice on `agent-shell--emit-event', whose `&key'
@@ -478,11 +544,18 @@ Runs once per turn, so the question scan is off any hot path."
                (decknix--agent-question-p decknix--agent-turn-message-tail))
          (setq decknix--agent-turn-closing-text decknix--agent-turn-message-tail)
          (setq decknix--agent-turn-ended t)
-         (run-hooks 'decknix-agent-turn-settled-hook)
+         (decknix--agent-turn-run-settled-hook)
          (setq decknix--agent-turn-message-tail nil))
         ('input-submitted
+         ;; Before the reset clears it: the closing text is the question
+         ;; this prompt answers.  A second reset in the same turn (an
+         ;; echoed user message) finds it gone and leaves the record.
+         (when decknix--agent-turn-closing-text
+           (setq decknix--agent-turn-answered
+                 (decknix-agent-turn-answered-gate
+                  decknix--agent-turn-closing-text (map-elt data :prompt))))
          (decknix-agent-turn-reset)
-         (run-hooks 'decknix-agent-turn-settled-hook))
+         (decknix--agent-turn-run-settled-hook))
         (_ nil)))))
 
 (defun decknix--agent-turn-status-advice (orig-fn buffer)
