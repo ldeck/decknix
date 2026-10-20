@@ -341,12 +341,17 @@ let
     # `session-lifecycle' owns the bulk quit/detach this board shares with
     # the Session Board -- it is a `require' in decknix-review-board.el, so
     # it has to be on the load path at build time too.
+    # turn-signals reads what a session's closing turn asks (the review
+    # phase and the reply it expects); attention gives the needs-you look.
     packageRequires = [ decknix-hub-review-status-el
-                        decknix-agent-session-lifecycle-el ];
+                        decknix-agent-session-lifecycle-el
+                        decknix-agent-turn-signals-el
+                        decknix-attention-el ];
     extraSiteFiles = [
       "decknix-review-board.el"
     ];
     testFiles = [
+      "decknix-review-gate-fixtures.el"
       "decknix-review-board-model-test.el"
     ];
   };
