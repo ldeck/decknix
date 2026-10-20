@@ -20,7 +20,7 @@ The `C-c A` prefix is labelled "Agent" in which-key.
 | — | `C-c A a` | Start / switch to agent |
 | — | `C-c A n` | Force new session |
 | — | `C-c A k` | Interrupt agent |
-| `C-c b` | `C-c A b` | Switch agent buffer (live only) — MRU order, status-coloured |
+| `C-c b` | `C-c A b` | Switch agent buffer (live only): sessions that need you first (⚑, in jump order), then the rest as before, each with the sidebar's state glyph and colour |
 
 ### Network-Failure Recovery
 

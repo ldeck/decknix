@@ -2730,12 +2730,15 @@ let
   # `extraSiteFiles' lists the seven non-pname siblings so the narrowed
   # installPhase still ships every main-bulk file into the daemon's
   # load-path (matching plain trivialBuild's default *.el install).
-  # C-c b picker category (Requests/WIP/Other) + attention rank: pure
-  # classifier over a session's tags + a status->urgency rank + a stable
-  # attention/MRU sort.  ERT-tested; the picker wiring lives in main-bulk.
+  # C-c b picker category (Requests/WIP/Other) + attention order: pure
+  # classifier over a session's tags, needs-you-first ordering and the
+  # sidebar's state prefix.  ERT-tested; the picker wiring lives in main-bulk.
   decknix-agent-picker-category-el = mkEmacsTestedPackage {
     pname = "decknix-agent-picker-category";
     src = ./agent-shell/picker-category;
+    # The attention states and the sidebar's state glyphs and faces, so the
+    # picker ranks and draws sessions exactly as the sidebar does.
+    packageRequires = [ decknix-attention-el decknix-sidebar-layout-el ];
     testFiles = [ "decknix-agent-picker-category-test.el" ];
   };
 

@@ -53,27 +53,12 @@
   (should (= (decknix--agent-picker-attention-rank "finished")
              (decknix--agent-picker-attention-rank "ready"))))
 
-(ert-deftest decknix-picker-cat/asking-ranks-with-waiting ()
-  "A session that ended on a question is blocked on you, like a permission
-prompt -- so it sorts into the same top band, above a turn that merely
-finished and wants reading."
-  (should (= (decknix--agent-picker-attention-rank "asking")
-             (decknix--agent-picker-attention-rank "waiting")))
-  (should (< (decknix--agent-picker-attention-rank "asking")
-             (decknix--agent-picker-attention-rank "ready"))))
-
-(ert-deftest decknix-picker-cat/netfail-ranks-first ()
-  "A session dead on the link outranks everything, including a permission
-prompt (#162).
-
-Both are stalled on you, but a `waiting' session is one keystroke from
-carrying on whereas a `netfail' one has already stopped producing and
-will keep sitting there until it is reset.  Ranking it below `waiting'
-would bury exactly the sessions a dropped link stranded."
-  (should (< (decknix--agent-picker-attention-rank "netfail")
-             (decknix--agent-picker-attention-rank "waiting")))
-  (should (< (decknix--agent-picker-attention-rank "netfail")
-             (decknix--agent-picker-attention-rank "ready"))))
+(ert-deftest decknix-picker-cat/every-needs-you-state-shares-the-top-band ()
+  "Which of them comes first is `decknix-attention's call, not this rank's."
+  (dolist (st decknix-attention-states)
+    (should (= 0 (decknix--agent-picker-attention-rank st)))
+    (should (< (decknix--agent-picker-attention-rank st)
+               (decknix--agent-picker-attention-rank "ready")))))
 
 ;; -- stable attention + MRU sort -----------------------------------
 
@@ -92,6 +77,53 @@ would bury exactly the sessions a dropped link stranded."
          (copy (copy-tree in)))
     (decknix--agent-picker-order-index in)
     (should (equal in copy))))
+
+;; -- needs-you first, in the sidebar's order ----------------------
+
+(ert-deftest decknix-picker-cat/needs-you-first-in-attention-order ()
+  "netfail, waiting, asking, then the rest as before: ready, working by MRU."
+  (let ((rows '((w1 "w1" "working" 0)
+                (as "as" "asking" 1)
+                (r1 "r1" "ready" 2)
+                (wt "wt" "waiting" 3)
+                (nf "nf" "netfail" 4)
+                (w2 "w2" "working" 5))))
+    (should (equal (decknix--agent-picker-order rows)
+                   '(nf wt as r1 w1 w2)))))
+
+(ert-deftest decknix-picker-cat/longest-wait-first-within-a-state ()
+  "Ties within a state go to whoever has waited longest, not to MRU."
+  (let* ((since '(("new" . 200.0) ("old" . 100.0)))
+         (order-fn (lambda (tuples)
+                     (decknix-attention-order
+                      tuples (lambda (tu) (cdr (assoc (car tu) since)))))))
+    (should (equal (decknix--agent-picker-order
+                    '((new "new" "asking" 0) (old "old" "asking" 1))
+                    order-fn)
+                   '(old new)))))
+
+(ert-deftest decknix-picker-cat/order-fn-sees-the-attention-rows-only ()
+  (let (seen)
+    (decknix--agent-picker-order
+     '((a "a" "ready" 0) (b "b" "waiting" 1))
+     (lambda (tuples) (setq seen (mapcar #'car tuples)) tuples))
+    (should (equal seen '("b")))))
+
+;; -- the sidebar's look --------------------------------------------
+
+(ert-deftest decknix-picker-cat/prefix-is-the-sidebar-glyph-and-face ()
+  (dolist (st '("netfail" "waiting" "asking" "working" "ready"
+                "finished" "closing" "killed" nil))
+    (let ((p (decknix--agent-picker-state-prefix st)))
+      (should (equal (substring-no-properties p)
+                     (concat (decknix--layout-state-glyph st) " ")))
+      (should (equal (get-text-property 0 'face p)
+                     (decknix--layout-state-face st))))))
+
+(ert-deftest decknix-picker-cat/needs-you-shows-the-flag-in-the-attention-face ()
+  (let ((p (decknix--agent-picker-state-prefix "asking")))
+    (should (string-prefix-p decknix-attention-glyph p))
+    (should (eq (get-text-property 0 'face p) 'decknix-attention-face))))
 
 (provide 'decknix-agent-picker-category-test)
 ;;; decknix-agent-picker-category-test.el ends here
