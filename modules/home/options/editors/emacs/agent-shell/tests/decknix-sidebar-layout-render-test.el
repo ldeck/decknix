@@ -346,5 +346,76 @@ reduced to a count."
     (should (string-match-p "25 agents" out))
     (should (string-match-p "15 more" out))))
 
+;; --- RET on session-bearing rows ---------------------------------------
+
+(defmacro decknix-lr-test--with-buffers (names &rest body)
+  "Run BODY with live buffers called NAMES, killed afterwards."
+  (declare (indent 1))
+  `(let ((bufs (mapcar #'get-buffer-create ,names)))
+     (unwind-protect (progn ,@body)
+       (mapc #'kill-buffer bufs))))
+
+(defun decknix-lr-test--render-wip (sessions)
+  "Return the rendered WIP section for SESSIONS."
+  (cl-letf (((symbol-function 'decknix--layout-sessions) (lambda () sessions))
+            ((symbol-function 'decknix--layout-wip-repos) (lambda () nil))
+            ((symbol-function 'decknix--layout-worktrees) (lambda () nil))
+            ((symbol-function 'decknix--layout-subagents-of) (lambda (_b) nil))
+            ((symbol-function 'decknix--sidebar-render-section-header)
+             (lambda (title &optional _id) (insert " " title "\n"))))
+    (decknix-layout-invalidate-wip)
+    (with-temp-buffer
+      (decknix--layout-render-wip 0 48)
+      (buffer-string))))
+
+(ert-deftest decknix-layout-render--a-wip-row-carries-the-upstream-buffer-property ()
+  "Upstream goto reads `agent-shell-workspace-buffer'; a WIP row without it
+answered \"No live agent buffer at point\"."
+  (decknix-lr-test--with-buffers '("*Claude: dk-wip*")
+    (let* ((out (decknix-lr-test--render-wip
+                 '(("*Claude: dk-wip*" nil nil "asking" nil nil))))
+           (pos (string-match "dk-wip" out)))
+      (should pos)
+      (should (eq (get-buffer "*Claude: dk-wip*")
+                  (get-text-property pos 'agent-shell-workspace-buffer out))))))
+
+(ert-deftest decknix-layout-render--buffer-at-falls-back-to-the-layout-name ()
+  (decknix-lr-test--with-buffers '("*Claude: dk-a*")
+    (with-temp-buffer
+      (insert (propertize "row" 'decknix-layout-buffer "*Claude: dk-a*") "\n"
+              (propertize "row" 'decknix-layout-session '("*Claude: dk-a*")) "\n"
+              (propertize "row" 'decknix-layout-buffer "*gone*") "\n")
+      (should (eq (get-buffer "*Claude: dk-a*") (decknix-layout-buffer-at 1)))
+      (should (eq (get-buffer "*Claude: dk-a*") (decknix-layout-buffer-at 5)))
+      (should-not (decknix-layout-buffer-at 9)))))
+
+(defun decknix-lr-test--ret-on-pr (key sessions)
+  "Return `decknix-layout-ret-action' on a PR row for KEY given SESSIONS."
+  (cl-letf (((symbol-function 'decknix--layout-sessions) (lambda () sessions)))
+    (with-temp-buffer
+      (insert (propertize "pr" 'decknix-layout-pr (list :key key)
+                          'decknix-hub-type 'request))
+      (decknix-layout-ret-action 1))))
+
+(ert-deftest decknix-layout-render--ret-on-a-covered-pr-goes-to-its-session ()
+  (decknix-lr-test--with-buffers '("*Claude: pr-upside-1*")
+    (should (equal (list 'goto (get-buffer "*Claude: pr-upside-1*"))
+                   (decknix-lr-test--ret-on-pr
+                    "upside#1" '(("*Claude: pr-upside-1*" nil ("upside#1") "asking")))))))
+
+(ert-deftest decknix-layout-render--ret-on-a-doubly-covered-pr-offers-a-choice ()
+  (decknix-lr-test--with-buffers '("*Claude: a*" "*Claude: b*")
+    (let ((action (decknix-lr-test--ret-on-pr
+                   "upside#1" '(("*Claude: a*" nil ("upside#1") "asking")
+                                ("*Claude: b*" nil ("upside#1") "ready")))))
+      (should (eq 'choose (car action)))
+      (should (= 2 (length (cadr action)))))))
+
+(ert-deftest decknix-layout-render--ret-on-an-uncovered-pr-is-the-default ()
+  "No session: nil, so the caller opens the request menu."
+  (should-not (decknix-lr-test--ret-on-pr "upside#1" nil))
+  (should-not (decknix-lr-test--ret-on-pr
+               "upside#1" '(("*Claude: not-live*" nil ("upside#1") "asking")))))
+
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here

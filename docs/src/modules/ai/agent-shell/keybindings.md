@@ -154,6 +154,15 @@ Navigate / Quick / Actions plus `T` for the toggles sub-transient.
 | `C-c W T` | Toggles transient (filters, sort, indicators) |
 | `C-c w` | Toggle the workspace tab itself (unchanged) |
 
+## Sidebar Keys
+
+Pressed inside the Agents sidebar itself.
+
+| Key | Action |
+|-----|--------|
+| `RET` | Session rows: go to the session. Reviews PR rows: go to the session covering the PR, ask which when several do, or open the PR's action menu when none does |
+| `M-RET` | Primary action: open the row's PR in the browser |
+
 ## Model & Mode
 
 | In-buffer | Global | Action |

@@ -5531,6 +5531,48 @@ rather than a decision."
       (user-error "No repo, worktree or PR on this row to start a session for"))
     (decknix-agent-session-new nil (car target) (cdr target))))
 
+(declare-function decknix-layout-ret-action "decknix-sidebar-layout-render" (pos))
+(declare-function agent-shell-workspace--clear-finished "ext:agent-shell-workspace" (buffer))
+(defvar agent-shell-workspace-sidebar--selected-buffer)
+
+(defun decknix-sidebar-goto-buffer (buf)
+  "Show agent BUF in the main area, as RET on a session row does.
+
+Mirrors upstream `agent-shell-workspace-sidebar-goto', which can only go
+to the buffer named by the row at point; a Reviews PR row names a PR, and
+its session has to be resolved first."
+  (unless (buffer-live-p buf) (user-error "That session is gone"))
+  (when (boundp 'agent-shell-workspace-sidebar--selected-buffer)
+    (setq agent-shell-workspace-sidebar--selected-buffer buf))
+  (when (fboundp 'agent-shell-workspace--clear-finished)
+    (ignore-errors (agent-shell-workspace--clear-finished buf)))
+  (let ((win (seq-find
+              (lambda (w)
+                (and (not (window-parameter w 'window-side))
+                     (not (string= (buffer-name (window-buffer w))
+                                   agent-shell-workspace-sidebar-buffer-name))))
+              (window-list nil 'no-minibuf))))
+    (when win
+      (set-window-buffer win buf)
+      (select-window win)))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh)))
+
+(defconst decknix-sidebar--choose-menu-label "Action menu (open PR, review...)"
+  "The non-session choice offered when several sessions cover one PR.")
+
+(defun decknix-sidebar--choose-session (bufs ctx)
+  "Ask which of BUFS to go to, or open the request menu for CTX."
+  (let ((choice (completing-read
+                 "Session: "
+                 (append (mapcar #'buffer-name bufs)
+                         (list decknix-sidebar--choose-menu-label))
+                 nil t)))
+    (if (equal choice decknix-sidebar--choose-menu-label)
+        (progn (setq decknix--sidebar-action-context ctx)
+               (decknix--sidebar-call-transient #'decknix-sidebar-request-menu))
+      (decknix-sidebar-goto-buffer (get-buffer choice)))))
+
 (defun decknix-sidebar-ret ()
   "Open the action menu for the row at point.
 Hub rows (Request, WIP, Task, Linked PR, Linked Repo) get a row-
@@ -5551,8 +5593,17 @@ directly — see `decknix-sidebar-primary-action'."
                                           'decknix-layout-orphan-prune))
          (subagent (get-text-property (line-beginning-position)
                                       'decknix-layout-subagent))
+         ;; Session-first: a Reviews PR row with a live session goes to
+         ;; it.  Only the layout's rows carry `decknix-layout-pr', so the
+         ;; old Requests rows (type `review') keep their menu.
+         (session-action (and (eq type 'request)
+                              (fboundp 'decknix-layout-ret-action)
+                              (decknix-layout-ret-action (line-beginning-position))))
          (cmd (pcase type
                 ('review            #'decknix-sidebar-request-menu)
+                ;; The session-first Reviews rows.  Matching only `review'
+                ;; sent them to the goto fallback, which opened GitHub.
+                ('request           #'decknix-sidebar-request-menu)
                 ('wip               #'decknix-sidebar-wip-menu)
                 ;; Placeholder rows reuse the WIP menu — only the
                 ;; worktree submenu (`w') is meaningful since
@@ -5565,6 +5616,10 @@ directly — see `decknix-sidebar-primary-action'."
                 ('linked-pr         #'decknix-sidebar-linked-pr-menu)
                 ('linked-repo       #'decknix-sidebar-linked-repo-menu))))
     (cond
+     ((eq (car session-action) 'goto)
+      (decknix-sidebar-goto-buffer (cadr session-action)))
+     ((eq (car session-action) 'choose)
+      (decknix-sidebar--choose-session (cadr session-action) ctx))
      ((and ctx cmd)
       (setq decknix--sidebar-action-context ctx)
       (decknix--sidebar-call-transient cmd))
