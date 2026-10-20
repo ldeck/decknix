@@ -288,8 +288,10 @@ wants you', which is the glyph a PR row uses for `open and raised' --
 the same shape for unrelated things.  Sharing shapes across row kinds is
 fine, the indentation ties each to its row, but only while the shape
 means the same KIND of thing."
-  (dolist (s '("asking" "waiting" "netfail" "working"))
-    (should (equal "◐" (decknix--layout-state-glyph s))))
+  (should (equal "◐" (decknix--layout-state-glyph "working")))
+  ;; Blocked on you is its own glyph, not the in-flight shape.
+  (dolist (s '("asking" "waiting" "netfail"))
+    (should (equal decknix-attention-glyph (decknix--layout-state-glyph s))))
   (dolist (s '("finished" "ready"))
     (should (equal "●" (decknix--layout-state-glyph s))))
   (should (equal "◌" (decknix--layout-state-glyph "closing")))
@@ -305,9 +307,8 @@ on a person."
 (ert-deftest decknix-layout--wanting-the-user-is-its-own-colour ()
   "Not failing and not progressing -- waiting on a person, which is the
 most actionable row the sidebar can show."
-  (dolist (s '("asking" "waiting"))
-    (should (equal '(:foreground "#c678dd" :weight bold)
-                   (decknix--layout-state-face s)))))
+  (dolist (s '("asking" "waiting" "netfail"))
+    (should (eq 'decknix-attention-face (decknix--layout-state-face s)))))
 
 (ert-deftest decknix-layout--a-complete-session-reads-like-a-passing-build ()
   (dolist (s '("finished" "ready"))
@@ -871,10 +872,15 @@ tests \"passed\" the code it was meant to exercise."
   (should (eq 'default (decknix--layout-state-face nil))))
 
 (ert-deftest decknix-layout--session-faces-agree-with-the-requests-indicator ()
-  "The first four are copied from `decknix--hub-request-session-faces' so a
+  "One face for blocked-on-you, shared with the Requests indicator, so a
 colour cannot mean one thing in the sidebar and another on a Request row."
-  (dolist (state '("netfail" "waiting" "asking" "working"))
-    (should (plist-get (decknix--layout-state-face state) :foreground))))
+  (dolist (state '("netfail" "waiting" "asking"))
+    (should (eq 'decknix-attention-face (decknix--layout-state-face state))))
+  (should (plist-get (decknix--layout-state-face "working") :foreground)))
+
+(ert-deftest decknix-layout--a-blocked-review-group-uses-the-attention-face ()
+  (should (eq 'decknix-attention-face
+              (decknix--layout-group-face '(:asking 1 :prs nil)))))
 
 ;; --- PR severity ------------------------------------------------------
 

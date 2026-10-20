@@ -87,11 +87,16 @@ Uses `agent-shell-rename-buffer` from the core package.
 
 ### Attention Tracker (`C-c j`)
 
-`agent-shell-attention` adds a mode-line indicator showing pending/busy session counts:
+`agent-shell-attention` places a mode-line indicator; decknix supplies its
+counts from the same states the sidebar's **Needs you** block uses:
 
 ```
-AS:2/1    ← 2 sessions pending input, 1 busy
+AS:2/5    ← 2 sessions need you (netfail / waiting / asking), 5 need you or are working
 ```
+
+Click it to choose one. Those three states share one look everywhere: the
+`⚑` glyph and `decknix-attention-face` (purple) in the sidebar, on Requests
+rows and Reviews group rows, and the same purple as a tab-bar tint.
 
 `C-c j` (`C-c A j` globally) jumps to the next session that needs you, by
 decknix's own session states: `netfail`, then `waiting`, then `asking`, the

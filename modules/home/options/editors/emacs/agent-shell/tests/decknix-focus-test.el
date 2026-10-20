@@ -60,16 +60,21 @@
 ;; -- Attention edge detector ----------------------------------------
 ;;
 ;; Contract: an "edge" into needs-attention is when the previous raw
-;; status was NOT "waiting" and the new raw status IS "waiting".
+;; status differs and the new raw status is one of the attention states.
 
 (ert-deftest decknix-focus/attention-edge ()
-  "Edge fires only on the transition into `waiting'."
+  "Edge fires on the transition into any state that needs you."
   (should     (decknix-focus-attention-edge-p "working" "waiting"))
   (should     (decknix-focus-attention-edge-p nil       "waiting"))
   (should     (decknix-focus-attention-edge-p "ready"   "waiting"))
   (should-not (decknix-focus-attention-edge-p "waiting" "waiting"))
   (should-not (decknix-focus-attention-edge-p "working" "ready"))
-  (should-not (decknix-focus-attention-edge-p "waiting" "ready")))
+  (should-not (decknix-focus-attention-edge-p "waiting" "ready"))
+  ;; Asking and netfail need you as much as a permission prompt does.
+  (should     (decknix-focus-attention-edge-p "working" "asking"))
+  (should     (decknix-focus-attention-edge-p "working" "netfail"))
+  (should-not (decknix-focus-attention-edge-p "asking"  "asking"))
+  (should     (decknix-focus-attention-edge-p "waiting" "asking")))
 
 ;; -- note-status detector -------------------------------------------
 ;;

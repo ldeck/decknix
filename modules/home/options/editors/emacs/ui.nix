@@ -71,7 +71,8 @@ in
 
           - "off": never raise the Emacs frame (default).
           - "attention": raise the frame when a backgrounded agent
-            session enters a waiting / needs-input state.
+            session starts needing you: waiting on a permission
+            prompt, asking a question, or dead on a network failure.
           - "both": "attention" plus raise the frame when a new session
             is created (e.g. an auto-review dispatch).
 

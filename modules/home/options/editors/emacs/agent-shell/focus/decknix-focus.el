@@ -13,7 +13,8 @@
 ;;
 ;;   off       -> never steal focus (default).
 ;;   attention -> raise the frame when a backgrounded session enters a
-;;                `waiting' (needs-input / permission) state.
+;;                state that needs you: `waiting' (permission), `asking'
+;;                (ended on a question) or `netfail' (died on the link).
 ;;   both      -> attention, plus raise when a new session is created
 ;;                (e.g. an auto-review dispatch).
 ;;
@@ -27,6 +28,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'decknix-attention)
 
 (defconst decknix-focus-states '(off attention both)
   "Ordered cycle of focus-steal states.
@@ -74,10 +76,14 @@ An unrecognised STATE resets the cycle to `off'."
 
 (defun decknix-focus-attention-edge-p (last raw)
   "Return non-nil on the transition into a needs-attention state.
-LAST is the previously seen raw status, RAW the new one.  An edge is
-LAST not already \"waiting\" while RAW is \"waiting\"."
-  (and (string= raw "waiting")
-       (not (equal last "waiting"))))
+LAST is the previously seen raw status, RAW the new one.  An edge is RAW
+in `decknix-attention-states' and different from LAST.
+
+Only `waiting' used to qualify, so a session that ended its turn on a
+question, or died on the link, never raised the frame -- the two cases
+where nothing will happen until you look."
+  (and (decknix-attention-state-p raw)
+       (not (equal last raw))))
 
 ;; -- Side effect: raise the frame -----------------------------------
 
@@ -107,8 +113,8 @@ activate is required.  Runs asynchronously and is a no-op off darwin."
 (defun decknix-focus-note-status (raw visible-p &optional buffer)
   "Record RAW status for BUFFER and maybe steal focus.
 Raises the frame when attention-steal is enabled, the buffer is not
-already visible/active (VISIBLE-P nil), and a fresh edge into
-\"waiting\" occurred.  RAW is always recorded so toggling the feature
+already visible/active (VISIBLE-P nil), and a fresh edge into a
+needs-attention state occurred.  RAW is always recorded so toggling the feature
 on mid-wait does not see a spurious edge on the next tick."
   (with-current-buffer (or buffer (current-buffer))
     (let ((last decknix-focus--last-status))

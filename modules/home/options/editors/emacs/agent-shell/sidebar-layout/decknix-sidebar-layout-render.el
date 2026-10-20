@@ -640,7 +640,7 @@ blocked on you must never be hidden by a judgement about its PR."
               (insert (propertize (decknix--layout-pr-label pr width)
                                   'face (cond ((decknix--layout-attention-p
                                                 (plist-get pr :state))
-                                               'warning)
+                                               'decknix-attention-face)
                                               ((eq 'updated (decknix--layout-review-phase pr))
                                                (alist-get 'updated decknix-sidebar-layout-group-faces))
                                               (t 'font-lock-comment-face))

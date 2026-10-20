@@ -71,7 +71,9 @@ marker), so the window count stays accurate."
 
 (ert-deftest decknix-tab-status/background-known-and-unknown ()
   "Known statuses map to a colour; unknown / nil map to nil (no tint)."
-  (should (equal "#3a1418" (decknix-agent-tab-status-background "waiting")))
+  (dolist (st '("waiting" "asking" "netfail"))
+    (should (equal decknix-attention-background
+                   (decknix-agent-tab-status-background st))))
   (should (equal "#3a330a" (decknix-agent-tab-status-background "working")))
   (should (null (decknix-agent-tab-status-background "bogus")))
   (should (null (decknix-agent-tab-status-background nil))))
