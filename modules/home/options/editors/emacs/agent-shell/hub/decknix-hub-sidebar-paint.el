@@ -124,33 +124,107 @@ from ORIG for the rest of the scope; otherwise call ORIG with ARGS."
 ;; Defined with the idle tick below; re-baselined by every paint.
 (defvar decknix--sidebar-idle-last-fingerprint)
 (defvar decknix--sidebar-idle-last-paint)
+(defvar decknix-sidebar-idle-force-interval)
+(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
+
+;; -- Paint pacing ----------------------------------------------------
+;;
+;; A paint, once started, ran to the end however long it took, and the
+;; next could start as soon as the user paused again: a two-second paint
+;; re-armed by every 2 s tick and every agent event left almost no idle
+;; time that was not spent painting.  Three bounds:
+;;
+;;   * a sidebar no window shows is not painted (beyond the force
+;;     interval, which keeps its side effects -- linked-prs.json, the
+;;     persisted toggles -- from going stale), and is painted when shown;
+;;   * the next paint waits until `decknix-sidebar-paint-spacing-factor'
+;;     times the last paint's duration has passed, so slow paints space
+;;     themselves out instead of filling the idle time;
+;;   * input arriving mid-paint abandons it between sections.  The render
+;;     goes to a scratch buffer and is applied only once complete, so an
+;;     abandoned paint leaves the visible sidebar exactly as it was.
+
+(defvar decknix-sidebar-paint-spacing-factor 3
+  "Minimum gap between paints, as a multiple of the last paint\='s duration.
+At 3, paints can take at most a quarter of idle time.")
+
+(defvar decknix-sidebar-paint-max-spacing 10
+  "Upper bound in seconds on the gap `decknix-sidebar-paint-spacing-factor\=' adds.")
+
+(defvar decknix--sidebar-paint-last-duration 0
+  "Seconds the last completed paint took.")
+
+(defvar decknix--sidebar-paint-last-end 0
+  "`float-time\=' the last paint finished, completed or abandoned.")
+
+(defvar decknix--sidebar-paint-pending nil
+  "Non-nil when a paint was skipped because no window shows the sidebar.")
+
+(defvar decknix--sidebar-paint-aborted nil
+  "Set when the paint in progress was abandoned for pending input.")
+
+(defvar decknix--sidebar-paint-abortable nil
+  "Non-nil while a paint may be abandoned at a section checkpoint.")
+
+(defun decknix--sidebar-paint-checkpoint ()
+  "Abandon the paint in progress if input is pending.
+Called between sidebar sections.  Throws to
+`decknix--sidebar-diff-render\=', which then leaves the visible sidebar
+untouched; only paints driven by the idle worker can be abandoned."
+  (when (and decknix--sidebar-paint-abortable (input-pending-p))
+    (throw 'decknix--sidebar-paint-abort t)))
+
+(defun decknix--sidebar-paint-hidden-p ()
+  "Non-nil when the sidebar buffer exists but no window shows it."
+  (let ((buf (get-buffer agent-shell-workspace-sidebar-buffer-name)))
+    (and buf (not (get-buffer-window buf t)))))
+
+(defun decknix--sidebar-paint-wait (now)
+  "Seconds still to wait at NOW before the next paint may start, or 0."
+  (max 0 (- (+ decknix--sidebar-paint-last-end
+               (min decknix-sidebar-paint-max-spacing
+                    (* decknix-sidebar-paint-spacing-factor
+                       decknix--sidebar-paint-last-duration)))
+            now)))
 
 (defun decknix--sidebar-paint-now (refresh-fn)
   "Run REFRESH-FN as the real synchronous repaint.
 Clears the pending-timer slot and holds `decknix--sidebar-paint-in-progress'
 non-nil for the duration so the debounce advice paints through rather than
 re-deferring.  Errors in REFRESH-FN are swallowed so a single bad paint
-cannot leave the guard stuck."
-  (setq decknix--sidebar-paint-timer nil)
-  (setq decknix--sidebar-paint-generation (1+ decknix--sidebar-paint-generation))
-  (decknix--sidebar-with-status-memo
-    (let ((decknix--sidebar-paint-in-progress t))
-      (ignore-errors (funcall refresh-fn)))
-    ;; Re-baseline the idle-tick dirty check off this fresh paint, so the
-    ;; 2 s tick only repaints on changes that happen AFTER it (from any
-    ;; source), never redundantly re-painting what we just drew.  Inside
-    ;; the memo scope, so it reads the statuses the paint just drew rather
-    ;; than recomputing every one of them.
-    (setq decknix--sidebar-idle-last-fingerprint (decknix--sidebar-idle-fingerprint)
-          decknix--sidebar-idle-last-paint (float-time)))
-  ;; Universal eager-persist net: any state change reaches the sidebar
-  ;; through a repaint, so persist toggle state (debounced + dirty-
-  ;; checked, hence free when nothing changed) after each real paint.
-  ;; This covers hub-filter toggles that refresh but do not call the
-  ;; eager saver themselves, so they survive a hard daemon restart
-  ;; instead of waiting for the 30s idle save / a clean shutdown.
-  (when (fboundp 'decknix--sidebar-state-write)
-    (decknix--sidebar-state-write)))
+cannot leave the guard stuck.  A paint abandoned for pending input (see
+`decknix--sidebar-paint-checkpoint') is rescheduled and does not count as
+drawn."
+  (setq decknix--sidebar-paint-timer nil
+        decknix--sidebar-paint-pending nil
+        decknix--sidebar-paint-generation (1+ decknix--sidebar-paint-generation))
+  (let ((start (float-time))
+        (decknix--sidebar-paint-aborted nil))
+    (decknix--sidebar-with-status-memo
+      (let ((decknix--sidebar-paint-in-progress t)
+            (decknix--sidebar-paint-abortable t))
+        (ignore-errors (funcall refresh-fn)))
+      (setq decknix--sidebar-paint-last-end (float-time))
+      (if decknix--sidebar-paint-aborted
+          (decknix--sidebar-schedule-paint #'decknix--sidebar-paint-tick)
+        (setq decknix--sidebar-paint-last-duration
+              (- decknix--sidebar-paint-last-end start))
+        ;; Re-baseline the idle-tick dirty check off this fresh paint, so
+        ;; the 2 s tick only repaints on changes that happen AFTER it (from
+        ;; any source), never redundantly re-painting what we just drew.
+        ;; Inside the memo scope, so it reads the statuses the paint just
+        ;; drew rather than recomputing every one of them.
+        (setq decknix--sidebar-idle-last-fingerprint (decknix--sidebar-idle-fingerprint)
+              decknix--sidebar-idle-last-paint (float-time))))
+    ;; Universal eager-persist net: any state change reaches the sidebar
+    ;; through a repaint, so persist toggle state (debounced + dirty-
+    ;; checked, hence free when nothing changed) after each real paint.
+    ;; This covers hub-filter toggles that refresh but do not call the
+    ;; eager saver themselves, so they survive a hard daemon restart
+    ;; instead of waiting for the 30s idle save / a clean shutdown.
+    (when (and (not decknix--sidebar-paint-aborted)
+               (fboundp 'decknix--sidebar-state-write))
+      (decknix--sidebar-state-write))))
 
 (defun decknix--sidebar-paint-defer-p ()
   "Return non-nil when the sidebar repaint should defer instead of running now.
@@ -168,10 +242,26 @@ When the paint should defer (see `decknix--sidebar-paint-defer-p' — typing in
 progress, or a minibuffer/picker open), re-defer onto a fresh idle timer rather
 than run the multi-hundred-ms (to multi-second) synchronous paint ahead of the
 user's interaction.  The paint then lands on the next genuine idle, so
-continuous typing and picker navigation yield zero paints and never a hitch."
-  (if (decknix--sidebar-paint-defer-p)
-      (decknix--sidebar-schedule-paint #'decknix--sidebar-paint-tick)
-    (decknix--sidebar-paint-now #'agent-shell-workspace-sidebar-refresh)))
+continuous typing and picker navigation yield zero paints and never a hitch.
+
+A hidden sidebar is only marked pending, and a paint too soon after a slow
+one waits out the gap first; see `decknix-sidebar-paint-spacing-factor'."
+  (let* ((now (float-time))
+         (wait (decknix--sidebar-paint-wait now)))
+    (cond
+     ((decknix--sidebar-paint-defer-p)
+      (decknix--sidebar-schedule-paint #'decknix--sidebar-paint-tick))
+     ((and (decknix--sidebar-paint-hidden-p)
+           (< (- now decknix--sidebar-idle-last-paint)
+              decknix-sidebar-idle-force-interval))
+      (setq decknix--sidebar-paint-timer nil
+            decknix--sidebar-paint-pending t))
+     ((> wait 0)
+      (decknix--sidebar-cancel-paint)
+      (setq decknix--sidebar-paint-timer
+            (run-with-timer wait nil #'decknix--sidebar-schedule-paint
+                            #'decknix--sidebar-paint-tick)))
+     (t (decknix--sidebar-paint-now #'agent-shell-workspace-sidebar-refresh)))))
 
 ;; -- Dirty-checked idle tick (replaces the blind 2 s repaint timer) --
 ;;
@@ -251,13 +341,15 @@ Repaints (through the normal debounced refresh) only when an input
 changed or the force interval elapsed, so an idle sidebar stops pegging
 `redisplay_internal'."
   (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
-             (decknix--sidebar-idle-should-paint-p
-              (decknix--sidebar-with-status-memo
-                (decknix--sidebar-idle-fingerprint))
-              decknix--sidebar-idle-last-fingerprint
-              decknix--sidebar-idle-last-paint
-              (float-time)
-              decknix-sidebar-idle-force-interval))
+             (or (and decknix--sidebar-paint-pending
+                      (not (decknix--sidebar-paint-hidden-p)))
+                 (decknix--sidebar-idle-should-paint-p
+                  (decknix--sidebar-with-status-memo
+                    (decknix--sidebar-idle-fingerprint))
+                  decknix--sidebar-idle-last-fingerprint
+                  decknix--sidebar-idle-last-paint
+                  (float-time)
+                  decknix-sidebar-idle-force-interval)))
     (agent-shell-workspace-sidebar-refresh)))
 
 (defun decknix--sidebar-install-idle-tick (&rest _)
@@ -361,7 +453,9 @@ Render ORIG-FN's fresh content into a scratch buffer -- with the
 sidebar's own window selected so `window-width'-based truncation stays
 correct -- then apply only the changed lines to the visible buffer via
 `decknix--sidebar-diff-apply'.  Falls back to a direct render when the
-sidebar buffer is not live."
+sidebar buffer is not live.  A render abandoned at a
+`decknix--sidebar-paint-checkpoint' is not applied at all, so the visible
+sidebar never shows half a paint."
   (let* ((target (current-buffer))
          (win (get-buffer-window target))
          (src (get-buffer-create " *decknix-sidebar-render*")))
@@ -371,10 +465,13 @@ sidebar buffer is not live."
         (setq-local inhibit-read-only t)
         (erase-buffer))
       (cl-flet ((paint () (with-current-buffer src (apply orig-fn args))))
-        (if (window-live-p win)
-            (with-selected-window win (paint))
-          (paint)))
-      (decknix--sidebar-diff-apply target src))))
+        (if (catch 'decknix--sidebar-paint-abort
+              (if (window-live-p win)
+                  (with-selected-window win (paint))
+                (paint))
+              nil)
+            (setq decknix--sidebar-paint-aborted t)
+          (decknix--sidebar-diff-apply target src))))))
 
 ;; -- Live-section render cache --------------------------------------
 ;;

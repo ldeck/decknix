@@ -6533,6 +6533,14 @@ duration -- the most important number on this branch."
         (declare-function decknix-sidebar-tile-cycle "decknix-sidebar-tile")
         (declare-function decknix--sidebar-maybe-apply-tile-pref "decknix-sidebar-tile")
 
+        ;; Between sections the render may be abandoned for pending input
+        ;; (see `decknix--sidebar-paint-checkpoint').  Guarded because the
+        ;; paint scheduler is only loaded with the hub.
+        (defun decknix--sidebar-render-checkpoint ()
+          (when (fboundp 'decknix--sidebar-paint-checkpoint)
+            (decknix--sidebar-paint-checkpoint)))
+        (declare-function decknix--sidebar-paint-checkpoint "decknix-hub-sidebar-paint" ())
+
         (advice-add 'agent-shell-workspace-sidebar--render :override
           (lambda ()
             "Render sidebar with hub data, live sessions, saved sessions, and key footer."
@@ -6589,7 +6597,9 @@ duration -- the most important number on this branch."
                     ;; Reviews and WIP each have ways to hide one.
                     (when (fboundp 'decknix--layout-render-needs-you)
                       (setq line-num (decknix--layout-render-needs-you line-num w)))
+                    (decknix--sidebar-render-checkpoint)
                     (setq line-num (decknix--layout-render-reviews line-num w))
+                    (decknix--sidebar-render-checkpoint)
                     ;; WIP nests my PRs and worktrees under the session
                     ;; working on them, and puts the rest in Dormant.  The
                     ;; PR-centric `decknix--hub-render-wip' is NOT called:
@@ -6603,6 +6613,8 @@ duration -- the most important number on this branch."
                 (when (fboundp 'decknix--hub-render-wip)
                   (setq line-num (decknix--hub-render-wip line-num))))
 
+              (decknix--sidebar-render-checkpoint)
+
               ;; ── Repos: sync failures needing attention ──
               (when (fboundp 'decknix--repo-sync-render)
                 (setq line-num (decknix--repo-sync-render line-num)))
@@ -6611,9 +6623,13 @@ duration -- the most important number on this branch."
               (when (fboundp 'decknix--hub-render-status-hint)
                 (setq line-num (decknix--hub-render-status-hint line-num)))
 
+              (decknix--sidebar-render-checkpoint)
+
               ;; ── Hub: Tasks (Jira) ──
               (when (fboundp 'decknix--hub-render-tasks)
                 (setq line-num (decknix--hub-render-tasks line-num)))
+
+              (decknix--sidebar-render-checkpoint)
 
               ;; ── Tokens: remaining quota per model account ──
               (when (and (bound-and-true-p decknix-sidebar-layout-enable)

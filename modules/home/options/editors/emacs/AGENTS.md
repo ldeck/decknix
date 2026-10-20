@@ -369,6 +369,21 @@ fighting an open picker.  A cheap visibility check first
 (`get-buffer-window`) so a hidden buffer's timer costs nothing (see
 `decknix--support-dashboard-visible-p` / `-tick`).
 
+A paint that can run long must also be **paced and abandonable**, since
+the pre-start check alone lets a two-second paint fill every idle gap.
+The sidebar (`decknix-hub-sidebar-paint.el`) is the reference:
+
+- a hidden sidebar is marked pending, not painted (except once per force
+  interval, for its side effects), and painted when shown;
+- the next paint waits `decknix-sidebar-paint-spacing-factor` times the
+  last paint's duration;
+- the render goes to a scratch buffer and calls
+  `decknix--sidebar-paint-checkpoint` between sections, so input arriving
+  mid-paint abandons it without the visible buffer ever showing half;
+- per-paint caches (the status memo, the session snapshot) are scoped to
+  the paint, not given a TTL, so non-display callers never see a stale
+  value.
+
 ### Don't stack completion UIs
 
 `corfu-auto` inside a `vertico`-driven minibuffer added ~50–100 ms per
