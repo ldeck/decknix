@@ -6898,8 +6898,13 @@ duration -- the most important number on this branch."
                    (get-buffer agent-shell-workspace-sidebar-buffer-name)))
               (when (buffer-live-p sidebar-buf)
                 (with-current-buffer sidebar-buf
-                  (get-text-property (line-beginning-position)
-                                     'agent-shell-workspace-buffer))))))
+                  ;; The session-first layout names its session by
+                  ;; buffer NAME too; without the fallback `a k', `v' and
+                  ;; RET all refused a WIP row.
+                  (if (fboundp 'decknix-layout-buffer-at)
+                      (decknix-layout-buffer-at (line-beginning-position))
+                    (get-text-property (line-beginning-position)
+                                       'agent-shell-workspace-buffer)))))))
 
         ;; -- Fix sidebar kill: upstream uses comint-send-eof which calls
         ;; comint-send-input, searching for the prompt regexp.  If the prompt

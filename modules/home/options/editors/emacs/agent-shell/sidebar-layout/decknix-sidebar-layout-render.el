@@ -380,6 +380,44 @@ calling it from the render path cannot queue an audit per paint."
    "\\`\\*\\(Claude\\|Pi\\|Auggie\\|Codex\\|Gemini\\)?:? ?\\|\\*\\'" ""
    (or buffer-name "")))
 
+(defun decknix--layout-session-buffer (session)
+  "Return SESSION's live agent buffer, or nil."
+  (let ((buf (and session (get-buffer (or (nth 0 session) "")))))
+    (and (buffer-live-p buf) buf)))
+
+(defun decknix-layout-buffer-at (pos)
+  "Return the live agent buffer the sidebar row at POS stands for, or nil.
+
+Rows rendered by this layout name their session three ways, and upstream
+only knew the first, so its goto refused every WIP row."
+  (let ((b (or (get-text-property pos 'agent-shell-workspace-buffer)
+               (get-text-property pos 'decknix-layout-buffer)
+               (nth 0 (get-text-property pos 'decknix-layout-session)))))
+    (when (stringp b) (setq b (get-buffer b)))
+    (and (bufferp b) (buffer-live-p b) b)))
+
+(defun decknix-layout-pr-live-sessions (pr sessions)
+  "Return the live buffers of those SESSIONS covering review PR."
+  (delq nil (mapcar #'decknix--layout-session-buffer
+                    (decknix--layout-pr-sessions sessions (plist-get pr :key)))))
+
+(defun decknix-layout-ret-action (pos)
+  "Return what RET should do on a Reviews PR row at POS, or nil.
+
+  (goto BUF)     exactly one live session covers the PR: go to it
+  (choose BUFS)  several do: let the user pick
+  nil            none, or not a Reviews PR row: the caller's default
+
+The session is what wants attention on a covered PR; the PR itself is a
+click away on M-RET.  RET used to open GitHub, which is the one thing a
+reader looking at a blocked session did not want."
+  (let ((pr (get-text-property pos 'decknix-layout-pr)))
+    (when pr
+      (let ((bufs (decknix-layout-pr-live-sessions pr (decknix--layout-sessions))))
+        (cond ((null bufs) nil)
+              ((null (cdr bufs)) (list 'goto (car bufs)))
+              (t (list 'choose bufs)))))))
+
 (defun decknix--layout-render-reviews (line-num width)
   "Render the Reviews section.  Returns the updated LINE-NUM."
   (let* ((sessions (decknix--layout-sessions))
@@ -427,6 +465,7 @@ calling it from the render path cannot queue an audit per paint."
                                                (alist-get 'updated decknix-sidebar-layout-group-faces))
                                               (t 'font-lock-comment-face))
                                   'decknix-layout-pr pr
+                                  'help-echo "RET its session (or a choice) · M-RET open the PR"
                                   'decknix-hub-type 'request
                                   'decknix-hub-repo (alist-get 'repo (plist-get pr :item))
                                   'decknix-hub-number (plist-get pr :number)
@@ -453,7 +492,9 @@ calling it from the render path cannot queue an audit per paint."
                                      (decknix--layout-short-name (nth 0 cs)))
                              'face 'error
                              'decknix-layout-session cs
-                             'decknix-layout-buffer (nth 0 cs))
+                             'decknix-layout-buffer (nth 0 cs)
+                             'agent-shell-workspace-buffer
+                             (decknix--layout-session-buffer cs))
                             "\n")
                     (setq line-num (1+ line-num))
                     (setq line-num (decknix--layout-render-subagents
@@ -512,7 +553,12 @@ hiding the sharing."
           (insert (propertize (concat left (make-string pad ?\s) right)
                               'face (decknix--layout-state-face state)
                               'decknix-layout-session session
-                              'decknix-layout-buffer (nth 0 session))
+                              'decknix-layout-buffer (nth 0 session)
+                              ;; The property upstream's goto, kill and
+                              ;; rename read.  Without it RET on a WIP row
+                              ;; said "No live agent buffer at point".
+                              'agent-shell-workspace-buffer
+                              (decknix--layout-session-buffer session))
                   "\n")
           (setq line-num (1+ line-num))
           (setq line-num (decknix--layout-render-subagents
