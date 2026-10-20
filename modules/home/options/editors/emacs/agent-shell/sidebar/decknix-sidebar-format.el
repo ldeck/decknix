@@ -89,7 +89,7 @@ filter is off and dropped when a cutoff is active."
 ;; -- Sidebar header line ---------------------------------------------
 
 (defvar decknix-sidebar-header-hints
-  '(("RET" . "open") ("TAB" . "expand") ("?" . "keys"))
+  '(("j" . "next") ("RET" . "open") ("TAB" . "expand") ("?" . "keys"))
   "Key hints the sidebar header offers, in display order.
 
 The sidebar had dozens of keys and the only pointer to any of them was

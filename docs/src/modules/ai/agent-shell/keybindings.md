@@ -162,6 +162,10 @@ narrows; `?` is always the last to go, and opens the full reference.
 
 | Key | Action |
 |-----|--------|
+| `j` | Move to the next session that needs you (`netfail`, then `waiting`, then `asking`, then the longest wait); again for the one after |
+| `J` | Go straight to that session |
+| `n` / `p` | Next / previous row that has an action, skipping headers and counts |
+| `o` | Restore a previous session (was `p`) |
 | `RET` | Session rows: go to the session. Reviews PR rows: go to the session covering the PR, ask which when several do, or open the PR's action menu when none does |
 | `M-RET` | Primary action: open the row's PR in the browser |
 | `TAB` | Expand or collapse the Reviews group, or held items, at point |
@@ -206,7 +210,7 @@ recommended-model-by-task table and the per-purpose
 |-----------|--------|--------|
 | `C-c m` | `C-c A m` | Manager dashboard toggle |
 | `C-c w` | `C-c A w` | Workspace tab toggle |
-| `C-c j` | `C-c A j` | Jump to session needing attention |
+| `C-c j` | `C-c A j` | Jump to the next session that needs you: `netfail`, then `waiting`, then `asking`, oldest wait first. Repeat to walk the queue; `C-u` to choose. Selects the tab already showing the session |
 | — | `C-c A S` | MCP server list |
 
 ## Help

@@ -1275,10 +1275,14 @@ Note the two on-rotation Support tools live under the `z' prefix
 (`z d' / `z w') precisely so the single keys `D' and `W' can mean what
 they mean in the sidebar itself (cycle layout / worktree menu)."
   ["Navigate"
+   ("j"   "Next needing you" decknix-layout-goto-next-attention)
+   ("J"   "Go to it"      decknix-layout-jump-next-attention)
+   ("n"   "Next row"      decknix-layout-next-row)
+   ("p"   "Previous row"  decknix-layout-prev-row)
    ("r"   "Requests"      decknix-sidebar-goto-requests)
    ("w"   "WIP"           decknix-sidebar-goto-wip)
    ("l"   "Live"          decknix-sidebar-goto-live)
-   ("p"   "Previous"      decknix-sidebar-goto-previous)
+   ("o"   "Previous (older)" decknix-sidebar-goto-previous)
    ("P"   "Restore previous" decknix--sidebar-restore-all-previous)
    ("s"   "Sessions…"     decknix-sidebar-sessions)]
   ["Quick"

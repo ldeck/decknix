@@ -18,6 +18,7 @@
 ;;; Code:
 
 (require 'decknix-sidebar-layout)
+(require 'decknix-attention)
 (require 'decknix-hub-icons)
 (require 'cl-lib)
 (require 'seq)
@@ -417,6 +418,119 @@ reader looking at a blocked session did not want."
         (cond ((null bufs) nil)
               ((null (cdr bufs)) (list 'goto (car bufs)))
               (t (list 'choose bufs)))))))
+
+(defconst decknix-layout-actionable-props
+  '(agent-shell-workspace-buffer decknix-layout-buffer decknix-layout-session
+    decknix-layout-repo decknix-layout-pr decknix-hub-type
+    decknix-layout-expand-key decknix-layout-subagent decknix-layout-worktree
+    decknix-layout-claim decknix-layout-orphan-prune decknix-previous-session
+    decknix-sidebar-saved-session decknix-repo-sync-problem
+    decknix-repo-sync-collapsed)
+  "Row properties that give RET something to do.
+`n' and `p' stop only on rows carrying one, so headers, blank lines and
+counted tails are skipped.")
+
+(defun decknix-layout-actionable-p (pos)
+  "Return non-nil when the row at POS has an action."
+  (seq-some (lambda (prop) (get-text-property pos prop))
+            decknix-layout-actionable-props))
+
+(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
+
+(defun decknix-layout--call-in-sidebar (fn)
+  "Call FN with the sidebar current, and its window selected when shown.
+
+These commands are also offered from the `?' menu, which runs its
+suffixes from the main window; moving point there would move it in the
+wrong buffer."
+  (let* ((buf (get-buffer agent-shell-workspace-sidebar-buffer-name))
+         (win (and buf (get-buffer-window buf t))))
+    (cond ((or (null buf) (eq (current-buffer) buf)) (funcall fn))
+          (win (with-selected-window win (funcall fn)))
+          (t (with-current-buffer buf (funcall fn))))))
+
+(defun decknix-layout-next-row (&optional n)
+  "Move to the Nth next row that has an action; backwards when N is negative."
+  (interactive "p")
+  (decknix-layout--call-in-sidebar
+   (lambda () (decknix-layout--next-row-1 (or n 1)))))
+
+(defun decknix-layout--next-row-1 (n)
+  "Move to the Nth next actionable row in the current buffer."
+  (let* ((n (or n 1))
+         (step (if (< n 0) -1 1))
+         (count (abs n))
+         (found (line-beginning-position)))
+    (save-excursion
+      (beginning-of-line)
+      (while (and (> count 0) (zerop (forward-line step)) (not (eobp)))
+        (when (decknix-layout-actionable-p (point))
+          (setq found (point) count (1- count)))))
+    (goto-char found)))
+
+(defun decknix-layout-prev-row (&optional n)
+  "Move to the Nth previous row that has an action."
+  (interactive "p")
+  (decknix-layout-next-row (- (or n 1))))
+
+(defun decknix-layout-row-buffers (pos)
+  "Return the live session buffers the row at POS stands for."
+  (let ((buf (decknix-layout-buffer-at pos))
+        (pr (get-text-property pos 'decknix-layout-pr)))
+    (cond (buf (list buf))
+          (pr (decknix-layout-pr-live-sessions pr (decknix--layout-sessions))))))
+
+(defun decknix-layout--find-row (buffer)
+  "Return the start of the best sidebar row standing for BUFFER, or nil.
+A session's own row beats a PR row that merely covers it."
+  (let (pr-row)
+    (save-excursion
+      (goto-char (point-min))
+      (catch 'found
+        (while (not (eobp))
+          (let ((bol (point)))
+            (cond ((eq buffer (decknix-layout-buffer-at bol)) (throw 'found bol))
+                  ((and (null pr-row) (get-text-property bol 'decknix-layout-pr)
+                        (memq buffer (decknix-layout-row-buffers bol)))
+                   (setq pr-row bol))))
+          (forward-line 1))
+        pr-row))))
+
+(defun decknix-layout--next-attention-target ()
+  "Return the attention buffer after the one at point, in jump order."
+  (let* ((ordered (decknix-attention-buffers))
+         (here (seq-find (lambda (b) (memq b ordered))
+                         (decknix-layout-row-buffers (line-beginning-position)))))
+    (decknix-attention-next ordered here)))
+
+(defun decknix-layout-goto-next-attention ()
+  "Move point to the next session that needs you.
+The order is the attention jump's: `netfail', `waiting', `asking', then
+the longest wait.  `J' goes to the session itself."
+  (interactive)
+  (decknix-layout--call-in-sidebar #'decknix-layout--goto-next-attention-1))
+
+(defun decknix-layout--goto-next-attention-1 ()
+  "Move point to the next attention session's row in the current buffer."
+  (let ((target (decknix-layout--next-attention-target)))
+    (if (null target)
+        (message "No session needs you")
+      (let ((row (decknix-layout--find-row target)))
+        (if row
+            (progn (goto-char row)
+                   (message "%s: %s" (decknix--layout-short-name (buffer-name target))
+                            (or (decknix-attention-observed-state target) "needs you")))
+          (message "%s needs you but has no row here; J goes to it"
+                   (decknix--layout-short-name (buffer-name target))))))))
+
+(defun decknix-layout-jump-next-attention ()
+  "Go straight to the session `j' would have moved to."
+  (interactive)
+  (let ((target (decknix-layout--call-in-sidebar
+                 #'decknix-layout--next-attention-target)))
+    (if target
+        (decknix-attention-display target)
+      (message "No session needs you"))))
 
 (defun decknix--layout-render-reviews (line-num width)
   "Render the Reviews section.  Returns the updated LINE-NUM."

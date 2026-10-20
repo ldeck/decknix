@@ -43,6 +43,7 @@
 (declare-function agent-shell-workspace--buffer-status "ext:agent-shell-workspace")
 (declare-function decknix-agent-buffer-status "decknix-agent-auto-close" (buffer))
 (defvar decknix--hub-dir)
+(declare-function decknix-attention-observe "decknix-attention" (buffer state &optional now))
 (defvar agent-shell-workspace-sidebar--refresh-timer)
 
 (defvar decknix-sidebar-paint-idle-delay 0.6
@@ -176,11 +177,15 @@ statuses -- the two things the blind 2 s timer existed to catch.  A few
    (when (and (fboundp 'agent-shell-buffers)
               (fboundp 'agent-shell-workspace--buffer-status))
      (mapcar (lambda (b)
-               (cons (buffer-name b)
-                     (ignore-errors
-                       (if (fboundp 'decknix-agent-buffer-status)
-                           (decknix-agent-buffer-status b)
-                         (agent-shell-workspace--buffer-status b)))))
+               (let ((status (ignore-errors
+                               (if (fboundp 'decknix-agent-buffer-status)
+                                   (decknix-agent-buffer-status b)
+                                 (agent-shell-workspace--buffer-status b)))))
+                 ;; Already computed, so recording it is free: it keeps the
+                 ;; attention counter current between sidebar repaints.
+                 (when (fboundp 'decknix-attention-observe)
+                   (decknix-attention-observe b status))
+                 (cons (buffer-name b) status)))
              (agent-shell-buffers)))))
 
 (defun decknix--sidebar-idle-should-paint-p (fingerprint last-fingerprint

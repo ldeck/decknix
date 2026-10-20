@@ -46,7 +46,7 @@
 (declare-function shell-maker-submit "ext:shell-maker")
 (declare-function shell-maker--busy "ext:shell-maker")
 (declare-function agent-shell-interrupt "ext:agent-shell")
-(declare-function agent-shell-attention-jump "ext:agent-shell")
+(declare-function decknix-attention-jump "decknix-attention" (&optional prompt))
 (declare-function agent-shell-workspace-toggle
                   "ext:agent-shell-workspace")
 (declare-function decknix-context-toggle-or-panel
@@ -260,9 +260,9 @@ Toggle with \\[decknix-agent-compose-toggle-sticky] in the compose buffer."
 (defun decknix-compose-jump ()
   "Jump to next pending session (forwarded to parent)."
   (interactive)
-  (if (fboundp 'agent-shell-attention-jump)
-      (call-interactively 'agent-shell-attention-jump)
-    (message "agent-shell-attention not loaded")))
+  (if (fboundp 'decknix-attention-jump)
+      (call-interactively 'decknix-attention-jump)
+    (message "decknix-attention not loaded")))
 
 (defun decknix-compose-workspace-toggle ()
   "Toggle Agents workspace from a compose buffer.

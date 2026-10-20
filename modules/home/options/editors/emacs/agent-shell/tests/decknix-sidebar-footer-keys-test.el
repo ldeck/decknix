@@ -53,20 +53,23 @@ the alphabetical-by-label ordering the footer advertises."
   "Without previous sessions, nav alist omits `p' / `P'."
   (let ((decknix--sidebar-previous-sessions nil))
     (should (equal
-             '(("r" . "requests")
+             '(("j" . "needs you")
+               ("r" . "requests")
                ("w" . "wip")
                ("l" . "live")
                ("s" . "sessions…"))
              (decknix--sidebar-footer-nav-keys)))))
 
 (ert-deftest decknix-sidebar-footer-keys--nav-keys-with-previous ()
-  "With previous sessions, nav alist inserts `p' / `P' before `s'."
+  "With previous sessions, nav alist inserts `o' / `P' before `s'.
+`o', not `p': `n' and `p' move between rows."
   (let ((decknix--sidebar-previous-sessions '(:dummy)))
     (should (equal
-             '(("r" . "requests")
+             '(("j" . "needs you")
+               ("r" . "requests")
                ("w" . "wip")
                ("l" . "live")
-               ("p" . "restore…")
+               ("o" . "restore…")
                ("P" . "restore all")
                ("s" . "sessions…"))
              (decknix--sidebar-footer-nav-keys)))))
@@ -84,7 +87,7 @@ the alphabetical-by-label ordering the footer advertises."
     (let* ((alist (decknix--sidebar-footer-nav-keys))
            (keys (mapcar #'car alist))
            (s-pos (cl-position "s" keys :test #'string=))
-           (p-pos (cl-position "p" keys :test #'string=))
+           (p-pos (cl-position "o" keys :test #'string=))
            (P-pos (cl-position "P" keys :test #'string=)))
       (should (and s-pos p-pos P-pos))
       (should (= p-pos (- s-pos 2)))
