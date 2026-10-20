@@ -1051,6 +1051,8 @@ Order: `hide' → `show' → `mentioned' → `hide'.  See
 Long enough to cover one sidebar render pass -- which is the point -- and
 short enough that a session opened or closed shows up immediately.")
 
+(declare-function decknix-attention-observe "decknix-attention" (buffer state &optional now))
+
 (defun decknix--hub-review-session-snapshot ()
   "Return the live agent sessions as (BUFFER-NAME TAGS REVIEW-PR) triples.
 
@@ -1091,7 +1093,13 @@ O(requests x sessions) pure comparisons; `covers-p' itself is ~3us."
                                  ;; separate section with no stated relation.
                                  (bound-and-true-p decknix--agent-session-workspace)
                                  ck)))))
-                   (agent-shell-buffers)))))))
+                   (agent-shell-buffers)))))
+    ;; The states were just computed; recording them here is what lets the
+    ;; attention jump say how long each session has been waiting.
+    (when (fboundp 'decknix-attention-observe)
+      (dolist (sn decknix--hub-review-session-snapshot)
+        (decknix-attention-observe (get-buffer (nth 0 sn)) (nth 3 sn))))
+    decknix--hub-review-session-snapshot))
 
 (defconst decknix--hub-request-session-faces
   '(("waiting" . (:foreground "#ff5f5f" :weight bold))

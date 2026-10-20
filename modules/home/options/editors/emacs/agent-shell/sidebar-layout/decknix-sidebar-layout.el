@@ -35,13 +35,15 @@
 (require 'seq)
 (require 'decknix-session-assoc)
 (require 'decknix-hub-icons)
+(require 'decknix-attention)
 (defvar decknix--agent-assoc-backfilled)
 (require 'subr-x)
 
-(defconst decknix-sidebar-layout-attention-states '("waiting" "asking" "netfail")
+(defconst decknix-sidebar-layout-attention-states decknix-attention-states
   "States meaning a session is blocked on the user.
-Same set the Requests filters treat as an attention override, so the two
-cannot drift into disagreeing about what \"needs you\" means.")
+An alias for `decknix-attention-states', which the attention jump and
+counter read, so the sidebar cannot drift into disagreeing with them about
+what \"needs you\" means.")
 
 (defconst decknix-sidebar-layout-state-order
   '("netfail" "waiting" "asking" "working" "finished" "ready" "closing")

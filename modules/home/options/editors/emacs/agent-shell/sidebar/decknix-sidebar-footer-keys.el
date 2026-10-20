@@ -16,7 +16,7 @@
 ;;
 ;;   `decknix--sidebar-footer-nav-keys'
 ;;       Returns the Navigate alist `((KEY . LABEL) ...)' for the
-;;       footer.  Includes the `p' / `P' restore entries only when
+;;       footer.  Includes the `o' / `P' restore entries only when
 ;;       `decknix--sidebar-previous-sessions' is non-nil so the
 ;;       footer doesn't advertise restore verbs that would no-op.
 ;;
@@ -45,11 +45,12 @@
 (defun decknix--sidebar-footer-nav-keys ()
   "Build the Navigate key alist for the footer."
   (append
-   '(("r"   . "requests")
+   '(("j"   . "needs you")
+     ("r"   . "requests")
      ("w"   . "wip")
      ("l"   . "live"))
    (when decknix--sidebar-previous-sessions
-     '(("p"   . "restore…")
+     '(("o"   . "restore…")
        ("P"   . "restore all")))
    '(("s"   . "sessions…"))))
 

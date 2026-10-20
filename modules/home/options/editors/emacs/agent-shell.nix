@@ -971,6 +971,19 @@ let
     ];
   };
 
+  # The one definition of "a session needs you": the attention states and
+  # their ranking, when each session entered one, and the tab-aware jump
+  # (`C-c A j', sidebar `J').  Replaces upstream agent-shell-attention's
+  # end_turn model, which disagreed with the sidebar about what needed you.
+  decknix-attention-el = mkEmacsTestedPackage {
+    pname = "decknix-attention";
+    src = ./agent-shell/attention;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-attention-test.el"
+    ];
+  };
+
   # Optional focus-stealing for backgrounded sessions.  Pure decision
   # layer (3-state cycle + attention-edge / new-session detectors); the
   # frame raise is the only side effect, invoked from the header status
@@ -1989,7 +2002,10 @@ let
     #
     # `decknix-session-assoc' supplies the observed worktree association
     # the claim rule now prefers over tags.
-    packageRequires = [ decknix-hub-icons-el decknix-session-assoc-el ];
+    packageRequires = [ decknix-hub-icons-el decknix-session-assoc-el
+                        # The attention states, so the sidebar and the
+                        # jump share one definition.
+                        decknix-attention-el ];
     testFiles = [ "decknix-sidebar-layout-test.el" ];
   };
 
@@ -2003,7 +2019,7 @@ let
     # vocabulary the old sidebar read at a glance.  Pure formatting, so
     # the dependency carries no side effects.
     packageRequires = [ decknix-sidebar-layout-el decknix-hub-icons-el
-                        decknix-session-assoc-el ];
+                        decknix-session-assoc-el decknix-attention-el ];
     testFiles = [ "decknix-sidebar-layout-render-test.el" ];
   };
 
@@ -3424,6 +3440,7 @@ in
           decknix-agent-help-el
           decknix-agent-header-el
           decknix-agent-tab-status-el
+          decknix-attention-el
           decknix-focus-el
           decknix-agent-table-el
           decknix-agent-copy-region-el
@@ -4152,6 +4169,12 @@ in
         ;; shell startup hook below (which lives in the heredoc per
         ;; AGENTS.md Rule 2: top-level side-effects belong in main).
         (require 'decknix-agent-header)
+
+        ;; The one definition of "needs you" (netfail / waiting / asking) and
+        ;; the tab-aware jump to the next such session (`C-c A j', bound with
+        ;; the rest of the agent prefix map).
+        (require 'decknix-attention)
+        (declare-function decknix-attention-jump "decknix-attention" (&optional prompt))
 
         ;; Tint tab-bar tabs by the status of the single agent they hold.  The
         ;; tab-bar keymap is uncached (rebuilt each redisplay), so the header's
@@ -5256,7 +5279,7 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c A S" "MCP servers"
             "C-c A m" "manager"
             "C-c A w" "workspace"
-            "C-c A j" "attention jump"
+            "C-c A j" "next session needing you"
             "C-c A o" "sidebar focus"
             "C-c A O" "sidebar toggle (this tab)"
             "C-c A q" "quit session"
@@ -5293,6 +5316,9 @@ ${optionalString cfg.tableOverlay.enable ''
         (define-key decknix-agent-prefix-map (kbd "n") 'decknix-agent-session-new)          ; New session (guided)
         (define-key decknix-agent-prefix-map (kbd "f") 'decknix-agent-session-fork)         ; Fork session (inherit ws+tags)
         (define-key decknix-agent-prefix-map (kbd "o") 'decknix-focus-sidebar)               ; Jump to the sidebar window
+        ;; Not with the optional upstream tracker further down, so it works
+        ;; whether or not that is enabled.
+        (define-key decknix-agent-prefix-map (kbd "j") #'decknix-attention-jump)            ; Next session needing you
         (define-key decknix-agent-prefix-map (kbd "O") 'decknix-sidebar-visibility-toggle)   ; Toggle sidebar visibility (this tab)
         (define-key decknix-agent-prefix-map (kbd "q") 'decknix-agent-session-quit)         ; Quit/close session
         (define-key decknix-agent-prefix-map (kbd "?") 'decknix-agent-help-map)           ; Help sub-prefix
@@ -6969,8 +6995,19 @@ duration -- the most important number on this branch."
           (kbd "w") #'decknix-sidebar-goto-wip)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "l") #'decknix-sidebar-goto-live)
+        ;; `o' (older sessions) restores a previous session: `p' now pairs
+        ;; with `n' to move between rows, as on the Review Board.
         (define-key agent-shell-workspace-sidebar-mode-map
-          (kbd "p") #'decknix-sidebar-goto-previous)
+          (kbd "o") #'decknix-sidebar-goto-previous)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "n") #'decknix-layout-next-row)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "p") #'decknix-layout-prev-row)
+        ;; `j' moves to the next session needing you, `J' goes to it.
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "j") #'decknix-layout-goto-next-attention)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "J") #'decknix-layout-jump-next-attention)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "a") (lambda () (interactive)
                       (decknix--sidebar-call-transient #'decknix-sidebar-actions)))
@@ -7927,8 +7964,10 @@ returns a fresh plist so the caller's is not mutated."
         (setq agent-shell-attention-render-function
               #'agent-shell-attention-render-active)
 
-        ;; Jump to session needing attention
-        (define-key decknix-agent-prefix-map (kbd "j") 'agent-shell-attention-jump)
+        ;; `C-c A j' is NOT bound here: it jumps by decknix's attention
+        ;; states (`decknix-attention-jump', bound with the prefix map above).
+        ;; Upstream's own jump follows its end_turn pending list, which
+        ;; disagreed with the sidebar about what needed you.
       ''
       + optionalString cfg.templates.enable ''
 
@@ -8234,8 +8273,8 @@ returns a fresh plist so the caller's is not mutated."
                     ;; every sidebar action from any agent-shell buffer.
                     (when (fboundp 'decknix-sidebar-transient)
                       (local-set-key (kbd "C-c W") 'decknix-sidebar-transient))
-                    (when (fboundp 'agent-shell-attention-jump)
-                      (local-set-key (kbd "C-c j") 'agent-shell-attention-jump))
+                    (when (fboundp 'decknix-attention-jump)
+                      (local-set-key (kbd "C-c j") 'decknix-attention-jump))
                     ;; C-c i — context sub-prefix in-buffer
                     (when (fboundp 'decknix-context-panel)
                       (let ((map (make-sparse-keymap)))

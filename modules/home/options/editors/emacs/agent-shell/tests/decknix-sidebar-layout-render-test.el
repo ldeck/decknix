@@ -417,5 +417,63 @@ answered \"No live agent buffer at point\"."
   (should-not (decknix-lr-test--ret-on-pr
                "upside#1" '(("*Claude: not-live*" nil ("upside#1") "asking")))))
 
+;; --- row motion and the next session needing you ---------------------
+
+(defun decknix-lr-test--rows ()
+  "Insert a sidebar-like buffer: header, session rows, a tail, a PR row."
+  (insert " Needs you\n"
+          (propertize " ⚑  a" 'decknix-layout-buffer "*Claude: a*") "\n"
+          "\n"
+          (propertize " ·  3 quiet" 'face 'shadow) "\n"
+          (propertize " ⚑  b" 'decknix-layout-buffer "*Claude: b*") "\n"
+          (propertize "    #9" 'decknix-layout-pr '(:key "r#9")) "\n")
+  (goto-char (point-min)))
+
+(ert-deftest decknix-layout-render--n-and-p-skip-rows-without-an-action ()
+  (with-temp-buffer
+    (decknix-lr-test--rows)
+    (decknix-layout-next-row)
+    (should (looking-at " ⚑  a"))
+    (decknix-layout-next-row)
+    (should (looking-at " ⚑  b"))
+    (decknix-layout-next-row)
+    (should (looking-at "    #9"))
+    ;; At the last actionable row, n stays put rather than running off.
+    (decknix-layout-next-row)
+    (should (looking-at "    #9"))
+    (decknix-layout-prev-row)
+    (should (looking-at " ⚑  b"))
+    (decknix-layout-prev-row 2)
+    (should (looking-at " ⚑  a"))))
+
+(ert-deftest decknix-layout-render--j-walks-sessions-in-jump-order ()
+  (decknix-lr-test--with-buffers '("*Claude: a*" "*Claude: b*")
+    (let ((decknix-attention--seen (make-hash-table :test 'eq :weakness 'key)))
+      (cl-letf (((symbol-function 'decknix--hub-review-session-snapshot)
+                 (lambda () '(("*Claude: a*" nil nil "asking")
+                              ("*Claude: b*" nil nil "netfail")))))
+        (with-temp-buffer
+          (decknix-lr-test--rows)
+          ;; netfail outranks asking, so b first, then a, then round again.
+          (decknix-layout-goto-next-attention)
+          (should (looking-at " ⚑  b"))
+          (decknix-layout-goto-next-attention)
+          (should (looking-at " ⚑  a"))
+          (decknix-layout-goto-next-attention)
+          (should (looking-at " ⚑  b")))))))
+
+(ert-deftest decknix-layout-render--j-finds-a-session-through-its-pr-row ()
+  "A review session with no row of its own is reached through its PR."
+  (decknix-lr-test--with-buffers '("*Claude: pr-r-9*")
+    (let ((decknix-attention--seen (make-hash-table :test 'eq :weakness 'key))
+          (sessions '(("*Claude: pr-r-9*" nil ("r#9") "asking"))))
+      (cl-letf (((symbol-function 'decknix--hub-review-session-snapshot)
+                 (lambda () sessions))
+                ((symbol-function 'decknix--layout-sessions) (lambda () sessions)))
+        (with-temp-buffer
+          (decknix-lr-test--rows)
+          (decknix-layout-goto-next-attention)
+          (should (looking-at "    #9")))))))
+
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here

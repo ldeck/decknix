@@ -93,7 +93,11 @@ Uses `agent-shell-rename-buffer` from the core package.
 AS:2/1    ← 2 sessions pending input, 1 busy
 ```
 
-`C-c j` jumps to the next session needing attention.
+`C-c j` (`C-c A j` globally) jumps to the next session that needs you, by
+decknix's own session states: `netfail`, then `waiting`, then `asking`, the
+longest wait first within each. Pressing it again moves on to the next one,
+`C-u` lets you choose, and a session living in another tab is visited in
+that tab. In the sidebar, `j` moves to that session's row and `J` goes to it.
 
 ## Nix Options
 
