@@ -736,6 +736,13 @@ the feed next notices."
     (should (eq 'finished (plist-get row :lane)))
     (should (eq 'posted (plist-get row :phase)))))
 
+(ert-deftest decknix-rb--phase-settled-after-a-go-ahead-without-a-link ()
+  "It acted, but did not report a posted review: not `posting', not `posted'."
+  (let ((answered (decknix-rb-test--answered decknix-fixture-gate-choose-one "1")))
+    (should (eq 'acted (decknix-review-board-phase "ready" nil nil answered)))
+    (should (eq 'posted (decknix-review-board-phase "ready" nil t answered)))
+    (should (equal "APPROVE" (decknix-review-board-phase-detail 'acted nil answered)))))
+
 ;; --- answering from the board ---
 
 (require 'decknix-review-board)
