@@ -7399,6 +7399,11 @@ Reads the live reviews feed, the same source the board and auto-review use."
                     (lambda (&rest _)
                       (when (fboundp 'decknix-review-board-refresh)
                         (ignore-errors (decknix-review-board-refresh)))))
+        ;; And when a session's turn ends or starts, which is when a row's
+        ;; state moves.  A review reaching its gate changes no GitHub data,
+        ;; so a board fed only by the reviews file kept saying `working'.
+        (add-hook 'decknix-agent-turn-settled-hook
+                  #'decknix-review-board-schedule-refresh)
         ;; == Priority lane-based view (#142, phase 1) ==
         ;; Always load the pure package (small, no load-time side effects)
         ;; so the `decknix-priority' command is M-x-available and gets full

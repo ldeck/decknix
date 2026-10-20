@@ -484,6 +484,42 @@ verb that adds work, which is why it asks rather than acting on point."
                 m)))
       (decknix-review-board--render))))
 
+(defcustom decknix-review-board-settle-delay 1.0
+  "Seconds after a session's turn ends or starts before the board repaints."
+  :type 'number
+  :group 'decknix-review-board)
+
+(defvar decknix-review-board--settle-timer nil
+  "Pending repaint armed by `decknix-review-board-schedule-refresh', or nil.")
+
+(defun decknix-review-board--settle-refresh ()
+  "Repaint the board for a session whose turn changed, if it is on screen."
+  (setq decknix-review-board--settle-timer nil)
+  (when-let* ((buf (get-buffer decknix-review-board-buffer-name)))
+    (when (get-buffer-window buf t)
+      (ignore-errors (decknix-review-board-refresh)))))
+
+(defun decknix-review-board-schedule-refresh ()
+  "Repaint the board shortly, once, when a session's turn ends or starts.
+
+The board used to rebuild only when the reviews feed was re-read, which
+says nothing about sessions: a review reaching its gate changes no
+GitHub data, so the row kept saying `working' until the hub next wrote
+`github-reviews.json', minutes later.  A turn boundary is exactly when a
+row's state moves, so that is when to repaint.
+
+Coalesced on one timer, because several sessions finishing together
+should cost one repaint, and skipped while the board is not shown: the
+next `g' or feed refresh rebuilds it anyway.  A plain timer, not an idle
+one: turns end from a process filter while you are often already idle,
+and an idle timer armed then waits for the NEXT idle period, which is
+the staleness this exists to remove."
+  (when (and (get-buffer decknix-review-board-buffer-name)
+             (not (timerp decknix-review-board--settle-timer)))
+    (setq decknix-review-board--settle-timer
+          (run-with-timer decknix-review-board-settle-delay nil
+                          #'decknix-review-board--settle-refresh))))
+
 (defun decknix-review-board-next ()
   "Move to the next row."
   (interactive)

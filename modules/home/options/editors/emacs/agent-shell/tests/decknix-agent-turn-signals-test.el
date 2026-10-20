@@ -385,5 +385,17 @@ the flag and still render `ready'."
                              '(("go" . "Which do you want?")))
                             :text))))
 
+(ert-deftest decknix-turn-settled-hook--runs-at-each-turn-boundary ()
+  "Views that show session state are told when a turn ends or starts,
+and not on every streamed chunk."
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'derived-mode-p) (lambda (&rest _) t)))
+      (let* ((runs 0)
+             (decknix-agent-turn-settled-hook (list (lambda () (setq runs (1+ runs))))))
+        (decknix--agent-turn-observe-event :event 'turn-complete :data nil)
+        (decknix--agent-turn-observe-event :event 'input-submitted :data nil)
+        (decknix--agent-turn-observe-event :event 'tool-call-update :data nil)
+        (should (= 2 runs))))))
+
 (provide 'decknix-agent-turn-signals-test)
 ;;; decknix-agent-turn-signals-test.el ends here

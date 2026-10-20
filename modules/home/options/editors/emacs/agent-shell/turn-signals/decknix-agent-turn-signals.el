@@ -447,6 +447,13 @@ mid-plan should still read as having work outstanding."
         decknix--agent-turn-ended nil
         decknix--agent-turn-closing-text nil))
 
+(defvar decknix-agent-turn-settled-hook nil
+  "Hook run in a session buffer when its turn ends or a new one starts.
+
+For views that show session state and are not otherwise told it moved:
+the Review Board rebuilds from the reviews feed, which a review reaching
+its gate does not touch.  Runs once per turn boundary, never per chunk.")
+
 (defun decknix--agent-turn-observe-event (&rest args)
   "Settle turn-end facts from an agent-shell event.
 Installed as `:before' advice on `agent-shell--emit-event', whose `&key'
@@ -471,8 +478,11 @@ Runs once per turn, so the question scan is off any hot path."
                (decknix--agent-question-p decknix--agent-turn-message-tail))
          (setq decknix--agent-turn-closing-text decknix--agent-turn-message-tail)
          (setq decknix--agent-turn-ended t)
+         (run-hooks 'decknix-agent-turn-settled-hook)
          (setq decknix--agent-turn-message-tail nil))
-        ('input-submitted (decknix-agent-turn-reset))
+        ('input-submitted
+         (decknix-agent-turn-reset)
+         (run-hooks 'decknix-agent-turn-settled-hook))
         (_ nil)))))
 
 (defun decknix--agent-turn-status-advice (orig-fn buffer)
