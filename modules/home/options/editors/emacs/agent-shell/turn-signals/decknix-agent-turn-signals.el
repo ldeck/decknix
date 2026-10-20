@@ -323,10 +323,19 @@ read as dormant while its agent was producing output.
 
 Any status outside `decknix-agent-turn-askable-statuses\=' is returned
 unchanged -- a live, blocked or dead session is never relabelled by how it
-happened to sign off."
+happened to sign off.
+
+`:ended\=' -- this buffer saw the turn complete and has sent nothing
+since -- overrules `:working\='.  The broker log is read at most every
+`decknix-agent-broker-working-reprobe-seconds\=', so for a few seconds
+after a turn ends it still reports the turn in flight, and a board
+refreshed in that window kept showing the gate it had just reached as
+`working\=' until something else repainted it.  The buffer's own record
+of the turn ending cannot lag that way.  The broker remains the only
+evidence for a turn this buffer did not start, which is what it is for."
   (cond
    ((not (member raw-status decknix-agent-turn-askable-statuses)) raw-status)
-   ((plist-get facts :working) "working")
+   ((and (plist-get facts :working) (not (plist-get facts :ended))) "working")
    ((plist-get facts :question) "asking")
    (t raw-status)))
 
@@ -346,6 +355,9 @@ happened to sign off."
 (defvar-local decknix--agent-turn-stop-reason nil
   "ACP stopReason of the last completed turn, or nil.")
 
+(defvar-local decknix--agent-turn-ended nil
+  "Non-nil from this buffer's `turn-complete' until its next turn starts.")
+
 (defvar-local decknix--agent-turn-closing-text nil
   "Trailing text of the last completed turn's message, or nil.
 Kept until the next turn starts, so the sidebar can say what a session
@@ -363,7 +375,8 @@ that is `asking' actually asked without reading its buffer.")
     (when (buffer-live-p buf)
       (list :question (buffer-local-value 'decknix--agent-turn-question buf)
             :plan (buffer-local-value 'decknix--agent-turn-plan buf)
-            :stop-reason (buffer-local-value 'decknix--agent-turn-stop-reason buf)))))
+            :stop-reason (buffer-local-value 'decknix--agent-turn-stop-reason buf)
+            :ended (buffer-local-value 'decknix--agent-turn-ended buf)))))
 
 (defun decknix--agent-turn-notification-buffer (state)
   "Return the shell buffer owning STATE, or nil.
@@ -431,6 +444,7 @@ mid-plan should still read as having work outstanding."
   (setq decknix--agent-turn-message-tail nil
         decknix--agent-turn-question nil
         decknix--agent-turn-stop-reason nil
+        decknix--agent-turn-ended nil
         decknix--agent-turn-closing-text nil))
 
 (defun decknix--agent-turn-observe-event (&rest args)
@@ -456,6 +470,7 @@ Runs once per turn, so the question scan is off any hot path."
          (setq decknix--agent-turn-question
                (decknix--agent-question-p decknix--agent-turn-message-tail))
          (setq decknix--agent-turn-closing-text decknix--agent-turn-message-tail)
+         (setq decknix--agent-turn-ended t)
          (setq decknix--agent-turn-message-tail nil))
         ('input-submitted (decknix-agent-turn-reset))
         (_ nil)))))

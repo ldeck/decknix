@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'decknix-agent-turn-signals)
 
 (ert-deftest decknix-working--beats-asking ()
@@ -36,6 +37,29 @@ are more specific than `working' and must survive."
 
 (ert-deftest decknix-working--no-facts-changes-nothing ()
   (should (equal "ready" (decknix-agent-turn-status "ready" nil))))
+
+;; The broker is re-read at most every few seconds, so just after a turn
+;; ends it can still say the turn is in flight.  A board refreshed then
+;; kept a session that had reached its gate under In progress.
+
+(ert-deftest decknix-working--a-turn-this-buffer-saw-end-is-not-working ()
+  (should (equal "asking"
+                 (decknix-agent-turn-status
+                  "ready" '(:working t :ended t :question t))))
+  (should (equal "ready"
+                 (decknix-agent-turn-status "ready" '(:working t :ended t)))))
+
+(ert-deftest decknix-working--ended-is-set-at-turn-end-and-cleared-by-input ()
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'derived-mode-p) (lambda (&rest _) t)))
+      (setq decknix--agent-turn-message-tail "Ready to submit? (yes / edit / cancel)")
+      (decknix--agent-turn-observe-event :event 'turn-complete :data nil)
+      (should (plist-get (decknix-agent-turn-facts) :ended))
+      (decknix--agent-turn-observe-event :event 'input-submitted :data nil)
+      (should-not (plist-get (decknix-agent-turn-facts) :ended))
+      (should (equal "working"
+                     (decknix-agent-turn-status
+                      "ready" (append '(:working t) (decknix-agent-turn-facts))))))))
 
 (provide 'decknix-agent-turn-working-test)
 ;;; decknix-agent-turn-working-test.el ends here
