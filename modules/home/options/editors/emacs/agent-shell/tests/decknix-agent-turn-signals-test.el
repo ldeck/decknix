@@ -17,6 +17,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'decknix-agent-turn-signals)
+(require 'decknix-review-gate-fixtures)
 
 ;; ---------------------------------------------------------------------
 ;; Question detection — "ready" vs "ready AND waiting on your answer"
@@ -44,6 +45,31 @@
   "A message that ends on a question is waiting on you."
   (should (decknix--agent-question-p "I fixed it. Want me to push?"))
   (should (decknix--agent-question-p "Shall I proceed?\n")))
+
+(ert-deftest decknix-turn-signals--question-with-a-reply-hint ()
+  "A question followed by its expected answers is still a question.
+`/review-service-pr' prescribes \"Ready to submit? (yes / edit /
+cancel)\" word for word, and with the line ending in `)' every review
+parked at that gate read `ready' and sat under In progress."
+  (should (decknix--agent-question-p decknix-fixture-gate-yes-edit-cancel))
+  (should (decknix--agent-question-p decknix-fixture-gate-indented-plan))
+  (should (decknix--agent-question-p "Push it? [y/N]"))
+  (should (decknix--agent-question-p "- **Use the new endpoint?**")))
+
+(ert-deftest decknix-turn-signals--question-real-gates ()
+  "Both gate shapes seen in real review sessions register."
+  (dolist (text (list decknix-fixture-gate-yes-edit-cancel
+                      decknix-fixture-gate-indented-plan
+                      decknix-fixture-gate-choose-one
+                      decknix-fixture-gate-heading-verdict))
+    (should (decknix--agent-question-p text)))
+  (should-not (decknix--agent-question-p decknix-fixture-posted))
+  (should-not (decknix--agent-question-p decknix-fixture-statement)))
+
+(ert-deftest decknix-turn-signals--question-parenthesis-alone-is-not-one ()
+  "Only a hint AFTER the mark counts; a `?)' aside mid-sentence does not."
+  (should-not (decknix--agent-question-p "Done (was it ever broken?) and pushed."))
+  (should-not (decknix--agent-question-p "Done.\n(See the PR.)")))
 
 (ert-deftest decknix-turn-signals--question-in-tail-window ()
   "A question near the end still counts even with trailing prose.
@@ -327,6 +353,11 @@ the flag and still render `ready'."
   (should (equal "Ready to merge #412."
                  (decknix-agent-turn-question-excerpt
                   "Ready to merge #412.\n\nCHOOSE ONE\n----------\n1. merge\n2. wait\n\nReply with the number."))))
+
+(ert-deftest decknix-turn-excerpt--the-gate-line-with-its-hint ()
+  (should (equal "Ready to submit? (yes / edit / cancel)"
+                 (decknix-agent-turn-question-excerpt
+                  decknix-fixture-gate-yes-edit-cancel))))
 
 (ert-deftest decknix-turn-excerpt--otherwise-the-last-line ()
   (should (equal "Waiting on your call."
