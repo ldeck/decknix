@@ -283,10 +283,6 @@ Claude session at the wrong (un-nested) path."
        (decknix-agent-provider-session-file-extension provider-id)
        session-id))))
 
-(declare-function decknix--header-status-icon
-                  "decknix-agent-header" (status))
-(declare-function decknix--header-status-face
-                  "decknix-agent-header" (status))
 (declare-function agent-shell-workspace--buffer-status
                   "ext:agent-shell-workspace" (buffer))
 (declare-function decknix-agent-buffer-status
@@ -1501,8 +1497,11 @@ ON-TOGGLE (which reopens/refreshes the picker with the new filter)."
 
 (declare-function decknix--agent-picker-category-of "decknix-agent-picker-category" (tags))
 (declare-function decknix--agent-picker-category-label "decknix-agent-picker-category" (cat))
-(declare-function decknix--agent-picker-attention-rank "decknix-agent-picker-category" (status))
-(declare-function decknix--agent-picker-order-index "decknix-agent-picker-category" (rows))
+(declare-function decknix--agent-picker-order "decknix-agent-picker-category"
+                  (rows &optional order-fn))
+(declare-function decknix--agent-picker-state-prefix "decknix-agent-picker-category" (state))
+(declare-function decknix-attention-observed-state "decknix-attention" (buffer))
+(declare-function decknix-attention-ordered-sessions "decknix-attention" (sessions))
 (declare-function decknix--agent-tags-for-conv-key "decknix-agent-tags-read" (conv-key))
 (declare-function decknix--agent-tags-for-conv-key-resolved
                   "decknix-agent-tags-read" (conv-key))
@@ -1535,12 +1534,16 @@ was named for."
   "Classify live agent buffer BUF into `requests'/`wip'/`other'."
   (decknix--agent-picker-category-of (decknix--agent-picker-buffer-tags buf)))
 
-(defun decknix--agent-picker-buffer-attention (buf)
-  "Return the attention sort rank for live agent buffer BUF (low = urgent)."
-  (decknix--agent-picker-attention-rank
-   (and (buffer-live-p buf)
-        (fboundp 'decknix-agent-buffer-status)
-        (ignore-errors (decknix-agent-buffer-status buf)))))
+(defun decknix--agent-picker-buffer-state (buf)
+  "Return the session state the sidebar last showed for live buffer BUF.
+Read from the attention observation table, which the sidebar and the
+session snapshot fill as they compute states, so the picker agrees with
+the sidebar and computes nothing per candidate.  A buffer never observed
+yet (no sidebar or snapshot since it started) falls back to its status."
+  (and (buffer-live-p buf)
+       (or (decknix-attention-observed-state buf)
+           (and (fboundp 'decknix-agent-buffer-status)
+                (ignore-errors (decknix-agent-buffer-status buf))))))
 
 (defun decknix--agent-picker-category-filter-suffix ()
   "Return a \" [types: Req WIP]\" prompt suffix, or \"\" when all shown."
@@ -2420,34 +2423,14 @@ With \\[universal-argument], shows all individual session snapshots."
 ;; Uses consult for live narrowing when available, else completing-read.
 ;; Excludes the current buffer; sorted by MRU. (#96)
 ;;
-;; Each candidate is prefixed with the same status icon used by the
-;; unified header-line and the workspace sidebar's Live section (●/◐/◉
-;; etc., coloured by `decknix--header-status-face') so it stays obvious
-;; which sessions are working / awaiting permission / idle without
-;; having to switch into them.
+;; Each candidate is prefixed with the sidebar's glyph for its state, in
+;; the sidebar's face (⚑ in the attention face for a session that needs
+;; you), and those sessions are listed first in the sidebar's jump order,
+;; so the two never disagree about what needs you.
 
-(defun decknix--agent-switch-buffer--status-prefix (buf)
-  "Return a coloured status-icon prefix for live buffer BUF.
-Falls back to two spaces when the upstream status helper or the
-header icon/face helpers aren't loaded yet (build-time stubbing,
-early daemon start) so the column stays aligned regardless."
-  (let ((status (and (buffer-live-p buf)
-                     (ignore-errors
-                       (if (fboundp 'decknix-agent-buffer-status)
-                           (decknix-agent-buffer-status buf)
-                         (and (fboundp 'agent-shell-workspace--buffer-status)
-                              (agent-shell-workspace--buffer-status buf)))))))
-    (if (and status
-             (fboundp 'decknix--header-status-icon)
-             (fboundp 'decknix--header-status-face))
-        (concat (propertize (decknix--header-status-icon status)
-                            'face (decknix--header-status-face status))
-                " ")
-      "  ")))
-
-(defun decknix--agent-switch-buffer--decorated-label (buf)
-  "Build a status-decorated picker label for live buffer BUF."
-  (concat (decknix--agent-switch-buffer--status-prefix buf)
+(defun decknix--agent-switch-buffer--decorated-label (buf state)
+  "Build a picker label for live buffer BUF in session STATE."
+  (concat (decknix--agent-picker-state-prefix state)
           (decknix--agent-session-live-label buf)
           ;; Tags, resolved by conv-key OR session id.  Without the
           ;; fallback a buffer holding one of the empty duplicate
@@ -2478,12 +2461,11 @@ toggle keys remain available to un-hide a provider.")
 (defun decknix-agent-switch-buffer ()
   "Switch to another live agent-shell buffer.
 Like \\[switch-to-buffer] but showing only agent-shell buffers.
-Excludes the current buffer.  Most-recently-used ordering is
-preserved from `agent-shell-buffers' and forced through the
-completion UI via `display-sort-function = identity', so vertico /
-consult don't re-sort the candidates alphabetically.  Each entry is
-prefixed with the provider glyph (A/C/P) and the same status icon
-shown in the header-line and the sidebar's Live section.
+Excludes the current buffer.  Sessions that need you come first, in
+the sidebar's Needs-you order; the rest keep the most-recently-used
+order of `agent-shell-buffers'.  `display-sort-function = identity'
+stops vertico / consult re-sorting them alphabetically.  Each entry is
+prefixed with the sidebar's glyph for its state, in the sidebar's face.
 
 In-picker keys: M-<glyph> (M-a/M-c/M-p) toggle whether that provider's
 buffers are shown; the picker reopens with the new filter."
@@ -2513,28 +2495,29 @@ buffers are shown; the picker reopens with the new filter."
           (let ((ht (make-hash-table :test 'equal))
                 (candidates nil))
             ;; Classify each buffer (Requests/WIP/Other), drop hidden
-            ;; categories, and order by attention (needs-me first) with the
-            ;; MRU index as the tie-break (`others' is MRU order).  Each row
-            ;; is prefixed with its category label so types are visible and
-            ;; type-filterable by typing.
+            ;; categories, and order needs-you first (`others' is MRU
+            ;; order, kept within the rest).  Each row is prefixed with its
+            ;; category label so types are visible and type-filterable by
+            ;; typing.
             (let ((rows nil) (mru 0))
               (dolist (buf others)
-                (let ((cat (decknix--agent-picker-buffer-category buf)))
+                (let ((cat (decknix--agent-picker-buffer-category buf))
+                      (state (decknix--agent-picker-buffer-state buf)))
                   (unless (memq cat decknix--agent-picker-hidden-categories)
-                    (push (list (cons buf cat)
-                                (decknix--agent-picker-buffer-attention buf)
-                                mru)
+                    (push (list (list buf cat state) (buffer-name buf) state mru)
                           rows)))
                 (setq mru (1+ mru)))
-              (dolist (pair (decknix--agent-picker-order-index (nreverse rows)))
-                (let* ((buf (car pair)) (cat (cdr pair))
+              (dolist (row (decknix--agent-picker-order
+                            (nreverse rows) #'decknix-attention-ordered-sessions))
+                (let* ((buf (nth 0 row)) (cat (nth 1 row))
                        (label
                         (concat
                          (propertize
                           (format "[%s] "
                                   (decknix--agent-picker-category-label cat))
                           'face 'shadow)
-                         (decknix--agent-switch-buffer--decorated-label buf))))
+                         (decknix--agent-switch-buffer--decorated-label
+                          buf (nth 2 row)))))
                   (puthash label buf ht)
                   (push label candidates))))
             (setq candidates (nreverse candidates))
