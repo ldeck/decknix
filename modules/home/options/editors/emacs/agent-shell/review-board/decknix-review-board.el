@@ -39,6 +39,9 @@
 
 (require 'decknix-review-board-model)
 (require 'decknix-agent-session-lifecycle)
+;; The one look for "needs you": its glyph and face, shared with the
+;; sidebar, the picker and the tab bar.
+(require 'decknix-attention)
 
 (declare-function decknix--hub-review-pr-key "decknix-hub-review-identity" (repo number))
 (declare-function decknix--hub-review-find-item "decknix-hub-review-status" (items repo number))
@@ -51,6 +54,9 @@
 (declare-function decknix-agent-buffer-status "decknix-agent-auto-close" (buffer))
 (declare-function decknix--agent-tags-for-buffer "decknix-agent-tags-read" (buffer))
 (declare-function decknix--agent-plan-label "decknix-agent-turn-signals" (progress))
+(declare-function decknix-agent-turn-closing-ask "decknix-agent-turn-signals" (&optional buffer))
+(declare-function decknix-agent-turn-closing-text "decknix-agent-turn-signals" (&optional buffer))
+(declare-function decknix-agent-turn-answered "decknix-agent-turn-signals" (&optional buffer))
 (declare-function decknix-review-board-activity-verb "decknix-review-board-model" (tags))
 (defvar decknix--agent-turn-plan)
 (declare-function agent-shell-buffers "ext:agent-shell")
@@ -103,8 +109,49 @@
   "Face for lane headings." :group 'decknix-review-board)
 
 (defface decknix-review-board-needs-you
-  '((t :inherit error :weight bold))
-  "Face for the needs-you lane heading." :group 'decknix-review-board)
+  '((t :inherit decknix-attention-face))
+  "Face for the needs-you lane heading and a blocked row nobody has covered.
+The shared attention face, so a session blocked on you looks the same
+here as in the sidebar, the picker and the tab bar."
+  :group 'decknix-review-board)
+
+(defface decknix-review-board-assessing
+  '((t :inherit warning))
+  "Face for a review still being assessed (or revised): in flight, amber."
+  :group 'decknix-review-board)
+
+(defface decknix-review-board-actioned
+  '((t :inherit font-lock-function-name-face))
+  "Face for a review acting on your answer, i.e. posting it."
+  :group 'decknix-review-board)
+
+(defface decknix-review-board-posted
+  '((t :inherit success))
+  "Face for a review that is on GitHub."
+  :group 'decknix-review-board)
+
+(defconst decknix-review-board-phase-looks
+  `((awaiting  ,decknix-attention-glyph decknix-attention-face "awaiting you")
+    (asking    ,decknix-attention-glyph decknix-attention-face "asking")
+    (waiting   ,decknix-attention-glyph decknix-attention-face "permission")
+    (netfail   ,decknix-attention-glyph decknix-attention-face "netfail")
+    (assessing "◐" decknix-review-board-assessing "assessing")
+    (revising  "◐" decknix-review-board-assessing "revising")
+    (actioned  "◑" decknix-review-board-actioned "posting")
+    (posted    "✓" decknix-review-board-posted "posted")
+    (idle      "●" font-lock-comment-face "idle"))
+  "(PHASE GLYPH FACE LABEL) for each `decknix-review-board-phases' entry.
+
+The sidebar's shape family: a half circle for work in flight, a full one
+for a unit at rest, the flag for blocked on you, and `✓' for a review that
+is done, as the sidebar marks a PR you have reviewed.  Assessing and
+posting are both in flight, so they share the half circle and differ in
+which half and colour.")
+
+(defun decknix-review-board--phase-look (phase)
+  "Return (GLYPH FACE LABEL) for PHASE."
+  (or (cdr (assq phase decknix-review-board-phase-looks))
+      (list "●" 'font-lock-comment-face (symbol-name (or phase 'idle)))))
 
 (defface decknix-review-board-covered
   '((t :inherit warning))
@@ -150,6 +197,17 @@ in the first place."
                              :conv-key ck
                              :prs prs
                              :state (ignore-errors (decknix-agent-buffer-status buf))
+                             ;; Where the review is in its two phases, from
+                             ;; what turn-signals already holds in memory:
+                             ;; the closing turn (parsed once per turn) and
+                             ;; the gate the last prompt answered.
+                             :ask (and (fboundp 'decknix-agent-turn-closing-ask)
+                                       (ignore-errors (decknix-agent-turn-closing-ask buf)))
+                             :posted (and (fboundp 'decknix-agent-turn-closing-text)
+                                          (decknix-agent-turn-ask-posted-p
+                                           (decknix-agent-turn-closing-text buf)))
+                             :answered (and (fboundp 'decknix-agent-turn-answered)
+                                            (decknix-agent-turn-answered buf))
                              :bot-p (decknix-review-board--prs-bot-p prs)
                              ;; What the session is DOING (its intent tag)
                              ;; and how far along its plan is, for the
@@ -324,7 +382,9 @@ pick up."
   (let* ((status (decknix--hub-review-status-aggregate (plist-get row :statuses)))
          (badge (decknix--hub-review-status-badge status))
          (state (plist-get row :state))
-         (attention (decknix-review-board--attention-p state))
+         (attention (and (memq (plist-get row :phase)
+                               decknix-review-board-attention-phases)
+                         t))
          (marked (and decknix-review-board--marks
                       (decknix-review-board--marked-p row)))
          ;; A session indicator, because the two largest lanes are mostly
@@ -345,20 +405,31 @@ pick up."
                               (when progress
                                 (propertize (format "%-5s " progress)
                                             'face 'font-lock-constant-face))))))
-         (trailing (cond (attention (or state ""))
+         (phase (plist-get row :phase))
+         (look (decknix-review-board--phase-look phase))
+         (detail (plist-get row :phase-detail))
+         ;; The phase leads, because it is the answer to "what is this
+         ;; session doing": assessing, waiting on you with which verdict,
+         ;; or posting.  The raw state follows only when the phase alone
+         ;; hides it (an idle session that is `closing' or `watching').
+         (phase-text
+          (concat (propertize (nth 2 look) 'face (nth 1 look))
+                  (when (and detail (not (string-empty-p detail)))
+                    (concat "  " detail))
+                  (when (and (eq phase 'idle) state
+                             (not (member state '("ready" "finished"))))
+                    (propertize (concat "  " state) 'face 'font-lock-comment-face))))
+         (trailing (cond ((not has-session)
+                          (propertize "no session" 'face 'font-lock-comment-face))
                          ((and (eq (plist-get row :lane) 'doing)
                                (not (string-empty-p (or activity ""))))
-                          (concat activity "  "
-                                  (propertize (or state "")
-                                              'face 'font-lock-comment-face)))
-                         (has-session (or state ""))
-                         (t (propertize "no session"
-                                        'face 'font-lock-comment-face))))
+                          (concat activity "  " phase-text))
+                         (t phase-text)))
          (line (format "%s %-2s %s %5d  %-52s %s"
                        (if marked "*" " ")
                        (if (string-empty-p badge) " " badge)
                        (if has-session
-                           (propertize "\u25cf" 'face 'font-lock-string-face)
+                           (propertize (nth 0 look) 'face (nth 1 look))
                          (propertize "\u00b7" 'face 'font-lock-comment-face))
                        (plist-get row :priority)
                        (truncate-string-to-width
@@ -403,7 +474,7 @@ pick up."
                      "  r review a PR url not listed here\n")
              'face 'font-lock-comment-face)
             "\n"
-            (propertize "  m  ● pri  row                                                  state\n"
+            (propertize "  m  ⚑ pri  row                                                  phase\n"
                         'face 'font-lock-comment-face)
             "\n")
     (dolist (lane decknix-review-board-lanes)
@@ -858,9 +929,20 @@ ACT
 COLUMNS
   m               `*' when marked
   badge           see below
-  session         `\u25cf' an agent is attached   `\u00b7' nobody is on it
+  phase           the session's glyph (see PHASES), `\u00b7' when nobody is on it
   pri             priority score -- higher sorts first
-  state           the agent's state, or `no session'
+  state           the phase, then what it waits on, or `no session'
+
+PHASES  (where a review is in /review-service-pr: assess, gate, post)
+  \u2691  awaiting you  the plan is ready: verdict shown, with the reply it
+                 wants (`reply 1-3, rec 1', `reply yes/edit/cancel')
+  \u2691  asking        any other question; `permission' and `netfail' too
+  \u25d0  assessing     reading the PR; you have not answered it yet
+  \u25d0  revising      changing the plan after you said edit
+  \u25d1  posting       acting on your go-ahead: posting the review
+  \u2713  posted        the review is on GitHub (the session said so, or
+                 the feed has your review); filed under Finished
+  \u25cf  idle          nothing in flight
 
 BADGES
   \u2298   gone       PR left your review queue (merged / closed).  The
@@ -952,9 +1034,15 @@ tail is dumber and cannot mislead."
                         (forward-line (- decknix-review-board-inspect-lines))
                         (line-beginning-position))))
           (concat
-           (format "state: %s\n\n" (or (ignore-errors
-                                          (decknix-agent-buffer-status buf))
-                                        "?"))
+           (format "state: %s\n" (or (ignore-errors
+                                        (decknix-agent-buffer-status buf))
+                                      "?"))
+           (format "phase: %s%s\n\n"
+                   (nth 2 (decknix-review-board--phase-look (plist-get row :phase)))
+                   (if-let* ((d (plist-get row :phase-detail))
+                             ((not (string-empty-p d))))
+                       (concat "   " d)
+                     ""))
            (buffer-substring-no-properties start end)))))))
 
 (defun decknix-review-board--inspect-request (row)

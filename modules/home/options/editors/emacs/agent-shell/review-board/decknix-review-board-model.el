@@ -30,12 +30,15 @@
 ;; first member merged while others are still open.  A silently wrong
 ;; answer is worse than a missing function, so require it.
 (require 'decknix-hub-review-status)
+;; Reading what a session's closing turn asks (verdict, expected reply) is
+;; turn-signals' job; the board only decides what that means for a row.
+(require 'decknix-agent-turn-ask)
 
 (defconst decknix-review-board-lane-help
   '((needs-you . "agent is blocked on you")
-    (doing     . "in progress — working, or done and dismissable")
+    (doing     . "assessing, posting your answer, or idle")
     (on-hold   . "PR back in draft — waiting on the author")
-    (finished  . "PR merged or closed — safe to quit")
+    (finished  . "review posted, or PR merged or closed: safe to quit")
     (grouped   . "bot PRs, folded per service")
     (idle      . "no session yet — nobody is on these"))
   "One-line description per lane, rendered beside the heading.
@@ -72,13 +75,82 @@ is reset.")
        (member state decknix-review-board-attention-states)
        t))
 
-(defun decknix-review-board--lane (has-session attention status bot-p)
+(defconst decknix-review-board-phases
+  '((awaiting  . "verdict ready, waiting on your answer")
+    (asking    . "asking you something")
+    (waiting   . "waiting on a permission prompt")
+    (netfail   . "link dropped; reset it")
+    (assessing . "reviewing; you have not answered yet")
+    (revising  . "changing the plan you asked it to change")
+    (actioned  . "acting on your answer: posting the review")
+    (posted    . "review is on GitHub")
+    (idle      . "nothing in flight"))
+  "Where a review session is in `/review-service-pr', and what each means.
+
+The command runs in two phases with a gate between: the agent assesses
+the PR and presents a plan, stops to ask, then posts once answered.  A
+single \"In progress\" hid all three, so a session waiting on you, one
+still reading the diff and one posting your answer looked alike.")
+
+(defconst decknix-review-board-attention-phases '(awaiting asking waiting netfail)
+  "Phases in which the session is blocked on you.")
+
+(defun decknix-review-board-phase (state ask posted answered &optional reviewed)
+  "Return the review phase of a session.  Pure.
+
+STATE is its status string, ASK what its closing turn asks (see
+`decknix-agent-turn-ask', nil when it asks nothing), POSTED non-nil when
+its closing turn reported the review on GitHub, ANSWERED the gate its
+last prompt answered (see `decknix-agent-turn-answered-gate'), and
+REVIEWED non-nil when the feed holds my settled review of the PR.
+
+A live turn is judged by what started it: answering a gate with a go-ahead
+means the agent is posting, any other answer means it is revising, and no
+answer means it is still assessing.
+
+The session's own POSTED report outranks asking: a review on GitHub that
+then asks \"anything else?\" is finished work, and a needs-you lane that
+fills with courtesy questions stops meaning it.  The feed's REVIEWED does
+not: my review existing does not answer what the agent is asking (see
+`decknix-review-board--lane'), so it only names a settled session."
+  (let ((intent (and answered
+                     (decknix-agent-turn-ask-reply-intent
+                      (plist-get answered :ask) (plist-get answered :reply)))))
+    (cond
+     ((member state '("waiting" "netfail")) (intern state))
+     ((equal state "working")
+      (pcase intent ('affirm 'actioned) ('nil 'assessing) (_ 'revising)))
+     (posted 'posted)
+     ((equal state "asking") (if (plist-get ask :verdict) 'awaiting 'asking))
+     (reviewed 'posted)
+     ((eq intent 'affirm) 'actioned)
+     (t 'idle))))
+
+(defun decknix-review-board-phase-detail (phase ask answered)
+  "Return the words shown after PHASE on a row, or nil.  Pure.
+
+The verdict and the reply expected while waiting on you (\"APPROVE ·
+reply 1-3, rec 1\"), the verdict being posted once you have answered."
+  (let ((verdict (or (plist-get ask :verdict)
+                     (plist-get (plist-get answered :ask) :verdict))))
+    (pcase phase
+      ((or 'awaiting 'asking)
+       (string-join
+        (delq nil (list (and (eq phase 'awaiting) verdict)
+                        (and ask (concat "reply "
+                                         (decknix-agent-turn-ask-reply-label
+                                          (plist-get ask :reply))))))
+        " · "))
+      ('actioned verdict)
+      (_ nil))))
+
+(defun decknix-review-board--lane (has-session attention status bot-p &optional phase)
   "Return the lane for a row.  Pure.
 
 HAS-SESSION is whether an agent is attached, ATTENTION whether that
 agent is blocked on the user, STATUS the staleness classification
-\(`gone' / `stale' / `answered' / nil), and BOT-P whether the author is a
-bot.
+\(`gone' / `stale' / `answered' / nil), BOT-P whether the author is a
+bot, and PHASE the session's review phase (`decknix-review-board-phase').
 
 Precedence is deliberate and only partly obvious:
 
@@ -117,6 +189,10 @@ Precedence is deliberate and only partly obvious:
    ;; moot, but my approving a PR does not answer whatever the agent is
    ;; asking me.  A blocked session still wants me.
    ((and has-session (eq status 'reviewed)) 'finished)
+   ;; The session's own report that it posted, so a review leaves the
+   ;; activity lane as soon as it is on GitHub rather than whenever the
+   ;; feed next notices.
+   ((and has-session (eq phase 'posted)) 'finished)
    ;; Any live session that is neither blocked nor gone is IN PROGRESS,
    ;; whoever authored the PR.  A dispatched bot session is one session
    ;; doing work -- you want to watch its progress, so it shows
@@ -214,8 +290,11 @@ session tagged both `review' and `fix' reads as the more specific `fix'."
   "Build a row plist for SESSION.
 
 SESSION is a plist with `:name', `:conv-key', `:prs' (a list of
-`repo#number'), `:state' and `:bot-p'.  STATUS-FN maps a PR key to its
-staleness status; PRIORITY-FN maps a PR key to its priority.
+`repo#number'), `:state' and `:bot-p', and optionally `:ask' (what its
+closing turn asks), `:posted' (that turn reported the review on GitHub)
+and `:answered' (the gate its last prompt answered).  STATUS-FN maps a
+PR key to its staleness status; PRIORITY-FN maps a PR key to its
+priority.
 
 A row's priority is its STRONGEST member, so one urgent bump lifts its
 whole group rather than being buried inside it."
@@ -227,7 +306,13 @@ whole group rather than being buried inside it."
          ;; the very rule it exists to enforce.
          (statuses (mapcar status-fn prs))
          (priorities (delq nil (mapcar priority-fn prs)))
-         (attention (decknix-review-board--attention-p (plist-get session :state))))
+         (status (decknix--hub-review-status-aggregate statuses))
+         (ask (plist-get session :ask))
+         (answered (plist-get session :answered))
+         (phase (decknix-review-board-phase
+                 (plist-get session :state) ask (plist-get session :posted)
+                 answered (eq status 'reviewed)))
+         (attention (and (memq phase decknix-review-board-attention-phases) t)))
     (list :kind (if (> (length prs) 1) 'group 'single)
           :name (plist-get session :name)
           ;; Carried through, not derived.  Every verb that DOES something --
@@ -245,6 +330,9 @@ whole group rather than being buried inside it."
           ;; here and renders without them.
           :verb (plist-get session :verb)
           :progress (plist-get session :progress)
+          :phase phase
+          :phase-detail (decknix-review-board-phase-detail phase ask answered)
+          :ask ask
           :statuses statuses
           :priority (if priorities (apply #'max priorities) 0)
           :session t
@@ -252,8 +340,9 @@ whole group rather than being buried inside it."
                  t attention
                  ;; A group is finished only when every member is; the
                  ;; aggregate encodes that unanimity rule.
-                 (decknix--hub-review-status-aggregate statuses)
-                 (plist-get session :bot-p)))))
+                 status
+                 (plist-get session :bot-p)
+                 phase))))
 
 (defun decknix-review-board--covered-p (pr-key sessions)
   "Non-nil when PR-KEY appears in any SESSIONS entry's `:prs'."

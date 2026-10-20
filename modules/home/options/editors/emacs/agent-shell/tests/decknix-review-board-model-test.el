@@ -11,7 +11,9 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'decknix-review-board-model)
+(require 'decknix-review-gate-fixtures)
 
 ;; --- lane precedence ---
 
@@ -631,6 +633,108 @@ your time yet."
 (ert-deftest decknix-rb--a-draft-cannot-be-merged ()
   (should (equal "PR is a draft"
                  (decknix-review-board-merge-blocker '(:prs ("r#1")) 'draft))))
+
+;; --- review phases: assessing, at the gate, posting, posted ---
+
+(defun decknix-rb-test--ask (text)
+  "What a turn closing on TEXT asks, as turn-signals reports it."
+  (list :verdict (decknix-agent-turn-ask-verdict text)
+        :reply (decknix-agent-turn-ask-reply text)))
+
+(defun decknix-rb-test--answered (text reply)
+  (list :ask (decknix-rb-test--ask text) :reply reply))
+
+(ert-deftest decknix-rb--phase-assessing-until-you-answer ()
+  "Working with no answer behind it: Phase 1, reading the PR."
+  (should (eq 'assessing (decknix-review-board-phase "working" nil nil nil))))
+
+(ert-deftest decknix-rb--phase-awaiting-at-a-gate-with-a-verdict ()
+  (should (eq 'awaiting (decknix-review-board-phase
+                         "asking" (decknix-rb-test--ask decknix-fixture-gate-choose-one)
+                         nil nil)))
+  (should (eq 'asking (decknix-review-board-phase
+                       "asking" (decknix-rb-test--ask "Which branch should this target?")
+                       nil nil))))
+
+(ert-deftest decknix-rb--phase-posting-after-a-go-ahead ()
+  "Answering the gate with yes, or the number of a yes, starts Phase 2."
+  (dolist (answered (list (decknix-rb-test--answered decknix-fixture-gate-choose-one "1")
+                          (decknix-rb-test--answered decknix-fixture-gate-yes-edit-cancel "yes")))
+    (should (eq 'actioned (decknix-review-board-phase "working" nil nil answered)))))
+
+(ert-deftest decknix-rb--phase-revising-after-an-edit ()
+  (should (eq 'revising
+              (decknix-review-board-phase
+               "working" nil nil
+               (decknix-rb-test--answered decknix-fixture-gate-choose-one "2")))))
+
+(ert-deftest decknix-rb--phase-posted-outranks-a-courtesy-question ()
+  "On GitHub and asking \"anything else?\" is finished work, not a call on you."
+  (should (eq 'posted
+              (decknix-review-board-phase
+               "asking" (decknix-rb-test--ask decknix-fixture-posted-then-asks)
+               t nil))))
+
+(ert-deftest decknix-rb--phase-feed-review-does-not-answer-the-gate ()
+  "My review on GitHub names a settled session, but a gate still wants me."
+  (should (eq 'posted (decknix-review-board-phase "ready" nil nil nil t)))
+  (should (eq 'awaiting
+              (decknix-review-board-phase
+               "asking" (decknix-rb-test--ask decknix-fixture-gate-choose-one) nil nil t))))
+
+(ert-deftest decknix-rb--phase-blocks-pass-through ()
+  (should (eq 'waiting (decknix-review-board-phase "waiting" nil nil nil)))
+  (should (eq 'netfail (decknix-review-board-phase "netfail" nil nil nil)))
+  (should (eq 'idle (decknix-review-board-phase "ready" nil nil nil)))
+  (should (eq 'idle (decknix-review-board-phase "closing" nil nil nil))))
+
+(ert-deftest decknix-rb--phase-detail-names-verdict-and-reply ()
+  (let ((numbered (decknix-rb-test--ask decknix-fixture-gate-choose-one))
+        (words (decknix-rb-test--ask decknix-fixture-gate-yes-edit-cancel)))
+    (should (equal "APPROVE · reply 1-3, rec 1"
+                   (decknix-review-board-phase-detail 'awaiting numbered nil)))
+    (should (equal "APPROVE · reply yes/edit/cancel"
+                   (decknix-review-board-phase-detail 'awaiting words nil)))
+    (should (equal "APPROVE"
+                   (decknix-review-board-phase-detail
+                    'actioned nil (list :ask numbered :reply "1"))))
+    (should-not (decknix-review-board-phase-detail 'assessing nil nil))))
+
+(ert-deftest decknix-rb--a-gate-is-in-needs-you-not-in-progress ()
+  "The reported bug: a session that had presented its verdict sat in
+In progress.  Its row now lands in Needs you, saying what it wants."
+  (let ((row (decknix-review-board--session-row
+              (list :name "pr-1" :prs '("b#9") :state "asking"
+                    :ask (decknix-rb-test--ask decknix-fixture-gate-yes-edit-cancel))
+              #'decknix-rb-test--status #'decknix-rb-test--priority)))
+    (should (eq 'needs-you (plist-get row :lane)))
+    (should (eq 'awaiting (plist-get row :phase)))
+    (should (equal "APPROVE · reply yes/edit/cancel" (plist-get row :phase-detail)))))
+
+(ert-deftest decknix-rb--in-progress-rows-say-which-phase ()
+  (let ((assessing (decknix-review-board--session-row
+                    '(:name "pr-1" :prs ("b#9") :state "working")
+                    #'decknix-rb-test--status #'decknix-rb-test--priority))
+        (posting (decknix-review-board--session-row
+                  (list :name "pr-2" :prs '("b#9") :state "working"
+                        :answered (decknix-rb-test--answered
+                                   decknix-fixture-gate-choose-one "1"))
+                  #'decknix-rb-test--status #'decknix-rb-test--priority)))
+    (should (eq 'doing (plist-get assessing :lane)))
+    (should (eq 'assessing (plist-get assessing :phase)))
+    (should (eq 'doing (plist-get posting :lane)))
+    (should (eq 'actioned (plist-get posting :phase)))))
+
+(ert-deftest decknix-rb--a-posted-review-is-finished ()
+  "Filed with finished work as soon as the session reports it, not when
+the feed next notices."
+  (let ((row (decknix-review-board--session-row
+              (list :name "pr-1" :prs '("b#9") :state "asking"
+                    :ask (decknix-rb-test--ask decknix-fixture-posted-then-asks)
+                    :posted t)
+              #'decknix-rb-test--status #'decknix-rb-test--priority)))
+    (should (eq 'finished (plist-get row :lane)))
+    (should (eq 'posted (plist-get row :phase)))))
 
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here
