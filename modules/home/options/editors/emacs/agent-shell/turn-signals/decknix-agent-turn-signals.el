@@ -52,6 +52,7 @@
 ;;; Code:
 
 (require 'map)
+(require 'seq)
 (require 'subr-x)
 (require 'rx)
 
@@ -144,6 +145,37 @@ per this file's Commentary."
                (string-match-p "\\?[ \t]*$" tail)
                (string-match-p decknix--agent-question-restated-regexp tail))
            t))))
+
+(defun decknix-agent-turn-question-excerpt (text)
+  "Return the line of TEXT that best says what the turn is asking, or nil.
+
+The last line ending in a question mark within the trailing
+`decknix-agent-turn-signals-question-window', when there is one -- that is
+the ask itself.  Otherwise, for a `CHOOSE ONE' block, the line before it,
+which states the decision; otherwise the last non-empty line.  Markdown
+emphasis, list and heading markers are stripped: this is read in a
+narrow sidebar row, not rendered."
+  (when (and (stringp text) (not (string-empty-p (string-trim text))))
+    (let* ((stripped (decknix--agent-turn-strip-code-fences text))
+           (lines (seq-filter (lambda (l) (not (string-empty-p l)))
+                              (mapcar #'string-trim (split-string stripped "\n"))))
+           (tail (let ((acc nil) (n 0))
+                   (dolist (l (reverse lines))
+                     (when (< n decknix-agent-turn-signals-question-window)
+                       (push l acc)
+                       (setq n (+ n (length l) 1))))
+                   acc))
+           (case-fold-search t)
+           (choose (seq-position tail "choose one"
+                                 (lambda (l k) (string-match-p (concat "\\`" k "\\'") l))))
+           (pick (or (car (last (seq-filter (lambda (l) (string-match-p "\\?\\'" l)) tail)))
+                     (and choose (> choose 0) (nth (1- choose) tail))
+                     (car (last tail)))))
+      (and pick
+           (string-trim
+            (replace-regexp-in-string
+             "\\`\\(?:[#>*-]+\\|[0-9]+[.)]\\)[ \t]*" ""
+             (replace-regexp-in-string "\\*\\*\\|__\\|`" "" pick)))))))
 
 (defun decknix--agent-plan-progress (entries)
   "Return a progress plist for ACP plan ENTRIES, or nil when there are none.
@@ -241,7 +273,11 @@ must not resurrect the flag -- a stale ask is worse than the bug being
 fixed, because every restored session would then demand attention it does
 not need."
   (let ((last-assistant (cdr (car (last turns)))))
-    (list :question (and (decknix--agent-question-p last-assistant) t))))
+    (list :question (and (decknix--agent-question-p last-assistant) t)
+          ;; The closing text too, so a restored session can still say
+          ;; WHAT it is asking, not merely that it is.
+          :text (and (stringp last-assistant)
+                     (decknix--agent-turn-append-tail nil last-assistant)))))
 
 (defun decknix-agent-turn-broker-facts (buffer)
   "Return turn facts BUFFER\='s broker log can supply, or nil.
@@ -290,6 +326,17 @@ happened to sign off."
 
 (defvar-local decknix--agent-turn-stop-reason nil
   "ACP stopReason of the last completed turn, or nil.")
+
+(defvar-local decknix--agent-turn-closing-text nil
+  "Trailing text of the last completed turn's message, or nil.
+Kept until the next turn starts, so the sidebar can say what a session
+that is `asking' actually asked without reading its buffer.")
+
+(defun decknix-agent-turn-closing-text (&optional buffer)
+  "Return the closing text of BUFFER's last turn, or nil.  No I/O."
+  (let ((buf (or buffer (current-buffer))))
+    (and (buffer-live-p buf)
+         (buffer-local-value 'decknix--agent-turn-closing-text buf))))
 
 (defun decknix-agent-turn-facts (&optional buffer)
   "Return the turn-end facts plist for BUFFER (default `current-buffer')."
@@ -364,7 +411,8 @@ The plan is deliberately KEPT: it spans turns, and a session that stops
 mid-plan should still read as having work outstanding."
   (setq decknix--agent-turn-message-tail nil
         decknix--agent-turn-question nil
-        decknix--agent-turn-stop-reason nil))
+        decknix--agent-turn-stop-reason nil
+        decknix--agent-turn-closing-text nil))
 
 (defun decknix--agent-turn-observe-event (&rest args)
   "Settle turn-end facts from an agent-shell event.
@@ -388,6 +436,7 @@ Runs once per turn, so the question scan is off any hot path."
          (setq decknix--agent-turn-stop-reason (map-elt data :stop-reason))
          (setq decknix--agent-turn-question
                (decknix--agent-question-p decknix--agent-turn-message-tail))
+         (setq decknix--agent-turn-closing-text decknix--agent-turn-message-tail)
          (setq decknix--agent-turn-message-tail nil))
         ('input-submitted (decknix-agent-turn-reset))
         (_ nil)))))

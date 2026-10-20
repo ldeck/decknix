@@ -22,6 +22,8 @@
 ;; a bare `(defvar decknix--hub-reviews)' is only a compiler hint, so the
 ;; lexical `let' fixtures would never reach the renderer's dynamic read.
 (defvar decknix--hub-reviews nil)
+;; Upstream agent-shell-attention's pending table, special for the same reason.
+(defvar agent-shell-attention--pending nil)
 
 (ert-deftest decknix-layout-render--feed-items-obey-the-request-filters ()
   "Every item passes through all five filters, not none of them."
@@ -537,6 +539,60 @@ left the feed, and nothing anywhere showed them."
                 '(("*Claude: a*" nil nil "asking" nil nil)
                   ("*Claude: b*" nil nil "working" nil nil)))))
       (should (string-match-p "WIP (2 — 1 need you" out)))))
+
+;; --- what each session is asking --------------------------------------
+
+(ert-deftest decknix-layout-render--needs-you-shows-what-it-asks ()
+  (decknix-lr-test--with-buffers '("*Claude: q*")
+    (cl-letf (((symbol-function 'decknix-agent-turn-closing-text)
+               (lambda (&optional _b) "Rebased.\nForce-push or open a fresh PR?"))
+              ((symbol-function 'decknix-agent-turn-question-excerpt)
+               (lambda (text) (car (last (split-string text "\n" t))))))
+      (let* ((out (decknix-lr-test--render-needs-you '(("*Claude: q*" nil nil "asking"))))
+             (pos (string-match "↳ Force-push" out)))
+        (should pos)
+        (should (eq 'font-lock-comment-face (get-text-property pos 'face out)))
+        ;; RET and `i' reach the session from the question line...
+        (with-temp-buffer
+          (insert out)
+          (should (eq (get-buffer "*Claude: q*") (decknix-layout-buffer-at (1+ pos))))
+          ;; ...but `n'/`p' pass over it.
+          (should-not (decknix-layout-actionable-p (1+ pos))))))))
+
+(ert-deftest decknix-layout-render--a-permission-prompt-names-what-it-wants ()
+  (decknix-lr-test--with-buffers '("*Claude: w*")
+    (let ((agent-shell-attention--pending (make-hash-table :test 'eq)))
+      (puthash (get-buffer "*Claude: w*") (cons "Permission: Run gh pr merge (execute)" 1.0)
+               agent-shell-attention--pending)
+      (should (equal "Permission: Run gh pr merge (execute)"
+                     (decknix-layout-session-ask (get-buffer "*Claude: w*") "waiting"))))))
+
+(ert-deftest decknix-layout-render--the-ask-line-fits-the-width ()
+  (let ((row (decknix--layout-ask-row '("x") (make-string 200 ?a) 48)))
+    (should (<= (string-width row) 48))
+    (should (string-suffix-p "…" row))))
+
+(ert-deftest decknix-layout-render--nothing-to-say-means-no-ask-line ()
+  (decknix-lr-test--with-buffers '("*Claude: q*")
+    (cl-letf (((symbol-function 'decknix-agent-turn-closing-text) (lambda (&optional _b) nil))
+              ((symbol-function 'decknix-agent-turn-question-excerpt) (lambda (_t) nil)))
+      (should-not (string-match-p
+                   "↳" (decknix-lr-test--render-needs-you '(("*Claude: q*" nil nil "asking"))))))))
+
+(ert-deftest decknix-layout-render--inspect-shows-the-question-and-the-tail ()
+  (decknix-lr-test--with-buffers '("*Claude: q*")
+    (let ((decknix-attention--seen (make-hash-table :test 'eq :weakness 'key))
+          (buf (get-buffer "*Claude: q*")))
+      (with-current-buffer buf (insert "earlier output\nthe last line\n"))
+      (decknix-attention-observe buf "asking" (- (float-time) 600))
+      (cl-letf (((symbol-function 'decknix-agent-turn-closing-text)
+                 (lambda (&optional _b) "Merge it?"))
+                ((symbol-function 'decknix-agent-turn-question-excerpt)
+                 (lambda (text) text)))
+        (let ((text (decknix-layout-inspect-text buf)))
+          (should (string-match-p "state: asking   for 10m" text))
+          (should (string-match-p "asks:  Merge it?" text))
+          (should (string-match-p "the last line" text)))))))
 
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here
