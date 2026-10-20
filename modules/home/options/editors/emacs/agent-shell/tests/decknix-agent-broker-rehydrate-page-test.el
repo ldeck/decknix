@@ -211,6 +211,82 @@ cost of a status sweep, and what made the buffer picker lag."
              (lambda () "/nonexistent")))
     (should-not (decknix--agent-broker-live-p "s-nope"))))
 
+(defmacro decknix-live-test--with-pidfile (spec &rest body)
+  "Bind (DIR KEY PF) per SPEC around BODY with a broker dir of DIR."
+  (declare (indent 1))
+  (let ((dir (nth 0 spec)) (key (nth 1 spec)) (pf (nth 2 spec)))
+    `(let* ((,dir (make-temp-file "dk-pid" t))
+            (,key "s-pid")
+            (,pf (expand-file-name (format "%s.sock.pid" ,key) ,dir))
+            (decknix--agent-broker-pid-cache (make-hash-table :test 'equal)))
+       (unwind-protect
+           (cl-letf (((symbol-function 'decknix--agent-broker-dir)
+                      (lambda () ,dir)))
+             ,@body)
+         (delete-directory ,dir t)))))
+
+(ert-deftest decknix-live--an-unchanged-pidfile-is-read-once ()
+  "A broker writes its pidfile once, yet every status query re-read it:
+35% of main-thread time in a sample of the sluggish daemon, mostly in
+`open(2)'.  A stat must be enough to reuse the pid."
+  (decknix-live-test--with-pidfile (dir key pf)
+    (ignore dir)
+    (with-temp-file pf (insert (number-to-string (emacs-pid))))
+    (let ((reads 0)
+          (orig (symbol-function 'decknix--agent-broker-read-bytes)))
+      (cl-letf (((symbol-function 'decknix--agent-broker-read-bytes)
+                 (lambda (&rest args) (setq reads (1+ reads)) (apply orig args))))
+        (dotimes (_ 10) (should (decknix--agent-broker-live-p key)))
+        (should (= 1 reads))))))
+
+(ert-deftest decknix-live--a-rewritten-pidfile-is-re-read ()
+  "A respawned broker rewrites its pidfile; the old pid must not stick."
+  (decknix-live-test--with-pidfile (dir key pf)
+    (ignore dir)
+    (with-temp-file pf (insert (number-to-string (emacs-pid))))
+    (should (decknix--agent-broker-live-p key))
+    ;; A different size, so the change is visible even within one
+    ;; mtime tick.
+    (with-temp-file pf (insert "9999999"))
+    (should-not (decknix--agent-broker-live-p key))))
+
+(ert-deftest decknix-live--a-removed-pidfile-is-not-live-even-if-cached ()
+  (decknix-live-test--with-pidfile (dir key pf)
+    (ignore dir)
+    (with-temp-file pf (insert (number-to-string (emacs-pid))))
+    (should (decknix--agent-broker-live-p key))
+    (delete-file pf)
+    (should-not (decknix--agent-broker-live-p key))))
+
+(ert-deftest decknix-live--the-pid-is-probed-every-call ()
+  "The pid is cached, the process is not: a broker can die and leave its
+pidfile behind."
+  (decknix-live-test--with-pidfile (dir key pf)
+    (ignore dir)
+    (with-temp-file pf (insert (number-to-string (emacs-pid))))
+    (should (decknix--agent-broker-live-p key))
+    (cl-letf (((symbol-function 'signal-process) (lambda (&rest _) -1)))
+      (should-not (decknix--agent-broker-live-p key)))))
+
+(ert-deftest decknix-read--broker-files-skip-coding-detection ()
+  "`set-auto-coding' is where editorconfig walks the directory tree for a
+`.editorconfig'; a quarter of the probe's time went there."
+  (let ((f (make-temp-file "dk-lit")))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'utf-8-unix))
+            (with-temp-file f (insert "{\"a\":\"é\"}\n")))
+          (cl-letf (((symbol-function 'set-auto-coding)
+                     (lambda (&rest _) (error "Coding detection ran")))
+                    ((symbol-function 'find-auto-coding)
+                     (lambda (&rest _) (error "Coding detection ran"))))
+            (let ((lines (decknix--agent-broker-read-log-tail f)))
+              (should (= 1 (length lines)))
+              ;; Raw bytes still parse to the decoded text.
+              (should (equal "é" (alist-get 'a (decknix--agent-broker-parse-json-line
+                                                (car lines))))))))
+      (delete-file f))))
+
 ;; --- the working-state cache -----------------------------------------
 
 (ert-deftest decknix-working-cache--an-unchanged-log-is-not-re-read ()

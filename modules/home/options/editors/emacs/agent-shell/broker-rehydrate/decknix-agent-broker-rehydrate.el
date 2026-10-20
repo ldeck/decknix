@@ -217,9 +217,7 @@ doubling this window rather than by re-reading the file whole."
 (defun decknix--agent-broker-read-byte-range (log-path beg end)
   "Return LOG-PATH\='s bytes between BEG and END as lines, or nil."
   (when (and log-path (file-readable-p log-path) (< beg end))
-    (with-temp-buffer
-      (insert-file-contents log-path nil beg end)
-      (split-string (buffer-string) "\n" t))))
+    (split-string (decknix--agent-broker-read-bytes log-path beg end) "\n" t)))
 
 (defun decknix--agent-broker-log-size (key)
   "Return the size in bytes of KEY\='s broker log, or 0."
@@ -229,6 +227,12 @@ doubling this window rather than by re-reading the file whole."
 
 ;; ── log path + buffer replay ────────────────────────────────────────
 
+(defvar decknix--agent-broker-dir-memo nil
+  "(XDG_STATE_HOME . DIR) from the last `decknix--agent-broker-dir\=' call.
+The dir is resolved on every status query of every session, and
+`expand-file-name\=' plus `getenv\=' showed in the sidebar's paint profile.
+Keyed on the env value so a changed XDG_STATE_HOME still takes effect.")
+
 (defun decknix--agent-broker-dir ()
   "Return the broker runtime dir for sockets/pidfiles/logs/registry.
 A STATE dir (`$XDG_STATE_HOME/decknix/agent-sockets', or
@@ -236,26 +240,76 @@ A STATE dir (`$XDG_STATE_HOME/decknix/agent-sockets', or
 flake's source tree, which nix copies on every `decknix switch', and a
 live unix-socket file there aborts the build.  MUST stay in sync with the
 `decknix-agent-broker-attach' wrapper's `reg_dir'."
-  (expand-file-name "decknix/agent-sockets"
-                    (or (getenv "XDG_STATE_HOME")
-                        (expand-file-name ".local/state" "~"))))
+  (let ((env (getenv "XDG_STATE_HOME")))
+    (if (and decknix--agent-broker-dir-memo
+             (equal env (car decknix--agent-broker-dir-memo)))
+        (cdr decknix--agent-broker-dir-memo)
+      (let ((dir (expand-file-name "decknix/agent-sockets"
+                                   (or env (expand-file-name ".local/state" "~")))))
+        (setq decknix--agent-broker-dir-memo (cons env dir))
+        dir))))
 
 (defun decknix--agent-broker-log-path (key)
   "Return the broker log path for session KEY, or nil when KEY is blank."
   (when (and key (stringp key) (not (string-empty-p key)))
-    (expand-file-name (format "%s.log" key) (decknix--agent-broker-dir))))
+    (concat (file-name-as-directory (decknix--agent-broker-dir)) key ".log")))
+
+(defmacro decknix--agent-broker-without-file-hooks (&rest body)
+  "Run BODY with file-name handlers and coding detection out of the way.
+Every broker file is a local plain file, so TRAMP-style handler dispatch
+can only cost.  More to the point, a plain `insert-file-contents\=' runs
+`set-auto-coding\=', which the editorconfig package advises to walk up
+the directory tree looking for `.editorconfig\=' files: a quarter of
+the status probe\='s time, for a pidfile holding five digits."
+  (declare (indent 0) (debug t))
+  `(let ((file-name-handler-alist nil))
+     ,@body))
+
+(defun decknix--agent-broker-read-bytes (file &optional beg end)
+  "Return FILE\='s raw bytes between BEG and END as a unibyte string.
+Literal: no coding detection, no format decoding, no hooks (see
+`decknix--agent-broker-without-file-hooks\=').  The JSON parser accepts
+UTF-8 bytes directly, so nothing downstream needs them decoded."
+  (decknix--agent-broker-without-file-hooks
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (insert-file-contents-literally file nil beg end)
+      (buffer-string))))
 
 (defun decknix--agent-broker-read-log-lines (log-path)
   "Return LOG-PATH's contents as a list of lines, or nil when unreadable."
   (when (and log-path (file-readable-p log-path))
-    (with-temp-buffer
-      (insert-file-contents log-path)
-      (split-string (buffer-string) "\n" t))))
+    (split-string (decknix--agent-broker-read-bytes log-path) "\n" t)))
 
 (defun decknix--agent-broker-pidfile-path (key)
   "Return the broker pidfile path for KEY (`<dir>/<key>.sock.pid'), or nil."
-  (when-let* ((log (decknix--agent-broker-log-path key)))
-    (concat (file-name-sans-extension log) ".sock.pid")))
+  (when (and key (stringp key) (not (string-empty-p key)))
+    (concat (file-name-as-directory (decknix--agent-broker-dir)) key ".sock.pid")))
+
+(defvar decknix--agent-broker-pid-cache (make-hash-table :test 'equal)
+  "Pidfile path -> (MTIME SIZE . PID) as last read.
+A broker writes its pidfile once at spawn, yet the status chain read it
+on every query: the external `sample\=' of a sluggish daemon put 35% of
+main-thread time in this one read, most of it in `open(2)\='.  A stat
+is enough to know the file is the one already read.")
+
+(defun decknix--agent-broker-pidfile-pid (pf)
+  "Return the pid recorded in pidfile PF, or nil.  Cached on PF\='s stat."
+  (let ((attrs (decknix--agent-broker-without-file-hooks
+                 (file-attributes pf))))
+    (if (null attrs)
+        (progn (remhash pf decknix--agent-broker-pid-cache) nil)
+      (let ((mtime (float-time (file-attribute-modification-time attrs)))
+            (size (file-attribute-size attrs))
+            (hit (gethash pf decknix--agent-broker-pid-cache)))
+        (if (and hit (equal mtime (car hit)) (equal size (cadr hit)))
+            (cddr hit)
+          (let ((pid (ignore-errors
+                       (string-to-number
+                        (string-trim (decknix--agent-broker-read-bytes pf))))))
+            (puthash pf (cons mtime (cons size pid))
+                     decknix--agent-broker-pid-cache)
+            pid))))))
 
 (defun decknix--agent-broker-live-p (key)
   "Non-nil when KEY's broker process is running, per its pidfile.
@@ -263,12 +317,7 @@ Rehydrate is gated on this: a resumed session whose broker has died is
 historical — its transcript prepopulation already covers it, and
 replaying a stale in-flight tail would be wrong."
   (when-let* ((pf (decknix--agent-broker-pidfile-path key))
-              ((file-readable-p pf))
-              (pid (ignore-errors
-                     (string-to-number
-                      (string-trim
-                       (with-temp-buffer (insert-file-contents pf)
-                                         (buffer-string)))))))
+              (pid (decknix--agent-broker-pidfile-pid pf)))
     (and (integerp pid) (> pid 0)
          ;; `signal-process' rather than `call-process' to "kill": this runs
          ;; once per session per status query, and forking 13 `kill' processes
@@ -277,6 +326,8 @@ replaying a stale in-flight tail would be wrong."
          ;;
          ;; Signal 0 probes without delivering.  A -1 means no such process
          ;; (or not ours, which cannot happen for a broker we spawned).
+         ;; Probed every call, never cached: a broker can die and leave
+         ;; its pidfile behind.
          (eq 0 (ignore-errors (signal-process pid 0))))))
 
 (defvar-local decknix--agent-broker-replay-window nil
@@ -369,9 +420,8 @@ parses per line and a malformed line is skipped."
     (let* ((bytes (or bytes decknix-agent-broker-tail-bytes))
            (size (or (file-attribute-size (file-attributes log-path)) 0))
            (beg (max 0 (- size bytes))))
-      (with-temp-buffer
-        (insert-file-contents log-path nil beg size)
-        (split-string (buffer-string) "\n" t)))))
+      (split-string (decknix--agent-broker-read-bytes log-path beg size)
+                    "\n" t))))
 
 (defun decknix--agent-broker-inflight-p (lines)
   "Non-nil when LINES end in an uncommitted turn carrying visible content.
