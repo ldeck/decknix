@@ -82,6 +82,49 @@ for `decknix-sidebar-paint-idle-delay' seconds."
   (setq decknix--sidebar-paint-timer
         (run-with-idle-timer decknix-sidebar-paint-idle-delay nil paint-fn)))
 
+;; -- One status per session per paint --------------------------------
+;;
+;; A paint asked each session for its status several times: once per
+;; section that lists it (Needs you, Reviews, WIP), once more in the
+;; session snapshot, and again in the fingerprint taken right after the
+;; paint.  Every ask ran the whole advice chain (watch, net-error,
+;; heartbeat, turn signals, broker liveness and log probe), which was 30%
+;; of a sampled multi-second paint.  Inside a paint the answers cannot
+;; usefully differ, so the first one is reused for the rest.
+;;
+;; Scoped, not a TTL: outside a paint (auto-close, reattach, the picker's
+;; fallback) every caller still gets a fresh answer, so nothing that acts
+;; on a status can act on a stale one.
+
+(defvar decknix--agent-status-memo nil
+  "Buffer -> status for the paint in progress, or nil outside one.
+Bound by `decknix--sidebar-with-status-memo'.")
+
+(defmacro decknix--sidebar-with-status-memo (&rest body)
+  "Run BODY reusing each buffer's status, joining any enclosing scope."
+  (declare (indent 0) (debug t))
+  `(let ((decknix--agent-status-memo
+          (or decknix--agent-status-memo (make-hash-table :test 'eq))))
+     ,@body))
+
+(defun decknix--agent-status-memo-advice (orig buffer &rest args)
+  "Outermost `:around' advice for `agent-shell-workspace--buffer-status'.
+Inside `decknix--sidebar-with-status-memo', return BUFFER's first status
+from ORIG for the rest of the scope; otherwise call ORIG with ARGS."
+  (if (or (null decknix--agent-status-memo) args (not (bufferp buffer)))
+      (apply orig buffer args)
+    (let ((hit (gethash buffer decknix--agent-status-memo 'miss)))
+      (if (not (eq hit 'miss))
+          hit
+        (puthash buffer (funcall orig buffer) decknix--agent-status-memo)))))
+
+(defvar decknix--sidebar-paint-generation 0
+  "Count of paints started.  A cache built during paint N is good for N.")
+
+;; Defined with the idle tick below; re-baselined by every paint.
+(defvar decknix--sidebar-idle-last-fingerprint)
+(defvar decknix--sidebar-idle-last-paint)
+
 (defun decknix--sidebar-paint-now (refresh-fn)
   "Run REFRESH-FN as the real synchronous repaint.
 Clears the pending-timer slot and holds `decknix--sidebar-paint-in-progress'
@@ -89,13 +132,17 @@ non-nil for the duration so the debounce advice paints through rather than
 re-deferring.  Errors in REFRESH-FN are swallowed so a single bad paint
 cannot leave the guard stuck."
   (setq decknix--sidebar-paint-timer nil)
-  (let ((decknix--sidebar-paint-in-progress t))
-    (ignore-errors (funcall refresh-fn)))
-  ;; Re-baseline the idle-tick dirty check off this fresh paint, so the
-  ;; 2 s tick only repaints on changes that happen AFTER it (from any
-  ;; source), never redundantly re-painting what we just drew.
-  (setq decknix--sidebar-idle-last-fingerprint (decknix--sidebar-idle-fingerprint)
-        decknix--sidebar-idle-last-paint (float-time))
+  (setq decknix--sidebar-paint-generation (1+ decknix--sidebar-paint-generation))
+  (decknix--sidebar-with-status-memo
+    (let ((decknix--sidebar-paint-in-progress t))
+      (ignore-errors (funcall refresh-fn)))
+    ;; Re-baseline the idle-tick dirty check off this fresh paint, so the
+    ;; 2 s tick only repaints on changes that happen AFTER it (from any
+    ;; source), never redundantly re-painting what we just drew.  Inside
+    ;; the memo scope, so it reads the statuses the paint just drew rather
+    ;; than recomputing every one of them.
+    (setq decknix--sidebar-idle-last-fingerprint (decknix--sidebar-idle-fingerprint)
+          decknix--sidebar-idle-last-paint (float-time)))
   ;; Universal eager-persist net: any state change reaches the sidebar
   ;; through a repaint, so persist toggle state (debounced + dirty-
   ;; checked, hence free when nothing changed) after each real paint.
@@ -205,7 +252,8 @@ changed or the force interval elapsed, so an idle sidebar stops pegging
 `redisplay_internal'."
   (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
              (decknix--sidebar-idle-should-paint-p
-              (decknix--sidebar-idle-fingerprint)
+              (decknix--sidebar-with-status-memo
+                (decknix--sidebar-idle-fingerprint))
               decknix--sidebar-idle-last-fingerprint
               decknix--sidebar-idle-last-paint
               (float-time)

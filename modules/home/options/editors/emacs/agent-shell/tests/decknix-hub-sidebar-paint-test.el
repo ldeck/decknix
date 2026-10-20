@@ -308,5 +308,84 @@ this is the fix for the multi-second freeze on up/down/RET in `C-c b'."
       (should (= scheduled 1))
       (should (= painted 0)))))
 
+;; -- One status per session per paint -------------------------------
+
+(defun decknix-sidebar-memo-test--counting-status (calls)
+  "Return a fake status ORIG that counts calls per buffer into CALLS."
+  (lambda (buffer &rest _)
+    (puthash buffer (1+ (gethash buffer calls 0)) calls)
+    (if (equal (buffer-name buffer) " memo-b") nil "working")))
+
+(ert-deftest decknix-sidebar-memo--outside-a-paint-every-call-is-fresh ()
+  "Auto-close, reattach and the picker's fallback act on a status; none
+of them may be handed a remembered one."
+  (let ((decknix--agent-status-memo nil)
+        (calls (make-hash-table :test 'eq))
+        (buf (generate-new-buffer " memo-a")))
+    (unwind-protect
+        (let ((orig (decknix-sidebar-memo-test--counting-status calls)))
+          (dotimes (_ 3) (decknix--agent-status-memo-advice orig buf))
+          (should (= 3 (gethash buf calls))))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-sidebar-memo--inside-a-scope-each-buffer-is-asked-once ()
+  "Needs you, Reviews, WIP, the snapshot and the fingerprint each asked
+every session again, and each ask ran the whole advice chain."
+  (let ((decknix--agent-status-memo nil)
+        (calls (make-hash-table :test 'eq))
+        (a (generate-new-buffer " memo-a"))
+        (b (generate-new-buffer " memo-b")))
+    (unwind-protect
+        (let ((orig (decknix-sidebar-memo-test--counting-status calls)))
+          (decknix--sidebar-with-status-memo
+            (dotimes (_ 4)
+              (should (equal "working" (decknix--agent-status-memo-advice orig a)))
+              ;; A nil status is an answer too, and is not re-asked.
+              (should-not (decknix--agent-status-memo-advice orig b))))
+          (should (= 1 (gethash a calls)))
+          (should (= 1 (gethash b calls)))
+          ;; The scope ends with the paint.
+          (decknix--agent-status-memo-advice orig a)
+          (should (= 2 (gethash a calls))))
+      (kill-buffer a) (kill-buffer b))))
+
+(ert-deftest decknix-sidebar-memo--a-nested-scope-joins-the-outer-one ()
+  (let ((decknix--agent-status-memo nil)
+        (calls (make-hash-table :test 'eq))
+        (a (generate-new-buffer " memo-a")))
+    (unwind-protect
+        (let ((orig (decknix-sidebar-memo-test--counting-status calls)))
+          (decknix--sidebar-with-status-memo
+            (decknix--agent-status-memo-advice orig a)
+            (decknix--sidebar-with-status-memo
+              (decknix--agent-status-memo-advice orig a)))
+          (should (= 1 (gethash a calls))))
+      (kill-buffer a))))
+
+(ert-deftest decknix-sidebar-memo--the-post-paint-fingerprint-reuses-the-paint ()
+  "The fingerprint taken right after a paint read every status afresh,
+straight after the paint had computed them all."
+  (decknix-sidebar-paint-test--isolated
+    (let ((decknix--agent-status-memo nil)
+          (calls (make-hash-table :test 'eq))
+          (a (generate-new-buffer " memo-a")))
+      (unwind-protect
+          (let ((orig (decknix-sidebar-memo-test--counting-status calls)))
+            (cl-letf (((symbol-function 'decknix--sidebar-idle-fingerprint)
+                       (lambda () (decknix--agent-status-memo-advice orig a)))
+                      ((symbol-function 'decknix--sidebar-state-write) #'ignore))
+              (decknix--sidebar-paint-now
+               (lambda () (decknix--agent-status-memo-advice orig a)))
+              (should (= 1 (gethash a calls)))))
+        (kill-buffer a)))))
+
+(ert-deftest decknix-sidebar-memo--each-paint-starts-a-new-generation ()
+  (decknix-sidebar-paint-test--isolated
+    (let ((decknix--sidebar-paint-generation 7))
+      (cl-letf (((symbol-function 'decknix--sidebar-idle-fingerprint) #'ignore)
+                ((symbol-function 'decknix--sidebar-state-write) #'ignore))
+        (decknix--sidebar-paint-now #'ignore))
+      (should (= 8 decknix--sidebar-paint-generation)))))
+
 (provide 'decknix-hub-sidebar-paint-test)
 ;;; decknix-hub-sidebar-paint-test.el ends here
