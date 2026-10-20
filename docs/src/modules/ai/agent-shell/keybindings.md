@@ -156,6 +156,13 @@ Navigate / Quick / Actions plus `T` for the toggles sub-transient.
 
 ## Sidebar Keys
 
+Every session blocked on you (`netfail`, `waiting`, `asking`) is listed
+first, under **Needs you**, in the order `j` visits them and with how long
+each has waited, whichever section it would otherwise sit in. A review
+session whose PR has since merged or closed is still listed, dimmed and
+marked `PR gone`: it is still waiting on a prompt, though the answer is
+usually to close it. The header line opens with the same count.
+
 Pressed inside the Agents sidebar itself. The header line names the few
 keys that do most of the work, dropping hints from the right as the sidebar
 narrows; `?` is always the last to go, and opens the full reference.

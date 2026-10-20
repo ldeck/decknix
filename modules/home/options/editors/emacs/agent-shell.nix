@@ -6578,6 +6578,10 @@ duration -- the most important number on this branch."
                   ;; row was 47 columns too wide and its right-hand value sat
                   ;; off-screen.  That is the "numbers pushed out of view".
                   (let ((w (max 24 (1- (decknix--layout-sidebar-width)))))
+                    ;; Every session blocked on you, before anything else:
+                    ;; Reviews and WIP each have ways to hide one.
+                    (when (fboundp 'decknix--layout-render-needs-you)
+                      (setq line-num (decknix--layout-render-needs-you line-num w)))
                     (setq line-num (decknix--layout-render-reviews line-num w))
                     ;; WIP nests my PRs and worktrees under the session
                     ;; working on them, and puts the rest in Dormant.  The
@@ -6886,23 +6890,28 @@ duration -- the most important number on this branch."
                   '(:eval
                     (let* ((live (length (seq-filter #'buffer-live-p
                                                      (agent-shell-buffers))))
-                           (saved-count (decknix--sidebar-saved-count)))
-                      (let* ((reviews (when (boundp 'decknix--hub-reviews)
-                                        (length (alist-get 'items
-                                                           decknix--hub-reviews))))
-                             (hub-str (if (and reviews (> reviews 0))
-                                         (format "  ⚡%d review%s"
-                                                 reviews
-                                                 (if (= reviews 1) "" "s"))
-                                       "")))
+                           (saved-count (decknix--sidebar-saved-count))
+                           ;; Read from the observation table, which the
+                           ;; render and idle tick keep current: computing
+                           ;; states here would run on every redisplay.
+                           (need (if (fboundp 'decknix-attention-count)
+                                     (car (decknix-attention-count))
+                                   0)))
                         (decknix--sidebar-header-line
-                         (propertize
-                          (format " ● %d live  ◦ %d saved%s"
-                                  live saved-count hub-str)
-                          'face 'font-lock-keyword-face)
+                         (concat
+                          (if (> need 0)
+                              (propertize (format " %s%d need you ·"
+                                                  decknix-attention-glyph need)
+                                          'face (if (facep 'decknix-attention-face)
+                                                    'decknix-attention-face
+                                                  'warning))
+                            "")
+                          (propertize
+                           (format " %d live · ◦%d saved" live saved-count)
+                           'face 'font-lock-keyword-face))
                          decknix-sidebar-header-hints
                          (let ((win (get-buffer-window (current-buffer))))
-                           (if (window-live-p win) (window-width win) 48)))))))))
+                           (if (window-live-p win) (window-width win) 48))))))))
 
         ;; -- Robust sidebar buffer-at-point lookup ---------------------------
         ;; Upstream `--buffer-at-point' reads the text property at

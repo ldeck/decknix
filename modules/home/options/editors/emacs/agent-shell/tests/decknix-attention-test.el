@@ -110,5 +110,12 @@
                (lambda () '(("x" nil nil "ready")))))
       (should (equal "No session needs you" (decknix-attention-jump))))))
 
+(ert-deftest decknix-attention--age-label-is-compact ()
+  (should (equal "now" (decknix-attention-age-label 100.0 130.0)))
+  (should (equal "12m" (decknix-attention-age-label 0.0 720.0)))
+  (should (equal "3h" (decknix-attention-age-label 0.0 10800.0)))
+  (should (equal "2d" (decknix-attention-age-label 0.0 172800.0)))
+  (should (equal "" (decknix-attention-age-label nil))))
+
 (provide 'decknix-attention-test)
 ;;; decknix-attention-test.el ends here

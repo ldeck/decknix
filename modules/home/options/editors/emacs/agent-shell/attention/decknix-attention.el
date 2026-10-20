@@ -49,6 +49,19 @@ agent mid-task.  `asking' last: the turn finished, on a question.")
   "Return STATE's urgency rank, lower first, or nil when it is not attention."
   (seq-position decknix-attention-states state))
 
+(defconst decknix-attention-glyph "◐"
+  "Glyph for a session blocked on the user.")
+
+(defun decknix-attention-age-label (since &optional now)
+  "Return how long ago SINCE was, compactly: `now', `12m', `3h', `2d'."
+  (if (not (numberp since))
+      ""
+    (let ((secs (max 0 (floor (- (or now (float-time)) since)))))
+      (cond ((< secs 60) "now")
+            ((< secs 3600) (format "%dm" (/ secs 60)))
+            ((< secs 86400) (format "%dh" (/ secs 3600)))
+            (t (format "%dd" (/ secs 86400)))))))
+
 ;; --- when each session started needing you -----------------------------
 
 (defvar decknix-attention--seen (make-hash-table :test 'eq :weakness 'key)
@@ -162,13 +175,16 @@ answering the first session takes a turn, during which it is often still
                   (let ((e (gethash buf agent-shell-attention--pending)))
                     (and (consp e) (numberp (cdr e)) (cdr e))))))))
 
+(defun decknix-attention-ordered-sessions (sessions)
+  "Return the attention SESSIONS in jump order, using the observed times."
+  (decknix-attention-order sessions #'decknix-attention--session-since))
+
 (defun decknix-attention-buffers ()
   "Return the live buffers needing attention, most urgent first."
   (delq nil (mapcar (lambda (s)
                       (let ((b (get-buffer (or (nth 0 s) ""))))
                         (and (buffer-live-p b) b)))
-                    (decknix-attention-order (decknix-attention--sessions)
-                                             #'decknix-attention--session-since))))
+                    (decknix-attention-ordered-sessions (decknix-attention--sessions)))))
 
 ;; --- getting there -------------------------------------------------------
 
