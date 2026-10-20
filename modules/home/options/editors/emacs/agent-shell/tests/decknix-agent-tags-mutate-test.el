@@ -347,6 +347,147 @@ logging it would bury the signal."
                                               (buffer-string)))))
       (delete-file log))))
 
+;; -- Vocabulary: rename / delete a tag everywhere --------------------
+
+(defun dk-mutate-test--convs (alist)
+  "Build CONVS from ALIST of (CONV-KEY TAGS SESSIONS)."
+  (let ((convs (make-hash-table :test 'equal)))
+    (dolist (row alist)
+      (let ((e (make-hash-table :test 'equal)))
+        (puthash "tags" (nth 1 row) e)
+        (puthash "sessions" (nth 2 row) e)
+        (puthash "workspace" "/ws" e)
+        (puthash (nth 0 row) e convs)))
+    convs))
+
+(defun dk-mutate-test--tags (convs key)
+  (gethash "tags" (gethash key convs)))
+
+(ert-deftest decknix-tags-mutate/normalise-applies-tag-add-rules ()
+  (should (equal "glossary" (decknix--agent-tag-normalise "  glossary ")))
+  (should-not (decknix--agent-tag-normalise "   "))
+  (should-not (decknix--agent-tag-normalise nil))
+  (should-not (decknix--agent-tag-normalise "a,b")))
+
+(ert-deftest decknix-tags-mutate/rename-single-conversation ()
+  "The 166d3cce case: a typo on one conversation, renamed in place."
+  (let ((convs (dk-mutate-test--convs
+                '(("c1" ("docs" "glosssary" "us") ("166d3cce"))
+                  ("c2" ("other") ("s2"))))))
+    (should (equal '("c1") (decknix--agent-tags-rename-in convs "glosssary" "glossary")))
+    (should (equal '("docs" "glossary" "us") (dk-mutate-test--tags convs "c1")))
+    (should (equal '("other") (dk-mutate-test--tags convs "c2")))
+    (should (equal "/ws" (gethash "workspace" (gethash "c1" convs))))))
+
+(ert-deftest decknix-tags-mutate/rename-onto-existing-tag-merges ()
+  "Renaming onto a tag the conversation already has leaves it once."
+  (let ((convs (dk-mutate-test--convs
+                '(("c1" ("glossary" "glosssary") ("s1"))
+                  ("c2" ("glossary") ("s2"))))))
+    (should (equal '("c1") (decknix--agent-tags-rename-in convs "glosssary" "glossary")))
+    (should (equal '("glossary") (dk-mutate-test--tags convs "c1")))
+    (should (equal '(("glossary" . 2)) (decknix--agent-tags-usage convs)))))
+
+(ert-deftest decknix-tags-mutate/rename-list-keeps-position ()
+  (should (equal '("a" "new" "c")
+                 (decknix--agent-tags-rename-list '("a" "old" "c") "old" "new")))
+  (should (equal '("new" "a")
+                 (decknix--agent-tags-rename-list '("new" "a" "old") "old" "new"))))
+
+(ert-deftest decknix-tags-mutate/usage-counts-conversations ()
+  (let ((convs (dk-mutate-test--convs
+                '(("c1" ("a" "b") ("s1")) ("c2" ("a") ("s2")) ("c3" nil ("s3"))))))
+    (should (equal '(("a" . 2) ("b" . 1)) (decknix--agent-tags-usage convs)))
+    (should (equal '("c1" "c2") (decknix--agent-tags-convs-using convs "a")))))
+
+(ert-deftest decknix-tags-mutate/delete-keeps-emptied-entries ()
+  "Deleting a tag must not drop the conversation's sessions or workspace."
+  (let ((convs (dk-mutate-test--convs
+                '(("c1" ("gone") ("s1")) ("c2" ("gone" "kept") ("s2"))))))
+    (should (equal '("c1" "c2") (decknix--agent-tags-delete-in convs "gone")))
+    (should (gethash "c1" convs))
+    (should-not (dk-mutate-test--tags convs "c1"))
+    (should (equal '("s1") (gethash "sessions" (gethash "c1" convs))))
+    (should (equal '("kept") (dk-mutate-test--tags convs "c2")))
+    (should (equal '(("kept" . 1)) (decknix--agent-tags-usage convs)))))
+
+(ert-deftest decknix-tags-mutate/last-removal-drops-tag-from-vocabulary ()
+  "There is no separate known-tags list: the last removal prunes it."
+  (let ((convs (dk-mutate-test--convs
+                '(("c1" ("shared" "solo") ("s1")) ("c2" ("shared") ("s2"))))))
+    (should (= 1 (decknix--agent-tags-remove-from-conv convs "c1" "shared")))
+    (should (= 0 (decknix--agent-tags-remove-from-conv convs "c1" "solo")))
+    (should (equal '(("shared" . 1)) (decknix--agent-tags-usage convs)))
+    (should (gethash "c1" convs))))
+
+(ert-deftest decknix-tags-mutate/session-ids-of-changed-keys ()
+  (let ((convs (dk-mutate-test--convs
+                '(("c1" ("a") ("s1" "s1b")) ("c2" ("a") ("s2" "s1"))))))
+    (should (equal '("s1" "s1b" "s2")
+                   (decknix--agent-tags-session-ids-of convs '("c1" "c2" "missing"))))))
+
+(ert-deftest decknix-tags-mutate/rename-everywhere-writes-once-across-sessions ()
+  "Every conversation carrying the tag, live or saved, in one write."
+  (decknix-test--with-store (dk-mutate-test--convs
+                             '(("live" ("x" "old") ("s1"))
+                               ("saved" ("old") ("s2"))
+                               ("other" ("y") ("s3"))))
+    (let ((writes 0))
+      (cl-letf (((symbol-function 'decknix--agent-tags-write)
+                 (lambda (s) (setq last-store s writes (1+ writes)))))
+        (should (equal '("live" "saved")
+                       (decknix--agent-tags-rename-everywhere "old" "new")))
+        (should (= 1 writes))
+        (should (equal '("x" "new") (dk-mutate-test--tags convs "live")))
+        (should (equal '("new") (dk-mutate-test--tags convs "saved")))
+        (should-not (decknix--agent-tags-rename-everywhere "absent" "z"))
+        (should (= 1 writes))))))
+
+(ert-deftest decknix-tags-mutate/delete-everywhere-writes-once ()
+  (decknix-test--with-store (dk-mutate-test--convs
+                             '(("a" ("t") ("s1")) ("b" ("t" "u") ("s2"))))
+    (let ((writes 0))
+      (cl-letf (((symbol-function 'decknix--agent-tags-write)
+                 (lambda (_s) (setq writes (1+ writes)))))
+        (should (equal '("a" "b") (decknix--agent-tags-delete-everywhere "t")))
+        (should (= 1 writes))
+        (should (equal '(("u" . 1)) (decknix--agent-tags-usage convs)))))))
+
+;; Against the real store, so the tags-changed hook is what callers see.
+(unless (fboundp 'decknix--agent-session-list-if-warm)
+  (defun decknix--agent-session-list-if-warm () nil))
+(require 'decknix-agent-tags-store)
+
+(ert-deftest decknix-tags-mutate/rename-everywhere-fires-tags-changed-once ()
+  "One rename across many conversations reports them all in ONE call."
+  (let* ((decknix--agent-tags-file (make-temp-file "dk-mutate-" nil ".json"))
+         (decknix--agent-tags-cache nil)
+         (decknix--agent-tags-cache-mtime nil)
+         (decknix--agent-tags-cache-checked-at 0.0)
+         (decknix--agent-tags-snapshot nil)
+         (calls nil)
+         (decknix-agent-tags-changed-functions
+          (list (lambda (keys) (push keys calls)))))
+    (unwind-protect
+        (let ((store (make-hash-table :test 'equal)))
+          (puthash "conversations"
+                   (dk-mutate-test--convs '(("a" ("glosssary") ("166d3cce"))
+                                            ("b" ("glosssary" "us") ("s2"))
+                                            ("c" ("us") ("s3"))))
+                   store)
+          (puthash "_canonicalKeyVersion" 1 store)
+          (with-temp-file decknix--agent-tags-file (insert (json-encode store)))
+          (decknix--agent-tags-read)
+          (decknix--agent-tags-rename-everywhere "glosssary" "glossary")
+          (should (equal '(("a" "b")) calls))
+          (setq decknix--agent-tags-cache nil decknix--agent-tags-cache-mtime nil
+                decknix--agent-tags-cache-checked-at 0.0)
+          (should (equal '(("glossary" . 2) ("us" . 2))
+                         (decknix--agent-tags-usage
+                          (gethash "conversations" (decknix--agent-tags-read))))))
+      (dolist (f (list decknix--agent-tags-file (concat decknix--agent-tags-file ".bak")))
+        (when (file-exists-p f) (delete-file f))))))
+
 (provide 'decknix-agent-tags-mutate-test)
 
 ;;; decknix-agent-tags-mutate-test.el ends here

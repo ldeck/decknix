@@ -1433,7 +1433,7 @@ workspace sidebar surface which sessions need attention.
 | `C-c A p` | Priority view (opt-in via `hub.priority.enable`): ranked lanes in `*Agent Priority*` |
 | `C-c A v` | Review last exchange (inline review buffer); `C-u` for full history |
 | `C-c A T` | Tags — global (list/filter conversations, rename, delete, cleanup) |
-| `C-c s t` | Tags — conversation-scoped (show, add, remove) — in-buffer only (#78) |
+| `C-c s t` | Tags — conversation-scoped (show, add, remove, set; `R`/`D` rename/delete everywhere) — in-buffer only (#78) |
 | `C-c W` | Sidebar action transient — open Navigate / Quick / Actions / Toggles (`T`) from any agent-shell buffer |
 | `C-c D` | Deckmacs — framework management (reload, status, diff, log) (#85) |
 | `C-c D r` | Reload default.el from current Nix profile; `C-u` to force |

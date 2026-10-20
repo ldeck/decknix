@@ -5550,7 +5550,7 @@ ${optionalString cfg.tableOverlay.enable ''
         (define-prefix-command 'decknix-agent-tags-global-map)
         (define-key decknix-agent-prefix-map (kbd "T") 'decknix-agent-tags-global-map)
         (define-key decknix-agent-tags-global-map (kbd "l") 'decknix-agent-tag-list)      ; List/filter sessions by tag
-        (define-key decknix-agent-tags-global-map (kbd "e") 'decknix-agent-tag-edit)      ; Rename tag globally
+        (define-key decknix-agent-tags-global-map (kbd "e") 'decknix-agent-tag-rename)    ; Rename tag globally
         (define-key decknix-agent-tags-global-map (kbd "d") 'decknix-agent-tag-delete)    ; Delete tag globally
         (define-key decknix-agent-tags-global-map (kbd "c") 'decknix-agent-tag-cleanup)
 
@@ -8332,6 +8332,11 @@ returns a fresh plist so the caller's is not mutated."
                       ;; are one-at-a-time, which is the wrong shape when a
                       ;; session has inherited a foreign tag set.
                       (define-key tag-map (kbd "s") 'decknix-agent-tag-set)
+                      ;; C-c s t R / D — the global rename / delete, here
+                      ;; too because a typo is noticed on the session that
+                      ;; carries it, next to add/remove.
+                      (define-key tag-map (kbd "R") 'decknix-agent-tag-rename)
+                      (define-key tag-map (kbd "D") 'decknix-agent-tag-delete)
                       (define-key map (kbd "t") tag-map)
                       (local-set-key (kbd "C-c s") map))
                     ;; which-key labels for C-c s session sub-prefix
@@ -8358,7 +8363,10 @@ returns a fresh plist so the caller's is not mutated."
                         "C-c s t"   "tags…"
                         "C-c s t l" "list / filter by tag"
                         "C-c s t a" "add tag"
-                        "C-c s t r" "remove tag"))
+                        "C-c s t r" "remove tag"
+                        "C-c s t s" "set tags"
+                        "C-c s t R" "rename tag everywhere"
+                        "C-c s t D" "delete tag everywhere"))
                     ;; Conditional bindings (may not be loaded)
                     (when (fboundp 'agent-shell-manager-toggle)
                       (local-set-key (kbd "C-c m") 'agent-shell-manager-toggle))

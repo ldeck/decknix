@@ -18,6 +18,8 @@
 ;;   `decknix--agent-store-metadata-by-conv-key'  CONV-KEY -> tags+ws
 ;;   `decknix--agent-register-session-id'         CONV-KEY -> session
 ;;   `decknix--agent-flush-pending-metadata'      comint-input-filter
+;;   `decknix--agent-tags-rename-everywhere'      OLD NEW -> one write
+;;   `decknix--agent-tags-delete-everywhere'      TAG -> one write
 ;;
 ;; The user-facing flush is a `comint-input-filter-functions' hook
 ;; target; the `add-hook' that installs it stays in main-bulk
@@ -29,6 +31,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 
 ;; Forward declarations -- carved tag-store + buffer-locals owned
 ;; by main-bulk.
@@ -338,6 +341,124 @@ submission."
         (remove-hook 'comint-input-filter-functions
                      #'decknix--agent-flush-pending-metadata
                      t)))))
+
+;; -- Vocabulary: rename / delete a tag across every conversation ----
+;;
+;; There is no separate list of known tags: completion, the sidebar and
+;; the pickers all derive the vocabulary from the conversations' own
+;; `tags' (`decknix--agent-tags-all').  So a tag disappears from
+;; completion the moment the last conversation carrying it drops it, and
+;; renaming or deleting a tag is a single pass over the store with ONE
+;; write, which makes `decknix-agent-tags-changed-functions' fire once
+;; with every affected conv-key rather than once per conversation.
+;;
+;; Saved and live sessions share the store, so the pass covers both.  The
+;; only tags held outside it are a not-yet-sent buffer's pending tags,
+;; which the interactive commands rewrite themselves.
+
+(defun decknix--agent-tag-normalise (name)
+  "Return NAME trimmed when it is a usable tag, else nil.  Pure.
+The same rule tag-add applies (trimmed, non-empty), plus no comma: every
+tag prompt reads with `completing-read-multiple', which would split a
+comma-bearing tag into two the next time it was picked."
+  (let ((s (and (stringp name) (string-trim name))))
+    (and s (not (string-empty-p s)) (not (string-search "," s)) s)))
+
+(defun decknix--agent-tags-convs-using (convs tag)
+  "Pure: sorted conv-keys in CONVS whose `tags' include TAG."
+  (let (keys)
+    (when (hash-table-p convs)
+      (maphash (lambda (k e)
+                 (when (and (hash-table-p e) (member tag (gethash "tags" e)))
+                   (push k keys)))
+               convs))
+    (sort keys #'string<)))
+
+(defun decknix--agent-tags-usage (convs)
+  "Pure: alist of (TAG . CONVERSATION-COUNT) over CONVS, sorted by TAG."
+  (let ((counts (make-hash-table :test 'equal))
+        out)
+    (when (hash-table-p convs)
+      (maphash (lambda (_k e)
+                 (when (hash-table-p e)
+                   (dolist (tag (delete-dups (copy-sequence (gethash "tags" e))))
+                     (puthash tag (1+ (gethash tag counts 0)) counts))))
+               convs))
+    (maphash (lambda (tag n) (push (cons tag n) out)) counts)
+    (sort out (lambda (a b) (string< (car a) (car b))))))
+
+(defun decknix--agent-tags-session-ids-of (convs keys)
+  "Pure: the session ids listed by the CONVS entries for KEYS, deduplicated."
+  (let (sids)
+    (dolist (k keys)
+      (let ((e (and (hash-table-p convs) (gethash k convs))))
+        (when (hash-table-p e)
+          (dolist (sid (gethash "sessions" e))
+            (cl-pushnew sid sids :test #'equal)))))
+    (nreverse sids)))
+
+(defun decknix--agent-tags-rename-list (tags old new)
+  "Pure: TAGS with OLD replaced by NEW in place, keeping NEW once.
+When NEW is already present the two merge at the earlier position, so a
+rename onto an existing tag never leaves a duplicate."
+  (let (out)
+    (dolist (tg tags)
+      (let ((tg (if (equal tg old) new tg)))
+        (unless (member tg out) (push tg out))))
+    (nreverse out)))
+
+(defun decknix--agent-tags-rename-in (convs old new)
+  "Rename tag OLD to NEW in every CONVS entry, in place.
+Returns the conv-keys changed.  Merges when an entry already has NEW."
+  (let ((keys (decknix--agent-tags-convs-using convs old)))
+    (dolist (k keys)
+      (let ((e (gethash k convs)))
+        (puthash "tags" (decknix--agent-tags-rename-list
+                         (gethash "tags" e) old new)
+                 e)))
+    keys))
+
+(defun decknix--agent-tags-delete-in (convs tag)
+  "Remove TAG from every CONVS entry, in place.  Returns the conv-keys changed.
+
+An entry left with no tags is KEPT.  Dropping it would also drop its
+session ids, workspace, model and links, which is what lets a session be
+found again at restore; and the tags-changed hook compares snapshots by
+key, so a removed key is never reported and its buffer keeps the old
+tag-derived name."
+  (let ((keys (decknix--agent-tags-convs-using convs tag)))
+    (dolist (k keys)
+      (let ((e (gethash k convs)))
+        (puthash "tags" (remove tag (gethash "tags" e)) e)))
+    keys))
+
+(defun decknix--agent-tags-remove-from-conv (convs conv-key tag)
+  "Remove TAG from CONV-KEY's entry in CONVS, in place.
+Returns how many OTHER conversations still carry TAG, so the caller can
+say whether it is still in the vocabulary.  The entry is kept even when
+emptied, for the reasons in `decknix--agent-tags-delete-in'."
+  (let ((e (and (hash-table-p convs) (gethash conv-key convs))))
+    (when (hash-table-p e)
+      (puthash "tags" (remove tag (gethash "tags" e)) e))
+    (length (decknix--agent-tags-convs-using convs tag))))
+
+(defun decknix--agent-tags-rename-everywhere (old new)
+  "Rename tag OLD to NEW across the whole tag store in one write.
+Returns the conv-keys changed (nil writes nothing)."
+  (let* ((store (decknix--agent-tags-read))
+         (convs (decknix--agent-tags-conversations store))
+         (keys (decknix--agent-tags-rename-in convs old new)))
+    (when keys (decknix--agent-tags-write store))
+    keys))
+
+(defun decknix--agent-tags-delete-everywhere (tag)
+  "Remove TAG from the whole tag store in one write.
+Returns the conv-keys changed (nil writes nothing)."
+  (let* ((store (decknix--agent-tags-read))
+         (convs (decknix--agent-tags-conversations store))
+         (keys (decknix--agent-tags-delete-in convs tag)))
+    (when keys (decknix--agent-tags-write store))
+    keys))
 
 ;; -- Backfill: retro-tag review sessions + migrate legacy tags -----
 
