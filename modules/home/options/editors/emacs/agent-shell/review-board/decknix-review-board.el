@@ -140,6 +140,7 @@ here as in the sidebar, the picker and the tab bar."
     (assessing "◐" decknix-review-board-assessing "assessing")
     (revising  "◐" decknix-review-board-assessing "revising")
     (actioned  "◑" decknix-review-board-actioned "posting")
+    (acted     "●" decknix-review-board-actioned "actioned")
     (posted    "✓" decknix-review-board-posted "posted")
     (idle      "●" font-lock-comment-face "idle"))
   "(PHASE GLYPH FACE LABEL) for each `decknix-review-board-phases' entry.
@@ -949,6 +950,8 @@ PHASES  (where a review is in /review-service-pr: assess, gate, post)
   \u25d0  assessing     reading the PR; you have not answered it yet
   \u25d0  revising      changing the plan after you said edit
   \u25d1  posting       acting on your go-ahead: posting the review
+  \u25cf  actioned      it acted on your go-ahead but reported no review link;
+                 `i' to see what happened
   \u2713  posted        the review is on GitHub (the session said so, or
                  the feed has your review); filed under Finished
   \u25cf  idle          nothing in flight

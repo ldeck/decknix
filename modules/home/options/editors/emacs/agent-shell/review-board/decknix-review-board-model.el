@@ -83,6 +83,7 @@ is reset.")
     (assessing . "reviewing; you have not answered yet")
     (revising  . "changing the plan you asked it to change")
     (actioned  . "acting on your answer: posting the review")
+    (acted     . "acted on your answer; no review link reported")
     (posted    . "review is on GitHub")
     (idle      . "nothing in flight"))
   "Where a review session is in `/review-service-pr', and what each means.
@@ -123,7 +124,10 @@ not: my review existing does not answer what the agent is asking (see
      (posted 'posted)
      ((equal state "asking") (if (plist-get ask :verdict) 'awaiting 'asking))
      (reviewed 'posted)
-     ((eq intent 'affirm) 'actioned)
+     ;; Settled after a go-ahead with no review link: it acted, but did
+     ;; not say it posted (a failed submit reads like this), so it is
+     ;; neither `posting' nor `posted'.
+     ((eq intent 'affirm) 'acted)
      (t 'idle))))
 
 (defun decknix-review-board-phase-detail (phase ask answered)
@@ -141,7 +145,7 @@ reply 1-3, rec 1\"), the verdict being posted once you have answered."
                                          (decknix-agent-turn-ask-reply-label
                                           (plist-get ask :reply))))))
         " · "))
-      ('actioned verdict)
+      ((or 'actioned 'acted) verdict)
       (_ nil))))
 
 (defun decknix-review-board--lane (has-session attention status bot-p &optional phase)

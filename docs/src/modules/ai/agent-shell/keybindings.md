@@ -204,6 +204,7 @@ gate, then posts once you answer:
 | `◐` | assessing | Reading the PR; you have not answered it yet |
 | `◐` | revising | Changing the plan after you asked for an edit |
 | `◑` | posting | Acting on your go-ahead, with the verdict being posted |
+| `●` | actioned | Settled after your go-ahead without reporting a review link (a failed submit looks like this); `i` to see |
 | `✓` | posted | The review is on GitHub (the session linked it, or the feed has your review). Filed under Finished |
 | `●` | idle | Settled, nothing in flight |
 
