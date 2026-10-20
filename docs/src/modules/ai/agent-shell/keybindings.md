@@ -29,8 +29,9 @@ moment: the turn ends having printed one line (`API Error: Unable to connect to
 API (ECONNRESET)`) and then *settles*, so without help each one reports a
 cheerful `ready` and sits in the sidebar looking like it finished its work.
 
-Sessions in this state report the **`netfail`** status — the `✗` glyph, a red
-row, and first place in the picker's attention order — and these keys clear
+Sessions in this state report the **`netfail`** status — the `✗` glyph in the
+picker, the shared needs-you `⚑` in the sidebar, and first place in both
+attention orders — and these keys clear
 them all in one action rather than one at a time:
 
 | Key | Action |

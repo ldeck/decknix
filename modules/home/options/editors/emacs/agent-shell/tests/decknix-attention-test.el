@@ -117,5 +117,27 @@
   (should (equal "2d" (decknix-attention-age-label 0.0 172800.0)))
   (should (equal "" (decknix-attention-age-label nil))))
 
+(ert-deftest decknix-attention--the-glyph-is-not-the-in-flight-shape ()
+  (should-not (equal "◐" decknix-attention-glyph)))
+
+(ert-deftest decknix-attention--the-face-carries-the-shared-colour ()
+  (should (equal decknix-attention-color
+                 (face-attribute 'decknix-attention-face :foreground nil t))))
+
+(ert-deftest decknix-attention--the-counter-ignores-upstream-counts ()
+  "Upstream passes its end_turn counts; showing them is how the two models
+came to disagree on screen."
+  (decknix-attention-test--with-buffers '("a" "b")
+    (decknix-attention-observe (get-buffer "a") "asking")
+    (decknix-attention-observe (get-buffer "b") "working")
+    (should (equal " AS:1/2"
+                   (substring-no-properties
+                    (decknix-attention-render-lighter 7 9))))))
+
+(ert-deftest decknix-attention--the-counter-is-silent-with-nothing-active ()
+  (decknix-attention-test--with-buffers '("a")
+    (decknix-attention-observe (get-buffer "a") "ready")
+    (should-not (decknix-attention-render-lighter 3 3))))
+
 (provide 'decknix-attention-test)
 ;;; decknix-attention-test.el ends here

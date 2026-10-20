@@ -52,6 +52,8 @@
 ;; `file-attributes'; the cache is warmed off the main thread by
 ;; `decknix--hub-path-facts-refresh-all' on an idle timer.
 (require 'decknix-hub-path-facts)
+;; The blocked-on-you face, glyph and states, shared with the sidebar.
+(require 'decknix-attention)
 
 ;; Forward declarations for symbols defined elsewhere in the heredoc
 ;; or in already-extracted helper modules (most are resolved at runtime
@@ -1051,8 +1053,6 @@ Order: `hide' → `show' → `mentioned' → `hide'.  See
 Long enough to cover one sidebar render pass -- which is the point -- and
 short enough that a session opened or closed shows up immediately.")
 
-(declare-function decknix-attention-observe "decknix-attention" (buffer state &optional now))
-
 (defun decknix--hub-review-session-snapshot ()
   "Return the live agent sessions as (BUFFER-NAME TAGS REVIEW-PR) triples.
 
@@ -1102,11 +1102,13 @@ O(requests x sessions) pure comparisons; `covers-p' itself is ~3us."
     decknix--hub-review-session-snapshot))
 
 (defconst decknix--hub-request-session-faces
-  '(("waiting" . (:foreground "#ff5f5f" :weight bold))
-    ("netfail" . (:foreground "#ff5f5f" :weight bold))
-    ("asking"  . (:foreground "#ffaf5f" :weight bold))
+  '(("waiting" . decknix-attention-face)
+    ("netfail" . decknix-attention-face)
+    ("asking"  . decknix-attention-face)
     ("working" . (:foreground "#d7af5f")))
   "Face per session state for the Requests row indicator.
+The blocked-on-you states share `decknix-attention-face' with the sidebar
+and the tab tints; they had been red and orange here and purple there.
 States absent here fall back to the neutral colour: they are sessions
 that exist and want nothing.")
 
@@ -1133,9 +1135,8 @@ nothing."
    ((equal state "working")
     (decknix--hub-icon "◐" (alist-get "working" decknix--hub-request-session-faces
                                       nil nil #'equal)))
-   ((alist-get state decknix--hub-request-session-faces nil nil #'equal)
-    (decknix--hub-icon "◉" (alist-get state decknix--hub-request-session-faces
-                                      nil nil #'equal)))
+   ((decknix-attention-state-p state)
+    (decknix--hub-icon decknix-attention-glyph 'decknix-attention-face))
    (t (decknix--hub-icon "◉" '(:foreground "#87d7ff")))))
 
 (defun decknix--hub-request-has-live-session-p (item)

@@ -28,6 +28,7 @@
 ;;; Code:
 
 (require 'subr-x)
+(require 'decknix-attention)
 
 ;; Resolved at runtime in the daemon's load-path (carved siblings / externals).
 (declare-function decknix--header-detect-status "decknix-agent-header" ())
@@ -43,10 +44,12 @@ Applied by `decknix-agent-tab-status-install'."
   :type 'boolean :group 'decknix-agent-tab-status)
 
 (defcustom decknix-agent-tab-status-colors
-  '(("working"      . "#3a330a")   ; amber — in progress
-    ("netfail"      . "#4a0f14")   ; deep red — turn died on the link (#162)
-    ("waiting"      . "#3a1418")   ; red   — needs YOU (permission/input)
-    ("asking"       . "#3a2410")   ; orange — needs YOU (ended on a question)
+  `(("working"      . "#3a330a")   ; amber — in progress
+    ;; One tint for all three needs-YOU states, shared with the sidebar
+    ;; and Requests rows; they had been red, red and orange here only.
+    ("netfail"      . ,decknix-attention-background)
+    ("waiting"      . ,decknix-attention-background)
+    ("asking"       . ,decknix-attention-background)
     ("ready"        . "#123010")   ; green — idle, ready for a prompt
     ("finished"     . "#0f2e30")   ; cyan  — just completed
     ("initializing" . "#262626")   ; grey  — starting up

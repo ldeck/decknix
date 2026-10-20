@@ -49,8 +49,29 @@ agent mid-task.  `asking' last: the turn finished, on a question.")
   "Return STATE's urgency rank, lower first, or nil when it is not attention."
   (seq-position decknix-attention-states state))
 
-(defconst decknix-attention-glyph "◐"
-  "Glyph for a session blocked on the user.")
+(defconst decknix-attention-glyph "⚑"
+  "Glyph for a session blocked on the user, wherever it is shown.
+
+Not the half circle: that is the shape for work in flight, and an agent
+paused on a question was drawn exactly like one producing output, with
+only a colour between them.  The flag is already what a Reviews group
+shows when one of its sessions is blocked on you.")
+
+(defconst decknix-attention-color "#c678dd"
+  "Foreground for anything blocked on the user.
+
+Purple because it borrows no other meaning: red already says broken, amber
+in progress, green done.  The sidebar, the Requests indicator and the
+Reviews group rows used three different colours for this one state, so
+none of them could be read without knowing which screen it was.")
+
+(defconst decknix-attention-background "#3a1f45"
+  "Background tint, a dark `decknix-attention-color', for tab-bar tabs.")
+
+(defface decknix-attention-face
+  `((t :foreground ,decknix-attention-color :weight bold))
+  "Face for a session, row or tab that is blocked on the user."
+  :group 'decknix)
 
 (defun decknix-attention-age-label (since &optional now)
   "Return how long ago SINCE was, compactly: `now', `12m', `3h', `2d'."
@@ -274,6 +295,33 @@ of them."
                    bufs))))
      (t (decknix-attention-display
          (decknix-attention-next bufs (window-buffer (selected-window))))))))
+
+;; --- mode-line counter -------------------------------------------------
+
+(defvar decknix-attention-lighter " AS:%d/%d"
+  "Mode-line template: sessions needing you, then those plus working ones.")
+
+(defvar decknix-attention--lighter-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mode-line mouse-1]
+                (lambda () (interactive) (decknix-attention-jump t)))
+    map)
+  "Keymap for the counter: click to choose a session that needs you.")
+
+(defun decknix-attention-render-lighter (&rest _upstream-counts)
+  "Render the AS:n/m counter from decknix's attention states.
+
+Installed as `agent-shell-attention-render-function', whose arguments --
+upstream's own pending and busy counts -- are ignored: those come from the
+end_turn model this replaces, and showing them beside the sidebar's count
+let the two disagree on screen.  Reads only the observation table."
+  (let ((counts (decknix-attention-count)))
+    (when (or (> (car counts) 0) (> (cdr counts) 0))
+      (propertize (format decknix-attention-lighter (car counts) (cdr counts))
+                  'face (and (> (car counts) 0) 'decknix-attention-face)
+                  'mouse-face 'mode-line-highlight
+                  'help-echo "Sessions needing you / active.  mouse-1: choose one"
+                  'local-map decknix-attention--lighter-map))))
 
 (provide 'decknix-attention)
 ;;; decknix-attention.el ends here

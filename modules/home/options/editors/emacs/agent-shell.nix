@@ -991,7 +991,8 @@ let
   decknix-focus-el = mkEmacsTestedPackage {
     pname = "decknix-focus";
     src = ./agent-shell/focus;
-    packageRequires = [ ];
+    # Steals focus on the attention states, so it reads their definition.
+    packageRequires = [ decknix-attention-el ];
     testFiles = [
       "decknix-focus-test.el"
     ];
@@ -1622,11 +1623,12 @@ let
 
   # Tint tab-bar tabs by the status of the single agent they hold.  Uses
   # `decknix--header-detect-status' at runtime (resolved in the daemon's
-  # load-path); no build-time dep, so packageRequires stays empty.
+  # load-path); its only build-time dep is the shared needs-you tint.
   decknix-agent-tab-status-el = mkEmacsTestedPackage {
     pname = "decknix-agent-tab-status";
     src = ./agent-shell/tab-status;
-    packageRequires = [ ];
+    # The shared needs-you tint.
+    packageRequires = [ decknix-attention-el ];
     testFiles = [
       "decknix-agent-tab-status-test.el"
     ];
@@ -2675,6 +2677,7 @@ let
       decknix-hub-file-event-el
       decknix-hub-path-facts-el
       decknix-agent-tags-read-el
+      decknix-attention-el
     ];
     testFiles = [
       "decknix-hub-worktree-persistence-test.el"
@@ -7969,9 +7972,12 @@ returns a fresh plist so the caller's is not mutated."
         (require 'agent-shell-attention)
         (agent-shell-attention-mode 1)
 
-        ;; Show both pending and busy counts: AS:n/m
+        ;; AS:n/m counts by decknix's attention states (n need you, m those
+        ;; plus working), not upstream's end_turn pending list, so the mode
+        ;; line and the sidebar cannot disagree.  Upstream still supplies
+        ;; the indicator's placement and its notifications.
         (setq agent-shell-attention-render-function
-              #'agent-shell-attention-render-active)
+              #'decknix-attention-render-lighter)
 
         ;; `C-c A j' is NOT bound here: it jumps by decknix's attention
         ;; states (`decknix-attention-jump', bound with the prefix map above).

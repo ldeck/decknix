@@ -1006,16 +1006,16 @@ reader has a decision to make and something to lose by not making it."
 ;; from.  Colour plus a left-hand glyph has to carry it.
 
 (defconst decknix-sidebar-layout-state-faces
-  '(("netfail"  . (:foreground "#ff5f5f" :weight bold))
-    ;; PURPLE for the two states that want the user.  Colour on a PR row
-    ;; reports the build; on a session row there is no build, so it
-    ;; reports progress -- yellow moving, green done, red broken.  An
-    ;; agent paused on a question is none of those: it is not failing and
-    ;; it is not progressing, it is waiting on a person.  Purple says that
-    ;; without borrowing a colour that means something else, and it is the
-    ;; single most actionable row the sidebar can show.
-    ("waiting"  . (:foreground "#c678dd" :weight bold))
-    ("asking"   . (:foreground "#c678dd" :weight bold))
+  '(;; ONE face for the three states that want the user, shared with the
+    ;; Requests indicator, the Reviews group rows and the tab tints.
+    ;; Colour on a PR row reports the build; on a session row there is no
+    ;; build, so it reports progress -- yellow moving, green done.  An
+    ;; agent blocked on you is none of those.  `netfail' was red here and
+    ;; red on Requests while `waiting' was purple here and red there: the
+    ;; same state looked different on two screens.
+    ("netfail"  . decknix-attention-face)
+    ("waiting"  . decknix-attention-face)
+    ("asking"   . decknix-attention-face)
     ;; Yellow for in-progress, matching a building PR.
     ("working"  . (:foreground "#d7af5f"))
     ;; Green for complete, matching a passing build.
@@ -1024,10 +1024,8 @@ reader has a decision to make and something to lose by not making it."
     ("closing"  . (:inherit font-lock-comment-face)))
   "Face per session state.
 
-The first four are copied from `decknix--hub-request-session-faces' so the
-sidebar and the Requests row indicator cannot disagree about what a colour
-means; `finished', `ready' and `closing' extend it, because the sidebar
-shows idle sessions and that indicator does not.")
+The attention states use `decknix-attention-face', as does the Requests
+row indicator, so the two cannot disagree about what a colour means.")
 
 (defun decknix--layout-state-face (state)
   "Return the face for session STATE."
@@ -1385,7 +1383,8 @@ without paying for it twice."
 ;; --- labels -----------------------------------------------------------
 
 (defconst decknix-sidebar-layout-state-glyphs
-  '(("asking"   . "◐") ("waiting" . "◐") ("netfail" . "◐")
+  `(("asking"   . ,decknix-attention-glyph) ("waiting" . ,decknix-attention-glyph)
+    ("netfail"  . ,decknix-attention-glyph)
     ("working"  . "◐")
     ("finished" . "●") ("ready"   . "●")
     ("closing"  . "◌"))
@@ -1402,9 +1401,10 @@ circle was `the agent wants you', which is the same glyph a PR uses for
 indentation ties each glyph to its row -- but only while the shape means
 the same KIND of thing.  It did not.
 
-An agent mid-task and an agent paused on a question are both half
-circles, because both are in flight; what separates them is the colour,
-which is where `whose move' lives for a session.")
+A session blocked on you is the exception: `decknix-attention-glyph'.
+It had been a half circle like an agent mid-task, separated from one only
+by colour, which is the single distinction the sidebar most needs to
+make legible.")
 
 (defun decknix--layout-state-glyph (state)
   "Return the row glyph for STATE; a middot when there is no session."
@@ -1456,7 +1456,7 @@ the section rendered `default\=' unless something was already shouting."
      (t nil))))
 
 (defconst decknix-sidebar-layout-group-faces
-  '((asking  . warning)
+  '((asking  . decknix-attention-face)
     (updated . (:foreground "#5fafd7" :weight bold))
     (blocked . error)
     (new     . (:foreground "#87af87"))
@@ -1464,8 +1464,9 @@ the section rendered `default\=' unless something was already shouting."
     (responded . font-lock-comment-face))
   "Face per Reviews group state.
 
-Green for work waiting on a reviewer, amber for a session mid-flight or
-blocked on the user, red for a PR that cannot proceed.  Nothing in the
+Green for work waiting on a reviewer, amber for a session mid-flight,
+`decknix-attention-face' for one blocked on the user, red for a PR that
+cannot proceed.  Nothing in the
 section was coloured before unless a session was blocked, so a repo with
 PRs waiting read as inert.")
 
