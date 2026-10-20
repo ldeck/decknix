@@ -289,82 +289,139 @@ pidfile behind."
 
 ;; --- the working-state cache -----------------------------------------
 
+(defmacro decknix-working-test--with-log (spec &rest body)
+  "Bind (FILE READS) per SPEC: a temp log, and a list of (BEG . END) reads.
+The log is KEY `s-w' for `decknix--agent-broker-log-path'.  Every read
+of broker bytes is recorded in READS, newest first."
+  (declare (indent 1))
+  (let ((file (nth 0 spec)) (reads (nth 1 spec)))
+    `(let* ((,file (make-temp-file "dk-wc"))
+            (,reads nil)
+            (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
+            (orig (symbol-function 'decknix--agent-broker-read-bytes)))
+       (unwind-protect
+           (cl-letf (((symbol-function 'decknix--agent-broker-log-path)
+                      (lambda (_k) ,file))
+                     ((symbol-function 'decknix--agent-broker-read-bytes)
+                      (lambda (f &optional beg end)
+                        (push (cons beg end) ,reads)
+                        (funcall orig f beg end))))
+             ,@body)
+         (delete-file ,file)))))
+
+(defun decknix-working-test--append (file &rest lines)
+  "Append LINES (each newline-terminated) to FILE."
+  (let ((coding-system-for-write 'utf-8-unix))
+    (write-region (mapconcat (lambda (l) (concat l "\n")) lines "")
+                  nil file t 'silent)))
+
+(defun decknix-working-test--probe (file &optional now)
+  (decknix--agent-broker-inflight-cached-p "s-w" (file-attributes file) now))
+
 (ert-deftest decknix-working-cache--an-unchanged-log-is-not-re-read ()
   "Keyed on the log\='s identity, not a clock.  Allocation is the reason:
 each miss reads 64 KB, splits it into hundreds of strings and JSON-parses
 each one, and at 13 sessions every 2 seconds that churn drives the GC
 that interrupts typing."
-  (let ((reads 0)
-        (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
-        (f (make-temp-file "dk-wc")))
-    (unwind-protect
-        (progn
-          (with-temp-file f (insert "{}\n"))
-          (cl-letf (((symbol-function 'decknix--agent-broker-log-path)
-                     (lambda (_k) f))
-                    ((symbol-function 'decknix--agent-broker-read-log-tail)
-                     (lambda (&rest _) (setq reads (1+ reads)) nil)))
-            (let ((attrs (file-attributes f)))
-              (dotimes (_ 20)
-                (decknix--agent-broker-inflight-cached-p "s-x" attrs))
-              (should (= 1 reads)))))
-      (delete-file f))))
+  (decknix-working-test--with-log (f reads)
+    (decknix-working-test--append f "{}")
+    (dotimes (_ 20) (decknix-working-test--probe f))
+    (should (= 1 (length reads)))))
 
-(ert-deftest decknix-working-cache--a-grown-log-is-re-read ()
-  "A log that grew may have changed what the last turn looks like, so the
-cached answer is no longer evidence."
-  (let ((reads 0)
-        (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
-        (f (make-temp-file "dk-wc2")))
-    (unwind-protect
-        (cl-letf (((symbol-function 'decknix--agent-broker-log-path)
-                   (lambda (_k) f))
-                  ((symbol-function 'decknix--agent-broker-read-log-tail)
-                   (lambda (&rest _) (setq reads (1+ reads)) nil)))
-          (with-temp-file f (insert "{}\n"))
-          (decknix--agent-broker-inflight-cached-p "s-y" (file-attributes f))
-          ;; Same mtime resolution is possible, so change the SIZE too --
-          ;; which is exactly why size is part of the key.
-          (with-temp-file f (insert "{}\n{}\n{}\n"))
-          (decknix--agent-broker-inflight-cached-p "s-y" (file-attributes f))
-          (should (= 2 reads)))
-      (delete-file f))))
+(ert-deftest decknix-working-cache--a-grown-log-reads-only-what-was-appended ()
+  "The actively written logs are the ones whose answer matters, and an
+identity key always misses on them; re-reading the 64 KB tail on each
+query is what the sample caught."
+  (let ((decknix-agent-broker-working-reprobe-seconds 0))
+    (decknix-working-test--with-log (f reads)
+      (decknix-working-test--append f (decknix-page-test--chunk "a")
+                                    decknix-page-test--stop)
+      (should-not (decknix-working-test--probe f))
+      (let ((size (file-attribute-size (file-attributes f))))
+        (decknix-working-test--append f (decknix-page-test--chunk "b"))
+        (should (decknix-working-test--probe f))
+        ;; The second read starts where the first stopped.
+        (should (equal size (car (car reads))))))))
+
+(ert-deftest decknix-working-cache--a-turn-end-in-the-append-is-seen ()
+  (let ((decknix-agent-broker-working-reprobe-seconds 0))
+    (decknix-working-test--with-log (f _reads)
+      (decknix-working-test--append f decknix-page-test--stop
+                                    (decknix-page-test--chunk "a"))
+      (should (decknix-working-test--probe f))
+      (decknix-working-test--append f "{\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"usage_update\"}}}")
+      (should (decknix-working-test--probe f))
+      (decknix-working-test--append f decknix-page-test--stop)
+      (should-not (decknix-working-test--probe f)))))
+
+(ert-deftest decknix-working-cache--a-torn-line-is-read-whole-next-time ()
+  "A boundary split by a concurrent write must not be lost: losing it
+would pin `working' until the staleness window ran out."
+  (let ((decknix-agent-broker-working-reprobe-seconds 0)
+        (coding-system-for-write 'utf-8-unix))
+    (decknix-working-test--with-log (f _reads)
+      (decknix-working-test--append f decknix-page-test--stop
+                                    (decknix-page-test--chunk "a"))
+      (write-region "{\"id\":1,\"result\":{\"stopRea" nil f t 'silent)
+      (should (decknix-working-test--probe f))
+      (write-region "son\":\"end_turn\"}}\n" nil f t 'silent)
+      (should-not (decknix-working-test--probe f)))))
+
+(ert-deftest decknix-working-cache--a-growing-log-is-re-read-at-most-per-window ()
+  "A busy log grows between every pair of queries; the floor is what
+stops it being opened on every one."
+  (let ((decknix-agent-broker-working-reprobe-seconds 3))
+    (decknix-working-test--with-log (f reads)
+      (decknix-working-test--append f decknix-page-test--stop)
+      (decknix-working-test--probe f 100.0)
+      (decknix-working-test--append f (decknix-page-test--chunk "a"))
+      ;; Inside the window: the old answer, no read.
+      (should-not (decknix-working-test--probe f 101.0))
+      (should (= 1 (length reads)))
+      ;; Past it: read, and the new turn is seen.
+      (should (decknix-working-test--probe f 103.5))
+      (should (= 2 (length reads))))))
+
+(ert-deftest decknix-working-cache--a-shrunk-log-is-probed-afresh ()
+  (let ((decknix-agent-broker-working-reprobe-seconds 0))
+    (decknix-working-test--with-log (f reads)
+      (decknix-working-test--append f (decknix-page-test--chunk "a")
+                                    (decknix-page-test--chunk "b"))
+      (should (decknix-working-test--probe f))
+      (let ((coding-system-for-write 'utf-8-unix))
+        (with-temp-file f (insert decknix-page-test--stop "\n")))
+      (should-not (decknix-working-test--probe f))
+      ;; From the start of the (now short) file, not the stale offset.
+      (should (equal 0 (car (car reads)))))))
+
+(ert-deftest decknix-working-cache--a-large-append-is-probed-afresh ()
+  "More than a tail appended since: the bounded full probe, never an
+unbounded read of everything in between."
+  (let ((decknix-agent-broker-working-reprobe-seconds 0)
+        (decknix-agent-broker-tail-bytes 256))
+    (decknix-working-test--with-log (f reads)
+      (decknix-working-test--append f decknix-page-test--stop)
+      (decknix-working-test--probe f)
+      (dotimes (i 20) (decknix-working-test--append f (decknix-page-test--chunk (format "c%d" i))))
+      (should (decknix-working-test--probe f))
+      (let ((r (car reads)))
+        (should (<= (- (cdr r) (car r)) 256))))))
 
 (ert-deftest decknix-working-cache--is-keyed-per-session ()
-  (let ((reads 0)
-        (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
-        (f (make-temp-file "dk-wc3")))
-    (unwind-protect
-        (progn
-          (with-temp-file f (insert "{}\n"))
-          (cl-letf (((symbol-function 'decknix--agent-broker-log-path)
-                     (lambda (_k) f))
-                    ((symbol-function 'decknix--agent-broker-read-log-tail)
-                     (lambda (&rest _) (setq reads (1+ reads)) nil)))
-            (let ((attrs (file-attributes f)))
-              (decknix--agent-broker-inflight-cached-p "s-a" attrs)
-              (decknix--agent-broker-inflight-cached-p "s-b" attrs)
-              (should (= 2 reads)))))
-      (delete-file f))))
+  (decknix-working-test--with-log (f reads)
+    (decknix-working-test--append f "{}")
+    (let ((attrs (file-attributes f)))
+      (decknix--agent-broker-inflight-cached-p "s-a" attrs)
+      (decknix--agent-broker-inflight-cached-p "s-b" attrs)
+      (should (= 2 (length reads))))))
 
 (ert-deftest decknix-working-cache--caches-false-too ()
   "Most sessions are idle; caching only the positive case would re-read
 nearly all of them on every pass."
-  (let ((reads 0)
-        (decknix--agent-broker-working-cache (make-hash-table :test 'equal))
-        (f (make-temp-file "dk-wc4")))
-    (unwind-protect
-        (progn
-          (with-temp-file f (insert "{}\n"))
-          (cl-letf (((symbol-function 'decknix--agent-broker-log-path)
-                     (lambda (_k) f))
-                    ((symbol-function 'decknix--agent-broker-read-log-tail)
-                     (lambda (&rest _) (setq reads (1+ reads)) nil)))
-            (let ((attrs (file-attributes f)))
-              (dotimes (_ 5)
-                (should-not (decknix--agent-broker-inflight-cached-p "s-z" attrs)))
-              (should (= 1 reads)))))
-      (delete-file f))))
+  (decknix-working-test--with-log (f reads)
+    (decknix-working-test--append f decknix-page-test--stop)
+    (dotimes (_ 5) (should-not (decknix-working-test--probe f)))
+    (should (= 1 (length reads)))))
 
 (ert-deftest decknix-working-cache--staleness-is-not-cached ()
   "Freshness depends on the clock: a fresh log goes stale with no file
@@ -381,12 +438,31 @@ change, so caching that half would pin an abandoned turn at `working'."
                      (lambda (_k) f))
                     ((symbol-function 'decknix--agent-broker-live-p)
                      (lambda (_k) t))
-                    ((symbol-function 'decknix--agent-broker-read-log-tail)
-                     (lambda (&rest _) (list "x"))))
+                    ((symbol-function 'decknix--agent-broker-inflight-cached-p)
+                     (lambda (&rest _) t)))
             ;; Zero staleness window: nothing can be working, regardless of
             ;; what the log tail holds.
             (should-not (decknix--agent-broker-working-p buf))))
       (kill-buffer buf) (delete-file f))))
+
+;; --- the line filters agree with the parse ---------------------------
+
+(ert-deftest decknix-line-filter--boundary-and-content-are-recognised ()
+  (should (decknix--agent-broker-line-boundary-p decknix-page-test--stop))
+  (should-not (decknix--agent-broker-line-boundary-p (decknix-page-test--chunk "x")))
+  (should (decknix--agent-broker-line-notification (decknix-page-test--chunk "x")))
+  (should-not (decknix--agent-broker-line-notification decknix-page-test--stop)))
+
+(ert-deftest decknix-line-filter--the-key-in-text-is-not-a-boundary ()
+  "Content that merely mentions the key is escaped inside a string, so
+the substring test passes it to the parse, which rejects it."
+  (should-not (decknix--agent-broker-line-boundary-p
+               (decknix-page-test--chunk "a \\\"stopReason\\\" here"))))
+
+(ert-deftest decknix-line-filter--surrounding-whitespace-still-parses ()
+  (should (decknix--agent-broker-parse-json-line "  {\"a\":1}  \r"))
+  (should-not (decknix--agent-broker-parse-json-line "   "))
+  (should-not (decknix--agent-broker-parse-json-line "# client attached")))
 
 (provide 'decknix-agent-broker-rehydrate-page-test)
 ;;; decknix-agent-broker-rehydrate-page-test.el ends here

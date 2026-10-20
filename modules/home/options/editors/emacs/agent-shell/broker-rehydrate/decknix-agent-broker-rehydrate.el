@@ -35,6 +35,7 @@
 
 (require 'subr-x)
 (require 'json)
+(require 'cl-lib)
 
 (declare-function agent-shell--on-notification "agent-shell" (&rest args))
 (declare-function agent-shell--state "agent-shell" ())
@@ -62,12 +63,17 @@ and every session-meta kind (usage/mode/commands/info updates).")
   "Parse LINE as one ACP JSON object using acp.el's config, or nil.
 Returns a symbol-keyed alist (matching what `agent-shell--on-notification'
 consumes); broker marker lines (`# …'), blank lines and malformed JSON
-return nil."
+return nil.
+
+No `string-trim': its trailing-whitespace regexp is matched from every
+position of a line that can run to 14 KB, and the status probe calls this
+for every line of a 64 KB tail.  The JSON parser skips the whitespace
+itself."
   (when (and line (stringp line))
-    (let ((s (string-trim line)))
-      (when (and (> (length s) 0) (eq (aref s 0) ?{))
+    (let ((i (string-match-p "[^ \t\r\n]" line)))
+      (when (and i (eq (aref line i) ?{))
         (ignore-errors
-          (json-parse-string s :object-type 'alist
+          (json-parse-string line :object-type 'alist
                              :null-object nil :false-object nil))))))
 
 (defun decknix--agent-broker-result-stop-reason-p (obj)
@@ -89,6 +95,24 @@ Replayable == method `session/update' whose `sessionUpdate' kind is in
            (kind   (and (listp update) (alist-get 'sessionUpdate update))))
       (when (member kind decknix--agent-broker-replay-kinds)
         obj))))
+
+;; A substring test before the parse.  Most lines of a busy log are
+;; neither a turn boundary nor visible content, and a `string-search' over
+;; a line costs far less than parsing it into an alist only to discard it.
+;; Neither key can appear outside its own object unescaped, so the filter
+;; never rejects a line the parse would have accepted.
+
+(defun decknix--agent-broker-line-boundary-p (line)
+  "Non-nil when raw LINE is a committed turn boundary."
+  (and (string-search "\"stopReason\"" line)
+       (decknix--agent-broker-result-stop-reason-p
+        (decknix--agent-broker-parse-json-line line))))
+
+(defun decknix--agent-broker-line-notification (line)
+  "Return raw LINE parsed when it is a replayable notification, else nil."
+  (and (string-search "\"sessionUpdate\"" line)
+       (decknix--agent-broker-visible-notification
+        (decknix--agent-broker-parse-json-line line))))
 
 (defun decknix--agent-broker-inflight-notifications (lines)
   "Return the in-flight-turn notifications to replay, parsed from LINES.
@@ -114,16 +138,14 @@ prepopulation, and everything since the attach is delivered live)."
       ;; last committed turn boundary strictly before that attach
       (let ((i (1- attach-idx)))
         (while (and (>= i 0) (= boundary-idx -1))
-          (when (decknix--agent-broker-result-stop-reason-p
-                 (decknix--agent-broker-parse-json-line (aref vec i)))
+          (when (decknix--agent-broker-line-boundary-p (aref vec i))
             (setq boundary-idx i))
           (setq i (1- i))))
       ;; visible agent notifications in (boundary-idx, attach-idx)
       (let ((out nil) (i (1+ boundary-idx)))
         (while (< i attach-idx)
-          (when-let* ((obj (decknix--agent-broker-visible-notification
-                            (decknix--agent-broker-parse-json-line
-                             (aref vec i)))))
+          (when-let* ((obj (decknix--agent-broker-line-notification
+                            (aref vec i))))
             (push obj out))
           (setq i (1+ i)))
         (nreverse out)))))
@@ -161,8 +183,7 @@ broker, so replaying past it would double the output."
 Returns -1 when there is none, meaning the window reaches the log start."
   (let ((i (1- end)) (found -1))
     (while (and (>= i 0) (= found -1))
-      (when (decknix--agent-broker-result-stop-reason-p
-             (decknix--agent-broker-parse-json-line (aref vec i)))
+      (when (decknix--agent-broker-line-boundary-p (aref vec i))
         (setq found i))
       (setq i (1- i)))
     found))
@@ -185,8 +206,7 @@ asked for, so a short log replays whole rather than empty."
   "Return the replayable notifications in VEC strictly between START and END."
   (let ((out nil) (i (1+ start)))
     (while (< i end)
-      (when-let* ((obj (decknix--agent-broker-visible-notification
-                        (decknix--agent-broker-parse-json-line (aref vec i)))))
+      (when-let* ((obj (decknix--agent-broker-line-notification (aref vec i))))
         (push obj out))
       (setq i (1+ i)))
     (nreverse out)))
@@ -439,8 +459,7 @@ and counting those marks every session as working."
         (> n 0)
       (let ((i (1+ boundary)) (found nil))
         (while (and (< i n) (null found))
-          (when (decknix--agent-broker-visible-notification
-                 (decknix--agent-broker-parse-json-line (aref vec i)))
+          (when (decknix--agent-broker-line-notification (aref vec i))
             (setq found t))
           (setq i (1+ i)))
         found))))
@@ -454,39 +473,102 @@ and counting those marks every session as working."
     (< (float-time (time-subtract (current-time) mtime))
        decknix-agent-broker-inflight-stale-seconds)))
 
+;; ── incremental working state ──────────────────────────────────────
+;;
+;; A log that is being written is exactly the log whose answer matters,
+;; and an mtime+size key always misses on it: the four actively written
+;; logs re-read and re-parsed a 64 KB tail on every status query.  So the
+;; cache remembers HOW FAR it has read, and a grown log costs only the
+;; bytes appended since.  Lines are consumed only up to the last newline,
+;; so a line torn by a concurrent write is read whole next time rather
+;; than lost -- losing a `stopReason' line would pin `working' until the
+;; staleness window.
+
 (defvar decknix--agent-broker-working-cache (make-hash-table :test 'equal)
-  "Broker key -> (MTIME SIZE INFLIGHT-P): the last probe and what it saw.
+  "Broker key -> (MTIME SIZE OFFSET INFLIGHT-P PROBED-AT).
 
-Keyed on the log\='s MTIME and SIZE rather than on a wall-clock TTL.  A log
-that has not grown cannot have changed what the last turn looks like, so
-the answer is still valid however long ago it was computed -- and a TTL
-is guesswork against the tick interval besides.  The first attempt used a
-2 second TTL while two timers tick every 2 seconds, so it almost never
-hit.
+MTIME and SIZE identify the log as last seen; an unchanged log costs one
+`file-attributes\=' and no allocation.  OFFSET is the byte just past the
+last complete line consumed, INFLIGHT-P the running answer, PROBED-AT the
+`float-time\=' of the last read.
 
-Allocation, not CPU, is why this matters.  Each miss reads 64 KB, splits
-it into hundreds of strings and JSON-parses each one; at 13 sessions
-every 2 seconds that churn drives the GC, and GC is what interrupts
-typing.  An unchanged log now costs one `file-attributes\=' and no
-allocation at all.")
+Allocation, not CPU, is why this matters.  Each full probe reads 64 KB,
+splits it into hundreds of strings and JSON-parses the candidates; at a
+dozen sessions every 2 seconds that churn drives the GC, and GC is what
+interrupts typing.")
 
-(defun decknix--agent-broker-inflight-cached-p (key attrs)
-  "Return whether KEY\='s log ends mid-turn, reusing the last probe if valid.
+(defcustom decknix-agent-broker-working-reprobe-seconds 3
+  "Minimum seconds between reads of a broker log that keeps growing.
 
-ATTRS is KEY\='s log `file-attributes\='.  Re-reads only when the log has
-grown or been replaced."
-  (let* ((mtime (float-time (file-attribute-modification-time attrs)))
+A busy log grows between every pair of status queries, so without a floor
+it is opened on each one, and `open(2)\=' dominated the sampled probe.
+The cost is lag: a turn that ends is seen as ended at most this many
+seconds late.  An unchanged log is never re-read whatever this is."
+  :type 'number
+  :group 'decknix)
+
+(defun decknix--agent-broker-complete-lines (bytes)
+  "Return (CONSUMED . LINES) for the complete lines of BYTES.
+CONSUMED counts bytes through the last newline; a trailing partial line
+is left for the next read."
+  (let ((nl (cl-position ?\n bytes :from-end t)))
+    (if (null nl)
+        (cons 0 nil)
+      (cons (1+ nl) (split-string (substring bytes 0 nl) "\n" t)))))
+
+(defun decknix--agent-broker-inflight-advance (inflight lines)
+  "Return INFLIGHT after reading LINES, appended in file order.
+A boundary ends the turn; visible content after it starts one.  Anything
+else (usage, mode updates, markers) leaves the answer as it was.  This is
+`decknix--agent-broker-inflight-p\=' read forwards, so it can resume."
+  (dolist (line lines inflight)
+    (cond ((decknix--agent-broker-line-boundary-p line) (setq inflight nil))
+          ((decknix--agent-broker-line-notification line) (setq inflight t)))))
+
+(defun decknix--agent-broker-probe-full (log size)
+  "Read LOG\='s last tail and return (OFFSET . INFLIGHT-P)."
+  (let* ((beg (max 0 (- size decknix-agent-broker-tail-bytes)))
+         (part (decknix--agent-broker-complete-lines
+                (decknix--agent-broker-read-bytes log beg size))))
+    (cons (+ beg (car part))
+          (and (decknix--agent-broker-inflight-p (cdr part)) t))))
+
+(defun decknix--agent-broker-probe-append (log offset size inflight)
+  "Read LOG\='s bytes OFFSET..SIZE and return (OFFSET . INFLIGHT-P)."
+  (let ((part (decknix--agent-broker-complete-lines
+               (decknix--agent-broker-read-bytes log offset size))))
+    (cons (+ offset (car part))
+          (and (decknix--agent-broker-inflight-advance inflight (cdr part)) t))))
+
+(defun decknix--agent-broker-inflight-cached-p (key attrs &optional now)
+  "Return whether KEY\='s log ends mid-turn, reading as little as possible.
+
+ATTRS is KEY\='s log `file-attributes\='.  An unchanged log is not read.
+A grown one is read from where the last read stopped, at most once per
+`decknix-agent-broker-working-reprobe-seconds\='.  A shrunk or replaced log, or
+one that grew by more than a tail, is probed afresh.  NOW defaults to
+`float-time\='."
+  (let* ((now (or now (float-time)))
+         (mtime (float-time (file-attribute-modification-time attrs)))
          (size (file-attribute-size attrs))
-         (hit (gethash key decknix--agent-broker-working-cache)))
-    (if (and hit (equal mtime (nth 0 hit)) (equal size (nth 1 hit)))
-        (nth 2 hit)
-      (let ((val (and (decknix--agent-broker-inflight-p
-                       (decknix--agent-broker-read-log-tail
-                        (decknix--agent-broker-log-path key)))
-                      t)))
-        (puthash key (list mtime size val)
+         (hit (gethash key decknix--agent-broker-working-cache))
+         (offset (nth 2 hit)))
+    (cond
+     ((and hit (equal mtime (nth 0 hit)) (equal size (nth 1 hit)))
+      (nth 3 hit))
+     ((and hit (>= size offset)
+           (< (- now (nth 4 hit)) decknix-agent-broker-working-reprobe-seconds))
+      (nth 3 hit))
+     (t
+      (let* ((log (decknix--agent-broker-log-path key))
+             (res (if (and hit (>= size offset)
+                           (<= (- size offset) decknix-agent-broker-tail-bytes))
+                      (decknix--agent-broker-probe-append
+                       log offset size (nth 3 hit))
+                    (decknix--agent-broker-probe-full log size))))
+        (puthash key (list mtime size (car res) (cdr res) now)
                  decknix--agent-broker-working-cache)
-        val))))
+        (cdr res))))))
 
 (defun decknix--agent-broker-working-p (&optional buffer)
   "Non-nil when BUFFER\='s agent is mid-turn according to its broker log.
