@@ -475,5 +475,68 @@ answered \"No live agent buffer at point\"."
           (decknix-layout-goto-next-attention)
           (should (looking-at "    #9")))))))
 
+;; --- Needs you ----------------------------------------------------------
+
+(defun decknix-lr-test--render-needs-you (sessions &optional feed)
+  "Return the rendered Needs-you block for SESSIONS with review FEED items."
+  (let ((decknix--hub-reviews (and feed (list (cons 'items feed))))
+        (decknix-attention--seen (make-hash-table :test 'eq :weakness 'key)))
+    (cl-letf (((symbol-function 'decknix--layout-sessions) (lambda () sessions))
+              ((symbol-function 'decknix--sidebar-render-section-header)
+               (lambda (title &optional _id) (insert " " title "\n"))))
+      (with-temp-buffer
+        (decknix--layout-render-needs-you 0 48)
+        (buffer-string)))))
+
+(ert-deftest decknix-layout-render--needs-you-lists-every-blocked-session-first-ranked ()
+  (decknix-lr-test--with-buffers '("*Claude: mine*" "*Claude: pr-upside-1*" "*Claude: idle*")
+    (let ((out (decknix-lr-test--render-needs-you
+                '(("*Claude: mine*" nil nil "asking")
+                  ("*Claude: pr-upside-1*" nil ("upside#1") "waiting")
+                  ("*Claude: idle*" nil nil "ready")))))
+      (should (string-match-p "Needs you (2)" out))
+      (should (< (string-match "pr-upside-1" out) (string-match "mine" out)))
+      (should-not (string-match-p "idle" out)))))
+
+(ert-deftest decknix-layout-render--a-blocked-review-on-a-merged-pr-is-not-hidden ()
+  "The bug: pr-upside-21531 and friends asked for a decision, their PRs had
+left the feed, and nothing anywhere showed them."
+  (decknix-lr-test--with-buffers '("*Claude: pr-upside-21531*")
+    (let* ((out (decknix-lr-test--render-needs-you
+                 '(("*Claude: pr-upside-21531*" nil ("upside#21531") "asking"))
+                 '(((repo . "UpsideRealty/upside") (number . 21556)))))
+           (pos (string-match "pr-upside-21531" out)))
+      (should pos)
+      (should (string-match-p "PR gone" out))
+      (should (eq (get-buffer "*Claude: pr-upside-21531*")
+                  (get-text-property pos 'agent-shell-workspace-buffer out))))))
+
+(ert-deftest decknix-layout-render--no-feed-does-not-call-a-pr-gone ()
+  (decknix-lr-test--with-buffers '("*Claude: pr-upside-1*")
+    (should-not (string-match-p
+                 "PR gone"
+                 (decknix-lr-test--render-needs-you
+                  '(("*Claude: pr-upside-1*" nil ("upside#1") "asking")))))))
+
+(ert-deftest decknix-layout-render--needs-you-is-absent-when-nothing-is-blocked ()
+  (decknix-lr-test--with-buffers '("*Claude: a*")
+    (should (equal "" (decknix-lr-test--render-needs-you
+                       '(("*Claude: a*" nil nil "working")))))))
+
+(ert-deftest decknix-layout-render--needs-you-rows-fit-the-width ()
+  (decknix-lr-test--with-buffers '("*Claude: a-very-long-session-name/with/many/tags/indeed*")
+    (dolist (l (split-string (decknix-lr-test--render-needs-you
+                              '(("*Claude: a-very-long-session-name/with/many/tags/indeed*"
+                                 nil nil "netfail")))
+                             "\n" t))
+      (should (<= (string-width l) 48)))))
+
+(ert-deftest decknix-layout-render--wip-heading-counts-who-needs-you ()
+  (decknix-lr-test--with-buffers '("*Claude: a*" "*Claude: b*")
+    (let ((out (decknix-lr-test--render-wip
+                '(("*Claude: a*" nil nil "asking" nil nil)
+                  ("*Claude: b*" nil nil "working" nil nil)))))
+      (should (string-match-p "WIP (2 — 1 need you" out)))))
+
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here

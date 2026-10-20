@@ -532,6 +532,72 @@ the longest wait.  `J' goes to the session itself."
         (decknix-attention-display target)
       (message "No session needs you"))))
 
+(defun decknix--layout-session-pr-gone-p (session raw-keys)
+  "Return non-nil when every PR SESSION reviews has left the feed's RAW-KEYS.
+Nil when RAW-KEYS is empty: no feed means nothing is known, not that every
+PR merged."
+  (let ((prs (decknix--layout-session-prs session)))
+    (and prs raw-keys
+         (seq-every-p (lambda (k) (not (member k raw-keys))) prs))))
+
+(defun decknix--layout-raw-feed-keys ()
+  "Return the canonical PR keys of the unfiltered review feed."
+  (delq nil (mapcar (lambda (i)
+                      (decknix--layout-pr-key (alist-get 'repo i) (alist-get 'number i)))
+                    (and (boundp 'decknix--hub-reviews)
+                         (alist-get 'items decknix--hub-reviews)))))
+
+(defun decknix--layout-needs-you-row (session width raw-keys)
+  "Return the Needs-you row for SESSION, fitted to WIDTH.
+
+A review session whose PR has left the feed is still listed -- it IS
+blocked on a prompt -- but dimmed and marked, since the answer is most
+likely to close it."
+  (let* ((state (nth 3 session))
+         (buf (decknix--layout-session-buffer session))
+         (gone (decknix--layout-session-pr-gone-p session raw-keys))
+         (age (decknix-attention-age-label (and buf (decknix-attention-since buf))))
+         (right (string-trim (concat state " " age (if gone " · PR gone" ""))))
+         (left (format " %s  " (decknix--layout-state-glyph state)))
+         (room (max 1 (- width (string-width left) (string-width right) 1)))
+         (name (decknix--layout-short-name (nth 0 session)))
+         (name (if (> (string-width name) room)
+                   (concat (truncate-string-to-width name (max 1 (1- room))) "…")
+                 name))
+         (pad (max 1 (- width (string-width left) (string-width name)
+                        (string-width right)))))
+    (propertize (concat left name (make-string pad ?\s) right)
+                'face (if gone 'font-lock-comment-face
+                        (decknix--layout-state-face state))
+                'decknix-layout-session session
+                'decknix-layout-buffer (nth 0 session)
+                'decknix-layout-needs-you t
+                'agent-shell-workspace-buffer buf
+                'help-echo "RET go to it · j next · i what it asks")))
+
+(defun decknix--layout-render-needs-you (line-num width)
+  "Render every session blocked on the user, first.  Returns LINE-NUM.
+
+Listed whatever section the session would otherwise sit in, because each
+of those sections can hide one.  Three review sessions asking for a
+decision were invisible: their PRs had merged, so they did not count as
+`asking' for their repo, the repo then had nothing else waiting, and the
+whole group folded into \"N more in flight, nothing waiting\".  A session
+blocked on you must never be hidden by a judgement about its PR."
+  (let* ((sessions (decknix-attention-ordered-sessions (decknix--layout-sessions)))
+         (live (seq-filter #'decknix--layout-session-buffer sessions)))
+    (when live
+      (let ((raw-keys (decknix--layout-raw-feed-keys)))
+        (decknix--sidebar-render-section-header
+         (format "Needs you (%d)" (length live)) 'needs-you)
+        (setq line-num (1+ line-num))
+        (dolist (session live)
+          (insert (decknix--layout-needs-you-row session width raw-keys) "\n")
+          (setq line-num (1+ line-num)))
+        (insert "\n")
+        (setq line-num (1+ line-num)))))
+  line-num)
+
 (defun decknix--layout-render-reviews (line-num width)
   "Render the Reviews section.  Returns the updated LINE-NUM."
   (let* ((sessions (decknix--layout-sessions))
@@ -649,9 +715,14 @@ hiding the sharing."
          ;; Naming the guesses in the heading, because a wrong guess that
          ;; renders like a fact is the defect every sidebar bug this week
          ;; turned out to be.
-         (if (> guessed 0)
-             (format "WIP (%d — %d inferred)" (length wip) guessed)
-           (format "WIP (%d)" (length wip))))
+         (let ((need (seq-count (lambda (sess) (decknix--layout-attention-p (nth 3 sess)))
+                                wip)))
+           (concat (format "WIP (%d" (length wip))
+                   (if (> need 0) (format " — %d need you" need) "")
+                   (cond ((and (> guessed 0) (> need 0)) (format ", %d inferred" guessed))
+                         ((> guessed 0) (format " — %d inferred" guessed))
+                         (t ""))
+                   ")")))
        'wip-sessions)
       (setq line-num (1+ line-num))
       (dolist (row (decknix--layout-dedup-claims (plist-get tree :sessions)))
