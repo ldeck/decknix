@@ -602,7 +602,7 @@ registry (`decknix-agent-provider.el`).
 | Auggie | `auggie` | `A` | ✅ Fully working | built into `auggie` CLI |
 | Claude Code | `claude-code` | `C` | ⚠️ Needs ACP bridge | `claude-agent-acp` (see below) |
 | Pi | `pi` | `P` | ⚠️ Needs ACP bridge | `pi-acp` (see below) |
-| Gemini CLI | `gemini` | `G` | ✅ Working (new sessions) | built into `gemini --experimental-acp` |
+| Gemini CLI | `gemini` | `G` | ✅ Working (new sessions) | built into `gemini --acp` |
 | OpenCode | `opencode` | `O` | ✅ Working (new sessions) | built into `opencode acp` |
 | Goose | `goose` | `🪿` | ✅ Working (new sessions) | built into `goose acp` |
 | Qwen Code | `qwen-code` | `Q` | ✅ Working (new sessions) | built into `qwen --experimental-acp` |
@@ -670,15 +670,16 @@ registry (verified against the pinned nixpkgs, nixos-25.11 rev `d030887`,
 
 Built-in-ACP (no separate bridge): opencode (`opencode acp`), goose
 (`goose acp`), qwen (`qwen --experimental-acp`), gemini (`gemini
---experimental-acp`). Separate-bridge: claude (`claude-agent-acp`), pi
+--acp`). Separate-bridge: claude (`claude-agent-acp`), pi
 (`pi-acp`), codex (`codex-acp`), cursor (`cursor-agent-acp`), droid
 (`droid-acp`), mistral (`vibe-acp`).
 
 #### Gemini CLI — Setup
 
 The `decknix.ai.gemini` module (`decknix.ai.gemini.enable = true`) installs
-`pkgs.gemini-cli`; the CLI speaks ACP directly via `gemini --experimental-acp`
-(no separate adapter, unlike Claude/Pi). Provided by upstream
+`pkgs.unstable.gemini-cli` (the upstream release bundle, see
+`pkgs/gemini-cli`); the CLI speaks ACP directly via `gemini --acp` (no
+separate adapter, unlike Claude/Pi). Provided by upstream
 `agent-shell-google.el` (buffer name "Gemini CLI").
 
 Authentication defaults to Google login (`agent-shell-google-authentication`

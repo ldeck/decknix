@@ -3727,8 +3727,10 @@ in
             ;; pi resume paid for a model turn of transcript re-reading.
             :resume-needs-primer t))
 
-        ;; Gemini CLI via `gemini --experimental-acp' (upstream
-        ;; agent-shell-google.el).  Requires the `gemini' binary on PATH
+        ;; Gemini CLI via `gemini --acp' (upstream agent-shell-google.el
+        ;; still defaults to `--experimental-acp', which gemini-cli 0.64
+        ;; marks deprecated in favour of `--acp', so pin the new flag
+        ;; here).  Requires the `gemini' binary on PATH
         ;; (enable `decknix.ai.gemini.enable' to install pkgs.gemini-cli)
         ;; and Google auth via `agent-shell-google-authentication'
         ;; (defaults to :login).  Like Claude/Pi it is flagless: no
@@ -3736,6 +3738,7 @@ in
         ;; over ACP rather than pinned on the command line.  Gemini does
         ;; not expose a flat resumable sessions dir with the shared
         ;; schema, so the saved-session picker/resume is best-effort.
+        (setq agent-shell-google-gemini-acp-command '("gemini" "--acp"))
         (decknix-agent-register-provider 'gemini
           '(:make-config-fn agent-shell-google-make-gemini-config
             :acp-command-var agent-shell-google-gemini-acp-command

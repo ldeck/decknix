@@ -124,10 +124,13 @@
               unstable = import inputs.nixpkgs-unstable {
                 inherit system;
                 config = prev.config;
-                # Only these packages advance; Gemini and Spec Kit retain the
-                # shared unstable pin. OmniWM is absent on that older pin.
+                # Only these packages advance; Spec Kit and the rest retain
+                # the shared unstable pin. OmniWM is absent on that older pin.
+                # Gemini comes from the upstream release bundle on the current
+                # pin, since nixpkgs' source build is stuck (pkgs/gemini-cli).
                 overlays = [ (_: _: {
                   inherit (currentPkgs) claude-code pi-coding-agent tabularis omniwm;
+                  gemini-cli = currentPkgs.callPackage ./pkgs/gemini-cli/default.nix { };
                 }) ];
               };
             };
