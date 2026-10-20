@@ -130,17 +130,29 @@ nested under the session sub-prefix at `C-c s t`. Global tags
 | `a` | Add tag (create or select) |
 | `r` | Remove tag |
 | `l` | List this session's tags |
+| `s` | Replace this session's tags |
+| `R` | Rename a tag on every session (same as `C-c A T e`) |
+| `D` | Delete a tag from every session (same as `C-c A T d`) |
 
 ### Global (`C-c A T`)
 
 | Key | Action |
 |-----|--------|
-| `t` | Tag current session |
-| `r` | Remove tag |
 | `l` | List / filter by tag |
-| `e` | Rename a tag |
-| `d` | Delete tag globally |
+| `e` | Rename a tag (`M-x decknix-agent-tag-rename`) |
+| `d` | Delete tag globally (`M-x decknix-agent-tag-delete`) |
 | `c` | Cleanup orphaned tags |
+
+Rename and delete pick from the existing tags with a usage count beside
+each, say how many conversations they will change, and confirm first.
+They cover live and saved sessions in one write, so buffer names and the
+sidebar refresh once. Renaming onto a tag that already exists merges the
+two. A conversation left with no tags keeps its sessions and workspace.
+
+There is no separate list of known tags: completion is built from the
+tags sessions carry, so removing a tag from the last session that has it
+removes it from completion as well. `r` says when that happened, or how
+many other conversations still carry it.
 
 ## Sidebar Actions (`C-c W`)
 

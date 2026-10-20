@@ -109,6 +109,19 @@
 (declare-function decknix--agent-tags-set-current-conversation
                   "decknix-agent-tags-mutate" (tags))
 
+;; Vocabulary edits (rename / delete everywhere) and the last-removal
+;; count live in the carved mutate layer so they are unit-tested.
+(declare-function decknix--agent-tag-normalise "decknix-agent-tags-mutate" (name))
+(declare-function decknix--agent-tags-usage "decknix-agent-tags-mutate" (convs))
+(declare-function decknix--agent-tags-convs-using "decknix-agent-tags-mutate" (convs tag))
+(declare-function decknix--agent-tags-rename-list "decknix-agent-tags-mutate" (tags old new))
+(declare-function decknix--agent-tags-session-ids-of "decknix-agent-tags-mutate" (convs keys))
+(declare-function decknix--agent-tags-remove-from-conv
+                  "decknix-agent-tags-mutate" (convs conv-key tag))
+(declare-function decknix--agent-tags-rename-everywhere "decknix-agent-tags-mutate" (old new))
+(declare-function decknix--agent-tags-delete-everywhere "decknix-agent-tags-mutate" (tag))
+(defvar decknix--agent-pending-tags)
+
 ;; -- Per-conversation workspace persistence (PR B.40) --
 ;; Moved into agent-shell/agent/decknix-agent-session-workspace.el.
 (declare-function decknix--agent-workspace-for-conv-key
@@ -401,7 +414,10 @@ session that never asked for it."
                  (if current (string-join current ", ") ""))))))
 
 (defun decknix-agent-tag-remove ()
-  "Remove a tag from the current conversation."
+  "Remove a tag from the current conversation.
+Tags have no vocabulary of their own, so once no other conversation
+carries the tag it is gone from completion too; the message says which,
+and points at the global delete when other conversations still use it."
   (interactive)
   (let* ((conv-key (decknix--agent-require-conv-key))
          (current (decknix--agent-tags-for-conv-key conv-key)))
@@ -410,16 +426,16 @@ session that never asked for it."
     (let* ((tag (completing-read "Remove tag: " current nil t))
            (store (decknix--agent-tags-read))
            (convs (decknix--agent-tags-conversations store))
-           (entry (gethash conv-key convs))
-           (remaining (remove tag (gethash "tags" entry))))
-      (if remaining
-          (progn
-            (puthash "tags" remaining entry)
-            (puthash "lastAccessed"
-                     (format-time-string "%Y-%m-%dT%H:%M:%S.000Z" nil t) entry))
-        (remhash conv-key convs))
+           (others (decknix--agent-tags-remove-from-conv convs conv-key tag)))
+      (puthash "lastAccessed"
+               (format-time-string "%Y-%m-%dT%H:%M:%S.000Z" nil t)
+               (gethash conv-key convs))
       (decknix--agent-tags-write store)
-      (message "Removed \"%s\" from conversation" tag))))
+      (if (zerop others)
+          (message "Removed \"%s\"; no other conversation uses it, so it is gone" tag)
+        (message "Removed \"%s\" (still on %d other conversation%s; %s deletes it everywhere)"
+                 tag others (if (= others 1) "" "s")
+                 (substitute-command-keys "\\[decknix-agent-tag-delete]"))))))
 
 (defun decknix-agent-tag-list ()
   "List conversations filtered by tag.
@@ -472,61 +488,96 @@ Prompts for a tag, then shows the latest session per matching conversation."
              (decknix--agent-session-display-name session)
              nil conv-key)))))))
 
-(defun decknix-agent-tag-edit ()
-  "Rename a tag across all conversations."
-  (interactive)
-  (let* ((all-tags (decknix--agent-tags-all)))
-    (unless all-tags
+(defun decknix--agent-tag-read-existing (prompt)
+  "Read an existing tag with PROMPT, annotating each with its usage count."
+  (let* ((usage (decknix--agent-tags-usage
+                 (decknix--agent-tags-conversations (decknix--agent-tags-read))))
+         (completion-extra-properties
+          (list :annotation-function
+                (lambda (tag)
+                  (let ((n (cdr (assoc tag usage))))
+                    (and n (format "  (%d conversation%s)" n (if (= n 1) "" "s"))))))))
+    (unless usage
       (user-error "No tags defined yet"))
-    (let* ((old-tag (completing-read "Rename tag: " all-tags nil t))
-           (new-tag (string-trim
-                     (read-string (format "Rename \"%s\" to: " old-tag) old-tag)))
-           (store (decknix--agent-tags-read))
-           (convs (decknix--agent-tags-conversations store))
-           (count 0))
-      (when (string-empty-p new-tag)
-        (user-error "Tag cannot be empty"))
-      (when (string= old-tag new-tag)
-        (user-error "Same name, nothing to do"))
-      (maphash (lambda (_key entry)
-                 (when (hash-table-p entry)
-                   (let ((tags (gethash "tags" entry)))
-                     (when (member old-tag tags)
-                       (puthash "tags"
-                                (mapcar (lambda (tg) (if (string= tg old-tag) new-tag tg)) tags)
-                                entry)
-                       (cl-incf count)))))
-               convs)
-      (decknix--agent-tags-write store)
-      (message "Renamed \"%s\" → \"%s\" across %d conversation%s"
-               old-tag new-tag count (if (= count 1) "" "s")))))
+    (completing-read prompt (mapcar #'car usage) nil t)))
 
-(defun decknix-agent-tag-delete ()
-  "Delete a tag from all conversations."
-  (interactive)
-  (let* ((all-tags (decknix--agent-tags-all)))
-    (unless all-tags
-      (user-error "No tags defined yet"))
-    (let* ((tag (completing-read "Delete tag globally: " all-tags nil t)))
-      (when (y-or-n-p (format "Delete tag \"%s\" from all conversations? " tag))
-        (let* ((store (decknix--agent-tags-read))
-               (convs (decknix--agent-tags-conversations store))
-               (count 0)
-               (empties nil))
-          (maphash (lambda (key entry)
-                     (when (hash-table-p entry)
-                       (let ((tags (gethash "tags" entry)))
-                         (when (member tag tags)
-                           (let ((remaining (remove tag tags)))
-                             (if remaining
-                                 (puthash "tags" remaining entry)
-                               (push key empties)))
-                           (cl-incf count)))))
-                   convs)
-          (dolist (key empties) (remhash key convs))
-          (decknix--agent-tags-write store)
-          (message "Deleted \"%s\" from %d conversation%s"
-                   tag count (if (= count 1) "" "s")))))))
+(defun decknix--agent-tags-rename-pending (old new)
+  "Rename OLD to NEW in live buffers' not-yet-flushed pending tags.
+Those tags reach the store only on the first submitted prompt, so a
+store-wide rename would otherwise miss them and the typo would come back."
+  (dolist (buf (buffer-list))
+    (with-current-buffer buf
+      (when (and (boundp 'decknix--agent-pending-tags)
+                 (local-variable-p 'decknix--agent-pending-tags)
+                 (member old decknix--agent-pending-tags))
+        (setq-local decknix--agent-pending-tags
+                    (decknix--agent-tags-rename-list
+                     decknix--agent-pending-tags old new))))))
+
+(defun decknix-agent-tag-rename (old new)
+  "Rename tag OLD to NEW on every conversation that carries it.
+Covers live and saved sessions alike (they share the tag store) in one
+write, so buffer names, the sidebar and the pickers refresh once.  When
+NEW already exists the two merge.  Confirms with the number of
+conversations affected before writing."
+  (interactive
+   (let* ((old (decknix--agent-tag-read-existing "Rename tag: "))
+          (new (read-string (format "Rename \"%s\" to: " old) old)))
+     (list old new)))
+  (let* ((new (or (decknix--agent-tag-normalise new)
+                  (user-error "Not a valid tag: %S (empty or contains a comma)" new)))
+         (convs (decknix--agent-tags-conversations (decknix--agent-tags-read)))
+         (using (decknix--agent-tags-convs-using convs old))
+         (already (decknix--agent-tags-convs-using convs new))
+         (n (length using)))
+    (when (string= old new)
+      (user-error "Same name, nothing to do"))
+    (unless using
+      (user-error "No conversation is tagged \"%s\"" old))
+    (when (or (not (called-interactively-p 'any))
+              (y-or-n-p
+               (format "Rename \"%s\" -> \"%s\" on %d conversation%s%s? "
+                       old new n (if (= n 1) "" "s")
+                       (if already
+                           (format " (merging into existing \"%s\" on %d)"
+                                   new (length already))
+                         ""))))
+      (let ((changed (decknix--agent-tags-rename-everywhere old new)))
+        (decknix--agent-tags-rename-pending old new)
+        (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+          (ignore-errors (agent-shell-workspace-sidebar-refresh)))
+        (message "Renamed \"%s\" -> \"%s\" across %d conversation%s"
+                 old new (length changed) (if (= (length changed) 1) "" "s"))
+        changed))))
+
+(define-obsolete-function-alias 'decknix-agent-tag-edit
+  #'decknix-agent-tag-rename "2026-10-21")
+
+(defun decknix-agent-tag-delete (tag)
+  "Delete TAG from every conversation that carries it.
+Confirms with the number of conversations affected.  Conversations left
+with no tags keep their sessions, workspace and links."
+  (interactive (list (decknix--agent-tag-read-existing "Delete tag everywhere: ")))
+  (let* ((convs (decknix--agent-tags-conversations (decknix--agent-tags-read)))
+         (n (length (decknix--agent-tags-convs-using convs tag))))
+    (unless (> n 0)
+      (user-error "No conversation is tagged \"%s\"" tag))
+    (when (or (not (called-interactively-p 'any))
+              (yes-or-no-p (format "Delete tag \"%s\" from %d conversation%s? "
+                                   tag n (if (= n 1) "" "s"))))
+      (let ((changed (decknix--agent-tags-delete-everywhere tag)))
+        (dolist (buf (buffer-list))
+          (with-current-buffer buf
+            (when (and (boundp 'decknix--agent-pending-tags)
+                       (local-variable-p 'decknix--agent-pending-tags)
+                       (member tag decknix--agent-pending-tags))
+              (setq-local decknix--agent-pending-tags
+                          (remove tag decknix--agent-pending-tags)))))
+        (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+          (ignore-errors (agent-shell-workspace-sidebar-refresh)))
+        (message "Deleted \"%s\" from %d conversation%s"
+                 tag (length changed) (if (= (length changed) 1) "" "s"))
+        changed))))
 
 (defun decknix-agent-tag-cleanup ()
   "Remove conversation entries that have no matching sessions on disk."
@@ -670,13 +721,25 @@ Runs from `decknix-agent-tags-changed-functions\=': a session named after
 its first prompt -- `Own HX-1337 contact ID round-trip in ...\' -- kept
 that name in the sidebar after it was tagged, because no tag command
 renamed the buffer.  Only buffers whose tags actually changed are touched,
-so nothing is renamed by an unrelated write such as a model change."
-  (let ((renamed 0))
+so nothing is renamed by an unrelated write such as a model change.
+
+A buffer also matches by session id: its tags are often read from a
+sibling entry keyed differently from its own conv-key (see
+`decknix--agent-tags-for-buffer'), and a store-wide tag rename changes
+exactly those siblings."
+  (let ((renamed 0)
+        (sids (ignore-errors
+                (decknix--agent-tags-session-ids-of
+                 (decknix--agent-tags-conversations (decknix--agent-tags-read))
+                 conv-keys))))
     (dolist (buf (buffer-list))
       (with-current-buffer buf
         (when (and (derived-mode-p 'agent-shell-mode)
-                   (bound-and-true-p decknix--agent-conv-key)
-                   (member decknix--agent-conv-key conv-keys))
+                   (or (and (bound-and-true-p decknix--agent-conv-key)
+                            (member decknix--agent-conv-key conv-keys))
+                       (and sids
+                            (bound-and-true-p decknix--agent-auggie-session-id)
+                            (member decknix--agent-auggie-session-id sids))))
           (let ((before (buffer-name)))
             (ignore-errors (decknix--agent-rename-current-buffer-from-tags))
             (unless (equal before (buffer-name)) (setq renamed (1+ renamed)))))))
@@ -685,6 +748,18 @@ so nothing is renamed by an unrelated write such as a model change."
     renamed))
 
 (add-hook 'decknix-agent-tags-changed-functions #'decknix--agent-rename-buffers-for-convs)
+
+(defvar decknix--hub-review-session-snapshot-at)
+
+(defun decknix--agent-tags-expire-session-snapshot (_conv-keys)
+  "Expire the memoised live-session snapshot after a tag change.
+It holds each buffer's name and tags, and boards outside decknix reuse
+it well past its own TTL (one for up to 15s), so without this a renamed
+tag showed the old buffer name, and lost its row, until it aged out."
+  (when (boundp 'decknix--hub-review-session-snapshot-at)
+    (setq decknix--hub-review-session-snapshot-at 0)))
+
+(add-hook 'decknix-agent-tags-changed-functions #'decknix--agent-tags-expire-session-snapshot)
 
 (defun decknix-agent-session-rename-from-tags ()
   "Re-derive the current buffer's name from its live tag-store tags.

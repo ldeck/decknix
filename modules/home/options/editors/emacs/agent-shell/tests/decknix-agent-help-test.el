@@ -90,7 +90,7 @@ can navigate by prefix family without hunting through the body."
     (dolist (section '("Sessions  (C-c s …)"
                        "Templates  (C-c t …)"
                        "Commands  (C-c c …)"
-                       "Tags — session  (C-c T …)"
+                       "Tags — session  (C-c s t …)"
                        "Tags — global  (C-c A T …)"
                        "Context  (C-c i …)"
                        "Global  (C-c A …)"))
