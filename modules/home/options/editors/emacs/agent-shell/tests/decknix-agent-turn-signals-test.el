@@ -15,6 +15,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'decknix-agent-turn-signals)
 
 ;; ---------------------------------------------------------------------
@@ -312,6 +313,46 @@ the flag and still render `ready'."
                   "ready"
                   (decknix-agent-turn-restored-facts
                    '(("go" . "Ready.\n\nCHOOSE ONE\n----------\n1. yes\n")))))))
+
+;; ---------------------------------------------------------------------
+;; What a session is asking -- the line the sidebar shows under it
+;; ---------------------------------------------------------------------
+
+(ert-deftest decknix-turn-excerpt--the-question-line-wins ()
+  (should (equal "Shall I force-push or open a fresh PR?"
+                 (decknix-agent-turn-question-excerpt
+                  "Rebased onto main.\n\nShall I force-push or open a fresh PR?\n\nEither works."))))
+
+(ert-deftest decknix-turn-excerpt--a-decision-block-gives-the-line-before-it ()
+  (should (equal "Ready to merge #412."
+                 (decknix-agent-turn-question-excerpt
+                  "Ready to merge #412.\n\nCHOOSE ONE\n----------\n1. merge\n2. wait\n\nReply with the number."))))
+
+(ert-deftest decknix-turn-excerpt--otherwise-the-last-line ()
+  (should (equal "Waiting on your call."
+                 (decknix-agent-turn-question-excerpt "Done.\nWaiting on your call.\n"))))
+
+(ert-deftest decknix-turn-excerpt--strips-markdown-and-code ()
+  (should (equal "Use the new endpoint?"
+                 (decknix-agent-turn-question-excerpt
+                  "Found it:\n```\nx ? y : z\n```\n- **Use the new endpoint?**")))
+  (should-not (decknix-agent-turn-question-excerpt nil))
+  (should-not (decknix-agent-turn-question-excerpt "  \n ")))
+
+(ert-deftest decknix-turn-closing-text--kept-at-turn-end-cleared-at-next-turn ()
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'derived-mode-p) (lambda (&rest _) t)))
+      (setq decknix--agent-turn-message-tail "Which one?")
+      (decknix--agent-turn-observe-event :event 'turn-complete :data nil)
+      (should (equal "Which one?" (decknix-agent-turn-closing-text)))
+      (decknix--agent-turn-observe-event :event 'input-submitted :data nil)
+      (should-not (decknix-agent-turn-closing-text)))))
+
+(ert-deftest decknix-turn-restore--keeps-the-closing-text ()
+  (should (equal "Which do you want?"
+                 (plist-get (decknix-agent-turn-restored-facts
+                             '(("go" . "Which do you want?")))
+                            :text))))
 
 (provide 'decknix-agent-turn-signals-test)
 ;;; decknix-agent-turn-signals-test.el ends here

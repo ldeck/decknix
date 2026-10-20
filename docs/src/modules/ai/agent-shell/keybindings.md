@@ -162,7 +162,9 @@ first, under **Needs you**, in the order `j` visits them and with how long
 each has waited, whichever section it would otherwise sit in. A review
 session whose PR has since merged or closed is still listed, dimmed and
 marked `PR gone`: it is still waiting on a prompt, though the answer is
-usually to close it. The header line opens with the same count.
+usually to close it. Under each, one dimmed line says what it is asking: the
+permission it wants, or the question its last turn ended on. The header line
+opens with the same count.
 
 Pressed inside the Agents sidebar itself. The header line names the few
 keys that do most of the work, dropping hints from the right as the sidebar
@@ -172,6 +174,7 @@ narrows; `?` is always the last to go, and opens the full reference.
 |-----|--------|
 | `j` | Move to the next session that needs you (`netfail`, then `waiting`, then `asking`, then the longest wait); again for the one after |
 | `J` | Go straight to that session |
+| `i` | What the session at point is asking: its state and wait, the question, its whole last message and the tail of the session. `RET` there goes to it |
 | `n` / `p` | Next / previous row that has an action, skipping headers and counts |
 | `o` | Restore a previous session (was `p`) |
 | `RET` | Session rows: go to the session. Reviews PR rows: go to the session covering the PR, ask which when several do, or open the PR's action menu when none does |

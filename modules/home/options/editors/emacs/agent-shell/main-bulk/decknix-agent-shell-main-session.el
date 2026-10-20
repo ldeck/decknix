@@ -155,6 +155,7 @@ history; only the model-facing primer is suppressed)."
 (declare-function decknix-agent-turn-restored-facts
                   "decknix-agent-turn-signals" (turns))
 (defvar decknix--agent-turn-question)
+(defvar decknix--agent-turn-closing-text)
 (declare-function decknix--agent-context-find-existing
                   "decknix-agent-context-history")
 (declare-function decknix--agent-context-render-window
@@ -1152,7 +1153,8 @@ dedupes against live buffers before calling here."
                            (decknix--agent-session-extract-all-turns session-id)))
                   (facts (decknix-agent-turn-restored-facts turns)))
         (with-current-buffer shell-buf
-          (setq-local decknix--agent-turn-question (plist-get facts :question)))))
+          (setq-local decknix--agent-turn-question (plist-get facts :question))
+          (setq-local decknix--agent-turn-closing-text (plist-get facts :text)))))
     ;; Model persistence for providers that can't pin the model at
     ;; launch (no `:model-launch-flag' -- Claude, Pi).  Auggie already
     ;; carries `--model' in `augmented-cmd' above; for the rest we

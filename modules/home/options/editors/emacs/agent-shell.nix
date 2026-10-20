@@ -7020,6 +7020,9 @@ duration -- the most important number on this branch."
           (kbd "j") #'decknix-layout-goto-next-attention)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "J") #'decknix-layout-jump-next-attention)
+        ;; `i' shows what the session at point is asking, as on the Review Board.
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "i") #'decknix-layout-inspect)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "a") (lambda () (interactive)
                       (decknix--sidebar-call-transient #'decknix-sidebar-actions)))

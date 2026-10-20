@@ -1277,6 +1277,7 @@ they mean in the sidebar itself (cycle layout / worktree menu)."
   ["Navigate"
    ("j"   "Next needing you" decknix-layout-goto-next-attention)
    ("J"   "Go to it"      decknix-layout-jump-next-attention)
+   ("i"   "What it asks"  decknix-layout-inspect)
    ("n"   "Next row"      decknix-layout-next-row)
    ("p"   "Previous row"  decknix-layout-prev-row)
    ("r"   "Requests"      decknix-sidebar-goto-requests)

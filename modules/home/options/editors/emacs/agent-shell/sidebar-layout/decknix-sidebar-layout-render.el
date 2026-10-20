@@ -393,7 +393,10 @@ Rows rendered by this layout name their session three ways, and upstream
 only knew the first, so its goto refused every WIP row."
   (let ((b (or (get-text-property pos 'agent-shell-workspace-buffer)
                (get-text-property pos 'decknix-layout-buffer)
-               (nth 0 (get-text-property pos 'decknix-layout-session)))))
+               (nth 0 (get-text-property pos 'decknix-layout-session))
+               ;; The question line under a Needs-you row: RET and `i' act
+               ;; on its session, though `n'/`p' pass over it.
+               (nth 0 (get-text-property pos 'decknix-layout-ask)))))
     (when (stringp b) (setq b (get-buffer b)))
     (and (bufferp b) (buffer-live-p b) b)))
 
@@ -547,6 +550,46 @@ PR merged."
                     (and (boundp 'decknix--hub-reviews)
                          (alist-get 'items decknix--hub-reviews)))))
 
+(declare-function decknix-agent-turn-closing-text "decknix-agent-turn-signals"
+                  (&optional buffer))
+(declare-function decknix-agent-turn-question-excerpt "decknix-agent-turn-signals"
+                  (text))
+(defvar agent-shell-attention--pending)
+
+(defun decknix--layout-permission-label (buf)
+  "Return the permission prompt BUF is waiting on, from upstream's table."
+  (and (boundp 'agent-shell-attention--pending)
+       (hash-table-p agent-shell-attention--pending)
+       (let ((e (gethash buf agent-shell-attention--pending)))
+         (cond ((and (consp e) (stringp (car e))) (car e))
+               ((and (plistp e) (stringp (plist-get e :label))) (plist-get e :label))))))
+
+(defun decknix-layout-session-ask (buf state)
+  "Return one line saying what session BUF, in STATE, is asking, or nil.
+
+Read from what is already cached in memory -- the permission prompt
+upstream recorded, or the closing text the turn-signals capture keeps --
+so it costs no buffer scan and no I/O on the paint path."
+  (when (buffer-live-p buf)
+    (or (and (equal state "waiting") (decknix--layout-permission-label buf))
+        (and (fboundp 'decknix-agent-turn-closing-text)
+             (fboundp 'decknix-agent-turn-question-excerpt)
+             (decknix-agent-turn-question-excerpt
+              (decknix-agent-turn-closing-text buf))))))
+
+(defun decknix--layout-ask-row (session text width)
+  "Return the dimmed one-line TEXT shown under SESSION, fitted to WIDTH."
+  (let* ((lead "      ↳ ")
+         (room (max 1 (- width (string-width lead))))
+         (text (replace-regexp-in-string "[\n\t]+" " " text))
+         (text (if (> (string-width text) room)
+                   (concat (truncate-string-to-width text (max 1 (1- room))) "…")
+                 text)))
+    (propertize (concat lead text)
+                'face 'font-lock-comment-face
+                'decknix-layout-ask session
+                'help-echo "i for the full question")))
+
 (defun decknix--layout-needs-you-row (session width raw-keys)
   "Return the Needs-you row for SESSION, fitted to WIDTH.
 
@@ -593,10 +636,100 @@ blocked on you must never be hidden by a judgement about its PR."
         (setq line-num (1+ line-num))
         (dolist (session live)
           (insert (decknix--layout-needs-you-row session width raw-keys) "\n")
-          (setq line-num (1+ line-num)))
+          (setq line-num (1+ line-num))
+          ;; What it asks, so most can be triaged without opening them.
+          (let ((ask (decknix-layout-session-ask
+                      (decknix--layout-session-buffer session) (nth 3 session))))
+            (when (and ask (not (string-empty-p ask)))
+              (insert (decknix--layout-ask-row session ask width) "\n")
+              (setq line-num (1+ line-num)))))
         (insert "\n")
         (setq line-num (1+ line-num)))))
   line-num)
+
+(defconst decknix-layout-inspect-buffer "*Sidebar Inspect*"
+  "Buffer showing what the session at point is asking.")
+
+(defvar decknix-layout-inspect-lines 40
+  "Trailing lines of the session shown under its last message.")
+
+(defvar-local decknix-layout--inspect-target nil
+  "The session buffer an inspect buffer describes.")
+
+(defun decknix-layout-inspect-text (buf)
+  "Return the inspect text for session BUF.  Reads memory only."
+  (let* ((state (or (decknix-attention-observed-state buf) "?"))
+         (since (decknix-attention-since buf))
+         (ask (decknix-layout-session-ask buf state))
+         (closing (and (fboundp 'decknix-agent-turn-closing-text)
+                       (decknix-agent-turn-closing-text buf)))
+         (tail (with-current-buffer buf
+                 (save-excursion
+                   (goto-char (point-max))
+                   (forward-line (- decknix-layout-inspect-lines))
+                   (buffer-substring-no-properties (point) (point-max))))))
+    (concat
+     (format "state: %s%s\n" state
+             (if since (format "   for %s" (decknix-attention-age-label since)) ""))
+     (if ask (format "asks:  %s\n" ask) "")
+     (if (and closing (not (string-empty-p (string-trim closing))))
+         (concat "\n" (propertize "Last message" 'face 'bold) "\n\n"
+                 (string-trim closing) "\n")
+       "")
+     "\n" (propertize "Session tail" 'face 'bold) "\n\n" tail)))
+
+(defun decknix-layout-inspect-go ()
+  "Go to the session this inspect buffer describes."
+  (interactive)
+  (let ((target decknix-layout--inspect-target))
+    (quit-window)
+    (decknix-attention-display target)))
+
+(defvar decknix-layout-inspect-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map special-mode-map)
+    (define-key map (kbd "RET") #'decknix-layout-inspect-go)
+    (define-key map (kbd "o") #'decknix-layout-inspect-go)
+    map)
+  "Keymap for `decknix-layout-inspect-mode'.")
+
+(define-derived-mode decknix-layout-inspect-mode special-mode "Inspect"
+  "What a session is asking.  RET goes to it, q closes this.")
+
+(defun decknix-layout-inspect ()
+  "Show what the session at point is asking, without leaving the sidebar.
+
+Its state and how long it has waited, the question, its whole last
+message, and the tail of the session.  Read-only, as on the Review
+Board: seeing the question is most of the value, and answering it from a
+summary is the risk this avoids.  RET in the window goes to the session."
+  (interactive)
+  (let ((buf (car (decknix-layout--call-in-sidebar
+                   (lambda () (decknix-layout-row-buffers (line-beginning-position)))))))
+    (unless (buffer-live-p buf) (user-error "No session on this row"))
+    (let ((out (get-buffer-create decknix-layout-inspect-buffer))
+          (text (decknix-layout-inspect-text buf)))
+      (with-current-buffer out
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (propertize (decknix--layout-short-name (buffer-name buf)) 'face 'bold)
+                  "\n" (propertize "RET go to it · q close" 'face 'shadow) "\n\n"
+                  text)
+          (goto-char (point-min)))
+        (decknix-layout-inspect-mode)
+        (setq decknix-layout--inspect-target buf))
+      (let ((main (seq-find
+                   (lambda (w)
+                     (not (or (window-parameter w 'window-side)
+                              (equal (buffer-name (window-buffer w))
+                                     agent-shell-workspace-sidebar-buffer-name))))
+                   (window-list nil 'no-minibuf))))
+        (if main
+            (with-selected-window main
+              (display-buffer out '((display-buffer-below-selected)
+                                    (window-height . 0.45)
+                                    (inhibit-same-window . t))))
+          (display-buffer out))))))
 
 (defun decknix--layout-render-reviews (line-num width)
   "Render the Reviews section.  Returns the updated LINE-NUM."

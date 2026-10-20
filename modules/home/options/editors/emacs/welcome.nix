@@ -320,6 +320,7 @@ in
                      ("C-c A s" . "Session picker (live + saved + new)")
                      ("C-c A w" . "Toggle the Agents workspace tab")
                      ("j / J" . "Sidebar: next session needing you / go to it")
+                     ("i" . "Sidebar: what the session at point is asking")
                      ("n / p" . "Sidebar: next / previous row")
                      ("o" . "Sidebar: restore a previous session")
                      ("RET" . "Sidebar: go to the session, or the row's menu")
