@@ -551,4 +551,121 @@ field name has not been verified."
             (should (= 1 reads))))
       (delete-directory dir t))))
 
+;; -- Incremental sub-agent listing ----------------------------------------
+;; Listing the dir and rebuilding every child on each refresh was a fifth of
+;; a sampled paint.  The listing follows the directory's mtime; a child's
+;; entry follows its own.
+
+(defmacro decknix-subdir-test--with (spec &rest body)
+  "Bind (DIR PARSES LISTS) per SPEC: a temp subagents dir and call counts."
+  (declare (indent 1))
+  (let ((dir (nth 0 spec)) (parses (nth 1 spec)) (lists (nth 2 spec)))
+    `(let* ((,dir (make-temp-file "dk-subdir-" t))
+            (,parses 0)
+            (,lists 0)
+            (decknix--agent-subagent-dir-cache (make-hash-table :test 'equal))
+            (decknix--agent-subagent-task-cache (make-hash-table :test 'equal))
+            (orig-dir-files (symbol-function 'directory-files)))
+       (unwind-protect
+           (cl-letf (((symbol-function 'decknix--agent-subagent-meta)
+                      (lambda (_p path)
+                        (setq ,parses (1+ ,parses))
+                        (unless (string-match-p "broken" path)
+                          (list (cons 'sessionId (file-name-base path))))))
+                     ((symbol-function 'directory-files)
+                      (lambda (&rest args)
+                        (setq ,lists (1+ ,lists))
+                        (apply orig-dir-files args))))
+             ,@body)
+         (delete-directory ,dir t)))))
+
+(defun decknix-subdir-test--touch (file time)
+  (unless (file-exists-p file) (write-region "" nil file nil 'silent))
+  (set-file-times file (seconds-to-time time)))
+
+(defun decknix-subdir-test--entries (dir now)
+  (decknix--agent-subagent-dir-entries
+   'claude-code dir
+   (float-time (file-attribute-modification-time (file-attributes dir)))
+   ".*\\.jsonl$" now))
+
+(ert-deftest decknix-subagent-dir--an-unchanged-dir-is-listed-once ()
+  (decknix-subdir-test--with (dir parses lists)
+    (let ((now (float-time)))
+      (decknix-subdir-test--touch (expand-file-name "a.jsonl" dir) now)
+      (decknix-subdir-test--touch (expand-file-name "b.jsonl" dir) now)
+      (dotimes (_ 5) (decknix-subdir-test--entries dir now))
+      (should (= 1 lists))
+      ;; And an unchanged child is not rebuilt.
+      (should (= 2 parses)))))
+
+(ert-deftest decknix-subagent-dir--a-new-child-is-listed ()
+  (decknix-subdir-test--with (dir _parses lists)
+    (let ((now (float-time)))
+      (decknix-subdir-test--touch (expand-file-name "a.jsonl" dir) now)
+      (set-file-times dir (seconds-to-time (- now 10)))
+      (should (= 1 (length (decknix-subdir-test--entries dir now))))
+      (decknix-subdir-test--touch (expand-file-name "b.jsonl" dir) now)
+      (set-file-times dir (seconds-to-time now))
+      (should (= 2 (length (decknix-subdir-test--entries dir now))))
+      (should (= 2 lists)))))
+
+(ert-deftest decknix-subagent-dir--a-writing-child-is-restamped-without-relisting ()
+  "A child\='s writes do not move the directory mtime, yet drive its
+`running' state, so its own mtime is still followed."
+  (decknix-subdir-test--with (dir parses lists)
+    (let* ((now (float-time))
+           (a (expand-file-name "a.jsonl" dir)))
+      (decknix-subdir-test--touch a (- now 5))
+      (set-file-times dir (seconds-to-time (- now 100)))
+      (decknix-subdir-test--entries dir now)
+      (decknix-subdir-test--touch a now)
+      (set-file-times dir (seconds-to-time (- now 100)))
+      (let ((e (car (decknix-subdir-test--entries dir now))))
+        (should (equal (float-time (file-attribute-modification-time
+                                    (file-attributes a)))
+                       (cadr e))))
+      (should (= 1 lists))
+      (should (= 2 parses)))))
+
+(ert-deftest decknix-subagent-dir--a-dormant-child-is-restated-rarely ()
+  (let ((decknix-agent-subagent-dormant-seconds 600)
+        (decknix-agent-subagent-dormant-restat-seconds 60))
+    (decknix-subdir-test--with (dir parses _lists)
+      (let* ((now (float-time))
+             (a (expand-file-name "a.jsonl" dir)))
+        (decknix-subdir-test--touch a (- now 3600))
+        (set-file-times dir (seconds-to-time (- now 3600)))
+        (decknix-subdir-test--entries dir now)
+        ;; Resumed, but inside the restat window: not seen yet.
+        (decknix-subdir-test--touch a now)
+        (set-file-times dir (seconds-to-time (- now 3600)))
+        (decknix-subdir-test--entries dir (+ now 10))
+        (should (= 1 parses))
+        ;; Past the window: seen.
+        (decknix-subdir-test--entries dir (+ now 61))
+        (should (= 2 parses))))))
+
+(ert-deftest decknix-subagent-dir--an-unparsed-child-is-retried-when-it-changes ()
+  "A transcript too new to parse must not be excluded for good."
+  (decknix-subdir-test--with (dir parses _lists)
+    (let* ((now (float-time))
+           (a (expand-file-name "broken.jsonl" dir)))
+      (decknix-subdir-test--touch a (- now 5))
+      (set-file-times dir (seconds-to-time (- now 100)))
+      (should-not (cddr (car (decknix-subdir-test--entries dir now))))
+      (decknix-subdir-test--entries dir now)
+      (should (= 1 parses))
+      (decknix-subdir-test--touch a now)
+      (set-file-times dir (seconds-to-time (- now 100)))
+      (decknix-subdir-test--entries dir now)
+      (should (= 2 parses)))))
+
+(ert-deftest decknix-subagent-dir--newest-first ()
+  (should (equal '("b" "a")
+                 (mapcar (lambda (s) (alist-get 'id s))
+                         (decknix--agent-subagents-sorted
+                          '(((id . "a") (modified . "2026-01-01T00:00:00+0000"))
+                            ((id . "b") (modified . "2026-02-01T00:00:00+0000"))))))))
+
 (provide 'decknix-agent-session-history-test)

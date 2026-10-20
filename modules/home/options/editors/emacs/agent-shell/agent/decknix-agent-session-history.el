@@ -464,7 +464,14 @@ nothing to say which was doing what."
   (when (file-readable-p meta-file)
     (let ((m (ignore-errors
                (json-parse-string
-                (with-temp-buffer (insert-file-contents meta-file) (buffer-string))
+                ;; Literal: a plain read runs coding detection, which
+               ;; editorconfig advises into a walk up the tree for an
+               ;; `.editorconfig'; the parser takes UTF-8 bytes as-is.
+               (let ((file-name-handler-alist nil))
+                 (with-temp-buffer
+                   (set-buffer-multibyte nil)
+                   (insert-file-contents-literally meta-file)
+                   (buffer-string)))
                 :object-type 'alist :null-object nil :false-object nil))))
       (when m
         (list (alist-get 'agentType m)
@@ -504,21 +511,98 @@ to the main session transcript."
             (unless (file-directory-p sub-dir)
               ;; Try sibling subagents/
               (setq sub-dir (expand-file-name "subagents" base-dir)))
-            (when (file-directory-p sub-dir)
-              (let* ((files (directory-files sub-dir t (concat ".*" ext "$")))
-                     (subagents nil))
-                (dolist (f files)
-                  ;; Parse metadata via the sub-agent fast path (#146):
-                  ;; immutable fields cached permanently by path, `modified'
-                  ;; from the file mtime -- no per-paint `jq' re-parse for a
-                  ;; streaming sub-agent.
-                  (let ((data (decknix--agent-subagent-meta p-id f)))
-                    (when data
-                      (push (decknix--agent-subagent-with-task data f) subagents))))
-                (sort subagents
-                      (lambda (a b)
-                        (string> (or (alist-get 'modified a) "")
-                                 (or (alist-get 'modified b) ""))))))))))))
+            (let ((dir-attrs (file-attributes sub-dir)))
+              (when (eq t (file-attribute-type dir-attrs))
+                (decknix--agent-subagents-sorted
+                 (delq nil
+                       (mapcar #'cddr
+                               (decknix--agent-subagent-dir-entries
+                                p-id sub-dir
+                                (float-time (file-attribute-modification-time dir-attrs))
+                                (concat ".*" ext "$")
+                                (float-time)))))))))))))
+
+;; -- Incremental sub-agent listing ------------------------------------
+;;
+;; Each refresh listed the `subagents/' dir and rebuilt every child's
+;; entry: up to 181 files, each with a regexp match, a metadata lookup, a
+;; meta.json stat and a `format-time-string'.  Sampled, that was a fifth
+;; of a multi-second paint, and the 3 s window above almost never covered
+;; two paints.  The listing changes only when a child is added or
+;; removed, which moves the DIRECTORY's mtime, so it is re-read only then;
+;; a child's entry is rebuilt only when ITS mtime moves.
+;;
+;; A child's own writes do not move the directory's mtime, so liveness
+;; still needs a stat per child.  That is skipped for children idle past
+;; `decknix-agent-subagent-dormant-seconds', which are re-stat'ed only
+;; when the listing changes or every
+;; `decknix-agent-subagent-dormant-restat-seconds'.  Most of a session's
+;; children are long finished, so this is most of the stats.
+
+(defvar decknix-agent-subagent-dormant-seconds 600
+  "Seconds since its last write after which a sub-agent is re-stat'ed rarely.
+Matches the sub-agent `active' window: older than this it renders as done
+whatever its exact age.")
+
+(defvar decknix-agent-subagent-dormant-restat-seconds 60
+  "Seconds between stats of a dormant sub-agent\='s transcript.
+The cost of a larger value is lag on a finished sub-agent being resumed:
+it is seen writing again at most this late.")
+
+(defvar decknix--agent-subagent-dir-cache (make-hash-table :test 'equal)
+  "SUB-DIR -> (DIR-MTIME RESTAT-AT . FILES).
+FILES is a list of (PATH MTIME . DATA) in listing order; DATA is the
+decorated metadata, or nil for a child that could not be parsed yet.
+RESTAT-AT is when dormant children were last stat\='ed.")
+
+(defun decknix--agent-subagent-file-entry (p-id path old)
+  "Return (PATH MTIME . DATA) for sub-agent PATH, reusing OLD if unchanged."
+  (let ((mtime (let ((attrs (file-attributes path)))
+                 (and attrs (float-time (file-attribute-modification-time attrs))))))
+    (if (and old (equal mtime (cadr old)))
+        old
+      (cons path
+            (cons mtime
+                  (when mtime
+                    (let ((data (decknix--agent-subagent-meta p-id path)))
+                      (and data (decknix--agent-subagent-with-task data path)))))))))
+
+(defun decknix--agent-subagent-dir-entries (p-id sub-dir dir-mtime regexp now)
+  "Return SUB-DIR\='s (PATH MTIME . DATA) entries as of NOW.
+DIR-MTIME is SUB-DIR\='s current mtime and REGEXP matches transcripts."
+  (let* ((hit (gethash sub-dir decknix--agent-subagent-dir-cache))
+         (same-dir (and hit (equal dir-mtime (car hit))))
+         (restat (or (not same-dir)
+                     (>= (- now (cadr hit))
+                         decknix-agent-subagent-dormant-restat-seconds)))
+         (old (and hit (cddr hit)))
+         (by-path (unless same-dir
+                    (let ((h (make-hash-table :test 'equal)))
+                      (dolist (e old h) (puthash (car e) e h)))))
+         (files
+          (if same-dir
+              (mapcar (lambda (e)
+                        (if (and (not restat)
+                                 (cadr e)
+                                 (> (- now (cadr e))
+                                    decknix-agent-subagent-dormant-seconds))
+                            e
+                          (decknix--agent-subagent-file-entry p-id (car e) e)))
+                      old)
+            (mapcar (lambda (path)
+                      (decknix--agent-subagent-file-entry
+                       p-id path (gethash path by-path)))
+                    (directory-files sub-dir t regexp)))))
+    (puthash sub-dir (cons dir-mtime (cons (if restat now (cadr hit)) files))
+             decknix--agent-subagent-dir-cache)
+    files))
+
+(defun decknix--agent-subagents-sorted (subagents)
+  "Return SUBAGENTS newest first, by their `modified' stamps."
+  (sort (copy-sequence subagents)
+        (lambda (a b)
+          (string> (or (alist-get 'modified a) "")
+                   (or (alist-get 'modified b) "")))))
 
 (provide 'decknix-agent-session-history)
 ;;; decknix-agent-session-history.el ends here
