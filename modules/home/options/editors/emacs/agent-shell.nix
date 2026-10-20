@@ -6984,14 +6984,16 @@ duration -- the most important number on this branch."
         ;; T = toggles transient (sectioned: Global, Requests, Live, WIP)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "T") (lambda () (interactive)
+                      (decknix--sidebar-call-transient
+                       #'decknix-sidebar-toggles-transient)))
+        ;; These three once sat INSIDE the `T' lambda above, so they were
+        ;; only bound after `T' had been pressed once in the session.
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "G") 'decknix-repo-sync-row-action)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "TAB") 'decknix-layout-toggle-expand)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "A") 'decknix-layout-toggle-attention-only)
-                      (decknix--sidebar-call-transient
-                       #'decknix-sidebar-toggles-transient)))
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "s") (lambda () (interactive)
                       (decknix--sidebar-call-transient #'decknix-sidebar-sessions)))
