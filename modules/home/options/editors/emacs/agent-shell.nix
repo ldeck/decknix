@@ -6869,10 +6869,14 @@ duration -- the most important number on this branch."
                                                  reviews
                                                  (if (= reviews 1) "" "s"))
                                        "")))
-                        (propertize
-                         (format " ● %d live  ◦ %d saved%s"
-                                 live saved-count hub-str)
-                         'face 'font-lock-keyword-face)))))))
+                        (decknix--sidebar-header-line
+                         (propertize
+                          (format " ● %d live  ◦ %d saved%s"
+                                  live saved-count hub-str)
+                          'face 'font-lock-keyword-face)
+                         decknix-sidebar-header-hints
+                         (let ((win (get-buffer-window (current-buffer))))
+                           (if (window-live-p win) (window-width win) 48)))))))))
 
         ;; -- Robust sidebar buffer-at-point lookup ---------------------------
         ;; Upstream `--buffer-at-point' reads the text property at

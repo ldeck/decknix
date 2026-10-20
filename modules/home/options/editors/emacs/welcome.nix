@@ -307,7 +307,26 @@ in
                      ("C-h B" . "embark-bindings - All bindings")
                      ("C-h C-d" . "helpful-at-point - Help for thing at point")
                      ("C-h F" . "helpful-function - Functions only")
-                     ("C-h C" . "helpful-command - Commands only"))))
+                     ("C-h C" . "helpful-command - Commands only")))
+
+            ;; The agent sidebar has more keys than any other screen here,
+            ;; and until this entry the welcome page named none of them.
+            ("Agents & Sidebar"
+             :key "7"
+             :quick (("C-c A j" . "Next session needing you")
+                     ("RET" . "Sidebar: open row / session")
+                     ("?" . "Sidebar: every key"))
+             :full  (("C-c A j" . "Jump to the next session needing you")
+                     ("C-c A s" . "Session picker (live + saved + new)")
+                     ("C-c A w" . "Toggle the Agents workspace tab")
+                     ("RET" . "Sidebar: go to the session, or the row's menu")
+                     ("M-RET" . "Sidebar: open the row's PR in the browser")
+                     ("TAB" . "Sidebar: expand / collapse a group")
+                     ("A" . "Sidebar: Reviews, only what wants you / all")
+                     ("N" . "Sidebar: new session for the row's repo or PR")
+                     ("G" . "Sidebar: repo-sync action for the row")
+                     ("T" . "Sidebar: toggles")
+                     ("?" . "Sidebar: every key"))))
           "Categories with :key shortcut, :quick (main view), :full (detail view).")
 
         ;; === Button types ===
@@ -389,7 +408,7 @@ in
           (decknix-welcome-show-category-by-name (button-get button 'cat-name)))
 
         (defun decknix-welcome-show-category-by-key (key)
-          "Show category cheat sheet for KEY (1-6)."
+          "Show category cheat sheet for KEY (1-7)."
           (let ((category (seq-find (lambda (c) (string= (plist-get (cdr c) :key) key))
                                     decknix-welcome-categories)))
             (when category
@@ -502,14 +521,15 @@ in
             (if (decknix-welcome-use-two-columns-p)
                 ;; Two-column layout for wide windows
                 (let* ((categories decknix-welcome-categories)
-                       (left-cats (seq-take categories 3))
-                       (right-cats (seq-drop categories 3))
+                       (half (/ (1+ (length categories)) 2))
+                       (left-cats (seq-take categories half))
+                       (right-cats (seq-drop categories half))
                        (col-width decknix-welcome-col-width)
                        (total-content-width (+ col-width col-width 4))  ; Two columns + gap
                        (col-offset (max 2 (/ (- win-width total-content-width) 2))))
 
                   ;; Process each row (pair of left and right categories)
-                  (dotimes (row 3)
+                  (dotimes (row half)
                     (let ((left-cat (nth row left-cats))
                           (right-cat (nth row right-cats)))
 
@@ -608,7 +628,7 @@ in
 
             ;; Footer
             (insert "\n")
-            (decknix-welcome-insert-centered "Press 1-6 for full cheat sheets • r refresh • q quit" win-width 'decknix-welcome-subtitle)
+            (decknix-welcome-insert-centered "Press 1-7 for full cheat sheets • r refresh • q quit" win-width 'decknix-welcome-subtitle)
             (decknix-welcome-insert-centered "C-h ? help • C-x b buffers • C-x C-f files • C-c w this screen" win-width 'decknix-welcome-subtitle)
 
             (goto-char (point-min))
@@ -643,7 +663,7 @@ in
           (when (fboundp 'page-break-lines-mode)
             (page-break-lines-mode 1)))
 
-        ;; Category shortcut keybindings (1-6)
+        ;; Category shortcut keybindings (1-7)
         (define-key decknix-welcome-mode-map (kbd "1")
           (lambda () (interactive) (decknix-welcome-show-category-by-key "1")))
         (define-key decknix-welcome-mode-map (kbd "2")
@@ -656,6 +676,8 @@ in
           (lambda () (interactive) (decknix-welcome-show-category-by-key "5")))
         (define-key decknix-welcome-mode-map (kbd "6")
           (lambda () (interactive) (decknix-welcome-show-category-by-key "6")))
+        (define-key decknix-welcome-mode-map (kbd "7")
+          (lambda () (interactive) (decknix-welcome-show-category-by-key "7")))
         (define-key decknix-welcome-mode-map (kbd "r") 'decknix-welcome-refresh)
         (define-key decknix-welcome-mode-map (kbd "q") 'quit-window)
 

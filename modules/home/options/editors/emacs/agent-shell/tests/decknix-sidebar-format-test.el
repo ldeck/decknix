@@ -190,5 +190,31 @@ the same height."
       ;; so the right side after padding is the empty string.
       (should (string-prefix-p "   c z" (nth 3 lines))))))
 
+;; -- header line ---------------------------------------------------
+
+(ert-deftest decknix-sidebar-header-line--all-hints-when-there-is-room ()
+  (should (equal "● 3 live  RET open · TAB expand · ? keys"
+                 (substring-no-properties
+                  (decknix--sidebar-header-line
+                   "● 3 live" '(("RET" . "open") ("TAB" . "expand") ("?" . "keys")) 80)))))
+
+(ert-deftest decknix-sidebar-header-line--drops-from-the-right-but-keeps-help ()
+  "`?' is the way to every other key, so it is the last to go."
+  (let ((out (substring-no-properties
+              (decknix--sidebar-header-line
+               "● 3 live" '(("RET" . "open") ("TAB" . "expand") ("?" . "keys")) 28))))
+    (should (equal "● 3 live  RET open · ? keys" out))))
+
+(ert-deftest decknix-sidebar-header-line--never-wider-than-asked-unless-counts-are ()
+  (dolist (w '(10 20 30 40))
+    (let ((out (decknix--sidebar-header-line
+                "● 3 live" '(("RET" . "open") ("TAB" . "expand") ("?" . "keys")) w)))
+      (should (or (<= (string-width out) w) (equal out "● 3 live"))))))
+
+(ert-deftest decknix-sidebar-header-line--keys-are-highlighted ()
+  (let ((out (decknix--sidebar-header-line "x" '(("?" . "keys")) 40)))
+    (should (eq 'font-lock-keyword-face
+                (get-text-property (string-match "?" out) 'face out)))))
+
 (provide 'decknix-sidebar-format-test)
 ;;; decknix-sidebar-format-test.el ends here
