@@ -14,6 +14,9 @@
 (require 'cl-lib)
 (require 'tab-bar)
 (require 'decknix-layout-persist)
+(require 'decknix-layout-persist-fixture)
+
+(defvar agent-shell-workspace--isolation-active)
 
 (defmacro decknix-layout-test--with-file (&rest body)
   "Run BODY with `decknix-layout-persist-file' in a fresh temp dir."
@@ -308,6 +311,111 @@
         (tab-bar-close-other-tabs)
         (unless tab-bar-mode-was (tab-bar-mode -1))
         (dolist (x (list a b c)) (when (buffer-live-p x) (kill-buffer x)))))))
+
+;; -- Restore: the real multi-tab layout -----------------------------------
+
+(defun decknix-layout-test--tab-buffers ()
+  "Buffer names of every window in each tab of the selected frame, in order."
+  (let ((tab-bar-tab-post-select-functions nil)
+        (current (tab-bar--current-tab-index)))
+    (prog1
+        (cl-loop for i from 1 to (length (tab-bar-tabs))
+                 collect (progn
+                           (tab-bar-select-tab i)
+                           (mapcar (lambda (w) (buffer-name (window-buffer w)))
+                                   (window-list nil 'nomini (frame-first-window)))))
+      (tab-bar-select-tab (1+ current)))))
+
+(defmacro decknix-layout-test--with-fixture (&rest body)
+  "Run BODY with the fixture saved, its sessions live and tab-bar-mode OFF.
+Off because a fresh daemon has no tab-bar until the first tab is made,
+which is exactly when the startup restore runs."
+  (declare (indent 0))
+  `(decknix-layout-test--with-file
+     (let ((tab-bar-mode-was (bound-and-true-p tab-bar-mode))
+           (sessions (cl-loop for i from 1 to 7
+                              collect (get-buffer-create (format "*Claude: session-%d*" i)))))
+       (unwind-protect
+           (save-window-excursion
+             (with-temp-file decknix-layout-persist-file
+               (prin1 decknix-layout-test-fixture (current-buffer)))
+             (when (bound-and-true-p tab-bar-mode) (tab-bar-mode -1))
+             (tab-bar-close-other-tabs)
+             (delete-other-windows)
+             (switch-to-buffer "*scratch*")
+             (get-buffer-create "*Review Board*")
+             (cl-letf (((symbol-function 'decknix-layout--gui-frames)
+                        (lambda () (list (selected-frame))))
+                       ((symbol-function 'select-frame-set-input-focus) #'ignore)
+                       ((symbol-function 'decknix-layout--live-session-buffer)
+                        (lambda (entry) (get-buffer (alist-get 'name entry)))))
+               ,@body))
+         (tab-bar-close-other-tabs)
+         (if tab-bar-mode-was (tab-bar-mode 1) (tab-bar-mode -1))
+         (dolist (b (cons (get-buffer "*Review Board*") sessions))
+           (when (buffer-live-p b) (kill-buffer b)))
+         (when (get-buffer "*Agent Sidebar*") (kill-buffer "*Agent Sidebar*"))))))
+
+(ert-deftest decknix-layout/restore-rebuilds-every-tab-of-a-real-layout ()
+  "The saved frame had three tabs; restore came back with only the selected one.
+Restore gated tab rebuilding on `tab-bar-mode', which is still off in a
+fresh daemon, and so fell back to showing the current tab alone."
+  (decknix-layout-test--with-fixture
+    (decknix-layout-restore nil nil)
+    (let ((tabs (tab-bar-tabs)))
+      (should (= 3 (length tabs)))
+      (should (equal '("*Review Board*" "Agents" "*Claude: session-7*")
+                     (mapcar (lambda (tab) (alist-get 'name tab)) tabs)))
+      (should (equal '(nil t nil)
+                     (mapcar (lambda (tab) (and (alist-get 'explicit-name tab) t)) tabs)))
+      (should (= 1 (tab-bar--current-tab-index))))
+    (should (equal '(("*Review Board*" "*Claude: session-1*")
+                     ("*Agent Sidebar*" "*Claude: session-2*" "*Claude: session-3*"
+                      "*Claude: session-4*" "*Claude: session-5*")
+                     ("*Claude: session-6*" "*Claude: session-7*"))
+                   (decknix-layout-test--tab-buffers)))))
+
+
+(ert-deftest decknix-layout/restore-keeps-tab-hooks-and-isolation-out-of-the-build ()
+  "A tab-select hook must not run on half-built tabs, nor isolation redirect.
+In the daemon both are the Agents tab's buffer isolation: shown a
+non-agent buffer while Agents is selected, it switches tabs.  The hook
+runs once, after restore, with the saved tab selected."
+  (decknix-layout-test--with-fixture
+    (let* ((hook-ran nil)
+           (selected-at-call nil)
+           (isolation-seen nil)
+           (agent-shell-workspace--isolation-active t)
+           (tab-bar-tab-post-select-functions
+            (list (lambda (&rest _) (setq hook-ran t) (tab-bar-select-tab 1)))))
+      (cl-letf (((symbol-function 'agent-shell-workspace--on-tab-selected)
+                 (lambda (&rest _)
+                   (push (alist-get 'name (tab-bar--current-tab)) selected-at-call)))
+                ((symbol-function 'decknix-layout--live-session-buffer)
+                 (lambda (entry)
+                   (push agent-shell-workspace--isolation-active isolation-seen)
+                   (get-buffer (alist-get 'name entry)))))
+        (decknix-layout-restore nil nil)
+        (should-not hook-ran)
+        (should isolation-seen)
+        (should-not (delq nil isolation-seen))
+        (should agent-shell-workspace--isolation-active)
+        (should (equal '("Agents") selected-at-call))
+        (should (= 1 (tab-bar--current-tab-index)))))))
+
+;; -- Pixel sizes ------------------------------------------------------------
+
+(ert-deftest decknix-layout/state-without-pixels-keeps-structure-and-buffers ()
+  (let* ((state (plist-get (nth 1 (plist-get (car (plist-get decknix-layout-test-fixture
+                                                              :frames))
+                                             :tabs))
+                           :state))
+         (out (decknix-layout--state-without-pixels state)))
+    (should (equal (decknix-layout--state-buffer-names state)
+                   (decknix-layout--state-buffer-names out)))
+    (should-not (string-match-p "pixel" (prin1-to-string out)))
+    (should (string-match-p "normal-width" (prin1-to-string out)))
+    (should (string-match-p "window-side" (prin1-to-string out)))))
 
 (provide 'decknix-layout-persist-test)
 ;;; decknix-layout-persist-test.el ends here
