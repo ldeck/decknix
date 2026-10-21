@@ -551,8 +551,11 @@ let
     pname = "decknix-board";
     src = ./agent-shell/board;
     packageRequires = [ decknix-attention-el ];
-    extraSiteFiles = [ "decknix-board-backend.el" "decknix-board-github.el" ];
-    testFiles = [ "decknix-board-fixture.el" "decknix-board-test.el" ];
+    # Scope: repository patterns, and where a session is.
+    extraSiteFiles = [ "decknix-board-backend.el" "decknix-board-github.el"
+                       "decknix-board-scope.el" ];
+    testFiles = [ "decknix-board-fixture.el" "decknix-board-test.el"
+                  "decknix-board-scope-test.el" ];
   };
 
   decknix-sidebar-toggles-el = mkEmacsTestedPackage {

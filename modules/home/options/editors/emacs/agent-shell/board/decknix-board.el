@@ -17,20 +17,31 @@
 ;;    :workspace "~/Code/hack"             ; optional
 ;;    :tags-all ("hackathon") :tags-any nil ; session grouping
 ;;    :slack-channel "C0123ABCD"            ; optional
+;;    :repos ("owner/hack-*")               ; optional, see below
+;;    :match either                         ; tags | repos | either | both
+;;    :exclude-tags ("archived")            ; optional
 ;;    :backend github
 ;;    :github (:repo "owner/name" :root 1 :label-prefix "type:"))
 ;;
-;; Grouping.  A session belongs to a board when it carries every
+;; Repositories.  :repos is the board's scope: exact `owner/name' entries,
+;; globs and `(:regexp RX)' (`decknix-board-scope').  Items are read from
+;; every repository in it; :github :repo stays the issue home, where `c'
+;; creates.  Without :repos the scope is the issue home alone.
+;;
+;; Grouping.  A session matches a board's tags when it carries every
 ;; :tags-all tag, at least one :tags-any tag (when any are given) and
-;; sits under :workspace (when given).  A board with none of the three
-;; claims no session by them, or it would claim every session.
+;; sits under :workspace (when given); a board with none of the three
+;; matches no session by them, or it would claim every session.  It
+;; matches the board's repositories when the cached facts place it in
+;; one (`decknix-board-session-repos').  :match combines the two, `either'
+;; by default; see `decknix-board-session-in-board-p'.
 ;;
 ;; Item tags.  A session works on an item when it is tagged
 ;; `<prefix>#<number>', where the prefix is the repository name for
-;; GitHub (`hack#12'), or, inside the board, just `#12'.  The repo form
-;; stays unambiguous across boards, because tags are global; it also puts
-;; a session on its board by itself.  `N' on an item tags a new session
-;; that way.
+;; GitHub (`hack#12'), or, inside the board, just `#12' for the issue
+;; home.  The repo form stays unambiguous across boards, because tags are
+;; global; it also puts a session on its board by itself.  `N' on an item
+;; tags a new session that way.
 ;;
 ;; Rendering reads only caches: the backend fetch is a subprocess and the
 ;; sessions come from the snapshot the sidebar already keeps.  A tick
@@ -45,6 +56,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'decknix-board-backend)
+(require 'decknix-board-scope)
 (require 'decknix-board-github)
 (require 'decknix-attention)
 
@@ -99,6 +111,10 @@ channel instead of posting."
 
 ;; --- definitions ---------------------------------------------------------
 
+(defvar decknix-board-reread-functions nil
+  "Functions called with a board's name when its definition was written or re-read.
+For anything that caches a definition.")
+
 (defun decknix-board-valid-name-p (name)
   "Non-nil when NAME can name a board file and buffer."
   (and (stringp name)
@@ -148,6 +164,7 @@ channel instead of posting."
               ";; No secrets here: this is plain, shareable data.\n")
       (let ((print-length nil) (print-level nil))
         (pp board (current-buffer))))
+    (run-hook-with-args 'decknix-board-reread-functions (plist-get board :name))
     file))
 
 (defun decknix-board-backend (board)
@@ -159,16 +176,43 @@ channel instead of posting."
   (plist-get (plist-get board (intern (format ":%s" (decknix-board-backend board))))
              :root))
 
+;; --- item identity ------------------------------------------------------
+
+(defun decknix-board-item-key (item)
+  "Return ITEM's key, unique across the board's repositories.
+`owner/name#N' for an item that knows its repository, else its number."
+  (or (plist-get item :key) (plist-get item :number)))
+
+(defun decknix-board-item-parent-key (item)
+  "Return the key of ITEM's parent, or nil."
+  (if (plist-get item :key) (plist-get item :parent-key) (plist-get item :parent)))
+
+(defun decknix-board--find (items key)
+  "Return the item of ITEMS whose key is KEY."
+  (seq-find (lambda (i) (equal (decknix-board-item-key i) key)) items))
+
 ;; --- tags and grouping ---------------------------------------------------
 
 (defun decknix-board-tag-prefix (board)
-  "Return the prefix of BOARD's item tags."
+  "Return the prefix of the tags of BOARD's issue-home items."
   (or (plist-get board :item-tag-prefix)
       (decknix-board-backend-tag-prefix (decknix-board-backend board) board)))
 
+(defun decknix-board--home-item-p (board item)
+  "Non-nil when ITEM lives in BOARD's issue home (or does not say)."
+  (let ((repo (plist-get item :repo))
+        (home (decknix-board-home-repo board)))
+    (or (null repo) (null home) (string= (downcase repo) (downcase home)))))
+
 (defun decknix-board-item-tag (board item)
-  "Return the tag that puts a session on BOARD's ITEM, e.g. `hack#12'."
-  (format "%s#%s" (decknix-board-tag-prefix board) (plist-get item :number)))
+  "Return the tag that puts a session on BOARD's ITEM, e.g. `hack#12'.
+An item from another repository in scope is tagged with that
+repository's name, as GitHub writes cross-repository references."
+  (format "%s#%s"
+          (if (decknix-board--home-item-p board item)
+              (decknix-board-tag-prefix board)
+            (decknix-board-repo-short (plist-get item :repo)))
+          (plist-get item :number)))
 
 (defun decknix-board--under-p (dir root)
   "Non-nil when directory DIR is ROOT or below it.  Pure: no file access."
@@ -177,76 +221,206 @@ channel instead of posting."
              (r (file-name-as-directory (expand-file-name root))))
          (string-prefix-p r d))))
 
-(defun decknix-board--item-tag-number (board tag)
-  "Return the item number TAG names on BOARD, or nil."
-  (let ((re (concat "\\`\\(?:" (regexp-quote (decknix-board-tag-prefix board))
-                    "\\)?#\\([0-9]+\\)\\'")))
-    (and (stringp tag) (string-match re tag)
-         (string-to-number (match-string 1 tag)))))
+(defvar decknix-board--known-items (make-hash-table :test 'equal)
+  "Board name -> the items its last fetch returned.
+Lets the sidebar's focus recognise item tags of a board that is not open.")
 
-(defun decknix-board--has-full-item-tag-p (board tags)
-  "Non-nil when TAGS include one of BOARD's `prefix#N' item tags."
-  (let ((prefix (concat (decknix-board-tag-prefix board) "#")))
-    (seq-some (lambda (tag)
-                (and (string-prefix-p prefix tag)
-                     (decknix-board--item-tag-number board tag)))
-              tags)))
+(defun decknix-board-context (board &optional items)
+  "Return what matching sessions against BOARD needs, computed once.
+ITEMS default to the board's last fetch.  A plist: :shorts maps each tag
+prefix (lower-cased) to its repository, from the issue home and the
+repositories items came from; :keyed is non-nil when items carry keys;
+:known lists the concrete repositories in scope."
+  (let* ((items (or items (gethash (plist-get board :name) decknix-board--known-items)))
+         (home (decknix-board-home-repo board))
+         (shorts (list (cons (downcase (decknix-board-tag-prefix board)) home))))
+    (dolist (i items)
+      (let ((r (plist-get i :repo)))
+        (when r
+          (let ((short (decknix-board-repo-short r)))
+            (unless (assoc short shorts) (push (cons short r) shorts))))))
+    (list :shorts (nreverse shorts)
+          :keyed (and (seq-some (lambda (i) (plist-get i :key)) items) t)
+          :known (decknix-board-scope-known-repos board))))
 
-(defun decknix-board-session-in-board-p (board session)
-  "Non-nil when SESSION (NAME TAGS PRS STATE WORKSPACE ...) is on BOARD."
+(defun decknix-board--tag-ref (tag)
+  "Return (PREFIX . NUMBER) for an item TAG `prefix#N' or `#N', else nil."
+  (and (stringp tag) (string-match "\\`\\([^#]*\\)#\\([0-9]+\\)\\'" tag)
+       (cons (match-string 1 tag) (string-to-number (match-string 2 tag)))))
+
+(defun decknix-board--tag-key (board tag ctx in-board)
+  "Return the item key TAG names on BOARD, or nil.
+A bare `#N' names an issue-home item, and only for a session IN-BOARD;
+`repo#N' names an item of any repository the board's items come from."
+  (let ((ref (decknix-board--tag-ref tag)))
+    (when ref
+      (let ((repo (if (string-empty-p (car ref))
+                      (and in-board (cons t (decknix-board-home-repo board)))
+                    (let ((hit (assoc (downcase (car ref)) (plist-get ctx :shorts))))
+                      (and hit (cons t (cdr hit)))))))
+        (when repo
+          (if (and (plist-get ctx :keyed) (cdr repo))
+              (decknix-board-github-key (cdr repo) (cdr ref))
+            (cdr ref)))))))
+
+(defun decknix-board--has-full-item-tag-p (tags ctx)
+  "Non-nil when TAGS include a `repo#N' tag for one of CTX's repositories."
+  (seq-some (lambda (tag)
+              (let ((ref (decknix-board--tag-ref tag)))
+                (and ref (not (string-empty-p (car ref)))
+                     (assoc (downcase (car ref)) (plist-get ctx :shorts)))))
+            tags))
+
+(defun decknix-board-match-mode (board)
+  "Return how BOARD combines tags and repositories: :match, else `either'."
+  (or (plist-get board :match) 'either))
+
+(defun decknix-board--tag-criteria-p (board)
+  "Non-nil when BOARD groups sessions by tags or workspace."
+  (or (plist-get board :tags-all) (plist-get board :tags-any) (plist-get board :workspace)))
+
+(defun decknix-board--tags-match-p (board session)
+  "Non-nil when SESSION meets BOARD's tag and workspace criteria.
+A board without any claims nothing by them, or it would claim everything."
   (let ((tags (nth 1 session))
         (all (plist-get board :tags-all))
         (any (plist-get board :tags-any))
         (ws (plist-get board :workspace)))
-    (or (decknix-board--has-full-item-tag-p board tags)
-        (and (or all any ws)
-             (seq-every-p (lambda (tag) (member tag tags)) all)
-             (or (null any) (seq-some (lambda (tag) (member tag tags)) any))
-             (or (null ws) (decknix-board--under-p (nth 4 session) ws))))))
+    (and (decknix-board--tag-criteria-p board)
+         (seq-every-p (lambda (tag) (member tag tags)) all)
+         (or (null any) (seq-some (lambda (tag) (member tag tags)) any))
+         (or (null ws) (decknix-board--under-p (nth 4 session) ws)))))
+
+(defun decknix-board--excluded-p (board session)
+  "Non-nil when SESSION carries one of BOARD's :exclude-tags."
+  (seq-some (lambda (tag) (member tag (nth 1 session))) (plist-get board :exclude-tags)))
+
+(defun decknix-board-session-repo-match-p (board session &optional ctx)
+  "Non-nil when SESSION works in a repository in BOARD's scope.
+By the cached facts of `decknix-board-session-repos-function', or failing
+those by a tag naming a concrete repository in scope (`followupboss' for
+`UpsideRealty/followupboss-integration')."
+  (or (seq-some (lambda (r) (decknix-board-repo-in-scope-p board r))
+                (funcall decknix-board-session-repos-function session))
+      (let ((known (plist-get (or ctx (decknix-board-context board)) :known)))
+        (seq-some (lambda (tag)
+                    (seq-some (lambda (r) (decknix-board-tag-names-repo-p tag r)) known))
+                  (nth 1 session)))))
+
+(defun decknix-board-session-in-board-p (board session &optional ctx)
+  "Non-nil when SESSION (NAME TAGS PRS STATE WORKSPACE ...) is on BOARD.
+CTX is `decknix-board-context', computed when nil.
+
+An item tag (`repo#N') always claims the session; :exclude-tags always
+removes it.  Otherwise :match decides:
+  `either' (default)  tags/workspace, or a repository in :repos
+  `tags'              tags/workspace only
+  `repos'             a repository in scope only
+  `both'              a repository in scope, and the tags/workspace
+                      when the board sets any
+Without :repos, `either' is the tag rule alone, so the issue home does
+not quietly pull in every session working in that repository."
+  (let ((ctx (or ctx (decknix-board-context board))))
+    (and (not (decknix-board--excluded-p board session))
+         (or (decknix-board--has-full-item-tag-p (nth 1 session) ctx)
+             (pcase (decknix-board-match-mode board)
+               ('tags (decknix-board--tags-match-p board session))
+               ('repos (decknix-board-session-repo-match-p board session ctx))
+               ('both (and (or (not (decknix-board--tag-criteria-p board))
+                               (decknix-board--tags-match-p board session))
+                           (decknix-board-session-repo-match-p board session ctx)))
+               (_ (or (decknix-board--tags-match-p board session)
+                      (and (decknix-board-scope-explicit-p board)
+                           (decknix-board-session-repo-match-p board session ctx))))))
+         t)))
+
+(defun decknix-board-session-item-keys (board session &optional ctx in-board)
+  "Return the item keys SESSION is tagged for on BOARD.
+IN-BOARD says whether SESSION is on the board, which is what gives a bare
+`#N' its meaning; it is computed when not given."
+  (let* ((ctx (or ctx (decknix-board-context board)))
+         (in-board (if (eq in-board 'unknown)
+                       (decknix-board-session-in-board-p board session ctx)
+                     in-board)))
+    (delete-dups
+     (delq nil (mapcar (lambda (tag) (decknix-board--tag-key board tag ctx in-board))
+                       (nth 1 session))))))
 
 (defun decknix-board-session-item-numbers (board session)
-  "Return the item numbers SESSION is tagged for on BOARD."
-  (let ((in-board (decknix-board-session-in-board-p board session))
-        (prefix (concat (decknix-board-tag-prefix board) "#")))
-    (delete-dups
-     (delq nil
-           (mapcar (lambda (tag)
-                     (and (or in-board (string-prefix-p prefix tag))
-                          (decknix-board--item-tag-number board tag)))
-                   (nth 1 session))))))
+  "Return the issue-home item numbers SESSION is tagged for on BOARD."
+  (let ((ctx (list :shorts (list (cons (downcase (decknix-board-tag-prefix board))
+                                       (decknix-board-home-repo board)))
+                   :keyed nil)))
+    (decknix-board-session-item-keys board session ctx 'unknown)))
 
 (defun decknix-board-group-sessions (board sessions items)
   "Group SESSIONS for BOARD against ITEMS.
 Return (:board BOARD-SESSIONS :by-item ALIST :unassigned SESSIONS), where
-ALIST maps an item number to its sessions."
-  (let ((numbers (mapcar (lambda (i) (plist-get i :number)) items))
+ALIST maps an item key to its sessions."
+  (let ((ctx (decknix-board-context board items))
+        (keys (mapcar #'decknix-board-item-key items))
         mine by-item unassigned)
     (dolist (s sessions)
-      (when (decknix-board-session-in-board-p board s)
+      (when (decknix-board-session-in-board-p board s ctx)
         (push s mine)
-        (let ((hits (seq-filter (lambda (n) (memq n numbers))
-                                (decknix-board-session-item-numbers board s))))
+        (let ((hits (seq-filter (lambda (k) (member k keys))
+                                (decknix-board-session-item-keys board s ctx t))))
           (if (null hits)
               (push s unassigned)
-            (dolist (n hits)
-              (setf (alist-get n by-item) (append (alist-get n by-item) (list s))))))))
+            (dolist (k hits)
+              (setf (alist-get k by-item nil nil #'equal)
+                    (append (alist-get k by-item nil nil #'equal) (list s))))))))
     (list :board (nreverse mine) :by-item by-item :unassigned (nreverse unassigned))))
+
+(defun decknix-board-item-sessions (key grouping)
+  "Return the sessions GROUPING puts on the item with KEY."
+  (alist-get key (plist-get grouping :by-item) nil nil #'equal))
+
+;; --- PRs from the hub's feeds --------------------------------------------
+
+(defun decknix-board-link-prs (board items prs)
+  "Return (:by-item ALIST :prs SCOPED) linking BOARD's scoped PRS to ITEMS.
+A PR links to an item that GitHub already says it closes, or whose tag
+or number its title or branch names (`decknix-board-pr-references-p').
+SCOPED is every PR in scope, each with :items, the keys it links to."
+  (let ((home (decknix-board-home-repo board))
+        by-item scoped)
+    (dolist (pr (decknix-board-scope-prs board prs))
+      (let* ((url (plist-get pr :url))
+             (hits (seq-filter
+                    (lambda (i)
+                      (or (and url (seq-some (lambda (p) (equal (plist-get p :url) url))
+                                             (plist-get i :prs)))
+                          (decknix-board-pr-references-p
+                           pr (or (plist-get i :repo) home) (plist-get i :number)
+                           (decknix-board-item-tag board i))))
+                    items))
+             (keys (mapcar #'decknix-board-item-key hits)))
+        (dolist (k keys)
+          (setf (alist-get k by-item nil nil #'equal)
+                (append (alist-get k by-item nil nil #'equal) (list pr))))
+        (push (append pr (list :items keys)) scoped)))
+    (list :by-item by-item :prs (nreverse scoped))))
 
 ;; --- the item tree -------------------------------------------------------
 
 (defun decknix-board--item-less-p (a b)
-  "Order items A and B by type depth, then number."
+  "Order items A and B by type depth, then repository, then number."
   (let ((ra (decknix-board-type-rank (plist-get a :type)))
-        (rb (decknix-board-type-rank (plist-get b :type))))
-    (if (/= ra rb) (< ra rb) (< (plist-get a :number) (plist-get b :number)))))
+        (rb (decknix-board-type-rank (plist-get b :type)))
+        (pa (or (plist-get a :repo) ""))
+        (pb (or (plist-get b :repo) "")))
+    (cond ((/= ra rb) (< ra rb))
+          ((not (string= pa pb)) (string< pa pb))
+          (t (< (plist-get a :number) (plist-get b :number))))))
 
-(defun decknix-board-tree (items root hierarchy)
+(defun decknix-board-tree (items root hierarchy &optional home)
   "Arrange ITEMS for display.
 With HIERARCHY (items carry parent links) return (:nodes NODES :unlinked
-NODES), each node (ITEM . CHILD-NODES).  NODES is the tree under ROOT
-when it is among ITEMS, else every top-level item; :unlinked holds the
-other top-level trees.  Without HIERARCHY return (:flat GROUPS), an
-alist of type to items, outermost type first."
+NODES), each node (ITEM . CHILD-NODES).  NODES is the tree under issue
+ROOT of repository HOME when it is among ITEMS, else every top-level
+item; :unlinked holds the other top-level trees.  Without HIERARCHY
+return (:flat GROUPS), an alist of type to items, outermost type first."
   (if (not hierarchy)
       (let (groups)
         (dolist (item (sort (copy-sequence items) #'decknix-board--item-less-p))
@@ -256,52 +430,69 @@ alist of type to items, outermost type first."
         (list :flat (sort groups (lambda (a b)
                                    (< (decknix-board-type-rank (car a))
                                       (decknix-board-type-rank (car b)))))))
-    (let ((by-number (make-hash-table))
-          (children (make-hash-table))
-          (seen (make-hash-table))
+    (let ((by-key (make-hash-table :test 'equal))
+          (children (make-hash-table :test 'equal))
+          (seen (make-hash-table :test 'equal))
           top)
-      (dolist (item items) (puthash (plist-get item :number) item by-number))
+      (dolist (item items) (puthash (decknix-board-item-key item) item by-key))
       (dolist (item items)
-        (let ((parent (plist-get item :parent)))
-          (if (and parent (gethash parent by-number))
+        (let ((parent (decknix-board-item-parent-key item)))
+          (if (and parent (gethash parent by-key))
               (puthash parent (cons item (gethash parent children)) children)
             (push item top))))
       (cl-labels ((build (item)
                     ;; A cycle is impossible on GitHub, but a hand-edited
                     ;; backend must not hang the render.
-                    (puthash (plist-get item :number) t seen)
+                    (puthash (decknix-board-item-key item) t seen)
                     (cons item
                           (mapcar #'build
                                   (seq-remove
-                                   (lambda (c) (gethash (plist-get c :number) seen))
+                                   (lambda (c) (gethash (decknix-board-item-key c) seen))
                                    (sort (copy-sequence
-                                          (gethash (plist-get item :number) children))
+                                          (gethash (decknix-board-item-key item) children))
                                          #'decknix-board--item-less-p))))))
         (let* ((top (sort top #'decknix-board--item-less-p))
-               (root-item (and root (seq-find (lambda (i) (eql (plist-get i :number) root))
-                                              top))))
+               (root-item (and root
+                               (seq-find
+                                (lambda (i)
+                                  (and (eql (plist-get i :number) root)
+                                       (or (null home) (null (plist-get i :repo))
+                                           (string= (downcase home)
+                                                    (downcase (plist-get i :repo))))))
+                                top))))
           (if root-item
               (list :nodes (list (build root-item))
                     :unlinked (mapcar #'build (remq root-item top)))
             (list :nodes (mapcar #'build top) :unlinked nil)))))))
 
+(defun decknix-board-board-tree (board items meta)
+  "Return BOARD's tree of ITEMS, hierarchical when META says so."
+  (decknix-board-tree items (decknix-board-root board) (plist-get meta :hierarchy)
+                      (decknix-board-home-repo board)))
+
 (defun decknix-board-ancestors (items item)
   "Return ITEM's ancestors among ITEMS, outermost first."
   (let (chain (seen nil) (cur item))
-    (while (and cur (plist-get cur :parent) (not (memq (plist-get cur :parent) seen)))
-      (push (plist-get cur :parent) seen)
-      (setq cur (seq-find (lambda (i) (eql (plist-get i :number) (plist-get cur :parent)))
-                          items))
+    (while (and cur (decknix-board-item-parent-key cur)
+                (not (member (decknix-board-item-parent-key cur) seen)))
+      (push (decknix-board-item-parent-key cur) seen)
+      (setq cur (decknix-board--find items (decknix-board-item-parent-key cur)))
       (when cur (push cur chain)))
     chain))
 
 ;; --- text for people and agents -----------------------------------------
 
+(defun decknix-board--item-ref (item)
+  "Return `#3' for ITEM, or `repo#3' when it is from another repository."
+  (format "%s#%s"
+          (if (plist-get item :foreign) (decknix-board-repo-short (plist-get item :repo)) "")
+          (plist-get item :number)))
+
 (defun decknix-board--item-label (item)
   "Return `epic #3 Title' for ITEM."
-  (format "%s#%s %s"
+  (format "%s%s %s"
           (if (plist-get item :type) (concat (plist-get item :type) " ") "")
-          (plist-get item :number) (plist-get item :title)))
+          (decknix-board--item-ref item) (plist-get item :title)))
 
 (defun decknix-board--excerpt (text n)
   "Return TEXT trimmed to N characters with an ellipsis when cut."
@@ -357,7 +548,7 @@ NOW is the time to stamp, for tests."
         (insert (format "Slack channel: %s\n" (plist-get board :slack-channel))))
       (insert (format "Updated: %s\n\n"
                       (format-time-string "%Y-%m-%d %H:%M %Z" (or now (current-time)))))
-      (insert (format "A session tagged `%s#N` (or `#N` with the board's tags) works on item N.\n\n"
+      (insert (format "A session tagged `%s#N` (or `#N` with the board's tags) works on item N; items from other repositories use their repository's name.\n\n"
                       (decknix-board-tag-prefix board)))
       (cl-labels ((line (item depth)
                     (insert (make-string (* 2 depth) ?\s)
@@ -368,7 +559,7 @@ NOW is the time to stamp, for tests."
                       (insert " (" (mapconcat (lambda (a) (concat "@" a))
                                               (plist-get item :assignees) " ")
                               ")"))
-                    (let ((ss (alist-get (plist-get item :number) by-item)))
+                    (let ((ss (alist-get (decknix-board-item-key item) by-item nil nil #'equal)))
                       (when ss (insert " sessions: " (decknix-board--session-names ss))))
                     (insert "\n"))
                   (node (n depth)
@@ -396,8 +587,8 @@ ITEMS are all the board's items; GROUPING its sessions."
          (subject (if item
                       (cons item (seq-filter
                                   (lambda (i)
-                                    (seq-some (lambda (a) (eql (plist-get a :number)
-                                                               (plist-get item :number)))
+                                    (seq-some (lambda (a) (equal (decknix-board-item-key a)
+                                                                 (decknix-board-item-key item)))
                                               (decknix-board-ancestors items i)))
                                   items))
                     items))
@@ -422,12 +613,13 @@ ITEMS are all the board's items; GROUPING its sessions."
                               (mapconcat (lambda (s) (nth 0 s)) need ", ")))
             (let ((active (seq-filter
                            (lambda (i) (and (not (equal (plist-get i :state) "closed"))
-                                            (alist-get (plist-get i :number) by-item)))
+                                            (alist-get (decknix-board-item-key i) by-item
+                                                       nil nil #'equal)))
                            subject)))
               (and active
                    (concat "In progress:\n"
                            (mapconcat (lambda (i)
-                                        (format "- #%s %s" (plist-get i :number)
+                                        (format "- %s %s" (decknix-board--item-ref i)
                                                 (plist-get i :title)))
                                       active "\n"))))))
      "\n")))
@@ -468,7 +660,7 @@ computes a state, so it is fresher than an older snapshot."
 (defvar-local decknix-board--fetched-at nil "When the last fetch finished.")
 (defvar-local decknix-board--fetching nil "Non-nil while a fetch runs.")
 (defvar-local decknix-board--fetch-started nil "When the last fetch began.")
-(defvar-local decknix-board--collapsed nil "Item numbers folded in the view.")
+(defvar-local decknix-board--collapsed nil "Keys of the items folded in the view.")
 (defvar-local decknix-board--fingerprint nil "Inputs of the last render.")
 (defvar-local decknix-board--snapshot-text nil "Last Markdown snapshot written.")
 
@@ -509,10 +701,29 @@ computes a state, so it is fresher than an older snapshot."
     (add-text-properties start (point) (list 'decknix-board-session buf
                                              'decknix-board-row t))))
 
-(defun decknix-board--item-line (item depth folded children-p)
-  "Return ITEM's row text at DEPTH; FOLDED and CHILDREN-P set the marker."
+(defun decknix-board--pr-label (pr)
+  "Return ` PR #N draft' for PR, naming its repository when it is a feed PR."
+  (format "  PR %s#%s%s"
+          (if (plist-get pr :source) (decknix-board-repo-short (plist-get pr :repo)) "")
+          (plist-get pr :number)
+          (cond ((equal (plist-get pr :state) "merged") " merged")
+                ((plist-get pr :draft) " draft")
+                ((equal (plist-get pr :state) "closed") " closed")
+                (t ""))))
+
+(defun decknix-board--item-prs (item feed)
+  "Return ITEM's PRs: those GitHub links, then FEED PRs naming it."
+  (append (plist-get item :prs)
+          (seq-remove (lambda (pr)
+                        (seq-some (lambda (p) (equal (plist-get p :url) (plist-get pr :url)))
+                                  (plist-get item :prs)))
+                      feed)))
+
+(defun decknix-board--item-line (item depth folded children-p &optional feed)
+  "Return ITEM's row text at DEPTH; FOLDED and CHILDREN-P set the marker.
+FEED holds the hub's open PRs that name ITEM."
   (let* ((closed (equal (plist-get item :state) "closed"))
-         (prs (plist-get item :prs)))
+         (prs (decknix-board--item-prs item feed)))
     (concat
      (make-string (* 2 depth) ?\s)
      (cond ((not children-p) "  ") (folded "▸ ") (t "▾ "))
@@ -520,7 +731,7 @@ computes a state, so it is fresher than an older snapshot."
      (if (plist-get item :type)
          (propertize (format "%-7s " (plist-get item :type)) 'face 'font-lock-type-face)
        "")
-     (propertize (format "#%s " (plist-get item :number)) 'face 'font-lock-constant-face)
+     (propertize (concat (decknix-board--item-ref item) " ") 'face 'font-lock-constant-face)
      (propertize (plist-get item :title) 'face (if closed 'shadow 'default))
      (if (and (plist-get item :sub-total) (> (plist-get item :sub-total) 0))
          (propertize (format "  %s/%s" (plist-get item :sub-done) (plist-get item :sub-total))
@@ -531,42 +742,74 @@ computes a state, so it is fresher than an older snapshot."
                                              (plist-get item :assignees) " "))
                      'face 'font-lock-variable-name-face)
        "")
-     (mapconcat (lambda (pr)
-                  (propertize (format "  PR #%s%s" (plist-get pr :number)
-                                      (cond ((equal (plist-get pr :state) "merged") " merged")
-                                            ((plist-get pr :draft) " draft")
-                                            ((equal (plist-get pr :state) "closed") " closed")
-                                            (t "")))
-                              'face 'font-lock-keyword-face))
+     (mapconcat (lambda (pr) (propertize (decknix-board--pr-label pr)
+                                         'face 'font-lock-keyword-face))
                 prs ""))))
 
-(defun decknix-board--insert-node (node depth by-item)
-  "Insert tree NODE at DEPTH, with its sessions from BY-ITEM."
+(defun decknix-board--insert-node (node depth by-item &optional pr-links)
+  "Insert tree NODE at DEPTH, with its sessions from BY-ITEM.
+PR-LINKS maps item keys to the feed PRs that name them."
   (let* ((item (car node))
-         (n (plist-get item :number))
-         (folded (memq n decknix-board--collapsed))
+         (key (decknix-board-item-key item))
+         (folded (member key decknix-board--collapsed))
          (start (point)))
-    (insert (decknix-board--item-line item depth folded (cdr node)) "\n")
+    (insert (decknix-board--item-line item depth folded (cdr node)
+                                      (alist-get key pr-links nil nil #'equal))
+            "\n")
     (add-text-properties start (point) (list 'decknix-board-item item
                                              'decknix-board-row t))
-    (dolist (s (alist-get n by-item))
+    (dolist (s (alist-get key by-item nil nil #'equal))
       (decknix-board--insert-session s (+ 6 (* 2 depth))))
     (unless folded
-      (dolist (c (cdr node)) (decknix-board--insert-node c (1+ depth) by-item)))))
+      (dolist (c (cdr node)) (decknix-board--insert-node c (1+ depth) by-item pr-links)))))
 
 (defun decknix-board--heading (text)
   "Insert section heading TEXT."
   (insert "\n" (propertize text 'face 'bold) "\n"))
 
-(defun decknix-board--draw (sessions)
-  "Redraw the current board buffer from its caches and SESSIONS."
+(defun decknix-board--scope-label (board)
+  "Return BOARD's repository scope as one line, or nil without :repos."
+  (when (decknix-board-scope-explicit-p board)
+    (mapconcat (lambda (e) (if (stringp e) e (format "/%s/" (cadr e))))
+               (decknix-board-scope board) ", ")))
+
+(defun decknix-board--scoped-feed (board)
+  "Return the hub's cached open PRs in BOARD's scope."
+  (decknix-board-scope-prs board (decknix-board-feed-prs)))
+
+(defun decknix-board--insert-prs (links items)
+  "Insert the Open PRs section from LINKS (`decknix-board-link-prs')."
+  (let ((prs (plist-get links :prs)))
+    (when prs
+      (decknix-board--heading (format "Open PRs (%d)" (length prs)))
+      (dolist (pr prs)
+        (let ((start (point))
+              (refs (mapcar (lambda (k)
+                              (let ((i (decknix-board--find items k)))
+                                (if i (decknix-board--item-ref i) (format "%s" k))))
+                            (plist-get pr :items))))
+          (insert "  "
+                  (propertize (format "%s#%s" (decknix-board-repo-short (plist-get pr :repo))
+                                      (plist-get pr :number))
+                              'face 'font-lock-keyword-face)
+                  (if (plist-get pr :draft) (propertize " draft" 'face 'shadow) "")
+                  " " (or (plist-get pr :title) "")
+                  (if refs
+                      (propertize (concat "  -> " (string-join refs " ")) 'face 'shadow)
+                    (propertize "  (no item)" 'face 'shadow))
+                  "\n")
+          (add-text-properties start (point) (list 'decknix-board-pr pr
+                                                   'decknix-board-row t)))))))
+
+(defun decknix-board--draw (sessions &optional feed)
+  "Redraw the current board buffer from its caches, SESSIONS and FEED.
+FEED is the hub's open PRs in the board's scope."
   (let* ((board decknix-board--board)
          (items decknix-board--items)
          (grouping (decknix-board-group-sessions board sessions items))
-         (tree (decknix-board-tree items
-                                   (decknix-board-root board)
-                                   (plist-get decknix-board--meta :hierarchy)))
+         (tree (decknix-board-board-tree board items decknix-board--meta))
          (by-item (plist-get grouping :by-item))
+         (links (decknix-board-link-prs board items feed))
          (inhibit-read-only t)
          (row (or (get-text-property (point) 'decknix-board-item)
                   (get-text-property (point) 'decknix-board-session)))
@@ -582,6 +825,13 @@ computes a state, so it is fresher than an older snapshot."
     (when (plist-get board :slack-channel)
       (insert "   Slack: " (plist-get board :slack-channel)))
     (insert "\n")
+    (let ((scope (decknix-board--scope-label board)))
+      (when scope
+        (insert "Repos: " scope
+                (let ((read (plist-get decknix-board--meta :repos)))
+                  (if read (propertize (format "   (%d read)" (length read)) 'face 'shadow) ""))
+                (propertize (format "   match %s" (decknix-board-match-mode board)) 'face 'shadow)
+                "\n")))
     (let ((open (seq-count (lambda (i) (not (equal (plist-get i :state) "closed"))) items)))
       (insert (format "%d open, %d done, %d session%s   fetched %s%s\n"
                       open (- (length items) open)
@@ -594,6 +844,10 @@ computes a state, so it is fresher than an older snapshot."
                           "   (no sub-issues: grouped by type)" ""))))
     (when decknix-board--error
       (insert (propertize (concat "Fetch failed: " decknix-board--error) 'face 'error) "\n"))
+    (when (plist-get decknix-board--meta :warning)
+      (insert (propertize (concat "Partly fetched: " (plist-get decknix-board--meta :warning))
+                          'face 'warning)
+              "\n"))
     (insert (propertize "RET open  N new session  c create child  j jump  b broadcast  s slack  TAB fold  g refresh  e edit  ? help"
                         'face 'shadow)
             "\n")
@@ -601,24 +855,28 @@ computes a state, so it is fresher than an older snapshot."
       (when need
         (decknix-board--heading (format "%s Needs you (%d)" decknix-attention-glyph (length need)))
         (dolist (s need) (decknix-board--insert-session s 2))))
-    (cond
-     ((plist-get tree :flat)
-      (dolist (group (plist-get tree :flat))
-        (decknix-board--heading (capitalize (car group)))
-        (dolist (item (cdr group))
-          (decknix-board--insert-node (list item) 0 by-item))))
-     (t
-      (decknix-board--heading "Plan")
-      (if (plist-get tree :nodes)
-          (dolist (n (plist-get tree :nodes)) (decknix-board--insert-node n 0 by-item))
-        (insert (propertize (if decknix-board--fetched-at
-                                "  No items yet: c creates one."
-                              "  Fetching...")
-                            'face 'shadow)
-                "\n"))
-      (when (plist-get tree :unlinked)
-        (decknix-board--heading "Outside the goal")
-        (dolist (n (plist-get tree :unlinked)) (decknix-board--insert-node n 0 by-item)))))
+    (let ((pr-links (plist-get links :by-item)))
+      (cond
+       ((plist-get tree :flat)
+        (dolist (group (plist-get tree :flat))
+          (decknix-board--heading (capitalize (car group)))
+          (dolist (item (cdr group))
+            (decknix-board--insert-node (list item) 0 by-item pr-links))))
+       (t
+        (decknix-board--heading "Plan")
+        (if (plist-get tree :nodes)
+            (dolist (n (plist-get tree :nodes))
+              (decknix-board--insert-node n 0 by-item pr-links))
+          (insert (propertize (if decknix-board--fetched-at
+                                  "  No items yet: c creates one."
+                                "  Fetching...")
+                              'face 'shadow)
+                  "\n"))
+        (when (plist-get tree :unlinked)
+          (decknix-board--heading "Outside the goal")
+          (dolist (n (plist-get tree :unlinked))
+            (decknix-board--insert-node n 0 by-item pr-links))))))
+    (decknix-board--insert-prs links items)
     (when (plist-get grouping :unassigned)
       (decknix-board--heading "Sessions on no item")
       (dolist (s (plist-get grouping :unassigned)) (decknix-board--insert-session s 2)))
@@ -634,15 +892,19 @@ computes a state, so it is fresher than an older snapshot."
                      row
                      (lambda (want have)
                        (if (bufferp want) (eq want have)
-                         (eql (plist-get want :number) (plist-get have :number))))))))
+                         (equal (decknix-board-item-key want)
+                                (and have (decknix-board-item-key have)))))))))
     (if found
         (goto-char (prop-match-beginning found))
       (goto-char (point-min))
       (forward-line (1- line)))))
 
-(defun decknix-board--fingerprint-of (sessions)
-  "Return the render inputs of the current buffer with SESSIONS."
+(defun decknix-board--fingerprint-of (sessions feed)
+  "Return the render inputs of the current buffer with SESSIONS and FEED."
   (list (mapcar (lambda (s) (list (nth 0 s) (nth 1 s) (nth 3 s) (nth 4 s))) sessions)
+        (mapcar (lambda (pr) (list (plist-get pr :url) (plist-get pr :title)
+                                   (plist-get pr :draft)))
+                feed)
         decknix-board--items decknix-board--meta decknix-board--error
         decknix-board--fetched-at decknix-board--fetching decknix-board--collapsed
         decknix-board--board))
@@ -650,14 +912,15 @@ computes a state, so it is fresher than an older snapshot."
 (defun decknix-board--render (&optional force)
   "Render the current board buffer unless nothing changed, or FORCE."
   (let* ((sessions (decknix-board-live-sessions))
-         (fp (decknix-board--fingerprint-of sessions)))
+         (feed (decknix-board--scoped-feed decknix-board--board))
+         (fp (decknix-board--fingerprint-of sessions feed)))
     (when (or force (not (equal fp decknix-board--fingerprint)))
       (setq decknix-board--fingerprint fp)
       ;; A tick redraws a board shown in an unselected window, whose
       ;; cursor is the window's point, not the buffer's.
       (let ((win (get-buffer-window (current-buffer) t)))
         (when win (goto-char (window-point win)))
-        (decknix-board--draw sessions)
+        (decknix-board--draw sessions feed)
         (when win (set-window-point win (point)))))))
 
 ;; --- fetching ------------------------------------------------------------
@@ -667,9 +930,7 @@ computes a state, so it is fresher than an older snapshot."
   (with-current-buffer buf
     (let* ((sessions (decknix-board-live-sessions))
            (board decknix-board--board)
-           (tree (decknix-board-tree decknix-board--items
-                                     (decknix-board-root board)
-                                     (plist-get decknix-board--meta :hierarchy)))
+           (tree (decknix-board-board-tree board decknix-board--items decknix-board--meta))
            (grouping (decknix-board-group-sessions board sessions decknix-board--items))
            (text (decknix-board-markdown board tree grouping))
            (body (replace-regexp-in-string "^Updated: .*\n" "" text)))
@@ -699,6 +960,8 @@ computes a state, so it is fresher than an older snapshot."
                      decknix-board--meta (cdr result)
                      decknix-board--error nil
                      decknix-board--fetched-at (current-time))
+               (puthash (plist-get decknix-board--board :name) (car result)
+                        decknix-board--known-items)
                (decknix-board--write-snapshot buf))
              (decknix-board--render))))))))
 
@@ -792,6 +1055,7 @@ definition has gone."
   (interactive)
   (let ((board (decknix-board--current)))
     (setq decknix-board--board (decknix-board-read (plist-get board :name)))
+    (run-hook-with-args 'decknix-board-reread-functions (plist-get board :name))
     (decknix-board--fetch (current-buffer))
     (decknix-board--render t)
     (message "Refreshing %s..." (plist-get board :name))))
@@ -819,11 +1083,10 @@ definition has gone."
 
 (defun decknix-board--item-sessions (item)
   "Return the live sessions working on ITEM."
-  (alist-get (plist-get item :number)
-             (plist-get (decknix-board-group-sessions
-                         decknix-board--board (decknix-board-live-sessions)
-                         decknix-board--items)
-                        :by-item)))
+  (decknix-board-item-sessions
+   (decknix-board-item-key item)
+   (decknix-board-group-sessions decknix-board--board (decknix-board-live-sessions)
+                                 decknix-board--items)))
 
 (defun decknix-board--row-p ()
   "Non-nil when the current line is an item or session row."
@@ -851,11 +1114,11 @@ definition has gone."
   (interactive)
   (let ((item (get-text-property (point) 'decknix-board-item)))
     (unless item (user-error "No item on this line"))
-    (let ((n (plist-get item :number)))
+    (let ((k (decknix-board-item-key item)))
       (setq decknix-board--collapsed
-            (if (memq n decknix-board--collapsed)
-                (delq n decknix-board--collapsed)
-              (cons n decknix-board--collapsed))))
+            (if (member k decknix-board--collapsed)
+                (delete k decknix-board--collapsed)
+              (cons k decknix-board--collapsed))))
     (decknix-board--render t)))
 
 (defun decknix-board--pick-session (sessions)
@@ -874,12 +1137,19 @@ definition has gone."
       (let* ((item (or (decknix-board--item-at-point) (user-error "No item here")))
              (sessions (decknix-board--item-sessions item)))
         (unless sessions
-          (user-error "No session on #%s: N starts one" (plist-get item :number)))
+          (user-error "No session on %s: N starts one" (decknix-board--item-ref item)))
         (pop-to-buffer (decknix-board--pick-session sessions))))))
 
 (defun decknix-board-browse ()
-  "Open the item at point in the browser."
+  "Open the item or PR at point in the browser."
   (interactive)
+  (let ((pr (get-text-property (point) 'decknix-board-pr)))
+    (when pr (browse-url (plist-get pr :url))))
+  (unless (get-text-property (point) 'decknix-board-pr)
+    (decknix-board--browse-item)))
+
+(defun decknix-board--browse-item ()
+  "Open the item at point in the browser."
   (let ((item (or (decknix-board--item-at-point) (user-error "No item here"))))
     (browse-url (decknix-board-backend-item-url
                  (decknix-board-backend decknix-board--board) decknix-board--board item))))
@@ -890,6 +1160,7 @@ With BROWSE (prefix argument), always open the item in the browser."
   (interactive "P")
   (let ((buf (get-text-property (point) 'decknix-board-session)))
     (cond
+     ((get-text-property (point) 'decknix-board-pr) (decknix-board-browse))
      ((and (not browse) (buffer-live-p buf)) (pop-to-buffer buf))
      (t
       (let* ((item (or (decknix-board--item-at-point) (user-error "No item here")))
@@ -962,7 +1233,7 @@ SPEC is (:type :title :body :parent).  ON-CREATED gets the new URL."
            (format "Create %s %S in %s%s? "
                    (or (plist-get spec :type) "item") (plist-get spec :title)
                    (decknix-board-backend-describe (decknix-board-backend board) board)
-                   (if parent (format " under #%s" (plist-get parent :number)) "")))
+                   (if parent (format " under %s" (decknix-board--item-ref parent)) "")))
       (decknix-board-backend-create-item
        (decknix-board-backend board) board spec
        (lambda (url err)
@@ -978,7 +1249,8 @@ SPEC is (:type :title :body :parent).  ON-CREATED gets the new URL."
   (let* ((board (decknix-board--current))
          (root (decknix-board-root board))
          (parent (or (get-text-property (point) 'decknix-board-item)
-                     (and root (seq-find (lambda (i) (eql (plist-get i :number) root))
+                     (and root (seq-find (lambda (i) (and (eql (plist-get i :number) root)
+                                                          (decknix-board--home-item-p board i)))
                                          decknix-board--items))))
          (type (completing-read "Type: " decknix-board-types nil t nil nil
                                 (decknix-board-child-type
@@ -1092,6 +1364,27 @@ Return `posted', `copied' or nil when declined."
            decknix-board-repo-history
            decknix-board-github--repos)))
 
+(defun decknix-board-parse-repos (text home)
+  "Return the :repos entries in TEXT, comma-separated; nil when only HOME.
+An entry wrapped in slashes, `/RX/', is a regexp; anything else is an
+exact `owner/name' or a glob."
+  (let ((entries (mapcar (lambda (e)
+                           (if (string-match "\\`/\\(.+\\)/\\'" e)
+                               (list :regexp (match-string 1 e))
+                             e))
+                         (seq-remove #'string-empty-p
+                                     (mapcar #'string-trim (split-string (or text "") ","))))))
+    (unless (or (null entries) (equal entries (list home)))
+      entries)))
+
+(defun decknix-board-read-repos (home)
+  "Read a board's repositories, defaulting to its issue HOME."
+  (decknix-board-parse-repos
+   (read-string (format "Repos in scope (comma-separated; globs like owner/hack-*, /regexp/) [%s]: "
+                        home)
+                nil nil home)
+   home))
+
 (defun decknix-board--read-tags (prompt default)
   "Read tags with PROMPT, offering known tags, DEFAULT pre-filled."
   (let ((known (and (fboundp 'decknix--agent-tags-all)
@@ -1118,6 +1411,7 @@ Return `posted', `copied' or nil when declined."
                                 (decknix-board--repo-candidates)
                                 nil nil nil 'decknix-board-repo-history))
          (_ (decknix-board-github--split-repo repo))
+         (repos (decknix-board-read-repos repo))
          (tags (decknix-board--read-tags "Session tags (all required): " name))
          (workspace (and (y-or-n-p "Also group sessions by a workspace directory? ")
                          (abbreviate-file-name
@@ -1129,10 +1423,12 @@ Return `posted', `copied' or nil when declined."
                                        nil t nil nil "create one now"))
          (root (and (equal root-choice "use an existing issue")
                     (read-number "Goal issue number: ")))
-         (board (list :name name :title title :goal goal
-                      :workspace workspace :tags-all tags :tags-any nil
-                      :slack-channel channel :backend 'github
-                      :github (list :repo repo :root root :label-prefix "type:"))))
+         (board (append
+                 (list :name name :title title :goal goal
+                       :workspace workspace :tags-all tags :tags-any nil)
+                 (and repos (list :repos repos :match 'either))
+                 (list :slack-channel channel :backend 'github
+                       :github (list :repo repo :root root :label-prefix "type:")))))
     (decknix-board-write board)
     (let ((buf (decknix-board-open name)))
       (when (equal root-choice "create one now")

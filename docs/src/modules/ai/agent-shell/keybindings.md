@@ -266,6 +266,8 @@ reviews feed.
 | `s` | Draft a Slack update; `C-c C-c` sends after confirming |
 | `g` / `e` / `?` | Refresh / edit definition / every key |
 
+`RET` or `o` on a row of the board's **Open PRs** section opens that PR.
+
 ## Model & Mode
 
 | In-buffer | Global | Action |
