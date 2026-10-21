@@ -206,6 +206,7 @@ narrows; `?` is always the last to go, and opens the full reference.
 | `TAB` | Expand or collapse the Reviews group, or held items, at point |
 | `A` | Reviews: only what wants you, or everything |
 | `K` | Sub-agents: only running and active ones (default), or finished ones too. Hidden, a session whose sub-agents have all finished takes no row |
+| `F` | Focus the sidebar on one [board](./boards.md#sidebar-focus) (a pilot, a hackathon): only its sessions, PRs, worktrees and repos. `F` again clears it, `C-u F` switches board. A dim `+N need you elsewhere` row counts what the focus hides. Survives restarts |
 | `N` | New session for the repo, worktree or PR at point |
 | `G` | Repo-sync action for the row at point |
 | `T` | Toggles |
@@ -303,7 +304,7 @@ recommended-model-by-task table and the per-purpose
 |-----------|--------|--------|
 | `C-c m` | `C-c A m` | Manager dashboard toggle |
 | `C-c w` | `C-c A w` | Workspace tab toggle |
-| `C-c j` | `C-c A j` | Jump to the next session that needs you: `netfail`, then `waiting`, then `asking`, oldest wait first. Repeat to walk the queue; `C-u` to choose. Selects the tab already showing the session |
+| `C-c j` | `C-c A j` | Jump to the next session that needs you: `netfail`, then `waiting`, then `asking`, oldest wait first. Repeat to walk the queue; `C-u` to choose. Selects the tab already showing the session. Global even when the sidebar is focused on a board, unless `decknix-attention-respect-focus` is set; `C-u C-u` inverts that for one jump |
 | — | `C-c A S` | MCP server list |
 
 ## Help

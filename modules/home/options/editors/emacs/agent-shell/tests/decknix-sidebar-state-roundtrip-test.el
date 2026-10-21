@@ -2,7 +2,7 @@
 
 ;; Author: decknix
 ;; Maintainer: decknix
-;; Package-Requires: ((emacs "29.1") (decknix-agent-shell-workspace "0.1") (decknix-hub-ci-filter "0.1") (decknix-hub-mention-bot "0.1") (decknix-hub-age-presets "0.1") (decknix-auto-review "0.1") (decknix-focus "0.1"))
+;; Package-Requires: ((emacs "29.1") (decknix-agent-shell-workspace "0.1") (decknix-hub-ci-filter "0.1") (decknix-hub-mention-bot "0.1") (decknix-hub-age-presets "0.1") (decknix-auto-review "0.1") (decknix-focus "0.1") (decknix-board "0.1"))
 ;; Keywords: decknix, tests
 
 ;;; Commentary:
@@ -36,6 +36,7 @@
 (require 'decknix-hub-attention-filter)
 (require 'decknix-auto-review)
 (require 'decknix-focus)
+(require 'decknix-board-focus)
 
 ;; `decknix--sidebar-state-save' reads the width-state var unconditionally
 ;; (no `boundp' guard).  Its defining package (`decknix-sidebar-width') is
@@ -207,6 +208,25 @@ all; honouring it would undo the hidden-by-default."
             (prin1 '((hide-completed-subagents . nil)) (current-buffer)))
           (decknix--sidebar-state-restore)
           (should (null decknix-sidebar-show-finished-subagents)))
+      (delete-directory tmp-dir t))))
+
+(ert-deftest decknix-sidebar-state--board-focus-roundtrips ()
+  "The board the sidebar is focused on survives a restart."
+  (let* ((tmp-dir (make-temp-file "decknix-state-test-" t))
+         (decknix--sidebar-state-file (expand-file-name "sidebar-state.el" tmp-dir))
+         (decknix-board-focus-name "us-pilot"))
+    (unwind-protect
+        (progn
+          (decknix--sidebar-state-save)
+          (setq decknix-board-focus-name nil)
+          (decknix--sidebar-state-restore)
+          (should (equal decknix-board-focus-name "us-pilot"))
+          ;; Cleared focus persists as cleared.
+          (setq decknix-board-focus-name nil)
+          (decknix--sidebar-state-save)
+          (setq decknix-board-focus-name "stale")
+          (decknix--sidebar-state-restore)
+          (should (null decknix-board-focus-name)))
       (delete-directory tmp-dir t))))
 
 (provide 'decknix-sidebar-state-roundtrip-test)

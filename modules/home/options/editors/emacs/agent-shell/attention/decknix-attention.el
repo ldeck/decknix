@@ -200,12 +200,41 @@ answering the first session takes a turn, during which it is often still
   "Return the attention SESSIONS in jump order, using the observed times."
   (decknix-attention-order sessions #'decknix-attention--session-since))
 
-(defun decknix-attention-buffers ()
-  "Return the live buffers needing attention, most urgent first."
-  (delq nil (mapcar (lambda (s)
-                      (let ((b (get-buffer (or (nth 0 s) ""))))
-                        (and (buffer-live-p b) b)))
-                    (decknix-attention-ordered-sessions (decknix-attention--sessions)))))
+(defcustom decknix-attention-respect-focus nil
+  "When non-nil, the attention jump visits only sessions in the focus.
+The focus is the sidebar's board focus (`decknix-board-focus').  Off by
+default: a session blocked on you outside the board you are looking at
+is still blocked on you.  `C-u C-u' inverts this for one jump."
+  :type 'boolean :group 'decknix)
+
+(defvar decknix-attention-focus-function nil
+  "Function (SESSIONS) returning those in the current focus, or nil.
+Set by the board focus, so this package needs no board knowledge.")
+
+(defun decknix-attention-focus-sessions (sessions)
+  "Return SESSIONS narrowed by `decknix-attention-focus-function'."
+  (if (functionp decknix-attention-focus-function)
+      (funcall decknix-attention-focus-function sessions)
+    sessions))
+
+(defun decknix-attention-buffers (&optional respect-focus)
+  "Return the live buffers needing attention, most urgent first.
+With RESPECT-FOCUS, only those in the current focus."
+  (let ((sessions (decknix-attention--sessions)))
+    (delq nil (mapcar (lambda (s)
+                        (let ((b (get-buffer (or (nth 0 s) ""))))
+                          (and (buffer-live-p b) b)))
+                      (decknix-attention-ordered-sessions
+                       (if respect-focus
+                           (decknix-attention-focus-sessions sessions)
+                         sessions))))))
+
+(defun decknix-attention-jump-respects-focus-p (arg)
+  "Non-nil when a jump with prefix ARG should stay inside the focus.
+`decknix-attention-respect-focus', inverted by a double prefix."
+  (if (equal arg '(16))
+      (not decknix-attention-respect-focus)
+    decknix-attention-respect-focus))
 
 ;; --- getting there -------------------------------------------------------
 
@@ -277,9 +306,12 @@ then the selected window.")
 Ranked `netfail', then `waiting', then `asking', then by how long each has
 been waiting.  Pressed again, it moves on to the next one rather than
 returning to the first.  With PROMPT (prefix argument), choose from all
-of them."
+of them.  With a double prefix (`C-u C-u'), stay inside the sidebar's
+board focus, or leave it when `decknix-attention-respect-focus' is set."
   (interactive "P")
-  (let ((bufs (decknix-attention-buffers)))
+  (let ((bufs (decknix-attention-buffers
+               (decknix-attention-jump-respects-focus-p prompt)))
+        (prompt (and prompt (not (equal prompt '(16))))))
     (cond
      ((null bufs) (message "No session needs you"))
      (prompt

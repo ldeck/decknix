@@ -551,11 +551,13 @@ let
     pname = "decknix-board";
     src = ./agent-shell/board;
     packageRequires = [ decknix-attention-el ];
-    # Scope: repository patterns, and where a session is.
+    # Scope (repository patterns, where a session is) and the sidebar's
+    # board focus ship here too: the focus must use the board's own
+    # membership rule, not a copy of it.
     extraSiteFiles = [ "decknix-board-backend.el" "decknix-board-github.el"
-                       "decknix-board-scope.el" ];
+                       "decknix-board-scope.el" "decknix-board-focus.el" ];
     testFiles = [ "decknix-board-fixture.el" "decknix-board-test.el"
-                  "decknix-board-scope-test.el" ];
+                  "decknix-board-scope-test.el" "decknix-board-focus-test.el" ];
   };
 
   decknix-sidebar-toggles-el = mkEmacsTestedPackage {
@@ -2893,6 +2895,9 @@ let
       # People row action (`p'): the pure lookup + formatter used by
       # `decknix--sb-act-people' / `decknix--sidebar-show-people'.
       decknix-hub-people-el
+      # The board focus is persisted with the toggles; on the load-path so
+      # the round-trip test can `(require 'decknix-board-focus)'.
+      decknix-board-el
     ];
     extraSiteFiles = [ "decknix-worktree-picker.el" ];
     testFiles = [
@@ -5020,6 +5025,9 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; board's tick is armed when one is opened and stops itself when
         ;; the last board buffer goes.
         (require 'decknix-board)
+        ;; Sidebar `F': narrow the sidebar to one board.  Loading it only
+        ;; registers the attention jump's focus filter; nothing runs.
+        (require 'decknix-board-focus)
 
         ;; Always-on hitch profiler (default-on, `decknix-perf-hitch-toggle'
         ;; to disable at runtime).  Surfaces slow timers/commands so we can
@@ -6682,6 +6690,10 @@ duration -- the most important number on this branch."
                   ;; row was 47 columns too wide and its right-hand value sat
                   ;; off-screen.  That is the "numbers pushed out of view".
                   (let ((w (max 24 (1- (decknix--layout-sidebar-width)))))
+                    ;; Which board the sidebar is narrowed to, if any, above
+                    ;; everything it narrows.
+                    (when (fboundp 'decknix--layout-render-focus)
+                      (setq line-num (decknix--layout-render-focus line-num w)))
                     ;; Every session blocked on you, before anything else:
                     ;; Reviews and WIP each have ways to hide one.
                     (when (fboundp 'decknix--layout-render-needs-you)
@@ -7175,6 +7187,11 @@ duration -- the most important number on this branch."
         ;; Same key as the sub-agents entry in the `T' toggles menu.
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "K") 'decknix-sidebar-toggle-finished-subagents)
+        ;; `F' focuses the sidebar on one board (a pilot, a hackathon); `F'
+        ;; again clears it, `C-u F' switches.  Free here: upstream binds no
+        ;; `F', and the `T' menu's `F' is local to that transient.
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "F") 'decknix-board-focus)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "s") (lambda () (interactive)
                       (decknix--sidebar-call-transient #'decknix-sidebar-sessions)))

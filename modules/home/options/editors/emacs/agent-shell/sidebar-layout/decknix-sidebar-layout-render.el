@@ -180,10 +180,40 @@ for the wrong one and padded every row to it."
   (let ((win (get-buffer-window (current-buffer))))
     (if (window-live-p win) (window-width win) (window-width))))
 
-(defun decknix--layout-sessions ()
-  "Return the live session snapshot, or nil."
+(declare-function decknix-board-focus-active-p "decknix-board-focus" ())
+(declare-function decknix-board-focus-title "decknix-board-focus" ())
+(declare-function decknix-board-focus-sessions "decknix-board-focus" (sessions))
+(declare-function decknix-board-focus-repo-p "decknix-board-focus" (repo))
+(declare-function decknix-board-focus-path-p "decknix-board-focus" (path))
+(declare-function decknix-board-focus-elsewhere-count "decknix-board-focus" (sessions))
+
+(defun decknix--layout-focus-p ()
+  "Non-nil when the sidebar is focused on a board."
+  (and (fboundp 'decknix-board-focus-active-p) (decknix-board-focus-active-p)))
+
+(defun decknix--layout-focus-repo-p (repo &optional path)
+  "Non-nil when REPO (or, failing that, PATH) is inside the board focus.
+Always without a focus.  The focus package owns the rule; this layer only
+asks, so the sidebar and the board cannot drift apart."
+  (or (not (decknix--layout-focus-p))
+      (and repo (decknix-board-focus-repo-p repo))
+      (and path (decknix-board-focus-path-p path))))
+
+(defun decknix--layout-all-sessions ()
+  "Return the live session snapshot, ignoring any focus, or nil."
   (and (fboundp 'decknix--hub-review-session-snapshot)
        (ignore-errors (decknix--hub-review-session-snapshot))))
+
+(defun decknix--layout-sessions ()
+  "Return the live session snapshot, narrowed to the board focus if any."
+  (let ((all (decknix--layout-all-sessions)))
+    (if (decknix--layout-focus-p) (decknix-board-focus-sessions all) all)))
+
+(defun decknix--layout-raw-feed-items ()
+  "Return the unfiltered review feed, narrowed to the board focus if any."
+  (seq-filter (lambda (item) (decknix--layout-focus-repo-p (alist-get 'repo item)))
+              (and (boundp 'decknix--hub-reviews)
+                   (alist-get 'items decknix--hub-reviews))))
 
 (defvar decknix--hub-reviews)
 
@@ -194,8 +224,7 @@ Reads the same `decknix--hub-reviews' the old Requests render used, and
 applies the SAME visibility filters -- otherwise folding Requests into
 Reviews would quietly re-show every draft, conflicted and already-reviewed
 PR those filters exist to hide."
-  (let ((items (and (boundp 'decknix--hub-reviews)
-                    (alist-get 'items decknix--hub-reviews))))
+  (let ((items (decknix--layout-raw-feed-items)))
     (if (fboundp 'decknix--hub-requests-attention-visible-p)
         (seq-filter
          (lambda (item)
@@ -352,9 +381,10 @@ Reads only the file\'s tail: a sub-agent transcript can run to megabytes."
     (pop-to-buffer buf)))
 
 (defun decknix--layout-wip-repos ()
-  "Return the hub WIP feed's repos list, or nil."
-  (and (boundp 'decknix--hub-wip)
-       (alist-get 'repos decknix--hub-wip)))
+  "Return the hub WIP feed's repos list, narrowed to the focus, or nil."
+  (seq-filter (lambda (repo) (decknix--layout-focus-repo-p (alist-get 'repo repo)))
+              (and (boundp 'decknix--hub-wip)
+                   (alist-get 'repos decknix--hub-wip))))
 
 (declare-function decknix--hub-wt-audit-refresh-if-stale "decknix-hub-wt-stale" ())
 
@@ -370,8 +400,10 @@ no longer calls -- so nothing refreshed the cache and every repo reported
 calling it from the render path cannot queue an audit per paint."
   (when (fboundp 'decknix--hub-wt-audit-refresh-if-stale)
     (ignore-errors (decknix--hub-wt-audit-refresh-if-stale)))
-  (and (fboundp 'decknix-hub-wt-rows)
-       (ignore-errors (decknix-hub-wt-rows))))
+  (seq-filter (lambda (wt) (decknix--layout-focus-repo-p (plist-get wt :repo)
+                                                         (plist-get wt :path)))
+              (and (fboundp 'decknix-hub-wt-rows)
+                   (ignore-errors (decknix-hub-wt-rows)))))
 
 (defun decknix--layout-short-name (buffer-name)
   "Return BUFFER-NAME without the agent wrapper."
@@ -498,8 +530,10 @@ A session's own row beats a PR row that merely covers it."
         pr-row))))
 
 (defun decknix-layout--next-attention-target ()
-  "Return the attention buffer after the one at point, in jump order."
-  (let* ((ordered (decknix-attention-buffers))
+  "Return the attention buffer after the one at point, in jump order.
+Inside a board focus only focused sessions have rows here, so `j' and `J'
+stay inside it; the global jump is `C-c A j'."
+  (let* ((ordered (decknix-attention-buffers t))
          (here (seq-find (lambda (b) (memq b ordered))
                          (decknix-layout-row-buffers (line-beginning-position)))))
     (decknix-attention-next ordered here)))
@@ -641,7 +675,11 @@ decision were invisible: their PRs had merged, so they did not count as
 whole group folded into \"N more in flight, nothing waiting\".  A session
 blocked on you must never be hidden by a judgement about its PR."
   (let* ((sessions (decknix-attention-ordered-sessions (decknix--layout-sessions)))
-         (live (seq-filter #'decknix--layout-session-buffer sessions)))
+         (live (seq-filter #'decknix--layout-session-buffer sessions))
+         (elsewhere (decknix--layout-elsewhere-count)))
+    (when (and (null live) (> elsewhere 0))
+      (insert (decknix--layout-elsewhere-row elsewhere) "\n\n")
+      (setq line-num (+ 2 line-num)))
     (when live
       (let ((raw-keys (decknix--layout-raw-feed-keys)))
         (decknix--sidebar-render-section-header
@@ -660,9 +698,39 @@ blocked on you must never be hidden by a judgement about its PR."
                        session (if hint (concat ask "  · reply " hint) ask) width)
                       "\n")
               (setq line-num (1+ line-num)))))
+        (when (> elsewhere 0)
+          (insert (decknix--layout-elsewhere-row elsewhere) "\n")
+          (setq line-num (1+ line-num)))
         (insert "\n")
         (setq line-num (1+ line-num)))))
   line-num)
+
+(defun decknix--layout-elsewhere-count ()
+  "Return how many sessions outside the board focus need you; 0 unfocused."
+  (if (decknix--layout-focus-p)
+      (decknix-board-focus-elsewhere-count
+       (seq-filter #'decknix--layout-session-buffer (decknix--layout-all-sessions)))
+    0))
+
+(defun decknix--layout-elsewhere-row (n)
+  "Return the dim row saying N sessions outside the focus need you.
+Shown so a focus never hides something blocked on you; `F' clears it."
+  (propertize (format " +%d need you elsewhere" n)
+              'face 'font-lock-comment-face
+              'decknix-layout-elsewhere n
+              'help-echo "Outside the board focus: F clears it, C-c A j goes there"))
+
+(defun decknix--layout-render-focus (line-num width)
+  "Render the board-focus banner, when focused.  Returns LINE-NUM."
+  (if (not (decknix--layout-focus-p))
+      line-num
+    (let* ((left (format " Focus: %s" (decknix-board-focus-title)))
+           (right "F clear · C-u F switch")
+           (pad (max 1 (- width (string-width left) (string-width right)))))
+      (insert (propertize left 'face 'bold)
+              (propertize (concat (make-string pad ?\s) right) 'face 'font-lock-comment-face)
+              "\n\n")
+      (+ 2 line-num))))
 
 (defconst decknix-layout-inspect-buffer "*Sidebar Inspect*"
   "Buffer showing what the session at point is asking.")
@@ -768,8 +836,7 @@ summary is the risk this avoids.  RET in the window goes to the session."
          (items (decknix--layout-feed-items))
          ;; The unfiltered feed, so a PR the filters hide is not mistaken
          ;; for one that has left the review queue entirely.
-         (all-items (and (boundp 'decknix--hub-reviews)
-                         (alist-get 'items decknix--hub-reviews)))
+         (all-items (decknix--layout-raw-feed-items))
          (all-groups (decknix--layout-review-groups sessions items all-items))
          (split (decknix--layout-filter-groups
                  all-groups decknix-sidebar-layout-reviews-attention-only))
