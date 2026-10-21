@@ -7147,6 +7147,9 @@ duration -- the most important number on this branch."
           (kbd "TAB") 'decknix-layout-toggle-expand)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "A") 'decknix-layout-toggle-attention-only)
+        ;; Same key as the sub-agents entry in the `T' toggles menu.
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "K") 'decknix-sidebar-toggle-finished-subagents)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "s") (lambda () (interactive)
                       (decknix--sidebar-call-transient #'decknix-sidebar-sessions)))

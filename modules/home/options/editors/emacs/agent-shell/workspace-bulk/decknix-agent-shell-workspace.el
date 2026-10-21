@@ -1178,7 +1178,7 @@ pipeline) moved to Shared rather than disappearing with them."
     ;; toggle has to be reachable with the layout on.  Of 110 sub-agents
     ;; measured across three sessions, 108 were `done' -- the toggle is the
     ;; difference between 2 rows and 110.
-    (decknix-sidebar-transient--hide-completed-subagents) ;; sub-agents (K)
+    (decknix-sidebar-transient--finished-subagents) ;; sub-agents (K)
     (decknix-sidebar-transient--layout-enable)    ;; layout (1)
     (decknix-sidebar-transient--reviews-attention);; reviews (2)
     (decknix-sidebar-transient--wip-items)        ;; wip items (3)
@@ -1293,6 +1293,7 @@ they mean in the sidebar itself (cycle layout / worktree menu)."
    ("M-RET" "Open primary / URL" decknix-sidebar-primary-action)
    (decknix-sidebar-transient--pin-keys)
    ("g"   "Refresh"       decknix-sidebar-refresh)
+   ("K"   "Sub-agents: live / all" decknix-sidebar-toggle-finished-subagents)
    ("q"   "Quit sidebar"  quit-window)]
   ["On the current row"
    ;; Row-action menus + worktree verbs bound directly in the sidebar
@@ -1727,37 +1728,33 @@ basename) or a list of tag strings to suppress from the displayed name."
 ;; Forward declarations keep the rest of this file's byte-compile
 ;; clean.  All four are pure formatters that `insert' into the
 
-(defvar decknix--sidebar-hide-completed-subagents nil
-  "When non-nil, omit `done' sub-agents from the sidebar (#144).
-Filters the rows rendered by `decknix--sidebar-render-subagents' so
-only running / active sub-agents show, keeping the Live section
-compact once helper agents finish.  Toggle with `G' in the sidebar
-Toggles transient (Live section); persisted via
-`decknix--sidebar-state-file'.")
+;; Owned by `decknix-sidebar-layout', which this package does not require:
+;; the legacy Live renderer below must honour it with the layout off too.
+(defvar decknix-sidebar-show-finished-subagents)
 
-(defun decknix-sidebar-toggle-hide-completed-subagents ()
-  "Toggle hiding of finished (`done') sub-agents in the sidebar."
+(defun decknix-sidebar-toggle-finished-subagents ()
+  "Toggle listing done and stopped sub-agents in the sidebar.
+Flips `decknix-sidebar-show-finished-subagents', off by default."
   (interactive)
-  (setq decknix--sidebar-hide-completed-subagents
-        (not decknix--sidebar-hide-completed-subagents))
+  (setq decknix-sidebar-show-finished-subagents
+        (not (bound-and-true-p decknix-sidebar-show-finished-subagents)))
   (when (fboundp 'agent-shell-workspace-sidebar-refresh)
     (agent-shell-workspace-sidebar-refresh))
-  (message "Completed sub-agents: %s"
-           (if decknix--sidebar-hide-completed-subagents "hidden" "shown")))
+  (message "Finished sub-agents: %s"
+           (if decknix-sidebar-show-finished-subagents "shown" "hidden")))
 
-(transient-define-suffix decknix-sidebar-transient--hide-completed-subagents ()
-  "Live-section toggle: hide finished (`done') sub-agents."
+(transient-define-suffix decknix-sidebar-transient--finished-subagents ()
+  "Toggle: list done and stopped sub-agents, or only live ones."
   :key "K"
   :description
   (lambda ()
-    (format "sub-agents    %s"
-            (propertize
-             (if decknix--sidebar-hide-completed-subagents "[running]" "[all]")
-             'face (if decknix--sidebar-hide-completed-subagents
-                       'success 'font-lock-comment-face))))
+    (let ((all (bound-and-true-p decknix-sidebar-show-finished-subagents)))
+      (format "sub-agents    %s"
+              (propertize (if all "[all]" "[live]")
+                          'face (if all 'warning 'font-lock-comment-face)))))
   :transient t
   (interactive)
-  (call-interactively #'decknix-sidebar-toggle-hide-completed-subagents))
+  (call-interactively #'decknix-sidebar-toggle-finished-subagents))
 
 ;; Sub-agent state faces (#144).  Deliberately standalone rather than
 ;; reusing `decknix-progress-attention-*': those live in
@@ -1811,8 +1808,7 @@ Live-section renderer, so the parent session is live."
       (let* (;; Parent is live (Live-section call site), so a fresh
              ;; sub-agent can reach `running'.
              (state (decknix--agent-subagent-state s now t)))
-        ;; Honour the hide-completed toggle: drop finished sub-agents.
-        (unless (and decknix--sidebar-hide-completed-subagents
+        (unless (and (not (bound-and-true-p decknix-sidebar-show-finished-subagents))
                      (eq state 'done))
           (let* ((name (decknix--agent-session-display-name s))
                  (face (decknix--sidebar-subagent-face state))
@@ -2015,12 +2011,12 @@ All toggle keys are accessed via the T transient prefix."
                            'face (if decknix--hub-expand-prs
                                      'font-lock-constant-face
                                    'font-lock-comment-face))))
-            (cons "G" (format "sub-agents %s"
+            (cons "K" (format "sub-agents %s"
                           (propertize
-                           (if decknix--sidebar-hide-completed-subagents
-                               "[running]" "[all]")
-                           'face (if decknix--sidebar-hide-completed-subagents
-                                     'success 'font-lock-comment-face))))
+                           (if (bound-and-true-p decknix-sidebar-show-finished-subagents)
+                               "[all]" "[live]")
+                           'face (if (bound-and-true-p decknix-sidebar-show-finished-subagents)
+                                     'warning 'font-lock-comment-face))))
             (cons "y" (format "symbols %s"
                           (propertize
                            (format "[%s]"
@@ -5767,8 +5763,8 @@ fresh-daemon idle save cannot clobber the Previous Sessions snapshot."
            (cons 'sessions-display-mode decknix--sidebar-sessions-display-mode)
            (cons 'width-state decknix--sidebar-width-state)
            (cons 'show-keys decknix--sidebar-show-keys)
-           (cons 'hide-completed-subagents
-                 decknix--sidebar-hide-completed-subagents)
+           (cons 'show-finished-subagents
+                 (bound-and-true-p decknix-sidebar-show-finished-subagents))
            (cons 'quick-switch
                  (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
                       agent-shell-workspace-sidebar--quick-switch))
@@ -5959,7 +5955,7 @@ so it is safe to call from the hot refresh path."
   '(decknix--sidebar-sessions-display-mode
     decknix--sidebar-width-state
     decknix--sidebar-show-keys
-    decknix--sidebar-hide-completed-subagents
+    decknix-sidebar-show-finished-subagents
     decknix--sidebar-show-toggles
     decknix--sidebar-live-view-mode
     decknix--sidebar-show-hidden
@@ -6074,9 +6070,12 @@ the sidebar.  Prompts for confirmation first."
             (unless (eq sp 'missing)
               (when (boundp 'decknix--sidebar-show-progress)
                 (setq decknix--sidebar-show-progress sp))))
-          (let ((hc (alist-get 'hide-completed-subagents state 'missing)))
-            (unless (eq hc 'missing)
-              (setq decknix--sidebar-hide-completed-subagents hc)))
+          ;; A new key rather than the old `hide-completed-subagents': that
+          ;; one was persisted as nil (show all) by every state file, which
+          ;; would have overridden the new hidden-by-default.
+          (let ((sf (alist-get 'show-finished-subagents state 'missing)))
+            (unless (eq sf 'missing)
+              (setq decknix-sidebar-show-finished-subagents sf)))
           (let ((qs (alist-get 'quick-switch state)))
             (when (and qs (boundp 'agent-shell-workspace-sidebar--quick-switch))
               (setq agent-shell-workspace-sidebar--quick-switch t)))

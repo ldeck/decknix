@@ -289,17 +289,50 @@ reduced to a count."
 
 ;; --- sub-agent rows ----------------------------------------------------
 
-(defun decknix-lr-test--render-subagents (pairs &optional expanded)
-  (cl-letf (((symbol-function 'decknix--layout-subagents-of) (lambda (_b) pairs))
-            ((symbol-function 'decknix--layout-expanded-p) (lambda (_k) expanded)))
-    (with-temp-buffer
-      (decknix--layout-render-subagents 0 "*parent*" 48)
-      (buffer-string))))
+(defun decknix-lr-test--render-subagents (pairs &optional expanded hide-finished)
+  "Render PAIRS, listing finished sub-agents unless HIDE-FINISHED."
+  (let ((decknix-sidebar-show-finished-subagents (not hide-finished)))
+    (cl-letf (((symbol-function 'decknix--layout-subagents-of) (lambda (_b) pairs))
+              ((symbol-function 'decknix--layout-expanded-p) (lambda (_k) expanded)))
+      (with-temp-buffer
+        (decknix--layout-render-subagents 0 "*parent*" 48)
+        (buffer-string)))))
 
 (defconst decknix-lr-test--subs
   (list (cons '((agentType . "pr-implementer") (description . "Contacts 01.2 to ready")) 'running)
         (cons '((agentType . "pr-shepherd") (description . "dry draft-to-ready #1051")) 'done)
         (cons '((agentType . "Explore") (description . "find the enqueuer")) 'stopped)))
+
+;; --- finished sub-agents hidden by default --------------------------------
+
+(ert-deftest decknix-layout-render--finished-subagents-are-hidden-by-default ()
+  (should-not (eval (car (get 'decknix-sidebar-show-finished-subagents 'standard-value)) t)))
+
+(ert-deftest decknix-layout-render--all-finished-subagents-take-no-row ()
+  (let ((out (decknix-lr-test--render-subagents (cdr decknix-lr-test--subs) t t)))
+    (should (equal "" out))))
+
+(ert-deftest decknix-layout-render--hidden-finished-leaves-a-lone-live-child-as-itself ()
+  (let ((out (decknix-lr-test--render-subagents decknix-lr-test--subs nil t)))
+    (should (= 1 (length (split-string out "\n" t))))
+    (should (string-match-p "pr-implementer: Contacts" out))
+    (should-not (string-match-p "agents" out))))
+
+(ert-deftest decknix-layout-render--hidden-finished-counts-and-lists-only-live-ones ()
+  (let* ((subs (cons (cons '((agentType . "Explore") (description . "map callers")) 'active)
+                     decknix-lr-test--subs))
+         (collapsed (decknix-lr-test--render-subagents subs nil t))
+         (expanded (decknix-lr-test--render-subagents subs t t)))
+    (should (string-match-p "2 agents ◐1 ◐1" collapsed))
+    (should-not (string-match-p "[●■]" collapsed))
+    (should (= 3 (length (split-string expanded "\n" t))))
+    (should (string-match-p "Explore: map callers" expanded))
+    (should-not (string-match-p "pr-shepherd\\|find the enqueuer" expanded))))
+
+(ert-deftest decknix-layout-render--shown-finished-subagents-are-counted-and-listed ()
+  (let ((out (decknix-lr-test--render-subagents (cdr decknix-lr-test--subs) t)))
+    (should (string-match-p "2 agents ■1 ●1" out))
+    (should (string-match-p "pr-shepherd: dry draft-to-ready" out))))
 
 (ert-deftest decknix-layout-render--several-subagents-take-one-row ()
   (let ((out (decknix-lr-test--render-subagents decknix-lr-test--subs)))

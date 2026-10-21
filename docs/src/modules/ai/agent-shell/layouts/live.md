@@ -114,6 +114,11 @@ rows beneath the parent, indented by 4 characters and dimmed:
 The provider glyph on sub-agent rows always matches the parent session's
 backend. The name is the sub-agent's slug (model identifier or tool name).
 
+Only running and active sub-agents are listed by default: a finished one needs
+nothing from you, so a session whose sub-agents are all done or stopped shows no
+sub-agent row at all. Press `K` in the sidebar (or set
+`decknix-sidebar-show-finished-subagents`) to list finished ones too.
+
 ## Linked-PR rows
 
 Shown under a session when the PRs toggle (`E`) is on. Fixed-width columns so

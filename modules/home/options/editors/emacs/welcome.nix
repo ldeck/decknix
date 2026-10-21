@@ -328,6 +328,7 @@ in
                      ("M-RET" . "Sidebar: open the row's PR in the browser")
                      ("TAB" . "Sidebar: expand / collapse a group")
                      ("A" . "Sidebar: Reviews, only what wants you / all")
+                     ("K" . "Sidebar: sub-agents, only live ones / all")
                      ("N" . "Sidebar: new session for the row's repo or PR")
                      ("G" . "Sidebar: repo-sync action for the row")
                      ("T" . "Sidebar: toggles")
