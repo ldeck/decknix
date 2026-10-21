@@ -151,5 +151,77 @@ modules had loaded the broker layer."
     (kill-buffer buf)
     (should-not (decknix-session-lifecycle--broker-key buf))))
 
+;; --- discard ----------------------------------------------------------
+
+(defmacro decknix-lifecycle-test--with-brokered (bindings &rest body)
+  "Run BODY with BINDINGS (VAR KEY) as live buffers carrying broker KEY.
+`decknix-agent-broker-stop' is stubbed to record into `stopped'."
+  (declare (indent 1))
+  `(let* (,@(mapcar (lambda (b) `(,(car b) (generate-new-buffer " brokered"))) bindings)
+          (stopped nil))
+     ,@(mapcar (lambda (b)
+                 `(with-current-buffer ,(car b)
+                    (setq-local decknix--agent-broker-key ,(cadr b))))
+               bindings)
+     (unwind-protect
+         (cl-letf (((symbol-function 'decknix-agent-broker-stop)
+                    (lambda (k) (push k stopped)))
+                   ((symbol-function 'decknix--agent-broker-stop-p)
+                    (lambda (k others) (and k (not (member k others)))))
+                   ((symbol-function 'agent-shell-buffers)
+                    (lambda () (list ,@(mapcar #'car bindings)))))
+           ,@body)
+       (dolist (b (list ,@(mapcar #'car bindings)))
+         (ignore-errors (kill-buffer b))))))
+
+(ert-deftest decknix-lifecycle--discard-stops-the-broker-and-kills ()
+  "The reason it exists: a plain kill leaves the broker to be reattached
+on the next start, which is how five killed reviews came back."
+  (decknix-lifecycle-test--with-brokered ((a "k1"))
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+      (should (= 1 (decknix-session-lifecycle-discard (list a))))
+      (should (equal '("k1") stopped))
+      (should-not (buffer-live-p a)))))
+
+(ert-deftest decknix-lifecycle--discard-declined-touches-nothing ()
+  (decknix-lifecycle-test--with-brokered ((a "k1"))
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
+      (should-not (decknix-session-lifecycle-discard (list a)))
+      (should-not stopped)
+      (should (buffer-live-p a)))))
+
+(ert-deftest decknix-lifecycle--discard-spares-a-broker-another-session-holds ()
+  (decknix-lifecycle-test--with-brokered ((a "k1") (b "k1"))
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+      (decknix-session-lifecycle-discard (list a))
+      (should-not stopped)
+      (should (buffer-live-p b)))))
+
+(ert-deftest decknix-lifecycle--sidebar-discard-takes-the-row-at-point ()
+  (decknix-lifecycle-test--with-brokered ((a "k1"))
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'agent-shell-workspace-sidebar--buffer-at-point)
+               (lambda () a)))
+      (decknix-sidebar-discard-at-point)
+      (should (equal '("k1") stopped))
+      (should-not (buffer-live-p a)))))
+
+(ert-deftest decknix-lifecycle--sidebar-discard-on-an-empty-row-is-a-user-error ()
+  (cl-letf (((symbol-function 'agent-shell-workspace-sidebar--buffer-at-point)
+             (lambda () nil)))
+    (should-error (decknix-sidebar-discard-at-point) :type 'user-error)))
+
+(ert-deftest decknix-lifecycle--discard-prompt-names-one-and-counts-many ()
+  (let ((a (generate-new-buffer "*Claude: one*")) (b (generate-new-buffer " b")))
+    (unwind-protect
+        (progn
+          (should (string-match-p "Discard \\*Claude: one\\*\\?"
+                                  (decknix-session-lifecycle-discard-prompt (list a))))
+          (should (string-match-p "Discard 2 sessions\\?"
+                                  (decknix-session-lifecycle-discard-prompt (list a b))))
+          (should (string-match-p "will not reattach"
+                                  (decknix-session-lifecycle-discard-prompt (list a)))))
+      (kill-buffer a) (kill-buffer b))))
+
 (provide 'decknix-agent-session-lifecycle-test)
 ;;; decknix-agent-session-lifecycle-test.el ends here

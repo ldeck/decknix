@@ -140,6 +140,19 @@ flag are not seeded on this fast automatic reattach path; a normal resume
 without a live broker still restores them from the transcript. Check the
 live conversation itself before relying on its `asking` badge after restart.
 
+Because of that reattach, closing a session buffer is not the same as
+ending it. `C-x k` (and `C-c s D`) only detach: the agent keeps running and
+comes back on the next start. To end a session for good, discard it, which
+stops its broker and then kills the buffer:
+
+| Key / command | Action |
+|---------------|--------|
+| `k` or `a k` on a sidebar row | Discard that session |
+| `C-c s k` (`decknix-agent-session-discard`) | Discard this session, or pick several by name |
+| `C-k` in the session picker (`C-c s s`) | Discard the selected sessions (`C-SPC` marks several) |
+| `C-c s q` | Quit this session (also stops its broker) |
+| `a K` on a sidebar row | Kill the buffer's process only (the old `k`) |
+
 ### Restoring frames and windows after a restart
 
 The daemon records every GUI frame, its tab-bar tabs and the windows in

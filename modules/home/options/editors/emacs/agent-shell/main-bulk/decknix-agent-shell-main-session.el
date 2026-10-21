@@ -1971,11 +1971,14 @@ the off-by-one tail and RET appears to do nothing."
 ;; `decknix--session-picker-delete-cands' — delete saved/previous sessions.
 ;; `decknix--session-picker-do-action'   — routes to either helper.
 
+(declare-function decknix-session-lifecycle-quit
+                  "decknix-agent-session-lifecycle" (buffers &optional noconfirm))
+
 (defun decknix--session-picker-kill-cands (cands)
-  "Kill live session buffer(s) for candidates CANDS.
+  "Discard live session buffer(s) for candidates CANDS: stop each broker, kill.
 Resolves each candidate key against `decknix--session-picker-live-map'.
-Non-live candidates are skipped.  Prompts once (single: `Kill session?';
-multiple: `Kill N sessions?') before touching any buffer."
+Non-live candidates are skipped.  Prompts once, with the count,
+before touching any buffer."
   (let* ((bufs (delq nil
                      (mapcar
                       (lambda (cand)
@@ -1987,11 +1990,17 @@ multiple: `Kill N sessions?') before touching any buffer."
          (n (length live)))
     (if (null live)
         (message "No live sessions in selection — use C-d to delete saved sessions")
+      ;; Discard rather than `kill-buffer': under brokering a kill only
+      ;; detaches, and the next start reattaches every surviving broker,
+      ;; which is how sessions killed here kept coming back.
       (when (yes-or-no-p
-             (format "Kill %d live session%s? " n (if (= 1 n) "" "s")))
-        (dolist (buf live)
-          (kill-buffer buf))
-        (message "Killed %d session%s" n (if (= 1 n) "" "s"))))))
+             (format "Discard %d live session%s (stops the agent)? "
+                     n (if (= 1 n) "" "s")))
+        (if (fboundp 'decknix-session-lifecycle-quit)
+            (decknix-session-lifecycle-quit live t)
+          (dolist (buf live)
+            (kill-buffer buf)))
+        (message "Discarded %d session%s" n (if (= 1 n) "" "s"))))))
 
 (defun decknix--session-picker-delete-cands (cands)
   "Permanently delete saved/previous sessions for candidates CANDS.
@@ -2389,7 +2398,7 @@ With \\[universal-argument], shows all individual session snapshots."
                             decknix--session-source-saved
                             decknix--session-source-archived
                             decknix--session-source-new)
-                      :prompt (format "Agent session%s%s%s (M-w ws; M-a archived; M-<glyph> type; C-SPC mark; C-k kill, C-d del, C-s send, C-t tile): "
+                      :prompt (format "Agent session%s%s%s (M-w ws; M-a archived; M-<glyph> type; C-SPC mark; C-k discard, C-d del, C-s send, C-t tile): "
                                       (if arg " (all snapshots)" "")
                                       (if decknix--session-picker-workspace-filter
                                           (format " [%s]"

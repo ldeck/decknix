@@ -5418,6 +5418,9 @@ ${optionalString cfg.tableOverlay.enable ''
                      ("f" . decknix-agent-session-fork)
                      ("q" . decknix-agent-session-quit)
                      ("D" . decknix-agent-session-detach)
+                     ;; `k' ends it for good: `C-x k' and `D' leave the
+                     ;; broker running, and the next start reattaches it.
+                     ("k" . decknix-agent-session-discard)
                      ("R" . decknix-agent-session-rename)
                      ("r" . decknix-agent-session-recent)
                      ("s" . decknix-agent-session-picker)
@@ -5471,6 +5474,7 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c s f" "fork session"
             "C-c s q" "quit session (ends the agent)"
             "C-c s D" "detach session (agent keeps running)"
+            "C-c s k" "discard sessions (stop agent, no reattach)"
             "C-c s R" "rename session"
             "C-c s r" "recent sessions"
             "C-c s S" "session board"
@@ -7083,6 +7087,12 @@ duration -- the most important number on this branch."
         ;; PR -- with its workspace seeded and tags suggested.
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "N") #'decknix-sidebar-launch-session)
+        ;; Upstream `k' sends EOF to the buffer's process, which under
+        ;; brokering is only the socat client: the agent survives and the
+        ;; next start reattaches it.  Discard stops the broker instead; the
+        ;; process-only kill stays on `a K'.
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "k") #'decknix-sidebar-discard-at-point)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "w") #'decknix-sidebar-goto-wip)
         (define-key agent-shell-workspace-sidebar-mode-map

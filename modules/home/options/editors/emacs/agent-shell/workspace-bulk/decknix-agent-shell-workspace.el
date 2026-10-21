@@ -1312,7 +1312,8 @@ they mean in the sidebar itself (cycle layout / worktree menu)."
   ["Actions (a …)"
    ("a r" "Restart"       agent-shell-workspace-sidebar-restart)
    ("a R" "Rename"        agent-shell-workspace-sidebar-rename)
-   ("a k" "Kill"          agent-shell-workspace-sidebar-kill)
+   ("a k" "Discard (ends agent)" decknix-sidebar-discard-at-point)
+   ("a K" "Kill process only" agent-shell-workspace-sidebar-kill)
    ("a d" "Delete killed" agent-shell-workspace-sidebar-delete-killed)
    ("a w" "Set workspace" decknix-sidebar-set-workspace)
    ("a h" "Hide"          decknix-sidebar-hide-conversation)
@@ -1320,7 +1321,9 @@ they mean in the sidebar itself (cycle layout / worktree menu)."
    ("a M" "Merge conv"    decknix-sidebar-merge-conversation)
    ("a m" "Set mode"      agent-shell-workspace-sidebar-set-mode)
    ("a a" "Add tile"      agent-shell-workspace-tile-add)
-   ("a x" "Remove tile"   agent-shell-workspace-tile-remove)]
+   ("a x" "Remove tile"   agent-shell-workspace-tile-remove)
+   ;; The difference people trip over: a closed buffer comes back.
+   (:info "C-x k only detaches: the agent runs on and reattaches at restart")]
   ["Support (on-rotation, z …)"
    ("z d" "Dashboard (DoS + alerts)"    decknix-support-dashboard)
    ("z w" "Workflow (what to do, when)" decknix-support-workflow)]
@@ -2723,7 +2726,8 @@ Calls `decknix--sidebar-restore-previous-session' for each selection."
   ["Agent"
    ("r" "Restart"       agent-shell-workspace-sidebar-restart)
    ("R" "Rename"        agent-shell-workspace-sidebar-rename)
-   ("k" "Kill"          agent-shell-workspace-sidebar-kill)
+   ("k" "Discard (ends agent)" decknix-sidebar-discard-at-point)
+   ("K" "Kill process only" agent-shell-workspace-sidebar-kill)
    ("d" "Delete killed" agent-shell-workspace-sidebar-delete-killed)
    ("w" "Set workspace" decknix-sidebar-set-workspace)
    ("h" "Hide"          decknix-sidebar-hide-conversation)

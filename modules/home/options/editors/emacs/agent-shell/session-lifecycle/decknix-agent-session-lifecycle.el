@@ -24,6 +24,10 @@
 ;; leaves the agent running -- one was found alive two hours after its buffer
 ;; closed. Quitting therefore stops the broker as well, but only when no
 ;; OTHER live session is attached to it.
+;;
+;; Discard is the same quit offered as a command on one session (the
+;; sidebar row, the current buffer, or ones picked by name), because the
+;; broker a plain kill leaves running is reattached on the next start.
 
 ;;; Code:
 
@@ -122,6 +126,74 @@ is the whole difference from quitting."
   (let ((live (seq-filter #'buffer-live-p buffers)))
     (dolist (buf live) (decknix-session-lifecycle-kill-buffer buf))
     (length live)))
+
+;; --- discard: the interactive face of quit ----------------------------
+;;
+;; `kill-buffer' (C-x k) keeps detach semantics on purpose: stepping away
+;; from a session must not end the agent.  But the broker it leaves running
+;; is reattached by the next daemon start, so a session killed that way
+;; comes back after every restart.  Discard is the explicit "I am done with
+;; this one": broker stopped, buffer gone, nothing to reattach.
+
+(declare-function agent-shell-workspace-sidebar--buffer-at-point
+                  "agent-shell-workspace" ())
+(declare-function agent-shell-workspace-sidebar-refresh
+                  "agent-shell-workspace" ())
+
+(defun decknix-session-lifecycle-discard-prompt (buffers)
+  "Return the confirmation prompt for discarding BUFFERS.  Pure."
+  (format "Discard %s? Its agent is stopped and will not reattach on restart. "
+          (if (cdr buffers)
+              (format "%d sessions" (length buffers))
+            (buffer-name (car buffers)))))
+
+(defun decknix-session-lifecycle-discard (buffers)
+  "Confirm, then quit BUFFERS and stop their brokers.  Returns the count.
+Nil when declined or when nothing is live."
+  (let ((live (seq-filter #'buffer-live-p buffers)))
+    (when (and live (yes-or-no-p (decknix-session-lifecycle-discard-prompt live)))
+      (prog1 (decknix-session-lifecycle-quit live t)
+        (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+          (ignore-errors (agent-shell-workspace-sidebar-refresh)))))))
+
+(defun decknix-session-lifecycle--report-discard (n)
+  (message (if n (format "decknix: discarded %d session%s" n (if (= n 1) "" "s"))
+             "decknix: nothing discarded")))
+
+;;;###autoload
+(defun decknix-agent-session-discard (buffers)
+  "Discard BUFFERS: stop each one's agent broker and kill the buffer.
+Interactively the current session, or sessions chosen from the live ones
+when not in a session buffer.  Unlike \\[kill-buffer], which only
+detaches and leaves the agent to be reattached on the next start, a
+discarded session is gone for good."
+  (interactive
+   (list (if (derived-mode-p 'agent-shell-mode)
+             (list (current-buffer))
+           (let ((names (completing-read-multiple
+                         "Discard sessions: "
+                         (mapcar #'buffer-name
+                                 (and (fboundp 'agent-shell-buffers) (agent-shell-buffers)))
+                         nil t)))
+             (or (delq nil (mapcar #'get-buffer names))
+                 (user-error "No session chosen"))))))
+  (decknix-session-lifecycle--report-discard
+   (decknix-session-lifecycle-discard buffers)))
+
+;;;###autoload
+(defun decknix-sidebar-discard-at-point ()
+  "Discard the session on the sidebar row at point.
+See `decknix-agent-session-discard'.  Reads the row through
+`agent-shell-workspace-sidebar--buffer-at-point', which decknix
+overrides to read the sidebar buffer itself: the `a' menu has already
+moved focus to the main window when this runs."
+  (interactive)
+  (let ((buf (and (fboundp 'agent-shell-workspace-sidebar--buffer-at-point)
+                  (agent-shell-workspace-sidebar--buffer-at-point))))
+    (unless (buffer-live-p buf)
+      (user-error "No live session on this row"))
+    (decknix-session-lifecycle--report-discard
+     (decknix-session-lifecycle-discard (list buf)))))
 
 (provide 'decknix-agent-session-lifecycle)
 ;;; decknix-agent-session-lifecycle.el ends here
