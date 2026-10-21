@@ -43,6 +43,7 @@
     - [Integration](./modules/ai/agent-shell/integration.md)
     - [Context Awareness](./modules/ai/agent-shell/context.md)
     - [On-Support (DoS) Features](./modules/ai/agent-shell/dos.md)
+    - [Coordination Boards](./modules/ai/agent-shell/boards.md)
     - [Keybindings](./modules/ai/agent-shell/keybindings.md)
     - [How It Compares](./modules/ai/agent-shell/comparison.md)
     - [Sidebar Layouts](./modules/ai/agent-shell/layouts/index.md)

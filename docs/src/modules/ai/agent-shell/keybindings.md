@@ -251,6 +251,21 @@ repaints itself a second after any session's turn ends or starts, so a
 review reaching its gate moves to Needs you without waiting for the
 reviews feed.
 
+## Coordination Boards (`C-c s H`)
+
+`C-c s H` opens a board (`C-u C-c s H`, or no boards yet: define one). See
+[Coordination Boards](./boards.md).
+
+| Key | Action |
+|-----|--------|
+| `n` / `p`, `TAB` | Next / previous row; fold the item |
+| `RET` / `o` | Go to the item's session, else open the item / always open it |
+| `N` | New session for the item, tagged `REPO#N` and briefed |
+| `j` / `b` | Go to the item's session / message its sessions (`C-u b`: all) |
+| `c` | Create a child issue (confirms first) |
+| `s` | Draft a Slack update; `C-c C-c` sends after confirming |
+| `g` / `e` / `?` | Refresh / edit definition / every key |
+
 ## Model & Mode
 
 | In-buffer | Global | Action |

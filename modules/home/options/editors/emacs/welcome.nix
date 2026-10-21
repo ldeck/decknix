@@ -320,6 +320,7 @@ in
              :full  (("C-c A j" . "Jump to the next session needing you")
                      ("C-c A s" . "Session picker (live + saved + new)")
                      ("C-c A w" . "Toggle the Agents workspace tab")
+                     ("C-c s H" . "Coordination board: plan + its sessions")
                      ("j / J" . "Sidebar: next session needing you / go to it")
                      ("i" . "Sidebar: what the session at point is asking")
                      ("n / p" . "Sidebar: next / previous row")
