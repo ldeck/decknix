@@ -205,6 +205,7 @@ narrows; `?` is always the last to go, and opens the full reference.
 | `M-RET` | Primary action: open the row's PR in the browser |
 | `TAB` | Expand or collapse the Reviews group, or held items, at point |
 | `A` | Reviews: only what wants you, or everything |
+| `K` | Sub-agents: only running and active ones (default), or finished ones too. Hidden, a session whose sub-agents have all finished takes no row |
 | `N` | New session for the repo, worktree or PR at point |
 | `G` | Repo-sync action for the row at point |
 | `T` | Toggles |

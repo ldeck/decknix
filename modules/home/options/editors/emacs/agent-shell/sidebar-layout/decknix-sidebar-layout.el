@@ -1151,6 +1151,23 @@ something records one."
       'stopped
     state))
 
+(defcustom decknix-sidebar-show-finished-subagents nil
+  "When non-nil, the sidebar lists done and stopped sub-agents too.
+Off by default because a finished sub-agent asks nothing of you: of 110
+measured across three sessions, 108 were done, so listing them spent a
+row per session saying only how much had already happened.  Toggle with
+`K' in the sidebar."
+  :type 'boolean
+  :group 'decknix)
+
+(defun decknix--layout-visible-subagents (pairs)
+  "Return the ((SUB . STATE) ...) PAIRS the sidebar should list.
+All of them when `decknix-sidebar-show-finished-subagents' is set,
+otherwise only the running and active ones."
+  (if decknix-sidebar-show-finished-subagents
+      pairs
+    (seq-remove (lambda (p) (memq (cdr p) '(done stopped))) pairs)))
+
 (defun decknix--layout-subagent-label (sub)
   "Return what SUB is doing: `TYPE: TASK\', falling back to its slug."
   (let ((type (alist-get 'agentType sub))

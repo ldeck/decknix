@@ -262,14 +262,12 @@ type and task.  Each child row opens its details on RET.
 
 They had rendered one row per child, every one reading `↳ C\' and the
 PARENT\'s name, so six children took six rows and said nothing about which
-was doing what.  Finished children still honour
-`decknix--sidebar-hide-completed-subagents\' in the expanded list; the
-summary counts them all."
+was doing what.  Unless `decknix-sidebar-show-finished-subagents\' is
+set, done and stopped children are left out of both the summary and the
+list, so a session whose children have all finished renders no row."
   (let* ((width (or width 48))
-         (pairs (decknix--layout-subagents-of buffer-name))
-         (shown (if (bound-and-true-p decknix--sidebar-hide-completed-subagents)
-                    (seq-remove (lambda (p) (memq (cdr p) '(done stopped))) pairs)
-                  pairs))
+         (shown (decknix--layout-visible-subagents
+                 (decknix--layout-subagents-of buffer-name)))
          (key (concat "subagents:" (or buffer-name ""))))
     (cl-flet ((child (pair indent)
                 (insert (propertize (decknix--layout-subagent-row (car pair) (cdr pair) indent width)
@@ -278,10 +276,10 @@ summary counts them all."
                         "\n")
                 (setq line-num (1+ line-num))))
       (cond
-       ((null pairs))
-       ((= 1 (length pairs)) (child (car pairs) "    "))
+       ((null shown))
+       ((= 1 (length shown)) (child (car shown) "    "))
        (t
-        (insert (propertize (concat "    ↳ " (decknix--layout-subagent-summary (mapcar #'cdr pairs)))
+        (insert (propertize (concat "    ↳ " (decknix--layout-subagent-summary (mapcar #'cdr shown)))
                             'decknix-layout-expand-key key
                             'help-echo "RET to list these agents")
                 "\n")

@@ -167,5 +167,47 @@ value.  Pins the reset-to-defaults contract (the user-visible `!' key)."
             decknix--hub-ci-filter orig-ci)
       (delete-directory tmp-dir t))))
 
+;; Owned by `decknix-sidebar-layout', outside this test's closure.
+(defvar decknix-sidebar-show-finished-subagents nil)
+
+(ert-deftest decknix-sidebar-state--finished-subagents-toggle-flips-and-repaints ()
+  (let ((decknix-sidebar-show-finished-subagents nil)
+        (paints 0))
+    (cl-letf (((symbol-function 'agent-shell-workspace-sidebar-refresh)
+               (lambda () (cl-incf paints)))
+              ((symbol-function 'message) #'ignore))
+      (decknix-sidebar-toggle-finished-subagents)
+      (should (eq decknix-sidebar-show-finished-subagents t))
+      (should (= paints 1))
+      (decknix-sidebar-toggle-finished-subagents)
+      (should (null decknix-sidebar-show-finished-subagents))
+      (should (= paints 2)))))
+
+(ert-deftest decknix-sidebar-state--finished-subagents-toggle-roundtrips ()
+  (let* ((tmp-dir (make-temp-file "decknix-state-test-" t))
+         (decknix--sidebar-state-file (expand-file-name "sidebar-state.el" tmp-dir))
+         (decknix-sidebar-show-finished-subagents t))
+    (unwind-protect
+        (progn
+          (decknix--sidebar-state-save)
+          (setq decknix-sidebar-show-finished-subagents nil)
+          (decknix--sidebar-state-restore)
+          (should (eq decknix-sidebar-show-finished-subagents t)))
+      (delete-directory tmp-dir t))))
+
+(ert-deftest decknix-sidebar-state--legacy-hide-completed-key-is-ignored ()
+  "Old state files persisted `hide-completed-subagents' nil, meaning show
+all; honouring it would undo the hidden-by-default."
+  (let* ((tmp-dir (make-temp-file "decknix-state-test-" t))
+         (decknix--sidebar-state-file (expand-file-name "sidebar-state.el" tmp-dir))
+         (decknix-sidebar-show-finished-subagents nil))
+    (unwind-protect
+        (progn
+          (with-temp-file decknix--sidebar-state-file
+            (prin1 '((hide-completed-subagents . nil)) (current-buffer)))
+          (decknix--sidebar-state-restore)
+          (should (null decknix-sidebar-show-finished-subagents)))
+      (delete-directory tmp-dir t))))
+
 (provide 'decknix-sidebar-state-roundtrip-test)
 ;;; decknix-sidebar-state-roundtrip-test.el ends here
