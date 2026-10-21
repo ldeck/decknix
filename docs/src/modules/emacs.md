@@ -158,7 +158,10 @@ Restore saved layout (2 frames, 5 tabs, 3 sessions, saved 1m ago)? [y]es with se
 path as the sidebar's Previous restore. `l` puts a placeholder in each
 session window that resumes on `RET`. A file or directory that has gone
 shows `*scratch*` in its window, and a frame saved on a monitor that is no
-longer attached opens wherever macOS places it.
+longer attached opens wherever macOS places it. Buffers that visit no file
+are reopened by their command when `decknix-layout-recreate-alist` knows
+one (by buffer name or major mode): by default the Review Board, the
+Session Board, the US Pilot board when installed, and `*Messages*`.
 
 | Key / command | Action |
 |---------------|--------|
