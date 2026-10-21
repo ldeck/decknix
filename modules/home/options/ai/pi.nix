@@ -1,10 +1,8 @@
-# Configuration for Pi agent (managed via agent-sync).
+# Configuration for Pi agent.
 #
-# This module ensures ~/.pi/ is managed via the 3-way reconciliation
-# sync, allowing for local edits to skills/commands.  Pi's canonical
-# global config lives at ~/.pi/agent/settings.json (verified against
-# pi-coding-agent 0.83.0 — it does not read ~/.pi.json at all), so any
-# declarative `settings' seed must target that file to have effect.
+# Pi's canonical global config lives at ~/.pi/agent/settings.json (verified
+# against pi-coding-agent 0.83.0; it does not read ~/.pi.json at all), so the
+# declarative `settings' keys are merged into that file.
 
 { config, lib, pkgs, ... }:
 
@@ -36,10 +34,11 @@ in {
       type = types.attrs;
       default = {};
       description = ''
-        Declarative seed for Pi's global settings
-        (~/.pi/agent/settings.json).  Reconciled 3-way, so Pi's own
-        edits (e.g. changing the default model in `pi config') coexist.
-        Example: { defaultProvider = "anthropic"; defaultModel = "claude-opus-5"; }.
+        Keys enforced in Pi's global settings (~/.pi/agent/settings.json)
+        on every switch.  Merged per key, so the keys Pi writes itself
+        (defaultModel from /model, packages, lastChangelogVersion) are kept;
+        a key set here wins over a runtime edit of the same key.
+        Example: { enabledModels = [ "openai-codex/gpt-6-sol" ]; tuiMode = "regular"; }.
       '';
     };
 
@@ -66,14 +65,29 @@ in {
     # the shared unstable pin still carries 0.83.0.
     home.packages = [ piPackage pkgs.pi-acp ];
 
-    # If we have settings, generate the file and sync it
-    decknix.cli.agentSync.enable = true;
-    decknix.cli.agentSync.files = mkIf (cfg.settings != {}) {
-      "~/.pi/agent/settings.json" = {
-        source = pkgs.writeText "pi-settings.json" (builtins.toJSON cfg.settings);
-        repo = "decknix";
-        repoPath = "modules/home/options/ai/pi.nix";
-      };
-    };
+    # Pi rewrites settings.json at runtime (defaultModel on /model,
+    # lastChangelogVersion after an update), so a whole-file agent-sync copy
+    # never applied: the live file always differed from the seed, which
+    # agent-sync treats as a conflict and keeps live.  Merge per key instead,
+    # as claude.nix does for its settings.
+    home.activation.pi-settings = mkIf (cfg.settings != {})
+      (lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        PI_SETTINGS="$HOME/.pi/agent/settings.json"
+        ${pkgs.coreutils}/bin/mkdir -p "$(${pkgs.coreutils}/bin/dirname "$PI_SETTINGS")"
+        [ -f "$PI_SETTINGS" ] || echo '{}' > "$PI_SETTINGS"
+        TMP="$(${pkgs.coreutils}/bin/mktemp)"
+        if ${pkgs.jq}/bin/jq --argjson seed ${escapeShellArg (builtins.toJSON cfg.settings)} \
+             '. * $seed' "$PI_SETTINGS" > "$TMP"; then
+          if ${pkgs.diffutils}/bin/cmp -s "$TMP" "$PI_SETTINGS"; then
+            ${pkgs.coreutils}/bin/rm -f "$TMP"
+          else
+            $DRY_RUN_CMD ${pkgs.coreutils}/bin/mv "$TMP" "$PI_SETTINGS"
+            echo "  [pi-settings] Merged ${toString (length (attrNames cfg.settings))} key(s) into $PI_SETTINGS"
+          fi
+        else
+          ${pkgs.coreutils}/bin/rm -f "$TMP"
+          echo "  [pi-settings] WARNING: failed to update $PI_SETTINGS (left unchanged)" >&2
+        fi
+      '');
   };
 }
