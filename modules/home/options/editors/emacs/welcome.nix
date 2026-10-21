@@ -289,6 +289,7 @@ in
                      ("C-c <left>" . "Previous layout of this tab")
                      ("C-c <right>" . "Next layout of this tab")
                      ("C-c S-<left>" . "Previous layout, across all tabs")
+                     ("C-c D w / W" . "Save / restore frames, tabs and windows")
                      ("C-M-l / C-S-l" . "Current line to window bottom / top")))
 
             ("Help & Discovery"

@@ -140,6 +140,37 @@ flag are not seeded on this fast automatic reattach path; a normal resume
 without a live broker still restores them from the transcript. Check the
 live conversation itself before relying on its `asking` badge after restart.
 
+### Restoring frames and windows after a restart
+
+The daemon records every GUI frame, its tab-bar tabs and the windows in
+each tab when it exits (SIGTERM from `launchctl kickstart -k` runs
+`kill-emacs-hook`), just before the last frame is closed, and every five
+minutes. It records file, dired and magit buffers by path and agent-shell
+buffers by session id, in `~/.local/state/decknix/emacs-layout.el`.
+
+The first GUI frame after a restart asks once:
+
+```
+Restore saved layout (2 frames, 5 tabs, 3 sessions, saved 1m ago)? [y]es with sessions, [l]ayout only, [n]o
+```
+
+`y` rebuilds the frames and tabs and resumes the sessions through the same
+path as the sidebar's Previous restore. `l` puts a placeholder in each
+session window that resumes on `RET`. A file or directory that has gone
+shows `*scratch*` in its window, and a frame saved on a monitor that is no
+longer attached opens wherever macOS places it.
+
+| Key / command | Action |
+|---------------|--------|
+| `C-c D w` (`decknix-layout-save`) | Save the layout now |
+| `C-c D W` (`decknix-layout-restore`) | Restore it; `C-u` restores the run before the last |
+
+`decknix-layout-restore-on-start` chooses `ask` (default), `notify`, `t`
+(restore without asking) or `nil`. `decknix-layout-restore-sessions` set to
+`nil` makes a restore use placeholders instead of resuming. The first save
+of each run keeps the previous file as `emacs-layout.el.prev`, so quitting
+straight after a restart does not lose the layout worth restoring.
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `services.emacs.decknix.enable` | `true` | Enable Emacs daemon |

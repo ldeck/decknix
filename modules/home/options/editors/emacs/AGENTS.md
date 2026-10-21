@@ -148,6 +148,7 @@ Current in-tree packages:
 | `agent-shell/support-workflow/decknix-support-workflow.el` | Guided daily support work order | `C-c A W`; day-aware Playbook checklist (Incidents → Daily Checks → Scheduled → Work Items/Alerts); `RET` runs each item's action |
 | `agent-shell/attention/decknix-attention.el` | One definition of "needs you" | `netfail`/`waiting`/`asking`, ranked, with when each session entered its state (fed from the session snapshot and the sidebar's idle fingerprint, never computed on redisplay); tab-aware `C-c A j` and sidebar `J` |
 | `agent-shell/tab-status/decknix-agent-tab-status.el` | Tint tab-bar tabs by agent status | Sets `tab-bar-tab-face-function`; single-agent tabs get a status background (working/waiting/ready/…); uncached tab-bar → repaints on the header's existing status poll, no extra timer; colours are an overridable defcustom |
+| `agent-shell/layout-persist/decknix-layout-persist.el` | Frames/tabs/windows across restarts | Saved on `kill-emacs-hook` (SIGTERM runs it), before the last frame closes and every 5 min to `~/.local/state/decknix/emacs-layout.el`; offered once on the first GUI client frame (idle timer, never in the server filter); agent windows resume via `decknix--sidebar-restore-previous-session` or a RET placeholder; `C-c D w` / `C-c D W` |
 
 Both support packages default their org-specific URLs / JQL / activity list
 to the NurtureCloud/vmxproperty values as overridable defvars (same pattern
