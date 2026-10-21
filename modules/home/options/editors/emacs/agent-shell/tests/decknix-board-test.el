@@ -220,8 +220,9 @@ repeats."
                     (decknix-board-github--list-argv decknix-board-test--board t "CUR")))
     (should (member "owner=acme" argv))
     (should (member "name=hack-boards" argv))
-    (should (seq-some (lambda (a) (string-match-p "parent{number}" a)) argv))
-    (should-not (seq-some (lambda (a) (string-match-p "parent{number}" a))
+    (should (seq-some (lambda (a) (string-search "parent{number repository{nameWithOwner}}" a))
+                      argv))
+    (should-not (seq-some (lambda (a) (string-search "parent{" a))
                           (decknix-board-github--list-argv decknix-board-test--board nil)))))
 
 (ert-deftest decknix-board-test-list-argv-label-filter ()
@@ -237,7 +238,7 @@ repeats."
       (decknix-board-backend-list-items 'github decknix-board-test--board
                                         (lambda (r) (setq result r)))
       (should (= 2 (length calls)))
-      (should-not (seq-some (lambda (a) (string-match-p "parent{number}" a))
+      (should-not (seq-some (lambda (a) (string-search "parent{" a))
                             (nth 1 calls)))
       (should (= 8 (length (car result))))
       (should-not (plist-get (cdr result) :hierarchy)))))
