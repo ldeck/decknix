@@ -486,6 +486,7 @@ let
     src = ./agent-shell/layout-persist;
     packageRequires = [ ];
     testFiles = [
+      "decknix-layout-persist-fixture.el"
       "decknix-layout-persist-test.el"
     ];
   };

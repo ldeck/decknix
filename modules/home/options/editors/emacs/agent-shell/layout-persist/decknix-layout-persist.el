@@ -70,6 +70,7 @@
                   (session-id history-count &optional display-name workspace conv-key search-term))
 
 (defvar decknix--agent-conv-key)
+(defvar agent-shell-workspace--isolation-active)
 (defvar decknix--agent-session-workspace)
 (defvar dired-directory)
 (defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
@@ -215,6 +216,29 @@ history does not survive a restart anyway."
                                 (cdr n))))))
     (cond ((decknix-layout--node-p state) (node state))
           ((consp state) (cons (copy-tree (car state)) (node (cdr state))))
+          (t state))))
+
+;; Keys `window-state-get' records in pixels.  `window-state-put' decides
+;; whether a state fits from these when present, so a state saved on a big
+;; GUI frame is refused by a smaller one (another monitor, a terminal).
+(defconst decknix-layout--pixel-keys
+  '(pixel-width pixel-height min-pixel-height min-pixel-width
+    min-pixel-height-ignore min-pixel-width-ignore
+    min-pixel-height-safe min-pixel-width-safe))
+
+(defun decknix-layout--state-without-pixels (state)
+  "Return a copy of window STATE with its pixel sizes removed.  Pure.
+`window-state-put' then checks and splits by lines and columns, using
+the saved proportions, so the tab keeps its windows instead of failing."
+  (cl-labels ((strip (params)
+                (seq-remove (lambda (p) (memq (car-safe p) decknix-layout--pixel-keys))
+                            params))
+              (node (n)
+                (cons (car n)
+                      (mapcar (lambda (c) (if (decknix-layout--node-p c) (node c) c))
+                              (strip (cdr n))))))
+    (cond ((decknix-layout--node-p state) (node state))
+          ((consp state) (cons (strip (car state)) (node (cdr state))))
           (t state))))
 
 ;; -- Capture ----------------------------------------------------------------
@@ -553,8 +577,11 @@ session that will not resume just yields nil and the window falls back."
 
 (defun decknix-layout--put-tab (state mapping fallback)
   "Show window STATE in the selected tab, buffers renamed through MAPPING."
-  (window-state-put (decknix-layout--state-rename-buffers state mapping fallback)
-                    (frame-root-window) 'safe)
+  (let ((renamed (decknix-layout--state-rename-buffers state mapping fallback)))
+    (condition-case nil
+        (window-state-put renamed (frame-root-window) 'safe)
+      (error (window-state-put (decknix-layout--state-without-pixels renamed)
+                               (frame-root-window) 'safe))))
   ;; `window-state-put' keeps `window-side' but not the sidebar's
   ;; `no-delete-other-windows', so C-x 1 would delete it; see
   ;; `decknix-layout-group--protect-side-windows'.
@@ -563,30 +590,47 @@ session that will not resume just yields nil and the window falls back."
                     (set-window-parameter w 'no-delete-other-windows t)))
                 nil (selected-frame)))
 
+(defun decknix-layout--restore-tabs (tabs current mapping fallback)
+  "Rebuild TABS in the selected frame, then select the one at index CURRENT.
+Every tab is made and filled before any is selected, with
+`tab-bar-tab-post-select-functions' bound to nil, so a hook reacting to
+a half-built tab (the Agents tab's buffer isolation, which switches tabs
+when a non-agent buffer is shown) cannot move later tabs' windows.
+
+Not conditional on `tab-bar-mode': a fresh daemon has not turned it on
+yet when the startup restore runs, and gating on it restored only the
+selected tab of every frame.  Tabs exist as a frame parameter either
+way, and `tab-bar-new-tab' turns the bar on as `tab-bar-show' says."
+  (let ((tab-bar-tab-post-select-functions nil))
+    (tab-bar-close-other-tabs)
+    (cl-loop for tab in tabs
+             for i from 0
+             do (when (> i 0) (tab-bar-new-tab))
+             (ignore-errors (decknix-layout--put-tab (plist-get tab :state) mapping fallback))
+             ;; The empty name hands the kept first tab back to the
+             ;; automatic name if this frame's old tab was named.
+             (tab-bar-rename-tab (if (plist-get tab :explicit)
+                                     (or (plist-get tab :name) "")
+                                   "")))
+    (tab-bar-select-tab (1+ current))))
+
 (defun decknix-layout--restore-frame (frame model mapping fallback)
   "Rebuild MODEL's tabs in FRAME, replacing the tabs it has."
   (with-selected-frame frame
     (let ((params (decknix-layout--params-on-screen
                    (plist-get model :params) (decknix-layout--workareas))))
       (ignore-errors (modify-frame-parameters frame params)))
-    (let ((tabs (plist-get model :tabs))
-          (tab-bar (and (fboundp 'tab-bar-new-tab) (bound-and-true-p tab-bar-mode))))
-      (when tab-bar (tab-bar-close-other-tabs))
-      (cl-loop for tab in (if tab-bar tabs (list (nth (or (plist-get model :current-tab) 0) tabs)))
-               for i from 0
-               do (when (and tab-bar (> i 0)) (tab-bar-new-tab))
-               (ignore-errors (decknix-layout--put-tab (plist-get tab :state) mapping fallback))
-               (when (and tab-bar (plist-get tab :explicit) (plist-get tab :name))
-                 (tab-bar-rename-tab (plist-get tab :name))))
-      (when tab-bar
-        (tab-bar-select-tab (1+ (min (or (plist-get model :current-tab) 0)
-                                     (1- (length tabs)))))))
-    (when (get-buffer-window agent-shell-workspace-sidebar-buffer-name frame)
-      (when (fboundp 'agent-shell-workspace--on-tab-selected)
-        (add-hook 'tab-bar-tab-post-select-functions #'agent-shell-workspace--on-tab-selected)
-        (ignore-errors (agent-shell-workspace--on-tab-selected)))
-      (when (fboundp 'agent-shell-workspace-sidebar-open)
-        (ignore-errors (agent-shell-workspace-sidebar-open))))))
+    (let* ((tabs (plist-get model :tabs))
+           (current (max 0 (min (or (plist-get model :current-tab) 0)
+                                (1- (length tabs))))))
+      (if (fboundp 'tab-bar-new-tab)
+          (decknix-layout--restore-tabs tabs current mapping fallback)
+        (ignore-errors
+          (decknix-layout--put-tab (plist-get (nth current tabs) :state)
+                                   mapping fallback))))
+    (when (and (get-buffer-window agent-shell-workspace-sidebar-buffer-name frame)
+               (fboundp 'agent-shell-workspace-sidebar-open))
+      (ignore-errors (agent-shell-workspace-sidebar-open)))))
 
 ;;;###autoload
 (defun decknix-layout-restore (&optional previous sessions)
@@ -603,26 +647,30 @@ selected one first, and makes more as needed."
                      (user-error "No saved layout in %s" file)))
          (frames (or (decknix-layout--gui-frames)
                      (user-error "Restore needs a GUI frame")))
-         (fallback (decknix-layout--fallback-buffer))
          (missing 0)
-         (mapping
-          (delq nil
-                (mapcar (lambda (b)
-                          (let ((buf (decknix-layout--resolve-buffer (car b) (cdr b))))
-                            (if (buffer-live-p buf)
-                                (cons (car b) (buffer-name buf))
-                              (setq missing (1+ missing))
-                              nil)))
-                        (plist-get layout :buffers))))
+         (resumed 0)
          (selected nil))
-    (dolist (model (plist-get layout :frames))
-      (let ((frame (or (pop frames)
-                       (make-frame (decknix-layout--params-on-screen
-                                    (plist-get model :params)
-                                    (decknix-layout--workareas))))))
-        (decknix-layout--restore-frame frame model mapping (buffer-name fallback))
-        (when (plist-get model :selected) (setq selected frame))))
-    (let ((resumed 0))
+    ;; Isolation off while building: with it on, any buffer shown while
+    ;; the selected tab is Agents (a board command popping to its buffer,
+    ;; a session being resumed) switches tabs under us.
+    (let ((agent-shell-workspace--isolation-active nil))
+      (let ((fallback (decknix-layout--fallback-buffer))
+            (mapping
+             (delq nil
+                   (mapcar (lambda (b)
+                             (let ((buf (decknix-layout--resolve-buffer (car b) (cdr b))))
+                               (if (buffer-live-p buf)
+                                   (cons (car b) (buffer-name buf))
+                                 (setq missing (1+ missing))
+                                 nil)))
+                           (plist-get layout :buffers)))))
+        (dolist (model (plist-get layout :frames))
+          (let ((frame (or (pop frames)
+                           (make-frame (decknix-layout--params-on-screen
+                                        (plist-get model :params)
+                                        (decknix-layout--workareas))))))
+            (decknix-layout--restore-frame frame model mapping (buffer-name fallback))
+            (when (plist-get model :selected) (setq selected frame)))))
       (when sessions
         (dolist (buf (buffer-list))
           (when (and (buffer-live-p buf)
@@ -642,14 +690,20 @@ selected one first, and makes more as needed."
                    (not (with-current-buffer sb
                           (derived-mode-p 'agent-shell-workspace-sidebar-mode))))
           (save-window-excursion (ignore-errors (agent-shell-workspace-sidebar-open)))))
-      (when (frame-live-p selected) (select-frame-set-input-focus selected))
-      (message "decknix: restored %s%s%s"
-               (decknix-layout--summary layout)
-               (if sessions (format "; resumed %d" resumed) "; sessions resume on RET")
-               (if (> missing 0)
-                   (format "; %d buffer%s gone, shown as *scratch*"
-                           missing (if (= missing 1) "" "s"))
-                 "")))))
+      (when (frame-live-p selected) (select-frame-set-input-focus selected)))
+    ;; After the `let', so the isolation decision made for the tab that
+    ;; ended up selected is the one that stays.
+    (when (and (fboundp 'agent-shell-workspace--on-tab-selected)
+               (get-buffer agent-shell-workspace-sidebar-buffer-name))
+      (add-hook 'tab-bar-tab-post-select-functions #'agent-shell-workspace--on-tab-selected)
+      (ignore-errors (agent-shell-workspace--on-tab-selected)))
+    (message "decknix: restored %s%s%s"
+             (decknix-layout--summary layout)
+             (if sessions (format "; resumed %d" resumed) "; sessions resume on RET")
+             (if (> missing 0)
+                 (format "; %d buffer%s gone, shown as *scratch*"
+                         missing (if (= missing 1) "" "s"))
+               ""))))
 
 ;; -- Startup offer ------------------------------------------------------------
 
