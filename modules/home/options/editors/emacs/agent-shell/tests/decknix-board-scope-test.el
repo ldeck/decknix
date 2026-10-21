@@ -134,6 +134,21 @@ RESPONSES is a function (ARGV) returning (EXIT STDOUT STDERR)."
                                                       '("widgetportal-integration#12")))
                   '("widgetportal-integration" "widget")))))
 
+(ert-deftest decknix-board-scope-test-session-repos-leaves-memoised-lists-alone ()
+  ;; A session that worked in the same checkout twice used to splice the
+  ;; memoised list onto itself: "List contains a loop" on the next call.
+  (let ((cached (list "ldeck/decknix" "exampleowner/org-decknix-config")))
+    (cl-letf (((symbol-function 'decknix-board-path-repos) (lambda (_dir) cached))
+              ((symbol-function 'decknix-board--session-observed)
+               (lambda (_s) '("/c/decknix" "/c/decknix")))
+              ((symbol-function 'decknix-board--session-created) #'ignore))
+      (let ((session (decknix-board-scope-test--session "s" nil nil "/c/decknix" nil)))
+        (dotimes (_ 3)
+          (should (equal (decknix-board-session-repos session)
+                         '("ldeck/decknix" "exampleowner/org-decknix-config"))))
+        (should (proper-list-p cached))
+        (should (equal cached '("ldeck/decknix" "exampleowner/org-decknix-config")))))))
+
 ;; --- membership ----------------------------------------------------------
 
 (defun decknix-board-scope-test--in-p (board session repos)

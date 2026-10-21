@@ -235,13 +235,19 @@ either, the directory layout gives a bare name."
   "Return the repositories SESSION (NAME TAGS PRS STATE WORKSPACE ...) is in.
 From the PRs it reviews and created, the worktrees it worked in, and its
 workspace.  Lower-cased; some may be bare names."
+  ;; `decknix-board-path-repos' returns memoised lists, so nothing here may
+  ;; splice them: `mapcan' would nconc a cached list onto itself (a loop the
+  ;; next time that path recurs), and `delete-dups' edits `append's shared
+  ;; last argument in place.  `append' with a trailing nil copies them all.
   (delete-dups
    (delq nil
          (append
           (mapcar #'decknix-board--pr-key-repo (nth 2 session))
           (mapcar #'decknix-board--pr-key-repo (decknix-board--session-created session))
-          (mapcan #'decknix-board-path-repos (decknix-board--session-observed session))
-          (decknix-board-path-repos (nth 4 session))))))
+          (apply #'append (mapcar #'decknix-board-path-repos
+                                  (decknix-board--session-observed session)))
+          (decknix-board-path-repos (nth 4 session))
+          nil))))
 
 (defvar decknix-board-session-repos-function #'decknix-board-session-repos
   "Function (SESSION) returning the repositories SESSION is in.
