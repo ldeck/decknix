@@ -71,6 +71,7 @@
 
 (defvar decknix--agent-conv-key)
 (defvar agent-shell-workspace--isolation-active)
+(defvar decknix--sidebar-tile-auto-suspended)
 (defvar decknix--agent-session-workspace)
 (defvar dired-directory)
 (defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
@@ -650,6 +651,12 @@ selected one first, and makes more as needed."
          (missing 0)
          (resumed 0)
          (selected nil))
+    ;; The restored windows are the arrangement the user had.  The sidebar
+    ;; tile preference would otherwise re-tile the selected frame on its
+    ;; next refresh with the N most recent sessions, which after a restart
+    ;; are whatever the broker reattach touched last.  Cycling the tile
+    ;; count (`t' in the sidebar) lifts this.
+    (setq decknix--sidebar-tile-auto-suspended t)
     ;; Isolation off while building: with it on, any buffer shown while
     ;; the selected tab is Agents (a board command popping to its buffer,
     ;; a session being resumed) switches tabs under us.

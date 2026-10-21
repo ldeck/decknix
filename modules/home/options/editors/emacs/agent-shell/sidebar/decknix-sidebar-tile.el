@@ -58,6 +58,12 @@ preference is preserved and applied automatically by
 `decknix--sidebar-maybe-apply-tile-pref' once enough buffers
 become available (e.g., after Previous sessions resume).")
 
+(defvar decknix--sidebar-tile-auto-suspended nil
+  "Non-nil stops `decknix--sidebar-maybe-apply-tile-pref' re-tiling.
+Set by a layout restore: the windows it puts back are the arrangement
+the user had, and re-tiling would replace them with the N most recent
+sessions.  Cleared by `decknix-sidebar-tile-cycle', the explicit ask.")
+
 (defun decknix--sidebar-tile-current-count ()
   "Return the number of currently tiled buffers (0 if not tiled).
 Reads the sidebar buffer-local `agent-shell-workspace--tiled-buffers'
@@ -95,7 +101,8 @@ The preference is reapplied by
                      ((= current 2) 3)
                      ((= current 3) 4)
                      (t 0))))
-    (setq decknix--sidebar-tile-count next)
+    (setq decknix--sidebar-tile-count next
+          decknix--sidebar-tile-auto-suspended nil)
     (cond
      ((= next 0)
       ;; Cycle wrapped back to off — untile if currently tiled.
@@ -123,9 +130,17 @@ Called from the sidebar refresh path so that resuming Previous
 sessions or creating a new session naturally engages the
 preferred tile count once enough buffers exist.  No-op when
 `decknix--sidebar-tile-count' is 0 or the current tiled count
-already equals the preference."
-  (let ((n decknix--sidebar-tile-count))
-    (when (and (integerp n) (>= n 2))
+already equals the preference.
+
+Only in a frame whose current tab shows the sidebar.  The refresh runs
+from a timer in whatever frame is selected, and `--tile' grids that
+frame's windows: after a restart it turned a two-window frame with no
+sidebar into a 2x2 grid of unrelated sessions."
+  (let ((n decknix--sidebar-tile-count)
+        (sidebar (get-buffer agent-shell-workspace-sidebar-buffer-name)))
+    (when (and (integerp n) (>= n 2)
+               (not decknix--sidebar-tile-auto-suspended)
+               sidebar (get-buffer-window sidebar (selected-frame)))
       (let* ((live-bufs (seq-filter #'buffer-live-p (agent-shell-buffers)))
              (target (min n (length live-bufs) 8))
              (current (decknix--sidebar-tile-current-count)))
