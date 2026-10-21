@@ -542,6 +542,19 @@ let
     ];
   };
 
+  # Per-purpose coordination boards (a hackathon, a pilot): a plan from an
+  # issue backend (GitHub sub-issues first) with the live sessions on each
+  # item.  Definitions are data files under ~/.config/decknix/boards, so a
+  # new board needs no Nix change.  Core, backend seam and GitHub backend
+  # ship as one package; the tests stub every subprocess.
+  decknix-board-el = mkEmacsTestedPackage {
+    pname = "decknix-board";
+    src = ./agent-shell/board;
+    packageRequires = [ decknix-attention-el ];
+    extraSiteFiles = [ "decknix-board-backend.el" "decknix-board-github.el" ];
+    testFiles = [ "decknix-board-fixture.el" "decknix-board-test.el" ];
+  };
+
   decknix-sidebar-toggles-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-toggles";
     src = ./agent-shell/sidebar;
@@ -3533,6 +3546,7 @@ in
           decknix-support-dashboard-el
           decknix-support-workflow-el
           decknix-dos-board-el
+          decknix-board-el
           decknix-winner-safe-el
           decknix-agent-subagent-state-el
           decknix-agent-resourcing-el
@@ -4999,6 +5013,11 @@ ${optionalString cfg.tableOverlay.enable ''
                               decknix-dos-board-refresh-interval
                               #'decknix-dos-board--tick))
 
+        ;; Coordination boards (`C-c s H').  Nothing starts at load: a
+        ;; board's tick is armed when one is opened and stops itself when
+        ;; the last board buffer goes.
+        (require 'decknix-board)
+
         ;; Always-on hitch profiler (default-on, `decknix-perf-hitch-toggle'
         ;; to disable at runtime).  Surfaces slow timers/commands so we can
         ;; keep optimising as the config grows.  `M-x decknix-perf-hitch-report'
@@ -5434,6 +5453,8 @@ ${optionalString cfg.tableOverlay.enable ''
                      ("B" . decknix-review-board)
                      ("S" . decknix-session-board)
                      ("F" . decknix-forge-board)
+                     ;; `H' for hackathon, the first use; any purpose board.
+                     ("H" . decknix-board-open)
                      ;; `K' ends every session whose work is over.  A review
                      ;; fleet leaves these behind: 11 of 24 measured on a
                      ;; live workspace were on PRs that had merged or closed.
@@ -5487,6 +5508,7 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c s v" "review last exchange"
             "C-c s V" "review menu"
             "C-c s B" "review board"
+            "C-c s H" "coordination board (M-x decknix-board-new)"
             "C-c s u" "copy this session's PR url (C-u: open)"
             "C-c s l" "layout switch"
             "C-c s L" "layout save"
