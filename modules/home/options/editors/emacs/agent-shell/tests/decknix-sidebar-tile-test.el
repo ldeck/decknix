@@ -147,22 +147,51 @@ Wrapped in cl-letf so the tile/untile/refresh side-effects no-op."
       (decknix--sidebar-maybe-apply-tile-pref)
       (should-not called))))
 
+(defmacro decknix-sidebar-tile-test--with-mismatch (sidebar-shown &rest body)
+  "Run BODY wanting 2 tiles with 0 tiled, recording the count `apply' gets.
+SIDEBAR-SHOWN non-nil shows the sidebar in the selected frame."
+  (declare (indent 1))
+  `(let ((b1 (generate-new-buffer " *tile-bufA*"))
+         (b2 (generate-new-buffer " *tile-bufB*"))
+         (sb (get-buffer-create agent-shell-workspace-sidebar-buffer-name))
+         (decknix--sidebar-tile-count 2)
+         (decknix--sidebar-tile-auto-suspended nil)
+         (apply-arg nil))
+     (unwind-protect
+         (save-window-excursion
+           (delete-other-windows)
+           (switch-to-buffer (if ,sidebar-shown sb b1))
+           (cl-letf (((symbol-function 'agent-shell-buffers)
+                      (lambda () (list b1 b2)))
+                     ((symbol-function 'decknix--sidebar-tile-current-count)
+                      (lambda () 0))
+                     ((symbol-function 'decknix--sidebar-tile-apply)
+                      (lambda (n) (setq apply-arg n) n)))
+             ,@body))
+       (kill-buffer b1) (kill-buffer b2) (kill-buffer sb))))
+
 (ert-deftest decknix-sidebar-tile--maybe-apply-engages-on-mismatch ()
   "Hook calls `apply' when current layout differs from desired count."
-  (let ((b1 (generate-new-buffer " *tile-bufA*"))
-        (b2 (generate-new-buffer " *tile-bufB*"))
-        (decknix--sidebar-tile-count 2)
-        (apply-arg nil))
-    (unwind-protect
-        (cl-letf (((symbol-function 'agent-shell-buffers)
-                   (lambda () (list b1 b2)))
-                  ((symbol-function 'decknix--sidebar-tile-current-count)
-                   (lambda () 0))
-                  ((symbol-function 'decknix--sidebar-tile-apply)
-                   (lambda (n) (setq apply-arg n) n)))
-          (decknix--sidebar-maybe-apply-tile-pref)
-          (should (= 2 apply-arg)))
-      (kill-buffer b1) (kill-buffer b2))))
+  (decknix-sidebar-tile-test--with-mismatch t
+    (decknix--sidebar-maybe-apply-tile-pref)
+    (should (= 2 apply-arg))))
+
+(ert-deftest decknix-sidebar-tile--maybe-apply-skips-frames-without-the-sidebar ()
+  "The refresh timer runs in any frame; only the sidebar's frame is tiled."
+  (decknix-sidebar-tile-test--with-mismatch nil
+    (decknix--sidebar-maybe-apply-tile-pref)
+    (should-not apply-arg)))
+
+(ert-deftest decknix-sidebar-tile--maybe-apply-waits-out-a-restore ()
+  "A restored layout is not re-tiled until the count is cycled again."
+  (decknix-sidebar-tile-test--with-mismatch t
+    (setq decknix--sidebar-tile-auto-suspended t)
+    (decknix--sidebar-maybe-apply-tile-pref)
+    (should-not apply-arg)
+    (cl-letf (((symbol-function 'agent-shell-workspace-sidebar-refresh) #'ignore))
+      (let ((decknix--sidebar-tile-count 0))
+        (decknix-sidebar-tile-cycle)))
+    (should-not decknix--sidebar-tile-auto-suspended)))
 
 (ert-deftest decknix-sidebar-tile--maybe-apply-noop-when-matched ()
   "Hook is a no-op when current layout already matches desired count."

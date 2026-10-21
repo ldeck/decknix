@@ -17,6 +17,7 @@
 (require 'decknix-layout-persist-fixture)
 
 (defvar agent-shell-workspace--isolation-active)
+(defvar decknix--sidebar-tile-auto-suspended)
 
 (defmacro decknix-layout-test--with-file (&rest body)
   "Run BODY with `decknix-layout-persist-file' in a fresh temp dir."
@@ -334,7 +335,8 @@ which is exactly when the startup restore runs."
   `(decknix-layout-test--with-file
      (let ((tab-bar-mode-was (bound-and-true-p tab-bar-mode))
            (sessions (cl-loop for i from 1 to 7
-                              collect (get-buffer-create (format "*Claude: session-%d*" i)))))
+                              collect (get-buffer-create (format "*Claude: session-%d*" i))))
+           (decknix--sidebar-tile-auto-suspended nil))
        (unwind-protect
            (save-window-excursion
              (with-temp-file decknix-layout-persist-file
@@ -373,7 +375,8 @@ fresh daemon, and so fell back to showing the current tab alone."
                      ("*Agent Sidebar*" "*Claude: session-2*" "*Claude: session-3*"
                       "*Claude: session-4*" "*Claude: session-5*")
                      ("*Claude: session-6*" "*Claude: session-7*"))
-                   (decknix-layout-test--tab-buffers)))))
+                   (decknix-layout-test--tab-buffers)))
+    (should decknix--sidebar-tile-auto-suspended)))
 
 
 (ert-deftest decknix-layout/restore-keeps-tab-hooks-and-isolation-out-of-the-build ()
