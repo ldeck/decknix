@@ -34,7 +34,8 @@
 ;; matches no session by them, or it would claim every session.  It
 ;; matches the board's repositories when the cached facts place it in
 ;; one (`decknix-board-session-repos').  :match combines the two, `either'
-;; by default; see `decknix-board-session-in-board-p'.
+;; by default; see `decknix-board-session-in-board-p'.  The sidebar's
+;; focus uses the same function, so a board and its focus always agree.
 ;;
 ;; Item tags.  A session works on an item when it is tagged
 ;; `<prefix>#<number>', where the prefix is the repository name for
@@ -113,7 +114,7 @@ channel instead of posting."
 
 (defvar decknix-board-reread-functions nil
   "Functions called with a board's name when its definition was written or re-read.
-For anything that caches a definition.")
+The sidebar's focus caches the definition and drops it here.")
 
 (defun decknix-board-valid-name-p (name)
   "Non-nil when NAME can name a board file and buffer."

@@ -627,5 +627,96 @@ left the feed, and nothing anywhere showed them."
           (should (string-match-p "asks:  Merge it?" text))
           (should (string-match-p "the last line" text)))))))
 
+;; --- board focus ---------------------------------------------------------
+;;
+;; The focus package is not on this package's load path; its interface is
+;; stubbed so these pin only what the sidebar does with the answers.
+
+(defvar decknix--hub-wip nil)
+
+(declare-function decknix-board-focus-sessions "decknix-board-focus" (sessions))
+
+(defmacro decknix-lr-test--focused (in-repos in-sessions &rest body)
+  "Run BODY focused on a board covering IN-REPOS and the IN-SESSIONS names."
+  (declare (indent 2))
+  `(let ((repos ,in-repos) (names ,in-sessions))
+     (cl-letf (((symbol-function 'decknix-board-focus-active-p) (lambda () t))
+               ((symbol-function 'decknix-board-focus-title) (lambda () "US Pilot"))
+               ((symbol-function 'decknix-board-focus-repo-p)
+                (lambda (r) (member (downcase r) repos)))
+               ((symbol-function 'decknix-board-focus-path-p)
+                (lambda (p) (string-match-p "upside" p)))
+               ((symbol-function 'decknix-board-focus-sessions)
+                (lambda (ss) (seq-filter (lambda (s) (member (car s) names)) ss)))
+               ((symbol-function 'decknix-board-focus-elsewhere-count)
+                (lambda (ss) (seq-count (lambda (s) (and (decknix-attention-state-p (nth 3 s))
+                                                         (not (member (car s) names))))
+                                        ss))))
+       ,@body)))
+
+(ert-deftest decknix-layout-render--focus-narrows-sessions-feed-wip-and-worktrees ()
+  (let ((decknix--hub-reviews '((items . (((repo . "UpsideRealty/upside") (number . 1))
+                                          ((repo . "UpsideRealty/other") (number . 2))))))
+        (decknix--hub-wip '((repos . (((repo . "UpsideRealty/upside") (prs . nil))
+                                      ((repo . "UpsideRealty/other") (prs . nil)))))))
+    (cl-letf (((symbol-function 'decknix--hub-review-session-snapshot)
+               (lambda () '(("in" nil nil "idle") ("out" nil nil "idle"))))
+              ((symbol-function 'decknix-hub-wt-rows)
+               (lambda () (list '(:repo "upside" :path "/c/upside-worktrees/a")
+                                '(:repo "other" :path "/c/other-worktrees/b")
+                                '(:path "/c/upside-worktrees/c")))))
+      (decknix-lr-test--focused '("upsiderealty/upside" "upside") '("in")
+        (should (equal (mapcar #'car (decknix--layout-sessions)) '("in")))
+        (should (equal (mapcar (lambda (i) (alist-get 'number i)) (decknix--layout-raw-feed-items))
+                       '(1)))
+        (should (equal (mapcar (lambda (r) (alist-get 'repo r)) (decknix--layout-wip-repos))
+                       '("UpsideRealty/upside")))
+        (should (equal (mapcar (lambda (w) (plist-get w :path)) (decknix--layout-worktrees))
+                       '("/c/upside-worktrees/a" "/c/upside-worktrees/c"))))
+      ;; Unfocused, everything shows.
+      (should (= 2 (length (decknix--layout-sessions))))
+      (should (= 2 (length (decknix--layout-raw-feed-items))))
+      (should (= 3 (length (decknix--layout-worktrees)))))))
+
+(ert-deftest decknix-layout-render--focus-banner-names-the-board-and-the-keys ()
+  (with-temp-buffer
+    (should (= 0 (decknix--layout-render-focus 0 48)))
+    (should (equal "" (buffer-string))))
+  (decknix-lr-test--focused nil nil
+    (with-temp-buffer
+      (should (= 2 (decknix--layout-render-focus 0 48)))
+      (should (string-match-p "\\` Focus: US Pilot +F clear · C-u F switch\n\n\\'"
+                              (buffer-string))))))
+
+(ert-deftest decknix-layout-render--focus-counts-who-needs-you-elsewhere ()
+  "Focused Needs-you lists only the board's sessions, and says how many
+outside it are blocked, so a focus never hides one silently."
+  (decknix-lr-test--with-buffers '("*Claude: in*" "*Claude: out*" "*Claude: out2*")
+    (let ((all '(("*Claude: in*" nil nil "asking")
+                 ("*Claude: out*" nil nil "waiting")
+                 ("*Claude: out2*" nil nil "asking"))))
+      (cl-letf (((symbol-function 'decknix--hub-review-session-snapshot) (lambda () all)))
+        (decknix-lr-test--focused nil '("*Claude: in*")
+          (let ((out (decknix-lr-test--render-needs-you
+                      (decknix-board-focus-sessions all))))
+            (should (string-match-p "Needs you (1)" out))
+            (should-not (string-match-p "Claude: out\\|  out" out))
+            (should (string-match-p "^ \\+2 need you elsewhere$" out)))
+          ;; Nothing blocked inside the focus: the count still shows.
+          (let ((out (decknix-lr-test--render-needs-you nil)))
+            (should-not (string-match-p "Needs you" out))
+            (should (string-match-p "\\+2 need you elsewhere" out))))))))
+
+(ert-deftest decknix-layout-render--j-stays-inside-the-focus ()
+  (decknix-lr-test--with-buffers '("*Claude: in*" "*Claude: out*")
+    (let ((all '(("*Claude: in*" nil nil "asking") ("*Claude: out*" nil nil "netfail")))
+          (decknix-attention--seen (make-hash-table :test 'eq :weakness 'key))
+          (decknix-attention-focus-function
+           (lambda (ss) (seq-filter (lambda (s) (equal (car s) "*Claude: in*")) ss))))
+      (cl-letf (((symbol-function 'decknix--hub-review-session-snapshot) (lambda () all)))
+        (with-temp-buffer
+          (should (eq (decknix-layout--next-attention-target)
+                      (get-buffer "*Claude: in*"))))))))
+
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here

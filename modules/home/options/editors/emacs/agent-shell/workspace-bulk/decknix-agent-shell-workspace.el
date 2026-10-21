@@ -1294,6 +1294,7 @@ they mean in the sidebar itself (cycle layout / worktree menu)."
    (decknix-sidebar-transient--pin-keys)
    ("g"   "Refresh"       decknix-sidebar-refresh)
    ("K"   "Sub-agents: live / all" decknix-sidebar-toggle-finished-subagents)
+   ("F"   "Focus on a board (F clears, C-u F switches)" decknix-board-focus)
    ("q"   "Quit sidebar"  quit-window)]
   ["On the current row"
    ;; Row-action menus + worktree verbs bound directly in the sidebar
@@ -1731,6 +1732,9 @@ basename) or a list of tag strings to suppress from the displayed name."
 ;; Owned by `decknix-sidebar-layout', which this package does not require:
 ;; the legacy Live renderer below must honour it with the layout off too.
 (defvar decknix-sidebar-show-finished-subagents)
+;; Owned by `decknix-board-focus', which this package does not require.
+(defvar decknix-board-focus-name)
+(declare-function decknix-board-focus "decknix-board-focus" (&optional choose))
 
 (defun decknix-sidebar-toggle-finished-subagents ()
   "Toggle listing done and stopped sub-agents in the sidebar.
@@ -5765,6 +5769,7 @@ fresh-daemon idle save cannot clobber the Previous Sessions snapshot."
            (cons 'show-keys decknix--sidebar-show-keys)
            (cons 'show-finished-subagents
                  (bound-and-true-p decknix-sidebar-show-finished-subagents))
+           (cons 'board-focus (bound-and-true-p decknix-board-focus-name))
            (cons 'quick-switch
                  (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
                       agent-shell-workspace-sidebar--quick-switch))
@@ -5956,6 +5961,7 @@ so it is safe to call from the hot refresh path."
     decknix--sidebar-width-state
     decknix--sidebar-show-keys
     decknix-sidebar-show-finished-subagents
+    decknix-board-focus-name
     decknix--sidebar-show-toggles
     decknix--sidebar-live-view-mode
     decknix--sidebar-show-hidden
@@ -6076,6 +6082,12 @@ the sidebar.  Prompts for confirmation first."
           (let ((sf (alist-get 'show-finished-subagents state 'missing)))
             (unless (eq sf 'missing)
               (setq decknix-sidebar-show-finished-subagents sf)))
+          ;; Set even before the focus package loads: its `defvar' then
+          ;; keeps the restored name.  A board deleted since reads as no
+          ;; focus rather than failing the restore.
+          (let ((bf (alist-get 'board-focus state 'missing)))
+            (when (or (null bf) (stringp bf))
+              (setq decknix-board-focus-name bf)))
           (let ((qs (alist-get 'quick-switch state)))
             (when (and qs (boundp 'agent-shell-workspace-sidebar--quick-switch))
               (setq agent-shell-workspace-sidebar--quick-switch t)))

@@ -6,7 +6,8 @@ and under each item the live agent sessions working on it. Sessions that need
 you are listed first.
 
 Each board picks its own repositories, tags, workspace and Slack channel, so
-you can run several at once. GitHub issues are the first backend; Jira and
+you can run several at once, and the sidebar can [focus](#sidebar-focus) on
+any one of them. GitHub issues are the first backend; Jira and
 taskwarrior are planned behind the same interface **(Planned)**.
 
 ## Quickstart: a hackathon board
@@ -67,7 +68,8 @@ Fields:
   goal issue; `:label-prefix` the type labels; `:label` restricts every
   repository's items to issues carrying it.
 
-Example definition: [a hackathon](./boards/hack-2026.eld).
+Example definitions: [a hackathon](./boards/hack-2026.eld) and
+[the US pilot](./boards/us-pilot.eld).
 
 ## Repositories
 
@@ -170,6 +172,51 @@ the body is not seen.
 | `g` | Re-read the definition and fetch now |
 | `e` | Edit the definition |
 | `?` | Every key |
+
+## Sidebar focus
+
+A board doubles as a focus for the sidebar, so it can show just one pilot or
+hackathon. In the sidebar press `F` and pick a board (`F` again clears it;
+`C-u F` switches board, or picks `none`). While focused:
+
+- the header shows `Focus: <title>` with the keys to clear or switch;
+- **Needs you**, **Reviews**, **WIP** and **Repos** list only the board's
+  sessions and its repositories' PRs, worktrees and sync problems, by the same
+  membership rule the board uses;
+- a dim `+N need you elsewhere` row counts sessions outside the focus that are
+  blocked on you, so nothing urgent is hidden silently;
+- sub-agents and Tokens are unchanged;
+- `j` / `J` in the sidebar move between the focused sessions only.
+
+The focus survives restarts with the other sidebar toggles. `C-c A j` stays
+global by default; set `decknix-attention-respect-focus` to keep it inside the
+focus, and `C-u C-u C-c A j` inverts that for one jump.
+
+The focus reads only cached data: the definition once when it changes, and
+each session's membership memoised for ten seconds.
+
+### The US pilot as a focus
+
+The NurtureCloud US Pilot Control board is its own tool, not a decknix board,
+so it is not a focus target as it stands. An equivalent definition makes one:
+
+```elisp
+(:name "us-pilot"
+ :title "US Pilot"
+ :goal "Bramlett live on NurtureCloud in us-prd"
+ :tags-any ("bramlett" "us" "acker")
+ :repos ("UpsideRealty/followupboss-integration"
+         "UpsideRealty/upside"
+         "UpsideRealty/address-normaliser")
+ :match both
+ :backend github
+ :github (:repo "UpsideRealty/followupboss-integration"
+          :label "us-pilot" :label-prefix "type:"))
+```
+
+`both` because the monolith is shared: a session needs a pilot tag and one of
+the pilot's repositories. The `:label` keeps the board's plan to issues
+labelled for the pilot; a focus needs no issues at all.
 
 ## For agents: the snapshot
 

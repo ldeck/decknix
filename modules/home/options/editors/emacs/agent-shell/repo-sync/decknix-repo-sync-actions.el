@@ -323,6 +323,8 @@ full report with one row."
 
 (defvar decknix--repo-sync-failed-expanded)
 
+(declare-function decknix-board-focus-path-p "decknix-board-focus" (path))
+
 (defun decknix--repo-sync-render (line-num)
   "Render the repo-sync problem section.  Returns the updated LINE-NUM.
 
@@ -330,7 +332,10 @@ Kicks off a cache refresh when the report has aged out, so the section is
 never rendered from the filesystem on the paint path."
   (when (decknix-repo-sync-report-stale-p)
     (decknix-repo-sync-refresh))
-  (let* ((all (decknix-repo-sync-problems))
+  (let* ((all (seq-filter (lambda (p)
+                            (or (not (fboundp 'decknix-board-focus-path-p))
+                                (decknix-board-focus-path-p (plist-get p :path))))
+                          (decknix-repo-sync-problems)))
          (split (decknix--repo-sync-collapse
                  all decknix-repo-sync-collapse-failed
                  decknix--repo-sync-failed-expanded))
@@ -340,7 +345,7 @@ never rendered from the filesystem on the paint path."
       (insert "\n")
       (setq line-num (1+ line-num))
       (decknix--sidebar-render-section-header
-       (format "Repos (%s)" (decknix-repo-sync-summary))
+       (format "Repos (%s)" (decknix--repo-sync-summary all))
        'repos)
       (setq line-num (1+ line-num))
       (dolist (problem problems)

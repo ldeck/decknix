@@ -330,6 +330,7 @@ in
                      ("TAB" . "Sidebar: expand / collapse a group")
                      ("A" . "Sidebar: Reviews, only what wants you / all")
                      ("K" . "Sidebar: sub-agents, only live ones / all")
+                     ("F" . "Sidebar: focus on one board (F clears, C-u F switches)")
                      ("N" . "Sidebar: new session for the row's repo or PR")
                      ("G" . "Sidebar: repo-sync action for the row")
                      ("T" . "Sidebar: toggles")
