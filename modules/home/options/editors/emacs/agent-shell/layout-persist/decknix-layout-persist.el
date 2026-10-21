@@ -27,6 +27,7 @@
 ;;    :buffers ((NAME . (:kind file   :file PATH))
 ;;              (NAME . (:kind dired  :dir PATH))
 ;;              (NAME . (:kind magit  :dir PATH))
+;;              (NAME . (:kind command :fn SYMBOL))
 ;;              (NAME . (:kind agent  :session ENTRY))
 ;;              (NAME . (:kind sidebar))
 ;;              (NAME . (:kind other)))
@@ -114,6 +115,34 @@ The periodic save is what survives a crash or SIGKILL, which skip
 `kill-emacs-hook'.  It writes only when the layout changed."
   :type '(choice integer (const nil)) :group 'decknix-layout-persist)
 
+(defcustom decknix-layout-recreate-alist
+  '(("\\`\\*Review Board\\*\\'" . decknix-review-board)
+    ("\\`\\*deckmacs: Session Board\\*\\'" . decknix-session-board)
+    ("\\`\\*US Pilot Control\\*\\'" . nc-us-pilot-board)
+    ("\\`\\*Messages\\*\\'" . messages-buffer))
+  "How to rebuild buffers that visit no file, keyed by name or major mode.
+Each entry is (KEY . FUNCTION).  KEY is a regexp matched against the
+buffer name, or a major-mode symbol matched with `derived-mode-p'.
+FUNCTION takes no arguments and makes the buffer; most are the command
+that opens it.  Windows are put back around the call, so a command that
+pops to its buffer does no harm, and its buffer is then found by the
+saved name when it does not return it.
+
+A buffer that matches is saved as (:kind command); anything else that
+visits no file is saved as (:kind other) and only comes back if
+something else recreated it first.  A FUNCTION that is not defined (a
+package this machine does not load) is skipped.
+
+Restore calls these synchronously, before the frames are rebuilt, so
+each must return promptly: the defaults render from memory and start
+any network reads as subprocesses (the US Pilot board's Jira reads are
+`make-process').  A function that would block belongs behind a
+placeholder instead."
+  :type '(alist :key-type (choice (regexp :tag "Buffer name")
+                                  (symbol :tag "Major mode"))
+                :value-type function)
+  :group 'decknix-layout-persist)
+
 (defconst decknix-layout--version 1)
 
 (defconst decknix-layout--frame-params '(left top width height fullscreen)
@@ -164,7 +193,33 @@ restore can hand it straight to the sidebar's resume path."
      ((and (string-prefix-p "magit-" (symbol-name major-mode))
            (derived-mode-p 'magit-mode))
       (list :kind 'magit :dir (expand-file-name default-directory)))
+     ((decknix-layout--recreate-fn (buffer-name buffer) major-mode)
+      (list :kind 'command
+            :fn (decknix-layout--recreate-fn (buffer-name buffer) major-mode)))
      (t (list :kind 'other)))))
+
+;; -- Recreatable buffers ---------------------------------------------------
+
+(defun decknix-layout--recreate-fn (name &optional mode)
+  "The `decknix-layout-recreate-alist' function for buffer NAME in MODE, or nil."
+  (cdr (seq-find (lambda (entry)
+                   (let ((key (car entry)))
+                     (if (stringp key)
+                         (string-match-p key name)
+                       (and mode (provided-mode-derived-p mode key)))))
+                 decknix-layout-recreate-alist)))
+
+(defun decknix-layout--recreate (name fn)
+  "Call FN to rebuild the buffer saved as NAME; return it or nil.
+`save-window-excursion' because the board commands `pop-to-buffer':
+during a restore that would rearrange whichever frame happens to be
+selected, which is not where the buffer is going."
+  (when (fboundp fn)
+    (let ((made (save-window-excursion (funcall fn))))
+      (if (and (bufferp made) (buffer-live-p made)
+               (equal (buffer-name made) name))
+          made
+        (get-buffer name)))))
 
 ;; -- Window-state walking -------------------------------------------------
 ;;
@@ -567,7 +622,13 @@ session that will not resume just yields nil and the window falls back."
                 (or (decknix-layout--live-session-buffer entry)
                     (decknix-layout--placeholder entry))))
       ('sidebar (get-buffer-create agent-shell-workspace-sidebar-buffer-name))
-      (_ (get-buffer name)))))
+      ('command (or (get-buffer name)
+                    (decknix-layout--recreate name (plist-get ref :fn))))
+      ;; Layouts saved before `command' existed recorded the boards as
+      ;; `other'; matching by name brings those back too.
+      (_ (or (get-buffer name)
+             (let ((fn (decknix-layout--recreate-fn name)))
+               (and fn (decknix-layout--recreate name fn))))))))
 
 (defun decknix-layout--fallback-buffer ()
   (if (fboundp 'get-scratch-buffer-create)

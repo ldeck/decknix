@@ -315,6 +315,13 @@
 
 ;; -- Restore: the real multi-tab layout -----------------------------------
 
+(defvar decknix-layout-test--board-calls 0)
+
+(defun decknix-layout-test--make-board ()
+  "Stand-in for a board command: make the buffer and pop to it, as they do."
+  (setq decknix-layout-test--board-calls (1+ decknix-layout-test--board-calls))
+  (pop-to-buffer (get-buffer-create "*Review Board*")))
+
 (defun decknix-layout-test--tab-buffers ()
   "Buffer names of every window in each tab of the selected frame, in order."
   (let ((tab-bar-tab-post-select-functions nil)
@@ -336,7 +343,10 @@ which is exactly when the startup restore runs."
      (let ((tab-bar-mode-was (bound-and-true-p tab-bar-mode))
            (sessions (cl-loop for i from 1 to 7
                               collect (get-buffer-create (format "*Claude: session-%d*" i))))
-           (decknix--sidebar-tile-auto-suspended nil))
+           (decknix-layout-test--board-calls 0)
+           (decknix--sidebar-tile-auto-suspended nil)
+           (decknix-layout-recreate-alist
+            '(("\\`\\*Review Board\\*\\'" . decknix-layout-test--make-board))))
        (unwind-protect
            (save-window-excursion
              (with-temp-file decknix-layout-persist-file
@@ -345,7 +355,6 @@ which is exactly when the startup restore runs."
              (tab-bar-close-other-tabs)
              (delete-other-windows)
              (switch-to-buffer "*scratch*")
-             (get-buffer-create "*Review Board*")
              (cl-letf (((symbol-function 'decknix-layout--gui-frames)
                         (lambda () (list (selected-frame))))
                        ((symbol-function 'select-frame-set-input-focus) #'ignore)
@@ -376,6 +385,7 @@ fresh daemon, and so fell back to showing the current tab alone."
                       "*Claude: session-4*" "*Claude: session-5*")
                      ("*Claude: session-6*" "*Claude: session-7*"))
                    (decknix-layout-test--tab-buffers)))
+    (should (= 1 decknix-layout-test--board-calls))
     (should decknix--sidebar-tile-auto-suspended)))
 
 
@@ -405,6 +415,65 @@ runs once, after restore, with the saved tab selected."
         (should agent-shell-workspace--isolation-active)
         (should (equal '("Agents") selected-at-call))
         (should (= 1 (tab-bar--current-tab-index)))))))
+
+;; -- Recreatable buffers ----------------------------------------------------
+
+(ert-deftest decknix-layout/recreate-fn-matches-by-name-or-mode ()
+  (let ((decknix-layout-recreate-alist
+         '(("\\`\\*Board\\*\\'" . board-fn) (special-mode . special-fn))))
+    (should (eq 'board-fn (decknix-layout--recreate-fn "*Board*")))
+    (should-not (decknix-layout--recreate-fn "*Board*<2>"))
+    (should (eq 'special-fn (decknix-layout--recreate-fn "x" 'messages-buffer-mode)))
+    (should-not (decknix-layout--recreate-fn "x" 'fundamental-mode))))
+
+(ert-deftest decknix-layout/registered-buffers-save-as-command ()
+  (let ((decknix-layout-recreate-alist '(("\\`dk-board\\'" . dk-make))))
+    (with-temp-buffer
+      (rename-buffer "dk-board" t)
+      (should (equal '(:kind command :fn dk-make)
+                     (decknix-layout--buffer-ref (current-buffer)))))))
+
+(ert-deftest decknix-layout/command-ref-recreates-without-moving-windows ()
+  (decknix-layout-test--with-windows
+    (let* ((calls 0)
+           (here (get-buffer-create "dk-here"))
+           (fn (lambda ()
+                 (setq calls (1+ calls))
+                 (pop-to-buffer (get-buffer-create "dk-board") '(display-buffer-pop-up-window)))))
+      (unwind-protect
+          (progn
+            (switch-to-buffer here)
+            (fset 'decknix-layout-test--fn fn)
+            (let ((buf (decknix-layout--resolve-buffer
+                        "dk-board" '(:kind command :fn decknix-layout-test--fn))))
+              (should (equal "dk-board" (buffer-name buf)))
+              (should (= 1 calls))
+              (should (equal '("dk-here") (mapcar (lambda (w) (buffer-name (window-buffer w)))
+                                                  (window-list)))))
+            ;; Live already: used as is, not rebuilt.
+            (decknix-layout--resolve-buffer "dk-board" '(:kind command :fn decknix-layout-test--fn))
+            (should (= 1 calls)))
+        (fmakunbound 'decknix-layout-test--fn)
+        (kill-buffer here)
+        (when (get-buffer "dk-board") (kill-buffer "dk-board"))))))
+
+(ert-deftest decknix-layout/old-other-refs-recreate-by-name ()
+  "Layouts saved before `command' recorded the boards as `other'."
+  (let ((decknix-layout-recreate-alist
+         '(("\\`dk-old-board\\'" . decknix-layout-test--old))))
+    (unwind-protect
+        (progn
+          (defalias 'decknix-layout-test--old
+            (lambda () (get-buffer-create "dk-old-board")))
+          (should (equal "dk-old-board"
+                         (buffer-name (decknix-layout--resolve-buffer
+                                       "dk-old-board" '(:kind other))))))
+      (fmakunbound 'decknix-layout-test--old)
+      (when (get-buffer "dk-old-board") (kill-buffer "dk-old-board")))))
+
+(ert-deftest decknix-layout/undefined-recreate-function-is-skipped ()
+  (should-not (decknix-layout--resolve-buffer
+               "dk-absent" '(:kind command :fn decknix-layout-test--never-defined))))
 
 ;; -- Pixel sizes ------------------------------------------------------------
 
