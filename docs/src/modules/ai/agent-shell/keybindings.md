@@ -154,6 +154,14 @@ tags sessions carry, so removing a tag from the last session that has it
 removes it from completion as well. `r` says when that happened, or how
 many other conversations still carry it.
 
+## Saved Layout (`C-c D w` / `C-c D W`)
+
+Frames, tabs and windows, including which agent session each window
+showed, are saved on exit and every five minutes, and offered back on the
+first frame after a daemon restart. `C-c D w` saves now; `C-c D W` restores
+and resumes the sessions (`C-u` for the run before the last). See
+[Emacs: restoring frames and windows](../../emacs.md#restoring-frames-and-windows-after-a-restart).
+
 ## Sidebar Actions (`C-c W`)
 
 Trigger sidebar transients without switching focus away from the

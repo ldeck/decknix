@@ -321,6 +321,11 @@ in
       (define-key deckmacs-prefix-map (kbd "s") #'deckmacs-status)
       (define-key deckmacs-prefix-map (kbd "d") #'deckmacs-diff)
       (define-key deckmacs-prefix-map (kbd "l") #'deckmacs-log)
+      ;; Save / restore the frame, tab and window layout across a restart
+      ;; (decknix-layout-persist, loaded by agent-shell.nix).  Bound here
+      ;; because this module owns the prefix map.
+      (define-key deckmacs-prefix-map (kbd "w") #'decknix-layout-save)
+      (define-key deckmacs-prefix-map (kbd "W") #'decknix-layout-restore)
 ${lib.optionalString config.programs.emacs.decknix.recording.enable ''
       ;; Screen-recording toggles (commands defined in recording.nix).  Bound
       ;; here on the prefix owner so the map is defined first; define-key stores
@@ -336,7 +341,9 @@ ${lib.optionalString config.programs.emacs.decknix.recording.enable ''
           "C-c D r" "reload"
           "C-c D s" "status"
           "C-c D d" "diff"
-          "C-c D l" "log"${lib.optionalString config.programs.emacs.decknix.recording.enable ''
+          "C-c D l" "log"
+          "C-c D w" "save window layout"
+          "C-c D W" "restore window layout"${lib.optionalString config.programs.emacs.decknix.recording.enable ''
 
           "C-c D V" "screencast (rec)"
           "C-c D K" "keystroke overlay"''}))

@@ -478,6 +478,18 @@ let
     ];
   };
 
+  # Frames, tab-bar tabs and windows saved on exit (and every few minutes)
+  # and offered back on the first GUI frame after a daemon restart, with the
+  # agent sessions they showed resumed through the sidebar's Previous path.
+  decknix-layout-persist-el = mkEmacsTestedPackage {
+    pname = "decknix-layout-persist";
+    src = ./agent-shell/layout-persist;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-layout-persist-test.el"
+    ];
+  };
+
   # Quick-capture: jot a feature/bug/investigation/discussion into a GitHub
   # issue/comment or taskwarrior without leaving Emacs or waiting on a busy
   # agent.  Tool-agnostic (gh + task CLIs), hexagonal (pluggable
@@ -3513,6 +3525,7 @@ in
           decknix-agent-acp-trace-el
           decknix-record-el
           decknix-layout-groups-el
+          decknix-layout-persist-el
           decknix-perf-hitch-el
           decknix-perf-hitch-autofile-el
           decknix-capture-el
@@ -4926,6 +4939,16 @@ ${optionalString cfg.tableOverlay.enable ''
         (require 'decknix-layout-groups)
         (declare-function decknix-layout-groups-restore "decknix-layout-groups")
         (add-hook 'emacs-startup-hook #'decknix-layout-groups-restore)
+
+        ;; Whole-layout persistence across daemon restarts: every GUI
+        ;; frame, its tabs and their windows, saved from `kill-emacs-hook'
+        ;; (SIGTERM from `launchctl kickstart -k' runs it), before the last
+        ;; frame is closed, and every 5 minutes; offered back once on the
+        ;; first GUI client frame.  C-c D w saves, C-c D W restores (bound
+        ;; in deckmacs.nix, which owns that prefix).
+        (require 'decknix-layout-persist)
+        (declare-function decknix-layout-persist-enable "decknix-layout-persist")
+        (decknix-layout-persist-enable)
 
         ;; DB connect: `M-x decknix-db' -> magit-style transient to reach a
         ;; managed database over its jumpbox tunnel, least-privilege first.
