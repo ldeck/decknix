@@ -119,12 +119,15 @@ The periodic save is what survives a crash or SIGKILL, which skip
   '(("\\`\\*Review Board\\*\\'" . decknix-review-board)
     ("\\`\\*deckmacs: Session Board\\*\\'" . decknix-session-board)
     ("\\`\\*US Pilot Control\\*\\'" . nc-us-pilot-board)
+    ("\\`\\*Board: .+\\*\\'" . decknix-board-recreate)
     ("\\`\\*Messages\\*\\'" . messages-buffer))
   "How to rebuild buffers that visit no file, keyed by name or major mode.
 Each entry is (KEY . FUNCTION).  KEY is a regexp matched against the
 buffer name, or a major-mode symbol matched with `derived-mode-p'.
 FUNCTION takes no arguments and makes the buffer; most are the command
-that opens it.  Windows are put back around the call, so a command that
+that opens it; a FUNCTION whose `decknix-layout-recreate-with-name'
+property is non-nil is called with the buffer name instead.  Windows are
+put back around the call, so a command that
 pops to its buffer does no harm, and its buffer is then found by the
 saved name when it does not return it.
 
@@ -215,7 +218,14 @@ restore can hand it straight to the sidebar's resume path."
 during a restore that would rearrange whichever frame happens to be
 selected, which is not where the buffer is going."
   (when (fboundp fn)
-    (let ((made (save-window-excursion (funcall fn))))
+    (let ((made (save-window-excursion
+                  ;; One function can rebuild a family of buffers (a board
+                  ;; per definition) only when told which one; the plain
+                  ;; commands take optional arguments of their own, so the
+                  ;; name is passed only to a function that asks for it.
+                  (if (get fn 'decknix-layout-recreate-with-name)
+                      (funcall fn name)
+                    (funcall fn)))))
       (if (and (bufferp made) (buffer-live-p made)
                (equal (buffer-name made) name))
           made

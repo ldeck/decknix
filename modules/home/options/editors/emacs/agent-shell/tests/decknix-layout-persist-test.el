@@ -457,6 +457,26 @@ runs once, after restore, with the saved tab selected."
         (kill-buffer here)
         (when (get-buffer "dk-board") (kill-buffer "dk-board"))))))
 
+(ert-deftest decknix-layout/recreate-passes-name-when-asked ()
+  "One function rebuilds a family of buffers when given the saved name."
+  (let (got)
+    (unwind-protect
+        (progn
+          (defalias 'decknix-layout-test--named
+            (lambda (name) (setq got name) (get-buffer-create name)))
+          (put 'decknix-layout-test--named 'decknix-layout-recreate-with-name t)
+          (defalias 'decknix-layout-test--plain
+            (lambda (&optional arg) (setq got arg) (get-buffer-create "dk-plain")))
+          (should (equal "dk-named" (buffer-name (decknix-layout--recreate
+                                                  "dk-named" 'decknix-layout-test--named))))
+          (should (equal "dk-named" got))
+          ;; Plain commands keep being called with no argument.
+          (decknix-layout--recreate "dk-plain" 'decknix-layout-test--plain)
+          (should-not got))
+      (fmakunbound 'decknix-layout-test--named)
+      (fmakunbound 'decknix-layout-test--plain)
+      (dolist (b '("dk-named" "dk-plain")) (when (get-buffer b) (kill-buffer b))))))
+
 (ert-deftest decknix-layout/old-other-refs-recreate-by-name ()
   "Layouts saved before `command' recorded the boards as `other'."
   (let ((decknix-layout-recreate-alist

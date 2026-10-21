@@ -427,5 +427,21 @@ repeats."
               (should (= tick (buffer-modified-tick))))))
       (kill-buffer asking))))
 
+(ert-deftest decknix-board-test-recreate-by-buffer-name ()
+  (let ((decknix-board-directory (make-temp-file "boards" t))
+        opened)
+    (unwind-protect
+        (cl-letf (((symbol-function 'decknix-board-open)
+                   (lambda (name) (setq opened name) 'buf)))
+          (decknix-board-write decknix-board-test--board)
+          (should (eq 'buf (decknix-board-recreate "*Board: hack*")))
+          (should (equal opened "hack"))
+          (setq opened nil)
+          (should-not (decknix-board-recreate "*Board: gone*"))
+          (should-not (decknix-board-recreate "*scratch*"))
+          (should-not opened)
+          (should (get 'decknix-board-recreate 'decknix-layout-recreate-with-name)))
+      (delete-directory decknix-board-directory t))))
+
 (provide 'decknix-board-test)
 ;;; decknix-board-test.el ends here
