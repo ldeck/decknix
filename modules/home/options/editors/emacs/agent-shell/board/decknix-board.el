@@ -704,10 +704,14 @@ computes a state, so it is fresher than an older snapshot."
 
 (defun decknix-board--due-p ()
   "Non-nil when the current board buffer should fetch again."
-  (and (not decknix-board--fetching)
-       (or (null decknix-board--fetch-started)
-           (> (- (float-time) decknix-board--fetch-started)
-              decknix-board-fetch-interval))))
+  (let ((age (and decknix-board--fetch-started
+                  (- (float-time) decknix-board--fetch-started))))
+    (or (null age)
+        (and (not decknix-board--fetching) (> age decknix-board-fetch-interval))
+        ;; A fetch whose sentinel never ran (gh wedged on auth, a killed
+        ;; process buffer) must not freeze the board for the session.
+        (and decknix-board--fetching (> age (* 5 decknix-board-fetch-interval))
+             (progn (setq decknix-board--fetching nil) t)))))
 
 (defun decknix-board--tick ()
   "Repaint visible boards and fetch the stale ones.
