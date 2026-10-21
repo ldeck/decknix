@@ -443,5 +443,20 @@ repeats."
           (should (get 'decknix-board-recreate 'decknix-layout-recreate-with-name)))
       (delete-directory decknix-board-directory t))))
 
+(ert-deftest decknix-board-test-fetch-due ()
+  (with-temp-buffer
+    (let ((decknix-board-fetch-interval 60))
+      (should (decknix-board--due-p))
+      (setq decknix-board--fetch-started (- (float-time) 10))
+      (should-not (decknix-board--due-p))
+      (setq decknix-board--fetch-started (- (float-time) 61))
+      (should (decknix-board--due-p))
+      (setq decknix-board--fetching t)
+      (should-not (decknix-board--due-p))
+      ;; A fetch that never finished is given up on.
+      (setq decknix-board--fetch-started (- (float-time) 400))
+      (should (decknix-board--due-p))
+      (should-not decknix-board--fetching))))
+
 (provide 'decknix-board-test)
 ;;; decknix-board-test.el ends here
