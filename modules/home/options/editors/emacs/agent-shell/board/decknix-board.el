@@ -768,6 +768,17 @@ With no boards defined yet, or with a prefix argument, define one."
       (pop-to-buffer buf)
       buf)))
 
+(defun decknix-board-recreate (buffer-name)
+  "Reopen the board shown in a buffer called BUFFER-NAME, for layout restore.
+Return the buffer, or nil when the name is not a board's or its
+definition has gone."
+  (when (string-match "\\`\\*Board: \\(.+\\)\\*\\'" buffer-name)
+    (let ((name (match-string 1 buffer-name)))
+      (and (file-exists-p (decknix-board-definition-file name))
+           (decknix-board-open name)))))
+
+(put 'decknix-board-recreate 'decknix-layout-recreate-with-name t)
+
 (defun decknix-board--current ()
   "Return the board of the current buffer, or signal."
   (or decknix-board--board (user-error "Not in a board buffer")))

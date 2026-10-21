@@ -174,7 +174,8 @@ shows `*scratch*` in its window, and a frame saved on a monitor that is no
 longer attached opens wherever macOS places it. Buffers that visit no file
 are reopened by their command when `decknix-layout-recreate-alist` knows
 one (by buffer name or major mode): by default the Review Board, the
-Session Board, the US Pilot board when installed, and `*Messages*`.
+Session Board, every coordination board (`*Board: NAME*`, while its
+definition exists), the US Pilot board when installed, and `*Messages*`.
 
 | Key / command | Action |
 |---------------|--------|
