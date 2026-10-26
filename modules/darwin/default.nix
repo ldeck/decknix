@@ -82,21 +82,8 @@ in
   # in the store. A missing file is harmless (public fetches don't consult it).
   nix.settings.netrc-file = "${homeDir}/.config/nix/netrc";
 
-  # Linux remote builder (lightweight NixOS VM via Apple Virtualization) so macOS
-  # can build Linux derivations locally — e.g. `dockerTools` OCI images for the
-  # hermetic Nix container builds (ACME-539). The guest is aarch64-linux (native
-  # under Apple silicon), which is enough to build and run the image locally; the
-  # linux/amd64 deploy image is built natively in CI. The VM runs as a
-  # LaunchDaemon after a `decknix switch` (sudo darwin-rebuild).
-  nix.linux-builder = {
-    enable = true;
-    maxJobs = 4;
-    config.virtualisation = {
-      cores = 6;
-      darwin-builder.diskSize = 40 * 1024; # MB — room for the JVM dep closure
-      darwin-builder.memorySize = 6 * 1024; # MB
-    };
-  };
+  # The Linux builder VM (decknix.linuxBuilder) lives in linux-builder/default.nix: it is
+  # on by default but only boots when a build needs it and powers off when idle.
 
   # 3. SYSTEM PACKAGES
   # These are installed in /run/current-system/sw (available to all users).

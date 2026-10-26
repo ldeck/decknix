@@ -23,6 +23,7 @@ Decknix is organised into modular components, each responsible for a specific ar
 | **AeroSpace System** | Disables Stage Manager, Mission Control shortcuts, separate Spaces |
 | **Emacs Daemon** | Background Emacs service via launchd, `ec` wrapper command |
 | **CLI Module** | Installs `decknix` binary, generates extensions config |
+| **Linux Builder** | On-demand aarch64-linux builder VM, stopped when idle ([Linux Builder](./linux-builder.md)) |
 
 ### Core Options
 

@@ -33,6 +33,7 @@
 - [Shell & Terminal](./modules/shell.md)
 - [Git](./modules/git.md)
 - [Window Management](./modules/window-management.md)
+- [Linux Builder](./modules/linux-builder.md)
 - [AI Tooling](./modules/ai/overview.md)
   - [Configuration](./modules/ai/configuration.md)
   - [Agent Shell](./modules/ai/agent-shell/overview.md)
