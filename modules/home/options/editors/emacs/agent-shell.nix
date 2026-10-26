@@ -2809,6 +2809,10 @@ let
     # conversation key read by the saved-session picker dispatch path.
     # `decknix-agent-session-restart' owns the pure orphan-bridge
     # predicate consumed by the startup reaper in main-session.
+    # The four compose packages are what
+    # `decknix-agent-compose-deliver-test' drives the real compose
+    # commands through, so the interrupt-then-submit path is tested in
+    # the module that owns it rather than only as a pure predicate.
     packageRequires = [ decknix-picker-selections-el
                         decknix-agent-session-bulk-send-el
                         decknix-agent-provider-el
@@ -2816,7 +2820,11 @@ let
                         decknix-agent-session-restart-el
                         decknix-agent-purposes-el
                         decknix-agent-picker-category-el
-                        decknix-agent-spawn-queue-el ];
+                        decknix-agent-spawn-queue-el
+                        decknix-agent-compose-wait-el
+                        decknix-agent-compose-queue-el
+                        decknix-agent-compose-busy-el
+                        decknix-agent-compose-history-el ];
     extraSiteFiles = [
       "decknix-agent-shell-main-batch.el"
       "decknix-agent-shell-main-compose.el"
@@ -2829,6 +2837,7 @@ let
     testFiles = [
       "decknix-agent-review-bot-test.el"
       "decknix-agent-session-picker-test.el"
+      "decknix-agent-compose-deliver-test.el"
     ];
   };
 

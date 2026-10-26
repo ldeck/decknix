@@ -67,6 +67,8 @@
 ;; this file is exercised) brings the symbol into the daemon's
 ;; load-path.  This avoids forcing every sibling review-package
 ;; that shares this directory to inherit the same dependency.
+(declare-function decknix--compose-deliver-after-interrupt
+                  "decknix-agent-shell-main-compose" (target input))
 (declare-function decknix--compose-wait-not-busy
                   "decknix-agent-compose-wait"
                   (target on-ready &optional timeout interval))
@@ -145,7 +147,15 @@ longer than the budget."
        (decknix--compose-wait-not-busy
         target
         (lambda ()
-          (decknix--agent-review-submit-do target content)))))))
+          ;; The wait also fires on its budget with the turn still running,
+          ;; where a plain submit is refused and the review is lost; the
+          ;; compose deliverer queues it instead.
+          (if (fboundp 'decknix--compose-deliver-after-interrupt)
+              (when (eq 'submit (decknix--compose-deliver-after-interrupt
+                                 target content))
+                (pop-to-buffer target)
+                (message "Review sent to %s" (buffer-name target)))
+            (decknix--agent-review-submit-do target content))))))))
 
 (defun decknix--agent-review-submit-pr (content)
   "Copy CONTENT to the kill-ring for pasting into a PR comment."

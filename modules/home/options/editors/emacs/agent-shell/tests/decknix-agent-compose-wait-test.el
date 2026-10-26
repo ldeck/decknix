@@ -206,5 +206,20 @@ Submitting anyway is the send that silently does nothing."
   (should-not (decknix--compose-submit-ok-p t nil nil))
   (should-not (decknix--compose-submit-ok-p nil t nil)))
 
+;; --- after the wait: submit, queue, or stranded; never a silent drop ---
+;;
+;; Reported 2026-10-26: interrupt and submit "interrupts but does not
+;; submit".  A turn still busy at the budget used to lose the prompt; it is
+;; queued now.  The command-level behaviour is pinned in
+;; `decknix-agent-compose-deliver-test'.
+
+(ert-deftest decknix-compose-after-interrupt-outcome/table ()
+  "Idle submits, still busy queues, a gone session strands."
+  (should (eq 'submit (decknix--compose-after-interrupt-outcome t t nil)))
+  (should (eq 'queue (decknix--compose-after-interrupt-outcome t t t)))
+  (should (eq 'stranded (decknix--compose-after-interrupt-outcome t nil nil)))
+  (should (eq 'stranded (decknix--compose-after-interrupt-outcome t nil t)))
+  (should (eq 'stranded (decknix--compose-after-interrupt-outcome nil nil nil))))
+
 (provide 'decknix-agent-compose-wait-test)
 ;;; decknix-agent-compose-wait-test.el ends here

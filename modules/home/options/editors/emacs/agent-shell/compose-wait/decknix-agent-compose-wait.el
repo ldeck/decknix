@@ -94,7 +94,7 @@ agent can action it before the interrupt lands.  This gap lets the cancel be
 processed first, so the sequence is interrupt-then-submit.  The wait budget
 still caps the total delay.")
 
-(defvar decknix-compose-interrupt-budget 8.0
+(defvar decknix-compose-interrupt-budget 10.0
   "Seconds to wait for the busy flag to clear after an interrupt before submitting.
 Auggie's `agent-shell-interrupt' clears `shell-maker--busy' synchronously, but
 a Claude interrupt only SENDS an async ACP `session/cancel' — the flag clears
@@ -103,7 +103,13 @@ stop reason).  With the old 2 s budget that ack often arrived after the timeout,
 so the wait fired the submit while still busy and the new prompt landed BEFORE
 the \"[interrupted]\" marker.  A budget generous enough to cover the ack keeps
 the order interrupt-then-submit; the busy-clear still fires the submit early in
-the common case, so this only extends the rare slow/wedged path.")
+the common case, so this only extends the rare slow/wedged path.
+
+The budget is a wait, not a deadline for the prompt: a turn still busy when it
+runs out gets the prompt queued (see `decknix--compose-after-interrupt-outcome')
+rather than dropped.  claude-agent-acp 0.94 only forces a wedged turn to end
+\"cancelled\" after a 30 s backstop, and a cancel that never reaches a live turn
+never ends it at all, so no budget can be long enough to make dropping safe.")
 
 (defun decknix--compose-submit-ok-p (buffer-live process-live busy)
   "Non-nil when a post-interrupt submit may actually be sent.  Pure.
@@ -115,6 +121,25 @@ shell is refused downstream, and the caller then closed the compose
 buffer anyway -- the prompt neither interrupted nor sent, which is what
 \"went into the ether\" described."
   (and buffer-live process-live (not busy) t))
+
+(defun decknix--compose-after-interrupt-outcome (buffer-live process-live busy)
+  "Return what to do with a prompt once the post-interrupt wait has fired.  Pure.
+
+  `submit'    the turn ended (the cancel was acked): send it now
+  `queue'     still busy at the budget: queue it to send when the turn ends
+  `stranded'  the session or its process is gone: nothing can take it
+
+`queue' replaces what used to be a silent drop.  The wait fires on its budget
+as well as on the busy flag clearing, and the C-c C-c interrupt branch had
+already closed the compose buffer, so a cancel acked after the budget (or
+never) left the prompt only on the kill ring with nothing saying so: the
+\"interrupts but does not submit\" report.  Queued, it is sent by the queue
+poller the moment the turn does end, and stays visible and editable until
+then."
+  (cond
+   ((decknix--compose-submit-ok-p buffer-live process-live busy) 'submit)
+   ((and buffer-live process-live) 'queue)
+   (t 'stranded)))
 
 (defun decknix--compose-wait-not-busy (target on-ready
                                               &optional timeout interval min-settle)

@@ -31,6 +31,9 @@
 
 (declare-function decknix--compose-submit-ok-p
                   "decknix-agent-compose-wait" (buffer-live process-live busy))
+(declare-function decknix--compose-after-interrupt-outcome
+                  "decknix-agent-compose-wait" (buffer-live process-live busy))
+(defvar decknix-compose-interrupt-budget)
 
 (require 'cl-lib)
 (require 'seq)
@@ -459,7 +462,8 @@ cancel/submit/wait/hold decision is pinned by
 
 INPUT may be a string or a list of turns (a drained document split back on
 its boundary rules).  MODE is `append' (default), `replace' or `combine',
-as resolved by `decknix--compose-queue-enqueue-action'.  Returns the new
+as resolved by `decknix--compose-queue-enqueue-action', or `prepend' for a
+prompt the user asked to send NOW that could not be sent yet.  Returns the new
 queue length, or nil when nothing was queued."
   (when (buffer-live-p target)
     (with-current-buffer target
@@ -467,6 +471,9 @@ queue length, or nil when nothing was queued."
         (setq decknix--compose-queued-prompt
               (pcase mode
                 ('replace incoming)
+                ('prepend (append incoming
+                                  (decknix--compose-queue-normalise
+                                   decknix--compose-queued-prompt)))
                 ('combine
                  (list (decknix--compose-queue-combine
                         (append (decknix--compose-queue-normalise
@@ -703,6 +710,78 @@ clipboard, so the text is recoverable even if the agent send errors out."
   (when (and (stringp input) (not (string-empty-p (string-trim input))))
     (kill-new input)))
 
+(defun decknix--compose-finish-buffer (compose-buf)
+  "Finish COMPOSE-BUF from outside it, e.g. from a timer callback.
+`decknix--compose-finish' quits the SELECTED window, which from a timer is
+whatever the user is looking at by then, not the compose window; so finish
+inside the compose buffer's own window, or kill a transient buffer that is
+no longer shown."
+  (when (buffer-live-p compose-buf)
+    (let ((win (get-buffer-window compose-buf t)))
+      (cond
+       (win (with-selected-window win
+              (with-current-buffer compose-buf
+                (decknix--compose-finish))))
+       ((buffer-local-value 'decknix--compose-sticky compose-buf)
+        (with-current-buffer compose-buf
+          (decknix--compose-history-reset)
+          (setq-local decknix--compose-drained nil)
+          (erase-buffer)
+          (set-buffer-modified-p nil)))
+       (t (kill-buffer compose-buf))))))
+
+(defun decknix--compose-deliver-after-interrupt (target input)
+  "Send INPUT to TARGET once the post-interrupt wait fires; never drop it.
+Returns the outcome from `decknix--compose-after-interrupt-outcome':
+`submit' (sent), `queue' (queued first, released, to send when the turn
+ends) or `stranded' (TARGET or its process is gone; INPUT is only on the
+kill ring).  Both `submit' and `queue' mean INPUT is safe, so the caller
+may consume the compose buffer; `stranded' means keep it."
+  (let* ((live (buffer-live-p target))
+         (proc (and live (get-buffer-process target)))
+         (proc-live (and proc (process-live-p proc)))
+         (busy (and live (with-current-buffer target
+                           (bound-and-true-p shell-maker--busy))))
+         (outcome (decknix--compose-after-interrupt-outcome
+                   live proc-live busy)))
+    (pcase outcome
+      ('submit
+       (with-current-buffer target
+         (goto-char (point-max))
+         (shell-maker-submit :input input)))
+      ('queue
+       ;; Released: the user already chose to talk over this turn, so a
+       ;; closing question must not hold the prompt back once it ends.
+       (decknix--compose-enqueue-prompt target input 'prepend)
+       (with-current-buffer target
+         (setq decknix--compose-queue-release t))
+       (message
+        "%s: interrupt not acknowledged after %ss -- prompt queued first, sends when the turn ends (C-c A Q s to see it)"
+        (buffer-name target) decknix-compose-interrupt-budget))
+      ('stranded
+       (message
+        "Agent session is gone -- prompt NOT sent; it is on the kill ring%s"
+        (if live "" " (session buffer killed)"))))
+    outcome))
+
+(defun decknix--compose-interrupt-then-deliver (target input compose-buf)
+  "Interrupt TARGET, then deliver INPUT once the turn ends; finish COMPOSE-BUF.
+COMPOSE-BUF is consumed only when INPUT was sent or queued, so a session
+that went away leaves the text where the user typed it.  The compose buffer
+stays open during the wait rather than closing up front: closing first is
+what made a refused send look like it had gone."
+  (when (buffer-live-p target)
+    (with-current-buffer target
+      (when (fboundp 'agent-shell-interrupt)
+        (let ((agent-shell-confirm-interrupt nil))
+          (agent-shell-interrupt)))))
+  (decknix--compose-wait-not-busy
+   target
+   (lambda ()
+     (unless (eq 'stranded
+                 (decknix--compose-deliver-after-interrupt target input))
+       (decknix--compose-finish-buffer compose-buf)))))
+
 (defun decknix-agent-compose-submit ()
   "Submit the compose buffer content to the agent-shell.
 If the agent is busy, offers three options:
@@ -774,21 +853,16 @@ interrupt."
                   (setq decknix--compose-queue-release t))
                 (setq input nil))
                (_ nil)))
-           (with-current-buffer target
-             (when (fboundp 'agent-shell-interrupt)
-               (let ((agent-shell-confirm-interrupt nil))
-                 (agent-shell-interrupt))))
-           ;; Close the compose buffer now so the user sees the
-           ;; input depart; the actual submit fires from the wait
-           ;; callback once the agent has acked the interrupt.
-           (decknix--compose-finish)
-           (decknix--compose-wait-not-busy
-            target
-            (lambda ()
-              ;; Nil input means `last' put this message in the queue; the
-              ;; poller owns the send from here.
-              (when input
-                (decknix--compose-submit-after-wait target input)))))
+           (if input
+               (decknix--compose-interrupt-then-deliver
+                target input (current-buffer))
+             ;; `last' put this message in the queue, so the queue poller
+             ;; owns the send and the compose buffer is already safe to close.
+             (with-current-buffer target
+               (when (fboundp 'agent-shell-interrupt)
+                 (let ((agent-shell-confirm-interrupt nil))
+                   (agent-shell-interrupt))))
+             (decknix--compose-finish)))
           ('submit
            (unless (and (buffer-live-p target)
                         (get-buffer-process target)
@@ -831,44 +905,19 @@ After interrupting, you can compose your message and submit with
 Use this when the agent is processing and you want to interject immediately
 rather than waiting for the current response to complete.
 
-The submit waits on the agent's interrupt acknowledgement (via
-`decknix--compose-wait-not-busy') before calling
-`shell-maker-submit', so the new prompt lands AFTER the
-\"[interrupted]\" marker in the buffer.  The compose buffer is
-closed/cleared from the wait callback, AFTER the submit, not
-before."
+The submit waits for the interrupted turn to end (via
+`decknix--compose-wait-not-busy') so the new prompt lands AFTER the
+\"[interrupted]\" marker.  A turn still running when the wait gives up gets
+the prompt queued first instead of dropped; see
+`decknix--compose-interrupt-then-deliver'."
   (interactive)
   (let ((input (string-trim (buffer-string)))
-        (target decknix--compose-target-buffer)
-        (compose-buf (current-buffer)))
+        (target decknix--compose-target-buffer))
     (if (string-empty-p input)
         (user-error "Empty prompt — nothing to submit")
       (decknix--compose-stash-input input)
-      ;; Interrupt the agent first.
-      (when (buffer-live-p target)
-        (with-current-buffer target
-          (when (fboundp 'agent-shell-interrupt)
-            (let ((agent-shell-confirm-interrupt nil))
-              (agent-shell-interrupt)))))
-      ;; Wait for the busy flag to clear (or the safety-net timeout)
-      ;; before submitting; then close the compose buffer.  Lexical
-      ;; binding captures `target' / `input' / `compose-buf' cleanly
-      ;; -- the eval/quote dance the old `run-at-time' needed is gone.
-      (decknix--compose-wait-not-busy
-       target
-       (lambda ()
-         (if (decknix--compose-submit-after-wait target input)
-             ;; Sent: consume the compose buffer as before.
-             (when (buffer-live-p compose-buf)
-               (with-current-buffer compose-buf
-                 (decknix--compose-finish)))
-           ;; Refused -- almost always the interrupt never landed.  KEEP
-           ;; the compose buffer and say so.  Closing it here is what made
-           ;; the prompt look like it vanished; the text is also on the
-           ;; kill ring via `decknix--compose-stash-input', but nothing
-           ;; told the user that.
-           (message
-            "Interrupt did not land — prompt NOT sent, left in the compose buffer (also on the kill ring)")))))))
+      (decknix--compose-interrupt-then-deliver
+       target input (current-buffer)))))
 
 (defun decknix-agent-compose-cancel ()
   "Cancel/clear the compose buffer without submitting.

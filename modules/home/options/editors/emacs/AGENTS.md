@@ -790,9 +790,12 @@ and `:supports-workspace-root`.
 - **History navigation**: `M-p`/`M-n` cycle through the **current session's**
   prompts only (from `comint-input-ring`). `M-P`/`M-N` (shifted) cycle through
   **all sessions** (current first, then on-demand from saved session files).
-- **Interrupt-and-submit** (`C-c k C-c`): Interrupts the agent, then submits
-  the compose buffer after a 0.3s delay. The compose buffer stays visible until
-  the submit fires (not closed prematurely).
+- **Interrupt-and-submit** (`C-c k C-c`, or `C-c C-c` then `i` on a busy
+  agent): interrupts the agent, waits for the interrupted turn to end
+  (`decknix-compose-interrupt-budget`, 10s), then submits. A turn still busy
+  at the budget gets the prompt queued first and released, so it sends when
+  the turn ends; it is never dropped. The compose buffer stays visible until
+  the prompt is sent or queued, and is kept if the session has gone.
 
 ### Unified Header-Line
 Every agent-shell buffer displays a persistent header-line combining:
