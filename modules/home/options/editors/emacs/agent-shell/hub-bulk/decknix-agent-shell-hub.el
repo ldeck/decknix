@@ -102,6 +102,7 @@
 (declare-function decknix--hub-mention-filter-normalize "decknix-hub-mention-bot")
 (declare-function decknix--hub-show-bots-label "decknix-hub-mention-bot")
 (declare-function decknix--hub-show-bots-normalize "decknix-hub-mention-bot")
+(declare-function decknix-hub-toggle-show-not-mine "decknix-hub-attention-filter")
 ;; Attention-filter cluster (PR B.33) -- engine + toggle commands
 ;; live in `decknix-hub-attention-filter'.  Declared up here because
 ;; the transient suffixes earlier in this file (line ~480 onward)
@@ -1070,8 +1071,20 @@ Built during the paint in progress, or younger than the TTL."
       (< (- now decknix--hub-review-session-snapshot-at)
          decknix--hub-review-session-snapshot-ttl)))
 
+(defun decknix--hub-session-linked-pr-keys (conv-key)
+  "Return CONV-KEY's explicitly linked PRs as owner/repo#number keys."
+  (when conv-key
+    (delq nil
+          (mapcar (lambda (link)
+                    (unless (equal (decknix--agent-pr-url-accessor link "type") "repo")
+                      (when-let* ((parsed (decknix--agent-pr-parse-url
+                                          (decknix--agent-pr-url-accessor link "url"))))
+                        (downcase (format "%s/%s#%s"
+                                          (nth 0 parsed) (nth 1 parsed) (nth 2 parsed))))))
+                  (decknix--agent-linked-prs conv-key)))))
+
 (defun decknix--hub-review-session-snapshot ()
-  "Return the live agent sessions as (BUFFER-NAME TAGS REVIEW-PR) triples.
+  "Return live sessions as (NAME TAGS REVIEW-PR STATE WORKSPACE KEY LINKED-PRS).
 
 Built once and memoised, because the naive shape of the caller is a
 nested loop: every Request row asked every session whether it covered
@@ -1111,7 +1124,8 @@ O(requests x sessions) pure comparisons; `covers-p' itself is ~3us."
                                  ;; PRs beneath it instead of listing them in a
                                  ;; separate section with no stated relation.
                                  (bound-and-true-p decknix--agent-session-workspace)
-                                 ck)))))
+                                 ck
+                                 (decknix--hub-session-linked-pr-keys ck))))))
                    (agent-shell-buffers)))))
     ;; The states were just computed; recording them here is what lets the
     ;; attention jump say how long each session has been waiting.

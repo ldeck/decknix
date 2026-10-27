@@ -628,6 +628,13 @@ no PRs at all."
            (decknix-session-assoc-created
             (buffer-local-value 'decknix--agent-broker-key buf))))))
 
+(defun decknix--layout-pr-linked-p (pr linked)
+  "Return non-nil when PR is explicitly assigned in LINKED."
+  (and (plist-get pr :repo) (plist-get pr :number)
+       (member (downcase (format "%s#%s"
+                                 (plist-get pr :repo) (plist-get pr :number)))
+               linked)))
+
 (defun decknix--layout-pr-created-p (pr created)
   "Return non-nil when PR is one of CREATED (`owner/repo#N\=' strings)."
   (and created (plist-get pr :repo) (plist-get pr :number)
@@ -754,7 +761,8 @@ until a test caught it."
                          (* 7 (sxhash-equal (nth 3 sess)))
                          (sxhash-equal
                           (decknix--layout-session-observed-roots sess))
-                         (* 3 (sxhash-equal (decknix--layout-session-created-prs sess)))))))
+                         (* 3 (sxhash-equal (decknix--layout-session-created-prs sess)))
+                         (* 11 (sxhash-equal (nth 6 sess)))))))
     (dolist (r wip-repos)
       (setq h (logxor (* 31 h)
                       (+ (* 131 (sxhash-equal (alist-get 'repo r)))
@@ -864,7 +872,8 @@ which would hide the sharing."
                                                 wts)))
                     (prs (seq-filter
                           (lambda (p)
-                            (or (and (plist-get p :branch)
+                            (or (decknix--layout-pr-linked-p p (nth 6 session))
+                                (and (plist-get p :branch)
                                      (member (plist-get p :branch) branches))
                                 ;; A PR this session raised is its work for as
                                 ;; long as the PR is open, however long ago.

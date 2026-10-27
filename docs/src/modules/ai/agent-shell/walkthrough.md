@@ -151,6 +151,11 @@ links a PR.
 {dm}Created:{/} 2026-07-08 09:12   {dm}Modified:{/} 2026-07-08 13:47</pre>
 <p class="sb-cap">Tags, workspace, model, permission-mode and linked PRs all persist per-conversation and survive resume/fork.</p>
 
+Link an authored PR with `C-c s l` when a different session takes over its work.
+The session-first sidebar then nests that specific PR under the current session,
+even if the original creator has closed and the new session works from the
+workspace root. A link records current coverage, not PR authorship.
+
 ## Copy a region as Slack / HTML / PDF
 
 <span class="keys"><kbd>C-c x s</kbd></span>

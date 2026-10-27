@@ -438,6 +438,19 @@ between a session's workspace and a PR number."
     (should (equal '(20511) (mapcar (lambda (p) (plist-get p :number))
                                     (plist-get row :prs))))))
 
+(ert-deftest decknix-layout--explicit-pr-link-claims-a-different-repo ()
+  "A workspace-root session can own a PR without claiming the whole repo."
+  (let* ((session (list "*Claude: tenantco/agency-contact*" '("tenantco") nil
+                        "ready" "/w" "conv" '("exampleowner/widget#20511")))
+         (tree (decknix--layout-wip-tree-1
+                (list session) decknix-layout-test--wip-repos nil))
+         (row (car (plist-get tree :sessions))))
+    (should (equal '(20511) (mapcar (lambda (p) (plist-get p :number))
+                                    (plist-get row :prs))))
+    (should (equal '(21300 57)
+                   (mapcar (lambda (p) (plist-get p :number))
+                           (plist-get (plist-get tree :dormant) :prs))))))
+
 (ert-deftest decknix-layout--workspace-match-ignores-a-trailing-slash ()
   "The audit writes some paths with a trailing slash and some without; the
 plain compare is the bug that once hid `decknix-config' from the picker."
@@ -1498,6 +1511,14 @@ is the failure the provenance marks exist to make visible."
              (a (decknix--layout-wip-tree sess nil nil)))
         (setq observed '("/w/a"))
         (should-not (eq a (decknix--layout-wip-tree sess nil nil)))))))
+
+(ert-deftest decknix-layout--wip-tree-rebuilds-when-a-pr-link-changes ()
+  (let ((decknix--layout-wip-memo nil)
+        (session (list "*Claude: tenantco/agency-contact*" '("tenantco") nil
+                       "ready" "/w" "conv" nil)))
+    (let ((before (decknix--layout-wip-tree (list session) nil nil)))
+      (setf (nth 6 session) '("exampleowner/widget#20511"))
+      (should-not (eq before (decknix--layout-wip-tree (list session) nil nil))))))
 
 (ert-deftest decknix-layout--wip-tree-rebuilds-when-a-session-changes-state ()
   (let ((decknix--layout-wip-memo nil))

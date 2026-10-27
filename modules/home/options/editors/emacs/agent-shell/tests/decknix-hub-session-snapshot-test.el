@@ -72,5 +72,33 @@
       (decknix--hub-review-session-snapshot)
       (should (= 2 builds)))))
 
+(ert-deftest decknix-snapshot--linked-authored-prs-are-session-keys ()
+  (let ((buffer (generate-new-buffer " *linked-pr-snapshot*"))
+        (decknix--hub-review-session-snapshot nil)
+        (decknix--hub-review-session-snapshot-at 0))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local decknix--agent-conv-key "current"))
+          (cl-letf (((symbol-function 'agent-shell-buffers) (lambda () (list buffer)))
+                    ((symbol-function 'decknix--agent-tags-for-buffer) (lambda (_) nil))
+                    ((symbol-function 'decknix--agent-review-prs-for-conv-key)
+                     (lambda (_) nil))
+                    ((symbol-function 'decknix-agent-buffer-status) (lambda (_) "ready"))
+                    ((symbol-function 'decknix--agent-linked-prs)
+                     (lambda (_)
+                       '(((url . "https://github.com/ExampleOwner/widget/pull/21697")
+                          (type . "authored"))
+                         ((url . "https://github.com/ExampleOwner/widget/pull/21640")
+                          (type . "repo")))))
+                    ((symbol-function 'decknix--agent-pr-url-accessor)
+                     (lambda (item field) (alist-get (intern field) item)))
+                    ((symbol-function 'decknix--agent-pr-parse-url)
+                     (lambda (_) '("ExampleOwner" "widget" 21697)))
+                    ((symbol-function 'decknix-attention-observe) (lambda (&rest _) nil)))
+            (should (equal '("exampleowner/widget#21697")
+                           (nth 6 (car (decknix--hub-review-session-snapshot)))))))
+      (kill-buffer buffer))))
+
 (provide 'decknix-hub-session-snapshot-test)
 ;;; decknix-hub-session-snapshot-test.el ends here
