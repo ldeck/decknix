@@ -40,7 +40,7 @@ Reverse coupling (decknix knows deckmacs symbols):
 - `modules/darwin/emacs.nix:151`: evaluates `deckmacs--loaded-store-path` and `deckmacs--resolve-current-default-el`.
 - `pkgs/nix-open/src/main.rs:44,306`: polls emacsclient.
 
-Other: `oncall-sidebar` (org tool) is called from `dos-board/decknix-dos-board.el:53` and `support-dashboard/decknix-support-dashboard.el:825`, and calls back via emacsclient (`:907`). These are org-specific and belong behind the org overlay.
+Other: an org-specific CLI is called from `dos-board/decknix-dos-board.el:53` and `support-dashboard/decknix-support-dashboard.el:825`, and calls back via emacsclient (`:907`). These are org-specific and belong behind the org overlay.
 
 ## 4. Identifier naming
 

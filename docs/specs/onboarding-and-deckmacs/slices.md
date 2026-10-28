@@ -7,6 +7,8 @@ Legend:
 - **External**: actions outside a local commit (repo creation, publishing, pushes). Each needs the user.
 - **Approval**: a human decision required before the slice starts.
 
+All approval decisions were taken on 2026-10-29 (spec section 13); "Decision" below names the one each slice applies.
+
 Dependency summary:
 
 ```
@@ -17,30 +19,39 @@ Dependency summary:
                    │        └─► 8 brew audit  │
                    │                          │
                    └─► 7 overlay toggles ─────┘
-5 deckmacs extract ─► 6 rename + state migration ─► 11 default Emacs + optional deckmacs
-                                                     │
-                                                     └─► 12 contract hardening
+0 relocation ─► 5a org code out ─► 5 deckmacs extract ─► 6 rename + state migration
+                                                                │
+                                                                ├─► 11 default Emacs + optional deckmacs
+                                                                │
+                                                                └─► 12 contract hardening
 ```
+
+## 0. Workspace relocation
+
+- Repo: the owner's machine and Nix-managed config; decknix and overlay docs and hooks. External: none beyond local moves. Decision: none.
+- Change: move the decknix checkout to the personal workspace and the overlay checkout to a directory named after its repository, create the deckmacs checkout path, and update every path reference and identity rule (spec section 14). Planned separately; this slice records only the outcome.
+- Acceptance: spec section 14 criteria.
+- Verify: identity resolution per checkout; pre-commit build guard passes in both framework repos at the new paths; `git worktree list` clean.
 
 ## 1. Docs freshness audit and generators
 
 - Repo: decknix. External: none (docs publish happens on the next push, which needs the user). Approval: none.
-- Change: replace the hand list in `docs/generate-options.nix` with the real module tree (home and darwin); generate the CLI reference from `clap`; fix the 11 stale pages in `inventory/current-state.md` section 7 (including the 404 install URL, by pointing at `bin/bootstrap.sh` until slice 3 lands); delete or redirect the orphan root pages; run `mdbook build`, options generation for the pinned nixpkgs, and a link check on PRs as well as `main`.
+- Change: replace the hand list in `docs/generate-options.nix` with the real module tree (home and darwin); generate the CLI reference from `clap`; fix the 11 stale pages in `inventory/current-state.md` section 7 (including the 404 install URL, by pointing at `bin/bootstrap.sh` until slice 3 lands, and the stale warning that the Determinate installer may be incompatible with nix-darwin, decision 3); delete or redirect the orphan root pages; run `mdbook build`, options generation for the pinned nixpkgs, and a link check on PRs as well as `main`.
 - Acceptance: every option declared under `decknix*` in home and darwin modules appears in the generated JSON; CLI reference matches `decknix --help` for every subcommand; link check passes; no listed stale discrepancy remains.
 - Verify: CI job output; a deliberate drift (remove one option from docs) fails the check locally.
 
 ## 2. Adoption state and tier-aware defaults
 
-- Repo: decknix. External: none. Approval: open decision 7 (tier boundaries).
-- Change: `decknix.adoption.*` option tree; `mkSystem` reads `~/.config/decknix/adoption.toml` with `builtins.fromTOML` when present; module defaults become `mkDefault (tierAtLeast N)`; absent file means current behaviour ("full"); `decknix.role` becomes an obsolete alias onto tiers; `/etc/decknix/manifest.json` generated from the active generation (launchd labels, `/etc` files, agent-sync targets, leftover paths); fix the template `settings.nix` role comment and `welcomeText`.
+- Repo: decknix. External: none. Decision 7: repo-sync and session-gc are tier 3, Gortex is tier 2.
+- Change: `decknix.adoption.*` option tree (TOML, `adoption.toml`); `mkSystem` reads `~/.config/decknix/adoption.toml` with `builtins.fromTOML` when present; module defaults become `mkDefault (tierAtLeast N)`; absent file means current behaviour ("full"); `decknix.role` becomes an obsolete alias onto tiers; `/etc/decknix/manifest.json` generated from the active generation (launchd labels, `/etc` files, agent-sync targets, leftover paths); fix the template `settings.nix` role comment and `welcomeText`.
 - Acceptance: the reference machine's system derivation is byte-identical with no adoption file; each tier fixture (0 to 4 where applicable) evaluates; manifest lists every launchd label in `inventory/current-state.md` section 5 that the generation enables.
 - Verify: `nix build` of the reference config before and after (compare out paths); eval tests per tier fixture as flake checks.
 
 ## 3. Installer v2 with tiers, plan screen and dry-run
 
-- Repo: decknix. External: none until docs publish. Approval: open decisions 3 (Nix flavour), 5 (Linux scope for tier 0), 10 (tier 0 token).
+- Repo: decknix. External: none until docs publish. Decisions 3 (upstream Nix via the Determinate installer), 5 (Linux gets tier 0 only), 6 (tier 0 logic as a library in decknix), 10 (token by env var only).
 - Depends on: 2.
-- Change: `bin/install.sh` (tier 0 plus handoff; `bin/bootstrap.sh` becomes a shim); `decknix install` and `decknix adopt` in the CLI (tier and component prompts, plan screen, `--dry-run`, `--yes`, `--tier`, `--with`, `--without`, `--org`, `--no-verify`); generated user flake with commented personal override files; backup index; `decknix doctor` verify; login hints; detection of existing installs (writes an adoption file reflecting current state, plan shows no changes).
+- Change: `bin/lib/tier0.sh` (sourceable tier 0 library with a stable function interface) and `bin/install.sh` (tier 0 via the library, plus handoff; `bin/bootstrap.sh` becomes a shim); pinned installer version with the flag that selects upstream Nix (verify it still exists); `decknix install` and `decknix adopt` in the CLI (tier and component prompts, plan screen, `--dry-run`, `--yes`, `--tier`, `--with`, `--without`, `--org`, `--no-verify`); generated user flake with commented personal override files; backup index; `decknix doctor` verify; login hints; detection of existing installs (writes an adoption file reflecting current state, plan shows no changes).
 - Acceptance: whole-script `install.sh` tests (stubbed PATH, temp HOME) cover idempotent re-run, single nix.conf marker, no changes without consent, piped run, refusal on unexpected directory; Rust golden tests for plan output from fixtures; existing-install detection produces an empty plan on the reference machine (`--dry-run`).
 - Verify: test suites; `decknix install --dry-run` on the reference machine; a manual tier 0 run in a throwaway macOS user account.
 
@@ -52,17 +63,25 @@ Dependency summary:
 - Acceptance: plan for `--all` on a fixture of the reference machine lists every artifact class in the inventory in the recommended order; secrets and `local/` never appear as removals without `--purge-secrets`; edited agent-sync copies go to backup, not deletion.
 - Verify: Rust fixture tests; end-to-end run is slice 9.
 
+## 5a. Org-specific code leaves the Emacs tree
+
+- Repo: decknix and overlay (coupled). External: push overlay (user). Decision 1 (no organisation association in deckmacs).
+- Depends on: 0. Must land before 5.
+- Change: move the org-only Emacs packages (support dashboard, on-support board, support workflow and their tests) into the overlay as tested packages (spec section 15, option (c)); replace org defaults in generic packages with empty customisation points and neutral examples; neutralise org names in comments, tests and doc fixtures; build the private term list used by the slice 5 history scrub and keep it outside the public repos.
+- Acceptance: a grep of the Emacs tree, its docs pages and `modules/darwin/emacs.nix` for the private term list finds nothing; the reference machine still gets the same org Emacs features through the overlay; all ERT suites pass in both repos.
+- Verify: full system build; ERT counts before and after (moved tests counted in the overlay).
+
 ## 5. deckmacs repository extraction with history
 
-- Repo: new `ldeck/deckmacs`, then decknix. External: **create `ldeck/deckmacs` on GitHub and push** (user). Approval: open decision 1 (visibility, licence).
-- Depends on: none (can run in parallel with 1 to 4), but must not overlap slice 6 or any in-flight Emacs work in decknix (one writer).
-- Change: `git filter-repo` on a fresh clone keeping every historical path of the Emacs tree, `modules/darwin/emacs.nix`, `EMACS_SETUP.md` and the Emacs docs pages, with `--path-rename` into the deckmacs layout; deckmacs flake exporting `homeManagerModules.default`, `darwinModules.daemon`, packages and ERT checks, with option names unchanged (`programs.emacs.decknix.*`) for now; decknix gains a `deckmacs` flake input and its emacs module imports it; decknix removes the tree in one commit naming the split commit.
-- Acceptance: reference system derivation unchanged in behaviour (same Emacs packages and config, out paths may differ only by source path); `git log --follow` in deckmacs reaches the earliest Emacs commit; `nix flake check` in deckmacs runs all 3,356 ERT tests.
+- Repo: new `ldeck/deckmacs`, then decknix. External: **create `ldeck/deckmacs` on GitHub (public, MIT) and push** (user). Decision 1.
+- Depends on: 0 and 5a (can otherwise run in parallel with 1 to 4), but must not overlap slice 6 or any in-flight Emacs work in decknix (one writer).
+- Change: `git filter-repo` on a fresh clone keeping every historical path of the Emacs tree, `modules/darwin/emacs.nix`, `EMACS_SETUP.md` and the Emacs docs pages, with `--path-rename` into the deckmacs layout, `--invert-paths` for org-only paths, and `--replace-text` / `--replace-message` from the private term list (spec section 6.5); deckmacs flake exporting `homeManagerModules.default`, `darwinModules.daemon`, packages and ERT checks, with option names unchanged (`programs.emacs.decknix.*`) for now; decknix gains a `deckmacs` flake input and its emacs module imports it; decknix removes the tree in one commit naming the split commit.
+- Acceptance: `git log --all -p` and `git log --all --format=%B` in deckmacs match none of the private terms; reference system derivation unchanged in behaviour (same Emacs packages and config, out paths may differ only by source path); `git log --follow` in deckmacs reaches the earliest Emacs commit; `nix flake check` in deckmacs runs all 3,356 ERT tests.
 - Verify: build both ways and diff `default.el`; ERT counts before and after.
 
 ## 6. Rename `decknix-` to `deckmacs-` with aliases, and state migration
 
-- Repo: deckmacs, decknix (CLI hook), overlay (coupled Elisp). External: push deckmacs. Approval: open decision 8 (alias lifetime).
+- Repo: deckmacs, decknix (CLI hook), overlay (coupled Elisp). External: push deckmacs. Decision 8 (aliases and old state paths kept for two releases).
 - Depends on: 5.
 - Change, in order inside the slice: (a) hot-reload matches both prefixes (`deckmacs.nix:112,146`) and the CLI post-switch reload becomes a hook registered via `extensions.json` (removes `cli/src/main.rs:1015-1116` and `modules/darwin/emacs.nix:151` knowledge of deckmacs symbols); (b) generated rename map and alias file (public symbols get obsolete aliases, faces get `face-alias`, old feature names get shim files, private symbols renamed plainly); integration code grouped under `deckmacs-decknix-*`; (c) Nix options to `programs.deckmacs.*` with `mkRenamedOptionModule`; (d) `deckmacs-config-directory` and `deckmacs-state-directory`, move-with-marker migration and fallback reads for Emacs-only files, `deckmacs-migrate-state` dry-run; shared files untouched; (e) overlay Elisp and option references updated in the same coupled change.
 - Acceptance: zero `decknix-` definitions left in deckmacs except aliases and shims; existing personal and overlay config evaluates with only rename warnings; a profile copied from the reference machine migrates every Emacs-only file in `inventory/emacs-footprint.md` section 5 with nothing lost (file count and checksum match); hot-reload works across the rename.
@@ -78,7 +97,7 @@ Dependency summary:
 
 ## 8. Homebrew audit helper
 
-- Repo: decknix. External: none. Approval: open decision 4 (audit only, or also declarative `homebrew`).
+- Repo: decknix. External: none. Decision 4 (audit only).
 - Depends on: 3 (shares the plan rendering).
 - Change: `decknix brew audit` (read-only) classifying brew leaves and casks as duplicate, migratable (with the decknix option or package), or keep; curated mapping file plus nixpkgs and nix-casks lookups; prints but never runs `brew uninstall`.
 - Acceptance: fixture of brew output yields stable classification; command makes no changes (asserted by tests stubbing `brew`).
@@ -102,7 +121,7 @@ Dependency summary:
 
 ## 11. Simple default Emacs and optional deckmacs
 
-- Repo: decknix, template. External: none. Approval: open decision 2 (default flavour).
+- Repo: decknix, template. External: none. Decision 2 (`basic` is the default; tier 4 adds deckmacs).
 - Depends on: 5, 6.
 - Change: `decknix.editors.emacs.flavour = none | basic | deckmacs`; `basic` module in decknix; decknix drops its hard `deckmacs` input; the generated user flake adds the deckmacs input only for tier 4; existing installs keep deckmacs via their adoption file.
 - Acceptance: tier 1 to 3 builds fetch no deckmacs source; reference machine unchanged; switching flavour up and down is clean.
@@ -110,18 +129,8 @@ Dependency summary:
 
 ## 12. Integration contract hardening
 
-- Repo: decknix and deckmacs. External: push both. Approval: open decision 9 (contract versioning).
+- Repo: decknix and deckmacs. External: push both. Decision 9 (semver contract, checked in both builds).
 - Depends on: 6, 11.
 - Change: published contract doc and JSON schemas for shared files and CLI `--json` outputs; generated `decknix-contract.json` with the shared constants; contract tests in both repos; deckmacs integration toggles default on only when the decknix CLI is present.
 - Acceptance: a changed constant or schema in either repo fails the other's check; deckmacs builds and runs standalone with integrations off.
 - Verify: CI in both repos; standalone `emacs-deckmacs` package smoke test.
-
-## Open decisions blocking slices
-
-- Slice 2: tier boundaries (7).
-- Slice 3: Nix flavour (3), Linux scope (5), tier 0 token (10); optionally shared installer library (6).
-- Slice 5: deckmacs visibility and licence (1).
-- Slice 6: alias lifetime (8).
-- Slice 8: Homebrew coexistence (4).
-- Slice 11: default Emacs (2).
-- Slice 12: contract versioning (9).
