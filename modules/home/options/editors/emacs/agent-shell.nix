@@ -2762,6 +2762,44 @@ let
     ];
   };
 
+  # Explicit-approval dispatcher (receiver half).  The `decknix-agent-dispatch'
+  # CLI drops a private request file naming ONE full session UUID; this module
+  # delivers it at most once through `decknix--compose-submit-after-wait' and
+  # writes a receipt.  Installing it is inert: no timer, watch or directory
+  # exists until the user turns on `decknix-agent-dispatch-mode'.  The submit,
+  # session-id and buffer lookups are injectable seams, so the suite never
+  # reaches a real session.  See the Emacs AGENTS.md "Agent dispatch" section.
+  decknix-agent-dispatch-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-dispatch";
+    src = ./agent-shell/dispatch;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-agent-dispatch-test.el"
+    ];
+  };
+
+  # Sender half.  The shell test runs in the build against a throwaway state
+  # dir, so a red CLI test fails the system build just like an ERT failure.
+  decknix-agent-dispatch-cli =
+    let
+      cliInputs = with pkgs; [ coreutils jq findutils ];
+      app = pkgs.writeShellApplication {
+        name = "decknix-agent-dispatch";
+        runtimeInputs = cliInputs;
+        text = lib.concatStringsSep "\n"
+          (lib.drop 1 (lib.splitString "\n"
+            (builtins.readFile ./agent-shell/scripts/decknix-agent-dispatch.sh)));
+      };
+    in
+    pkgs.runCommand "decknix-agent-dispatch-checked"
+      { nativeBuildInputs = cliInputs ++ [ pkgs.diffutils pkgs.bash ]; }
+      ''
+        bash ${./agent-shell/scripts/decknix-agent-dispatch-test.sh} \
+          ${app}/bin/decknix-agent-dispatch
+        mkdir -p $out/bin
+        ln -s ${app}/bin/decknix-agent-dispatch $out/bin/decknix-agent-dispatch
+      '';
+
   # PR B-Bulk.3a: bulk extraction of the always-loaded core (always-1
   # + always-tail sub-heredocs).  Verbatim move of 254 declarations
   # (~4,800 lines), isolated in its own `main-bulk/' src dir to keep
@@ -3374,6 +3412,7 @@ in
         # safe to install now — nothing routes through them yet.
         decknix-agent-broker
         socat
+        decknix-agent-dispatch-cli
         (writeShellApplication {
           name = "decknix-agent-broker-attach";
           runtimeInputs = [ socat decknix-agent-broker coreutils ];
@@ -3615,6 +3654,7 @@ in
         ++ (optional cfg.context.enable decknix-agent-shell-context-el)
         ++ (optional cfg.hub.enable decknix-agent-shell-hub-el)
         ++ [ decknix-picker-selections-el ]
+        ++ [ decknix-agent-dispatch-el ]
         ++ [ decknix-agent-shell-main-el ]
         ++ (optional cfg.workspace.enable decknix-worktree-picker-el)
         ++ (optional cfg.workspace.enable decknix-agent-shell-workspace-el);
@@ -3937,6 +3977,10 @@ in
         (require 'decknix-agent-session-bulk-send)
         (declare-function decknix--session-bulk-send-plan
                           "decknix-agent-session-bulk-send")
+        ;; Explicit-approval dispatcher: loading only defines functions and the
+        ;; `decknix-agent-dispatch-mode' command.  It stays OFF until the user
+        ;; runs `M-x decknix-agent-dispatch-mode'; nothing here arms it.
+        (require 'decknix-agent-dispatch)
         (require 'decknix-agent-format)
         (declare-function decknix--agent-session-time-ago "decknix-agent-format")
         (declare-function decknix--agent-session-time-compact "decknix-agent-format")

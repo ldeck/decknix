@@ -59,6 +59,7 @@
 - [decknix CLI](./cli/overview.md)
 - [Core Commands](./cli/core-commands.md)
 - [Extensions](./cli/extensions.md)
+- [Agent dispatch](./cli/agent-dispatch.md)
 
 # Guides
 

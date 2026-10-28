@@ -1212,6 +1212,62 @@ Notes:
 | `C-c s C-n` | `decknix-agent-net-error-reset-all` | reset only — for when you would rather steer them yourself |
 | `C-c s M-n` | `decknix-agent-net-error-list` | report which sessions died, and on what |
 
+### Agent dispatch (`agent-shell/dispatch/`, `decknix-agent-dispatch` CLI)
+
+Explicit-approval hand-off of ONE prompt to ONE live session from outside
+Emacs (for example a coordinator agent sending to a champion session). Docs:
+`docs/src/cli/agent-dispatch.md`.
+
+Channel is a private directory, never `emacsclient -e`, a second ACP
+attachment, or `claude --resume` against a running session:
+
+```
+~/.local/state/decknix/agent-dispatch/   (0700, checked at arm time)
+  pending/   <id>.json     CLI writes (tmp file + hard link, 0600)
+  inflight/  <id>.json     receiver claims by atomic rename
+             <id>.attempt  marker written just before the submit call
+  receipts/  <id>.json     one per request, never overwritten, no prompt text
+```
+
+Rules the code and tests pin (do not weaken):
+
+- **Inert on install.** The package defines functions and a global minor mode.
+  No timer, file watch or directory exists until someone runs
+  `M-x decknix-agent-dispatch-mode`. Nothing arms it automatically.
+- **Exact identity.** `--session` must be the full lowercase UUID; a prefix,
+  uppercase or trailing junk is refused. Zero or several live buffers holding
+  it, or a different buffer than the one claimed, is refused. There is no
+  broadcast and no multi-session flag.
+- **At most once.** pending -> inflight (atomic claim) before anything else,
+  `.attempt` marker before submit, receipt written before inflight is removed,
+  no retry anywhere. Crash recovery settles leftovers as `unknown` (marker
+  seen) or `not-sent` (never attempted). A submit error or a submit with no
+  busy flag afterwards is `unknown`; `accepted` needs a returned-true submit
+  AND `shell-maker--busy` set afterwards.
+- **Fail closed.** No process, unsent text at the prompt (`process-mark` to
+  `point-max`), stale/future/over-long request, request created before the mode
+  was armed, symlink / loose mode / wrong owner / oversized request file,
+  reserved shell-maker words (`help`, `clear`, `config`), any internal error.
+- **Busy waits, never interrupts.** A busy session keeps the request in
+  flight until idle or the request's own expiry (default 120 s, max 900 s),
+  then `expired`. `agent-shell-interrupt` is never called.
+- **Reused seams.** Delivery goes through `decknix--compose-submit-after-wait`
+  (live + process + not busy, then `shell-maker-submit`); session ids come from
+  `decknix--agent-buffer-session-id`. Both are injectable variables so the
+  ERT suite replaces them and turns the real entry points into errors.
+- **Main-thread cost.** One 2 s timer (plus file-notify to scan sooner) that
+  lists a tiny directory and parses at most 8 small JSON files; no subprocess,
+  no network, and submit defers while `input-pending-p`.
+
+Receipt states: `accepted`, `rejected`, `expired`, `not-sent`, `unknown`
+(plus `cancelled`/`expired` written by the CLI). Inspect with
+`decknix-agent-dispatch status ID` (exit 0 accepted, 10 waiting, 11 not
+delivered, 12 unknown, 2 no such request).
+
+Tests: `tests/decknix-agent-dispatch-test.el` (ERT) and
+`scripts/decknix-agent-dispatch-test.sh` (CLI, run inside the Nix build of
+`decknix-agent-dispatch-cli`). Neither can reach a real session.
+
 ### Multi-Session Concurrency
 Multiple agent-shell sessions run **independently and concurrently**. Each
 buffer has its own process. Switching away from a session does NOT pause it —
