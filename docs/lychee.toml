@@ -1,0 +1,29 @@
+# Link check for the built book (docs/book) and README.md, run in CI.
+# Offline-resolvable links must always pass; external links are checked too.
+
+max_retries = 3
+retry_wait_time = 5
+timeout = 30
+accept = ["200..=299", "429"]
+include_fragments = true
+
+exclude = [
+  # Local services that only exist on a configured machine.
+  '^https?://(localhost|127\.0\.0\.1)',
+  # The published site itself: on a PR the new pages are not deployed yet.
+  '^https://ldeck\.github\.io/decknix/',
+  # Edit links point at files on main and 404 for pages added in a PR.
+  '^https://github\.com/ldeck/decknix/edit/',
+  # Placeholder hosts used in examples.
+  '^https?://([a-z0-9-]+\.)*example\.(com|org)',
+]
+
+exclude_path = [
+  # mdBook output that is not authored content.
+  "docs/book/print.html",
+  "docs/book/searchindex.js",
+  "docs/book/toc.html",
+  "docs/book/404.html",
+  # Vendored font licences from the mdBook theme.
+  "docs/book/fonts/",
+]

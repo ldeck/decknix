@@ -44,7 +44,7 @@ decknix switch --override decknix=~/tools/decknix
 # Test decknix and your org-config together
 decknix switch \
   --override decknix=~/tools/decknix \
-  --override org-config=~/Code/my-org/decknix-config
+  --override my-org=~/Code/my-org/my-org-config
 ```
 
 Each `--override` becomes `--override-input <INPUT> path:<PATH>` on the

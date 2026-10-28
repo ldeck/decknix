@@ -22,6 +22,11 @@
     extraSpecialArgs ? {},
     # home.stateVersion
     stateVersion ? "24.05",
+    # Where personal overrides, identities and adoption state are read from.
+    # null means the user's real ~/.config/decknix (needs --impure). Docs
+    # generation and eval tests pass a directory inside the flake source so
+    # they evaluate purely and never see the evaluating machine's config.
+    configDir ? null,
   }:
   let
     decknix = inputs.decknix or (throw "mkSystem: inputs must include 'decknix'");
@@ -40,9 +45,9 @@
     merged = defaults // settings;
     inherit (merged) username hostname system role;
 
-    loader = decknix.lib.configLoader {
+    loader = decknix.lib.configLoader ({
       inherit lib username hostname system role;
-    };
+    } // lib.optionalAttrs (configDir != null) { inherit configDir; });
   in {
     darwinConfigurations."default" = nix-darwin.lib.darwinSystem {
       specialArgs = { inherit inputs; } // extraSpecialArgs;

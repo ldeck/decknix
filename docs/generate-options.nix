@@ -1,100 +1,140 @@
-# Generate options documentation for decknix modules.
+# Options reference for every decknix module, generated from the real module
+# tree rather than a hand-kept list.
 #
-# Usage:
-#   nix-build docs/generate-options.nix -A markdown -o docs/src/options-generated.md
-#   nix-build docs/generate-options.nix -A json     -o docs/options.json
+# The hand-kept list this replaces drifted: it missed 14 option-declaring home
+# modules and every darwin module. Evaluating the system exactly as a user's
+# flake does (through `mkSystem`, with the same auto-imported darwin and home
+# trees) means a new module is documented the moment it is imported, and the
+# coverage check below fails if a module declares options but is not imported.
 #
-{ pkgs ? import <nixpkgs> {} }:
+# Usage (from the repository root):
+#   nix build .#docs-options            # merged JSON for the docs hub page
+#   nix build .#checks.<system>.docs-options-coverage
+#
+{ pkgs, self, inputs }:
 
 let
   lib = pkgs.lib;
 
-  # Evaluate home-manager modules in isolation to extract their option declarations.
-  # We only need the option *declarations*, not the config values.
-  homeEval = lib.evalModules {
-    modules = [
-      # Import all home-manager modules from the framework
-      ../modules/home/options.nix
-      ../modules/home/options/cli/agent-sync.nix
-      ../modules/home/options/cli/auggie.nix
-      ../modules/home/options/cli/board.nix
-      ../modules/home/options/cli/extensions.nix
-      ../modules/home/options/cli/nix-github-auth.nix
-      ../modules/home/options/editors/profiles.nix
-      ../modules/home/options/editors/vim/whitespace.nix
-      ../modules/home/options/editors/vim/skim.nix
-      ../modules/home/options/editors/emacs/default.nix
-      ../modules/home/options/editors/emacs/agent-shell.nix
-      ../modules/home/options/editors/emacs/completion.nix
-      ../modules/home/options/editors/emacs/development.nix
-      ../modules/home/options/editors/emacs/editing.nix
-      ../modules/home/options/editors/emacs/http.nix
-      ../modules/home/options/editors/emacs/languages.nix
-      ../modules/home/options/editors/emacs/lsp.nix
-      ../modules/home/options/editors/emacs/magit.nix
-      ../modules/home/options/editors/emacs/org.nix
-      ../modules/home/options/editors/emacs/project.nix
-      ../modules/home/options/editors/emacs/treemacs.nix
-      ../modules/home/options/editors/emacs/ui.nix
-      ../modules/home/options/editors/emacs/undo.nix
-      ../modules/home/options/editors/emacs/welcome.nix
-      ../modules/home/options/wm/aerospace/default.nix
-      ../modules/home/options/wm/hammerspoon/default.nix
-      ../modules/home/options/wm/spaces.nix
+  # Evaluation target: the platform decknix supports for tiers 1 and above.
+  # Option declarations do not depend on the host running the docs build, so
+  # the Linux CI runner evaluates (never builds) the darwin system.
+  system = "aarch64-darwin";
+  docsUser = "docs";
 
-      # Minimal stubs for infrastructure options that modules set but don't declare.
-      # These are normally provided by home-manager / NixOS; we only need them
-      # so that evalModules doesn't error when config blocks set them.
-      ({ ... }: {
-        options.assertions = lib.mkOption {
-          type = lib.types.listOf lib.types.unspecified;
-          default = [];
-          internal = true;
-        };
-        options.warnings = lib.mkOption {
-          type = lib.types.listOf lib.types.str;
-          default = [];
-          internal = true;
-        };
-        options.home = lib.mkOption { type = lib.types.submodule {}; default = {}; };
-        options.xdg = lib.mkOption { type = lib.types.submodule {}; default = {}; };
+  evaluated = (self.lib.mkSystem {
+    inputs = inputs // { decknix = self; };
+    settings = { username = docsUser; hostname = "docs"; inherit system; };
+    configDir = ../tests/fixtures/config-empty;
+  }).darwinConfigurations.default;
 
-        # programs.emacs stubs (the decknix modules set these in their config blocks)
-        options.programs.emacs.enable = lib.mkOption { type = lib.types.bool; default = false; internal = true; };
-        options.programs.emacs.package = lib.mkOption { type = lib.types.package; default = pkgs.emacs; internal = true; };
-        options.programs.emacs.extraPackages = lib.mkOption { type = lib.types.functionTo (lib.types.listOf lib.types.package); default = _: []; internal = true; };
-        options.programs.emacs.extraConfig = lib.mkOption { type = lib.types.lines; default = ""; internal = true; };
+  darwinOptions = evaluated.options;
+  # The home-manager user is a submodule. Its bare type has no definitions, so
+  # option defaults that read config (home.stateVersion, the username) would
+  # fail; extend the type with the user's own definitions from mkSystem, the
+  # same modules the real system evaluates for that user.
+  homeOptions =
+    let
+      userType = darwinOptions.home-manager.users.type.nestedTypes.elemType;
+      userDefinitions = map (def: def.value.${docsUser})
+        (lib.filter (def: def.value ? ${docsUser})
+          darwinOptions.home-manager.users.definitionsWithLocations);
+      userIdentity = {
+        home.username = docsUser;
+        home.homeDirectory = "/Users/${docsUser}";
+      };
+    in
+    (userType.substSubModules
+      (userType.getSubModules ++ userDefinitions ++ [ userIdentity ])).getSubOptions [ ];
 
-        # programs.vim stubs
-        options.programs.vim.enable = lib.mkOption { type = lib.types.bool; default = false; internal = true; };
-        options.programs.vim.plugins = lib.mkOption { type = lib.types.listOf lib.types.package; default = []; internal = true; };
-        options.programs.vim.extraConfig = lib.mkOption { type = lib.types.lines; default = ""; internal = true; };
+  sourceRoot = toString self;
+  modulesRoot = "${sourceRoot}/modules/";
 
-        # programs.zsh stubs
-        options.programs.zsh.enable = lib.mkOption { type = lib.types.bool; default = false; internal = true; };
-        options.programs.zsh.shellAliases = lib.mkOption { type = lib.types.attrsOf lib.types.str; default = {}; internal = true; };
-      })
-    ];
-    specialArgs = { inherit pkgs; inherit (pkgs) lib; };
-  };
+  isOwnDeclaration = decl: lib.hasPrefix modulesRoot (toString decl);
+  ownedBy = opt: lib.any isOwnDeclaration opt.declarations;
+  isShown = opt: opt.visible == true || opt.visible == "shallow";
 
-  # Filter to only decknix-namespaced options (and programs.*.decknix.* extensions)
-  isDecknixOption = name:
-    lib.hasPrefix "decknix." name ||
-    builtins.match "programs\\.[^.]+\\.decknix\\..*" name != null;
+  # Declarations are rendered relative to modules/ because the hub page builds
+  # source links as `<repo>/blob/main/modules/<declaration>`.
+  relativeDeclaration = decl:
+    let d = toString decl; in
+    if lib.hasPrefix modulesRoot d then lib.removePrefix modulesRoot d else d;
 
-  optionsDoc = pkgs.nixosOptionsDoc {
-    options = homeEval.options;
+  mkDoc = options: pkgs.nixosOptionsDoc {
+    inherit options;
+    warningsAreErrors = false;
     transformOptions = opt: opt // {
-      visible = isDecknixOption opt.name;
+      visible = isShown opt && ownedBy opt;
+      declarations = map relativeDeclaration opt.declarations;
     };
   };
 
-in {
-  # CommonMark output for embedding in mdBook
-  markdown = optionsDoc.optionsCommonMark;
+  homeDoc = mkDoc homeOptions;
+  darwinDoc = mkDoc darwinOptions;
 
-  # JSON output for JS search UI
-  json = optionsDoc.optionsJSON;
+  docList = options:
+    lib.filter (opt: ownedBy opt && isShown opt && !opt.internal)
+      (lib.optionAttrSetToDocList options);
+
+  documentedFiles = lib.unique (map relativeDeclaration
+    (lib.concatMap (opt: lib.filter isOwnDeclaration opt.declarations)
+      (docList homeOptions ++ docList darwinOptions)));
+
+  # Every module file that declares a visible option must be reachable from
+  # the evaluated tree. A file that declares options but is never imported
+  # (or is only imported by a path the system never takes) shows up here.
+  declaringFiles =
+    let
+      nixFiles = lib.filter (f: lib.hasSuffix ".nix" (toString f))
+        (lib.filesystem.listFilesRecursive (self + "/modules"));
+      declares = f:
+        let text = builtins.readFile f; in
+        lib.hasInfix "mkOption" text || lib.hasInfix "mkEnableOption" text;
+    in
+    map relativeDeclaration (lib.filter declares nixFiles);
+
+  # Files that only declare internal or submodule-local options, so they
+  # legitimately contribute no visible top-level entry of their own.
+  coverageExemptions = [ ];
+
+  undocumentedFiles =
+    lib.subtractLists (documentedFiles ++ coverageExemptions) declaringFiles;
+
+in rec {
+  json = pkgs.runCommand "decknix-options.json" {
+    nativeBuildInputs = [ pkgs.jq ];
+  } ''
+    home=${homeDoc.optionsJSON}/share/doc/nixos/options.json
+    darwin=${darwinDoc.optionsJSON}/share/doc/nixos/options.json
+    # A module imported into both scopes (modules/common) declares the same
+    # option twice; that is one option. Different declarations under one name
+    # would make one of them invisible on the hub page, so they fail the build.
+    jq -S -n --slurpfile h "$home" --slurpfile d "$darwin" '
+      ($h[0] | map_values(. + {scope: "home"})) as $home
+      | ($d[0] | map_values(. + {scope: "darwin"})) as $darwin
+      | reduce ($darwin | to_entries[]) as $e ($home;
+          if has($e.key) then
+            if .[$e.key].declarations == $e.value.declarations
+            then .[$e.key].scope = "home+darwin"
+            else error("option \($e.key) is declared differently in home and darwin")
+            end
+          else .[$e.key] = $e.value
+          end)' > $out
+  '';
+
+  coverage = pkgs.runCommand "decknix-options-coverage" {
+    nativeBuildInputs = [ pkgs.jq ];
+    undocumented = lib.concatStringsSep "\n" undocumentedFiles;
+  } ''
+    if [ -n "$undocumented" ]; then
+      echo "module files that declare options but are missing from the reference:" >&2
+      echo "$undocumented" >&2
+      exit 1
+    fi
+    count=$(jq 'length' ${json})
+    files=$(jq '[.[].declarations[]] | unique | length' ${json})
+    echo "documented $count options from $files module files" | tee $out
+  '';
+
+  inherit documentedFiles declaringFiles undocumentedFiles;
 }
-

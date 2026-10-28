@@ -325,7 +325,7 @@ in
       roots = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        example = [ "~/Code/examplecloud" ];
+        example = [ "~/Code/my-org" ];
         description = ''
           Directories to scan for git repositories to track.  Every primary
           checkout found under a root is tracked; linked worktrees are folded
@@ -396,8 +396,8 @@ in
       default = { };
       example = literalExpression ''
         {
-          "~/Code/examplecloud/svc-public-api" = "examplecloud";
-          "~/Code/examplecloud/widget" = "examplecloud";
+          "~/Code/my-org/api" = "my-org";
+          "~/Code/my-org/web" = "my-org";
         }
       '';
       description = ''

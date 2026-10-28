@@ -82,7 +82,7 @@ else
         echo "Choose an installer:"
         echo "  1) 📗 ** Decknix supported**: Nix Community's nix-installer (Experimental fork of the Determinate Systems installer)"
         echo "  2) 📒 Official Nix Installer (Standard)"
-        echo "  3) 📙 Determinate Systems (May be incompatible with nix-darwin configuration of decknix. TBD)"
+        echo "  3) 📙 Determinate Systems installer (not the one decknix is tested with; option 1 is)"
 
         read -rp "Selection [1]: " installer_choice
         installer_choice=${installer_choice:-1}

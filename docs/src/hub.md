@@ -27,8 +27,7 @@
         style="flex:1;min-width:200px;padding:0.4em 0.6em;font-size:0.95em;border:1px solid var(--sidebar-separator);border-radius:4px;background:var(--bg);color:var(--fg);" />
       <select id="options-channel"
         style="padding:0.4em 0.6em;font-size:0.95em;border:1px solid var(--sidebar-separator);border-radius:4px;background:var(--bg);color:var(--fg);">
-        <option value="unstable">nixpkgs unstable</option>
-        <option value="24.11">nixpkgs 24.11</option>
+        <option value="25.11">nixpkgs 25.11 (flake pin)</option>
       </select>
       <!-- Source filters: hidden by default, shown when org-options.json exists -->
       <span id="options-source-filters" style="display:none;font-size:0.9em;">

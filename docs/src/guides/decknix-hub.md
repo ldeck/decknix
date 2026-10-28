@@ -34,7 +34,7 @@ changes — zero polling from Emacs, zero main-thread blocking.
 
 ### 1. Enable the daemon
 
-In your `decknix-config` (e.g., `~/.config/decknix/configuration.nix`):
+In a system-level module (for example `~/.config/decknix/local/system.nix`, or your org config overlay's darwin module):
 
 ```nix
 decknix.services.hub.enable = true;
@@ -76,7 +76,8 @@ cat ~/.config/decknix/hub/meta.json
 | `decknix.services.hub.enable` | `false` | Start the launchd daemon |
 | `decknix.services.hub.github.enable` | `true` | Enable GitHub adapter |
 | `decknix.services.hub.github.reviewsInterval` | `60` | Seconds between review polls |
-| `decknix.services.hub.github.wipInterval` | `120` | Seconds between WIP polls |
+| `decknix.services.hub.github.wipInterval` | `60` | Seconds between WIP polls |
+| `decknix.services.hub.github.mergedRetentionDays` | `30` | Days a merged PR stays in the WIP feed |
 | `decknix.services.hub.github.reviewRepos` | `[]` | Repos to check (empty = all) |
 
 #### Jira
@@ -97,7 +98,7 @@ cat ~/.config/decknix/hub/meta.json
 | Option | Default | Description |
 |--------|---------|-------------|
 | `decknix.services.hub.teamcity.enable` | `false` | Enable TeamCity adapter |
-| `decknix.services.hub.teamcity.proxyUrl` | `http://localhost:8080` | IAP proxy URL |
+| `decknix.services.hub.teamcity.proxyUrl` | `http://localhost:58080` | IAP proxy URL |
 | `decknix.services.hub.teamcity.interval` | `60` | Seconds between polls |
 | `decknix.services.hub.teamcity.repos` | `[]` | Repos to cross-link with WIP branches |
 | `decknix.services.hub.teamcity.recentFinishedCount` | `1` | Recent finished builds per branch |
@@ -108,7 +109,7 @@ Org configs typically wire identity from `config.<org>.user.email` (set via `ide
 
 ```nix
 # In org config system.nix:
-decknix.services.hub.jira.email = lib.mkDefault config.examplecloud.user.email;
+decknix.services.hub.jira.email = lib.mkDefault config.my-org.user.email;
 ```
 
 See [Config Loader — Identity Files](../architecture/config-loader.md#identity-files) for details.
@@ -169,7 +170,7 @@ Press `RET` on a task to open it in Jira.
 ### Org Filter (`O`)
 
 Press `O` in the sidebar to cycle through GitHub owners/orgs:
-`all` → `ldeck` → `ExampleOwner` → `all`. Filters both Requests and WIP.
+`all` → each owner in your feeds (for example `you` → `my-org`) → `all`. Filters both Requests and WIP.
 
 ## Troubleshooting
 

@@ -8,11 +8,17 @@ The `decknix` CLI is a Rust binary that provides the primary interface for manag
 decknix [COMMAND]
 
 Commands:
-  switch    Switch system configuration
-  update    Update flake inputs
-  help      Show help (including extensions)
-  <ext>     Run a user-defined extension
+  update              Update flake inputs
+  switch              Switch system configuration
+  wt                  Manage git worktrees
+  session             Find, create, and resume agent sessions (alias: s)
+  repos               Keep local clones fresh (alias: repo)
+  pull-local-changes  Pull local changes to agent skills/commands back into repositories
+  help                Show help (including extensions)
+  <ext>               Run a user-defined extension
 ```
+
+The full, generated flag reference for every built-in command is in [Command Reference](./reference.md).
 
 The CLI automatically discovers **user extensions** defined via Nix and displays them alongside built-in commands.
 
@@ -47,6 +53,6 @@ decknix help board
 
 ## Next
 
-- [Core Commands](./core-commands.md) — `switch`, `update`
-- [Extensions](./extensions.md) — add custom subcommands
-
+- [Core Commands](./core-commands.md): what each command does, with examples
+- [Command Reference](./reference.md): every flag, generated from the CLI itself
+- [Extensions](./extensions.md): add custom subcommands

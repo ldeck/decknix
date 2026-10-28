@@ -1,7 +1,7 @@
 # Pair Protocol v1 (draft)
 
 > Status: **draft / pre-implementation**.
-> Reference implementation: [`ExampleOwner/example-ai-pairing`](https://github.com/ExampleOwner/example-ai-pairing) (not yet created at time of writing).
+> Reference implementation: a separate repository, not yet public.
 > Last updated: 2026-05-29.
 
 A protocol for multi-human and multi-agent collaborative sessions layered on
@@ -269,7 +269,7 @@ them in order on `put` and reads from the first that resolves on `get`.
 
 | Adapter         | Backing                                | Fits when…                                                                  |
 | --------------- | -------------------------------------- | --------------------------------------------------------------------------- |
-| `gcs`           | Google Cloud Storage bucket            | Default for ExampleCloud. Versioned objects, IAM via corporate Google.      |
+| `gcs`           | Google Cloud Storage bucket            | Teams on Google Cloud. Versioned objects, IAM via corporate Google.         |
 | `s3`            | AWS S3                                 | Same shape on AWS.                                                          |
 | `slack`         | A bound channel; artifacts as uploads  | Lowest-friction for small/transient sessions.                               |
 | `gdrive`        | A shared Drive folder                  | Non-engineer participants want preview + native sharing.                    |
@@ -281,7 +281,7 @@ The protocol is store-agnostic; sessions declare what they want:
 ```toml
 [[artifact_store]]
 kind   = "gcs"
-bucket = "org-pair-artifacts"
+bucket = "my-org-pair-artifacts"
 prefix = "<session_id>/"
 
 # Optional second store, written in parallel for human convenience:
@@ -290,9 +290,9 @@ kind        = "slack"
 channel_id  = "C0XXXXXXXXX"
 ```
 
-### 5.4 Defaults for ExampleCloud sessions
+### 5.4 Suggested defaults for a team on Google Cloud
 
-- **Primary store**: `gcs` against a bucket like `org-pair-artifacts`,
+- **Primary store**: `gcs` against a bucket like `my-org-pair-artifacts`,
   object versioning on, lifecycle rule to move >90-day objects to colder
   storage.
 - **Secondary store** (always on by default): the same Slack channel
@@ -327,9 +327,9 @@ promote(artifact_ids: [Id], target_repo: Repo, target_path: Path,
 
 ```
 /pair promote <artifact-ref> to <repo> [as <path>] [titled "..."] [--draft|--ready]
-/pair promote @last to widget as docs/specs/pair-protocol.md
-/pair promote @kind:spec to widget           # bulk by kind
-/pair promote scope-pair-protocol-v1 to svc-public-api as docs/scopes/
+/pair promote @last to web as docs/specs/pair-protocol.md
+/pair promote @kind:spec to web              # bulk by kind
+/pair promote scope-pair-protocol-v1 to api as docs/scopes/
 ```
 
 Artifact refs accepted: `art_<ULID>`, name, `@last`, `@last:N`, `@all`,
@@ -346,15 +346,15 @@ pair promote <ref>... --to <repo> [--as <path>] [--branch <name>] \
 
 ### 6.3 Per-session repo aliases
 
-Sessions may declare friendly repo aliases at create time so `to widget`
+Sessions may declare friendly repo aliases at create time so `to web`
 resolves correctly:
 
 ```toml
 [repos]
-widget          = "ExampleOwner/widget"
-svc-public-api  = "ExampleOwner/svc-public-api"
-feedz           = "ExampleOwner/svc-provider-feedz-service"
-experiment      = "ExampleOwner/example-ai-pairing"
+web             = "my-org/web"
+api             = "my-org/api"
+provider        = "my-org/data-provider-service"
+experiment      = "my-org/example-pairing"
 ```
 
 Aliases are resolved against this map; fully-qualified `org/repo` is
@@ -423,7 +423,7 @@ Commits opened by the relay carry attribution trailers so the human and
 the requesting seat are both visible:
 
 ```
-Author:  Lachlan Deck <you@example.com>
+Author:  Lachlan Deck <lachlan@example.com>
 Pair-Session: ses_01J7Z8KX4VFWQ0M9N6R2H3D8AB
 Pair-Promoted-By: lachlan/human
 Pair-Requested-By: alice/agent
@@ -453,15 +453,15 @@ Thanks for taking a look.
 | Phase | Mechanism                                                                          | Notes                                                                  |
 | ----- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | D1    | Relay shells out to the host's local `gh` CLI.                                     | Laptop mode only; reuses existing host auth; trivially safe.           |
-| D2    | A GitHub App in the `ExampleOwner` org with `contents:write` and `pull_requests:write`. | Tailnet VM mode. App opens the PR; trailers credit the human + seat. |
+| D2    | A GitHub App in the team's org with `contents:write` and `pull_requests:write`.        | Tailnet VM mode. App opens the PR; trailers credit the human + seat. |
 | D3    | Same App with finer scopes; per-user OAuth for non-host promoters if needed.       | Only if external participants ever land.                               |
 
 Start at D1. Migrate to D2 when the relay moves off the laptop.
 
 ### 6.7 Direct push for `experiment-` repos
 
-For repositories whose name starts with `experiment-` (e.g.
-`ExampleOwner/example-ai-pairing`), the relay accepts an additional
+For repositories whose name starts with `experiment-` (e.g. the
+implementation repository itself), the relay accepts an additional
 `--direct` flag on `promote` that commits straight to the repo's default
 branch without opening a PR. This is reserved for the implementation
 repo itself while it iterates rapidly. If the project graduates out of
@@ -564,7 +564,7 @@ Both can be tuned per-session by the host; sane defaults ship in P1.
 
 | Phase | Scope                                                                                                                       | Target           |
 | ----- | --------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| **P0**| This spec, repo bootstrap (`ExampleOwner/example-ai-pairing`), CI skeleton.                                              | This week.       |
+| **P0**| This spec, implementation repo bootstrap, CI skeleton.                                                                      | This week.       |
 | **P1**| Relay daemon (Rust), conversational mode only, JSONL transcript, WebSocket transport, single-host launchd, basic web UI.   | This week / next.|
 | **P2**| Slack mirror, `GcsArtifactStore` + `FilesystemArtifactStore`, `publish_artifact`, MCP transport.                            | Next.            |
 | **P3**| `pair` CLI parity with web UI; `slack` artifact adapter; identity polish.                                                   | Following.       |
@@ -592,7 +592,7 @@ requires.
 | Live transport                | WebSocket (SSE fallback)                                                     |
 | Agent transport               | MCP                                                                          |
 | Slack mirror                  | Enabled when a channel is bound; carries human-readable subset               |
-| Primary artifact store        | `gcs` (`org-pair-artifacts` bucket, versioning on)                            |
+| Primary artifact store        | `gcs` (`my-org-pair-artifacts` bucket, versioning on)                        |
 | Secondary artifact store      | `slack` (bound channel, file upload with link to canonical store)            |
 | Promotion `draft`             | `true`                                                                       |
 | Augmentcode review            | Always requested on every push to a promoted PR (`auggie review` comment)    |
@@ -602,7 +602,7 @@ requires.
 | Loop guard                    | On                                                                           |
 | Event ids                     | ULID                                                                         |
 | Implementation language       | Rust (relay + CLI)                                                           |
-| Implementation repo           | `ExampleOwner/example-ai-pairing` (direct-push allowed while named `experiment-`) |
+| Implementation repo           | A separate `experiment-` repository (direct-push allowed while so named)     |
 
 ## 12. Open questions
 

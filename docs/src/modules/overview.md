@@ -8,28 +8,34 @@ Decknix is organised into modular components, each responsible for a specific ar
 
 | Module | Description | Page |
 |--------|-------------|------|
-| **Emacs** | Full IDE with 13+ sub-modules, profiles, daemon | [Emacs →](./emacs.md) |
+| **Emacs** | Full IDE with 17 sub-modules, profiles, daemon | [Emacs →](./emacs.md) |
 | **Vim** | Whitespace cleanup, skim fuzzy finder | [Vim →](./vim.md) |
 | **Shell & Terminal** | Zsh, Starship prompt, completions | [Shell →](./shell.md) |
 | **Git** | Delta diffs, global config, LFS | [Git →](./git.md) |
-| **Window Management** | AeroSpace, Hammerspoon, Spaces | [WM →](./window-management.md) |
-| **AI Tooling** | Augment Code agent, MCP servers, Agent Shell | [AI →](./ai/overview.md) |
+| **Window Management** | AeroSpace, Hammerspoon, OmniWM, Spaces (all opt-in) | [WM →](./window-management.md) |
+| **AI Tooling** | Opt-in agent CLIs (Claude Code, Pi, Gemini, Codex, OpenCode, Goose, Qwen, Auggie), Gortex, agent-sync, Agent Shell | [AI →](./ai/overview.md) |
+| **Apps** | Ungoogled Chromium from nix-casks (on by default on macOS) | |
+| **CLI helpers** | `repo-jdk`, `board`, GitHub token for Nix (`nix-github-auth`) | [CLI →](../cli/extensions.md) |
 
 ### Darwin (System) Modules
 
 | Module | Description |
 |--------|-------------|
-| **System Defaults** | Packages (vim, git, curl, skim), Nerd Fonts, Dock/Finder prefs |
+| **System Defaults** | Packages (vim, git, curl, skim, nix-open), Nerd Fonts, Nix settings, Dock/Finder prefs |
 | **AeroSpace System** | Disables Stage Manager, Mission Control shortcuts, separate Spaces |
 | **Emacs Daemon** | Background Emacs service via launchd, `ec` wrapper command |
 | **CLI Module** | Installs `decknix` binary, generates extensions config |
 | **Linux Builder** | On-demand aarch64-linux builder VM, stopped when idle ([Linux Builder](./linux-builder.md)) |
+| **decknix Hub** | Background work-item aggregator (GitHub, Jira, TeamCity), off by default ([Hub](../guides/decknix-hub.md)) |
+| **Repo Sync** | Fast-forwards workspace clones every 3h, on by default ([Services](./services.md)) |
+| **Session GC** | Weekly agent session archiving, on by default ([Services](./services.md)) |
+| **IAP Proxy** | Local IAP-authenticating proxies, off by default ([Services](./services.md)) |
 
 ### Core Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `decknix.role` | Bootstrap template: `"developer"`, `"designer"`, `"minimal"` | `"developer"` |
+| `decknix.role` | `"developer"`, `"designer"` or `"minimal"`. Currently has no effect on the build | `"minimal"` (`mkSystem` passes `"developer"` unless `settings.nix` sets `role`) |
 | `decknix.username` | Your macOS username (set automatically by mkSystem) | — |
 | `decknix.hostname` | Machine hostname | — |
 
@@ -66,9 +72,9 @@ Instead of toggling individual modules, choose a profile tier:
 
 Installed for all users regardless of role:
 
-`coreutils` · `curl` · `wget` · `tree` · `jq` · `ripgrep` · `gh`
+`coreutils` · `curl` · `wget` · `tree` · `jq` · `yq-go` · `ripgrep` · `gh`
 
-System-level: `vim` · `git` · `curl` · `skim`
+System-level: `vim` · `git` · `curl` · `skim` · `nix-open`
 
 Fonts: **JetBrains Mono Nerd Font**
 

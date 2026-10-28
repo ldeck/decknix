@@ -34,6 +34,7 @@
 - [Git](./modules/git.md)
 - [Window Management](./modules/window-management.md)
 - [Linux Builder](./modules/linux-builder.md)
+- [Background Services](./modules/services.md)
 - [AI Tooling](./modules/ai/overview.md)
   - [Configuration](./modules/ai/configuration.md)
   - [Agent Shell](./modules/ai/agent-shell/overview.md)
@@ -58,6 +59,7 @@
 
 - [decknix CLI](./cli/overview.md)
 - [Core Commands](./cli/core-commands.md)
+- [Command Reference](./cli/reference.md)
 - [Extensions](./cli/extensions.md)
 - [Agent dispatch](./cli/agent-dispatch.md)
 

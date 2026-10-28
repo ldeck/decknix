@@ -1,6 +1,6 @@
 # Inventory: what a full uninstall must handle
 
-Read-only survey of the reference machine on 2026-10-27 (Determinate installer receipt 3.11.3, Nix 2.31.2, nix-darwin 25.11 active, no Homebrew). decknix has no uninstall code today (`grep -rni uninstall` finds only transcripts and vendored JS). Ordering below is a recommendation, unverified until slice 3 runs it on a VM.
+Read-only survey of the reference machine on 2026-10-27 (installer receipt 3.11.3, which looks like the nix-community fork of the Determinate installer; Nix 2.31.2+1; nix-darwin 25.11 active, no Homebrew). decknix has no uninstall code today (`grep -rni uninstall` finds only transcripts and vendored JS). Ordering below is a recommendation, unverified until slice 3 runs it on a VM.
 
 ## System level
 

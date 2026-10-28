@@ -31,7 +31,7 @@ org-config at the same time:
 ```bash
 decknix switch \
   --override decknix=~/tools/decknix \
-  --override org-config=~/Code/my-org/decknix-config
+  --override my-org=~/Code/my-org/my-org-config
 ```
 
 Each `--override` becomes `--override-input <INPUT> path:<PATH>` on the
@@ -46,7 +46,7 @@ automatically:
 ```toml
 [switch.overrides]
 decknix   = "~/tools/decknix"
-org-config = "~/Code/my-org/decknix-config"
+my-org    = "~/Code/my-org/my-org-config"
 ```
 
 CLI `--override` flags win per-input; pass `--no-overrides` to ignore the

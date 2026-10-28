@@ -53,18 +53,21 @@ let
       oauthClientId = mkOption {
         type = types.str;
         default = cfg.oauthClientId;
+        defaultText = literalExpression "config.decknix.services.iap-proxy.oauthClientId";
         description = "Google OAuth 2.0 client ID. Defaults to the shared oauthClientId.";
       };
 
       oauthClientSecret = mkOption {
         type = types.str;
         default = cfg.oauthClientSecret;
+        defaultText = literalExpression "config.decknix.services.iap-proxy.oauthClientSecret";
         description = "Google OAuth 2.0 client secret. Defaults to the shared oauthClientSecret.";
       };
 
       tokenStorePath = mkOption {
         type = types.str;
         default = "${homeDir}/.config/iap-proxy/${name}-tokens.json";
+        defaultText = literalExpression ''"''${home}/.config/iap-proxy/<name>-tokens.json"'';
         description = "Path to persist this instance's OAuth refresh token.";
       };
 
@@ -107,7 +110,7 @@ in
         Source tree for the iap-proxy Python package.
         Typically provided as a flake input:
           inputs.iap-proxy-src = {
-            url = "github:ExampleOwner/example-iap-proxy/feature/token-persistence";
+            url = "github:<owner>/<iap-proxy-repo>";
             flake = false;
           };
         Then passed as: decknix.services.iap-proxy.src = inputs.iap-proxy-src;
@@ -129,15 +132,16 @@ in
       default = { };
       example = literalExpression ''
         {
-          teamcity = {
+          ci = {
             port = 58080;
-            targetUrl = "https://widget-ci.com.au";
-            iapClientId = "90320025603-xxxx.apps.googleusercontent.com";
+            targetUrl = "https://ci.example.com";
+            iapClientId = "000000000000-xxxx.apps.googleusercontent.com";
           };
-          acmeland-production = {
+          production = {
             port = 59090;
-            targetUrl = "https://monolith.acmeland-production.examplecloud.io";
-            iapClientId = "111064767675-xxxx.apps.googleusercontent.com";
+            targetUrl = "https://app.example.com";
+            iapClientId = "000000000001-xxxx.apps.googleusercontent.com";
+            autoStart = false;
           };
         }
       '';

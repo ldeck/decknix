@@ -8,7 +8,7 @@ The `settings.nix` file in your flake directory defines your machine identity:
   username = "ldeck";            # Your macOS username
   hostname = "lds-mbp";         # Machine hostname
   system   = "aarch64-darwin";  # "aarch64-darwin" (Apple Silicon) or "x86_64-darwin" (Intel)
-  role     = "developer";       # Bootstrap template: "developer", "designer", or "minimal"
+  role     = "developer";       # "developer", "designer" or "minimal" (currently informational)
 }
 ```
 
@@ -19,19 +19,13 @@ The `settings.nix` file in your flake directory defines your machine identity:
 | `username` | string | `"setup-required"` | Your macOS login username (`whoami`) |
 | `hostname` | string | `"setup-required"` | Machine hostname (`hostname -s`) |
 | `system` | string | `"aarch64-darwin"` | Nix system identifier |
-| `role` | enum | `"developer"` | Determines which bootstrap template is applied |
+| `role` | enum | `"developer"` | Recorded as `decknix.role`; currently has no effect on the build |
 
 ## Roles
 
-The `role` field selects a starter template for first-time setup:
+`role` accepts `"developer"`, `"designer"` or `"minimal"` and is passed to home-manager as `decknix.role`. Nothing in the framework reads it today: the role starter templates in `modules/home/options.nix` are not applied by any installer or command, and no module changes its defaults by role. Any other value (for example `"tester"`) fails evaluation.
 
-| Role | What It Adds |
-|------|-------------|
-| `developer` | Git config template + nodejs |
-| `designer` | Inkscape |
-| `minimal` | Nothing extra — blank slate |
-
-After the first build, the role has minimal impact. You can always add or remove packages in your `home.nix` regardless of role.
+Role is due to be replaced by adoption tiers; until then it is safe to leave at `"developer"`. Add or remove packages in your `home.nix` regardless of role.
 
 ## Where Settings Are Used
 
@@ -50,6 +44,6 @@ outputs = inputs@{ decknix, ... }:
 - Set `networking.hostName`
 - Set `system.primaryUser`
 - Derive the home directory path
-- Pass `role` to home-manager for template selection
+- Pass `role` to home-manager as `decknix.role`
 - Configure `configLoader` paths
 

@@ -4,10 +4,21 @@ Decknix provides a declarative, Nix-managed AI development environment — from 
 
 ## What's Included
 
-| Component | Description | Page |
-|-----------|-------------|------|
-| **Auggie CLI** | Augment Code agent with Nix-managed settings and MCP servers | [Configuration →](./configuration.md) |
-| **Agent Shell** | Emacs-native multi-session AI interface (7 sub-modules) | [Agent Shell →](./agent-shell/overview.md) |
+| Component | Option | Default | Description |
+|-----------|--------|---------|-------------|
+| **Claude Code** | `decknix.ai.claude.enable` | off | Claude Code CLI, settings, MCP servers, permissions |
+| **Pi** | `decknix.ai.pi.enable` | off | Pi coding agent |
+| **Gemini** | `decknix.ai.gemini.enable` | off | Gemini CLI |
+| **Codex** | `decknix.ai.codex.enable` | off | Codex CLI and its ACP bridge |
+| **OpenCode** | `decknix.ai.opencode.enable` | off | OpenCode |
+| **Goose** | `decknix.ai.goose.enable` | off | Goose |
+| **Qwen Code** | `decknix.ai.qwen.enable` | off | Qwen Code |
+| **Auggie CLI** | `decknix.cli.auggie.enable` | off | Augment Code agent with Nix-managed settings and MCP servers ([Configuration](./configuration.md)) |
+| **Gortex** | `decknix.ai.gortex.enable` | on | Code-intelligence graph of your tracked repos, served to every configured agent over MCP; its daemon runs only when a roster is set |
+| **agent-sync** | `decknix.cli.agentSync.enable` | on when files are registered | Deploys skills, commands and guidelines as real, editable copies |
+| **Agent Shell** | `programs.emacs.decknix.agentShell.enable` | on (full Emacs profile) | Emacs-native multi-session AI interface ([Agent Shell](./agent-shell/overview.md)) |
+
+Every option is listed in the [Configuration Hub](../../hub.md).
 
 ## Design Principles
 
@@ -50,17 +61,17 @@ C-c A s    → Session picker (live + saved + new)
 C-c A ?    → Full keybinding reference
 ```
 
-For CLI-only usage without Emacs:
+For CLI-only usage without Emacs, run the agent directly (`claude`, `pi`, `auggie`, ...) or use the workspace- and tag-aware session commands:
 
 ```bash
-auggie                    # Interactive agent session
-auggie session list       # List saved sessions
-auggie session resume ID  # Resume a session
+decknix session new                 # new Claude session in this workspace
+decknix session list                # sessions in this workspace
+decknix session resume --last       # resume the most recent one
 ```
 
 ## Next Steps
 
-- [Configuration](./configuration.md) — Auggie CLI settings, MCP servers, model selection
+- [Configuration](./configuration.md): Auggie CLI settings, MCP servers, model selection
 - [Agent Shell Overview](./agent-shell/overview.md) — The Emacs agent interface
 - [Vision](./vision.md) — Where this is heading
 

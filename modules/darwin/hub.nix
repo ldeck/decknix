@@ -127,7 +127,7 @@ in
         default = "";
         description = ''
           Jira user email for API authentication.
-          Typically set by org config (e.g. org-config wires this from
+          Typically set by an org config overlay, which wires this from
           its own user.email option so each team member's identity flows through).
         '';
       };

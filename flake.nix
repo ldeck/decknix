@@ -75,6 +75,10 @@
             inherit (pkgs) config;
           };
           rustArgs = { inherit (rustPkgs) rustPlatform; };
+          docsOptions = import ./docs/generate-options.nix {
+            inherit pkgs inputs;
+            inherit (inputs) self;
+          };
         in
         {
         # --- Expose the Decknix CLI Package ---
@@ -89,6 +93,11 @@
 
         # Set it as the default so 'nix run' works without arguments
         packages.default = config.packages.decknix-cli;
+
+        # Generated options reference for the docs site, and the check that
+        # keeps it complete (docs/generate-options.nix).
+        packages.docs-options = docsOptions.json;
+        checks.docs-options-coverage = docsOptions.coverage;
 
         # Devshell for working on decknix itself
         devShells.default = pkgs.mkShell {

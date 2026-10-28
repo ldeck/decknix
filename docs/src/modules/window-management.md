@@ -8,6 +8,8 @@ they can be used individually or combined.
 |------|-------|--------|----------------|
 | [Amethyst](https://ianyh.com/amethyst/) | Automatic tiling (xmonad-style) | nix-casks | — (package only) |
 | [AeroSpace](https://github.com/nikitabobko/AeroSpace) | Manual tiling (i3-style) | nixpkgs | `decknix.wm.aerospace` |
+| [OmniWM](https://github.com/OmniNull/OmniWM) | Scrolling and dwindle tiling (Apple Silicon, macOS 26+) | nixpkgs (current pin) | `decknix.wm.omniwm` |
+| [Hammerspoon](https://www.hammerspoon.org/) | Lua automation (space navigation bindings) | nixpkgs | `decknix.wm.hammerspoon` |
 | [Rectangle](https://rectangleapp.com/) | Window snapping (keyboard shortcuts) | nix-casks | — (package only) |
 | [SpaceId](https://github.com/dshnkao/SpaceId) | Menu-bar space indicator | nix-casks | — (package only) |
 | Native macOS | Stage Manager, Split View, Spaces | built-in | — |
@@ -158,6 +160,18 @@ keep track of which Space you're on.
     ];
 }
 ```
+
+## OmniWM
+
+[OmniWM](https://github.com/OmniNull/OmniWM) is a tiling window manager for Apple Silicon Macs running macOS 26 or later: Niri-style scrolling containers plus Hyprland-style dwindle layouts. It is an alternative to AeroSpace; do not enable both, since each fights the other for window placement. It needs Accessibility permission on first launch.
+
+```nix
+{ ... }: {
+  decknix.wm.omniwm.enable = true;
+}
+```
+
+decknix installs the package (`OmniWM` and `omniwmctl`), can run it as a launchd agent at login (`startAtLogin`) and can write its settings file from `decknix.wm.omniwm.settings`. All options are in the [Configuration Hub](../hub.md).
 
 ## Hammerspoon
 

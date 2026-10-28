@@ -9,10 +9,12 @@ The config loader (`decknix.lib.configLoader`) is the engine that discovers and 
    - `identity.nix` — org user identity (auto-wired to `config.<org>.user.*`)
    - `home.nix` — home-manager module
    - `system.nix` — nix-darwin module
-   - `secrets.nix` — secrets (merged into home-manager)
-   - `home/**/*.nix` — recursively loaded home modules
+   - `secrets.nix`: secrets, loaded into both home-manager and nix-darwin (`lib/default.nix`, `modules.home` and `modules.system` both append `load "secrets"`)
+   - `home/**/*.nix`, `system/**/*.nix`, `secrets/**/*.nix`: recursively loaded modules of each type
 3. Also check for root-level files (`~/.config/decknix/home.nix`, etc.)
 4. **Import** every discovered file and trace what was loaded
+
+`mkSystem` reads `~/.config/decknix` by default, which needs `--impure`. Pass `configDir` to `mkSystem` to read another directory instead (docs generation and eval tests use a fixture inside the flake so they evaluate purely).
 
 ## Discovery Order
 
@@ -20,10 +22,10 @@ The config loader (`decknix.lib.configLoader`) is the engine that discovers and 
 ~/.config/decknix/
 ├── local/home.nix              ← loaded
 ├── local/system.nix            ← loaded
-├── local/secrets.nix           ← loaded (merged into home)
-├── examplecloud/identity.nix   ← auto-wired to config.examplecloud.user.*
-├── examplecloud/home.nix       ← loaded (can reference config.examplecloud.user.*)
-├── examplecloud/system.nix     ← loaded
+├── local/secrets.nix           ← loaded (into home and system)
+├── my-org/identity.nix         ← auto-wired to config.my-org.user.*
+├── my-org/home.nix             ← loaded (can reference config.my-org.user.*)
+├── my-org/system.nix           ← loaded
 ├── secrets.nix                 ← loaded (root-level)
 └── home.nix                    ← loaded (root-level)
 ```
@@ -39,9 +41,9 @@ When `<org>/identity.nix` exists, the loader auto-generates NixOS module options
 The file is a plain Nix attrset (not a module):
 
 ```nix
-# ~/.config/decknix/examplecloud/identity.nix
+# ~/.config/decknix/my-org/identity.nix
 {
-  email = "you@examplecloud.com";
+  email = "you@my-org.example";
   name = "Your Name";
   githubUser = "your-github";
   gpgKey = "ABCDEF1234567890";   # optional — omit or leave empty
@@ -50,13 +52,13 @@ The file is a plain Nix attrset (not a module):
 
 ### Using identity in modules
 
-The directory name becomes the option namespace. For a directory named `examplecloud`, the following options are available everywhere:
+The directory name becomes the option namespace. For a directory named `my-org`, the following options are available everywhere:
 
 ```nix
 { config, ... }: {
   # In any darwin or home-manager module:
-  some.service.email = config.examplecloud.user.email;
-  some.service.name  = config.examplecloud.user.name;
+  some.service.email = config.my-org.user.email;
+  some.service.name  = config.my-org.user.name;
   # etc.
 }
 ```
@@ -76,7 +78,7 @@ Each org directory can have its own `identity.nix` with different values. A user
 
 ```
 ~/.config/decknix/
-├── examplecloud/identity.nix   → config.examplecloud.user.email = "me@nc.com"
+├── my-org/identity.nix         → config.my-org.user.email = "me@my-org.example"
 └── sideproject/identity.nix    → config.sideproject.user.email = "me@sp.com"
 ```
 
@@ -87,7 +89,7 @@ The `local/` directory is excluded from identity discovery — it's for personal
 When you build, the loader traces what it finds:
 
 ```
-[Loader] identity + /Users/you/.config/decknix/examplecloud/identity.nix
+[Loader] identity + /Users/you/.config/decknix/my-org/identity.nix
 [Loader] system + /Users/you/.config/decknix/local/system.nix
 [Loader] home + /Users/you/.config/decknix/local/home.nix
 [Loader] No secrets modules found.
@@ -124,7 +126,7 @@ decknix.lib.configLoader {
     system   = [ ... ];  # List of imported system modules
     identity = [ ... ];  # Auto-generated identity modules (config.<org>.user.*)
   };
-  allDirs = [ "local" "examplecloud" ];  # Discovered directory names
+  allDirs = [ "local" "my-org" ];  # Discovered directory names
 }
 ```
 

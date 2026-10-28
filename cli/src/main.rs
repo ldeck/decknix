@@ -43,7 +43,7 @@ enum Commands {
         force: bool,
 
         /// Override flake input(s) with local paths (repeatable, INPUT=PATH).
-        /// Example: --override decknix=~/tools/decknix --override org-config=~/Code/my-org/decknix-config
+        /// Example: --override decknix=~/Code/me/decknix --override my-org=~/Code/my-org/my-org-config
         #[arg(long, value_name = "INPUT=PATH")]
         r#override: Vec<String>,
 
@@ -78,7 +78,7 @@ enum Commands {
         /// Commit message (generated if not provided)
         #[arg(long)]
         message: Option<String>,
-        /// Destination for new files (defaults to decknix-config if in examplecloud, else decknix)
+        /// Destination for new files (defaults to the org overlay for files in its workspace, else decknix)
         #[arg(long)]
         to: Option<String>,
         /// Pull files even when their content looks STALE (matches an older
@@ -1422,7 +1422,7 @@ fn main() -> anyhow::Result<()> {
                 .map(|s| s.split_once('=')
                     .map(|(k, v)| (k.to_string(), v.to_string()))
                     .ok_or_else(|| anyhow::anyhow!(
-                        "--override '{}': expected INPUT=PATH format (e.g. org-config=~/Code/my-org/decknix-config)",
+                        "--override '{}': expected INPUT=PATH format (e.g. my-org=~/Code/my-org/my-org-config)",
                         s
                     )))
                 .collect::<anyhow::Result<Vec<_>>>()?;
@@ -2215,6 +2215,43 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    // The docs site includes cli/reference.md verbatim. Rendering it from the
+    // clap definitions in a test means the Nix build (which runs cargo test)
+    // fails as soon as the committed reference drifts from the real CLI.
+    // Regenerate with: DECKNIX_UPDATE_CLI_REFERENCE=1 cargo test cli_reference
+    fn cli_reference_markdown() -> String {
+        fn walk(cmd: &clap::Command, path: &str, out: &mut String) {
+            let help = cmd.clone().render_long_help().to_string();
+            let help: Vec<&str> = help.lines().map(str::trim_end).collect();
+            out.push_str(&format!("\n## `{}`\n\n```text\n{}\n```\n", path, help.join("\n").trim_end()));
+            for sub in cmd.get_subcommands().filter(|c| !c.is_hide_set()) {
+                walk(sub, &format!("{} {}", path, sub.get_name()), out);
+            }
+        }
+        let mut root = Cli::command();
+        root.build();
+        let mut out = String::from(
+            "# CLI reference\n\n\
+             <!-- Generated from the clap definitions in cli/src by the `cli_reference` test. Do not edit by hand. -->\n\n\
+             Every built-in `decknix` command and its flags. Extensions registered through\n\
+             `extensions.json` are listed by `decknix help` on each machine and are not shown here.\n",
+        );
+        walk(&root, "decknix", &mut out);
+        out
+    }
+
+    #[test]
+    fn cli_reference_is_current() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("reference.md");
+        let rendered = cli_reference_markdown();
+        if std::env::var_os("DECKNIX_UPDATE_CLI_REFERENCE").is_some() {
+            fs::write(&path, &rendered).unwrap();
+        }
+        let committed = fs::read_to_string(&path).unwrap_or_default();
+        assert!(committed == rendered,
+            "cli/reference.md is stale; regenerate with DECKNIX_UPDATE_CLI_REFERENCE=1 cargo test cli_reference");
+    }
+
     #[test]
     fn emacs_switch_status_distinguishes_binary_from_elisp_change() {
         assert_eq!(super::emacs_switch_status("/store/emacs-a", "/store/emacs-b", "old", "new", true),

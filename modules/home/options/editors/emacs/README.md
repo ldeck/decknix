@@ -198,7 +198,7 @@ Key bindings (in magit-status after `C-x g`):
 - `@ l i` → List issues
 - `RET` on PR → View PR details
 
-**Setup Required:** Forge needs a GitHub token. See [Secrets Guide](../../../../docs/secrets.md).
+**Setup Required:** Forge needs a GitHub token. See [Secrets Guide](../../../../docs/src/configuration/secrets.md).
 
 Options:
 - `programs.emacs.decknix.magit.forge.enable` - Enable Forge (default: true)

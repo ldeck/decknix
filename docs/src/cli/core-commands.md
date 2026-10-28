@@ -27,10 +27,10 @@ decknix switch --dry-run
 decknix switch --force
 
 # Test a local framework checkout
-decknix switch --override decknix=~/tools/decknix
+decknix switch --override decknix=~/path/to/decknix
 
 # Override multiple inputs (repeat the flag)
-decknix switch --override decknix=~/tools/decknix --override org-config=~/Code/my-org/decknix-config
+decknix switch --override decknix=~/path/to/decknix --override my-org=~/Code/my-org/my-org-config
 ```
 
 ### How It Works
@@ -79,8 +79,8 @@ them once in `~/.config/decknix/settings.toml`:
 
 ```toml
 [switch.overrides]
-decknix = "~/tools/decknix"
-org-config = "~/Code/my-org/decknix-config"
+decknix = "~/path/to/decknix"
+my-org = "~/Code/my-org/my-org-config"
 ```
 
 Every `decknix switch` then applies those overrides by default. Precedence,
@@ -94,7 +94,7 @@ The status line annotates each override with `[config]` when it came from
 `settings.toml`, so it's always clear where a given path was sourced from:
 
 ```
-🔄 Switching (decknix=/Users/you/tools/decknix [config], org-config=/Users/you/Code/foo/decknix-config [config])...
+🔄 Switching (decknix=/Users/you/path/to/decknix [config], my-org=/Users/you/Code/my-org/my-org-config [config])...
 ```
 
 To force a switch against the published inputs (ignoring `settings.toml`
@@ -109,8 +109,8 @@ decknix switch --no-overrides --override decknix=~/experiments/decknix
 ```
 
 `settings.toml` lives alongside your user config; it is a personal file and
-should not be checked into a shared `decknix-config` repo. If your
-`decknix-config` doesn't already ignore it, add it:
+should not be checked into a shared config repository. If your
+user flake is a git repository and doesn't already ignore it, add it:
 
 ```gitignore
 settings.toml
@@ -154,11 +154,14 @@ vice versa, and tags are shared both ways.
 Usage: decknix session <COMMAND>
 
 Commands:
-  list    List sessions in a workspace (default: current directory)
-  resume  Resume a session (exec into the agent by default)
-  new     Start a new session (exec into the agent by default)
-  tag     Add or remove tags on a session's conversation
-  tags    List all known tags with usage counts
+  list     List sessions in a workspace (default: current directory)
+  archive  Archive matching sessions: compress + index, then remove the original
+  restore  Restore an archived session (decompress back to its original location)
+  gc       Apply the retention policy: archive stale sessions, trash very old archives
+  resume   Resume a session (exec into the agent by default)
+  new      Start a new session (exec into the agent by default)
+  tag      Add or remove tags on a session's conversation
+  tags     List all known tags with usage counts
 ```
 
 ### `decknix session list`
@@ -181,8 +184,8 @@ Options:
 # Sessions in this workspace, all agents
 decknix session list
 
-# Claude sessions tagged #dos touched in the last day, as JSON
-decknix session list --agent claude --tag dos --since 1d --json
+# Claude sessions tagged #triage touched in the last day, as JSON
+decknix session list --agent claude --tag triage --since 1d --json
 
 # Everything across every workspace whose transcript matches a regex
 decknix session list --all --grep "replay.dlq"
@@ -213,8 +216,8 @@ Options:
 # Resume by id prefix
 decknix session resume d8df9eb9
 
-# Resume the latest session tagged #dos in this workspace
-decknix session resume --tag dos
+# Resume the latest session tagged #triage in this workspace
+decknix session resume --tag triage
 
 # Resume the most recent session anywhere — just print the command
 decknix session resume --last --all --print
@@ -244,7 +247,7 @@ Options:
 decknix session new
 
 # New session pre-tagged and seeded with a prompt
-decknix session new --tag dos --tag triage -- "Investigate ALRT-5752"
+decknix session new --tag triage --tag incident -- "Investigate INC-123"
 ```
 
 ### `decknix session tag` / `decknix session tags`
@@ -253,7 +256,7 @@ Add or remove tags on a conversation, or list every known tag with usage counts.
 
 ```bash
 # Tag / untag a conversation (by id or unique prefix)
-decknix session tag d8df9eb9 --add dos --add day5
+decknix session tag d8df9eb9 --add triage --add day5
 decknix session tag d8df9eb9 --remove day5
 
 # List all known tags with counts (--json for machine output)
@@ -262,8 +265,8 @@ decknix session tags --json
 ```
 
 > Tags are shared with the Emacs session tooling (`C-c A T`), so a session
-> tagged here appears under that tag in the sidebar and pickers — and the agents
-> the DoS board spawns on a ticket can be found and resumed later by tag.
+> tagged here appears under that tag in the sidebar and pickers, and agents
+> spawned from a board on a ticket can be found and resumed later by tag.
 
 ## `decknix wt`
 
@@ -285,6 +288,7 @@ Commands:
   prune-metadata      Prune git worktree metadata only
   clean-fork-remotes  Sweep orphan fork remotes
   registry            Dump the registry
+  finished            Remove worktrees whose PR is merged or closed (by GitHub's PR state)
 ```
 
 Most cleanup verbs are **dry-run by default** — they report what they would do
@@ -301,7 +305,7 @@ Common options (audit / clean / orphans / prune):
 ```bash
 # See every worktree decknix tracks (optionally one repo)
 decknix wt list
-decknix wt list --repo ExampleOwner/pubsub-dlq-forwarder
+decknix wt list --repo my-org/my-service
 
 # Dry-run health report: stale, dirty, orphaned, upstream-branch-deleted
 decknix wt audit
@@ -316,6 +320,60 @@ decknix wt clean --older-than 7d --apply
 
 # Full sweep of stale worktrees (dir + branch + metadata + fork remotes)
 decknix wt prune --apply --safe-delete-branch
+```
+
+`decknix wt finished` complements the git-based verbs: it asks GitHub for each
+worktree's PR state, so it also catches review worktrees (`pr-N`, detached) and
+squash- or rebase-merged PRs that `clean` cannot see. It keeps anything with
+uncommitted changes, commits not in the PR, or an open session.
+
+```bash
+decknix wt finished            # preview
+decknix wt finished --apply
+```
+
+## `decknix session archive` / `restore` / `gc`
+
+Session transcripts grow without bound. `archive` compresses matching sessions
+into an indexed archive and removes the originals; `restore` puts one back
+where it came from; `gc` applies the retention policy from the `[session]`
+table of `~/.config/decknix/settings.toml` (archive stale sessions, trash very
+old archives). The weekly `decknix-session-gc` launchd agent runs `gc` for you
+(see [Background Services](../modules/services.md)).
+
+```bash
+decknix session archive --older-than 4w --dry-run
+decknix session archive --larger-than 50M
+decknix session restore d8df9eb9
+decknix session gc --dry-run
+```
+
+## `decknix repos`
+
+Keeps the primary checkout of every clone in your workspaces fresh: fetches
+and fast-forwards each repo's default branch, never touching dirty trees or a
+checked-out feature branch. Workspaces come from `[repos].workspaces` in
+`settings.toml` or `--workspace [ORG=]PATH`. The `decknix-repo-sync` launchd
+agent runs `sync` every three hours.
+
+```bash
+decknix repos list             # local only: what sync would consider
+decknix repos sync --dry-run
+decknix repos sync --workspace my-org=~/Code/my-org
+decknix repos fix-lock ~/Code/my-org/my-service   # remove index.lock only when provably abandoned
+```
+
+## `decknix pull-local-changes`
+
+Agent skills and commands are deployed as real, editable copies (see
+[agent-sync](../modules/ai/configuration.md)). When you edit a deployed copy,
+`pull-local-changes` copies the edit back to the source repository it came
+from. It previews by default; `--apply` copies and commits, and `--force`
+pulls even when the deployed copy looks older than the committed source.
+
+```bash
+decknix pull-local-changes
+decknix pull-local-changes --apply --message "docs(skills): clarify the review step"
 ```
 
 ## `decknix help`

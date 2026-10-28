@@ -57,7 +57,6 @@ Decknix ships with several extensions:
 | `decknix cheatsheet` | Show window manager keybinding cheatsheet |
 | `decknix repo-jdk` | Resolve the JDK a repository declares |
 | `decknix space` | Space picker (GUI) |
-| `decknix verify` | Verify system integration |
 
 ### `decknix board` — cross-repo issue dashboard
 

@@ -57,6 +57,15 @@ non-negotiable. Specifically:
 - **Issue references**: Link to GitHub issues when implementing tracked features.
 - **Planned features**: Mark unimplemented but tracked features as **(Planned)**
   in documentation rather than omitting them.
+- **Generated references**: the options reference is generated from the real
+  module tree (`nix build .#docs-options`; `checks.<system>.docs-options-coverage`
+  fails when a module declares options the reference cannot see) and the CLI
+  reference (`cli/reference.md`) is checked by `cargo test`; regenerate it with
+  `DECKNIX_UPDATE_CLI_REFERENCE=1 cargo test cli_reference` after changing any
+  clap definition. CI also runs `mdbook build` and a lychee link check on PRs.
+- **Public docs name no private org projects**: option descriptions, examples
+  and help text are published, so use neutral placeholders (`my-org`,
+  `example.com`) rather than real org repositories, hosts or channels.
 
 ### 2. Nix Conventions
 

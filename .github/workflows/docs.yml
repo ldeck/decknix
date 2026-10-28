@@ -1,11 +1,28 @@
-name: Deploy Documentation
+name: Documentation
 
+# Build and check on every PR so stale or broken docs are caught before merge;
+# deploy only from main.
 on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'modules/**'
+      - 'lib/**'
+      - 'cli/**'
+      - 'README.md'
+      - 'flake.nix'
+      - 'flake.lock'
+      - '.github/workflows/docs.yml'
   push:
     branches: [main]
     paths:
       - 'docs/**'
       - 'modules/**'
+      - 'lib/**'
+      - 'cli/**'
+      - 'README.md'
+      - 'flake.nix'
+      - 'flake.lock'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -15,8 +32,8 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -27,48 +44,51 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v30
 
-      - name: Generate options JSON (per nixpkgs channel)
+      # Options come from evaluating the real module tree against the flake's
+      # pinned nixpkgs (docs/generate-options.nix), not a channel, so the
+      # reference matches what users actually get.
+      - name: Generate options JSON and check coverage
         run: |
           mkdir -p docs/src/data
-          for channel in nixos-24.11 nixos-unstable; do
-            echo "::group::Generating options for $channel"
-            OPTIONS_JSON=$(NIX_PATH="nixpkgs=channel:$channel" nix-build docs/generate-options.nix -A json --no-out-link)
-            # Copy JSON and normalise declaration paths to relative
-            python3 -c "
-          import json, sys, os
-          with open(os.path.join('$OPTIONS_JSON', 'share/doc/nixos/options.json')) as f:
-              data = json.load(f)
-          # Strip absolute paths to relative (modules/...)
-          for opt in data.values():
-              opt['declarations'] = [
-                  d.split('/modules/', 1)[-1] if '/modules/' in d else d.rsplit('/', 1)[-1]
-                  for d in opt.get('declarations', [])
-              ]
-          slug = '$channel'.replace('nixos-', '')
-          with open(f'docs/src/data/options-{slug}.json', 'w') as f:
-              json.dump(data, f, separators=(',', ':'))
-          print(f'  wrote options-{slug}.json ({len(data)} options)')
-          "
-            echo "::endgroup::"
-          done
-          ls -la docs/src/data/
-
-      - name: Install mdBook
-        run: |
-          mkdir -p $HOME/bin
-          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz \
-            | tar -xz -C $HOME/bin
-          echo "$HOME/bin" >> $GITHUB_PATH
+          release=$(nix eval --raw --impure --expr \
+            '(builtins.getFlake (toString ./.)).inputs.nixpkgs.lib.trivial.release')
+          nix build -L .#checks.x86_64-linux.docs-options-coverage
+          cat result
+          nix build -L .#docs-options -o options-json
+          cp options-json "docs/src/data/options-$release.json"
+          # Older org hub pages still request the channel names this site
+          # used to publish; serve them the pinned set rather than a 404.
+          cp options-json docs/src/data/options-unstable.json
+          cp options-json docs/src/data/options-24.11.json
+          grep -q "value=\"$release\"" docs/src/hub.md || {
+            echo "docs/src/hub.md channel selector does not offer nixpkgs $release" >&2
+            exit 1
+          }
 
       - name: Build documentation
-        run: mdbook build docs
+        run: nix run --inputs-from . nixpkgs#mdbook -- build docs
+
+      # Internal links and anchors must resolve offline; external links are
+      # checked too, because a broken install URL is exactly what users hit
+      # first. Rate-limited and auth-walled hosts are excluded in
+      # docs/lychee.toml.
+      - name: Check links
+        run: |
+          nix run --inputs-from . nixpkgs#lychee -- \
+            --config docs/lychee.toml \
+            --root-dir "$PWD/docs/book" \
+            docs/book README.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/book
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -78,4 +98,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
