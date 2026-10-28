@@ -15,6 +15,8 @@ shell, git, AI tooling, and system configuration with a 3-layer override model
 | Path | Purpose |
 |------|---------|
 | `lib/default.nix` | `mkSystem` + `configLoader` (identity discovery, module wiring) |
+| `lib/adoption.nix` | `adoption.toml` parsing; tiers and the components they gate |
+| `tests/` | Eval tests (`adoption.nix`, run as flake checks), `closure-unchanged.sh`, fixtures |
 | `modules/darwin/` | macOS system-level config (launchd, system packages) |
 | `modules/darwin/hub.nix` | decknix-hub launchd service + Nix options |
 | `modules/home/options/` | home-manager modules (editors, shell, git, AI) |

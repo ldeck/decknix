@@ -21,7 +21,8 @@ in
   options.services.decknix.sessionGc = {
     enable = mkOption {
       type = types.bool;
-      default = true;
+      default = config.decknix.adoption.components.session-gc.enable;
+      defaultText = literalExpression "config.decknix.adoption.components.session-gc.enable";
       description = "Weekly launchd job that archives stale agent sessions and trashes very old archives.";
     };
 

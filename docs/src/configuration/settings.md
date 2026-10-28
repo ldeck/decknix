@@ -23,9 +23,9 @@ The `settings.nix` file in your flake directory defines your machine identity:
 
 ## Roles
 
-`role` accepts `"developer"`, `"designer"` or `"minimal"` and is passed to home-manager as `decknix.role`. Nothing in the framework reads it today: the role starter templates in `modules/home/options.nix` are not applied by any installer or command, and no module changes its defaults by role. Any other value (for example `"tester"`) fails evaluation.
+`role` accepts `"developer"`, `"designer"` or `"minimal"` and is passed to home-manager as `decknix.role`. Nothing in the framework reads it, and no module changes its defaults by role. Any other value (for example `"tester"`) fails evaluation.
 
-Role is due to be replaced by adoption tiers; until then it is safe to leave at `"developer"`. Add or remove packages in your `home.nix` regardless of role.
+What a machine installs is chosen by its [adoption tier](./adoption.md) instead. Role is deliberately not mapped onto tiers: `mkSystem` passes `"developer"` when `settings.nix` omits `role`, so any mapping would silently change what existing installs build. It is safe to leave at `"developer"`.
 
 ## Where Settings Are Used
 

@@ -25,7 +25,8 @@ in
   options.services.decknix.repoSync = {
     enable = mkOption {
       type = types.bool;
-      default = true;
+      default = config.decknix.adoption.components.repo-sync.enable;
+      defaultText = literalExpression "config.decknix.adoption.components.repo-sync.enable";
       description = "Periodic launchd job that fetches + fast-forwards every configured clone's default branch to keep local code fresh.";
     };
 

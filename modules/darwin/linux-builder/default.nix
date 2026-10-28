@@ -56,7 +56,8 @@ in
   options.decknix.linuxBuilder = {
     enable = mkOption {
       type = types.bool;
-      default = true;
+      default = config.decknix.adoption.components.linux-builder.enable;
+      defaultText = literalExpression "config.decknix.adoption.components.linux-builder.enable";
       description = ''
         Run nix-darwin's Linux builder VM so Linux derivations build locally.
         Turning this off makes nix-darwin delete the VM's disk image on the

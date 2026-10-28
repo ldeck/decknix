@@ -45,7 +45,8 @@ in
   options.services.emacs.decknix = {
     enable = mkOption {
       type = types.bool;
-      default = true;
+      default = config.decknix.adoption.components.emacs.enable;
+      defaultText = literalExpression "config.decknix.adoption.components.emacs.enable";
       description = "Enable Emacs integration (server + ec wrapper).";
     };
 

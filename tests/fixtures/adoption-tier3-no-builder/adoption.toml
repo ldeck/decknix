@@ -1,0 +1,9 @@
+version = 1
+tier = 3
+
+[components]
+linux-builder = false
+
+[org]
+core = true
+services = false

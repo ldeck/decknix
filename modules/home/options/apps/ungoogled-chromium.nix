@@ -8,10 +8,13 @@ in {
   options.decknix.apps.ungoogledChromium = {
     enable = mkOption {
       type = types.bool;
-      default = pkgs.stdenv.isDarwin;
+      default = pkgs.stdenv.isDarwin && config.decknix.adoption.components.apps.enable;
+      defaultText = literalExpression
+        "pkgs.stdenv.isDarwin && config.decknix.adoption.components.apps.enable";
       description = ''
         Install Ungoogled Chromium, the macOS app from nix-casks.  On by
-        default on macOS; set false to skip it.
+        default on macOS from tier 3 (the `apps` component); set false to
+        skip it.
       '';
     };
   };

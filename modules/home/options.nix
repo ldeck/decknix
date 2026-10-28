@@ -4,52 +4,18 @@ with lib;
 
 let
   cfg = config.decknix;
-
-  # Bootstrap templates for `decknix init` / bootstrap.sh
-  # These are written to ~/.config/decknix/local/home.nix on first setup.
-  # They are NOT used at evaluation time — only as starter files.
-  templates = {
-    developer = ''
-      { pkgs, ... }: {
-        # -- DEVELOPER LOCAL CONFIG --
-        # Fill in your identity, then rebuild.
-        programs.git.extraConfig = {
-          user.email = "you@example.com";
-          user.name  = "Your Name";
-        };
-
-        # Additional packages beyond the framework defaults
-        home.packages = with pkgs; [
-          nodejs
-        ];
-      }
-    '';
-
-    designer = ''
-      { pkgs, ... }: {
-        # -- DESIGNER LOCAL CONFIG --
-        home.packages = with pkgs; [
-          inkscape
-        ];
-      }
-    '';
-
-    minimal = ''
-      { ... }: {
-        # Minimal local config — add your overrides here.
-      }
-    '';
-  };
-
 in {
   options.decknix = {
     role = mkOption {
       type = types.enum [ "developer" "designer" "minimal" ];
       default = "minimal";
       description = ''
-        The user's role. Determines:
-        - Which template is generated during bootstrap
-        - Which default packages are included
+        Informational only; nothing reads it. What a machine installs is
+        decided by the adoption tier (`decknix.adoption.tier`, from
+        ~/.config/decknix/adoption.toml). Kept so existing settings.nix files
+        still evaluate. It is deliberately not mapped onto tiers: mkSystem
+        passes "developer" when settings.nix omits it, so a mapping would
+        silently change what existing installs build.
       '';
     };
 
@@ -73,15 +39,6 @@ in {
         Set this to decouple your preferred editor from any editor profile.
         Examples: "vim", "nvim", "emacs", "emacsclient -t"
       '';
-    };
-
-    # Expose templates so bootstrap/CLI can read them
-    _internal.templates = mkOption {
-      type = types.attrsOf types.str;
-      default = templates;
-      internal = true;
-      readOnly = true;
-      description = "Bootstrap templates keyed by role name.";
     };
   };
 

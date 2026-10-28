@@ -19,6 +19,7 @@
 # Configuration
 
 - [Settings Reference](./configuration/settings.md)
+- [Adoption Tiers](./configuration/adoption.md)
 - [Personal Overrides](./configuration/personal-overrides.md)
 - [Organisation Configs](./configuration/org-configs.md)
 - [Secrets & Authentication](./configuration/secrets.md)

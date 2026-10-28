@@ -99,6 +99,13 @@
         packages.docs-options = docsOptions.json;
         checks.docs-options-coverage = docsOptions.coverage;
 
+        # Adoption tiers evaluate and gate the right components
+        # (tests/adoption.nix).
+        checks.adoption-tiers = import ./tests/adoption.nix {
+          inherit pkgs inputs;
+          inherit (inputs) self;
+        };
+
         # Devshell for working on decknix itself
         devShells.default = pkgs.mkShell {
           packages = [
@@ -214,8 +221,9 @@
               # Welcome to Decknix!
 
               To finish setup:
-              1. Edit 'flake.nix' and update 'username' and 'hostname'.
-              2. Run 'nix run nix-darwin -- switch --flake .#default --impure'
+              1. Edit 'settings.nix' and set 'username' (whoami) and 'hostname' (hostname -s).
+              2. Optionally write 'adoption.toml' to choose a tier (see the docs).
+              3. Run 'sudo nix run nix-darwin -- switch --flake .#default --impure'
 
               Enjoy!
             '';

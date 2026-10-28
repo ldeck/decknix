@@ -14,6 +14,7 @@ in
   imports = [
     ../cli/default.nix
     ../common/unfree.nix
+    ../common/adoption.nix
     ./aerospace.nix
     ./hub.nix
     ./iap-proxy.nix
@@ -97,9 +98,9 @@ in
   ];
 
   # 4. FONTS
-  fonts.packages = with pkgs; [
+  fonts.packages = lib.optionals config.decknix.adoption.components.fonts.enable (with pkgs; [
     nerd-fonts.jetbrains-mono
-  ];
+  ]);
 
   # 5. ACTIVATION SCRIPTS
   system.activationScripts.postActivation.text = ''

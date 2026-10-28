@@ -48,6 +48,10 @@
     loader = decknix.lib.configLoader ({
       inherit lib username hostname system role;
     } // lib.optionalAttrs (configDir != null) { inherit configDir; });
+
+    adoption = import ./adoption.nix { inherit lib; };
+    adoptionState = adoption.read (if configDir != null then configDir else loader.configDir);
+    adoptionModule = adoption.module adoptionState;
   in {
     darwinConfigurations."default" = nix-darwin.lib.darwinSystem {
       specialArgs = { inherit inputs; } // extraSpecialArgs;
@@ -57,6 +61,7 @@
 
         # Framework
         decknix.darwinModules.default
+        adoptionModule
       ]
       # Org/user darwin modules
       ++ darwinModules
@@ -78,6 +83,7 @@
           home-manager.users.${username} = { pkgs, ... }: {
             imports = [
               decknix.homeModules.default
+              adoptionModule
             ]
             ++ homeModules
             # Identity modules — same options available in home-manager context
@@ -261,7 +267,7 @@
       # so config.<org>.user.* is available in both contexts.
       identity = identityModules;
     };
-    inherit allDirs;
+    inherit allDirs configDir;
   };
 }
 

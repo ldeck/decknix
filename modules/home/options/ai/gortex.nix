@@ -233,7 +233,8 @@ in
   options.decknix.ai.gortex = {
     enable = mkOption {
       type = types.bool;
-      default = true;
+      default = config.decknix.adoption.components.gortex.enable;
+      defaultText = literalExpression "config.decknix.adoption.components.gortex.enable";
       description = ''
         Index tracked repositories into a Gortex knowledge graph and serve it
         to every configured agent over MCP.  On by default: one shared

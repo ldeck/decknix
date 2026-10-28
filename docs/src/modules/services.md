@@ -1,6 +1,6 @@
 # Background Services
 
-decknix runs a few launchd jobs. This page lists every one the framework defines, its default and how to turn it off. Full option lists are in the [Configuration Hub](../hub.md).
+decknix runs a few launchd jobs. This page lists every one the framework defines, its default and how to turn it off. Repo sync, session GC and the Linux builder belong to [tier 3](../configuration/adoption.md) and the Emacs daemon to tier 4; installs without an `adoption.toml` get them all. Full option lists are in the [Configuration Hub](../hub.md).
 
 ## Summary
 

@@ -8,6 +8,7 @@
 ├── flake.lock                       # Pinned dependency versions
 ├── settings.nix                     # username, hostname, system, role
 ├── settings.toml                    # CLI settings: [switch.overrides], [repos], [session]
+├── adoption.toml                    # Adopted tier and component toggles (optional)
 ├── extensions.json                  # Home-level CLI extensions (generated)
 │
 ├── local/                           # Personal overrides (always loaded)
@@ -55,11 +56,13 @@ decknix/
 ├── docs/                            # This documentation site
 ├── lib/
 │   ├── default.nix                  # mkSystem + configLoader
+│   ├── adoption.nix                 # adoption.toml parsing, tiers and components
 │   └── find.nix                     # File discovery utilities
 ├── modules/
 │   ├── cli/                         # decknix CLI nix-darwin module
 │   │   └── default.nix              # CLI package, /etc/decknix/extensions.json
 │   ├── common/
+│   │   ├── adoption.nix             # decknix.adoption.* options (system and home)
 │   │   └── unfree.nix               # Unfree package allowlist (system and home)
 │   ├── darwin/                      # macOS system modules (all auto-imported)
 │   │   ├── default.nix              # System packages, fonts, Nix settings, defaults
@@ -67,6 +70,7 @@ decknix/
 │   │   ├── emacs.nix                # Emacs daemon service
 │   │   ├── hub.nix                  # decknix-hub work-item aggregator
 │   │   ├── iap-proxy.nix            # Local IAP authenticating proxies
+│   │   ├── manifest.nix             # Install manifest (system.build.decknixManifest)
 │   │   ├── repo-sync.nix            # Periodic repos sync agent
 │   │   ├── session-gc.nix           # Weekly agent session GC
 │   │   └── linux-builder/           # On-demand Linux builder VM
@@ -82,7 +86,7 @@ decknix/
 │           └── wm/                  # aerospace/, hammerspoon/, omniwm/, spaces.nix
 ├── pkgs/                            # Custom Nix packages (CLI, hub, broker, ACP bridges, ...)
 ├── templates/                       # Flake templates for `nix flake init`
-├── tests/fixtures/                  # Config directories for pure evaluation (docs, eval tests)
+├── tests/                           # Eval tests (adoption.nix), closure-unchanged.sh, fixtures/
 └── flake.nix                        # Framework flake
 ```
 
