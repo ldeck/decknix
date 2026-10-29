@@ -144,17 +144,14 @@ Current in-tree packages:
 | `agent-shell/progress/decknix-progress.el` | Progress data layer | Provider-agnostic items, attention rollup |
 | `agent-shell/progress/decknix-progress-ui.el` | `*decknix-progress*` buffer | Magit-style hierarchical view |
 | `agent-shell/progress/decknix-progress-sidebar.el` | Sidebar badge integration | Mtime-cached `index.json` reads |
-| `agent-shell/support-dashboard/decknix-support-dashboard.el` | On-support DoS + alert dashboard | `C-c A D`; live DoS board + Slack alert feed; row actions (browse/assign/investigate/alert); weekly-report open + daily-log draft |
-| `agent-shell/support-workflow/decknix-support-workflow.el` | Guided daily support work order | `C-c A W`; day-aware Playbook checklist (Incidents → Daily Checks → Scheduled → Work Items/Alerts); `RET` runs each item's action |
 | `agent-shell/attention/decknix-attention.el` | One definition of "needs you" | `netfail`/`waiting`/`asking`, ranked, with when each session entered its state (fed from the session snapshot and the sidebar's idle fingerprint, never computed on redisplay); tab-aware `C-c A j` and sidebar `J` |
 | `agent-shell/tab-status/decknix-agent-tab-status.el` | Tint tab-bar tabs by agent status | Sets `tab-bar-tab-face-function`; single-agent tabs get a status background (working/waiting/ready/…); uncached tab-bar → repaints on the header's existing status poll, no extra timer; colours are an overridable defcustom |
 | `agent-shell/layout-persist/decknix-layout-persist.el` | Frames/tabs/windows across restarts | Saved on `kill-emacs-hook` (SIGTERM runs it), before the last frame closes and every 5 min to `~/.local/state/decknix/emacs-layout.el`; offered once on the first GUI client frame (idle timer, never in the server filter); agent windows resume via `decknix--sidebar-restore-previous-session` or a RET placeholder; `C-c D w` / `C-c D W` |
 | `agent-shell/board/decknix-board*.el` | Per-purpose coordination boards | `C-c s H`; definitions are data in `~/.config/decknix/boards/NAME.eld`; `decknix-board-backend` generics (GitHub sub-issues first, flat by type label as fallback); sessions grouped by board tags/workspace and/or `:repos` scope (`:match`), `REPO#N` item tags; items from every scope repo (globs expanded by `gh repo list`, cached 10 min); renders from caches, `gh` fetch in a subprocess, Markdown snapshot to `~/.local/state/decknix/boards/` for agents. `decknix-board-focus` is the sidebar's `F`: same membership function, memoised per session for 10 s |
 
-Both support packages default their org-specific URLs / JQL / activity list
-to the ExampleCloud/examplecorp values as overridable defvars (same pattern
-as the rest of the dashboard), so a different org points them elsewhere
-without patching the package.
+Org-only packages (an on-support dashboard, board and workflow, say) do not
+live here: they ship from the org's own repositories and plug into the
+customisation points these packages expose.
 
 ### Verification
 
@@ -302,14 +299,14 @@ sentinel that repaints the UI.
    blocking `url-retrieve-synchronously` from a command, hook, or timer
    that the user is waiting on.  Use `make-process` with a `:sentinel`
    that updates the buffer when the data arrives (see
-   `decknix--support-dashboard-fetch`, `-fetch-alerts`, and the hub's
+   `decknix-board--fetch`, whose backend runs `gh` in a child, and the hub's
    Rust daemon → JSON-file → `file-notify` pattern — the sidebar does
    *zero* polling itself).
 2. **No synchronous fetch to satisfy a redraw.**  Cache the last-known
    data and render from the cache; filtering, sorting, and re-layout are
    client-side and must never re-hit the source (see
-   `decknix--support-dashboard-redraw`, which filters cached issues
-   instead of re-querying Jira).  "Take the latest known status" is the
+   `decknix-board--render`, which repaints from the cached items
+   instead of re-querying GitHub).  "Take the latest known status" is the
    default; a refresh is a separate, async, best-effort action.
 
 ### Intentionally-async work belongs in a background process, not the main thread
@@ -347,8 +344,8 @@ in the gap *between* two keystrokes and still lands on the user:
   parse), that is the signal it was miscategorised — push it back to
   case 1 and hand the main thread only the finished result.
 
-Reference implementations: `decknix--support-dashboard-fetch` (heavy work
-in a child process, tiny sentinel) for case 1;
+Reference implementations: `decknix-board--fetch` (heavy work in a child
+process, tiny callback) for case 1;
 `decknix--agent-session-refresh-run-when-idle` in
 `agent-shell/agent/decknix-agent-session-cache.el` for the case-2
 idle-defer + re-defer guard.
@@ -369,7 +366,7 @@ refresh, badge updates) must **bail cheaply when the user is busy**:
 `active-minibuffer-window` check keeps a background repaint from
 fighting an open picker.  A cheap visibility check first
 (`get-buffer-window`) so a hidden buffer's timer costs nothing (see
-`decknix--support-dashboard-visible-p` / `-tick`).
+`decknix-board--tick`).
 
 A paint that can run long must also be **paced and abandonable**, since
 the pre-start check alone lets a two-second paint fill every idle gap.

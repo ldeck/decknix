@@ -504,44 +504,6 @@ let
     ];
   };
 
-  # Deterministic (LLM-free) live support monitoring dashboard: polls the DoS
-  # Jira board via `atlassian-cli' into an auto-refreshing read-only buffer.
-  # Pure parse/format/render layer is ERT-tested; the fetch is async and the
-  # refresh timer is armed in the heredoc (Rule 2).
-  decknix-support-dashboard-el = mkEmacsTestedPackage {
-    pname = "decknix-support-dashboard";
-    src = ./agent-shell/support-dashboard;
-    packageRequires = [ ];
-    testFiles = [
-      "decknix-support-dashboard-test.el"
-    ];
-  };
-
-  decknix-support-workflow-el = mkEmacsTestedPackage {
-    pname = "decknix-support-workflow";
-    src = ./agent-shell/support-workflow;
-    packageRequires = [ ];
-    testFiles = [
-      "decknix-support-workflow-test.el"
-    ];
-  };
-
-  # The "living playbook": a read-only, auto-refreshing board that renders the
-  # `oncall-sidebar --json' runbook priority model (incidents -> alerts -> DoS)
-  # as magit-like lanes with single-key actions on the row at point.  It
-  # recomputes nothing — the oncall CLI (decknix-config) is the single engine
-  # and owns every spawn — so emacs + terminal stay in parity.  Pure
-  # parse/lane/format/header layer is ERT-tested; the async CLI run + timer are
-  # the impure shell.
-  decknix-dos-board-el = mkEmacsTestedPackage {
-    pname = "decknix-dos-board";
-    src = ./agent-shell/dos-board;
-    packageRequires = [ ];
-    testFiles = [
-      "decknix-dos-board-test.el"
-    ];
-  };
-
   # Per-purpose coordination boards (a hackathon, a pilot): a plan from an
   # issue backend (GitHub sub-issues first) with the live sessions on each
   # item.  Definitions are data files under ~/.config/decknix/boards, so a
@@ -3599,9 +3561,6 @@ in
           decknix-perf-hitch-el
           decknix-perf-hitch-autofile-el
           decknix-capture-el
-          decknix-support-dashboard-el
-          decknix-support-workflow-el
-          decknix-dos-board-el
           decknix-board-el
           decknix-winner-safe-el
           decknix-agent-subagent-state-el
@@ -5033,47 +4992,6 @@ ${optionalString cfg.tableOverlay.enable ''
         (require 'decknix-db)
         (declare-function decknix-db "decknix-db")
 
-        ;; Live support monitoring dashboard (`C-c A D', bound below): a
-        ;; deterministic, LLM-free DoS-board view fed by `atlassian-cli' that
-        ;; auto-refreshes on a timer while displayed.  The tick only refreshes
-        ;; when the buffer is visible, so it is cheap to leave armed.  Timer is
-        ;; re-armed idempotently across `decknix switch' hot-reloads.
-        (require 'decknix-support-dashboard)
-        (declare-function decknix-support-dashboard "decknix-support-dashboard")
-        (declare-function decknix--support-dashboard-tick "decknix-support-dashboard")
-        (defvar decknix-support-dashboard-refresh-interval)
-        (defvar decknix--support-dashboard-timer nil)
-        (when (timerp decknix--support-dashboard-timer)
-          (cancel-timer decknix--support-dashboard-timer))
-        (setq decknix--support-dashboard-timer
-              (run-with-timer decknix-support-dashboard-refresh-interval
-                              decknix-support-dashboard-refresh-interval
-                              #'decknix--support-dashboard-tick))
-
-        ;; Guided support workflow (the systematic "what to do, when, how"
-        ;; distilled from the Techops Playbook work order).  No timer -- it is
-        ;; a static, day-aware checklist buffer opened on demand.
-        (require 'decknix-support-workflow)
-        (declare-function decknix-support-workflow "decknix-support-workflow")
-
-        ;; The living playbook — DoS priority board (`C-c A B', bound below).
-        ;; Renders the `oncall-sidebar --json' runbook model as magit-like,
-        ;; single-key-actionable lanes; recomputes nothing (the CLI is the one
-        ;; engine and owns spawns).  Its refresh tick is visibility-gated, so
-        ;; the timer is cheap to leave armed; re-armed idempotently across
-        ;; `decknix switch' hot-reloads.
-        (require 'decknix-dos-board)
-        (declare-function decknix-dos-board "decknix-dos-board")
-        (declare-function decknix-dos-board--tick "decknix-dos-board")
-        (defvar decknix-dos-board-refresh-interval)
-        (defvar decknix-dos-board--timer nil)
-        (when (timerp decknix-dos-board--timer)
-          (cancel-timer decknix-dos-board--timer))
-        (setq decknix-dos-board--timer
-              (run-with-timer decknix-dos-board-refresh-interval
-                              decknix-dos-board-refresh-interval
-                              #'decknix-dos-board--tick))
-
         ;; Coordination boards (`C-c s H').  Nothing starts at load: a
         ;; board's tick is armed when one is opened and stops itself when
         ;; the last board buffer goes.
@@ -5438,10 +5356,7 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c A r" "recent sessions"
             "C-c A P" "Progress (conv-key)"
             "C-c A p" "priority view"
-            "C-c A v" "review last exchange"
-            "C-c A D" "support dashboard"
-            "C-c A B" "DoS priority board (live)"
-            "C-c A W" "support workflow (guided)"))
+            "C-c A v" "review last exchange"))
 
         ;; Global keybindings under C-c A prefix
         ;; Only actions that make sense from OUTSIDE an agent-shell buffer.
@@ -5964,9 +5879,6 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         (define-prefix-command 'decknix-agent-command-map)
         (define-key decknix-agent-prefix-map (kbd "c") 'decknix-agent-command-map)
         (define-key decknix-agent-prefix-map (kbd "C") 'decknix-capture)             ; Quick-capture issue/task
-        (define-key decknix-agent-prefix-map (kbd "D") 'decknix-support-dashboard)   ; Live support/DoS-board dashboard
-        (define-key decknix-agent-prefix-map (kbd "B") 'decknix-dos-board)           ; Living playbook: DoS priority board
-        (define-key decknix-agent-prefix-map (kbd "W") 'decknix-support-workflow)    ; Guided support daily workflow
         (define-key decknix-agent-command-map (kbd "c") 'decknix-agent-command-run)    ; Pick & insert
         (define-key decknix-agent-command-map (kbd "n") 'decknix-agent-command-new)    ; New
         (define-key decknix-agent-command-map (kbd "e") 'decknix-agent-command-edit)   ; Edit
@@ -6011,7 +5923,8 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         (require 'agent-shell-workspace)
         (define-key decknix-agent-prefix-map (kbd "w") 'agent-shell-workspace-toggle)
         ;; `w' switches the Agents TAB; `M-w' shows/hides the sidebar within
-        ;; it and `M-W' re-pins it.  Plain `W' is already support-workflow.
+        ;; it and `M-W' re-pins it.  Plain `W' is left to org packages
+        ;; (an on-support workflow, for one).
         (define-key decknix-agent-prefix-map (kbd "M-w") 'decknix-sidebar-toggle-visible)
         (define-key decknix-agent-prefix-map (kbd "M-W") 'decknix-sidebar-pin)
         (define-key decknix-agent-prefix-map (kbd "M-r") 'decknix-repo-sync-resweep)

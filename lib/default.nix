@@ -6,8 +6,8 @@
   #     decknix.lib.mkSystem {
   #       inherit inputs;
   #       settings = import ./settings.nix;
-  #       darwinModules = [ inputs.org-config.darwinModules.default ];
-  #       homeModules   = [ inputs.org-config.homeModules.default ];
+  #       darwinModules = [ inputs.my-org-config.darwinModules.default ];
+  #       homeModules   = [ inputs.my-org-config.homeModules.default ];
   #     };
   mkSystem = {
     # The user's flake inputs (must include decknix, nixpkgs, nix-darwin)
@@ -134,11 +134,11 @@
   #   │   ├── home.nix           — personal packages, git identity
   #   │   ├── system.nix         — machine-specific tweaks
   #   │   └── secrets.nix        — personal secrets (e.g., .authinfo)
-  #   ├── examplecloud/
-  #   │   ├── identity.nix       — { email = "you@examplecloud.com"; name = "..."; }
-  #   │   ├── home.nix           — NC-specific home overrides
-  #   │   ├── system.nix         — NC-specific system overrides
-  #   │   └── secrets.nix        — NC-specific secrets (e.g., TeamCity token)
+  #   ├── my-org/
+  #   │   ├── identity.nix       — { email = "you@example.com"; name = "..."; }
+  #   │   ├── home.nix           — org-specific home overrides
+  #   │   ├── system.nix         — org-specific system overrides
+  #   │   └── secrets.nix        — org-specific secrets (e.g., TeamCity token)
   #   └── secrets.nix            — root-level secrets (loaded into both home & system layers)
   #
   # Secrets files are loaded into BOTH home-manager AND darwin/system contexts.

@@ -1261,6 +1261,11 @@ and again once the registry write completes."
      (when (fboundp 'agent-shell-workspace-sidebar-refresh)
        (agent-shell-workspace-sidebar-refresh)))))
 
+(defun decknix-sidebar--support-views-p ()
+  "Non-nil when an org package provides the on-support views."
+  (and (fboundp 'decknix-support-dashboard)
+       (fboundp 'decknix-support-workflow)))
+
 (transient-define-prefix decknix-sidebar-transient ()
   "Sidebar actions and toggles — the `?' / `h' keybinding reference.
 
@@ -1327,6 +1332,7 @@ they mean in the sidebar itself (cycle layout / worktree menu)."
    ;; The difference people trip over: a closed buffer comes back.
    (:info "C-x k only detaches: the agent runs on and reattaches at restart")]
   ["Support (on-rotation, z …)"
+   :if decknix-sidebar--support-views-p
    ("z d" "Dashboard (DoS + alerts)"    decknix-support-dashboard)
    ("z w" "Workflow (what to do, when)" decknix-support-workflow)]
   ["" ("T" "Toggles…"     decknix-sidebar-toggles-transient)])
@@ -5492,14 +5498,20 @@ in-menu `S Session…' entry both route here."
 (declare-function decknix-agent-session-new "decknix-agent-shell-main-session"
                   (&optional quick default-ws default-tags))
 
+(defvar decknix-agent-workspace-root nil
+  "Directory holding the checkouts of the repositories the sidebar lists.
+A repository row resolves to the subdirectory named after the repository.
+nil falls back to the first of `decknix-agent-workspace-roots'; an org
+config sets it to its workspace, e.g. \"~/Code/my-org\".")
+
 (defun decknix-sidebar--repo-path (repo)
   "Return the checkout path for REPO under the workspace, or nil."
-  (when (and repo (stringp repo))
-    (let ((dir (expand-file-name
-                (car (last (split-string repo "/" t)))
-                (or (bound-and-true-p decknix-agent-workspace-root)
-                    (expand-file-name "~/Code/examplecloud")))))
-      (and (file-directory-p dir) dir))))
+  (let ((root (or decknix-agent-workspace-root
+                  (car (bound-and-true-p decknix-agent-workspace-roots)))))
+    (when (and repo (stringp repo) root)
+      (let ((dir (expand-file-name (car (last (split-string repo "/" t)))
+                                   (expand-file-name root))))
+        (and (file-directory-p dir) dir)))))
 
 (defun decknix-sidebar--launch-row ()
   "Return the (PATH . TAGS) a new session here should start from, or nil.

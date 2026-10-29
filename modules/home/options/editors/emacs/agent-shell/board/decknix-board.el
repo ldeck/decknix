@@ -105,9 +105,9 @@ few seconds can show states that are a few seconds old instead."
 (defcustom decknix-board-slack-post-command nil
   "Command that posts a Slack message, as a list.
 `--channel ID --message TEXT' are appended.  nil looks for a
-`slack-post-message.py' on `exec-path' or in a workspace's
-`.org-tools/bin'.  When there is none, `s' copies the update and opens the
-channel instead of posting."
+`slack-post-message.py' on `exec-path'; an org config whose helper lives
+elsewhere sets this to its path.  When there is none, `s' copies the
+update and opens the channel instead of posting."
   :type '(choice (const nil) (repeat string)) :group 'decknix-board)
 
 ;; --- definitions ---------------------------------------------------------
@@ -1269,9 +1269,7 @@ SPEC is (:type :title :body :parent).  ON-CREATED gets the new URL."
 (defun decknix-board--slack-command ()
   "Return the Slack posting command, or nil when there is none."
   (or decknix-board-slack-post-command
-      (let ((exe (or (executable-find "slack-post-message.py")
-                     (car (file-expand-wildcards
-                           (expand-file-name "~/Code/*/.org-tools/bin/slack-post-message.py"))))))
+      (let ((exe (executable-find "slack-post-message.py")))
         (and exe (file-executable-p exe) (list exe)))))
 
 (defun decknix-board-slack-argv (command channel text)

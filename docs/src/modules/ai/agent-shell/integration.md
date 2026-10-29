@@ -20,10 +20,10 @@ MCP servers extend the agent's capabilities by providing access to external data
       args = [ "-y" "gcp-monitoring-mcp" ];
       env.GOOGLE_APPLICATION_CREDENTIALS = "~/.config/gcloud/credentials.json";
     };
-    "examplecloud-knowledge-base" = {
+    "my-org-knowledge-base" = {
       type = "stdio";
       command = "npx";
-      args = [ "-y" "examplecloud-kb-mcp" ];
+      args = [ "-y" "my-org-kb-mcp" ];
     };
   };
 }
@@ -73,7 +73,7 @@ With MCP servers configured, the agent can:
 |--------|-----------|
 | `context7` | Query up-to-date library documentation |
 | `gcp-monitoring` | Search GCP logs, error groups, Datastore entities |
-| `examplecloud-knowledge-base` | Search resolved Jira tickets and internal docs |
+| `my-org-knowledge-base` | Search resolved Jira tickets and internal docs |
 | `jira` | Read/create/transition Jira issues |
 | `confluence` | Search and create Confluence pages |
 | `github` | Full GitHub API access (issues, PRs, code search) |
@@ -83,6 +83,4 @@ The agent automatically discovers available MCP servers and uses them when relev
 ## Organisation-Specific Servers
 
 Org configs can layer additional MCP servers on top of the framework defaults. See [Organisation Configs](../../configuration/org-configs.md) for how this works.
-
-For ExampleCloud-specific MCP server configuration, see the [NC Agent Shell Workflows](https://github.com/ExampleOwner/decknix-config) documentation.
 

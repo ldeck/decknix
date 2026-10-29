@@ -141,41 +141,52 @@
 
 ;; -- Repo-specific soft patterns ----------------------------------
 
+(defmacro decknix-hub-ci-test--with-repo-soft (&rest body)
+  "Run BODY with `acme/widgets' treating e2e and integration checks as soft."
+  (declare (indent 0))
+  `(let ((decknix--hub-ci-repo-soft-patterns
+          '(("acme/widgets" . ("e2e" "integration")))))
+     ,@body))
+
 (ert-deftest decknix-hub-ci/check-soft-p-for-repo-global-pattern-without-repo ()
   ;; Global patterns work even without a repo arg.
   (should (decknix--hub-ci-check-soft-p-for-repo "codacy" nil))
   (should-not (decknix--hub-ci-check-soft-p-for-repo "build" nil)))
 
 (ert-deftest decknix-hub-ci/check-soft-p-for-repo-extra-pattern-matched ()
-  ;; Per-repo extra pattern matches when repo is provided.
-  (should (decknix--hub-ci-check-soft-p-for-repo
-           "e2e-suite" "examplecloud/widget"))
-  (should (decknix--hub-ci-check-soft-p-for-repo
-           "integration-tests" "examplecloud/widget")))
+  (decknix-hub-ci-test--with-repo-soft
+    ;; Per-repo extra pattern matches when repo is provided.
+    (should (decknix--hub-ci-check-soft-p-for-repo
+             "e2e-suite" "acme/widgets"))
+    (should (decknix--hub-ci-check-soft-p-for-repo
+             "integration-tests" "acme/widgets"))))
 
 (ert-deftest decknix-hub-ci/check-soft-p-for-repo-extra-pattern-not-global ()
-  ;; Extra pattern is repo-scoped: no match for a different repo.
-  (should-not (decknix--hub-ci-check-soft-p-for-repo
-               "e2e-suite" "another-org/another-repo")))
+  (decknix-hub-ci-test--with-repo-soft
+    ;; Extra pattern is repo-scoped: no match for a different repo.
+    (should-not (decknix--hub-ci-check-soft-p-for-repo
+                 "e2e-suite" "another-org/another-repo"))))
 
 (ert-deftest decknix-hub-ci/classify-partial-becomes-soft-with-repo ()
-  ;; With the repo arg, an e2e failure (repo-soft) + codacy (global-soft)
-  ;; = all soft → soft_fail, not partial_fail.
-  (let ((ci (decknix-test--make-ci
-             "fail"
-             (list (decknix-test--make-check "codacy" "FAILURE")
-                   (decknix-test--make-check "e2e-suite" "FAILURE")))))
-    (should (equal "soft_fail"
-                   (decknix--hub-ci-classify ci "examplecloud/widget")))))
+  (decknix-hub-ci-test--with-repo-soft
+    ;; With the repo arg, an e2e failure (repo-soft) + codacy (global-soft)
+    ;; = all soft → soft_fail, not partial_fail.
+    (let ((ci (decknix-test--make-ci
+               "fail"
+               (list (decknix-test--make-check "codacy" "FAILURE")
+                     (decknix-test--make-check "e2e-suite" "FAILURE")))))
+      (should (equal "soft_fail"
+                     (decknix--hub-ci-classify ci "acme/widgets"))))))
 
 (ert-deftest decknix-hub-ci/classify-partial-repo-soft-plus-hard-still-partial ()
-  ;; Even with repo patterns, a hard build failure keeps partial_fail.
-  (let ((ci (decknix-test--make-ci
-             "fail"
-             (list (decknix-test--make-check "e2e-suite" "FAILURE")
-                   (decknix-test--make-check "build" "FAILURE")))))
-    (should (equal "partial_fail"
-                   (decknix--hub-ci-classify ci "examplecloud/widget")))))
+  (decknix-hub-ci-test--with-repo-soft
+    ;; Even with repo patterns, a hard build failure keeps partial_fail.
+    (let ((ci (decknix-test--make-ci
+               "fail"
+               (list (decknix-test--make-check "e2e-suite" "FAILURE")
+                     (decknix-test--make-check "build" "FAILURE")))))
+      (should (equal "partial_fail"
+                     (decknix--hub-ci-classify ci "acme/widgets"))))))
 
 (ert-deftest decknix-hub-ci/classify-fail-honours-all-failure-conclusions ()
   ;; FAILURE / ERROR / TIMED_OUT / CANCELLED / ACTION_REQUIRED all count.
@@ -261,16 +272,17 @@ the heuristic stays script-based rather than codepoint-range-based."
     (should (eq 'error (decknix-test--icon-face icon)))))
 
 (ert-deftest decknix-hub-ci/ci-icon-repo-arg-upgrades-partial-to-soft ()
-  ;; When repo arg makes all failing checks soft, icon should be soft_fail.
-  (let* ((ci (decknix-test--make-ci
-              "fail"
-              (list (decknix-test--make-check "codacy" "FAILURE")
-                    (decknix-test--make-check "e2e-suite" "FAILURE"))))
-         (icon (decknix--hub-ci-icon ci nil "examplecloud/widget")))
-    ;; All soft (codacy=global-soft, e2e=repo-soft) → soft_fail → ●+orange+bold.
-    (should (equal "●" (decknix-test--icon-glyph icon)))
-    (should (equal '(:foreground "orange" :weight bold)
-                   (decknix-test--icon-face icon)))))
+  (decknix-hub-ci-test--with-repo-soft
+    ;; When repo arg makes all failing checks soft, icon should be soft_fail.
+    (let* ((ci (decknix-test--make-ci
+                "fail"
+                (list (decknix-test--make-check "codacy" "FAILURE")
+                      (decknix-test--make-check "e2e-suite" "FAILURE"))))
+           (icon (decknix--hub-ci-icon ci nil "acme/widgets")))
+      ;; All soft (codacy=global-soft, e2e=repo-soft) → soft_fail → ●+orange+bold.
+      (should (equal "●" (decknix-test--icon-glyph icon)))
+      (should (equal '(:foreground "orange" :weight bold)
+                     (decknix-test--icon-face icon))))))
 
 (ert-deftest decknix-hub-ci/ci-icon-running-is-half-circle-warning ()
   (let ((icon (decknix--hub-ci-icon (decknix-test--make-ci "running"))))

@@ -22,7 +22,7 @@ BLOCK = [
     "cd ~/Code/widget && ./gradlew :core:test --tests '*Foo*'",
     "timeout 400 nix build .#darwinConfigurations.default.system",
     "decknix wt audit --json > /tmp/a.json",
-    "~/Code/examplecloud/.org-tools/bin/wait-for-pr-reviews 20861",
+    "~/Code/my-org/.tools/bin/wait-for-pr-reviews 20861",
     "gh run watch 123",
     "sleep 2m",
 ]

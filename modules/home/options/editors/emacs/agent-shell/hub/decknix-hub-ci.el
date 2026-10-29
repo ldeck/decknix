@@ -41,14 +41,16 @@
 A CI failure is classified as soft_fail when ALL failing checks
 match one of these patterns (case-insensitive substring match).")
 
-(defvar decknix--hub-ci-repo-soft-patterns
-  '(("examplecloud/widget" . ("e2e" "integration" "canary" "infra"
-                              "smoke" "performance" "staging" "stress")))
+(defvar decknix--hub-ci-repo-soft-patterns nil
   "Per-repo extra soft patterns for CI classification.
 Alist of REPO-FULL-NAME (\"owner/repo\") → extra soft-pattern strings.
 Each extra pattern is a case-insensitive substring, same convention as
 `decknix--hub-ci-soft-patterns'.  Combined with the global patterns when
-classifying a check from that repository.")
+classifying a check from that repository.
+
+Empty by default: which checks are advisory is a property of each
+organisation's pipelines, so an org config sets it, for example
+  ((\"acme/widgets\" . (\"e2e\" \"integration\" \"canary\"))).")
 
 (defun decknix--hub-ci-check-soft-p (check-name)
   "Return non-nil if CHECK-NAME matches a global soft/lint pattern."
@@ -58,7 +60,7 @@ classifying a check from that repository.")
 
 (defun decknix--hub-ci-check-soft-p-for-repo (check-name repo)
   "Return non-nil if CHECK-NAME is soft globally or via per-REPO patterns.
-REPO is the full repository name (e.g. \"examplecloud/widget\")."
+REPO is the full repository name (e.g. \"acme/widgets\")."
   (or (decknix--hub-ci-check-soft-p check-name)
       (when repo
         (let* ((extra (cdr (assoc repo decknix--hub-ci-repo-soft-patterns)))
@@ -76,7 +78,7 @@ Returns \"pass\", \"running\", \"fail\", \"soft_fail\",
 \"partial_fail\" — SOME failing checks are soft, others are hard.
 \"fail\"         — ALL failing checks are hard (no soft match).
 
-REPO is the full repository name (e.g. \"examplecloud/widget\"); when
+REPO is the full repository name (e.g. \"acme/widgets\"); when
 provided, `decknix--hub-ci-repo-soft-patterns' is consulted for extra
 per-repo soft patterns in addition to the global list."
   (if (not ci)

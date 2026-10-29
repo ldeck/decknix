@@ -71,9 +71,10 @@ in
     !include ${homeDir}/.config/nix/access-tokens.conf
   '';
 
-  # Authenticate Nix's fetchers to ExampleCloud's private GAR Maven repo the same
-  # way Gradle does — so hermetic builds that vendor private deps (e.g. ACME-539's
-  # nix container build) can pull them without per-artifact workarounds. On the
+  # Authenticate Nix's fetchers to a private Maven registry (for example Google
+  # Artifact Registry) the same way Gradle does, so hermetic builds that vendor
+  # private deps (a Nix container build, say) can pull them without
+  # per-artifact workarounds. On the
   # multi-user daemon, fixed-output fetches read the daemon's netrc-file (a client
   # `--option` is ignored), so it must be set here. Points at a user-writable file
   # the daemon reads; refresh it with a short-lived token before such a build:

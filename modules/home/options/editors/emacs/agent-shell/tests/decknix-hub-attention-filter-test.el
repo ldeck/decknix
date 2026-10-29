@@ -551,6 +551,7 @@ reviewer, was always shown under hide-any.  It must now be hidden."
   (skip-unless (fboundp 'decknix--hub-review-priority))
   (let* ((decknix--hub-requests-sort-mode 'priority)
          (decknix--hub-requests-sort-reverse nil)
+         (decknix-hub-review-incident-prefixes '("SEV"))
          (hot '((title . "SEV-1: incident") (number . 1)
                 (updated . "2026-01-01T00:00:00Z")))
          (feat '((title . "NOVA-1: feature") (number . 2)

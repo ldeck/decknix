@@ -68,8 +68,8 @@ Fields:
   goal issue; `:label-prefix` the type labels; `:label` restricts every
   repository's items to issues carrying it.
 
-Example definitions: [a hackathon](./boards/hack-2026.eld) and
-[the US pilot](./boards/us-pilot.eld).
+Example definitions: [a hackathon](./boards/hackathon.eld) and
+[a pilot](./boards/pilot.eld).
 
 ## Repositories
 
@@ -77,9 +77,9 @@ Example definitions: [a hackathon](./boards/hack-2026.eld) and
 
 | Entry | Matches |
 |-------|---------|
-| `"ExampleOwner/widget"` | exactly that repository |
-| `"ExampleOwner/hack-*"` | a glob over `owner/name` (`*`, `?`, `[...]`) |
-| `"*/widgetportal-*"` | a glob with any owner (expanded within the board's named owners) |
+| `"acme/widgets"` | exactly that repository |
+| `"acme/hack-*"` | a glob over `owner/name` (`*`, `?`, `[...]`) |
+| `"*/portal-*"` | a glob with any owner (expanded within the board's named owners) |
 | `(:regexp "acme-dev/.*-cli")` | a regexp, anchored to the whole `owner/name` |
 
 Matching ignores case. Items are read from every repository in scope, the
@@ -108,8 +108,8 @@ Two rules, combined by `:match`:
   from cached facts only: the PRs it reviews or created, the worktrees its
   tool calls touched, and its workspace resolved through the hub's clone map
   and worktree registry (or, failing those, a `<repo>-worktrees/` directory
-  name). A tag naming a repository in scope counts too (`widgetportal` names
-  `widgetportal-integration`; tags shorter than four characters never do).
+  name). A tag naming a repository in scope counts too (`portal` names
+  `portal-integration`; tags shorter than four characters never do).
 
 | `:match` | On the board when |
 |----------|-------------------|
@@ -195,23 +195,23 @@ focus, and `C-u C-u C-c A j` inverts that for one jump.
 The focus reads only cached data: the definition once when it changes, and
 each session's membership memoised for ten seconds.
 
-### The US pilot as a focus
+### A pilot as a focus
 
-The ExampleCloud Pilot Control board is its own tool, not a decknix board,
-so it is not a focus target as it stands. An equivalent definition makes one:
+A pilot that already has its own control tool is not a focus target as it
+stands. An equivalent definition makes one:
 
 ```elisp
-(:name "us-pilot"
- :title "US Pilot"
- :goal "Tenantco live on ExampleCloud in us-prd"
- :tags-any ("tenantco" "us" "tenantb")
- :repos ("ExampleOwner/widgetportal-integration"
-         "ExampleOwner/widget"
-         "ExampleOwner/address-normaliser")
+(:name "pilot"
+ :title "Pilot"
+ :goal "First tenant live in the new region"
+ :tags-any ("tenant-a" "pilot")
+ :repos ("acme/portal-integration"
+         "acme/widgets"
+         "acme/address-service")
  :match both
  :backend github
- :github (:repo "ExampleOwner/widgetportal-integration"
-          :label "us-pilot" :label-prefix "type:"))
+ :github (:repo "acme/portal-integration"
+          :label "pilot" :label-prefix "type:"))
 ```
 
 `both` because the monolith is shared: a session needs a pilot tag and one of

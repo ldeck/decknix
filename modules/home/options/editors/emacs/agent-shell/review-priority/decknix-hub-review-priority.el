@@ -16,43 +16,54 @@
 ;; This scores an item instead.  Higher sorts first.  Two axes, because
 ;; they answer different questions and neither subsumes the other:
 ;;
-;;   WHAT is it?    Incident work (HOT/PIR/DOS/ALRT) outranks feature work,
-;;                  which outranks EH.  Taken from the ticket prefix in
-;;                  the title, which every PR here carries.
+;;   WHAT is it?    Incident work outranks feature work, which outranks
+;;                  deferred work.  Taken from the ticket prefix in the
+;;                  title (`ABC-123: ...'); which prefixes mean incident
+;;                  or deferred work is the org's to say, so both lists
+;;                  are customisation points and empty by default.
 ;;
 ;;   WHERE is it?   Somebody waiting on a reply outranks a re-request,
 ;;                  which outranks a stale review, which outranks an
 ;;                  untouched personal ask, which outranks a team ask.
 ;;
 ;; A composite integer rather than tiers, because the two axes genuinely
-;; cross: a HOT PR nobody has touched should beat a feature PR that is
+;; cross: an incident PR nobody has touched should beat a feature PR that is
 ;; merely waiting on a reply, and strict tiers cannot express that
 ;; without doubling every level.  Every weight is a named constant with
 ;; its reasoning, so the ordering can be argued with rather than reverse
 ;; engineered from behaviour.
 ;;
 ;; Age contributes a small, capped nudge.  Waiting matters -- somebody is
-;; blocked -- but it must never let a two-week-old EH draft outrank a HOT
-;; PR raised an hour ago, so the cap is deliberately below one tier step.
+;; blocked -- but it must never let a two-week-old deferred draft outrank
+;; an incident PR raised an hour ago, so the cap is deliberately below one
+;; tier step.
 
 ;;; Code:
 
 (require 'map)
 
-(defconst decknix--hub-review-incident-prefixes '("HOT" "PIR" "DOS" "ALRT")
-  "Ticket prefixes that mean incident work.  Reviewed before anything else.")
+(defgroup decknix-hub-review-priority nil
+  "Ordering of the review queue."
+  :group 'decknix)
 
-(defconst decknix--hub-review-deferred-prefixes '("EH")
-  "Ticket prefixes that are explicitly lower priority than feature work.")
+(defcustom decknix-hub-review-incident-prefixes nil
+  "Ticket prefixes that mean incident work.  Reviewed before anything else.
+Upper case, matched against the `ABC' of a title's `ABC-123:' key, e.g.
+\='(\"SEV\" \"INC\")."
+  :type '(repeat string) :group 'decknix-hub-review-priority)
+
+(defcustom decknix-hub-review-deferred-prefixes nil
+  "Ticket prefixes that are explicitly lower priority than feature work."
+  :type '(repeat string) :group 'decknix-hub-review-priority)
 
 ;; --- weights, each with the reason it is the size it is ---
 
 (defconst decknix--hub-review-w-incident 100
-  "Bonus for incident work.  Larger than any engagement gap, so a HOT PR
-nobody has touched still beats a feature PR someone is waiting on.")
+  "Bonus for incident work.  Larger than any engagement gap, so an incident
+PR nobody has touched still beats a feature PR someone is waiting on.")
 
 (defconst decknix--hub-review-w-deferred -30
-  "Penalty for EH work: below feature work, but not below a draft or a
+  "Penalty for deferred work: below feature work, but not below a draft or a
 bot, because it is still real work somebody asked for.")
 
 (defconst decknix--hub-review-w-replies-to-me 60
@@ -80,7 +91,7 @@ are waiting on a fresh one.")
 
 (defconst decknix--hub-review-w-answered -25
   "Another reviewer has responded, so this is probably covered.  A
-penalty rather than a floor: a HOT PR someone else answered can still
+penalty rather than a floor: an incident PR someone else answered can still
 outrank an untouched feature PR.")
 
 (defconst decknix--hub-review-w-draft -40
@@ -110,9 +121,9 @@ repo here follows."
   "Return the workstream component of TITLE's priority."
   (let ((prefix (decknix--hub-review-ticket-prefix title)))
     (cond
-     ((member prefix decknix--hub-review-incident-prefixes)
+     ((member prefix decknix-hub-review-incident-prefixes)
       decknix--hub-review-w-incident)
-     ((member prefix decknix--hub-review-deferred-prefixes)
+     ((member prefix decknix-hub-review-deferred-prefixes)
       decknix--hub-review-w-deferred)
      (t 0))))
 
@@ -160,9 +171,9 @@ For `help-echo' and for arguing with the ordering when it looks wrong."
       "gone: no review wanted"
     (let ((parts nil)
           (prefix (decknix--hub-review-ticket-prefix (map-elt item 'title))))
-      (when (member prefix decknix--hub-review-incident-prefixes)
+      (when (member prefix decknix-hub-review-incident-prefixes)
         (push (format "incident(%s) +%d" prefix decknix--hub-review-w-incident) parts))
-      (when (member prefix decknix--hub-review-deferred-prefixes)
+      (when (member prefix decknix-hub-review-deferred-prefixes)
         (push (format "deferred(%s) %d" prefix decknix--hub-review-w-deferred) parts))
       (push (format "engagement +%d" (decknix--hub-review-engagement-score item)) parts)
       (let ((a (decknix--hub-review-age-score age-days)))

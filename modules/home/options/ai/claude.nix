@@ -344,7 +344,7 @@ in {
     # it would be worse than the shadowing.
     #
     # PATH is deliberately NOT reordered to fix this.  `~/.local/bin' also
-    # holds `oncall-rs' and `org-health-kargo', which exist in Nix too, so
+    # holds org CLIs that exist in Nix too (installed both ways), so
     # appending instead of prepending would change which of THOSE runs --
     # a much wider blast radius than the problem being solved.
     #

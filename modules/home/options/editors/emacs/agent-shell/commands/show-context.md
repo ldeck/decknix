@@ -13,7 +13,7 @@ query, not a plan — be terse.
 
 Parse `$ARGUMENTS` for:
 - **`TASK_KEY`** — issue/ticket key (e.g. `ACME-202`). Optional; inferred from context.
-- **`PROJECT_KEY`** — project key (e.g. `ARC`, `OPS`, `ACME`, `CORE`). Optional.
+- **`PROJECT_KEY`** — project key (e.g. `OPS`, `CORE`, `ACME`). Optional.
 
 If no arguments, default to **session context**.
 

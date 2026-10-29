@@ -15,10 +15,10 @@ py3.buildPythonApplication rec {
   version = "0.2.0";
   pyproject = true;
 
-  # Source is provided as a flake input (private GitHub repo).
-  # In the downstream decknix-config flake.nix:
+  # Source is provided as a flake input (a private GitHub repo), e.g. in an
+  # org config flake.nix:
   #   inputs.iap-proxy-src = {
-  #     url = "github:ExampleOwner/example-iap-proxy/feature/token-persistence";
+  #     url = "github:my-org/iap-proxy";
   #     flake = false;
   #   };
   src = iap-proxy-src;
@@ -39,7 +39,6 @@ py3.buildPythonApplication rec {
 
   meta = with lib; {
     description = "HTTP proxy with Google IAP authentication for local development";
-    homepage = "https://github.com/ExampleOwner/example-iap-proxy";
     mainProgram = "iap-proxy";
     maintainers = [ "ldeck" ];
     platforms = platforms.darwin ++ platforms.linux;

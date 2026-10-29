@@ -12,6 +12,11 @@
 (require 'ert)
 (require 'decknix-hub-review-priority)
 
+;; Which prefixes mean incident or deferred work is an org setting, empty
+;; by default; these tests pin one so the orderings have something to rank.
+(setq decknix-hub-review-incident-prefixes '("SEV" "PIR" "SUPP" "ALRT")
+      decknix-hub-review-deferred-prefixes '("EH"))
+
 (defun decknix-rp-test--item (&rest kv)
   "Build a feed item from plist KV."
   (let (alist)
@@ -26,10 +31,10 @@
 
 (ert-deftest decknix-rp--prefix-parsing ()
   "The `ABC-123:' convention every repo here uses."
-  (should (equal "HOT" (decknix--hub-review-ticket-prefix "SEV-239: log uncaught exceptions")))
+  (should (equal "SEV" (decknix--hub-review-ticket-prefix "SEV-239: log uncaught exceptions")))
   (should (equal "NOVA" (decknix--hub-review-ticket-prefix "NOVA-4287: Decide ACR grants")))
   (should (equal "EH" (decknix--hub-review-ticket-prefix "EH-12: tidy")))
-  (should (equal "HOT" (decknix--hub-review-ticket-prefix "sev-1: lowercase still counts"))))
+  (should (equal "SEV" (decknix--hub-review-ticket-prefix "sev-1: lowercase still counts"))))
 
 (ert-deftest decknix-rp--prefix-absent ()
   "A PR with no ticket key is feature-weight, not an error."
@@ -40,7 +45,7 @@
 ;; --- the workstream ordering you asked for ---
 
 (ert-deftest decknix-rp--incident-beats-feature-beats-eh ()
-  "Incident (HOT/PIR/DOS/ALRT) > feature > EH, all else equal."
+  "Incident > feature > deferred, all else equal."
   (let ((hot (decknix-rp-test--p (decknix-rp-test--item 'title "SEV-1: x")))
         (feat (decknix-rp-test--p (decknix-rp-test--item 'title "NOVA-1: x")))
         (eh (decknix-rp-test--p (decknix-rp-test--item 'title "EH-1: x"))))
@@ -48,11 +53,11 @@
     (should (> feat eh))))
 
 (ert-deftest decknix-rp--all-incident-prefixes-rank-together ()
-  "HOT, PIR, DOS and ALRT are one band, not a hierarchy."
+  "Every incident prefix is one band, not a hierarchy."
   (let ((scores (mapcar (lambda (p)
                           (decknix-rp-test--p
                            (decknix-rp-test--item 'title (format "%s-1: x" p))))
-                        '("HOT" "PIR" "DOS" "ALRT"))))
+                        '("SEV" "PIR" "SUPP" "ALRT"))))
     (should (= 1 (length (delete-dups (copy-sequence scores)))))))
 
 ;; --- engagement ordering ---
@@ -80,7 +85,7 @@ and invert the workstream ordering."
 ;; --- the cross-axis case that motivated a composite score ---
 
 (ert-deftest decknix-rp--untouched-incident-beats-engaged-feature ()
-  "A HOT PR nobody has touched outranks a feature PR waiting on a reply.
+  "An incident PR nobody has touched outranks a feature PR waiting on a reply.
 This is the case strict tiers could not express without doubling every
 level, and it is why the incident bonus exceeds the whole engagement
 range."
@@ -102,7 +107,7 @@ range."
     (should (< gone worst))))
 
 (ert-deftest decknix-rp--answered-demotes-but-does-not-sink ()
-  "An answered HOT PR still outranks an untouched feature PR.
+  "An answered incident PR still outranks an untouched feature PR.
 A penalty, not a floor: someone else responding is a hint, not a fact
 about whether the work matters."
   (should (> (decknix-rp-test--p (decknix-rp-test--item 'title "SEV-1: x") 'answered)
@@ -124,7 +129,7 @@ about whether the work matters."
     (should (> old new))))
 
 (ert-deftest decknix-rp--age-cannot-outrank-a-tier ()
-  "A fortnight-old EH draft must not beat a HOT PR raised an hour ago.
+  "A fortnight-old deferred draft must not beat an incident PR raised an hour ago.
 The age cap exists precisely to keep waiting from becoming importance."
   (let ((old-eh (decknix-rp-test--p
                  (decknix-rp-test--item 'title "EH-1: x") nil 365))

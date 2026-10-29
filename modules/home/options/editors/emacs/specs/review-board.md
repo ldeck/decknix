@@ -36,7 +36,7 @@ created, so the two are specified together and sequenced deliberately.
 | Review identity | `review-identity/` | Which PR a session is reviewing, surviving rename and tag edits. |
 | Session snapshot | `hub-bulk` | Memoised per-session tags/PR, cheap on the render path. |
 | Auto-review policy | `auto-review/` | `off` / `bot` / `human` / `any`, readiness predicates. |
-| DoS board | `dos-board/` | The interaction model this follows. |
+| DoS board | an org package, outside decknix since slice 5 of the onboarding spec | The interaction model this follows. |
 | Bulk send | `session-bulk-send/` | Partition logic for dispatching to many sessions. |
 
 So the data layer is largely done. This spec is mostly about a surface

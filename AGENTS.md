@@ -37,7 +37,7 @@ decknix switch --dry-run    # Build without activating
 
 # Override any flake input with a local path (repeatable, for pre-PR testing)
 decknix switch --override decknix=~/tools/decknix
-decknix switch --override decknix=~/tools/decknix --override org-config=~/Code/my-org/decknix-config
+decknix switch --override decknix=~/tools/decknix --override my-org-config=~/Code/my-org/my-org-config
 
 # Build just the system derivation (for CI or validation)
 nix build .#darwinConfigurations.default.system --impure \
@@ -175,9 +175,9 @@ cd ~/.config/decknix && nix build .#darwinConfigurations.default.system \
 #### Commit and switch readiness gate
 
 **Do not commit code or config until the full system builds from the exact
-staged index tree.** The Nix-managed `pre-commit` hook in
-`decknix-config/modules/build-guard/pre-commit.sh` enforces this for both
-`~/tools/decknix` and `~/Code/examplecloud/decknix-config`. It archives each
+staged index tree.** The Nix-managed `pre-commit` hook in the org overlay
+(`modules/build-guard/pre-commit.sh`) enforces this for both the decknix
+checkout and the org overlay checkout. It archives each
 repo's Git index, excluding unstaged edits and ignored Cargo outputs, then
 builds the complete system with both snapshots as flake overrides. It blocks
 the commit on any failure, including a newly exposed downstream ERT failure.

@@ -118,7 +118,6 @@ The periodic save is what survives a crash or SIGKILL, which skip
 (defcustom decknix-layout-recreate-alist
   '(("\\`\\*Review Board\\*\\'" . decknix-review-board)
     ("\\`\\*deckmacs: Session Board\\*\\'" . decknix-session-board)
-    ("\\`\\*Pilot Control\\*\\'" . org-pilot-board)
     ("\\`\\*Board: .+\\*\\'" . decknix-board-recreate)
     ("\\`\\*Messages\\*\\'" . messages-buffer))
   "How to rebuild buffers that visit no file, keyed by name or major mode.

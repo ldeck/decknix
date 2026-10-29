@@ -30,7 +30,7 @@
 ;; home on this board via `d' (which dispatches `/review-and-ship-bot-pr'
 ;; behind the mandatory review gate).
 ;;
-;; Follows `decknix-dos-board' deliberately -- constant lanes, cursor,
+;; Follows the on-support board's model deliberately -- constant lanes, cursor,
 ;; single-key actions, read-only, refreshed rather than recomputed.  The
 ;; engine here is the hub JSON plus the pure packages (priority, status,
 ;; identity, and this board's own model), so nothing is computed twice.
@@ -966,7 +966,7 @@ PRIORITY  (why the numbers look the way they do)
   Two axes added together, so the score is a rank, not a percentage, and
   NEGATIVE IS NORMAL for deprioritised work.
 
-    what     incident HOT/PIR/DOS/ALRT +100   EH -30   feature 0
+    what     incident +100   deferred -30   feature 0
     where    replies-to-me +60  needs-reply +50  re-requested +45
              stale +40  mine +30  team +15  otherwise +10
     minus    bot -35   draft -40   answered -25   gone -1000

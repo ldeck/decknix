@@ -16,7 +16,7 @@
 ;; agent.  Hexagonal: destinations are a pluggable alist of adapters
 ;; (`decknix-capture-destinations'); GitHub + taskwarrior are the core
 ;; adapters shipped here, and an org config (e.g. examplecloud) can add
-;; more -- Jira ACME task/subtask -- without touching this core (v1
+;; more -- a Jira task/subtask -- without touching this core (v1
 ;; ships GitHub issue + comment + taskwarrior; Jira is a later adapter).
 ;;
 ;; Submission is asynchronous (`make-process'): the picker returns
