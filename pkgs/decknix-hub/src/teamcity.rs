@@ -422,6 +422,18 @@ struct TcVcsRoot {
     name: Option<String>,
 }
 
+
+/// The repository name of a VCS root named after its GitHub URL, e.g.
+/// "https://github.com/acme/widgets#refs/heads/main" or
+/// "git@github.com:acme/widgets.git" both give "widgets".
+fn vcs_root_repo_slug(name: &str) -> Option<&str> {
+    let pos = name.find("github.com")?;
+    let path = name[pos + "github.com".len()..].trim_start_matches(['/', ':']);
+    let repo = path.split_once('/')?.1;
+    let repo = repo.split(['#', '/']).next().unwrap_or(repo);
+    let repo = repo.strip_suffix(".git").unwrap_or(repo);
+    (!repo.is_empty()).then_some(repo)
+}
 /// Discover the mapping from GitHub repo slug (e.g. "widget") to TC project ID
 /// (e.g. "Monolith") by parsing VCS root names.
 async fn discover_repo_tc_mapping(client: &Client, base: &str) -> HashMap<String, String> {
@@ -448,10 +460,7 @@ async fn discover_repo_tc_mapping(client: &Client, base: &str) -> HashMap<String
     for vcs in data.vcs_root.unwrap_or_default() {
         let name = vcs.name.unwrap_or_default();
         let vid = vcs.id.unwrap_or_default();
-        // Extract repo slug: "https://github.com/ExampleOwner/svc-public-api#refs/..."
-        if let Some(pos) = name.find("ExampleOwner/") {
-            let after = &name[pos + "ExampleOwner/".len()..];
-            let repo_slug = after.split('#').next().unwrap_or(after);
+        if let Some(repo_slug) = vcs_root_repo_slug(&name) {
             // TC project is the first segment of the VCS root ID
             let tc_project = vid.split('_').next().unwrap_or(&vid);
             // Skip VCS roots with odd/compound IDs (e.g. "HttpsGithubCom...")
@@ -564,7 +573,7 @@ async fn poll_deploy_status(
     }
 
     for (repo, branches) in &repo_branches {
-        // Extract repo slug: "ExampleOwner/widget" → "widget"
+        // Extract repo slug: "acme/widgets" → "widgets"
         let repo_slug = repo.split('/').last().unwrap_or(repo);
         let tc_project = match repo_tc_map.get(repo_slug) {
             Some(p) => p.clone(),
@@ -722,5 +731,28 @@ pub async fn run_teamcity_adapter(
 
         if once { return; }
         tokio::time::sleep(interval).await;
+    }
+}
+#[cfg(test)]
+mod vcs_root_tests {
+    use super::vcs_root_repo_slug;
+
+    #[test]
+    fn slug_from_https_url_with_ref() {
+        assert_eq!(
+            vcs_root_repo_slug("https://github.com/acme/widgets#refs/heads/main"),
+            Some("widgets")
+        );
+    }
+
+    #[test]
+    fn slug_from_ssh_url() {
+        assert_eq!(vcs_root_repo_slug("git@github.com:acme/widgets.git"), Some("widgets"));
+    }
+
+    #[test]
+    fn no_slug_without_github_url() {
+        assert_eq!(vcs_root_repo_slug("Widgets main"), None);
+        assert_eq!(vcs_root_repo_slug("https://github.com/acme"), None);
     }
 }

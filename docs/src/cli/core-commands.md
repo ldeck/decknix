@@ -352,8 +352,10 @@ decknix session gc --dry-run
 
 Keeps the primary checkout of every clone in your workspaces fresh: fetches
 and fast-forwards each repo's default branch, never touching dirty trees or a
-checked-out feature branch. Workspaces come from `[repos].workspaces` in
-`settings.toml` or `--workspace [ORG=]PATH`. The `decknix-repo-sync` launchd
+checked-out feature branch. Workspaces come from `--workspace [ORG=]PATH`,
+then `[repos].workspaces` in `settings.toml`, then the Nix option
+`decknix.cli.repos.workspaces` (an org config can declare its workspace
+there), and failing all three, `~/Code`. The `decknix-repo-sync` launchd
 agent runs `sync` every three hours.
 
 ```bash
@@ -370,6 +372,11 @@ Agent skills and commands are deployed as real, editable copies (see
 `pull-local-changes` copies the edit back to the source repository it came
 from. It previews by default; `--apply` copies and commits, and `--force`
 pulls even when the deployed copy looks older than the committed source.
+
+Each file names its repository; the checkout for that name comes from
+`decknix.cli.agentSync.repoRoots`, then a `[switch.overrides]` entry of the
+same name in `settings.toml`. `decknix` itself defaults to `~/tools/decknix`
+(or `$DECKNIX_DEV`).
 
 ```bash
 decknix pull-local-changes

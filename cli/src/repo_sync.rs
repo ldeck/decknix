@@ -139,18 +139,35 @@ fn parse_workspace(spec: &str) -> Workspace {
     }
 }
 
-/// Read `[repos]` out of settings.toml, applying built-in defaults so the
-/// section is entirely optional.
+/// Workspaces declared by Nix (`decknix.cli.repos.workspaces`), which writes
+/// them to `~/.config/decknix/repos.json` as `{"workspaces": ["org=~/path"]}`.
+fn nix_workspaces(json: &str) -> Vec<Workspace> {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|v| v.get("workspaces").and_then(|w| w.as_array()).cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|x| x.as_str())
+        .map(parse_workspace)
+        .collect()
+}
+
+/// Resolve the workspace roots: CLI flags, then `[repos]` in settings.toml,
+/// then the Nix-declared list, then `~/Code` as a last resort. Each layer
+/// replaces the one below it rather than adding to it, so a machine's own
+/// settings.toml can always narrow what the org config declares.
 fn repo_config(cli_workspaces: &[String], cli_depth: Option<usize>) -> RepoConfig {
-    // Built-in fallback matches the machine's known layout: personal tools live
-    // flat under ~/tools; the examplecloud org's clones sit under ~/Code/examplecloud.
     let mut cfg = RepoConfig {
-        workspaces: vec![
-            parse_workspace("ldeck=~/tools"),
-            parse_workspace("examplecloud=~/Code/examplecloud"),
-        ],
+        workspaces: vec![parse_workspace("~/Code")],
         scan_depth: 2,
     };
+
+    if let Ok(s) = std::fs::read_to_string(home().join(".config/decknix/repos.json")) {
+        let declared = nix_workspaces(&s);
+        if !declared.is_empty() {
+            cfg.workspaces = declared;
+        }
+    }
 
     let path = home().join(".config/decknix/settings.toml");
     if let Ok(s) = std::fs::read_to_string(&path) {
@@ -919,6 +936,16 @@ mod lock_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nix_workspaces_reads_the_declared_list() {
+        let w = nix_workspaces(r#"{"workspaces": ["acme=~/Code/acme", "~/tools"]}"#);
+        assert_eq!(w.len(), 2);
+        assert_eq!(w[0].org, "acme");
+        assert_eq!(w[1].org, "tools");
+        assert!(nix_workspaces("not json").is_empty());
+        assert!(nix_workspaces(r#"{"other": 1}"#).is_empty());
+    }
 
     #[test]
     fn parse_workspace_labelled_and_bare() {

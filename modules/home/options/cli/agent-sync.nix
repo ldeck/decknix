@@ -138,13 +138,31 @@ in {
       default = {};
       description = "Files to manage via the 3-way reconciliation sync.";
     };
+
+    repoRoots = mkOption {
+      type = types.attrsOf types.str;
+      default = {};
+      example = { my-org-config = "~/Code/my-org/my-org-config"; };
+      description = ''
+        Checkout path for each repository named by a file's `repo`, so
+        `decknix pull-local-changes` knows where to copy edits back to.
+        Written to `~/.config/decknix/agent-sync-repos.json`. A repository not
+        listed here falls back to a `[switch.overrides]` entry of the same name
+        in `settings.toml`; `decknix` itself defaults to `~/tools/decknix`.
+      '';
+    };
   };
 
-  config = mkIf cfg.enable {
+  config = mkMerge [
+  (mkIf (cfg.repoRoots != {}) {
+    home.file.".config/decknix/agent-sync-repos.json".text = builtins.toJSON cfg.repoRoots;
+  })
+  (mkIf cfg.enable {
     # Run after linkGeneration so Home Manager has already torn down any stale
     # home.file symlinks (e.g. files migrated off the old symlink deployment)
     # before we lay down real, editable copies.
     home.activation.agent-sync =
       lib.hm.dag.entryAfter [ "writeBoundary" "linkGeneration" ] (syncScript cfg.files);
-  };
+  })
+  ];
 }

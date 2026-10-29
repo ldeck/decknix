@@ -336,7 +336,7 @@ pub struct ManifestEntry {
     pub hash: String,
     /// The Nix store path it was deployed from (if known)
     pub nix_store_path: Option<String>,
-    /// The repository name it belongs to (e.g. "decknix", "org-config")
+    /// The repository name it belongs to (e.g. "decknix", "my-org-config")
     pub source_repo: String,
     /// The relative path within that repository
     pub repo_path: String,
@@ -410,19 +410,41 @@ fn expand_live_path(raw: &str) -> PathBuf {
     }
 }
 
+/// Look `repo_name` up in a `{"name": "~/path"}` JSON object, as written by
+/// `decknix.cli.agentSync.repoRoots` to `~/.config/decknix/agent-sync-repos.json`.
+fn declared_repo_root(json: &str, repo_name: &str) -> Option<PathBuf> {
+    let map: HashMap<String, String> = serde_json::from_str(json).ok()?;
+    map.get(repo_name).map(|p| expand_live_path(p))
+}
+
 /// Resolve a manifest `source_repo` name to its checkout root on disk.
+///
+/// `DECKNIX_DEV` wins for the framework itself; then the roots declared in
+/// Nix; then a `[switch.overrides]` entry of the same name, since a local
+/// override already says where that input's checkout is. Only the framework
+/// has a built-in default: every other repository is named by whoever
+/// registers its files.
 fn resolve_repo_root(repo_name: &str) -> Option<PathBuf> {
-    match repo_name {
-        "decknix" => Some(
-            std::env::var("DECKNIX_DEV")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join("tools/decknix")),
-        ),
-        "org-config" | "decknix-config" => {
-            Some(dirs::home_dir().unwrap_or_default().join("Code/examplecloud/decknix-config"))
+    let config_dir = dirs::home_dir().unwrap_or_default().join(".config/decknix");
+    if repo_name == "decknix" {
+        if let Ok(dev) = std::env::var("DECKNIX_DEV") {
+            return Some(PathBuf::from(dev));
         }
-        _ => None,
     }
+    if let Some(root) = fs::read_to_string(config_dir.join("agent-sync-repos.json"))
+        .ok()
+        .and_then(|json| declared_repo_root(&json, repo_name))
+    {
+        return Some(root);
+    }
+    if let Some((_, path)) = load_switch_overrides_from_settings(&config_dir.join("settings.toml"))
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(name, _)| name == repo_name)
+    {
+        return Some(expand_live_path(&path));
+    }
+    (repo_name == "decknix").then(|| dirs::home_dir().unwrap_or_default().join("tools/decknix"))
 }
 
 /// Run `git -C <repo> <args>` and return trimmed stdout regardless of exit
@@ -1549,13 +1571,9 @@ fn main() -> anyhow::Result<()> {
 
                     if apply {
                         let repo_name = to.as_deref().unwrap_or(&entry.source_repo);
-                        let repo_root = match repo_name {
-                            "decknix" => std::env::var("DECKNIX_DEV").map(PathBuf::from).unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join("tools/decknix")),
-                            "org-config" | "decknix-config" => dirs::home_dir().unwrap_or_default().join("Code/examplecloud/decknix-config"),
-                            _ => {
-                                eprintln!("⚠️  Unknown repo '{}' for {}; skipping copy", repo_name, live_path_raw);
-                                continue;
-                            }
+                        let Some(repo_root) = resolve_repo_root(repo_name) else {
+                            eprintln!("⚠️  Unknown repo '{}' for {}; skipping copy", repo_name, live_path_raw);
+                            continue;
                         };
 
                         if !repo_root.is_dir() {
@@ -1610,8 +1628,7 @@ fn main() -> anyhow::Result<()> {
                                     // Found a NEW file
                                     let live_hash = calculate_hash(&path)?;
 
-                                    // Default routing: if path contains examplecloud -> org-config, else decknix
-                                    // Since these live under $HOME command dirs, it's likely decknix unless we override.
+                                    // New commands default to decknix; `--to` routes them elsewhere.
                                     let repo_name = to.as_deref().unwrap_or("decknix");
                                     let repo_path = format!("modules/home/options/editors/emacs/agent-shell/commands/{}", path.file_name().unwrap().to_string_lossy());
 
@@ -1625,10 +1642,8 @@ fn main() -> anyhow::Result<()> {
                                     changed_files.push((live_path_raw.clone(), new_entry.clone(), live_hash.clone()));
 
                                     if apply {
-                                        let repo_root = match repo_name {
-                                            "decknix" => std::env::var("DECKNIX_DEV").map(PathBuf::from).unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join("tools/decknix")),
-                                            "org-config" | "decknix-config" => dirs::home_dir().unwrap_or_default().join("Code/examplecloud/decknix-config"),
-                                            _ => continue,
+                                        let Some(repo_root) = resolve_repo_root(repo_name) else {
+                                            continue;
                                         };
 
                                         let target_path = repo_root.join(&new_entry.repo_path);
@@ -2274,6 +2289,17 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn declared_repo_root_reads_the_named_checkout() {
+        let json = r#"{"my-org-config": "/w/my-org-config"}"#;
+        assert_eq!(
+            declared_repo_root(json, "my-org-config"),
+            Some(PathBuf::from("/w/my-org-config"))
+        );
+        assert_eq!(declared_repo_root(json, "other"), None);
+        assert_eq!(declared_repo_root("not json", "my-org-config"), None);
+    }
+
     fn git_in(repo: &Path, args: &[&str]) {
         let ok = Command::new("git")
             .arg("-C")
@@ -2404,9 +2430,9 @@ mod tests {
 
     #[test]
     fn test_filter_regex_matches_repo_or_path() {
-        let f = compile_filter(&WtFilter { regex: Some("trade".into()), older_than: None }).unwrap();
+        let f = compile_filter(&WtFilter { regex: Some("market".into()), older_than: None }).unwrap();
         assert!(filter_matches(&f, "acmeland/marketx-integration", Path::new("/x"), Duration::from_secs(0)));
-        assert!(filter_matches(&f, "x", Path::new("/tmp/trade-stuff/wt"), Duration::from_secs(0)));
+        assert!(filter_matches(&f, "x", Path::new("/tmp/market-stuff/wt"), Duration::from_secs(0)));
         assert!(!filter_matches(&f, "acmeland/other", Path::new("/tmp/other/wt"), Duration::from_secs(0)));
     }
 
