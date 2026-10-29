@@ -1,6 +1,6 @@
 # Inventory: the reference org config overlay
 
-The reference overlay is a private repository consumed as a flake input of the user flake. This public spec deliberately does not name it or its sibling projects; file references below are relative to that overlay repository at its `main` as of 2026-10-27. The overlay's own docs will carry the named, org-specific version of this inventory (slice 7).
+The reference overlay is a private repository consumed as a flake input of the user flake. This public spec deliberately does not name it or its sibling projects; file references below are relative to that overlay repository at its `main` as of 2026-10-27. The overlay's own docs will carry the named, org-specific version of this inventory (slice 10).
 
 ## 1. Shape
 

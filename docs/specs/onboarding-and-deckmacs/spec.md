@@ -1,6 +1,6 @@
 # Onboarding, adoption tiers, uninstall and the deckmacs split
 
-Status: approved 2026-10-29 with the decisions in section 13. Slices 1 and 2 are in progress.
+Status: approved 2026-10-29 with the decisions in section 13; layering (section 6.0) approved 2026-10-30. Slices 1 and 2 have landed on `main` locally.
 
 Supporting inventories (evidence for every claim below):
 
@@ -39,11 +39,11 @@ Separately, the Emacs configuration has become a product of its own. Its identif
 2. A gentle first rung: Nix with flakes and nothing else, enough to use any flake-based project (including the org's Nix build pipelines).
 3. Clean, verified uninstall, per tier and in full, that never touches the person's data.
 4. Extract the advanced Emacs configuration into `ldeck/deckmacs` with history, rename Emacs-only identifiers to `deckmacs-` with obsolete aliases, and migrate state paths without data loss.
-5. decknix ships a basic default Emacs and offers deckmacs as tier 4.
+5. decknix ships a basic default Emacs and offers deckmacs as tier 4 (the editor) and tier 5 (agent workspace and boards).
 6. Org overlays declare their optional components so the installer can offer them; the overlay never has to edit the user's flake text.
 7. Docs that are current, organised by tier, and kept current by CI (generated options and CLI reference, link check).
 8. People who adopt the higher tiers need no bespoke Homebrew installs; people who keep Homebrew are not fought.
-9. deckmacs is public and carries no association with any particular organisation: no org names, repositories, chat channels, issue trackers or org overlays in its code, docs, tests or history.
+9. decknix and deckmacs are public and carry no association with any particular organisation: no org names, repositories, chat channels, issue trackers or org overlays in their code, docs, tests or history (decknix's history is scrubbed once, slice 6).
 10. The working checkouts follow a predictable layout: personal projects in one personal workspace, org projects in the org workspace, each checkout named after its repository (section 14).
 
 ## 3. Non-goals
@@ -59,7 +59,8 @@ Separately, the Emacs configuration has become a product of its own. Its identif
 - **Curious developer.** Wants Nix and flake dev shells for one or two repos. Will not hand their shell or `/etc` to a framework on day one. Needs: tier 0 only, fully reversible with one command.
 - **AI-agent user.** Wants Claude Code, Pi, Gemini and friends installed and configured, plus the org's shared skills and commands. Happy with nix-darwin and home-manager, not interested in Emacs. Needs: tiers 1 and 2, plus the org AI component.
 - **Workstation adopter.** Wants decknix to replace Homebrew: GUI apps, fonts, window manager, Linux builder for container builds. Needs: tier 3 and a Homebrew migration report.
-- **Full decknix user.** Emacs as the cockpit: deckmacs, agent-shell, hub, broker, boards, launchd services. Needs: tier 4 and every org component.
+- **Editor user.** Wants a good Emacs without the agent features. Needs: tier 4 only (deckmacs editor), usable without decknix's services.
+- **Full decknix user.** Emacs as the cockpit: deckmacs, agent-shell, hub, broker, boards, launchd services. Needs: tier 5 and every org component.
 - **Org config adopter (orthogonal).** Any of the above who also layers an org overlay: identity, git hooks, org services, org AI artifacts. Needs: per-component choice, secrets prompts that never go near the Nix store.
 
 ## 5. Adoption ladder
@@ -86,17 +87,52 @@ Tiers are cumulative. Each tier lists what it installs, where it comes from, and
 - Installs: GUI apps from nix-casks, fonts, window manager (AeroSpace, Hammerspoon or OmniWM), Linux builder (on demand), repo-sync and session-gc agents (tier 3, decision 7).
 - Reversible: untick and switch, plus leftovers the switch cannot remove declaratively (rsync'ed app copies in `~/Applications/Nix Apps`, the Linux builder disk image under `/var/lib/linux-builder`, about 29.5 GB on the reference machine).
 
-**Tier 4: deckmacs**
-- Installs: `github:ldeck/deckmacs` home-manager module, the Emacs daemon agent, and the decknix integrations deckmacs can use (hub agent, session broker, boards).
+**Tier 4: deckmacs editor**
+- Installs: the `github:ldeck/deckmacs` home-manager module with the Emacs distribution only (editing, LSP, UI) and the Emacs daemon agent. No agent features; usable without the decknix hub or broker.
 - Reversible: untick and switch; deckmacs state is kept unless `--purge-state` is given.
 
+**Tier 5: agent workspace and boards**
+- Installs: the deckmacs packages `interactive-buffers`, `agent-workspace` and `boards` (section 6.5), plus the decknix services they talk to (hub agent, session broker).
+- Reversible: untick and switch; drops back to the tier 4 editor. Session and board state is kept unless `--purge-state` is given.
+- Note: slice 2 shipped tiers 0 to 4; tier 5 is added with the installer (slice 3), and until then tier 4 means "deckmacs with everything" as today.
+
 **Org overlay (orthogonal, any tier from 1)**
-- The overlay publishes a component manifest (section 6.4). Typical components: identity and git hooks, org AI artifacts, org background services (for example IAP proxies, an MCP server agent), org Emacs customisations (requires tier 4), heavy language tooling.
+- The overlay publishes a component manifest (section 6.4). Typical components: identity and git hooks, org AI artifacts, org background services (for example IAP proxies, an MCP server agent), org Emacs packages (require tier 4, or tier 5 when they build on the agent workspace or boards), heavy language tooling.
 - Reversible per component, same mechanism as tiers.
+
+**Org DoS tooling (orthogonal, requires the org overlay)**
+- The org's support-rotation views (section 6.0) ship from the org DoS tooling repo next to the CLI they drive, and are offered as one overlay component. Requires tier 5.
+- Reversible: untick the component and switch.
 
 Existing installs: a machine with a pre-existing `~/.config/decknix` and no adoption file is treated as "everything currently enabled" so nothing changes on upgrade (section 12).
 
 ## 6. Design
+
+### 6.0 Layers and where code lives
+
+Approved 2026-10-30. Each layer is one repository (or one directory of one), depends only on the layers below it, and maps onto one installer choice.
+
+1. **decknix** (public, `ldeck/decknix`): the Nix framework (`mkSystem`, modules, adoption tiers), the CLI, the background services (hub, session broker, repo-sync, session-gc), the installer and uninstaller. No Emacs code beyond the basic default (slice 14) once deckmacs exists.
+2. **deckmacs** (public, `ldeck/deckmacs`, one repository): the Emacs distribution (editing, LSP, UI) with no agent features and usable on its own, plus a `packages/` directory of separately installable, Nix-packaged Emacs packages with declared dependencies that tests enforce:
+   - `interactive-buffers`: the common interactive-buffer framework. Rows and sections, one key grammar for every list buffer, render from cache, refresh scheduling, async fetch, and a shared attention look.
+   - `agent-workspace`: the agent-shell extensions (sidebar, sessions, compose, queue, attention, layout persistence). Depends on `interactive-buffers` and on the decknix hub and broker through the checked integration contract (section 6.5).
+   - `boards`: boards built on the framework (Review Board, Session Board, coordination boards). Depends on `interactive-buffers`, and on `agent-workspace` where a board acts on sessions.
+   A package moves to its own repository only when a consumer outside deckmacs needs it on its own. deckmacs has no association with any organisation (decision 1).
+3. **Private org packages**, in two private repositories:
+   - **The org DoS tooling repo** (the support-rotation CLI's home) carries the support-rotation views next to the CLI they drive, co-versioned with it: an on-support priority board and worksheet, a support dashboard and a guided support workflow. Its flake exports the CLI and the Emacs package (built and tested as a flake check), and a home-manager module the overlay consumes. The test for placement is what the code drives: anything that renders or drives that CLI or the rotation's tracker board lives here.
+   - **The org overlay** carries every other org Emacs package (a pilot board, an agent inbox, snippets, org defaults, org board definitions, org CI check names for the hub) as tested packages behind its `emacs` component, built with a test-running builder. deckmacs will export that builder (`lib.mkTestedPackage`, slice 8); until then the overlay carries a copy of the builder decknix uses today.
+
+Installer choices map onto layers, and uninstall works per layer:
+
+- Nix only: tier 0.
+- decknix base: tier 1 (and tier 3 workstation, which stays a decknix layer).
+- AI agents: tier 2.
+- deckmacs editor: tier 4.
+- Agent workspace and boards: tier 5.
+- The org overlay: the overlay's components (section 6.4).
+- The org DoS tooling views: one overlay component sourced from the org DoS tooling repo; requires tier 5.
+
+Removing a layer removes every layer that depends on it, and the plan screen lists them before anything changes (section 6.3).
 
 ### 6.1 Adoption state
 
@@ -130,9 +166,9 @@ Two stages so the shell part stays small and testable and the logic lives in Rus
 
 `decknix uninstall` and `install.sh --uninstall` (the latter works even when the CLI is broken, by reading the manifest with `jq` from nixpkgs).
 
-- Scope: `--tier N` removes tiers above N-1; `--component X` removes one component; `--all` removes everything decknix installed including nix-darwin; `--all --nix` also runs `/nix/nix-installer uninstall`.
+- Scope: `--tier N` removes tiers above N-1 (so `--tier 5` keeps the deckmacs editor and drops the agent workspace and boards); `--component X` removes one component, including the org DoS tooling component; `--all` removes everything decknix installed including nix-darwin; `--all --nix` also runs `/nix/nix-installer uninstall`. Removing a layer also removes the layers that depend on it (section 6.0).
 - **Plan screen** first, built from `/etc/decknix/manifest.json`, the backup index and the agent-sync manifest. `--dry-run` stops there.
-- Order for `--all` (from the artifact inventory; order is unverified until slice 3 exercises it on a VM):
+- Order for `--all` (from the artifact inventory; order is unverified until slice 12 exercises it on a VM):
   1. Copy out generated files people rely on as real files (for example a generated `~/.authinfo`) when the plan flags them.
   2. Boot out decknix launchd agents and daemons listed in the manifest.
   3. Remove agent-sync copies whose hash matches the deployed hash; move edited ones to the backup.
@@ -141,22 +177,25 @@ Two stages so the shell part stays small and testable and the logic lives in Rus
   6. Remove home-manager generations and GC roots, including `~/.config/decknix/result`.
   7. Optionally the Determinate uninstaller. A reboot is required to clear `/etc/synthetic.conf` entries; the summary says so.
 - **Never touches**: secrets under `~/.config/decknix/<org>/secrets/` (unless `--purge-secrets` with typed confirmation), `~/.config/decknix/local/`, the user flake itself (kept for reinstall), agent data in `~/.claude`, `~/.pi` and similar beyond files in the agent-sync manifest, source repositories, Emacs state (unless `--purge-state`), Homebrew, App Store and vendor apps.
-- **Verify**: `decknix doctor --leftovers` scans every path class in the inventory and reports anything remaining. Slice 9 runs it on a fresh VM after install then uninstall.
+- **Verify**: `decknix doctor --leftovers` scans every path class in the inventory and reports anything remaining. Slice 12 runs it on a fresh VM after install then uninstall.
 
 ### 6.4 Org overlay contract
 
 - An overlay flake exports, alongside `darwinModules.default` and `homeModules.default`, a `decknixOrg` attribute: name, description, components (id, title, description, minimum tier, default on or off, depends on), declared secrets (name, prompt, help URL, required by component), identity fields, and login hints.
 - The installer reads it with `nix eval --json <ref>#decknixOrg`, so the overlay never edits the user flake text.
-- Overlay modules gate each component on `config.decknix.adoption.org.<id>.enable`. Components that touch Emacs additionally require `config.programs.deckmacs.enable or false`; today the reference overlay's Emacs customisations are unconditional (org overlay inventory section 3), which would break evaluation for a tier 1 to 3 user (unverified, slice 7 tests it).
-- Org-specific settings that currently live in the generic framework move to the overlay. Example: the `netrc-file` setting for a private artifact registry in `modules/darwin/default.nix:76-83`. A fresh count on 2026-10-29 (`grep -rniIE` for the org's names, domains, repository owners and tool prefixes over modules, lib, cli, pkgs, templates and bin) finds about 194 non-test lines, about 125 of them in the Emacs tree, plus several hundred in test fixtures. The Emacs ones must leave before deckmacs is published (section 15, slice 5a); the rest move to the overlay or become neutral examples in slice 7.
+- Overlay modules gate each component on `config.decknix.adoption.org.<id>.enable`. Components that touch Emacs additionally require `config.programs.deckmacs.enable or false`; today the reference overlay's Emacs customisations are unconditional (org overlay inventory section 3), which would break evaluation for a tier 1 to 3 user (unverified, slice 10 tests it).
+- Org-specific settings that currently live in the generic framework move to the overlay. Example: the `netrc-file` setting for a private artifact registry in `modules/darwin/default.nix:76-83`. A fresh count on 2026-10-29 (`grep -rniIE` for the org's names, domains, repository owners and tool prefixes over modules, lib, cli, pkgs, templates and bin) finds about 194 non-test lines, about 125 of them in the Emacs tree, plus several hundred in test fixtures. All of them leave decknix in slice 5 (section 15): whole org-only packages move to the org DoS tooling repo or the overlay, org defaults become empty customisation points set by the overlay, and names in comments, fixtures and docs become neutral placeholders. The term list used to check this lives in the overlay, never in a public repository.
 
 ### 6.5 deckmacs split
 
-**New repository `ldeck/deckmacs`**, public, MIT like decknix (decision 1). Flake outputs:
-- `homeManagerModules.default`: options under `programs.deckmacs.*`.
+**New repository `ldeck/deckmacs`**, public, MIT like decknix (decision 1). Layout (section 6.0): the distribution at the top level and `packages/{interactive-buffers,agent-workspace,boards}`, each with its own Nix derivation, ERT suite and declared dependencies. A dependency test fails the build when a package requires a feature from a package it does not declare (for example `interactive-buffers` requiring anything from `agent-workspace`). Flake outputs:
+- `homeManagerModules.default`: options under `programs.deckmacs.*`, with one toggle per package (`programs.deckmacs.packages.<name>.enable`) so tier 4 installs the distribution alone and tier 5 adds the packages.
 - `darwinModules.daemon`: the Emacs server launchd agent, moved from `modules/darwin/emacs.nix:81`.
-- `packages.<system>.*`: the carved Elisp packages (today 156 `mkEmacsTestedPackage` derivations, `agent-shell.nix:116-203`), plus `emacs-deckmacs` for trying it standalone.
-- `checks.<system>.*`: the ERT suites, so CI can run them without a full system build.
+- `packages.<system>.*`: the carved Elisp packages (today 156 `mkEmacsTestedPackage` derivations, `agent-shell.nix:116-203`), grouped by layer, plus `emacs-deckmacs` for trying it standalone.
+- `lib.mkTestedPackage`: the test-running package builder, for downstream private packages (section 15).
+- `checks.<system>.*`: the ERT suites and the dependency test, so CI can run them without a full system build.
+
+The carve into `packages/` (slice 8) follows the extraction (slice 7) and precedes the rename (slice 9), so the rename map is generated per package.
 
 **What moves**: everything under `modules/home/options/editors/emacs/` (17 Nix modules, agent-shell packages, tests, specs, `db/`), `modules/darwin/emacs.nix`, `EMACS_SETUP.md`, the Emacs and agent-shell docs pages.
 
@@ -187,11 +226,13 @@ Two stages so the shell part stays small and testable and the logic lives in Rus
 **History**:
 - Use `git filter-repo` on a fresh clone of decknix, keeping every historical path of the Emacs tree (found with `git log --name-only --format= -- <paths>` across renames) plus `modules/darwin/emacs.nix` and `EMACS_SETUP.md`, then `--path-rename` into the deckmacs layout. `git subtree split` is rejected because it follows one prefix and loses pre-rename history.
 - decknix then removes the tree in one commit whose message names the deckmacs commit it was split at.
-- Organisation neutrality (goal 9). Org-specific code leaves the Emacs tree before the split (slice 5a), so it never enters deckmacs at its new paths. History needs more: today's tree and its history carry org names in defaults (URLs, repository names, CLI names), examples, comments, test fixtures, docs pages and commit messages (about 125 non-test lines in the Emacs tree, several hundred more in tests, plus whole org-only packages and doc fixtures). The split therefore also (1) drops org-only paths from all history with `--invert-paths`, (2) rewrites file contents with `--replace-text` and commit messages with `--replace-message` from a term map that is kept outside the public repos, and (3) is gated on an acceptance check: `git log --all -p` and `git log --all --format=%B` in the new repository match none of the private terms. decknix's own history is already public and is not rewritten.
+- Organisation neutrality (goal 9). Org-specific code leaves decknix before the split (slice 5), so it never enters deckmacs at its new paths. History needs more: decknix's tree and history carry org names in defaults (URLs, repository names, CLI names), examples, comments, test fixtures, docs pages, committed agent transcripts and commit messages. decknix is public, so its own history is scrubbed once before deckmacs is split from it (slice 6): (1) drop org-only paths from all history with `--invert-paths`, including the paths they had before renames, (2) rewrite file contents with `--replace-text` and commit messages with `--replace-message` from a term map kept in the overlay (never in a public repository), mapping each term to the same neutral placeholder slice 5 used, and (3) gate on an acceptance check: `git grep` across every commit and `git log --all --format=%B` match none of the private terms, and the rewritten `main` tree equals the pre-rewrite `main` tree. Author identities are unchanged. The cut-over force-pushes `main` and re-pushes tags, so it needs the owner's explicit confirmation; GitHub can keep orphaned commits reachable by SHA until support purges them, and caches or forks may retain them.
+- deckmacs is then split from the scrubbed decknix history, so it inherits a clean history; the same acceptance check runs on deckmacs before its first push.
+- The private repositories (the org overlay and the org DoS tooling repo) are not scrubbed.
 
 **Consumers**:
 - Transition: decknix takes `deckmacs` as a flake input and its emacs module imports `deckmacs.homeManagerModules.default` with identical defaults, so existing users see no change.
-- End state: decknix no longer depends on deckmacs; the generated user flake adds the `deckmacs` input only when tier 4 is chosen. The org overlay consumes deckmacs only through options, behind its Emacs component toggle; it never pins deckmacs itself (the user flake does, with `follows`).
+- End state: decknix no longer depends on deckmacs; the generated user flake adds the `deckmacs` input only when tier 4 or 5 is chosen. The org overlay consumes deckmacs only through options, behind its Emacs component toggle; it never pins deckmacs itself (the user flake does, with `follows`). The org DoS tooling repo's Emacs package is consumed by the overlay through that repo's home-manager module.
 
 ### 6.6 Homebrew policy
 
@@ -205,7 +246,7 @@ Two stages so the shell part stays small and testable and the logic lives in Rus
 Public decknix site (`docs/src`), reorganised by the ladder:
 
 - **Start here**: what decknix is, the ladder, choose your tier.
-- **Quickstarts**: one page per tier (0 to 4), each ending with "how to undo this".
+- **Quickstarts**: one page per tier (0 to 5), each ending with "how to undo this".
 - **Concepts**: layers (framework, org overlay, personal), adoption state, generated user flake, agent-sync, launchd services, the integration contract.
 - **Reference (generated)**: options for every home and darwin module, CLI reference from `clap`, launchd label list, file and state path list.
 - **Guides**: org overlays (written generically: how to build one and publish a component manifest), secrets, Homebrew migration, troubleshooting, uninstall.
@@ -226,17 +267,19 @@ Private overlay doc: lives in the overlay repo, names its components, secrets an
 
 - `install.sh`: whole-script tests with PATH-stubbed `nix`, `curl`, `uname`, `git`, temp `HOME`, `CI=true`, and a call log, as in the sibling installer's test suite. Cover: idempotent second run, marker written once, no `--yes` means no changes, piped run via `bash -s`, refusal on unexpected state.
 - `decknix install|adopt|uninstall|doctor`: Rust unit tests on plan generation from fixtures (manifest, backup index, adoption file), plus golden plan-screen output.
-- Fresh machine: macOS VMs (for example tart on Apple silicon) running tier 0, tier 1, tier 4 install, re-run, tier down, full uninstall, then `doctor --leftovers` must be empty. A fresh macOS user account is the fallback where a VM is not possible.
-- deckmacs: ERT suites as flake checks in deckmacs CI; a contract test in each repo against the shared schemas.
+- Fresh machine: macOS VMs (for example tart on Apple silicon) running tier 0, tier 1, tier 4 and tier 5 install, re-run, tier down, full uninstall, then `doctor --leftovers` must be empty. A fresh macOS user account is the fallback where a VM is not possible.
+- deckmacs: ERT suites and the package dependency test as flake checks in deckmacs CI; a contract test in each repo against the shared schemas.
+- Private org packages: ERT suites as flake checks in the overlay and in the org DoS tooling repo, using the same test-running builder.
 
 ## 9. Success criteria
 
-- Time to first working shell at tier 0 under 10 minutes on a fresh VM, and tier 1 under 30 minutes with a cold cache (targets, to be measured in slice 9).
+- Time to first working shell at tier 0 under 10 minutes on a fresh VM, and tier 1 under 30 minutes with a cold cache (targets, to be measured in slice 12).
 - A second run of the installer at the same tier changes nothing and says so.
 - Full uninstall on a fresh VM leaves `doctor --leftovers` empty, login shells work, and the reboot note is shown.
 - Options reference covers 100 percent of declared `decknix*` and `deckmacs*` options; CI link check green; no stale page from the current audit remains.
 - deckmacs history browsable back to the first Emacs commit; existing users upgrade with no config edits beyond rename warnings.
-- A tier 1 to 3 user with the org overlay evaluates without deckmacs present.
+- A tier 1 to 3 user with the org overlay evaluates without deckmacs present; a tier 4 user evaluates without the agent workspace and boards.
+- A grep of decknix and deckmacs (every commit and every commit message) for the private term list finds nothing.
 
 ## 10. Relationship to the org Nix build pipelines
 
@@ -269,8 +312,8 @@ Private overlay doc: lives in the overlay repo, names its components, secrets an
 
 Approved by the owner on 2026-10-29. They replace the open questions in the draft.
 
-1. **deckmacs visibility and licence**: public on `ldeck/deckmacs`, MIT like decknix. It has no association with any organisation: no org names, repositories, chat channels, issue trackers or org overlays in code, docs, tests or history (goal 9, section 6.5, section 15).
-2. **Default Emacs in decknix**: `basic`. Tier 4 adds deckmacs.
+1. **deckmacs visibility and licence**: public on `ldeck/deckmacs`, MIT like decknix, one repository with a `packages/` directory (section 6.0). It has no association with any organisation: no org names, repositories, chat channels, issue trackers or org overlays in code, docs, tests or history (goal 9, section 6.5, section 15). decknix meets the same bar, including a one-time scrub of its public history (layering approval, 2026-10-30).
+2. **Default Emacs in decknix**: `basic`. Tier 4 adds the deckmacs editor; tier 5 adds its agent workspace and boards (layering approved 2026-10-30, section 6.0).
 3. **Nix flavour**: upstream Nix via the Determinate installer. nix-darwin keeps managing Nix. The stale `bootstrap.sh` warning is corrected in the docs and installer slices.
 4. **Homebrew**: audit only for now.
 5. **Linux scope**: tier 0 only for now.
@@ -302,25 +345,20 @@ Acceptance criteria (slice 0):
 - Agent session state that records working directories (session store, previous sessions, sockets) is either rewritten or left to age out, and the plan says which.
 - Nothing is left at the old paths except, optionally, a symlink kept for one release and recorded for removal.
 
-Ordering: slice 0 lands before the deckmacs extraction (slice 5), so deckmacs is created at its final path and its history never records the old one.
+Ordering: slice 0 lands before the deckmacs extraction (slice 7), so deckmacs is created at its final path and its history never records the old one.
 
-## 15. Org Emacs customisations once deckmacs is public
+## 15. Org code once decknix and deckmacs are public
 
-Some Emacs code is specific to the reference org. Part of it already lives in the org overlay (a pilot board, an agent inbox, snippets, agent-shell purpose settings, an alert-feed command for a support dashboard). Part of it still lives in decknix's Emacs tree: whole org-only packages (a support dashboard, an on-support board and a support workflow that drive an org CLI and link to org trackers, about 2k lines with their tests), org defaults in otherwise generic packages (CI check names keyed by org repositories, a tracker base URL, board-scope examples, a workspace path), and org names in comments, tests and doc fixtures. All of the second group must leave the framework before deckmacs is published (slice 5a), or the "no organisation association" decision fails on day one.
+Some code in decknix is specific to the reference org. Part of it already lives in the org overlay (a pilot board, an agent inbox, snippets, agent-shell purpose settings, an alert-feed command for a support dashboard). Part of it still lives in decknix: whole org-only packages (a support dashboard, an on-support board and worksheet, and a support workflow, which drive the org's support-rotation CLI and its tracker board, about 2k lines with their tests), org defaults in otherwise generic code (CI check names keyed by org repositories, an org helper-script path, a workspace path, org wiring in the agent-shell module), and org names in comments, tests, docs pages, example board definitions and committed agent transcripts. All of it leaves decknix in slice 5, before the history scrub (slice 6) and the deckmacs split (slice 7).
 
-Options for where the org Emacs code lives:
+Options considered on 2026-10-29: (a) the org overlay, (b) a separate private org package repository, (c) a hybrid: tested packages in the overlay, liftable later. The layering approved on 2026-10-30 (section 6.0) settles it:
 
-- **(a) Org overlay.** Emacs packages kept in the overlay, layered on deckmacs through its options and public functions, behind the overlay's `emacs` component (requires tier 4).
-- **(b) Separate private org package repository.** An ELPA-style collection of the org's deckmacs extensions with its own flake, versions and CI, consumed by the overlay.
-- **(c) Hybrid.** Start in the overlay, but packaged as proper tested Emacs packages using a builder exported by deckmacs, so they can be lifted into their own repository without change if a second consumer appears.
+- **Support-rotation views go to the org DoS tooling repo**, next to the CLI they drive. They change with that CLI (its JSON output is their input), so co-versioning them removes a cross-repo pin bump from every CLI change. That repo's flake exports the Emacs package with its ERT suite as a flake check, and its home-manager module adds the package and its key bindings when the overlay enables it.
+- **Everything else org-specific goes to the overlay** as tested packages behind its `emacs` component (option (c)), with their ERT suites as overlay flake checks.
+- Both use a test-running builder: today a copy of the builder decknix uses, later `deckmacs.lib.mkTestedPackage`.
+- Generic seams the moved code needs (a dashboard command variable, board scopes, CI check names, a workspace root, a helper-script directory) stay in decknix, and then deckmacs, as empty, documented customisation points with neutral examples; the overlay sets them.
+- A further private package repository is still deferred until there is a second consumer or a cadence that differs from the overlay's.
 
-Comparison:
+Live-setup continuity: the overlay consumes the org DoS tooling repo as a pinned remote flake input, so a local commit there is not visible to a switch until it is pushed and the pin bumped. Slice 5 therefore keeps a temporary copy of the views wired in the overlay until that push, then switches the overlay to the DoS tooling repo's module and drops the copy.
 
-- **Build coupling.** The code calls deckmacs functions and options, so it must change in step with deckmacs renames (slice 6). In (a) and (c) that is one coupled overlay commit; (b) adds a third pin to bump in order.
-- **Release cadence.** The org code changes at the overlay's pace (daily, alongside org workflow changes), not deckmacs's. (b) puts a release step between an org change and its use.
-- **Consumers.** Today there is exactly one: people who use the overlay at tier 4. No one outside the overlay consumes it, which is the main argument for (b) gone.
-- **Testing.** The overlay currently deploys its Elisp as plain files and runs none of its ERT tests in a build or flake check. All three options need that fixed. A tested-package builder exported by deckmacs (`lib.mkTestedPackage`, the generalised `mkEmacsTestedPackage`) gives (a) and (c) the same byte-compile and ERT gate deckmacs uses, without a separate CI.
-
-Recommendation: **(c)**. The org code moves into the overlay as tested Emacs packages built with the deckmacs-exported builder and run as overlay flake checks, gated on the overlay's `emacs` component. A separate private package repository is deferred until there is a second consumer or a cadence that differs from the overlay's. Generic seams the moved code needs (for example a dashboard command variable, board scopes, CI check names) stay in deckmacs as empty, documented customisation points with neutral examples.
-
-The org-named inventory behind this section is kept outside this public repository.
+The org-named inventory behind this section, and the private term list, are kept in the overlay, outside this public repository.
