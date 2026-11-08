@@ -4807,6 +4807,13 @@ ${optionalString cfg.tableOverlay.enable ''
         (with-eval-after-load 'agent-shell-chat-mode
           (advice-add 'agent-shell-chat--upsert-overlay :around
                       #'decknix--agent-chat-upsert-advice))
+        ;; Space whole-buffer relabels by their own cost; see
+        ;; `decknix--agent-chat-relabel-pace-advice'.
+        (declare-function decknix--agent-chat-relabel-pace-advice
+                          "decknix-agent-welcome" (orig buffer))
+        (with-eval-after-load 'agent-shell-chat-mode
+          (advice-add 'agent-shell-chat--relabel-buffer :around
+                      #'decknix--agent-chat-relabel-pace-advice))
         (defvar decknix--agent-shell-init-finished)
         (defun decknix--agent-chat-suppress-early-prompt (&rest _)
           "Blank the prompt label while this shell is still initializing."

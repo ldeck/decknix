@@ -404,5 +404,67 @@ overlay to spare."
              props)))
       (funcall orig category anchor-beg anchor-end beg end props))))
 
+;; -- Chat relabel pacing ---------------------------------------------
+;;
+;; `agent-shell-chat-mode' relabels by rescanning the WHOLE buffer, and
+;; schedules that rescan with `run-at-time 0' on every shell event,
+;; streaming chunks included.  Coalescing collapses a burst to one rescan,
+;; but the next chunk schedules another straight after it, so a long
+;; transcript streaming output spent most of its time relabelling (419
+;; hitches, worst 885 ms).  Space the rescans by their own cost instead:
+;; a relabel waits `decknix-agent-chat-relabel-spacing-factor' times the
+;; last one's duration after it ended, the full cap in a buffer no window
+;; shows, and a moment longer while input is pending.  Upstream's timer
+;; slot stays set while the relabel waits, so its own coalescing still
+;; holds and nothing stacks.
+
+(defvar agent-shell-chat--relabel-timer)
+(declare-function agent-shell-chat--relabel-buffer "ext:agent-shell-chat-mode" (buffer))
+
+(defvar decknix-agent-chat-relabel-spacing-factor 4
+  "Minimum gap between relabels of one buffer, as a multiple of the last\='s cost.")
+
+(defvar decknix-agent-chat-relabel-max-spacing 3.0
+  "Upper bound in seconds on the relabel gap; also the gap for a hidden buffer.")
+
+(defvar-local decknix--agent-chat-relabel-cost 0
+  "Seconds the last relabel of this buffer took.")
+
+(defvar-local decknix--agent-chat-relabel-end 0
+  "`float-time\=' the last relabel of this buffer finished.")
+
+(defun decknix--agent-chat-relabel-wait (now cost end hidden)
+  "Seconds a relabel requested at NOW should still wait, or 0.  Pure.
+COST and END are the last relabel's duration and finish time; HIDDEN is
+non-nil when no window shows the buffer."
+  (let ((gap (if hidden
+                 decknix-agent-chat-relabel-max-spacing
+               (min decknix-agent-chat-relabel-max-spacing
+                    (* decknix-agent-chat-relabel-spacing-factor cost)))))
+    (max 0 (- (+ end gap) now))))
+
+(defun decknix--agent-chat-relabel-pace-advice (orig buffer)
+  "Around-advice for `agent-shell-chat--relabel-buffer': pace the rescan.
+Runs ORIG on BUFFER now when the gap has passed, otherwise re-arms the
+same timer for when it will have."
+  (if (not (buffer-live-p buffer))
+      (funcall orig buffer)
+    (with-current-buffer buffer
+      (let* ((now (float-time))
+             (wait (decknix--agent-chat-relabel-wait
+                    now decknix--agent-chat-relabel-cost
+                    decknix--agent-chat-relabel-end
+                    (not (get-buffer-window buffer t))))
+             (wait (if (and (<= wait 0) (input-pending-p)) 0.2 wait)))
+        (if (> wait 0)
+            (setq agent-shell-chat--relabel-timer
+                  (run-at-time wait nil #'agent-shell-chat--relabel-buffer buffer))
+          (prog1 (funcall orig buffer)
+            (when (buffer-live-p buffer)
+              (with-current-buffer buffer
+                (setq decknix--agent-chat-relabel-end (float-time)
+                      decknix--agent-chat-relabel-cost
+                      (- decknix--agent-chat-relabel-end now))))))))))
+
 (provide 'decknix-agent-welcome)
 ;;; decknix-agent-welcome.el ends here

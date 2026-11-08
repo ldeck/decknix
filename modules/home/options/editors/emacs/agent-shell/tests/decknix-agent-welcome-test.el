@@ -546,5 +546,61 @@ Pi> ")
   (should-not (decknix--agent-chat-prompt-label-suppressable-p ""))
   (should-not (decknix--agent-chat-prompt-label-suppressable-p nil)))
 
+;; -- Chat relabel pacing ---------------------------------------------
+
+(defvar agent-shell-chat--relabel-timer nil)
+
+(ert-deftest decknix-agent-chat-relabel/wait-scales-with-cost-and-is-capped ()
+  (let ((decknix-agent-chat-relabel-spacing-factor 4)
+        (decknix-agent-chat-relabel-max-spacing 3.0))
+    (should (= 0 (decknix--agent-chat-relabel-wait 100.0 0.01 99.0 nil)))
+    (should (< 1.9 (decknix--agent-chat-relabel-wait 100.0 0.5 99.9 nil) 2.0))
+    (should (= 3.0 (decknix--agent-chat-relabel-wait 100.0 10.0 100.0 nil)))
+    (should (= 3.0 (decknix--agent-chat-relabel-wait 100.0 0.0 100.0 t)))))
+
+(defmacro decknix-agent-chat-relabel-test--with (spec &rest body)
+  "Run BODY in a temp buffer with SPEC = (RAN TIMED HIDDEN INPUT) stubbed."
+  (declare (indent 1))
+  (let ((ran (nth 0 spec)) (timed (nth 1 spec)))
+    `(with-temp-buffer
+       (let ((,ran 0) (,timed nil) (agent-shell-chat--relabel-timer nil))
+         (cl-letf (((symbol-function 'get-buffer-window)
+                    (lambda (&rest _) (not ,(nth 2 spec))))
+                   ((symbol-function 'input-pending-p) (lambda (&rest _) ,(nth 3 spec)))
+                   ((symbol-function 'run-at-time)
+                    (lambda (secs _rep _fn &rest _) (setq ,timed secs) 'relabel-timer)))
+           (let ((orig (lambda (_b) (cl-incf ,ran))))
+             ,@body))))))
+
+(ert-deftest decknix-agent-chat-relabel/a-first-relabel-runs-now ()
+  (decknix-agent-chat-relabel-test--with (ran timed nil nil)
+    (decknix--agent-chat-relabel-pace-advice orig (current-buffer))
+    (should (= 1 ran))
+    (should-not timed)
+    (should (> decknix--agent-chat-relabel-end 0))))
+
+(ert-deftest decknix-agent-chat-relabel/a-costly-relabel-defers-the-next ()
+  "The next rescan re-arms upstream's own timer slot, so coalescing holds."
+  (decknix-agent-chat-relabel-test--with (ran timed nil nil)
+    (setq decknix--agent-chat-relabel-cost 0.5
+          decknix--agent-chat-relabel-end (float-time))
+    (decknix--agent-chat-relabel-pace-advice orig (current-buffer))
+    (should (= 0 ran))
+    (should (< 1.5 timed 2.1))
+    (should (eq 'relabel-timer agent-shell-chat--relabel-timer))))
+
+(ert-deftest decknix-agent-chat-relabel/a-hidden-buffer-waits-the-cap ()
+  (decknix-agent-chat-relabel-test--with (ran timed t nil)
+    (setq decknix--agent-chat-relabel-end (float-time))
+    (decknix--agent-chat-relabel-pace-advice orig (current-buffer))
+    (should (= 0 ran))
+    (should (< 2.5 timed 3.1))))
+
+(ert-deftest decknix-agent-chat-relabel/pending-input-defers-briefly ()
+  (decknix-agent-chat-relabel-test--with (ran timed nil t)
+    (decknix--agent-chat-relabel-pace-advice orig (current-buffer))
+    (should (= 0 ran))
+    (should (= 0.2 timed))))
+
 (provide 'decknix-agent-welcome-test)
 ;;; decknix-agent-welcome-test.el ends here
