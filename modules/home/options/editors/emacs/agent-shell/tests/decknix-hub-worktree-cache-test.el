@@ -154,5 +154,29 @@ rest of the session."
         (decknix--hub-worktree-discover-from-sessions))
       (should (= 3 calls)))))
 
+;; -- Path-facts sweep continuation -------------------------------------
+
+(ert-deftest decknix-hub-path-facts-refresh-all/continues-a-sweep-that-ran-out ()
+  "A sweep that spent its slice arms one idle continuation."
+  (let ((decknix--hub-worktree-cache (make-hash-table :test 'equal))
+        (decknix--hub-path-facts-continuation nil)
+        (armed nil))
+    (cl-letf (((symbol-function 'decknix--hub-path-facts-refresh)
+               (lambda (&rest _) 'more))
+              ((symbol-function 'run-with-idle-timer)
+               (lambda (_secs _rep fn &rest _) (setq armed fn) 'cont)))
+      (decknix--hub-path-facts-refresh-all)
+      (should (eq armed #'decknix--hub-path-facts-refresh-all))
+      (should (eq 'cont decknix--hub-path-facts-continuation)))))
+
+(ert-deftest decknix-hub-path-facts-refresh-all/a-finished-sweep-arms-nothing ()
+  (let ((decknix--hub-worktree-cache (make-hash-table :test 'equal))
+        (decknix--hub-path-facts-continuation 'stale))
+    (cl-letf (((symbol-function 'decknix--hub-path-facts-refresh) #'ignore)
+              ((symbol-function 'run-with-idle-timer)
+               (lambda (&rest _) (error "No continuation for a finished sweep"))))
+      (decknix--hub-path-facts-refresh-all)
+      (should-not decknix--hub-path-facts-continuation))))
+
 (provide 'decknix-hub-worktree-cache-test)
 ;;; decknix-hub-worktree-cache-test.el ends here

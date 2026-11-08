@@ -2448,14 +2448,20 @@ No-op unless `decknix-hub-eager-clone-probe' is non-nil."
   (when decknix-hub-eager-clone-probe
     (decknix-hub-worktree-registry-refresh)))
 
+(defvar decknix--hub-path-facts-continuation nil
+  "Idle timer finishing a path-facts sweep that ran out of its slice, or nil.")
+
 (defun decknix--hub-path-facts-refresh-all ()
   "Idle worker: warm `decknix--hub-path-facts' for render-path paths.
 Walks the in-memory worktree registry (primaries + worktree paths)
 and live-session workspace dirs, refreshing the cache so the 2 s
 sidebar render reads canonical/mtime facts without any synchronous
 stat.  Cooperative via `decknix--hub-path-facts-refresh' (yields on
-pending input) and only ever invoked from an idle timer, so it
-never blocks or delays typing."
+pending input and after one short slice) and only ever invoked from an
+idle timer, so it never blocks or delays typing.  A sweep that runs out
+of its slice continues shortly after on the same idle period; fresh
+entries cost nothing to revisit, so the continuation simply restarts."
+  (setq decknix--hub-path-facts-continuation nil)
   (let ((paths nil))
     (maphash
      (lambda (_repo entry)
@@ -2469,7 +2475,10 @@ never blocks or delays typing."
         (when (buffer-live-p buf)
           (let ((dir (buffer-local-value 'default-directory buf)))
             (when (stringp dir) (push dir paths))))))
-    (decknix--hub-path-facts-refresh (delete-dups paths))))
+    (when (eq 'more (decknix--hub-path-facts-refresh (delete-dups paths)))
+      (setq decknix--hub-path-facts-continuation
+            (run-with-idle-timer (time-add (or (current-idle-time) 0) 0.2)
+                                 nil #'decknix--hub-path-facts-refresh-all)))))
 
 (defun decknix--hub-write-linked-prs ()
   "Write linked-prs.json to the hub directory for the daemon.

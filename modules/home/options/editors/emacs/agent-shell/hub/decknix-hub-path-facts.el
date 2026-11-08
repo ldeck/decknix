@@ -24,7 +24,7 @@
 ;;; Code:
 
 (defvar decknix--hub-path-facts (make-hash-table :test 'equal)
-  "Cache: canonical PATH key -> plist (:truename :exists :mtime :ts).
+  "Cache: canonical PATH key -> plist (:truename :exists :mtime :ts :tn-ts).
 Populated OFF the main thread by `decknix--hub-path-facts-refresh';
 read on the render path by the pure `decknix--hub-path-*' accessors.")
 
@@ -40,39 +40,64 @@ Pure -- string manipulation only, never touches the filesystem."
   "Drop every cached path fact (used by tests + on registry reset)."
   (clrhash decknix--hub-path-facts))
 
+(defvar decknix-hub-path-facts-truename-ttl 300.0
+  "Seconds a cached truename is reused before it is resolved again.
+Resolving a truename reads every symlink along the path, several system
+calls per component, and the answer almost never changes; existence and
+mtime, which do, are re-read on the shorter `decknix-hub-path-facts-ttl'
+with one `file-attributes' on the cached truename.")
+
+(defvar decknix-hub-path-facts-slice-seconds 0.05
+  "Longest one refresh pass may run before it yields to an idle continuation.
+Yielding only on pending input let a sweep of a hundred cold paths hold
+the main thread for most of a second while the user happened not to type.")
+
 (defun decknix--hub-path-facts-put (path &optional force)
   "Probe PATH on disk and store its facts; skip when still fresh.
-With FORCE non-nil re-probe even a fresh entry.  This is the ONLY
-function here that touches the filesystem, so it must run off the
-render tick (idle worker / async sentinel)."
+With FORCE non-nil re-probe even a fresh entry, truename included.  This
+is the ONLY function here that touches the filesystem, so it must run off
+the render tick (idle worker / async sentinel)."
   (let* ((key (decknix--hub-path-key path))
          (cur (gethash key decknix--hub-path-facts))
-         (ts (and cur (plist-get cur :ts))))
+         (now (float-time))
+         (ts (and cur (plist-get cur :ts)))
+         (tn-ts (and cur (plist-get cur :tn-ts))))
     (if (and (not force) ts
-             (< (- (float-time) ts) decknix-hub-path-facts-ttl))
+             (< (- now ts) decknix-hub-path-facts-ttl))
         cur
-      (let* ((exists (file-exists-p key))
-             (tn (directory-file-name (file-truename key)))
-             (mtime (and exists
-                         (file-attribute-modification-time
-                          (file-attributes key)))))
+      (let* ((reuse (and (not force) tn-ts (plist-get cur :exists)
+                         (< (- now tn-ts) decknix-hub-path-facts-truename-ttl)))
+             (tn (if reuse
+                     (plist-get cur :truename)
+                   (directory-file-name (file-truename key))))
+             (attrs (file-attributes tn))
+             (exists (and attrs t)))
         (puthash key
                  (list :truename tn :exists exists
-                       :mtime mtime :ts (float-time))
+                       :mtime (and attrs (file-attribute-modification-time attrs))
+                       :ts now
+                       :tn-ts (cond ((not exists) nil)
+                                    (reuse tn-ts)
+                                    (t now)))
                  decknix--hub-path-facts)))))
 
 (defun decknix--hub-path-facts-refresh (paths &optional force)
-  "Probe each of PATHS into the cache, yielding on pending input.
-Cooperative: returns early (leaving the rest for the next idle
-tick) as soon as `input-pending-p' reports the user has resumed
-typing, so a cold-iCloud stat storm can never hold the main thread
-for more than a single path.  FORCE re-probes fresh entries."
-  (catch 'decknix--hub-path-facts-yield
-    (dolist (p paths)
-      (when (input-pending-p)
-        (throw 'decknix--hub-path-facts-yield nil))
-      (when (and p (stringp p))
-        (ignore-errors (decknix--hub-path-facts-put p force))))))
+  "Probe each of PATHS into the cache, yielding on input or a spent slice.
+Cooperative: returns early as soon as `input-pending-p' reports the user
+has resumed typing, so a cold-iCloud stat storm can never hold the main
+thread for more than a single path.  It also stops once a pass has run
+for `decknix-hub-path-facts-slice-seconds' and then returns `more', so
+the caller can continue on a later idle moment.  FORCE re-probes fresh
+entries."
+  (let ((deadline (+ (float-time) decknix-hub-path-facts-slice-seconds)))
+    (catch 'decknix--hub-path-facts-yield
+      (dolist (p paths)
+        (when (input-pending-p)
+          (throw 'decknix--hub-path-facts-yield nil))
+        (when (> (float-time) deadline)
+          (throw 'decknix--hub-path-facts-yield 'more))
+        (when (and p (stringp p))
+          (ignore-errors (decknix--hub-path-facts-put p force)))))))
 
 (defun decknix--hub-path-truename (path)
   "Return the cached truename for PATH, or a disk-free fallback.

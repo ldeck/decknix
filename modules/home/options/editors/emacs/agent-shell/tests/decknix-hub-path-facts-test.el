@@ -127,5 +127,67 @@ new one."
         (decknix--hub-path-facts-refresh '("/tmp/a" "/tmp/b" nil 5))
         (should (equal '("/tmp/a" "/tmp/b") (nreverse seen)))))))
 
+(ert-deftest decknix-path-facts--refresh-stops-after-its-slice ()
+  "A long sweep yields `more' once its slice is spent, leaving the rest."
+  (decknix-path-facts-test--isolated
+    (let ((seen nil)
+          (decknix-hub-path-facts-slice-seconds 0.01))
+      (cl-letf (((symbol-function 'input-pending-p) (lambda (&rest _) nil))
+                ((symbol-function 'decknix--hub-path-facts-put)
+                 (lambda (p &optional _f) (push p seen) (sleep-for 0.02))))
+        (should (eq 'more (decknix--hub-path-facts-refresh '("/a" "/b" "/c"))))
+        (should (equal '("/a") seen))))))
+
+(ert-deftest decknix-path-facts--refresh-within-its-slice-returns-nil ()
+  (decknix-path-facts-test--isolated
+    (cl-letf (((symbol-function 'input-pending-p) (lambda (&rest _) nil))
+              ((symbol-function 'decknix--hub-path-facts-put) #'ignore))
+      (should-not (decknix--hub-path-facts-refresh '("/a" "/b"))))))
+
+(ert-deftest decknix-path-facts--stale-entry-reuses-a-fresh-truename ()
+  "Existence and mtime are re-read; the truename is not resolved again."
+  (decknix-path-facts-test--isolated
+    (let ((dir (make-temp-file "decknix-pf" t)))
+      (unwind-protect
+          (progn
+            (decknix--hub-path-facts-put dir)
+            (let ((key (decknix--hub-path-key dir)))
+              (plist-put (gethash key decknix--hub-path-facts) :ts 0)
+              (cl-letf (((symbol-function 'file-truename)
+                         (lambda (&rest _) (error "truename re-resolved"))))
+                (let ((facts (decknix--hub-path-facts-put dir)))
+                  (should (plist-get facts :exists))
+                  (should (> (plist-get facts :ts) 0))))))
+        (delete-directory dir t)))))
+
+(ert-deftest decknix-path-facts--an-old-truename-is-resolved-again ()
+  (decknix-path-facts-test--isolated
+    (let ((dir (make-temp-file "decknix-pf" t))
+          (resolved 0))
+      (unwind-protect
+          (progn
+            (decknix--hub-path-facts-put dir)
+            (let ((key (decknix--hub-path-key dir)))
+              (plist-put (gethash key decknix--hub-path-facts) :ts 0)
+              (plist-put (gethash key decknix--hub-path-facts) :tn-ts 0)
+              (cl-letf* ((orig (symbol-function 'file-truename))
+                         ((symbol-function 'file-truename)
+                          (lambda (&rest args) (cl-incf resolved) (apply orig args))))
+                (decknix--hub-path-facts-put dir)
+                (should (> resolved 0)))))
+        (delete-directory dir t)))))
+
+(ert-deftest decknix-path-facts--a-vanished-path-drops-its-truename-age ()
+  "Once a path is gone its truename is resolved afresh when it returns."
+  (decknix-path-facts-test--isolated
+    (let ((dir (make-temp-file "decknix-pf" t)))
+      (decknix--hub-path-facts-put dir)
+      (delete-directory dir t)
+      (let ((key (decknix--hub-path-key dir)))
+        (plist-put (gethash key decknix--hub-path-facts) :ts 0)
+        (let ((facts (decknix--hub-path-facts-put dir)))
+          (should-not (plist-get facts :exists))
+          (should-not (plist-get facts :tn-ts)))))))
+
 (provide 'decknix-hub-path-facts-test)
 ;;; decknix-hub-path-facts-test.el ends here
