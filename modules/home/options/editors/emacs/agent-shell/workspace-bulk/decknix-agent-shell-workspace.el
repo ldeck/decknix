@@ -2435,33 +2435,68 @@ warm cache; 30s keeps the header current without needless timer churn.")
 (defvar decknix--sidebar-saved-count-refresh-timer nil
   "Idle timer coalescing off-redisplay saved-count recomputes, or nil.")
 
+(defvar decknix--agent-tags-cache)
+(defvar decknix--agent-tags-cache-mtime)
+
+(defvar decknix--sidebar-saved-count-inputs nil
+  "(SESSIONS TAGS-STORE TAGS-MTIME) the cached saved-count was computed from.")
+
+(defun decknix--sidebar-saved-count-same-inputs-p (inputs sessions)
+  "Non-nil when INPUTS still describe SESSIONS and the current tag store.
+Sessions compare element by element with `eq': the session cache hands out
+the same entry objects until it re-reads them, so an unchanged cache is
+recognised without walking any entry."
+  (and inputs
+       (let ((a (nth 0 inputs)) (b sessions))
+         (while (and a b (eq (car a) (car b)))
+           (setq a (cdr a) b (cdr b)))
+         (and (null a) (null b)))
+       (eq (nth 1 inputs) (bound-and-true-p decknix--agent-tags-cache))
+       (equal (nth 2 inputs) (bound-and-true-p decknix--agent-tags-cache-mtime))))
+
 (defun decknix--sidebar-saved-count-recompute ()
   "Recompute the saved-count cache, then repaint the header-line.
 Runs off the redisplay path (idle timer) so the O(N) stat-syscall
 grouping work never blocks cursor motion.  After refreshing the
 scalar it marks all mode-lines/header-lines for update so the
 sidebar reflects the new value on the next redisplay — which then
-just reads the now-fresh cache without recomputing."
+just reads the now-fresh cache without recomputing.
+
+The grouping is skipped when neither the session list nor the tag store
+changed since the last count: re-grouping identical inputs every 30 s
+was up to two seconds of main-thread work for the same number.  While
+input is pending the recompute steps aside to the next idle moment."
   (setq decknix--sidebar-saved-count-refresh-timer nil)
-  (setq decknix--sidebar-saved-count-cache-time (float-time))
-  ;; Use the WARM-ONLY session list.  `decknix--agent-session-list' does a
-  ;; multi-second SYNCHRONOUS filesystem scan when its cache is cold -- and
-  ;; the cache goes cold every time a session is created or resumed -- so
-  ;; running it on this header-line idle timer froze the whole editor for
-  ;; up to 21s per fire.  `-if-warm' never blocks: when the cache is cold it
-  ;; returns nil, so we keep the last count and kick a NON-blocking async
-  ;; warm; the next tick reads the freshly-warmed cache.
-  (let ((sessions (ignore-errors (decknix--agent-session-list-if-warm))))
-    (if sessions
+  (if (input-pending-p)
+      (setq decknix--sidebar-saved-count-refresh-timer
+            (run-with-idle-timer 1.0 nil #'decknix--sidebar-saved-count-recompute))
+    (setq decknix--sidebar-saved-count-cache-time (float-time))
+    ;; Use the WARM-ONLY session list.  `decknix--agent-session-list' does a
+    ;; multi-second SYNCHRONOUS filesystem scan when its cache is cold -- and
+    ;; the cache goes cold every time a session is created or resumed -- so
+    ;; running it on this header-line idle timer froze the whole editor for
+    ;; up to 21s per fire.  `-if-warm' never blocks: when the cache is cold it
+    ;; returns nil, so we keep the last count and kick a NON-blocking async
+    ;; warm; the next tick reads the freshly-warmed cache.
+    (let ((sessions (ignore-errors (decknix--agent-session-list-if-warm))))
+      (cond
+       ((and sessions decknix--sidebar-saved-count-cache
+             (decknix--sidebar-saved-count-same-inputs-p
+              decknix--sidebar-saved-count-inputs sessions)))
+       (sessions
         (setq decknix--sidebar-saved-count-cache
               (condition-case nil
                   (length (decknix--agent-session-group-by-conversation sessions))
                 (error (or decknix--sidebar-saved-count-cache 0))))
-      (when (fboundp 'decknix--agent-session-refresh-async)
+        (setq decknix--sidebar-saved-count-inputs
+              (list sessions
+                    (bound-and-true-p decknix--agent-tags-cache)
+                    (bound-and-true-p decknix--agent-tags-cache-mtime))))
+       ((fboundp 'decknix--agent-session-refresh-async)
         (dolist (entry (bound-and-true-p decknix-agent-provider-registry))
           (ignore-errors (decknix--agent-session-refresh-async (car entry)))))))
-  ;; Cheap: just flags buffers for redisplay, does not itself redraw.
-  (force-mode-line-update t))
+    ;; Cheap: just flags buffers for redisplay, does not itself redraw.
+    (force-mode-line-update t)))
 
 (defun decknix--sidebar-saved-count ()
   "Return the cached saved-conversation count without blocking redisplay.

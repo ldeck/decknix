@@ -26,6 +26,8 @@
 (require 'cl-lib)
 (require 'decknix-agent-shell-workspace)
 
+(defvar decknix--sidebar-saved-count-inputs)
+
 (defmacro decknix-saved-count-test--with-env (&rest body)
   "Run BODY with saved-count cache state reset and grouping stubbed.
 Binds `decknix-saved-count-test--group-calls' to the number of times
@@ -35,6 +37,9 @@ return a fixed 3-element list so the count is deterministic."
   `(let ((decknix--sidebar-saved-count-cache nil)
          (decknix--sidebar-saved-count-cache-time 0.0)
          (decknix--sidebar-saved-count-refresh-timer nil)
+         (decknix--sidebar-saved-count-inputs nil)
+         (decknix--agent-tags-cache 'store)
+         (decknix--agent-tags-cache-mtime '(1 2))
          (decknix-saved-count-test--group-calls 0))
      (cl-letf (((symbol-function 'decknix--agent-session-list)
                 (lambda (&rest _) '(a b c)))
@@ -54,6 +59,8 @@ return a fixed 3-element list so the count is deterministic."
        ,@body)))
 
 (defvar decknix-saved-count-test--group-calls 0)
+(defvar decknix--agent-tags-cache nil)
+(defvar decknix--agent-tags-cache-mtime nil)
 
 (ert-deftest decknix-sidebar-saved-count/getter-never-computes-inline ()
   "Cold-cache getter returns 0 and defers — it must not group inline."
@@ -111,6 +118,36 @@ NOT run the expensive grouping -- the fix for the 21s freeze."
     (should (= 7 (decknix--sidebar-saved-count)))
     (should (= 0 decknix-saved-count-test--group-calls))
     (should (null decknix--sidebar-saved-count-refresh-timer))))
+
+(ert-deftest decknix-sidebar-saved-count/unchanged-inputs-skip-the-grouping ()
+  "The same sessions and tag store give the same count without regrouping."
+  (decknix-saved-count-test--with-env
+    (decknix--sidebar-saved-count-recompute)
+    (decknix--sidebar-saved-count-recompute)
+    (should (= 1 decknix-saved-count-test--group-calls))
+    (should (= 3 decknix--sidebar-saved-count-cache))))
+
+(ert-deftest decknix-sidebar-saved-count/a-changed-tag-store-regroups ()
+  (decknix-saved-count-test--with-env
+    (decknix--sidebar-saved-count-recompute)
+    (setq decknix--agent-tags-cache-mtime '(3 4))
+    (decknix--sidebar-saved-count-recompute)
+    (should (= 2 decknix-saved-count-test--group-calls))))
+
+(ert-deftest decknix-sidebar-saved-count/a-changed-session-list-regroups ()
+  (decknix-saved-count-test--with-env
+    (decknix--sidebar-saved-count-recompute)
+    (cl-letf (((symbol-function 'decknix--agent-session-list-if-warm)
+               (lambda (&rest _) (list 'a 'b 'c 'd))))
+      (decknix--sidebar-saved-count-recompute))
+    (should (= 2 decknix-saved-count-test--group-calls))))
+
+(ert-deftest decknix-sidebar-saved-count/pending-input-defers-the-recompute ()
+  (decknix-saved-count-test--with-env
+    (cl-letf (((symbol-function 'input-pending-p) (lambda (&rest _) t)))
+      (decknix--sidebar-saved-count-recompute))
+    (should (= 0 decknix-saved-count-test--group-calls))
+    (should (eq 'stub-timer decknix--sidebar-saved-count-refresh-timer))))
 
 (provide 'decknix-sidebar-saved-count-test)
 ;;; decknix-sidebar-saved-count-test.el ends here
