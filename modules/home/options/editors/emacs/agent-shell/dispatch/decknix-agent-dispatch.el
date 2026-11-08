@@ -97,6 +97,13 @@
 (defvar decknix-agent-dispatch--timer nil)
 (defvar decknix-agent-dispatch--watch nil)
 (defvar decknix-agent-dispatch--kick nil)
+(defvar decknix-agent-dispatch--pending-seen nil
+  "(MTIME . AT) of pending/ when a listing last left nothing unread, or nil.")
+
+(defvar decknix-agent-dispatch-rescan-interval 30
+  "Seconds after which the poll lists pending/ even though its mtime is unchanged.
+A backstop for a filesystem whose directory mtime did not move; file-notify
+and the mtime check make a new request visible well before this.")
 
 (defconst decknix-agent-dispatch--uuid-regexp
   "[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}")
@@ -406,14 +413,38 @@ cannot make the same request retry on every tick."
            (decknix-agent-dispatch--finish id sid "unknown" msg)
          (decknix-agent-dispatch--finish id sid "not-sent" msg))))))
 
+(defun decknix-agent-dispatch--pending-mtime ()
+  "Modification time of the pending/ directory, or nil when unreadable."
+  (when-let ((attrs (file-attributes (decknix-agent-dispatch--sub "pending"))))
+    (file-attribute-modification-time attrs)))
+
+(defun decknix-agent-dispatch--pending-unchanged-p (mtime now)
+  "Non-nil when pending/ at MTIME holds nothing a listing at NOW would add.
+True only if the last complete listing saw this same MTIME and was taken
+less than `decknix-agent-dispatch-rescan-interval' seconds before NOW."
+  (and mtime decknix-agent-dispatch--pending-seen
+       (equal mtime (car decknix-agent-dispatch--pending-seen))
+       (< (- now (cdr decknix-agent-dispatch--pending-seen))
+          decknix-agent-dispatch-rescan-interval)))
+
 (defun decknix-agent-dispatch--tick ()
-  "Scan for new requests and advance waiting ones.  Cheap; never blocks."
+  "Scan for new requests and advance waiting ones.  Cheap; never blocks.
+The 2 s poll lists pending/ only when the directory's mtime moved since a
+listing that read everything in it.  Listing it every tick was one
+directory read every two seconds forever, and on a busy disk that read is
+what froze typing (102 hitches, worst 19 s) while nothing was pending."
   (when decknix-agent-dispatch--armed-at
     (condition-case err
-        (let ((waiting (hash-table-keys decknix-agent-dispatch--active)))
-          (dolist (id (seq-take (decknix-agent-dispatch--pending-ids) 8))
-            (decknix-agent-dispatch--guard
-             id (lambda () (decknix-agent-dispatch--process-pending id))))
+        (let ((waiting (hash-table-keys decknix-agent-dispatch--active))
+              (mtime (decknix-agent-dispatch--pending-mtime))
+              (now (float-time)))
+          (unless (decknix-agent-dispatch--pending-unchanged-p mtime now)
+            (let ((ids (decknix-agent-dispatch--pending-ids)))
+              (setq decknix-agent-dispatch--pending-seen
+                    (and mtime (<= (length ids) 8) (cons mtime now)))
+              (dolist (id (seq-take ids 8))
+                (decknix-agent-dispatch--guard
+                 id (lambda () (decknix-agent-dispatch--process-pending id))))))
           (dolist (id waiting)
             (decknix-agent-dispatch--guard
              id (lambda () (decknix-agent-dispatch--step id)))))
@@ -457,13 +488,15 @@ cannot make the same request retry on every tick."
     (setq decknix-agent-dispatch--kick
           (run-at-time 0.2 nil
                        (lambda ()
-                         (setq decknix-agent-dispatch--kick nil)
+                         (setq decknix-agent-dispatch--kick nil
+                               decknix-agent-dispatch--pending-seen nil)
                          (decknix-agent-dispatch--tick))))))
 
 (defun decknix-agent-dispatch--start ()
   (decknix-agent-dispatch--ensure-dirs)
   (decknix-agent-dispatch--check-dirs)
-  (setq decknix-agent-dispatch--armed-at (decknix-agent-dispatch--now))
+  (setq decknix-agent-dispatch--armed-at (decknix-agent-dispatch--now)
+        decknix-agent-dispatch--pending-seen nil)
   (decknix-agent-dispatch--recover)
   (setq decknix-agent-dispatch--timer
         (run-with-timer decknix-agent-dispatch-poll-interval

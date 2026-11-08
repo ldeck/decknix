@@ -59,6 +59,7 @@
           (dispatch-test--submit-mode 'ok)
           (dispatch-test--clock 1000)
           (decknix-agent-dispatch--active (make-hash-table :test 'equal))
+          (decknix-agent-dispatch--pending-seen nil)
           (decknix-agent-dispatch--armed-at 900)
           (decknix-agent-dispatch-submit-function #'dispatch-test--stub-submit)
           (decknix-agent-dispatch-session-id-function
@@ -541,6 +542,62 @@ ARGS: :id :session :prompt :created :expires :hash :version :mode."
     (unwind-protect
         (should-not (decknix-agent-dispatch--busy-p buf))
       (kill-buffer buf))))
+
+;; -- polling cost --------------------------------------------------
+
+(defun dispatch-test--count-listings (thunk)
+  "Call THUNK and return how many times pending/ was listed."
+  (let ((n 0))
+    (cl-letf* ((orig (symbol-function 'decknix-agent-dispatch--pending-ids))
+               ((symbol-function 'decknix-agent-dispatch--pending-ids)
+                (lambda () (cl-incf n) (funcall orig))))
+      (funcall thunk))
+    n))
+
+(ert-deftest decknix-agent-dispatch/an-unchanged-pending-dir-is-not-listed ()
+  "Idle ticks stat pending/ once and do not read it."
+  (dispatch-test-with-env
+    (should (= 1 (dispatch-test--count-listings #'decknix-agent-dispatch--tick)))
+    (should (= 0 (dispatch-test--count-listings
+                  (lambda ()
+                    (decknix-agent-dispatch--tick)
+                    (decknix-agent-dispatch--tick)))))))
+
+(ert-deftest decknix-agent-dispatch/a-new-request-moves-the-mtime-and-is-delivered ()
+  (dispatch-test-with-env
+    (let ((target (dispatch-test--make-session "target" dispatch-test--sid)))
+      (decknix-agent-dispatch--tick)
+      ;; Make the change visible even on a filesystem with coarse mtimes.
+      (setcar decknix-agent-dispatch--pending-seen '(0 0 0 0))
+      (dispatch-test--drop)
+      (decknix-agent-dispatch--tick)
+      (should (equal (list (cons target "do the thing")) dispatch-test--sent)))))
+
+(ert-deftest decknix-agent-dispatch/an-unread-backlog-is-listed-again ()
+  "More than one tick's worth of requests never marks the dir as read."
+  (dispatch-test-with-env
+    (let ((decknix-agent-dispatch--pending-seen nil))
+      (cl-letf (((symbol-function 'decknix-agent-dispatch--pending-ids)
+                 (lambda () (make-list 9 "x")))
+                ((symbol-function 'decknix-agent-dispatch--process-pending) #'ignore))
+        (decknix-agent-dispatch--tick)
+        (should-not decknix-agent-dispatch--pending-seen)))))
+
+(ert-deftest decknix-agent-dispatch/the-rescan-interval-lists-regardless ()
+  (dispatch-test-with-env
+    (decknix-agent-dispatch--tick)
+    (setcdr decknix-agent-dispatch--pending-seen
+            (- (float-time) decknix-agent-dispatch-rescan-interval 1))
+    (should (= 1 (dispatch-test--count-listings #'decknix-agent-dispatch--tick)))))
+
+(ert-deftest decknix-agent-dispatch/a-file-notify-kick-forces-a-listing ()
+  (dispatch-test-with-env
+    (decknix-agent-dispatch--tick)
+    (let ((decknix-agent-dispatch--kick nil) (fn nil))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_s _r f &rest _) (setq fn f) 'kick)))
+        (decknix-agent-dispatch--kick-scan))
+      (should (= 1 (dispatch-test--count-listings fn))))))
 
 (provide 'decknix-agent-dispatch-test)
 ;;; decknix-agent-dispatch-test.el ends here
