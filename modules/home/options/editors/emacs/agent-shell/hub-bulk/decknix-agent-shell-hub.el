@@ -54,6 +54,8 @@
 (require 'decknix-hub-path-facts)
 ;; The blocked-on-you face, glyph and states, shared with the sidebar.
 (require 'decknix-attention)
+;; Change-only atomic writes for the worktree cache flush.
+(require 'decknix-hub-cache-write)
 
 ;; Forward declarations for symbols defined elsewhere in the heredoc
 ;; or in already-extracted helper modules (most are resolved at runtime
@@ -2400,22 +2402,22 @@ the worktree state differs."
 ;; -- Persistence (mirrors decknix--hub-pr-cache pattern) -----------
 
 (defun decknix--hub-worktree-cache-save ()
-  "Persist the worktree cache to disk in the spec §3.6.1 alist form."
+  "Persist the worktree cache to disk in the spec §3.6.1 alist form.
+Skips the write when nothing changed since the last one; see
+`decknix-hub-cache-write'."
   (when (> (hash-table-count decknix--hub-worktree-cache) 0)
     (condition-case err
         (let (entries)
           (maphash (lambda (repo entry)
                      (push (cons repo entry) entries))
                    decknix--hub-worktree-cache)
-          (make-directory (file-name-directory
-                           decknix--hub-worktree-cache-file) t)
-          (with-temp-file decknix--hub-worktree-cache-file
-            (insert ";; Auto-generated worktree registry — do not edit\n")
-            (insert ";; Format: ((\"owner/repo\" :primary PATH"
-                    " :worktrees ((BRANCH . PATH) ...)"
-                    " :ts FLOAT :stale BOOL) ...)\n")
-            (prin1 entries (current-buffer))
-            (insert "\n")))
+          (decknix-hub-cache-write
+           decknix--hub-worktree-cache-file
+           (concat ";; Auto-generated worktree registry — do not edit\n"
+                   ";; Format: ((\"owner/repo\" :primary PATH"
+                   " :worktrees ((BRANCH . PATH) ...)"
+                   " :ts FLOAT :stale BOOL) ...)\n")
+           entries))
       (error
        (message "hub-worktree-cache: save failed: %s"
                 (error-message-string err))))))

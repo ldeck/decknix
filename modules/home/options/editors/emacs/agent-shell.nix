@@ -1078,10 +1078,23 @@ let
   # primitives; trivialBuild byte-compiles every sibling here so
   # packageRequires stays empty (none of the other hub/ modules
   # `require' this one at load-time).
+  # Change-only, rename-into-place cache file writer shared by the PR,
+  # repo and worktree cache flushes.  Those ran every 120 s and rewrote
+  # their whole file even when nothing had changed, which on a busy disk
+  # froze the main thread for seconds at a time.
+  decknix-hub-cache-write-el = mkEmacsTestedPackage {
+    pname = "decknix-hub-cache-write";
+    src = ./agent-shell/hub;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-hub-cache-write-test.el"
+    ];
+  };
+
   decknix-hub-pr-cache-el = mkEmacsTestedPackage {
     pname = "decknix-hub-pr-cache";
     src = ./agent-shell/hub;
-    packageRequires = [ ];
+    packageRequires = [ decknix-hub-cache-write-el ];
     testFiles = [
       "decknix-hub-pr-cache-test.el"
     ];
@@ -1099,7 +1112,7 @@ let
   decknix-hub-repo-cache-el = mkEmacsTestedPackage {
     pname = "decknix-hub-repo-cache";
     src = ./agent-shell/hub;
-    packageRequires = [ ];
+    packageRequires = [ decknix-hub-cache-write-el ];
     testFiles = [
       "decknix-hub-repo-cache-test.el"
     ];
@@ -2683,6 +2696,7 @@ let
       decknix-hub-path-facts-el
       decknix-agent-tags-read-el
       decknix-attention-el
+      decknix-hub-cache-write-el
     ];
     testFiles = [
       "decknix-hub-worktree-persistence-test.el"
@@ -3595,6 +3609,7 @@ in
         ++ (optional cfg.hub.enable decknix-priority-el)
         ++ (optional cfg.hub.enable decknix-hub-worktree-parse-el)
         ++ (optional cfg.hub.enable decknix-hub-icons-el)
+        ++ (optional cfg.hub.enable decknix-hub-cache-write-el)
         ++ (optional cfg.hub.enable decknix-hub-pr-cache-el)
         ++ (optional cfg.hub.enable decknix-hub-repo-cache-el)
         ++ (optional cfg.hub.enable decknix-hub-pr-lookup-el)

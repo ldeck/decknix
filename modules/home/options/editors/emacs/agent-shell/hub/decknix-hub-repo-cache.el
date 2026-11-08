@@ -32,13 +32,14 @@
 ;;
 ;; Direct parallel to `decknix-hub-pr-cache' (PR B.24) — same shape,
 ;; same persistence pattern, same per-restart save+restore contract.
-;; The two share no code by design; the keys, TTLs, and storage
-;; formats are independent so a future refactor can change either
-;; one without touching the other.
+;; The two share only the change-only writer (`decknix-hub-cache-write');
+;; the keys, TTLs, and storage formats are independent so a future
+;; refactor can change either one without touching the other.
 
 ;;; Code:
 
 (require 'cl-lib)
+(require 'decknix-hub-cache-write)
 
 (defvar decknix--hub-repo-cache (make-hash-table :test 'equal)
   "Cache for repo+branch HEAD status.
@@ -55,18 +56,15 @@ Keys are \"OWNER/REPO#BRANCH\"; values are (TIMESTAMP . STATUS-ALIST).")
   "Set of repo+branch keys currently being fetched.")
 
 (defun decknix--hub-repo-cache-save ()
-  "Persist the repo cache to disk."
+  "Persist the repo cache to disk, skipping an unchanged flush."
   (when (> (hash-table-count decknix--hub-repo-cache) 0)
     (condition-case err
         (let (entries)
           (maphash (lambda (k v) (push (cons k v) entries))
                    decknix--hub-repo-cache)
-          (make-directory (file-name-directory
-                           decknix--hub-repo-cache-file) t)
-          (with-temp-file decknix--hub-repo-cache-file
-            (insert ";; Auto-generated repo cache — do not edit\n")
-            (prin1 entries (current-buffer))
-            (insert "\n")))
+          (decknix-hub-cache-write decknix--hub-repo-cache-file
+                                   ";; Auto-generated repo cache — do not edit\n"
+                                   entries))
       (error
        (message "hub-repo-cache: save failed: %s"
                 (error-message-string err))))))

@@ -27,9 +27,9 @@
 ;;   `decknix--hub-pr-cache-save'        — flush hash to disk
 ;;   `decknix--hub-pr-cache-restore'     — repopulate hash from disk
 ;;
-;; Persistence is atomic-ish: write the entire alist in one
-;; `with-temp-file' so a partial write can never leave the cache file
-;; in a half-readable state.  Both save and restore wrap their I/O in
+;; Persistence goes through `decknix-hub-cache-write': a flush whose
+;; content matches the last one never touches the disk, and a real write
+;; lands via rename so the cache file is never half-written.  Both save and restore wrap their I/O in
 ;; `condition-case' and downgrade failures to a `message' so a corrupt
 ;; cache file never prevents the daemon / sidebar from starting.
 ;;
@@ -42,6 +42,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'decknix-hub-cache-write)
 
 (defvar decknix--hub-pr-cache (make-hash-table :test 'equal)
   "Cache for PR status looked up via `gh pr view'.
@@ -69,18 +70,18 @@ single hub cycle (~60s) instead of waiting for the global TTL.")
   "Set of PR URLs currently being fetched (to avoid duplicate requests).")
 
 (defun decknix--hub-pr-cache-save ()
-  "Persist the PR cache to disk for fast restoration on restart."
+  "Persist the PR cache to disk for fast restoration on restart.
+Skips the write when nothing changed since the last one; see
+`decknix-hub-cache-write'."
   (when (> (hash-table-count decknix--hub-pr-cache) 0)
     (condition-case err
         (let ((entries nil))
           (maphash (lambda (url val)
                      (push (cons url val) entries))
                    decknix--hub-pr-cache)
-          (make-directory (file-name-directory decknix--hub-pr-cache-file) t)
-          (with-temp-file decknix--hub-pr-cache-file
-            (insert ";; Auto-generated PR cache — do not edit\n")
-            (prin1 entries (current-buffer))
-            (insert "\n")))
+          (decknix-hub-cache-write decknix--hub-pr-cache-file
+                                   ";; Auto-generated PR cache — do not edit\n"
+                                   entries))
       (error
        (message "hub-pr-cache: save failed: %s"
                 (error-message-string err))))))
