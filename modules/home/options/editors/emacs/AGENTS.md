@@ -383,6 +383,23 @@ The sidebar (`decknix-hub-sidebar-paint.el`) is the reference:
   the paint, not given a TTL, so non-display callers never see a stale
   value.
 
+The same pacing applies to any periodic sweep whose cost grows with the
+number of sessions or the speed of the disk: the sidebar's idle-tick
+fingerprint and the chat relabel both wait a multiple of their own last
+duration, and the path-facts sweep stops after a 50 ms slice and continues
+on an idle continuation.
+
+### Periodic writes: only when changed, never half-written
+
+A timer that flushes state to disk must not rewrite an unchanged file:
+on a busy disk the write is the slow part, and it runs on the main thread.
+Use `decknix-hub-cache-write` (or `-write-string` for non-Lisp text),
+which compares a digest of the text with the last write to that file and
+renames a temporary sibling into place when it did change.  Anything
+Emacs itself writes into a watched directory (the hub directory gets
+`linked-prs.json` and the cache flushes) must not trigger the watcher's
+repaint, or each paint schedules the next through its own write.
+
 ### Don't stack completion UIs
 
 `corfu-auto` inside a `vertico`-driven minibuffer added ~50–100 ms per
