@@ -290,6 +290,8 @@ in
                      ("C-c <right>" . "Next layout of this tab")
                      ("C-c S-<left>" . "Previous layout, across all tabs")
                      ("C-c D w / W" . "Save / restore frames, tabs and windows")
+                     ("C-c l l / s / x" . "Switch / save / delete a named layout group")
+                     ("C-c l w / W" . "Save / restore frames, tabs and windows")
                      ("C-M-l / C-S-l" . "Current line to window bottom / top")))
 
             ("Help & Discovery"

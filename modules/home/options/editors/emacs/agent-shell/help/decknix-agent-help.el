@@ -111,6 +111,15 @@ Press q to dismiss."
     "  C-c s d     Toggle short/full ID in header\n"
     "\n"
 
+    (propertize "Layouts  (C-c l …)\n" 'font-lock-face '(:weight bold))
+    (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
+    "  C-c l l     Switch to a named layout group\n"
+    "  C-c l s     Save windows as a named layout group\n"
+    "  C-c l x     Delete a named layout group\n"
+    "  C-c l w     Save frames, tabs and windows now\n"
+    "  C-c l W     Restore saved frames, tabs and windows\n"
+    "\n"
+
     (propertize "Input & Editing\n" 'font-lock-face '(:weight bold))
     (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
     "  C-c e       Compose buffer (multi-line editor)\n"

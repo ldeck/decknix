@@ -5007,6 +5007,30 @@ ${optionalString cfg.tableOverlay.enable ''
         (declare-function decknix-layout-persist-enable "decknix-layout-persist")
         (decknix-layout-persist-enable)
 
+        ;; `C-c l': one prefix for every layout command, the named groups
+        ;; (also on `C-c s l'/`L'/`C-l' and `C-c A l'/`L') and the saved
+        ;; whole layout (also on `C-c D w'/`W').  Global, so in an eglot
+        ;; buffer it merges with eglot's own `C-c l' keys (r a f F d i t h
+        ;; k in lsp.nix); keep these letters clear of those.
+        (defvar decknix-layout-prefix-map
+          (let ((map (make-sparse-keymap)))
+            (define-key map (kbd "l") #'decknix-layout-group-switch)
+            (define-key map (kbd "s") #'decknix-layout-group-save)
+            (define-key map (kbd "x") #'decknix-layout-group-delete)
+            (define-key map (kbd "w") #'decknix-layout-save)
+            (define-key map (kbd "W") #'decknix-layout-restore)
+            map)
+          "Keymap for layout groups and the saved layout, on `C-c l'.")
+        (global-set-key (kbd "C-c l") decknix-layout-prefix-map)
+        (with-eval-after-load 'which-key
+          (which-key-add-key-based-replacements
+            "C-c l"   "layout"
+            "C-c l l" "switch group"
+            "C-c l s" "save group"
+            "C-c l x" "delete group"
+            "C-c l w" "save windows"
+            "C-c l W" "restore windows"))
+
         ;; DB connect: `M-x decknix-db' -> magit-style transient to reach a
         ;; managed database over its jumpbox tunnel, least-privilege first.
         ;; Services come from `decknix-db-services' (set by the ExampleCloud
@@ -5378,7 +5402,9 @@ ${optionalString cfg.tableOverlay.enable ''
             "C-c A r" "recent sessions"
             "C-c A P" "Progress (conv-key)"
             "C-c A p" "priority view"
-            "C-c A v" "review last exchange"))
+            "C-c A v" "review last exchange"
+            "C-c A l" "layout: switch group"
+            "C-c A L" "layout: save group"))
 
         ;; Global keybindings under C-c A prefix
         ;; Only actions that make sense from OUTSIDE an agent-shell buffer.
@@ -5468,7 +5494,9 @@ ${optionalString cfg.tableOverlay.enable ''
         (when (fboundp 'decknix-layout-group-switch)
           (define-key decknix-session-prefix-map (kbd "l") 'decknix-layout-group-switch)
           (define-key decknix-session-prefix-map (kbd "L") 'decknix-layout-group-save)
-          (define-key decknix-session-prefix-map (kbd "C-l") 'decknix-layout-group-delete))
+          (define-key decknix-session-prefix-map (kbd "C-l") 'decknix-layout-group-delete)
+          (define-key decknix-agent-prefix-map (kbd "l") 'decknix-layout-group-switch)
+          (define-key decknix-agent-prefix-map (kbd "L") 'decknix-layout-group-save))
         ;; Network-failure recovery (#162) on the session prefix.  `N' is the
         ;; one you want after the link comes back: it resets every stranded
         ;; session AND re-prompts it.  `C-n' resets without prompting, for

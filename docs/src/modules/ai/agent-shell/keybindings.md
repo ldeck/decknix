@@ -162,6 +162,25 @@ first frame after a daemon restart. `C-c D w` saves now; `C-c D W` restores
 and resumes the sessions (`C-u` for the run before the last). See
 [Emacs: restoring frames and windows](../../emacs.md#restoring-frames-and-windows-after-a-restart).
 
+## Layouts (`C-c l`)
+
+One prefix for every layout command: named window-layout groups and the
+saved whole-frame layout.
+
+| Key | Action |
+|-----|--------|
+| `C-c l l` | Switch to a named layout group |
+| `C-c l s` | Save the current windows as a named layout group |
+| `C-c l x` | Delete a named layout group |
+| `C-c l w` | Save frames, tabs and windows now (`C-c D w`) |
+| `C-c l W` | Restore the saved frames, tabs and windows (`C-c D W`) |
+
+In a buffer managed by eglot, `C-c l` also carries the language-server
+keys (`r`, `a`, `f`, `F`, `d`, `i`, `t`, `h`, `k`); the letters do not
+overlap, so both sets work there. The older bindings stay:
+`C-c s l` / `C-c s L` / `C-c s C-l` outside an agent buffer, and
+`C-c A l` / `C-c A L` from anywhere, switch and save groups.
+
 ## Sidebar Actions (`C-c W`)
 
 Trigger sidebar transients without switching focus away from the

@@ -183,6 +183,7 @@ definition exists), the US Pilot board when installed, and `*Messages*`.
 |---------------|--------|
 | `C-c D w` (`decknix-layout-save`) | Save the layout now |
 | `C-c D W` (`decknix-layout-restore`) | Restore it; `C-u` restores the run before the last |
+| `C-c l w` / `C-c l W` | The same two commands under the layout prefix |
 
 `decknix-layout-restore-on-start` chooses `ask` (default), `notify`, `t`
 (restore without asking) or `nil`. `decknix-layout-restore-sessions` set to
