@@ -87,6 +87,26 @@ Plist keys: :type (issue|pr|jira), :repo, :number, :state, :title, :pinned, :url
     (when (string-match "github\\.com[:/]\\([^/]+/[^/.]+\\)" url)
       (match-string 1 url))))
 
+;; A buffer whose workspace has no GitHub remote never caches a repo, so
+;; every caller that found `decknix--context-repo' nil detected it again:
+;; `project-current' plus a synchronous `git remote' on the main thread,
+;; once a minute from the CI poller, for as long as Emacs ran.
+(defvar decknix-context-repo-retry-seconds 600
+  "Seconds before a failed GitHub repo detection is attempted again.")
+
+(defvar-local decknix--context-repo-probed-at nil
+  "`float-time' of the last repo detection that found nothing, or nil.")
+
+(defun decknix--context-ensure-repo ()
+  "Return this buffer's GitHub owner/repo, detecting it when it may have changed.
+A failed detection is not retried for `decknix-context-repo-retry-seconds'."
+  (or decknix--context-repo
+      (unless (and decknix--context-repo-probed-at
+                   (< (- (float-time) decknix--context-repo-probed-at)
+                      decknix-context-repo-retry-seconds))
+        (or (setq decknix--context-repo (decknix--context-detect-repo))
+            (progn (setq decknix--context-repo-probed-at (float-time)) nil)))))
+
 ;; -- Reference detection from buffer text --
 (defun decknix--context-scan-buffer ()
   "Scan agent-shell buffer text for issue/PR references.
@@ -322,22 +342,40 @@ poller uses `decknix--context-fetch-ci-async'."
                (decknix--context-ci-command branch repo)))))
     (when ci (setq decknix--context-ci ci))))
 
+(defvar decknix-context-fetch-stale-seconds 300
+  "Seconds before an unanswered background `gh' fetch stops blocking a new one.")
+
+(defvar-local decknix--context-ci-pending-since nil
+  "`float-time' the in-flight background CI fetch started, or nil.")
+
+(defvar-local decknix--context-reviews-pending nil
+  "(COUNT . SINCE) of in-flight background review fetches, or nil.")
+
+(defun decknix--context-fetch-busy-p (since)
+  "Non-nil when a fetch that started at SINCE is still worth waiting for."
+  (and since (< (- (float-time) since) decknix-context-fetch-stale-seconds)))
+
 (defun decknix--context-fetch-ci-async ()
   "Asynchronously refresh CI status for the current branch + header.
 Non-blocking replacement for `decknix--context-fetch-ci' used by the
 background poller and the on-create refresh.  Repo/branch detection is a
-fast local git call; only the `gh' network hop runs off-thread."
+fast local git call; only the `gh' network hop runs off-thread.  A fetch
+still in flight is not doubled: a hung `gh' used to gain a sibling every
+poll."
   (let* ((branch (or decknix--context-branch
                      (setq decknix--context-branch
                            (string-trim
                             (shell-command-to-string
                              "git branch --show-current 2>/dev/null")))))
-         (repo (or decknix--context-repo
-                   (setq decknix--context-repo (decknix--context-detect-repo)))))
-    (when (and repo (not (string-empty-p repo)))
+         (repo (decknix--context-ensure-repo)))
+    (when (and repo (not (string-empty-p repo))
+               (not (decknix--context-fetch-busy-p
+                     decknix--context-ci-pending-since)))
+      (setq decknix--context-ci-pending-since (float-time))
       (decknix--context-gh-async
        (decknix--context-ci-command branch repo)
        (lambda (data)
+         (setq decknix--context-ci-pending-since nil)
          (when-let ((ci (decknix--context-ci-plist-from-runs data)))
            (setq decknix--context-ci ci)
            (decknix--context-update-header)))))))
@@ -380,27 +418,37 @@ background paths use `decknix--context-fetch-reviews-async'."
   "Asynchronously tally unresolved review threads across open PRs.
 Resets the running tally, dispatches one async `gh pr view' per open PR,
 and folds each result into `decknix--context-reviews' as it arrives, so
-the main thread is never blocked on the network."
-  (setq decknix--context-reviews (list :total 0 :unresolved 0 :url nil))
-  (dolist (item (decknix--context-open-prs))
-    (let* ((props (cdr item))
-           (repo (or (plist-get props :repo) decknix--context-repo))
-           (num (plist-get props :number))
-           (url (plist-get props :url)))
-      (when num
-        (decknix--context-gh-async
-         (decknix--context-reviews-command repo num)
-         (lambda (threads)
-           (when threads
-             (let* ((pair (decknix--context-count-review-threads threads))
-                    (cur (or decknix--context-reviews
-                             (list :total 0 :unresolved 0 :url nil))))
-               (setq decknix--context-reviews
-                     (list :total (+ (plist-get cur :total) (car pair))
-                           :unresolved (+ (plist-get cur :unresolved)
-                                          (cdr pair))
-                           :url (or (plist-get cur :url) url)))
-               (decknix--context-update-header)))))))))
+the main thread is never blocked on the network.  Skipped while an
+earlier tally is still arriving."
+  (unless (decknix--context-fetch-busy-p (cdr decknix--context-reviews-pending))
+    (setq decknix--context-reviews (list :total 0 :unresolved 0 :url nil)
+          decknix--context-reviews-pending nil)
+    (dolist (item (decknix--context-open-prs))
+      (let* ((props (cdr item))
+             (repo (or (plist-get props :repo) decknix--context-repo))
+             (num (plist-get props :number))
+             (url (plist-get props :url)))
+        (when num
+          (setq decknix--context-reviews-pending
+                (cons (1+ (or (car decknix--context-reviews-pending) 0))
+                      (or (cdr decknix--context-reviews-pending) (float-time))))
+          (decknix--context-gh-async
+           (decknix--context-reviews-command repo num)
+           (lambda (threads)
+             (let ((left (1- (or (car decknix--context-reviews-pending) 1))))
+               (setq decknix--context-reviews-pending
+                     (and (> left 0)
+                          (cons left (cdr decknix--context-reviews-pending)))))
+             (when threads
+               (let* ((pair (decknix--context-count-review-threads threads))
+                      (cur (or decknix--context-reviews
+                               (list :total 0 :unresolved 0 :url nil))))
+                 (setq decknix--context-reviews
+                       (list :total (+ (plist-get cur :total) (car pair))
+                             :unresolved (+ (plist-get cur :unresolved)
+                                            (cdr pair))
+                             :url (or (plist-get cur :url) url)))
+                 (decknix--context-update-header))))))))))
 
 ;; -- Non-blocking full refresh (background paths) --
 (defun decknix--context-refresh-async ()
@@ -413,8 +461,7 @@ so user input is never blocked on network latency.  Non-blocking
 counterpart of `decknix--context-full-refresh'; called by the on-create
 hook and the background poller."
   (when (derived-mode-p 'agent-shell-mode)
-    (unless decknix--context-repo
-      (setq decknix--context-repo (decknix--context-detect-repo)))
+    (decknix--context-ensure-repo)
     (unless decknix--context-branch
       (setq decknix--context-branch
             (string-trim
@@ -582,6 +629,24 @@ Delegates to the unified header which incorporates context data."
   (decknix--context-update-header))
 
 ;; -- CI polling timer --
+(defun decknix--context-ci-poll-target ()
+  "The agent-shell buffer the CI poller refreshes, or nil.
+The most recently used agent-shell buffer, and only while a window shows
+it: the result lands in its header line, which nobody sees otherwise."
+  (let ((buf (cl-find-if (lambda (b)
+                           (with-current-buffer b
+                             (derived-mode-p 'agent-shell-mode)))
+                         (buffer-list))))
+    (and buf (get-buffer-window buf t) buf)))
+
+(defun decknix--context-ci-poll-tick ()
+  "Poll CI + review status for `decknix--context-ci-poll-target', async.
+Named so the hitch profiler attributes it; it ran as an anonymous lambda."
+  (when-let ((buf (decknix--context-ci-poll-target)))
+    (with-current-buffer buf
+      (decknix--context-fetch-ci-async)
+      (decknix--context-fetch-reviews-async))))
+
 (defun decknix--context-start-ci-polling ()
   "Start polling CI + review status every 60 seconds, asynchronously.
 The poll dispatches `gh' via the `*-async' fetchers so it never blocks
@@ -590,16 +655,7 @@ for the duration of the network call once every minute."
   (when decknix--context-ci-timer
     (cancel-timer decknix--context-ci-timer))
   (setq decknix--context-ci-timer
-        (run-with-timer 60 60
-                        (lambda ()
-                          (when-let ((buf (cl-find-if
-                                           (lambda (b)
-                                             (with-current-buffer b
-                                               (derived-mode-p 'agent-shell-mode)))
-                                           (buffer-list))))
-                            (with-current-buffer buf
-                              (decknix--context-fetch-ci-async)
-                              (decknix--context-fetch-reviews-async)))))))
+        (run-with-timer 60 60 #'decknix--context-ci-poll-tick)))
 
 ;; -- Persistence: save/restore pinned context items --
 ;; Piggybacks on the existing agent-sessions.json tag store.

@@ -123,5 +123,90 @@ JSON parse are covered without network or the `gh' binary."
       (should (listp result))
       (should (equal 7 (alist-get 'n result))))))
 
+;; -- Background poll cost -----------------------------------------------
+
+(ert-deftest decknix-context/a-failed-repo-detection-is-not-retried-every-poll ()
+  "No GitHub remote used to mean a synchronous git call every minute."
+  (with-temp-buffer
+    (let ((detects 0))
+      (cl-letf (((symbol-function 'decknix--context-detect-repo)
+                 (lambda () (cl-incf detects) nil)))
+        (should-not (decknix--context-ensure-repo))
+        (should-not (decknix--context-ensure-repo))
+        (should (= 1 detects))
+        (setq decknix--context-repo-probed-at
+              (- (float-time) decknix-context-repo-retry-seconds 1))
+        (decknix--context-ensure-repo)
+        (should (= 2 detects))))))
+
+(ert-deftest decknix-context/a-found-repo-is-kept ()
+  (with-temp-buffer
+    (let ((detects 0))
+      (cl-letf (((symbol-function 'decknix--context-detect-repo)
+                 (lambda () (cl-incf detects) "o/r")))
+        (should (equal "o/r" (decknix--context-ensure-repo)))
+        (should (equal "o/r" (decknix--context-ensure-repo)))
+        (should (= 1 detects))))))
+
+(ert-deftest decknix-context/an-in-flight-ci-fetch-is-not-doubled ()
+  (with-temp-buffer
+    (setq decknix--context-branch "main" decknix--context-repo "o/r")
+    (let ((spawned 0) (done nil))
+      (cl-letf (((symbol-function 'decknix--context-gh-async)
+                 (lambda (_args on-done) (cl-incf spawned) (setq done on-done))))
+        (decknix--context-fetch-ci-async)
+        (decknix--context-fetch-ci-async)
+        (should (= 1 spawned))
+        (funcall done nil)
+        (decknix--context-fetch-ci-async)
+        (should (= 2 spawned))))))
+
+(ert-deftest decknix-context/a-stale-in-flight-fetch-no-longer-blocks ()
+  (with-temp-buffer
+    (setq decknix--context-branch "main" decknix--context-repo "o/r"
+          decknix--context-ci-pending-since
+          (- (float-time) decknix-context-fetch-stale-seconds 1))
+    (let ((spawned 0))
+      (cl-letf (((symbol-function 'decknix--context-gh-async)
+                 (lambda (&rest _) (cl-incf spawned))))
+        (decknix--context-fetch-ci-async)
+        (should (= 1 spawned))))))
+
+(ert-deftest decknix-context/review-tally-waits-for-the-last-one ()
+  (with-temp-buffer
+    (setq decknix--context-items
+          '(("#1" . (:type pr :state "open" :number 1 :repo "o/r"))
+            ("#2" . (:type pr :state "open" :number 2 :repo "o/r"))))
+    (let ((dones nil))
+      (cl-letf (((symbol-function 'decknix--context-gh-async)
+                 (lambda (_args on-done) (push on-done dones)))
+                ((symbol-function 'decknix--context-update-header) #'ignore))
+        (decknix--context-fetch-reviews-async)
+        (should (= 2 (length dones)))
+        (decknix--context-fetch-reviews-async)
+        (should (= 2 (length dones)))
+        (funcall (pop dones) nil)
+        (decknix--context-fetch-reviews-async)
+        (should (= 1 (length dones)))
+        (funcall (pop dones) nil)
+        (should-not decknix--context-reviews-pending)
+        (decknix--context-fetch-reviews-async)
+        (should (= 2 (length dones)))))))
+
+(ert-deftest decknix-context/the-poll-skips-a-hidden-shell ()
+  (let ((fetched nil))
+    (cl-letf (((symbol-function 'decknix--context-ci-poll-target) (lambda () nil))
+              ((symbol-function 'decknix--context-fetch-ci-async)
+               (lambda () (setq fetched t))))
+      (decknix--context-ci-poll-tick)
+      (should-not fetched))))
+
+(ert-deftest decknix-context/the-poll-timer-runs-a-named-function ()
+  (let ((decknix--context-ci-timer nil) (fn nil))
+    (cl-letf (((symbol-function 'run-with-timer)
+               (lambda (_a _b f &rest _) (setq fn f) 'timer)))
+      (decknix--context-start-ci-polling))
+    (should (eq fn #'decknix--context-ci-poll-tick))))
+
 (provide 'decknix-agent-shell-context-test)
 ;;; decknix-agent-shell-context-test.el ends here
