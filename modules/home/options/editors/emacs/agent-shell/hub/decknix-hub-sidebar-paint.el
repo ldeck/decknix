@@ -335,22 +335,57 @@ Pure, so the decision is unit-testable without a live sidebar."
   (or (not (equal fingerprint last-fingerprint))
       (>= (- now last-paint) force-interval)))
 
+(defvar decknix-sidebar-idle-spacing-factor 5
+  "Minimum gap between fingerprints, as a multiple of the last one\='s duration.
+The fingerprint asks every live session for its status, and each ask can
+stat a broker log and pidfile.  On a slow disk that took seconds, and a
+2 s tick then spent most of its time fingerprinting.  At 5, it can take at
+most a sixth of the time.")
+
+(defvar decknix-sidebar-idle-max-spacing 30
+  "Upper bound in seconds on the gap `decknix-sidebar-idle-spacing-factor\=' adds.")
+
+(defvar decknix--sidebar-idle-fp-duration 0
+  "Seconds the last idle-tick fingerprint took.")
+
+(defvar decknix--sidebar-idle-fp-at 0
+  "`float-time\=' the last idle-tick fingerprint started.")
+
+(defun decknix--sidebar-idle-fp-due-p (now)
+  "Non-nil when the idle tick may take a fingerprint at NOW.
+False while input is pending, or until `decknix-sidebar-idle-spacing-factor'
+times the last fingerprint's duration has passed since it started."
+  (and (not (input-pending-p))
+       (>= (- now decknix--sidebar-idle-fp-at)
+           (min decknix-sidebar-idle-max-spacing
+                (* decknix-sidebar-idle-spacing-factor
+                   decknix--sidebar-idle-fp-duration)))))
+
+(defun decknix--sidebar-idle-timed-fingerprint (now)
+  "Take the idle-tick fingerprint, recording when it started (NOW) and its cost."
+  (setq decknix--sidebar-idle-fp-at now)
+  (prog1 (decknix--sidebar-with-status-memo
+           (decknix--sidebar-idle-fingerprint))
+    (setq decknix--sidebar-idle-fp-duration (- (float-time) now))))
+
 (defun decknix--sidebar-idle-tick ()
   "Dirty-checked replacement for the sidebar's blind 2 s auto-refresh.
 Repaints (through the normal debounced refresh) only when an input
 changed or the force interval elapsed, so an idle sidebar stops pegging
-`redisplay_internal'."
-  (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
-             (or (and decknix--sidebar-paint-pending
-                      (not (decknix--sidebar-paint-hidden-p)))
-                 (decknix--sidebar-idle-should-paint-p
-                  (decknix--sidebar-with-status-memo
-                    (decknix--sidebar-idle-fingerprint))
-                  decknix--sidebar-idle-last-fingerprint
-                  decknix--sidebar-idle-last-paint
-                  (float-time)
-                  decknix-sidebar-idle-force-interval)))
-    (agent-shell-workspace-sidebar-refresh)))
+`redisplay_internal'.  The fingerprint itself is skipped while input is
+pending and paced by its own cost; see `decknix--sidebar-idle-fp-due-p'."
+  (let ((now (float-time)))
+    (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
+               (or (and decknix--sidebar-paint-pending
+                        (not (decknix--sidebar-paint-hidden-p)))
+                   (and (decknix--sidebar-idle-fp-due-p now)
+                        (decknix--sidebar-idle-should-paint-p
+                         (decknix--sidebar-idle-timed-fingerprint now)
+                         decknix--sidebar-idle-last-fingerprint
+                         decknix--sidebar-idle-last-paint
+                         now
+                         decknix-sidebar-idle-force-interval))))
+      (agent-shell-workspace-sidebar-refresh))))
 
 (defun decknix--sidebar-install-idle-tick (&rest _)
   "Swap the sidebar's blind 2 s refresh timer for the dirty-checked tick.

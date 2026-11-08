@@ -32,7 +32,9 @@
          (decknix--sidebar-paint-last-end 0)
          (decknix--sidebar-paint-pending nil)
          (decknix--sidebar-idle-last-fingerprint 'unset)
-         (decknix--sidebar-idle-last-paint 0))
+         (decknix--sidebar-idle-last-paint 0)
+         (decknix--sidebar-idle-fp-duration 0)
+         (decknix--sidebar-idle-fp-at 0))
      ,@body))
 
 ;; -- Guard predicate ------------------------------------------------
@@ -537,6 +539,71 @@ for as long as it stays hidden."
       (decknix--sidebar-paint-now (lambda () (sleep-for 0.02)))
       (should (>= decknix--sidebar-paint-last-duration 0.015))
       (should (eq 'fp decknix--sidebar-idle-last-fingerprint)))))
+
+;; -- Idle-tick fingerprint pacing ------------------------------------
+
+(defmacro decknix-sidebar-idle-pace-test--tick (spec &rest body)
+  "Run BODY with the idle tick's collaborators stubbed.
+SPEC is (FINGERPRINTS REFRESHED INPUT): FINGERPRINTS counts fingerprint
+calls, REFRESHED records a refresh, INPUT is the `input-pending-p' answer."
+  (declare (indent 1))
+  (let ((fps (nth 0 spec)) (refreshed (nth 1 spec)) (input (nth 2 spec)))
+    `(let ((,fps 0) (,refreshed nil))
+       (cl-letf (((symbol-function 'input-pending-p) (lambda (&rest _) ,input))
+                 ((symbol-function 'decknix--sidebar-paint-hidden-p) (lambda () nil))
+                 ((symbol-function 'agent-shell-workspace-sidebar-refresh)
+                  (lambda () (setq ,refreshed t)))
+                 ((symbol-function 'decknix--sidebar-idle-fingerprint)
+                  (lambda () (cl-incf ,fps) (list 'fp ,fps))))
+         ,@body))))
+
+(ert-deftest decknix-sidebar-idle-pace--no-fingerprint-while-typing ()
+  "Pending input skips the whole tick: no status sweep in front of a key."
+  (decknix-sidebar-paint-test--isolated
+    (decknix-sidebar-idle-pace-test--tick (fps refreshed t)
+      (decknix--sidebar-idle-tick)
+      (should (= 0 fps))
+      (should-not refreshed))))
+
+(ert-deftest decknix-sidebar-idle-pace--a-slow-fingerprint-spaces-out-the-next ()
+  "A 2 s fingerprint on a 2 s tick left no idle time; it now waits 5x its cost."
+  (decknix-sidebar-paint-test--isolated
+    (let ((decknix-sidebar-idle-spacing-factor 5)
+          (decknix-sidebar-idle-max-spacing 30)
+          (decknix--sidebar-idle-fp-duration 2.0)
+          (decknix--sidebar-idle-fp-at (- (float-time) 4.0)))
+      (decknix-sidebar-idle-pace-test--tick (fps _refreshed nil)
+        (decknix--sidebar-idle-tick)
+        (should (= 0 fps))
+        (setq decknix--sidebar-idle-fp-at (- (float-time) 10.5))
+        (decknix--sidebar-idle-tick)
+        (should (= 1 fps))))))
+
+(ert-deftest decknix-sidebar-idle-pace--the-gap-is-capped ()
+  (decknix-sidebar-paint-test--isolated
+    (let ((decknix-sidebar-idle-spacing-factor 5)
+          (decknix-sidebar-idle-max-spacing 30)
+          (decknix--sidebar-idle-fp-duration 600.0)
+          (decknix--sidebar-idle-fp-at 100.0))
+      (cl-letf (((symbol-function 'input-pending-p) (lambda (&rest _) nil)))
+        (should-not (decknix--sidebar-idle-fp-due-p 129.0))
+        (should (decknix--sidebar-idle-fp-due-p 130.0))))))
+
+(ert-deftest decknix-sidebar-idle-pace--a-fingerprint-records-its-cost ()
+  (decknix-sidebar-paint-test--isolated
+    (cl-letf (((symbol-function 'decknix--sidebar-idle-fingerprint)
+               (lambda () (sleep-for 0.02) 'fp)))
+      (let ((now (float-time)))
+        (should (eq 'fp (decknix--sidebar-idle-timed-fingerprint now)))
+        (should (= now decknix--sidebar-idle-fp-at))
+        (should (>= decknix--sidebar-idle-fp-duration 0.015))))))
+
+(ert-deftest decknix-sidebar-idle-pace--a-changed-fingerprint-still-refreshes ()
+  (decknix-sidebar-paint-test--isolated
+    (decknix-sidebar-idle-pace-test--tick (fps refreshed nil)
+      (decknix--sidebar-idle-tick)
+      (should (= 1 fps))
+      (should refreshed))))
 
 (provide 'decknix-hub-sidebar-paint-test)
 ;;; decknix-hub-sidebar-paint-test.el ends here
