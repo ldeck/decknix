@@ -178,5 +178,47 @@ rest of the session."
       (decknix--hub-path-facts-refresh-all)
       (should-not decknix--hub-path-facts-continuation))))
 
+;; -- Hub directory events ---------------------------------------------
+
+(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
+
+(defun decknix-hub-file-event-test--paints-for (name)
+  "Return non-nil when a hub event for NAME schedules a sidebar paint."
+  (let ((painted nil)
+        (sidebar (get-buffer-create agent-shell-workspace-sidebar-buffer-name)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'decknix--hub-event-filename) (lambda (_e) name))
+                  ((symbol-function 'decknix--hub-refresh-wip) #'ignore)
+                  ((symbol-function 'decknix--sidebar-schedule-paint)
+                   (lambda (&rest _) (setq painted t))))
+          (decknix--hub-on-file-change '(desc changed "ignored"))
+          painted)
+      (kill-buffer sidebar))))
+
+(ert-deftest decknix-hub-on-file-change/a-daemon-file-repaints ()
+  (should (decknix-hub-file-event-test--paints-for "github-wip.json")))
+
+(ert-deftest decknix-hub-on-file-change/emacs-own-writes-do-not-repaint ()
+  "A paint writes linked-prs.json; repainting on it made paints self-sustaining."
+  (should-not (decknix-hub-file-event-test--paints-for "linked-prs.json"))
+  (should-not (decknix-hub-file-event-test--paints-for "pr-cache.el"))
+  (should-not (decknix-hub-file-event-test--paints-for ".cache-write-abc")))
+
+(ert-deftest decknix-hub-write-linked-prs/an-unchanged-file-is-not-rewritten ()
+  (let* ((dir (make-temp-file "hub-linked-" t))
+         (decknix--hub-dir dir)
+         (decknix--hub-cache-write-digests (make-hash-table :test 'equal))
+         (writes 0))
+    (unwind-protect
+        (cl-letf* (((symbol-function 'agent-shell-buffers) (lambda () nil))
+                   (orig (symbol-function 'write-region))
+                   ((symbol-function 'write-region)
+                    (lambda (&rest args) (cl-incf writes) (apply orig args))))
+          (decknix--hub-write-linked-prs)
+          (decknix--hub-write-linked-prs)
+          (should (= 1 writes))
+          (should (file-exists-p (expand-file-name "linked-prs.json" dir))))
+      (delete-directory dir t))))
+
 (provide 'decknix-hub-worktree-cache-test)
 ;;; decknix-hub-worktree-cache-test.el ends here

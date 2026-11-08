@@ -75,5 +75,12 @@
       (should (decknix-hub-cache-write file nil '(x)))
       (should (decknix-hub-cache-write other nil '(x))))))
 
+(ert-deftest decknix-hub-cache-write/string-form-is-change-only-too ()
+  (decknix-hub-cache-write-test--in-tmp file
+    (should (decknix-hub-cache-write-string file "{\"a\":1}\n"))
+    (should-not (decknix-hub-cache-write-string file "{\"a\":1}\n"))
+    (should (decknix-hub-cache-write-string file "{\"a\":2}\n"))
+    (should (equal (decknix-hub-cache-write-test--read file) "{\"a\":2}\n"))))
+
 (provide 'decknix-hub-cache-write-test)
 ;;; decknix-hub-cache-write-test.el ends here

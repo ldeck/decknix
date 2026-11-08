@@ -310,16 +310,20 @@ that two-step write back onto the canonical JSON name so the
 `pcase' below matches regardless of which event the kqueue
 backend surfaces first."
   (let ((name (decknix--hub-event-filename event)))
-    (when name
-      (pcase name
-        ("github-reviews.json"  (decknix--hub-refresh-reviews))
-        ("github-wip.json"      (decknix--hub-refresh-wip))
-        ("meta.json"            (decknix--hub-refresh-meta))
-        ("jira-tasks.json"      (decknix--hub-refresh-jira))
-        ("teamcity-builds.json" (decknix--hub-refresh-teamcity))
-        ("teamcity-deploys.json" (decknix--hub-refresh-deploys))
-        ("token-quotas.json"    (decknix--hub-refresh-token-quotas))
-        (_ nil))
+    ;; Only the daemon's own files repaint.  Emacs writes into this
+    ;; directory too (linked-prs.json on every paint, the PR/repo cache
+    ;; flushes), and repainting on those made every paint schedule the
+    ;; next one through its own write.
+    (when (and name
+               (pcase name
+                 ("github-reviews.json"  (decknix--hub-refresh-reviews) t)
+                 ("github-wip.json"      (decknix--hub-refresh-wip) t)
+                 ("meta.json"            (decknix--hub-refresh-meta) t)
+                 ("jira-tasks.json"      (decknix--hub-refresh-jira) t)
+                 ("teamcity-builds.json" (decknix--hub-refresh-teamcity) t)
+                 ("teamcity-deploys.json" (decknix--hub-refresh-deploys) t)
+                 ("token-quotas.json"    (decknix--hub-refresh-token-quotas) t)
+                 (_ nil)))
       ;; Refresh the sidebar (COALESCED) if it exists.  The hub daemon
       ;; writes its JSON files in bursts -- a single poll can rewrite
       ;; github-reviews / github-wip / teamcity-* / jira / meta together --
@@ -2522,10 +2526,12 @@ status for these branches."
                  repo-map)
         (let ((json-data (json-encode
                           (list (cons 'repos repos)))))
+          ;; Called from every sidebar paint, and the content rarely
+          ;; changes: write only when it did.
           (condition-case err
-              (with-temp-file (expand-file-name "linked-prs.json"
-                                                decknix--hub-dir)
-                (insert json-data "\n"))
+              (decknix-hub-cache-write-string
+               (expand-file-name "linked-prs.json" decknix--hub-dir)
+               (concat json-data "\n"))
             (error
              (message "hub: write linked-prs.json: %s"
                       (error-message-string err)))))))))

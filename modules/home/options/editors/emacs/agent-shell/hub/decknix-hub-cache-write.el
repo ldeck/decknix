@@ -34,15 +34,14 @@
         (print-level nil))
     (concat (or header "") (prin1-to-string data) "\n")))
 
-(defun decknix-hub-cache-write (file header data &optional force)
-  "Write HEADER and printed DATA to FILE, but only when that text changed.
+(defun decknix-hub-cache-write-string (file text &optional force)
+  "Write TEXT to FILE, but only when it differs from the last write there.
 
-Returns non-nil when FILE was written, nil when the text matched the last
+Returns non-nil when FILE was written, nil when TEXT matched the last
 write to FILE and FILE still exists.  FORCE writes regardless.  The write
 goes to a temporary sibling that is then renamed over FILE, so FILE is
 always either the old content or the new, never a partial one."
   (let* ((file (expand-file-name file))
-         (text (decknix--hub-cache-write-text header data))
          (digest (secure-hash 'sha1 text)))
     (unless (and (not force)
                  (equal digest (gethash file decknix--hub-cache-write-digests))
@@ -59,6 +58,13 @@ always either the old content or the new, never a partial one."
                    (signal (car err) (cdr err))))))
       (puthash file digest decknix--hub-cache-write-digests)
       t)))
+
+(defun decknix-hub-cache-write (file header data &optional force)
+  "Write HEADER and printed DATA to FILE, but only when that text changed.
+See `decknix-hub-cache-write-string' for the return value, FORCE and the
+atomic replace."
+  (decknix-hub-cache-write-string
+   file (decknix--hub-cache-write-text header data) force))
 
 (provide 'decknix-hub-cache-write)
 ;;; decknix-hub-cache-write.el ends here
