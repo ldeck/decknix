@@ -779,5 +779,26 @@ the feed next notices."
     (should (eq #'decknix-review-board-reply
                 (lookup-key decknix-review-board-mode-map (kbd d))))))
 
+(ert-deftest decknix-rb--a-turn-moving-off-screen-repaints-when-shown ()
+  "A board in another tab skipped the repaint and stayed stale on return."
+  (let ((board (get-buffer-create decknix-review-board-buffer-name))
+        (shown nil) (built 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'get-buffer-window) (lambda (&rest _) shown))
+                  ((symbol-function 'decknix-review-board--build)
+                   (lambda () (setq built (1+ built)) nil))
+                  ((symbol-function 'decknix-review-board--render) #'ignore))
+          (decknix-review-board--settle-refresh)
+          (should (= 0 built))
+          (decknix-review-board-refresh-if-stale)
+          (should (= 0 built))
+          (setq shown t)
+          (decknix-review-board-refresh-if-stale)
+          (should (= 1 built))
+          (decknix-review-board-refresh-if-stale)
+          (should (= 1 built)))
+      (setq decknix-review-board--stale nil)
+      (kill-buffer board))))
+
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here

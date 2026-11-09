@@ -547,10 +547,14 @@ verb that adds work, which is why it asks rather than acting on point."
       (when (fboundp 'decknix-review-board-refresh)
         (ignore-errors (decknix-review-board-refresh)))))))
 
+(defvar decknix-review-board--stale nil
+  "Non-nil when a session's turn moved while the board was not on screen.")
+
 (defun decknix-review-board-refresh ()
   "Rebuild and re-render the board."
   (interactive)
   (when-let* ((buf (get-buffer decknix-review-board-buffer-name)))
+    (setq decknix-review-board--stale nil)
     (with-current-buffer buf
       (setq decknix-review-board--model
             (let ((m (decknix-review-board--build)))
@@ -568,11 +572,27 @@ verb that adds work, which is why it asks rather than acting on point."
   "Pending repaint armed by `decknix-review-board-schedule-refresh', or nil.")
 
 (defun decknix-review-board--settle-refresh ()
-  "Repaint the board for a session whose turn changed, if it is on screen."
+  "Repaint the board for a session whose turn changed, if it is on screen.
+Otherwise mark it stale, for `decknix-review-board-refresh-if-stale'."
   (setq decknix-review-board--settle-timer nil)
   (when-let* ((buf (get-buffer decknix-review-board-buffer-name)))
-    (when (get-buffer-window buf t)
-      (ignore-errors (decknix-review-board-refresh)))))
+    (if (get-buffer-window buf t)
+        (ignore-errors (decknix-review-board-refresh))
+      (setq decknix-review-board--stale t))))
+
+(defun decknix-review-board-refresh-if-stale (&rest _)
+  "Repaint the board now that it is shown, if a turn moved while it was not.
+
+The board usually lives in a tab of its own, and a turn that ends while
+another tab is selected skips the repaint.  Switching back then showed the
+rows as they were, so a session that had reached its gate still read
+`In progress' until the reviews feed next changed.  Run from
+`tab-bar-tab-post-select-functions' and the board's own
+`window-buffer-change-functions'."
+  (when-let* ((decknix-review-board--stale)
+              (buf (get-buffer decknix-review-board-buffer-name))
+              ((get-buffer-window buf t)))
+    (ignore-errors (decknix-review-board-refresh))))
 
 (defun decknix-review-board-schedule-refresh ()
   "Repaint the board shortly, once, when a session's turn ends or starts.
@@ -1205,7 +1225,9 @@ verb that approved directly would route around it.")
 (define-derived-mode decknix-review-board-mode special-mode "ReviewBoard"
   "Major mode for the review worklist."
   (setq truncate-lines t)
-  (buffer-disable-undo))
+  (buffer-disable-undo)
+  (add-hook 'window-buffer-change-functions
+            #'decknix-review-board-refresh-if-stale nil t))
 
 ;;;###autoload
 (defun decknix-review-board ()

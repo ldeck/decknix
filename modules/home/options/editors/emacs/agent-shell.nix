@@ -7549,6 +7549,10 @@ Reads the live reviews feed, the same source the board and auto-review use."
         ;; so a board fed only by the reviews file kept saying `working'.
         (add-hook 'decknix-agent-turn-settled-hook
                   #'decknix-review-board-schedule-refresh)
+        ;; That repaint is skipped while the board's tab is not selected,
+        ;; so catch up when it is.
+        (add-hook 'tab-bar-tab-post-select-functions
+                  #'decknix-review-board-refresh-if-stale)
         ;; == Priority lane-based view (#142, phase 1) ==
         ;; Always load the pure package (small, no load-time side effects)
         ;; so the `decknix-priority' command is M-x-available and gets full
