@@ -59,6 +59,7 @@
 
 (declare-function agent-shell--state "ext:agent-shell")
 (declare-function agent-shell--content-block-to-markdown "ext:agent-shell" (content))
+(defvar shell-maker--busy)
 
 ;; ---------------------------------------------------------------------------
 ;; Tunables
@@ -77,6 +78,13 @@ The accumulator runs on every streamed chunk, so it must be O(1) per
 chunk rather than growing without bound; only the tail is ever read (see
 `decknix-agent-turn-signals-question-window')."
   :type 'integer :group 'decknix)
+
+(defcustom decknix-agent-turn-unprompted-quiet-seconds 3
+  "Seconds of no new agent text after which an unprompted turn is settled.
+An unprompted turn is one this buffer did not start, so no `turn-complete'
+ever arrives for it: a background task waking the agent, or a turn the
+broker replays after a reattach.  Silence is the only sign it has ended."
+  :type 'number :group 'decknix)
 
 ;; ---------------------------------------------------------------------------
 ;; Pure layer -- ERT-tested.
@@ -100,7 +108,8 @@ an example would falsely read as an ask."
   (replace-regexp-in-string "```[^\0]*?```" "" (or text "")))
 
 (defconst decknix--agent-question-restated-regexp
-  (rx (or (seq "waiting on your " (or "choice" "answer" "call" "decision" "reply"))
+  (rx (or (seq "waiting " (or "on" "for") " your "
+               (or "choice" "answer" "call" "decision" "reply" "pick"))
           (seq "your option" (? "s") " " (or "were" "are"))))
   "Prose shapes for a turn restating a choice it is already blocked on.
 
@@ -112,7 +121,11 @@ misses had this shape.
 Deliberately narrow.  \"Waiting on your next instruction\" closed five of
 those twelve transcripts and every one was genuinely idle, so the verb
 list must stay specific -- a bare \"waiting on your\" would misreport all
-five as blocked.")
+five as blocked.
+
+\"Waiting for your pick\" is the shape a review session uses when a
+background task wakes it while it is still blocked on its gate (\"I'm
+still waiting for your pick: 1 ... is recommended, or 2, or 3\").")
 
 (defconst decknix--agent-question-line-regexp
   (rx "?" (* (any "*_`")) (* blank)
@@ -216,6 +229,22 @@ label the next turn `posting' after you merely said \"stop\"."
   (when-let* ((ask (decknix-agent-turn-ask closing))
               ((plist-get ask :verdict)))
     (list :ask ask :reply (or reply ""))))
+
+(defun decknix-agent-turn-unprompted-settlement (closing question tail)
+  "Return (CLOSING . QUESTION) once an unprompted turn has ended on TAIL.  Pure.
+
+CLOSING and QUESTION are what the session last settled on.  A turn that
+asks replaces them.  One that does not leaves a pending question in
+place: nobody has answered it, and a background task reporting that a
+log search found nothing does not answer it either.  Otherwise the new
+text becomes the closing text, so the board reads what the session said
+last.  An empty TAIL changes nothing."
+  (cond
+   ((not (and (stringp tail) (not (string-empty-p (string-trim tail)))))
+    (cons closing question))
+   ((decknix--agent-question-p tail) (cons tail t))
+   (question (cons closing t))
+   (t (cons tail nil))))
 
 (defun decknix--agent-plan-progress (entries)
   "Return a progress plist for ACP plan ENTRIES, or nil when there are none.
@@ -401,6 +430,12 @@ turn it starts, which is the turn that acts on the answer.")
 Kept until the next turn starts, so the sidebar can say what a session
 that is `asking' actually asked without reading its buffer.")
 
+(defvar-local decknix--agent-turn-unprompted-timer nil
+  "Quiet timer settling an unprompted turn in this buffer, or nil.")
+
+(defvar-local decknix--agent-turn-unprompted-seen nil
+  "The message tail when the unprompted timer was armed, compared with `eq'.")
+
 (defun decknix-agent-turn-closing-text (&optional buffer)
   "Return the closing text of BUFFER's last turn, or nil.  No I/O."
   (let ((buf (or buffer (current-buffer))))
@@ -472,7 +507,8 @@ more than a bounded string append (`decknix--agent-turn-append-tail')."
              (setq decknix--agent-turn-message-tail
                    (decknix--agent-turn-append-tail
                     decknix--agent-turn-message-tail
-                    (decknix--agent-turn-chunk-text notification))))
+                    (decknix--agent-turn-chunk-text notification)))
+             (decknix--agent-turn-note-unprompted buffer))
             ("plan"
              (setq decknix--agent-turn-plan
                    (decknix--agent-plan-progress
@@ -496,10 +532,70 @@ more than a bounded string append (`decknix--agent-turn-append-tail')."
              (decknix-agent-turn-reset))
             (_ nil)))))))
 
+(defun decknix--agent-turn-note-unprompted (buffer)
+  "Arm the quiet timer when BUFFER streams agent text it did not ask for.
+
+A turn this buffer started keeps `shell-maker--busy' set until its
+`turn-complete', which settles it.  Text arriving while the buffer is not
+busy belongs to a turn nothing will settle: a background task waking the
+agent, or the broker replaying a turn after a reattach.  Review sessions
+reach their gate this way constantly, because the gate often follows a
+background CI wait, and the board kept such a session `In progress' until
+the next prompt.
+
+Runs on every chunk, so it costs one variable test and one `timerp' once
+the timer is armed."
+  (unless (or (bound-and-true-p shell-maker--busy)
+              (timerp decknix--agent-turn-unprompted-timer))
+    (decknix--agent-turn-arm-unprompted buffer)))
+
+(defun decknix--agent-turn-arm-unprompted (buffer)
+  "Start BUFFER's quiet timer from the current message tail."
+  (setq decknix--agent-turn-unprompted-seen decknix--agent-turn-message-tail
+        decknix--agent-turn-unprompted-timer
+        (run-with-timer decknix-agent-turn-unprompted-quiet-seconds nil
+                        #'decknix--agent-turn-unprompted-check buffer)))
+
+(defun decknix--agent-turn-unprompted-check (buffer)
+  "Settle BUFFER's unprompted turn if no text arrived since the timer was armed."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq decknix--agent-turn-unprompted-timer nil)
+      (cond
+       ((bound-and-true-p shell-maker--busy) nil)
+       ((not (eq decknix--agent-turn-message-tail
+                 decknix--agent-turn-unprompted-seen))
+        (decknix--agent-turn-arm-unprompted buffer))
+       (t (decknix-agent-turn-settle-unprompted))))))
+
+(defun decknix--agent-turn-cancel-unprompted ()
+  "Drop the current buffer's quiet timer: its own turn boundary settles it."
+  (when (timerp decknix--agent-turn-unprompted-timer)
+    (cancel-timer decknix--agent-turn-unprompted-timer))
+  (setq decknix--agent-turn-unprompted-timer nil))
+
+(defun decknix-agent-turn-settle-unprompted ()
+  "Settle the current buffer's unprompted turn from its message tail.
+
+The tail is kept, unlike at `turn-complete': more text from the same run
+extends it, and the next settlement reads the whole of it.  `:ended' is
+left alone, because a replayed turn may still be running and only the
+broker can say whether it has stopped."
+  (let ((tail decknix--agent-turn-message-tail))
+    (when (and (stringp tail) (not (string-empty-p (string-trim tail))))
+      (let ((settled (decknix-agent-turn-unprompted-settlement
+                      decknix--agent-turn-closing-text
+                      decknix--agent-turn-question
+                      tail)))
+        (setq decknix--agent-turn-closing-text (car settled)
+              decknix--agent-turn-question (cdr settled)))
+      (decknix--agent-turn-run-settled-hook))))
+
 (defun decknix-agent-turn-reset ()
   "Clear turn-end facts in the current buffer at the start of a new turn.
 The plan is deliberately KEPT: it spans turns, and a session that stops
 mid-plan should still read as having work outstanding."
+  (decknix--agent-turn-cancel-unprompted)
   (setq decknix--agent-turn-message-tail nil
         decknix--agent-turn-question nil
         decknix--agent-turn-stop-reason nil
@@ -539,6 +635,7 @@ Runs once per turn, so the question scan is off any hot path."
         ('turn-complete
          (when (fboundp 'decknix-session-assoc-end-turn)
            (ignore-errors (decknix-session-assoc-end-turn)))
+         (decknix--agent-turn-cancel-unprompted)
          (setq decknix--agent-turn-stop-reason (map-elt data :stop-reason))
          (setq decknix--agent-turn-question
                (decknix--agent-question-p decknix--agent-turn-message-tail))

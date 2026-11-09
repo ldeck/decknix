@@ -19,6 +19,8 @@
 (require 'decknix-agent-turn-signals)
 (require 'decknix-review-gate-fixtures)
 
+(defvar shell-maker--busy nil)
+
 ;; ---------------------------------------------------------------------
 ;; Question detection — "ready" vs "ready AND waiting on your answer"
 ;; ---------------------------------------------------------------------
@@ -461,6 +463,109 @@ and not on every streamed chunk."
                           (list (cons "go" decknix-fixture-posted)
                                 (cons "please re-review" "Looking again.")))
                          :answered)))
+
+;; ---------------------------------------------------------------------
+;; Unprompted turns: a background task wakes the agent, no prompt started it
+;; ---------------------------------------------------------------------
+;;
+;; Over three weeks of review transcripts, 90 turns were started by a
+;; background task notification rather than a prompt, and 46 of them ended
+;; on a gate.  No `turn-complete' reaches the buffer for such a turn, so
+;; its text never became the closing text and the session kept whatever
+;; its last prompted turn said.
+
+(ert-deftest decknix-turn-question--a-restated-pick-is-asking ()
+  (should (decknix--agent-question-p decknix-fixture-still-waiting-for-pick))
+  (should-not (decknix--agent-question-p "Waiting on your next instruction.")))
+
+(ert-deftest decknix-turn-unprompted--a-gate-replaces-a-report ()
+  (should (equal (cons decknix-fixture-gate-after-background-wait t)
+                 (decknix-agent-turn-unprompted-settlement
+                  decknix-fixture-before-background-wait nil
+                  decknix-fixture-gate-after-background-wait))))
+
+(ert-deftest decknix-turn-unprompted--a-report-keeps-the-pending-gate ()
+  "Nobody answered the gate, and a log search finishing does not answer it."
+  (should (equal (cons decknix-fixture-gate-choose-one t)
+                 (decknix-agent-turn-unprompted-settlement
+                  decknix-fixture-gate-choose-one t
+                  decknix-fixture-background-report))))
+
+(ert-deftest decknix-turn-unprompted--a-report-after-a-report-is-the-new-closing ()
+  (should (equal (cons decknix-fixture-background-report nil)
+                 (decknix-agent-turn-unprompted-settlement
+                  decknix-fixture-before-background-wait nil
+                  decknix-fixture-background-report))))
+
+(ert-deftest decknix-turn-unprompted--empty-text-changes-nothing ()
+  (should (equal (cons "Which?" t)
+                 (decknix-agent-turn-unprompted-settlement "Which?" t "  \n"))))
+
+(defun decknix-turn-test--chunk (buffer text)
+  "Feed TEXT to BUFFER as a streamed agent message chunk."
+  (decknix--agent-turn-observe-notification
+   :state (list (cons :buffer buffer))
+   :acp-notification
+   `((method . "session/update")
+     (params . ((update . ((sessionUpdate . "agent_message_chunk")
+                           (content . ((type . "text") (text . ,text))))))))))
+
+(defmacro decknix-turn-test--in-session (&rest body)
+  "Run BODY in a session buffer whose quiet timer never fires by itself."
+  `(with-temp-buffer
+     (let ((decknix-agent-turn-unprompted-quiet-seconds 3600)
+           (settled 0))
+       (ignore settled)
+       (cl-letf (((symbol-function 'derived-mode-p) (lambda (&rest _) t)))
+         (let ((decknix-agent-turn-settled-hook
+                (list (lambda () (setq settled (1+ settled))))))
+           (unwind-protect (progn ,@body)
+             (decknix--agent-turn-cancel-unprompted)))))))
+
+(ert-deftest decknix-turn-unprompted--a-gate-reached-without-a-prompt-is-asking ()
+  "The live case: the prompted turn handed off to a background job, the
+job woke the agent, and it put its gate in a turn nothing settled."
+  (decknix-turn-test--in-session
+   (setq decknix--agent-turn-message-tail decknix-fixture-before-background-wait)
+   (decknix--agent-turn-observe-event :event 'turn-complete :data nil)
+   (should-not (plist-get (decknix-agent-turn-facts) :question))
+   (setq settled 0)
+   (decknix-turn-test--chunk (current-buffer) decknix-fixture-gate-after-background-wait)
+   (should (timerp decknix--agent-turn-unprompted-timer))
+   (decknix--agent-turn-unprompted-check (current-buffer))
+   (should (plist-get (decknix-agent-turn-facts) :question))
+   (should (equal decknix-fixture-gate-after-background-wait
+                  (decknix-agent-turn-closing-text)))
+   (should (= 1 settled))
+   (should (equal "asking"
+                  (decknix-agent-turn-status
+                   "ready" (append '(:working t) (decknix-agent-turn-facts)))))))
+
+(ert-deftest decknix-turn-unprompted--text-still-arriving-waits ()
+  (decknix-turn-test--in-session
+   (decknix-turn-test--chunk (current-buffer) "Checking the new head. ")
+   (decknix-turn-test--chunk (current-buffer) "Still running.")
+   (decknix--agent-turn-unprompted-check (current-buffer))
+   (should (timerp decknix--agent-turn-unprompted-timer))
+   (should-not (decknix-agent-turn-closing-text))
+   (decknix--agent-turn-unprompted-check (current-buffer))
+   (should (equal "Checking the new head. Still running."
+                  (decknix-agent-turn-closing-text)))))
+
+(ert-deftest decknix-turn-unprompted--a-turn-this-buffer-started-is-left-alone ()
+  "While a prompt is in flight `turn-complete' settles the turn."
+  (decknix-turn-test--in-session
+   (let ((shell-maker--busy t))
+     (decknix-turn-test--chunk (current-buffer) "Which one?")
+     (should-not decknix--agent-turn-unprompted-timer))))
+
+(ert-deftest decknix-turn-unprompted--a-prompt-cancels-the-quiet-timer ()
+  (decknix-turn-test--in-session
+   (decknix-turn-test--chunk (current-buffer) "Which one?")
+   (let ((timer decknix--agent-turn-unprompted-timer))
+     (decknix--agent-turn-observe-event :event 'input-submitted :data nil)
+     (should-not decknix--agent-turn-unprompted-timer)
+     (should-not (memq timer timer-list)))))
 
 ;; ---------------------------------------------------------------------
 ;; Quick replies: always confirmed, refused when the key was not offered

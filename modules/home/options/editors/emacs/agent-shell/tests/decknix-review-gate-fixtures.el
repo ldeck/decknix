@@ -138,5 +138,40 @@ Reply with the number or the name."
   "Fixed the bug, added two tests, and committed as abc1234."
   "A turn that reports and asks nothing.")
 
+(defconst decknix-fixture-before-background-wait
+  "I've posted `@dependabot rebase` on #390. A background job is waiting for the new head and its CI. When it finishes I'll re-check the diff, title and commit message against each other, then show the `/ship` gate."
+  "A prompted turn that hands off to a background job and asks nothing.")
+
+(defconst decknix-fixture-gate-after-background-wait
+  "#390: DEPENDABOT HASN'T REBASED
+-----------------------------
+
+I posted `@dependabot rebase` at 04:14Z. 22 minutes later there's no new head (still `a997f69b`), no reaction and no reply. The PR is still 1 behind `main` (#391), `MERGEABLE`, and CI is green on the old head.
+
+What limits the options:
+- The `main` ruleset doesn't require branches to be up to date. It does require linear history, 1 approval, and `require_last_push_approval: true`.
+- That rules out `gh pr update-branch`. It would make me the last pusher, and then my own approval wouldn't count.
+
+CHOOSE ONE
+----------
+1. wait: give Dependabot another 30 min, then post `@dependabot recreate` if it still hasn't moved; ship gate after green CI  [recommended]
+2. merge stale: go to the #390 ship gate now (static approve, then rebase-merge onto `main`)
+3. stop: halt the group (#390 and #389 untouched)
+
+Reply with the number or the name."
+  "The gate the same session reached when the background job woke it.
+No prompt started this turn, so no `turn-complete' arrived for it, and the
+board kept the session In progress for nineteen hours.")
+
+(defconst decknix-fixture-still-waiting-for-pick
+  "That was the second leftover search finishing. Its output is only `Widget.kt` source, not the detekt findings, so the two `detektMain` issues on #519 are still unconfirmed. Nothing in the survey changes.
+
+I'm still waiting for your pick: 1 (ship #518 only) is recommended, or 2, or 3."
+  "A background task woke a session blocked on its gate; it restates the ask.")
+
+(defconst decknix-fixture-background-report
+  "That notification was a leftover log search finishing. It found nothing new, so the two `detektMain` issues on #519 are still unconfirmed."
+  "A background task woke a blocked session, which reports and asks nothing.")
+
 (provide 'decknix-review-gate-fixtures)
 ;;; decknix-review-gate-fixtures.el ends here

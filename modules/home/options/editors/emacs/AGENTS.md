@@ -1167,6 +1167,12 @@ Notes:
   restated pending choice. Biased to over-report: a false positive costs a
   glance, a miss costs however long the session sits there unnoticed. Validated
   12/12 against real transcripts.
+- **Unprompted turns** get no `turn-complete`: a background task waking the
+  agent, or a turn the broker replays after a reattach.  Text arriving while
+  the buffer is not busy arms a quiet timer
+  (`decknix-agent-turn-unprompted-quiet-seconds`) that settles the closing
+  text from it; a pending question survives a turn that does not ask.
+  Review sessions reach their gate this way after every background CI wait.
 - `waiting` feeds `:awaiting-permission` (score 80) and `asking` feeds
   `:attention` (70), so a turn blocked mid-flight on a permission dialog
   outranks one that merely wants an answer. (`waiting` fed `:attention` until
