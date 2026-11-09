@@ -1173,6 +1173,9 @@ Notes:
   (`decknix-agent-turn-unprompted-quiet-seconds`) that settles the closing
   text from it; a pending question survives a turn that does not ask.
   Review sessions reach their gate this way after every background CI wait.
+- The heartbeat backstop (`decknix--agent-buffer-status-harden`) is installed
+  at depth 50, inside the turn-signal refinement.  Wrapping it instead turned
+  every `asking` with tool-call residue back into `ready`.
 - `waiting` feeds `:awaiting-permission` (score 80) and `asking` feeds
   `:attention` (70), so a turn blocked mid-flight on a permission dialog
   outranks one that merely wants an answer. (`waiting` fed `:attention` until

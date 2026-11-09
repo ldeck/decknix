@@ -13,6 +13,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'decknix-agent-turn-signals)
+(require 'decknix-agent-heartbeat-watch)
 
 (ert-deftest decknix-working--beats-asking ()
   "Both facts present: mid-turn wins, because a question only ever closes
@@ -60,6 +61,27 @@ are more specific than `working' and must survive."
       (should (equal "working"
                      (decknix-agent-turn-status
                       "ready" (append '(:working t) (decknix-agent-turn-facts))))))))
+
+;; A background task that wakes a blocked session leaves tool-call residue,
+;; so agent-shell reports `working' after the turn is over.  The backstop
+;; that downgrades that residue to `ready' used to wrap the turn-signal
+;; refinement instead of sitting inside it, so the question was never
+;; considered and the session read idle.  The heredoc installs the
+;; backstop at depth 50; this pins what that composition must produce.
+
+(ert-deftest decknix-working--residue-does-not-hide-a-question ()
+  (let ((status (make-symbol "buffer-status")))
+    (defalias status (lambda (_buffer) "working"))
+    (advice-add status :around #'decknix--agent-turn-status-advice)
+    (advice-add status :around #'decknix--agent-buffer-status-harden '((depth . 50)))
+    (with-temp-buffer
+      (setq decknix--agent-turn-question t
+            decknix--agent-turn-ended t)
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () (list (cons :session (list (cons :id "s1")))))))
+        (should (equal "asking" (funcall status (current-buffer))))
+        (setq decknix--agent-turn-question nil)
+        (should (equal "ready" (funcall status (current-buffer))))))))
 
 (provide 'decknix-agent-turn-working-test)
 ;;; decknix-agent-turn-working-test.el ends here

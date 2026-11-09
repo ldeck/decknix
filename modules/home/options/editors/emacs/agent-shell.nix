@@ -2280,7 +2280,9 @@ let
   decknix-agent-turn-signals-el = mkEmacsTestedPackage {
     pname = "decknix-agent-turn-signals";
     src = ./agent-shell/turn-signals;
-    packageRequires = [ ];
+    # Test-time only: the status test composes this package's refinement
+    # with the heartbeat backstop the way the heredoc installs them.
+    packageRequires = [ decknix-agent-heartbeat-watch-el ];
     # What a closing question expects (verdict, reply kind), required by
     # turn-signals itself, so it ships in the same derivation.
     extraSiteFiles = [
@@ -4912,9 +4914,8 @@ ${optionalString cfg.tableOverlay.enable ''
         (advice-add 'agent-shell--emit-event :before
                     #'decknix--agent-turn-observe-event)
         ;; Display: refine `ready'/`finished' to `asking'.  Composes with
-        ;; the heartbeat-watch backstop below -- that one only ever
-        ;; downgrades a stale `working', this one only ever refines a
-        ;; settled idle status, so they cannot fight over a result.
+        ;; the heartbeat-watch backstop below, which runs inside it (depth
+        ;; 50) so a stale `working' is downgraded before this refines it.
         (with-eval-after-load 'agent-shell-workspace
           (advice-add 'agent-shell-workspace--buffer-status :around
                       #'decknix--agent-turn-status-advice))
@@ -4948,9 +4949,16 @@ ${optionalString cfg.tableOverlay.enable ''
         ;; real state the user has to act on.
         (declare-function decknix--agent-buffer-status-harden
                           "decknix-agent-heartbeat-watch" (orig buffer &rest args))
+        ;; Depth 50: innermost, so it corrects agent-shell's own answer
+        ;; and every refinement above reads the corrected one.  Added after
+        ;; the turn-signal advice it used to wrap that advice instead, and
+        ;; turned the `asking' and broker `working' it produced into
+        ;; `ready'.  A review that reached its gate after a background
+        ;; task woke it carries tool-call residue, so it sat `In progress'
+        ;; on the Review Board until the next prompt.
         (with-eval-after-load 'agent-shell-workspace
           (advice-add 'agent-shell-workspace--buffer-status :around
-                      #'decknix--agent-buffer-status-harden))
+                      #'decknix--agent-buffer-status-harden '((depth . 50))))
 
         ;; Transient network-failure sensing + bulk retry (#162).  A turn
         ;; killed by a dropped link ends having printed one line ("API
