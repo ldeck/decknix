@@ -84,6 +84,22 @@ in
   # in the store. A missing file is harmless (public fetches don't consult it).
   nix.settings.netrc-file = "${homeDir}/.config/nix/netrc";
 
+  # Keep the store from filling the disk.  Every `decknix switch`, and every
+  # commit gated by a full system build, leaves a whole system closure behind
+  # as garbage: about 20 GB accumulated within days, until the disk hit 100%
+  # and slowed everything that writes files.  A weekly collection removes
+  # that garbage and generations older than two weeks; min-free/max-free make
+  # Nix collect on its own during a build when free space drops below 10 GiB,
+  # until 30 GiB is free.  Project roots (devenv, direnv, `result` links)
+  # still pin what they reference.
+  nix.gc = {
+    automatic = lib.mkDefault true;
+    interval = lib.mkDefault [ { Weekday = 0; Hour = 3; Minute = 15; } ];
+    options = lib.mkDefault "--delete-older-than 14d";
+  };
+  nix.settings.min-free = lib.mkDefault (10 * 1024 * 1024 * 1024);
+  nix.settings.max-free = lib.mkDefault (30 * 1024 * 1024 * 1024);
+
   # The Linux builder VM (decknix.linuxBuilder) lives in linux-builder/default.nix: it is
   # on by default but only boots when a build needs it and powers off when idle.
 
