@@ -47,6 +47,7 @@
 (require 'decknix-agent-conv-resolve)
 (require 'decknix-agent-session-restart)
 (require 'decknix-agent-spawn-queue)
+(require 'decknix-agent-session-lifecycle)
 (declare-function decknix--agent-broker-resume-from-live-p
                   "decknix-agent-session-broker" (key))
 
@@ -294,9 +295,6 @@ Claude session at the wrong (un-nested) path."
 (declare-function decknix--quickaction-target-window
                   "decknix-agent-quickaction-window"
                   (cur-is-sidebar cur main))
-(declare-function decknix--quit-pick-replacement
-                  "decknix-agent-quickaction-window"
-                  (mru-other-bufs visible-bufs))
 (declare-function decknix-picker-selections-coerce
                   "decknix-picker-selections" (raw))
 (declare-function decknix-picker-selections-cand-key
@@ -3240,40 +3238,24 @@ hours after its buffer closed, socket and pidfile intact.
 Use `decknix-agent-session-detach' (`C-c s D') for the other intent:
 step away and leave the agent working.
 
-If other live agent-shell sessions exist, switches to the most
-recently used one that is not already on screen in another window
-of the current frame, so a split-window view does not collapse
-into two panes showing the same session.  Use `C-c A s' afterwards
-to pick a different session.  If this was the last session,
-returns to the welcome screen or *scratch*."
+Only the windows showing this session change (see
+`decknix-session-lifecycle-release-windows'): a window split off for it
+closes, any other goes back to what it showed before, else to the most
+recent session not already on screen.  Auto-close runs this from a timer,
+when the selected window is wherever you are, so switching THAT window
+put another session over the Review Board you had gone back to.  If this
+was the last session and you were looking at it, returns to the welcome
+screen."
   (interactive)
   (unless (derived-mode-p 'agent-shell-mode)
     (user-error "Not in an agent-shell buffer"))
   (when (y-or-n-p "Quit this agent session? ")
     (let* ((buf (current-buffer))
-           (this-win (selected-window))
-           ;; Snapshot buffers visible in OTHER windows of the
-           ;; current frame BEFORE the kill mutates window/buffer
-           ;; layout.  Multi-frame setups stay independent: only
-           ;; the current frame's panes are considered "visible".
-           (visible-bufs
-            (delq nil
-                  (mapcar (lambda (w)
-                            (unless (eq w this-win)
-                              (window-buffer w)))
-                          (window-list nil 'no-minibuffer))))
-           ;; agent-shell-buffers is MRU-first; remove the buffer
-           ;; being killed so the carved replacement picker only
-           ;; sees the surviving candidates.
+           (selected (selected-window))
+           (was-looking (eq (window-buffer selected) buf))
            (other-bufs (remq buf
                              (when (fboundp 'agent-shell-buffers)
                                (agent-shell-buffers))))
-           ;; Pure pick: prefer the first MRU candidate not already
-           ;; visible elsewhere; falls back to MRU head when every
-           ;; candidate is already on screen.  Returns nil only
-           ;; when no other live sessions exist.
-           (replacement
-            (decknix--quit-pick-replacement other-bufs visible-bufs))
            ;; Broker keys of the OTHER live sessions, so a broker some
            ;; other buffer is still attached to is never taken down.
            (other-broker-keys
@@ -3287,15 +3269,12 @@ returns to the welcome screen or *scratch*."
       (when (and (fboundp 'decknix--agent-broker-stop-p)
                  (decknix--agent-broker-stop-p broker-key other-broker-keys))
         (ignore-errors (decknix-agent-broker-stop broker-key)))
+      (decknix-session-lifecycle-release-windows buf other-bufs)
       (kill-buffer buf)
-      (cond
-       (replacement
-        (switch-to-buffer replacement))
-       ;; Last session — return to welcome or scratch
-       ((fboundp 'decknix-welcome)
-        (decknix-welcome))
-       (t
-        (switch-to-buffer (get-buffer-create "*scratch*")))))))
+      (when (and was-looking (null other-bufs)
+                 (window-live-p selected) (eq selected (selected-window))
+                 (fboundp 'decknix-welcome))
+        (decknix-welcome)))))
 
 (defun decknix-agent-session-detach ()
   "Close this session's buffer, LEAVING its agent running in its broker.
@@ -3316,8 +3295,7 @@ quitting with the cleanup skipped -- refuse rather than pretend."
   (let ((key (bound-and-true-p decknix--agent-broker-key)))
     (unless (and key (stringp key) (not (string-empty-p key)))
       (user-error "Not a brokered session: nothing would survive detaching"))
-    (let ((kill-buffer-query-functions nil))
-      (kill-buffer (current-buffer)))
+    (decknix-session-lifecycle-kill-buffer (current-buffer))
     (message "Detached; agent still running (broker %s)" key)))
 
 (defun decknix-agent-session-recent ()

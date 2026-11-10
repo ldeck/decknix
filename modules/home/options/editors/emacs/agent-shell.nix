@@ -2829,7 +2829,10 @@ let
     # `decknix-agent-compose-deliver-test' drives the real compose
     # commands through, so the interrupt-then-submit path is tested in
     # the module that owns it rather than only as a pure predicate.
+    # `decknix-agent-session-lifecycle' decides where the windows of a
+    # quit or detached session go, shared with both boards.
     packageRequires = [ decknix-picker-selections-el
+                        decknix-agent-session-lifecycle-el
                         decknix-agent-session-bulk-send-el
                         decknix-agent-provider-el
                         decknix-agent-conv-resolve-el
@@ -2854,6 +2857,7 @@ let
       "decknix-agent-review-bot-test.el"
       "decknix-agent-session-picker-test.el"
       "decknix-agent-compose-deliver-test.el"
+      "decknix-agent-session-quit-test.el"
     ];
   };
 

@@ -16,7 +16,10 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'decknix-agent-session-lifecycle)
+
+(defvar agent-shell-workspace--isolation-active nil)
 
 (ert-deftest decknix-lifecycle--a-broker-only-the-doomed-hold-is-stoppable ()
   "Nothing survives holding `k1', so it is safe to stop."
@@ -222,6 +225,118 @@ on the next start, which is how five killed reviews came back."
           (should (string-match-p "will not reattach"
                                   (decknix-session-lifecycle-discard-prompt (list a)))))
       (kill-buffer a) (kill-buffer b))))
+
+;; --- where a closing session's windows go ---------------------------
+;;
+;; Reported: after submitting a verdict and arming auto-close (`C-c s x'),
+;; the window that had shown the session came back showing the Review
+;; Board, and the board's own window showed another session.  The
+;; session had been opened from the board, so the window split off for it
+;; had only the board in its history, and the quit then switched the
+;; SELECTED window -- the board -- to the next session.
+
+(defmacro decknix-lifecycle-test--frame (bindings &rest body)
+  "Run BODY in a fresh single-window layout with BINDINGS of named buffers."
+  (declare (indent 1))
+  `(save-window-excursion
+     (let* ((pop-up-windows t)
+            ,@(mapcar (lambda (b) `(,b (get-buffer-create ,(format "*rb-test-%s*" b))))
+                      bindings))
+       (unwind-protect
+           (progn
+             (set-frame-size (selected-frame) 200 60)
+             (delete-other-windows)
+             ,@body)
+         (dolist (b (list ,@bindings))
+           (when (buffer-live-p b) (kill-buffer b)))))))
+
+(defun decknix-lifecycle-test--shown ()
+  "Buffers on screen, in window order."
+  (mapcar #'window-buffer (window-list nil 'nomini (frame-first-window))))
+
+(ert-deftest decknix-lifecycle-windows--a-window-split-off-for-the-session-closes ()
+  (decknix-lifecycle-test--frame (board session)
+    (switch-to-buffer board)
+    (let ((board-win (selected-window)))
+      (pop-to-buffer session)
+      (select-window board-win)
+      (decknix-session-lifecycle-release-windows session nil)
+      (should (equal (list board) (decknix-lifecycle-test--shown)))
+      (should (eq board-win (selected-window))))))
+
+(ert-deftest decknix-lifecycle-windows--the-board-is-never-shown-twice ()
+  "The window's only history is the board, and the board is on screen."
+  (decknix-lifecycle-test--frame (board session other)
+    (switch-to-buffer board)
+    (let ((win (split-window-right)))
+      (set-window-buffer win session)
+      (decknix-session-lifecycle-release-windows session (list other))
+      (should (equal (list board other) (decknix-lifecycle-test--shown))))))
+
+(ert-deftest decknix-lifecycle-windows--a-window-gets-back-what-it-showed-before ()
+  (decknix-lifecycle-test--frame (board session earlier other)
+    (switch-to-buffer board)
+    (let ((win (split-window-right)))
+      (set-window-buffer win earlier)
+      (set-window-buffer win session)
+      (decknix-session-lifecycle-release-windows session (list other))
+      (should (equal (list board earlier) (decknix-lifecycle-test--shown))))))
+
+(ert-deftest decknix-lifecycle-windows--opened-over-the-board-gives-the-board-back ()
+  (decknix-lifecycle-test--frame (board session other)
+    (switch-to-buffer board)
+    (switch-to-buffer session)
+    (decknix-session-lifecycle-release-windows session (list other))
+    (should (equal (list board) (decknix-lifecycle-test--shown)))))
+
+(ert-deftest decknix-lifecycle-windows--a-killed-buffer-is-skipped ()
+  (decknix-lifecycle-test--frame (board session gone other)
+    (switch-to-buffer board)
+    (let ((win (split-window-right)))
+      (set-window-buffer win gone)
+      (set-window-buffer win session)
+      (kill-buffer gone)
+      (decknix-session-lifecycle-release-windows session (list other))
+      (should (equal (list board other) (decknix-lifecycle-test--shown))))))
+
+(ert-deftest decknix-lifecycle-windows--a-session-off-screen-moves-nothing ()
+  (decknix-lifecycle-test--frame (board session other)
+    (switch-to-buffer board)
+    (decknix-session-lifecycle-release-windows session (list other))
+    (should (equal (list board) (decknix-lifecycle-test--shown)))))
+
+(ert-deftest decknix-lifecycle-windows--the-agents-tab-shows-only-agent-buffers ()
+  (decknix-lifecycle-test--frame (board session other)
+    (switch-to-buffer board)
+    (switch-to-buffer session)
+    (let ((agent-shell-workspace--isolation-active t))
+      (cl-letf (((symbol-function 'agent-shell-workspace--in-agents-tab-p) (lambda () t))
+                ((symbol-function 'agent-shell-workspace--agent-buffer-p)
+                 (lambda (b) (memq b (list session other)))))
+        (decknix-session-lifecycle-release-windows session (list other))))
+    (should (equal (list other) (decknix-lifecycle-test--shown)))))
+
+(ert-deftest decknix-lifecycle-windows--kill-buffer-releases-first ()
+  "The bulk quit and detach path: the board's `k' and `D'."
+  (decknix-lifecycle-test--frame (board session other)
+    (switch-to-buffer board)
+    (let ((win (split-window-right)))
+      (set-window-buffer win session)
+      (decknix-session-lifecycle-kill-buffer session (list other))
+      (should-not (buffer-live-p session))
+      (should (equal (list board other) (decknix-lifecycle-test--shown))))))
+
+(ert-deftest decknix-lifecycle-windows--pick-skips-doomed-dead-visible-and-disallowed ()
+  (let ((a (generate-new-buffer " a")) (b (generate-new-buffer " b"))
+        (c (generate-new-buffer " c")) (d (generate-new-buffer " d")))
+    (unwind-protect
+        (progn
+          (kill-buffer b)
+          (should (eq d (decknix-session-lifecycle-pick-buffer
+                         (list a b c d) a (list c) #'always)))
+          (should-not (decknix-session-lifecycle-pick-buffer
+                       (list a d) a nil (lambda (x) (not (eq x d))))))
+      (mapc (lambda (x) (when (buffer-live-p x) (kill-buffer x))) (list a c d)))))
 
 (provide 'decknix-agent-session-lifecycle-test)
 ;;; decknix-agent-session-lifecycle-test.el ends here

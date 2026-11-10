@@ -87,12 +87,103 @@ error instead of a nil."
     (mapcar (lambda (b) (cons b (decknix-session-lifecycle--broker-key b)))
             (agent-shell-buffers))))
 
-(defun decknix-session-lifecycle-kill-buffer (buffer)
-  "Kill BUFFER without asking.
+;; --- windows a closing session leaves behind ---------------------------
+;;
+;; `kill-buffer' hands each window that showed the buffer to
+;; `switch-to-prev-buffer', which happily picks a buffer another window
+;; already shows.  A session opened from the Review Board splits off a
+;; window whose only history is the board, so closing it put the board in
+;; that window too.  And `decknix-agent-session-quit' then switched the
+;; SELECTED window to another session, which from the auto-close timer is
+;; whatever window you happen to be in: usually the board itself.
 
-`kill-buffer-query-functions' is suppressed because the caller has already
-confirmed the whole set: a per-buffer prompt after a bulk confirmation is
-the drift that made the two boards behave differently."
+(declare-function agent-shell-workspace--agent-buffer-p "agent-shell-workspace" (buffer))
+(declare-function agent-shell-workspace--in-agents-tab-p "agent-shell-workspace" ())
+(defvar agent-shell-workspace--isolation-active)
+
+(defun decknix-session-lifecycle-pick-buffer (candidates doomed elsewhere allowed-p)
+  "Return the first of CANDIDATES a window can show once DOOMED is gone.  Pure.
+Skips DOOMED, killed buffers, buffers in ELSEWHERE (shown by another
+window of the same frame) and buffers ALLOWED-P rejects."
+  (seq-find (lambda (b)
+              (and (buffer-live-p b)
+                   (not (eq b doomed))
+                   (not (memq b elsewhere))
+                   (funcall allowed-p b)))
+            candidates))
+
+(defun decknix-session-lifecycle--allowed-p ()
+  "Return the predicate for buffers a released window may show.
+Inside the isolated Agents tab only agent buffers, the rule its own
+`switch-to-buffer' advice enforces and `set-window-buffer' would bypass."
+  (if (and (bound-and-true-p agent-shell-workspace--isolation-active)
+           (fboundp 'agent-shell-workspace--in-agents-tab-p)
+           (fboundp 'agent-shell-workspace--agent-buffer-p)
+           (agent-shell-workspace--in-agents-tab-p))
+      #'agent-shell-workspace--agent-buffer-p
+    (lambda (b) (not (string-prefix-p " " (buffer-name b))))))
+
+(defun decknix-session-lifecycle--split-for-p (window buffer)
+  "Non-nil when WINDOW was split off to show BUFFER and has shown nothing else."
+  (let ((quit-restore (window-parameter window 'quit-restore)))
+    (and (eq (car quit-restore) 'window)
+         (eq (nth 3 quit-restore) buffer)
+         (not (seq-some (lambda (entry)
+                          (and (buffer-live-p (car entry))
+                               (not (eq (car entry) buffer))))
+                        (window-prev-buffers window)))
+         (eq t (window-deletable-p window)))))
+
+(defun decknix-session-lifecycle--show (window buffer)
+  "Show BUFFER in WINDOW where WINDOW last left it, if it showed it before."
+  (let ((entry (assq buffer (window-prev-buffers window))))
+    (if entry
+        (set-window-buffer-start-and-point window buffer (nth 1 entry) (nth 2 entry))
+      (set-window-buffer window buffer))))
+
+(defun decknix-session-lifecycle-release-windows (buffer &optional sessions)
+  "Move every window showing BUFFER off it, ahead of killing BUFFER.
+
+A window split off for BUFFER that has shown nothing else is deleted, as
+`quit-window' would.  Any other window goes back to what it showed before
+BUFFER, else to the first of SESSIONS (live sessions, most recent first),
+skipping anything another window of its frame already shows.  Only when
+every session is already on screen may one be shown twice; a non-session
+buffer, the Review Board above all, never is.  Windows not showing BUFFER
+are never touched, so closing a session in the background moves nothing."
+  (let ((allowed (decknix-session-lifecycle--allowed-p)))
+    (dolist (win (get-buffer-window-list buffer 'nomini t))
+      (when (window-live-p win)
+        (if (decknix-session-lifecycle--split-for-p win buffer)
+            (delete-window win)
+          (let* ((elsewhere (delq nil (mapcar (lambda (w)
+                                                (unless (eq w win) (window-buffer w)))
+                                              (window-list (window-frame win) 'nomini))))
+                 (prev (mapcar #'car (window-prev-buffers win)))
+                 (next (or (decknix-session-lifecycle-pick-buffer
+                            (append prev sessions) buffer elsewhere allowed)
+                           (decknix-session-lifecycle-pick-buffer
+                            sessions buffer nil allowed)
+                           (other-buffer buffer nil (window-frame win)))))
+            (decknix-session-lifecycle--show win next)))))))
+
+(defun decknix-session-lifecycle--other-sessions (buffers)
+  "Return the live agent sessions not in BUFFERS, most recent first."
+  (when (fboundp 'agent-shell-buffers)
+    (seq-remove (lambda (b) (memq b buffers)) (agent-shell-buffers))))
+
+(defun decknix-session-lifecycle-kill-buffer (buffer &optional sessions)
+  "Kill BUFFER without asking, first moving its windows somewhere sensible.
+
+SESSIONS are the sessions its windows may fall back to (see
+`decknix-session-lifecycle-release-windows'); by default every other live
+one.  `kill-buffer-query-functions' is suppressed because the caller has
+already confirmed the whole set: a per-buffer prompt after a bulk
+confirmation is the drift that made the two boards behave differently."
+  (when (buffer-live-p buffer)
+    (ignore-errors
+      (decknix-session-lifecycle-release-windows
+       buffer (or sessions (decknix-session-lifecycle--other-sessions (list buffer))))))
   (let ((kill-buffer-query-functions nil))
     (ignore-errors (kill-buffer buffer))))
 
@@ -108,14 +199,15 @@ and report accordingly."
                (not (yes-or-no-p (decknix-session-lifecycle-prompt (length live)))))
           nil
         (let ((others (decknix-session-lifecycle-surviving-keys
-                       live (decknix-session-lifecycle--broker-alist))))
+                       live (decknix-session-lifecycle--broker-alist)))
+              (spared (decknix-session-lifecycle--other-sessions live)))
           (dolist (buf live)
             (let ((key (decknix-session-lifecycle--broker-key buf)))
               (when (and key
                          (fboundp 'decknix--agent-broker-stop-p)
                          (decknix--agent-broker-stop-p key others))
                 (ignore-errors (decknix-agent-broker-stop key))))
-            (decknix-session-lifecycle-kill-buffer buf)))
+            (decknix-session-lifecycle-kill-buffer buf spared)))
         (length live)))))
 
 (defun decknix-session-lifecycle-detach (buffers)
@@ -123,8 +215,9 @@ and report accordingly."
 
 No confirmation: detaching is reversible and the agent keeps working, which
 is the whole difference from quitting."
-  (let ((live (seq-filter #'buffer-live-p buffers)))
-    (dolist (buf live) (decknix-session-lifecycle-kill-buffer buf))
+  (let* ((live (seq-filter #'buffer-live-p buffers))
+         (spared (decknix-session-lifecycle--other-sessions live)))
+    (dolist (buf live) (decknix-session-lifecycle-kill-buffer buf spared))
     (length live)))
 
 ;; --- discard: the interactive face of quit ----------------------------
