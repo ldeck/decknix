@@ -14,10 +14,9 @@
 //!     `:session-jq-filter` in agent-shell.nix. A root `_canonicalKeyVersion`
 //!     guards the algorithm.
 //!
-//! Providers are pluggable via the [`Provider`] trait + [`registry`]. Two are
-//! implemented today — `claude` and `auggie`; the ACP agents with no shared
-//! session schema (pi/gemini/opencode/goose/qwen) are intentionally omitted
-//! until they have on-disk sessions to read.
+//! Providers are pluggable via the [`Provider`] trait + [`registry`]: `claude`,
+//! `auggie` and `pi`. The ACP agents with no on-disk sessions to read
+//! (gemini/opencode/goose/qwen) are intentionally omitted.
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Subcommand;
@@ -561,7 +560,7 @@ trait Provider {
 }
 
 fn registry() -> Vec<Box<dyn Provider>> {
-    vec![Box::new(ClaudeProvider), Box::new(AuggieProvider)]
+    vec![Box::new(ClaudeProvider), Box::new(AuggieProvider), Box::new(PiProvider)]
 }
 
 /// Resolve `--agent` to the providers it selects. "all" → every provider.
@@ -572,7 +571,7 @@ fn select_providers(agent: &str) -> Result<Vec<Box<dyn Provider>>> {
     }
     let picked: Vec<Box<dyn Provider>> = all.into_iter().filter(|p| p.id() == agent).collect();
     if picked.is_empty() {
-        bail!("unknown --agent '{}' (known: claude, auggie, all)", agent);
+        bail!("unknown --agent '{}' (known: claude, auggie, pi, all)", agent);
     }
     Ok(picked)
 }
@@ -581,7 +580,7 @@ fn one_provider(agent: &str) -> Result<Box<dyn Provider>> {
     registry()
         .into_iter()
         .find(|p| p.id() == agent)
-        .ok_or_else(|| anyhow!("--agent must be a specific agent (claude or auggie), got '{}'", agent))
+        .ok_or_else(|| anyhow!("--agent must be a specific agent (claude, auggie or pi), got '{}'", agent))
 }
 
 // ---------------------------------------------------------------------------
@@ -1005,6 +1004,93 @@ impl Provider for AuggieProvider {
             }
         }
         LaunchPlan { program: "auggie".into(), args, cwd: workspace.to_path_buf(), session_id: None }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pi provider
+// ---------------------------------------------------------------------------
+
+/// pi keeps `~/.pi/agent/sessions/<slug>/<timestamp>_<uuid>.jsonl`. Its
+/// sessions carry tags in the shared store like any other, but `list` and
+/// `resume` only knew claude and auggie, so a pi coordinator was invisible
+/// to `--tag` lookups that found its claude peers.
+struct PiProvider;
+
+fn pi_files() -> Vec<(String, PathBuf)> {
+    arch_providers()
+        .into_iter()
+        .filter(|ap| ap.id == "pi")
+        .flat_map(|ap| arch_enumerate(&ap, None))
+        .map(|f| (f.id, f.path))
+        .collect()
+}
+
+impl Provider for PiProvider {
+    fn id(&self) -> &'static str {
+        "pi"
+    }
+
+    fn list(&self, workspace: Option<&Path>) -> (Vec<SessionMeta>, bool) {
+        let want = workspace.map(canonical);
+        let rows = pi_files()
+            .into_iter()
+            .map(|(id, path)| self.meta_for(&id, &path))
+            .filter(|m| match &want {
+                None => true,
+                Some(w) => m.workspace.as_deref().map(canonical).as_ref() == Some(w),
+            })
+            .collect();
+        (rows, false)
+    }
+
+    fn session_files(&self) -> Vec<(String, PathBuf)> {
+        pi_files()
+    }
+
+    fn meta_for(&self, id: &str, path: &Path) -> SessionMeta {
+        SessionMeta {
+            id: id.to_string(),
+            provider: "pi",
+            workspace: pi_cwd(path),
+            first_message: pi_first_message(path).unwrap_or_else(|| "(no prompt)".into()),
+            mtime: mtime_of(path),
+            path: path.to_path_buf(),
+        }
+    }
+
+    fn conv_key_message(&self, path: &Path) -> Option<String> {
+        pi_first_message(path)
+    }
+
+    fn grep(&self, path: &Path, re: &Regex) -> bool {
+        fs::read_to_string(path).map(|s| re.is_match(&s)).unwrap_or(false)
+    }
+
+    fn resume_cmd(&self, meta: &SessionMeta, model: Option<&str>) -> LaunchPlan {
+        let mut args = vec!["--session".into(), meta.path.to_string_lossy().into_owned()];
+        if let Some(m) = model {
+            args.push("--model".into());
+            args.push(m.into());
+        }
+        LaunchPlan {
+            program: "pi".into(),
+            args,
+            cwd: meta.workspace.clone().unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
+            session_id: None,
+        }
+    }
+
+    fn new_cmd(&self, workspace: &Path, model: Option<&str>, prompt: Option<&str>) -> LaunchPlan {
+        let mut args = Vec::new();
+        if let Some(m) = model {
+            args.push("--model".into());
+            args.push(m.into());
+        }
+        if let Some(p) = prompt.filter(|p| !p.is_empty()) {
+            args.push(p.into());
+        }
+        LaunchPlan { program: "pi".into(), args, cwd: workspace.to_path_buf(), session_id: None }
     }
 }
 
