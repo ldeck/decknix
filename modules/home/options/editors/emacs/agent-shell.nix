@@ -356,15 +356,22 @@ let
     ];
   };
 
-  # The URLs a session is handling: the PRs it is about first, then the
-  # transcript's links, most recent first.  Pure; the commands that
-  # pick, cycle and act on them arrive with the UI file.
+  # The URLs a session is handling (identity PRs first, then the
+  # transcript's links, most recent first) and the commands that pick,
+  # cycle and act on them, plus `decknix-review-session-mode'.  The
+  # collector is pure; the UI file only reads live state through
+  # `fboundp' / `bound-and-true-p', and installs nothing at load time
+  # (keys, hooks and embark are wired in the heredoc per Rule 2).
   decknix-session-urls-el = mkEmacsTestedPackage {
     pname = "decknix-session-urls";
     src = ./agent-shell/session-urls;
     packageRequires = [ ];
+    extraSiteFiles = [
+      "decknix-session-urls-ui.el"
+    ];
     testFiles = [
       "decknix-session-urls-test.el"
+      "decknix-session-urls-ui-test.el"
     ];
   };
 
@@ -4163,6 +4170,16 @@ in
         ;; Review board: lanes, rows, ordering (read-only surface).
         (require 'decknix-review-board-model)
         (require 'decknix-review-board)
+        ;; The URLs a session is handling: `C-c s O' / `U' / `<' / `>' in
+        ;; every agent-shell buffer (bound with the rest of the local
+        ;; `C-c s' map below), and `decknix-review-session-mode' switched on
+        ;; in review sessions.  The conv-key arrives after mode entry, so
+        ;; the mode is re-checked on each turn boundary too.
+        (require 'decknix-session-urls)
+        (require 'decknix-session-urls-ui)
+        (decknix-session-urls-embark-setup)
+        (add-hook 'agent-shell-mode-hook #'decknix-review-session-on-mode-entry)
+        (add-hook 'decknix-agent-turn-settled-hook #'decknix-review-session-maybe-enable)
         (require 'decknix-agent-broker-rehydrate)
         (require 'decknix-agent-broker-reattach)
         ;; #151: reattach to brokers that survived the restart.  Armed on a
@@ -8491,6 +8508,9 @@ returns a fresh plist so the caller's is not mutated."
                       (define-key tag-map (kbd "R") 'decknix-agent-tag-rename)
                       (define-key tag-map (kbd "D") 'decknix-agent-tag-delete)
                       (define-key map (kbd "t") tag-map)
+                      ;; C-c s O / U / < / > — URLs this session is handling.
+                      (when (fboundp 'decknix-session-urls-bind-session-keys)
+                        (decknix-session-urls-bind-session-keys map))
                       (local-set-key (kbd "C-c s") map))
                     ;; which-key labels for C-c s session sub-prefix
                     (when (fboundp 'which-key-add-key-based-replacements)
@@ -8511,6 +8531,10 @@ returns a fresh plist so the caller's is not mutated."
                         "C-c s u" "unlink PR / repo"
                         "C-c s i" "session info"
                         "C-c s R" "restart session"
+                        "C-c s O" "open a URL from this session"
+                        "C-c s U" "act on a URL (at point / pick)"
+                        "C-c s <" "previous URL in buffer"
+                        "C-c s >" "next URL in buffer"
                         "C-c s a" "resources (sub-agents/PRs)"
                         "C-c s v" "review last exchange"
                         "C-c s t"   "tags…"
