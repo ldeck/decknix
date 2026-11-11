@@ -4,6 +4,8 @@
 
 Nothing is sent by installing it. Delivery needs both an explicit `send` for a specific session and the receiver switched on in Emacs.
 
+For coordinators, prefer `decknix session send` ([Session messaging](./session-messaging.md)): it resolves a session by tag or buffer name, shows the session's state first, waits up to 24 h for an idle point, supports `--when now` and `--when interrupt`, and records `answered` receipts. It writes version 2 requests to the same receiver; this script keeps writing version 1 requests with the behaviour described below.
+
 ## Turn the receiver on (once per Emacs run)
 
 ```
@@ -35,6 +37,6 @@ Other commands: `cancel ID` (only before the receiver claims it), `sweep` (settl
 
 ## What is refused
 
-The session is absent, held by more than one buffer, or changed between claim and send. Its process is gone. You have typed something at the prompt that is not sent yet (it is left untouched). The request is stale, future-dated, tampered with, or its file is a symlink or not mode 0600. A busy session is waited on, never interrupted, and only until the request expires.
+The session is absent, held by more than one buffer, or changed between claim and send. Its process is gone. You have typed something at the prompt that is not sent yet (it is left untouched). The request is stale, future-dated, tampered with, or its file is a symlink or not mode 0600. A busy session is waited on, never interrupted, and only until the request expires (only a version 2 `--when interrupt` request from `decknix session send` can interrupt, under the interrupt policy).
 
 Receipts live in `~/.local/state/decknix/agent-dispatch/receipts/` and never contain the prompt text.

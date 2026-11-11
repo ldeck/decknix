@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::session_archive;
+use crate::session_msg;
 
 /// conv-key canonicalisation length — matches `decknix--agent-conv-key-canonical-length`.
 const CONV_KEY_CANONICAL_LEN: usize = 200;
@@ -80,6 +81,93 @@ pub enum SessionAction {
         /// Emit JSON instead of aligned columns
         #[arg(long)]
         json: bool,
+        /// List the sessions live in Emacs right now, with their state
+        /// (working, background, asking, idle, ...), from the exported state files
+        #[arg(long)]
+        live: bool,
+    },
+    /// Show what a live session is doing: state, busy time, last activity,
+    /// current tool, closing text, queue
+    Status {
+        /// Session id, unique id prefix, buffer name, or a tag one live session carries
+        target: String,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Send a message to a live session (delivered by the Emacs dispatch receiver)
+    Send {
+        /// Session id, unique id prefix, buffer name, or a tag one live session carries
+        target: String,
+        /// The message text
+        #[arg(long, short = 'm')]
+        message: Option<String>,
+        /// Read the message from a file
+        #[arg(long)]
+        message_file: Option<String>,
+        /// Read the message from stdin
+        #[arg(long)]
+        stdin: bool,
+        /// idle: deliver when the session's turn ends (default); now: only if
+        /// idle, else print its state and exit 13; interrupt: cancel its turn
+        /// first (needs --reason, subject to the interrupt policy)
+        #[arg(long, default_value = "idle")]
+        when: String,
+        /// Expiry (e.g. 30m, 24h, 7d). Defaults: idle 24h, interrupt 1h, now 60s
+        #[arg(long)]
+        ttl: Option<String>,
+        /// Sender session id (default: $DECKNIX_SESSION_ID or $CLAUDE_CODE_SESSION_ID)
+        #[arg(long)]
+        from: Option<String>,
+        /// Why; shown in the receiving session's transcript (required for interrupt)
+        #[arg(long)]
+        reason: Option<String>,
+        /// Leave notices in the sender's inbox on delivered, answered and failure
+        #[arg(long)]
+        notify: bool,
+        /// Wait up to this many seconds for delivery (or a refusal)
+        #[arg(long, value_name = "SECS")]
+        wait_receipt: Option<u64>,
+        /// Queue even when the receiver looks off (it refuses requests older than its arming)
+        #[arg(long)]
+        force: bool,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a sent message's receipt chain (queued, delivered, answered, or why not)
+    Message {
+        /// Message id printed by `send`
+        id: String,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Block until messages are delivered or answered (run it in the background)
+    Watch {
+        /// Message ids printed by `send`
+        ids: Vec<String>,
+        /// delivered or answered
+        #[arg(long, default_value = "answered")]
+        until: String,
+        /// Give up after this long (e.g. 30m, 2h)
+        #[arg(long, default_value = "2h")]
+        timeout: String,
+        /// Emit JSON lines
+        #[arg(long)]
+        json: bool,
+    },
+    /// Notices about messages this session sent with --notify
+    Inbox {
+        /// Whose inbox (default: $DECKNIX_SESSION_ID or $CLAUDE_CODE_SESSION_ID)
+        #[arg(long)]
+        session: Option<String>,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+        /// Remove the notices shown
+        #[arg(long)]
+        clear: bool,
     },
     /// Archive matching sessions: compress + index, then remove the original
     Archive {
@@ -198,9 +286,17 @@ pub enum SessionAction {
 pub fn run(action: SessionAction) -> Result<()> {
     let paths = Paths::resolve()?;
     match action {
-        SessionAction::List { agent, workspace, all, tags, grep, since, limit, archived, include_archived, json } => {
+        SessionAction::List { live: true, json, .. } => exit_with(session_msg::cmd_list_live(json)),
+        SessionAction::List { agent, workspace, all, tags, grep, since, limit, archived, include_archived, json, live: false } => {
             cmd_list(&paths, &agent, workspace, all, tags, grep, since, limit, archived, include_archived, json)
         }
+        SessionAction::Status { target, json } => exit_with(session_msg::cmd_status(&target, json)),
+        SessionAction::Send { target, message, message_file, stdin, when, ttl, from, reason, notify, wait_receipt, force, json } => {
+            exit_with(session_msg::cmd_send(&target, message, message_file, stdin, &when, ttl, from, reason, notify, wait_receipt, force, json))
+        }
+        SessionAction::Message { id, json } => exit_with(session_msg::cmd_message(&id, json)),
+        SessionAction::Watch { ids, until, timeout, json } => exit_with(session_msg::cmd_watch(ids, &until, &timeout, json)),
+        SessionAction::Inbox { session, json, clear } => exit_with(session_msg::cmd_inbox(session, json, clear)),
         SessionAction::Archive { agent, older_than, larger_than, tags, workspace, from, dry_run, json } => {
             cmd_archive(&paths, &agent, older_than, larger_than, tags, workspace, from, dry_run, json)
         }
@@ -214,6 +310,14 @@ pub fn run(action: SessionAction) -> Result<()> {
         }
         SessionAction::Tag { id, agent, add, remove } => cmd_tag(&paths, &agent, id, add, remove),
         SessionAction::Tags { json } => cmd_tags(&paths, json),
+    }
+}
+
+/// Turn a messaging command's exit code into the process exit status.
+fn exit_with(code: Result<i32>) -> Result<()> {
+    match code? {
+        0 => Ok(()),
+        n => std::process::exit(n),
     }
 }
 
@@ -267,7 +371,7 @@ fn slug(workspace: &str) -> String {
 // Store (agent-sessions.json) — load / mutate / atomic save
 // ---------------------------------------------------------------------------
 
-fn load_store(path: &Path) -> Result<Value> {
+pub(crate) fn load_store(path: &Path) -> Result<Value> {
     match fs::read_to_string(path) {
         Ok(s) if s.trim().is_empty() => Ok(json!({})),
         Ok(s) => serde_json::from_str(&s).with_context(|| format!("parsing {}", path.display())),
@@ -330,7 +434,7 @@ fn entry_tags(entry: &Value) -> Vec<String> {
 }
 
 /// `session-id -> tags` from every conversation's `sessions[]` membership.
-fn session_tag_index(store: &Value) -> Map<String, Value> {
+pub(crate) fn session_tag_index(store: &Value) -> Map<String, Value> {
     let mut idx = Map::new();
     if let Some(convs) = conversations(store) {
         for entry in convs.values() {
@@ -1369,7 +1473,7 @@ fn dispatch(plan: LaunchPlan, print: bool) -> Result<()> {
 // Small helpers
 // ---------------------------------------------------------------------------
 
-fn looks_like_uuid(s: &str) -> bool {
+pub(crate) fn looks_like_uuid(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 36
         && b.iter().enumerate().all(|(i, &c)| match i {
@@ -1378,7 +1482,7 @@ fn looks_like_uuid(s: &str) -> bool {
         })
 }
 
-fn new_uuid_v4() -> Result<String> {
+pub(crate) fn new_uuid_v4() -> Result<String> {
     let mut b = [0u8; 16];
     fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
     b[6] = (b[6] & 0x0f) | 0x40;

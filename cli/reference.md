@@ -308,6 +308,11 @@ Usage: decknix session <COMMAND>
 
 Commands:
   list     List sessions in a workspace (default: current directory)
+  status   Show what a live session is doing: state, busy time, last activity, current tool, closing text, queue
+  send     Send a message to a live session (delivered by the Emacs dispatch receiver)
+  message  Show a sent message's receipt chain (queued, delivered, answered, or why not)
+  watch    Block until messages are delivered or answered (run it in the background)
+  inbox    Notices about messages this session sent with --notify
   archive  Archive matching sessions: compress + index, then remove the original
   restore  Restore an archived session (decompress back to its original location)
   gc       Apply the retention policy: archive stale sessions, trash very old archives
@@ -360,6 +365,148 @@ Options:
 
       --json
           Emit JSON instead of aligned columns
+
+      --live
+          List the sessions live in Emacs right now, with their state (working, background, asking, idle, ...), from the exported state files
+
+  -h, --help
+          Print help
+```
+
+## `decknix session status`
+
+```text
+Show what a live session is doing: state, busy time, last activity, current tool, closing text, queue
+
+Usage: decknix session status [OPTIONS] <TARGET>
+
+Arguments:
+  <TARGET>
+          Session id, unique id prefix, buffer name, or a tag one live session carries
+
+Options:
+      --json
+          Emit JSON
+
+  -h, --help
+          Print help
+```
+
+## `decknix session send`
+
+```text
+Send a message to a live session (delivered by the Emacs dispatch receiver)
+
+Usage: decknix session send [OPTIONS] <TARGET>
+
+Arguments:
+  <TARGET>
+          Session id, unique id prefix, buffer name, or a tag one live session carries
+
+Options:
+  -m, --message <MESSAGE>
+          The message text
+
+      --message-file <MESSAGE_FILE>
+          Read the message from a file
+
+      --stdin
+          Read the message from stdin
+
+      --when <WHEN>
+          idle: deliver when the session's turn ends (default); now: only if idle, else print its state and exit 13; interrupt: cancel its turn first (needs --reason, subject to the interrupt policy)
+
+          [default: idle]
+
+      --ttl <TTL>
+          Expiry (e.g. 30m, 24h, 7d). Defaults: idle 24h, interrupt 1h, now 60s
+
+      --from <FROM>
+          Sender session id (default: $DECKNIX_SESSION_ID or $CLAUDE_CODE_SESSION_ID)
+
+      --reason <REASON>
+          Why; shown in the receiving session's transcript (required for interrupt)
+
+      --notify
+          Leave notices in the sender's inbox on delivered, answered and failure
+
+      --wait-receipt <SECS>
+          Wait up to this many seconds for delivery (or a refusal)
+
+      --force
+          Queue even when the receiver looks off (it refuses requests older than its arming)
+
+      --json
+          Emit JSON
+
+  -h, --help
+          Print help
+```
+
+## `decknix session message`
+
+```text
+Show a sent message's receipt chain (queued, delivered, answered, or why not)
+
+Usage: decknix session message [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          Message id printed by `send`
+
+Options:
+      --json
+          Emit JSON
+
+  -h, --help
+          Print help
+```
+
+## `decknix session watch`
+
+```text
+Block until messages are delivered or answered (run it in the background)
+
+Usage: decknix session watch [OPTIONS] [IDS]...
+
+Arguments:
+  [IDS]...
+          Message ids printed by `send`
+
+Options:
+      --until <UNTIL>
+          delivered or answered
+
+          [default: answered]
+
+      --timeout <TIMEOUT>
+          Give up after this long (e.g. 30m, 2h)
+
+          [default: 2h]
+
+      --json
+          Emit JSON lines
+
+  -h, --help
+          Print help
+```
+
+## `decknix session inbox`
+
+```text
+Notices about messages this session sent with --notify
+
+Usage: decknix session inbox [OPTIONS]
+
+Options:
+      --session <SESSION>
+          Whose inbox (default: $DECKNIX_SESSION_ID or $CLAUDE_CODE_SESSION_ID)
+
+      --json
+          Emit JSON
+
+      --clear
+          Remove the notices shown
 
   -h, --help
           Print help

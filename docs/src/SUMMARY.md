@@ -62,6 +62,7 @@
 - [Command Reference](./cli/reference.md)
 - [Extensions](./cli/extensions.md)
 - [Agent dispatch](./cli/agent-dispatch.md)
+- [Session messaging](./cli/session-messaging.md)
 
 # Guides
 
