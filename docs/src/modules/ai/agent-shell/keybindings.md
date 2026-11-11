@@ -231,6 +231,56 @@ narrows; `?` is always the last to go, and opens the full reference.
 | `T` | Toggles |
 | `?` / `h` | Every sidebar key |
 
+## Session URLs
+
+Every agent-shell buffer can reach the links its session is handling without
+scrolling. The list puts the session's identity first (the PR it reviews, PRs
+linked to the conversation, PRs it created), then every URL in the last 256 KB
+of the transcript, most recent first, since the link you want is usually the
+one the agent printed last. Bare ticket keys such as `ABC-123` are included
+when `decknix-session-urls-jira-base-url` is set, or when a ticket URL in the
+transcript shows the base.
+
+| Key | Action |
+|-----|--------|
+| `C-c s O` | Pick a URL (annotated with its kind, label and where it appeared) and open it; `C-u` opens the action menu instead |
+| `C-c s U` | Action menu on the URL at point, or on a picked one |
+| `C-c s <` / `C-c s >` | Move to the previous / next URL in the buffer and highlight it. From the prompt, `<` lands on the most recent |
+
+Straight after a move, `n`/`p` (or `<`/`>`) keep cycling, `RET`/`o` opens,
+`w` copies, `m` copies as a Markdown link and `a` opens the action menu. Any
+other key ends the cycle and does what it normally does.
+
+The action menu offers: open in the browser, eww or xwidget (when this Emacs
+has it), copy the URL, copy as a Markdown link, insert into the compose
+buffer, and for a PR its files-changed view, its checks and its Review Board
+row; `j` opens the ticket, or one the session mentions. In the `C-c s O`
+picker, embark's `C-.` acts on a candidate with the same actions.
+
+### Review sessions
+
+`decknix-review-session-mode` switches on by itself in review sessions (any
+session with recorded review coordinates), shown in the mode line as
+`[review widget#460 ...]`. Its keys come in two tiers:
+
+| Chord (anywhere) | Letter (transcript only) | Action |
+|------------------|--------------------------|--------|
+| `C-c C-j` | `o` | Open the reviewed PR |
+| `C-c C-f` | `f` | Its files-changed view |
+| `C-c C-k` | `k` | Its checks |
+| `C-c C-b` | `b` | Its Review Board row |
+| `C-c C-y` | `w` | Copy its URL |
+| `C-c C-q` | `y` / `1`-`9` | Answer the session like the board does; always confirms first |
+| `C-c s <` / `>` | `<` / `>` | Previous / next URL |
+| `C-c s O` | `u` | Pick a URL and open it |
+| `C-c s U` | `a` | Act on a URL |
+| | `?` | Menu of all of the above |
+
+The letters only act when point is in the transcript; at the prompt they
+insert themselves, the same rule agent-shell's own `n`/`p` follow, so typing
+is never affected. They avoid every key agent-shell binds there. `C-c C-p` is
+comint's previous prompt, hence `C-c C-j` for open.
+
 ## Review Board Keys
 
 `C-c s B` opens the Review Board: every live review session and every
@@ -264,6 +314,9 @@ gate, then posts once you answer:
 | `r` | Review PR url(s) pasted from anywhere |
 | `A` / `x` / `f` | Cycle auto-review, toggle auto-dismiss, toggle filters |
 | `g` / `?` | Refresh / full help |
+
+From a review session, `C-c C-b` (or `b` in its transcript) comes back to its
+row here.
 
 The reply keys act on the row at point only, never the marked set: one key
 answering several gates would post several reviews. The board also

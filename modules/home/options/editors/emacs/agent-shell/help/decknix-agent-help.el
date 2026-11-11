@@ -111,6 +111,15 @@ Press q to dismiss."
     "  C-c s d     Toggle short/full ID in header\n"
     "\n"
 
+    (propertize "Session URLs  (C-c s …)\n" 'font-lock-face '(:weight bold))
+    (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
+    "  C-c s O     Pick a URL this session is handling and open it\n"
+    "  C-c s U     Act on the URL at point (or a picked one)\n"
+    "  C-c s < >   Previous / next URL; then n/p cycle, RET open, w copy\n"
+    "  Review sessions add C-c C-j open PR, C-c C-f files, C-c C-k checks,\n"
+    "  C-c C-b board row, C-c C-y copy, C-c C-q reply; ? in the transcript.\n"
+    "\n"
+
     (propertize "Layouts  (C-c l …)\n" 'font-lock-face '(:weight bold))
     (propertize (make-string 40 ?─) 'font-lock-face 'font-lock-comment-face) "\n"
     "  C-c l l     Switch to a named layout group\n"

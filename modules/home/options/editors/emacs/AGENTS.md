@@ -148,6 +148,7 @@ Current in-tree packages:
 | `agent-shell/tab-status/decknix-agent-tab-status.el` | Tint tab-bar tabs by agent status | Sets `tab-bar-tab-face-function`; single-agent tabs get a status background (working/waiting/ready/…); uncached tab-bar → repaints on the header's existing status poll, no extra timer; colours are an overridable defcustom |
 | `agent-shell/layout-persist/decknix-layout-persist.el` | Frames/tabs/windows across restarts | Saved on `kill-emacs-hook` (SIGTERM runs it), before the last frame closes and every 5 min to `~/.local/state/decknix/emacs-layout.el`; offered once on the first GUI client frame (idle timer, never in the server filter); agent windows resume via `decknix--sidebar-restore-previous-session` or a RET placeholder; `C-c D w` / `C-c D W` |
 | `agent-shell/board/decknix-board*.el` | Per-purpose coordination boards | `C-c s H`; definitions are data in `~/.config/decknix/boards/NAME.eld`; `decknix-board-backend` generics (GitHub sub-issues first, flat by type label as fallback); sessions grouped by board tags/workspace and/or `:repos` scope (`:match`), `REPO#N` item tags; items from every scope repo (globs expanded by `gh repo list`, cached 10 min); renders from caches, `gh` fetch in a subprocess, Markdown snapshot to `~/.local/state/decknix/boards/` for agents. `decknix-board-focus` is the sidebar's `F`: same membership function, memoised per session for 10 s |
+| `agent-shell/session-urls/decknix-session-urls*.el` | URLs a session is handling | Pure collector (identity PRs first, then transcript URLs most recent first, bare ticket keys via `decknix-session-urls-jira-base-url` or an inferred base; tail-bounded, cached on `buffer-chars-modified-tick`); `C-c s O`/`U`/`<`/`>` in every agent-shell buffer; `decknix-review-session-mode` auto-enabled in review sessions (`C-c C-j/f/k/b/y/q` chords plus transcript-only letters that self-insert at the prompt) |
 
 Org-only packages (an on-support dashboard, board and workflow, say) do not
 live here: they ship from the org's own repositories and plug into the
@@ -1561,6 +1562,9 @@ workspace sidebar surface which sessions need attention.
 | `C-c s g` | Grep all session content (in-buffer shortcut for `C-c A g`) |
 | `C-c s R` | Restart current session in place — re-resumes the conversation (revives `killed` buffers, preserves history); in-buffer only |
 | `C-c s c` | Toggle inline Context history section (▶/▼) — in-buffer only |
+| `C-c s O` / `C-c s U` | Open a URL this session is handling (picker; `C-u` for actions) / action menu on the URL at point — in-buffer only |
+| `C-c s <` / `C-c s >` | Previous / next URL in the buffer, highlighted; then `n`/`p` cycle, `RET` open, `w` copy, `m` Markdown, `a` act |
+| `C-c C-j` `C-c C-f` `C-c C-k` `C-c C-b` `C-c C-y` `C-c C-q` | Review sessions only (`decknix-review-session-mode`): open PR, files, checks, Review Board row, copy URL, quick reply. Letters `o f k b w y 1-9 < > u a ?` do the same in the transcript and self-insert at the prompt |
 | `C-c s [` / `C-c s ]` | Page restored Context window to older / newer turns (#136). Also bound on the Context header itself as `[` / `]`. Header line shows `Context (a–b / N)` so the cursor position is discoverable. Cross-window jump-to-match: `C-c s g` selecting a hit outside the loaded window now seeds the cursor so the matched turn lands at the bottom and `point` lands on the match |
 | `C-c i` | Context panel (in agent-shell buffers) |
 | `C-c w` | Toggle Agents workspace (in-buffer shortcut) |

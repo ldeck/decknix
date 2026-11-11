@@ -927,6 +927,7 @@ NAVIGATE
   c / w           copy the PR URL(s) to the kill ring
   i               inspect: what this session is asking, or the PR detail
   j               jump to the session buffer
+                  (and back: C-c C-b in a review session returns to its row)
   r               review a PR by url (paste one or several)
   g               refresh          q  bury          ?  this help
   A               cycle auto-review: off / bot / human / any
