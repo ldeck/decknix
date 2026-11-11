@@ -127,6 +127,40 @@
                                                   decknix-agent-session-export-dir)))))
       (ignore buf))))
 
+(ert-deftest decknix-agent-session-export/tags-are-exported ()
+  "The file carries the tags the sidebar shows, so the CLI resolves a lane
+by the same tags even before its session id joins a store entry."
+  (export-test-with-env
+    (let* ((seen nil)
+           (decknix-agent-session-export-tags-function
+            (lambda (buf sid)
+              (push (cons (buffer-name buf) sid) seen)
+              '("lane-04" "PLAT-1342"))))
+      (export-test--session "lane" export-test--sid)
+      (decknix-agent-session-export-sweep 1000.0)
+      (should (equal ["lane-04" "PLAT-1342"]
+                     (plist-get (export-test--read (concat export-test--sid ".json"))
+                                :tags)))
+      (should (equal (list (cons "lane" export-test--sid)) seen)))))
+
+(ert-deftest decknix-agent-session-export/no-tags-is-an-empty-array ()
+  (export-test-with-env
+    (let ((decknix-agent-session-export-tags-function (lambda (_buf _sid) nil)))
+      (export-test--session "lane" export-test--sid)
+      (decknix-agent-session-export-sweep 1000.0)
+      (should (equal [] (plist-get (export-test--read (concat export-test--sid ".json"))
+                                   :tags))))))
+
+(ert-deftest decknix-agent-session-export/a-failing-tag-lookup-still-exports ()
+  (export-test-with-env
+    (let ((decknix-agent-session-export-tags-function
+           (lambda (_buf _sid) (error "store unreadable"))))
+      (export-test--session "lane" export-test--sid)
+      (decknix-agent-session-export-sweep 1000.0)
+      (let ((s (export-test--read (concat export-test--sid ".json"))))
+        (should (equal "idle" (plist-get s :state)))
+        (should (equal [] (plist-get s :tags)))))))
+
 (ert-deftest decknix-agent-session-export/working-then-background ()
   (export-test-with-env
     (let ((buf (export-test--session "lane" export-test--sid)))

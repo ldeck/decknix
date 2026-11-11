@@ -1306,9 +1306,14 @@ through `decknix-hub-cache-write-string`, so unchanged sessions cost no I/O,
 and `last_activity` is bucketed to 15 s. `background` = busy, no tool in
 flight, quiet for `decknix-agent-session-export-background-seconds` (120):
 the agent keeps a prompt open while a background task it started runs, which
-read as plain busy and made coordinator messages expire. The CLI side is
+read as plain busy and made coordinator messages expire. Each file also
+carries `tags` as the sidebar resolves them (`decknix--agent-tags-resolve`,
+conv-key plus session-id union), because the CLI alone only sees store
+entries that already list the session id. The CLI side is
 `cli/src/session_msg.rs` (`decknix session status | list --live | send |
-message | watch | inbox`).
+message | watch | inbox`) and `cli/src/session_lookup.rs` (the one target
+resolver behind `find`, `tags`, `status`, `send`, `resume`, `tag`, and the
+dispatch script's non-UUID `--session`).
 
 Receipt states: `accepted`, `rejected`, `expired`, `not-sent`, `unknown`
 (plus `cancelled`/`expired` written by the CLI). Inspect with

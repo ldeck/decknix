@@ -15,7 +15,8 @@
 ;;   $XDG_STATE_HOME/decknix/sessions/   (0700)
 ;;     _emacs.json      heartbeat: pid, time, interval, dispatch receiver on?
 ;;     <session>.json   state, busy since, last activity, current tool,
-;;                      closing text tail, queue depth, last delivery
+;;                      closing text tail, queue depth, last delivery,
+;;                      tags as the sidebar resolves them
 ;;
 ;; Before this a coordinator saw a single busy bit only through a message
 ;; expiring.  A lane whose agent had gone silent for half an hour, its
@@ -55,6 +56,8 @@
 (declare-function decknix--compose-queue-count "decknix-agent-shell-main-compose" (target))
 (declare-function decknix-agent-dispatch-waiting-count "decknix-agent-dispatch" (sid))
 (declare-function decknix-agent-dispatch-last-delivered "decknix-agent-dispatch" (sid))
+(declare-function decknix--agent-tags-resolve "decknix-agent-tags-read" (conv-key session-id))
+(declare-function decknix--agent-current-conv-key "decknix-agent-buffer-lookup" ())
 
 (defgroup decknix-agent-session-export nil
   "Export live agent session state to files for the decknix CLI."
@@ -98,6 +101,10 @@
         (agent-shell-workspace--buffer-status buf)
       (if (buffer-local-value 'shell-maker--busy buf) "working" "ready")))
   "Called with a buffer; returns its sidebar status string.")
+
+(defvar decknix-agent-session-export-tags-function
+  #'decknix-agent-session-export--sidebar-tags
+  "Called with (BUFFER SESSION-ID); returns the session's tags or nil.")
 
 (defvar decknix-agent-session-export-write-function #'decknix-hub-cache-write-string
   "Called with (FILE TEXT &optional FORCE); writes only when TEXT changed.")
@@ -223,6 +230,27 @@ stores a time, and edits the tool list only for tool call updates."
              (decknix-agent-turn-closing-text buf))
         (buffer-local-value 'decknix--agent-turn-message-tail buf))))
 
+(defun decknix-agent-session-export--sidebar-tags (buf sid)
+  "Tags of BUF holding SID, resolved as the sidebar resolves them.
+The CLI otherwise sees only store entries that already LIST the session
+id, and a fresh or resumed session is often filed under a conv-key whose
+entry has not gained it yet, so the CLI read it as untagged while the
+sidebar showed its tags.  The store read is cached, so this costs a hash
+lookup per sweep."
+  (when (fboundp 'decknix--agent-tags-resolve)
+    (with-current-buffer buf
+      (decknix--agent-tags-resolve
+       (and (fboundp 'decknix--agent-current-conv-key)
+            (decknix--agent-current-conv-key))
+       sid))))
+
+(defun decknix-agent-session-export--tags (buf sid)
+  "Exported tag vector for BUF holding SID; empty when the lookup fails."
+  (vconcat (seq-filter #'stringp
+                       (condition-case nil
+                           (funcall decknix-agent-session-export-tags-function buf sid)
+                         (error nil)))))
+
 (defun decknix-agent-session-export-snapshot (buf sid now)
   "Return the exported plist for BUF holding session SID at NOW."
   (with-current-buffer buf
@@ -251,6 +279,7 @@ stores a time, and edits the tool list only for tool call updates."
             :agent (decknix-agent-session-export--json-value
                     (decknix-agent-session-export--agent buf))
             :cwd (expand-file-name default-directory)
+            :tags (decknix-agent-session-export--tags buf sid)
             :emacs_pid (emacs-pid)
             :state state :status status
             :busy (if busy t :false)
