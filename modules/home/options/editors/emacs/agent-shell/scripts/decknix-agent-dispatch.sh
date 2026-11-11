@@ -7,7 +7,9 @@
 # resumes one.  Nothing is delivered unless the user has turned on
 # `decknix-agent-dispatch-mode' in Emacs, and a request expires on its own.
 #
-#   send --session UUID (--prompt-file FILE | --prompt-stdin) [--ttl SECONDS]
+#   send --session TARGET (--prompt-file FILE | --prompt-stdin) [--ttl SECONDS]
+#                  TARGET: full session UUID, or a tag, buffer name or id
+#                  prefix that `decknix session find --live` resolves to one
 #   status ID      exit 0 accepted, 10 pending/in-flight, 11 not delivered,
 #                  12 unknown outcome, 2 no such request
 #   cancel ID      withdraw a request that has not been claimed yet
@@ -27,7 +29,9 @@ die() { echo "decknix-agent-dispatch: $*" >&2; exit "${2:-1}"; }
 usage() {
   cat >&2 <<'USAGE'
 usage: decknix-agent-dispatch COMMAND
-  send --session UUID (--prompt-file FILE | --prompt-stdin) [--ttl SECONDS]
+  send --session TARGET (--prompt-file FILE | --prompt-stdin) [--ttl SECONDS]
+              TARGET: full session UUID, or a tag, buffer name or id prefix
+              that "decknix session find --live" resolves to one session
   status ID   exit 0 accepted, 10 pending/in-flight, 11 not delivered,
               12 unknown outcome, 2 no such request
   cancel ID   withdraw a request that has not been claimed yet
@@ -102,7 +106,17 @@ cmd_send() {
     esac
   done
   [[ -n $sid ]] || die "--session UUID is required" 2
-  [[ $sid =~ $uuid_re ]] || die "--session must be the full lowercase session UUID, not a prefix" 2
+  if ! [[ $sid =~ $uuid_re ]]; then
+    # A tag, buffer name or id prefix: resolve it with the shared resolver,
+    # which prints the matches or closest sessions itself when it cannot.
+    command -v decknix >/dev/null ||
+      die "--session must be a full lowercase session UUID (decknix is not on PATH to resolve '$sid')" 2
+    local resolved rc
+    resolved="$(decknix session find --live --id -- "$sid")"
+    rc=$?
+    (( rc == 0 )) || die "cannot resolve --session '$sid' to one live session" "$rc"
+    sid="$resolved"
+  fi
   if ! [[ $ttl =~ ^[0-9]+$ ]] || (( ttl < 1 || ttl > max_ttl )); then
     die "--ttl must be 1..$max_ttl seconds" 2
   fi

@@ -29,6 +29,16 @@ mode() { stat -c '%a' "$1"; }
 
 printf 'plain prompt\n' >"$root/p.txt"
 
+# A stub `decknix` so target resolution is hermetic: it knows one tag.
+mkdir -p "$root/bin"
+cat >"$root/bin/decknix" <<STUB
+#!/usr/bin/env bash
+[[ "\$*" == "session find --live --id -- lane-1" ]] && { echo "$SID"; exit 0; }
+echo "no live session matches" >&2; exit 20
+STUB
+chmod +x "$root/bin/decknix"
+export PATH="$root/bin:$PATH"
+
 # read-only commands never create the state dir
 "$cli" status "$SID" >/dev/null 2>&1; ok
 [[ ! -e $DECKNIX_AGENT_DISPATCH_DIR ]] || fail "status created the state dir"
@@ -60,6 +70,11 @@ ok; [[ $id2 != "$id" ]] || fail "ids not unique"
 ok; [[ $(jq -j .prompt "$DECKNIX_AGENT_DISPATCH_DIR/pending/$id2.json") == 'héllo ☃ wörld' ]] || fail "unicode prompt"
 ok; [[ $(jq -r .prompt_sha256 "$DECKNIX_AGENT_DISPATCH_DIR/pending/$id2.json") == "$(printf 'héllo ☃ wörld' | sha256sum | cut -d' ' -f1)" ]] || fail "unicode hash"
 ok; [[ $(count pending) == 2 ]] || fail "expected 2 pending"
+
+# a tag resolves through `decknix session find`
+expect_rc 0 "tag target" "$cli" send --session lane-1 --prompt-file "$root/p.txt"
+ok; [[ $(jq -r .session_id "$DECKNIX_AGENT_DISPATCH_DIR/pending/$(cat "$root/out").json") == "$SID" ]] || fail "tag resolved to the wrong session"
+expect_rc 20 "unknown tag keeps the resolver's exit code" "$cli" send --session lane-9 --prompt-file "$root/p.txt"
 
 # refusals: nothing written
 before="$(count pending)"

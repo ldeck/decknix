@@ -21,7 +21,7 @@ decknix-agent-dispatch send --session 11111111-2222-4333-8444-555555555555 --pro
 printf 'short prompt' | decknix-agent-dispatch send --session <uuid> --prompt-stdin --ttl 60
 ```
 
-`--session` must be the full lowercase session UUID. There is no prefix match, no broadcast, and exactly one session per request. The command prints the request id and returns immediately; it never contacts Emacs.
+`--session` is the full lowercase session UUID, or anything `decknix session find --live` resolves to exactly one live session (a tag such as `lane-04`, a buffer name, an id prefix); when it cannot, the command prints the matches or the closest sessions and exits with `find`'s code (20 none, 21 several, 22 saved only). The request always names the full UUID. There is no broadcast, and exactly one session per request. Prefer `decknix session send`, which adds idle/now/interrupt modes and receipts ([Session messaging](./session-messaging.md)). The command prints the request id and returns immediately; it never contacts Emacs.
 
 A request expires after `--ttl` seconds (default 120, maximum 900). Past that it can never be delivered.
 
