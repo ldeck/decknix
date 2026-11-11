@@ -2756,6 +2756,21 @@ let
     ];
   };
 
+  # Lane state export for `decknix session status/list --live/send'.  One
+  # change-only JSON file per live session plus a heartbeat under
+  # $XDG_STATE_HOME/decknix/sessions/, so a coordinator agent can see what a
+  # lane is doing (working / background / asking / idle ...) without asking
+  # Emacs.  Read-only: it never sends anything.  Spec:
+  # docs/specs/session-messaging/spec.md.
+  decknix-agent-session-export-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-session-export";
+    src = ./agent-shell/session-export;
+    packageRequires = [ decknix-hub-cache-write-el ];
+    testFiles = [
+      "decknix-agent-session-export-test.el"
+    ];
+  };
+
   # Sender half.  The shell test runs in the build against a throwaway state
   # dir, so a red CLI test fails the system build just like an ERT failure.
   decknix-agent-dispatch-cli =
@@ -3635,6 +3650,7 @@ in
         ++ (optional cfg.hub.enable decknix-agent-shell-hub-el)
         ++ [ decknix-picker-selections-el ]
         ++ [ decknix-agent-dispatch-el ]
+        ++ [ decknix-agent-session-export-el ]
         ++ [ decknix-agent-shell-main-el ]
         ++ (optional cfg.workspace.enable decknix-worktree-picker-el)
         ++ (optional cfg.workspace.enable decknix-agent-shell-workspace-el);
@@ -3961,6 +3977,19 @@ in
         ;; `decknix-agent-dispatch-mode' command.  It stays OFF until the user
         ;; runs `M-x decknix-agent-dispatch-mode'; nothing here arms it.
         (require 'decknix-agent-dispatch)
+        ;; Lane state export: read-only, so unlike the dispatcher it is on
+        ;; by default.  Advice is named and idempotent across hot-reloads.
+        (require 'decknix-agent-session-export)
+        (declare-function decknix-agent-session-export-observe-notification
+                          "decknix-agent-session-export" (&rest args))
+        (declare-function decknix-agent-session-export-observe-event
+                          "decknix-agent-session-export" (&rest args))
+        (advice-add 'agent-shell--on-notification :before
+                    #'decknix-agent-session-export-observe-notification)
+        (advice-add 'agent-shell--emit-event :before
+                    #'decknix-agent-session-export-observe-event)
+        (unless decknix-agent-session-export-mode
+          (decknix-agent-session-export-mode 1))
         (require 'decknix-agent-format)
         (declare-function decknix--agent-session-time-ago "decknix-agent-format")
         (declare-function decknix--agent-session-time-compact "decknix-agent-format")

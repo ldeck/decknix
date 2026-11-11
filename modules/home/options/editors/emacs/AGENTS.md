@@ -1271,9 +1271,23 @@ Rules the code and tests pin (do not weaken):
   `point-max`), stale/future/over-long request, request created before the mode
   was armed, symlink / loose mode / wrong owner / oversized request file,
   reserved shell-maker words (`help`, `clear`, `config`), any internal error.
-- **Busy waits, never interrupts.** A busy session keeps the request in
-  flight until idle or the request's own expiry (default 120 s, max 900 s),
-  then `expired`. `agent-shell-interrupt` is never called.
+- **Busy waits; only a policed v2 request interrupts.** A busy session keeps
+  the request in flight until idle or the request's own expiry, then
+  `expired`. Version 1 (the script): default 120 s, max 900 s, unsent input
+  refused, never interrupts. Version 2 (`decknix session send`, spec
+  `docs/specs/session-messaging/spec.md`): max 7 days; `idle` also waits on
+  unsent input; `now` refuses a busy session (`busy`); `interrupt` needs a
+  `reason`, calls `decknix-agent-dispatch-interrupt-function` once (seam;
+  default `agent-shell-interrupt` without confirmation) only when
+  `decknix-agent-dispatch--interrupt-refusal` allows it (policy
+  `decknix-agent-dispatch-interrupt-policy`, default `coordinator`;
+  self-interrupts, a 300 s per-session rate limit and the A-interrupts-B,
+  B-interrupts-A loop guard are always refused), and unsent input always
+  refuses it. A v2 prompt is delivered behind a one-line `[decknix message
+  ID from SENDER...]` envelope so the transcript names the sender and any
+  interrupt reason. An accepted v2 request gains `receipts/<id>.answered.json`
+  (closing text tail) when the turn ends or goes `background`, and with
+  `notify` the sender gets files under `notices/<sender-id>/`.
 - **Reused seams.** Delivery goes through `decknix--compose-submit-after-wait`
   (live + process + not busy, then `shell-maker-submit`); session ids come from
   `decknix--agent-buffer-session-id`. Both are injectable variables so the
@@ -1281,6 +1295,20 @@ Rules the code and tests pin (do not weaken):
 - **Main-thread cost.** One 2 s timer (plus file-notify to scan sooner) that
   lists a tiny directory and parses at most 8 small JSON files; no subprocess,
   no network, and submit defers while `input-pending-p`.
+
+Lane state export (`agent-shell/session-export/`,
+`decknix-agent-session-export-mode`, on by default because it only writes):
+one JSON file per live session plus `_emacs.json` (heartbeat with pid and
+whether the receiver is armed) under `$XDG_STATE_HOME/decknix/sessions/`.
+The notification observer stores a timestamp and edits a tool-call alist only
+for tool updates; a self-pacing sweep (5 s, or 20x its own duration) writes
+through `decknix-hub-cache-write-string`, so unchanged sessions cost no I/O,
+and `last_activity` is bucketed to 15 s. `background` = busy, no tool in
+flight, quiet for `decknix-agent-session-export-background-seconds` (120):
+the agent keeps a prompt open while a background task it started runs, which
+read as plain busy and made coordinator messages expire. The CLI side is
+`cli/src/session_msg.rs` (`decknix session status | list --live | send |
+message | watch | inbox`).
 
 Receipt states: `accepted`, `rejected`, `expired`, `not-sent`, `unknown`
 (plus `cancelled`/`expired` written by the CLI). Inspect with

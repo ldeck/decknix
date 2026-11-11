@@ -59,6 +59,20 @@
           (dispatch-test--submit-mode 'ok)
           (dispatch-test--clock 1000)
           (decknix-agent-dispatch--active (make-hash-table :test 'equal))
+          (decknix-agent-dispatch--delivered (make-hash-table :test 'equal))
+          (decknix-agent-dispatch--last-delivered (make-hash-table :test 'equal))
+          (decknix-agent-dispatch--interrupts nil)
+          (dispatch-test--interrupted nil)
+          (dispatch-test--tags nil)
+          (dispatch-test--quiet nil)
+          (decknix-agent-dispatch-interrupt-function
+           (lambda (buf) (push buf dispatch-test--interrupted)))
+          (decknix-agent-dispatch-tags-function
+           (lambda (sid) (alist-get sid dispatch-test--tags nil nil #'equal)))
+          (decknix-agent-dispatch-settled-function
+           (lambda (buf) (memq buf dispatch-test--quiet)))
+          (decknix-agent-dispatch-closing-text-function
+           (lambda (buf) (buffer-local-value 'dispatch-test--closing buf)))
           (decknix-agent-dispatch--pending-seen nil)
           (decknix-agent-dispatch--armed-at 900)
           (decknix-agent-dispatch-submit-function #'dispatch-test--stub-submit)
@@ -83,6 +97,10 @@
        (delete-directory root t))))
 
 (defvar dispatch-test--clock 1000)
+(defvar dispatch-test--interrupted nil "Buffers the interrupt stub was called with.")
+(defvar dispatch-test--tags nil "Alist session id -> tags.")
+(defvar dispatch-test--quiet nil "Busy buffers that read as waiting on background work.")
+(defvar-local dispatch-test--closing nil)
 
 (defun dispatch-test--sub (name)
   (expand-file-name name decknix-agent-dispatch-dir))
@@ -146,7 +164,7 @@ ARGS: :id :session :prompt :created :expires :hash :version :mode."
               (let ((r (copy-sequence (dispatch-test--req))))
                 (plist-put r key val)
                 (decknix-agent-dispatch--validate r now))))
-    (should (equal "bad-version" (bad :v 2 1000)))
+    (should (equal "bad-version" (bad :v 3 1000)))
     (should (equal "bad-id" (bad :id "nope" 1000)))
     (should (equal "bad-session-id" (bad :session_id "11111111" 1000)))
     (should (equal "bad-session-id" (bad :session_id (upcase dispatch-test--sid-2) 1000)))
@@ -598,6 +616,242 @@ ARGS: :id :session :prompt :created :expires :hash :version :mode."
                  (lambda (_s _r f &rest _) (setq fn f) 'kick)))
         (decknix-agent-dispatch--kick-scan))
       (should (= 1 (dispatch-test--count-listings fn))))))
+
+;; -- version 2: modes, interrupts, receipts, notices -----------------
+
+(defconst dispatch-test--coord "cccccccc-dddd-4eee-8fff-000000000000")
+
+(defun dispatch-test--drop2 (&rest args)
+  "Write a version 2 request; ARGS as `dispatch-test--drop' plus :when
+:from :reason :notify :from_name :ttl."
+  (let* ((id (or (plist-get args :id) dispatch-test--rid))
+         (prompt (or (plist-get args :prompt) "do the thing"))
+         (req (append
+               (list :v 2 :id id
+                     :session_id (or (plist-get args :session) dispatch-test--sid)
+                     :prompt prompt
+                     :prompt_sha256 (secure-hash 'sha256 (encode-coding-string prompt 'utf-8))
+                     :created_at dispatch-test--clock
+                     :expires_at (+ dispatch-test--clock (or (plist-get args :ttl) 86400)))
+               (cl-loop for k in '(:when :from :reason :from_name)
+                        when (plist-get args k) append (list k (plist-get args k)))
+               (and (plist-get args :notify) (list :notify t))))
+         (path (expand-file-name (concat id ".json") (dispatch-test--sub "pending"))))
+    (with-file-modes #o600
+      (with-temp-file path (insert (json-serialize req))))
+    path))
+
+(defun dispatch-test--json (path)
+  (when (file-exists-p path)
+    (with-temp-buffer
+      (insert-file-contents path)
+      (json-parse-string (buffer-string) :object-type 'plist))))
+
+(defun dispatch-test--answered (&optional id)
+  (dispatch-test--json (expand-file-name (concat (or id dispatch-test--rid) ".answered.json")
+                                         (dispatch-test--sub "receipts"))))
+
+(defun dispatch-test--notices (from)
+  (let ((dir (expand-file-name from (dispatch-test--sub "notices"))))
+    (when (file-directory-p dir)
+      (mapcar (lambda (f) (dispatch-test--json (expand-file-name f dir)))
+              (directory-files dir nil "\\.json\\'")))))
+
+(defun dispatch-test--type (buf text)
+  (with-current-buffer buf
+    (insert "> ")
+    (set-marker (process-mark (get-buffer-process buf)) (point-max))
+    (insert text)))
+
+(ert-deftest decknix-agent-dispatch/v2-validation ()
+  (let ((r (list :v 2 :id dispatch-test--rid :session_id dispatch-test--sid
+                 :prompt "hello"
+                 :prompt_sha256 (secure-hash 'sha256 (encode-coding-string "hello" 'utf-8))
+                 :created_at 1000 :expires_at (+ 1000 86400))))
+    (should-not (decknix-agent-dispatch--validate r 1000))
+    (should (equal "ttl-too-long"
+                   (decknix-agent-dispatch--validate
+                    (plist-put (copy-sequence r) :expires_at (+ 1000 (* 8 86400))) 1000)))
+    (should (equal "bad-mode"
+                   (decknix-agent-dispatch--validate
+                    (append r '(:when "later")) 1000)))
+    (should (equal "bad-from"
+                   (decknix-agent-dispatch--validate (append r '(:from "nope")) 1000)))
+    (should (equal "interrupt-needs-reason"
+                   (decknix-agent-dispatch--validate (append r '(:when "interrupt")) 1000)))
+    (should-not (decknix-agent-dispatch--validate
+                 (append r '(:when "interrupt" :reason "obsolete work")) 1000))
+    (should (equal "ttl-too-long"
+                   (decknix-agent-dispatch--validate
+                    (plist-put (plist-put (copy-sequence r) :v 1) :expires_at 99999) 1000)))))
+
+(ert-deftest decknix-agent-dispatch/v2-decide-table ()
+  (cl-flet ((d (&rest kv)
+              (apply #'decknix-agent-dispatch--decide
+                     (append kv '(:matches 1 :same t :proc t :unsent nil :busy nil)))))
+    (should (equal 'wait (d :mode 'idle :unsent t)))
+    (should (equal 'wait (d :mode 'idle :busy t)))
+    (should (equal '(refuse . "busy") (d :mode 'now :busy t)))
+    (should (equal '(refuse . "unsent-input") (d :mode 'now :unsent t)))
+    (should (equal 'interrupt (d :mode 'interrupt :busy t)))
+    (should (equal 'wait (d :mode 'interrupt :busy t :interrupted 1000)))
+    (should (equal '(refuse . "unsent-input") (d :mode 'interrupt :busy t :unsent t)))
+    (should (equal 'submit (d :mode 'interrupt)))))
+
+(ert-deftest decknix-agent-dispatch/v2-idle-waits-for-typed-text-then-delivers ()
+  (dispatch-test-with-env
+    (let ((buf (dispatch-test--make-session "target" dispatch-test--sid)))
+      (dispatch-test--type buf "half typed")
+      (dispatch-test--drop2 :from dispatch-test--coord :from_name "coord")
+      (decknix-agent-dispatch--tick)
+      (should-not dispatch-test--sent)
+      (should-not (dispatch-test--receipt))
+      (should (= 1 (decknix-agent-dispatch-waiting-count dispatch-test--sid)))
+      (with-current-buffer buf (erase-buffer) (insert "> ")
+                           (set-marker (process-mark (get-buffer-process buf)) (point-max)))
+      (setq dispatch-test--clock 5000)
+      (decknix-agent-dispatch--tick)
+      (should (equal (format "[decknix message %s from coord]\ndo the thing"
+                             (substring dispatch-test--rid 0 8))
+                     (cdar dispatch-test--sent)))
+      (should (equal "accepted" (plist-get (dispatch-test--receipt) :state)))
+      (should (equal dispatch-test--rid
+                     (plist-get (decknix-agent-dispatch-last-delivered dispatch-test--sid) :id))))))
+
+(ert-deftest decknix-agent-dispatch/v2-idle-outlives-the-v1-ceiling ()
+  (dispatch-test-with-env
+    (let ((buf (dispatch-test--make-session "target" dispatch-test--sid)))
+      (with-current-buffer buf (setq-local shell-maker--busy t))
+      (dispatch-test--drop2)
+      (decknix-agent-dispatch--tick)
+      (setq dispatch-test--clock (+ 1000 3600))
+      (decknix-agent-dispatch--tick)
+      (should-not (dispatch-test--receipt))
+      (with-current-buffer buf (setq-local shell-maker--busy nil))
+      (decknix-agent-dispatch--tick)
+      (should (equal "accepted" (plist-get (dispatch-test--receipt) :state))))))
+
+(ert-deftest decknix-agent-dispatch/v2-now-refuses-a-busy-session ()
+  (dispatch-test-with-env
+    (let ((buf (dispatch-test--make-session "target" dispatch-test--sid)))
+      (with-current-buffer buf (setq-local shell-maker--busy t))
+      (dispatch-test--drop2 :when "now" :ttl 60 :from dispatch-test--coord :notify t)
+      (decknix-agent-dispatch--tick)
+      (should-not dispatch-test--sent)
+      (should-not dispatch-test--interrupted)
+      (should (equal "busy" (plist-get (dispatch-test--receipt) :reason)))
+      (let ((n (car (dispatch-test--notices dispatch-test--coord))))
+        (should (equal "rejected" (plist-get n :state)))
+        (should (equal "busy" (plist-get n :reason)))))))
+
+(ert-deftest decknix-agent-dispatch/v2-interrupt-cancels-then-delivers-with-reason ()
+  (dispatch-test-with-env
+    (let ((buf (dispatch-test--make-session "target" dispatch-test--sid)))
+      (push (cons dispatch-test--coord '("coordinator")) dispatch-test--tags)
+      (with-current-buffer buf (setq-local shell-maker--busy t))
+      (dispatch-test--drop2 :when "interrupt" :reason "plan changed"
+                            :from dispatch-test--coord :from_name "coord")
+      (decknix-agent-dispatch--tick)
+      (should (equal (list buf) dispatch-test--interrupted))
+      (should-not dispatch-test--sent)
+      (decknix-agent-dispatch--tick)
+      (should (= 1 (length dispatch-test--interrupted)))
+      (with-current-buffer buf (setq-local shell-maker--busy nil))
+      (decknix-agent-dispatch--tick)
+      (should (string-match-p "interrupted your turn: plan changed\\]\ndo the thing\\'"
+                              (cdar dispatch-test--sent)))
+      (should (equal "accepted" (plist-get (dispatch-test--receipt) :state)))
+      (should-not (dispatch-test--state-files "inflight")))))
+
+(ert-deftest decknix-agent-dispatch/v2-interrupt-policy-refuses-untagged-senders ()
+  (dispatch-test-with-env
+    (let ((buf (dispatch-test--make-session "target" dispatch-test--sid)))
+      (with-current-buffer buf (setq-local shell-maker--busy t))
+      (dispatch-test--drop2 :when "interrupt" :reason "x" :from dispatch-test--coord)
+      (decknix-agent-dispatch--tick)
+      (should-not dispatch-test--interrupted)
+      (should (equal "interrupt-not-allowed" (plist-get (dispatch-test--receipt) :reason))))))
+
+(ert-deftest decknix-agent-dispatch/v2-interrupt-policy-table ()
+  (let ((decknix-agent-dispatch--interrupts nil)
+        (tags (lambda (s) (pcase s ("C" '("coordinator")) ("L" '("interruptible"))))))
+    (let ((decknix-agent-dispatch-interrupt-policy 'never))
+      (should (equal "interrupt-not-allowed"
+                     (decknix-agent-dispatch--interrupt-refusal "C" "L" tags 0))))
+    (let ((decknix-agent-dispatch-interrupt-policy 'opt-in))
+      (should-not (decknix-agent-dispatch--interrupt-refusal "X" "L" tags 0))
+      (should (decknix-agent-dispatch--interrupt-refusal "C" "M" tags 0)))
+    (let ((decknix-agent-dispatch-interrupt-policy 'coordinator))
+      (should-not (decknix-agent-dispatch--interrupt-refusal "C" "M" tags 0))
+      (should-not (decknix-agent-dispatch--interrupt-refusal nil "L" tags 0))
+      (should (decknix-agent-dispatch--interrupt-refusal "X" "M" tags 0))
+      (should (equal "interrupt-self"
+                     (decknix-agent-dispatch--interrupt-refusal "C" "C" tags 0))))
+    (let ((decknix-agent-dispatch-interrupt-policy 'always))
+      (should-not (decknix-agent-dispatch--interrupt-refusal "X" "M" tags 0)))))
+
+(ert-deftest decknix-agent-dispatch/v2-interrupts-are-rate-limited-and-loop-guarded ()
+  (let ((decknix-agent-dispatch--interrupts nil)
+        (decknix-agent-dispatch-interrupt-policy 'always)
+        (tags #'ignore))
+    (decknix-agent-dispatch--note-interrupt "A" "B" 1000)
+    (should (equal "interrupt-rate-limited"
+                   (decknix-agent-dispatch--interrupt-refusal "C" "B" tags 1100)))
+    (should (equal "interrupt-loop"
+                   (decknix-agent-dispatch--interrupt-refusal "B" "A" tags 1100)))
+    (should-not (decknix-agent-dispatch--interrupt-refusal "C" "D" tags 1100))
+    (should-not (decknix-agent-dispatch--interrupt-refusal "B" "A" tags 1400))))
+
+(ert-deftest decknix-agent-dispatch/v2-answered-receipt-and-notices ()
+  (dispatch-test-with-env
+    (let ((buf (dispatch-test--make-session "target" dispatch-test--sid)))
+      (dispatch-test--drop2 :from dispatch-test--coord :notify t)
+      (decknix-agent-dispatch--tick)
+      (should (equal "accepted" (plist-get (dispatch-test--receipt) :state)))
+      (should-not (dispatch-test--answered))
+      (with-current-buffer buf
+        (setq-local dispatch-test--closing "Done; PR is up.")
+        (setq-local shell-maker--busy nil))
+      (decknix-agent-dispatch--tick)
+      (let ((a (dispatch-test--answered)))
+        (should (equal "answered" (plist-get a :state)))
+        (should (equal "Done; PR is up." (plist-get a :tail))))
+      (should (equal '("accepted" "answered")
+                     (sort (mapcar (lambda (n) (plist-get n :state))
+                                   (dispatch-test--notices dispatch-test--coord))
+                           #'string<))))))
+
+(ert-deftest decknix-agent-dispatch/v2-answered-when-the-turn-only-waits-on-background-work ()
+  (dispatch-test-with-env
+    (let ((buf (dispatch-test--make-session "target" dispatch-test--sid)))
+      (dispatch-test--drop2)
+      (decknix-agent-dispatch--tick)
+      (decknix-agent-dispatch--tick)
+      (should-not (dispatch-test--answered))
+      (push buf dispatch-test--quiet)
+      (decknix-agent-dispatch--tick)
+      (should (eq t (plist-get (dispatch-test--answered) :turn_open))))))
+
+(ert-deftest decknix-agent-dispatch/v2-expiry-notifies-the-sender ()
+  (dispatch-test-with-env
+    (let ((buf (dispatch-test--make-session "target" dispatch-test--sid)))
+      (with-current-buffer buf (setq-local shell-maker--busy t))
+      (dispatch-test--drop2 :ttl 100 :from dispatch-test--coord :notify t)
+      (decknix-agent-dispatch--tick)
+      (setq dispatch-test--clock 1200)
+      (decknix-agent-dispatch--tick)
+      (should (equal "expired" (plist-get (dispatch-test--receipt) :state)))
+      (should (equal "expired" (plist-get (car (dispatch-test--notices dispatch-test--coord))
+                                          :state))))))
+
+(ert-deftest decknix-agent-dispatch/v1-sends-no-envelope-and-no-notice ()
+  (dispatch-test-with-env
+    (dispatch-test--make-session "target" dispatch-test--sid)
+    (dispatch-test--drop)
+    (decknix-agent-dispatch--tick)
+    (should (equal "do the thing" (cdar dispatch-test--sent)))
+    (should-not (directory-files (dispatch-test--sub "notices") nil "\\`[^.]"))
+    (should (= 0 (hash-table-count decknix-agent-dispatch--delivered)))))
 
 (provide 'decknix-agent-dispatch-test)
 ;;; decknix-agent-dispatch-test.el ends here
