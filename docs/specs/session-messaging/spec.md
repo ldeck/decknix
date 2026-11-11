@@ -68,7 +68,7 @@ watch <id>... [--until delivered|answered] [--timeout 2h]
 inbox [--session ID] [--json] [--clear]      notices pushed to the sender
 ```
 
-`<target>` is a full session id, a unique id prefix (8+ characters), an exact buffer name, or a tag carried by exactly one live session. Anything ambiguous is an error that lists the candidates. The request file always names the full id, so the receiver's exact-identity rule is unchanged.
+`<target>` is anything `decknix session find` accepts (full id, unique id prefix of 6+ characters, buffer name or its tag path, workspace path, or tags matched exactly, case-insensitively or normalised) that resolves to exactly one live session; see `cli/src/session_lookup.rs`. Anything ambiguous is an error that lists the candidates (exit 21), a miss lists the closest sessions (exit 20), and a saved-only match exits 22. The request file always names the full id, so the receiver's exact-identity rule is unchanged.
 
 `--from` defaults to `$DECKNIX_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`, when it is a full UUID. Tags come from `~/.config/decknix/agent-sessions.json`.
 

@@ -308,6 +308,7 @@ Usage: decknix session <COMMAND>
 
 Commands:
   list     List sessions in a workspace (default: current directory)
+  find     Find sessions by tag(s), buffer name, id or id prefix, or workspace; live first. Lists every match; on a miss, the closest sessions
   status   Show what a live session is doing: state, busy time, last activity, current tool, closing text, queue
   send     Send a message to a live session (delivered by the Emacs dispatch receiver)
   message  Show a sent message's receipt chain (queued, delivered, answered, or why not)
@@ -319,7 +320,7 @@ Commands:
   resume   Resume a session (exec into the agent by default)
   new      Start a new session (exec into the agent by default)
   tag      Add or remove tags on a session's conversation
-  tags     List all known tags with usage counts
+  tags     List every tag with its session count, live count and sessions; spellings that differ only in case or separators are grouped
 
 Options:
   -h, --help
@@ -335,18 +336,18 @@ Usage: decknix session list [OPTIONS]
 
 Options:
       --agent <AGENT>
-          Which agent(s): claude, auggie, or all
+          Which agent(s): claude, auggie, pi, or all
 
           [default: all]
 
       --workspace <WORKSPACE>
-          Workspace to list (default: current directory)
+          Workspace to list (default: current directory, or every workspace when --tag or --grep is given)
 
       --all
           List across every workspace instead of just one
 
       --tag <TAGS>
-          Only sessions carrying this tag (repeatable; all must match)
+          Only sessions carrying this tag (repeatable or comma-separated; all must match; case, `#`, separators and leading zeros are ignored)
 
       --grep <GREP>
           Only sessions whose transcript matches this regex
@@ -373,6 +374,34 @@ Options:
           Print help
 ```
 
+## `decknix session find`
+
+```text
+Find sessions by tag(s), buffer name, id or id prefix, or workspace; live first. Lists every match; on a miss, the closest sessions
+
+Usage: decknix session find [OPTIONS] <QUERY>...
+
+Arguments:
+  <QUERY>...
+          Tags (`lane-04,PLAT-1342`, `lane-04/PLAT-1342`, or several words, all must match), a buffer name, an id or 6+ char id prefix, or a path
+
+Options:
+      --live
+          Live sessions only (exit 22 when only saved sessions match)
+
+      --all
+          Live and saved sessions together (default: saved only when no live one matches)
+
+      --id
+          Print only the full id of the single match (exit 21 when ambiguous)
+
+      --json
+          Emit JSON
+
+  -h, --help
+          Print help
+```
+
 ## `decknix session status`
 
 ```text
@@ -382,7 +411,7 @@ Usage: decknix session status [OPTIONS] <TARGET>
 
 Arguments:
   <TARGET>
-          Session id, unique id prefix, buffer name, or a tag one live session carries
+          Session id, id prefix, buffer name, or tag(s) only one live session carries
 
 Options:
       --json
@@ -401,7 +430,7 @@ Usage: decknix session send [OPTIONS] <TARGET>
 
 Arguments:
   <TARGET>
-          Session id, unique id prefix, buffer name, or a tag one live session carries
+          Session id, id prefix, buffer name, or tag(s) only one live session carries
 
 Options:
   -m, --message <MESSAGE>
@@ -434,7 +463,7 @@ Options:
           Wait up to this many seconds for delivery (or a refusal)
 
       --force
-          Queue even when the receiver looks off (it refuses requests older than its arming)
+          Queue even when the receiver looks off (it refuses requests older than its arming) or the full id names no live session
 
       --json
           Emit JSON
@@ -601,11 +630,11 @@ Usage: decknix session resume [OPTIONS] [ID]
 
 Arguments:
   [ID]
-          Session id or unique prefix
+          Session id or unique prefix; else tag(s) or a buffer name only one session carries
 
 Options:
       --agent <AGENT>
-          Which agent(s) to resolve within: claude, auggie, or all
+          Which agent(s) to resolve within: claude, auggie, pi, or all
 
           [default: all]
 
@@ -641,7 +670,7 @@ Arguments:
 
 Options:
       --agent <AGENT>
-          Which agent: claude or auggie
+          Which agent: claude, auggie or pi
 
           [default: claude]
 
@@ -670,11 +699,11 @@ Usage: decknix session tag [OPTIONS] <ID>
 
 Arguments:
   <ID>
-          Session id or unique prefix
+          Session id or unique prefix; else tag(s) or a buffer name only one session carries
 
 Options:
       --agent <AGENT>
-          Which agent(s) to resolve within: claude, auggie, or all
+          Which agent(s) to resolve within: claude, auggie, pi, or all
 
           [default: all]
 
@@ -691,11 +720,14 @@ Options:
 ## `decknix session tags`
 
 ```text
-List all known tags with usage counts
+List every tag with its session count, live count and sessions; spellings that differ only in case or separators are grouped
 
 Usage: decknix session tags [OPTIONS]
 
 Options:
+      --live
+          Only tags carried by live sessions
+
       --json
           Emit JSON instead of aligned columns
 

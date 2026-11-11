@@ -147,7 +147,7 @@ Runs `nix flake update [input]` under the hood. After updating, run `decknix swi
 Find, create, resume, and tag agent sessions from the terminal — the
 workspace- and tag-aware CLI companion to the in-editor session tooling. It
 resolves against the same session store the Emacs sidebar and pickers use
-(Claude and Auggie), so a session you spawn in Emacs can be resumed here and
+(Claude, Auggie and pi), so a session you spawn in Emacs can be resumed here and
 vice versa, and tags are shared both ways.
 
 ```
@@ -155,13 +155,35 @@ Usage: decknix session <COMMAND>
 
 Commands:
   list     List sessions in a workspace (default: current directory)
+  find     Find sessions by tag(s), buffer name, id or id prefix, or workspace
   archive  Archive matching sessions: compress + index, then remove the original
   restore  Restore an archived session (decompress back to its original location)
   gc       Apply the retention policy: archive stale sessions, trash very old archives
   resume   Resume a session (exec into the agent by default)
   new      Start a new session (exec into the agent by default)
   tag      Add or remove tags on a session's conversation
-  tags     List all known tags with usage counts
+  tags     List every tag with its session count, live count and sessions
+```
+
+The live-session commands (`status`, `send`, `message`, `watch`, `inbox`,
+`list --live`) are described in [Session messaging](./session-messaging.md).
+
+### `decknix session find`
+
+Find sessions the way you would name them: by tags (`lane-04,PLAT-1342`,
+`lane-04/PLAT-1342`, or several words; all must match), a buffer name, a full id
+or 6+ character id prefix, or a workspace path. Tags match exactly, else
+ignoring case, else ignoring `#`, quotes, separators and leading zeros. Live
+sessions come first; saved ones are shown when nothing live matches, or with
+`--all`. It lists every match and never picks one silently; on a miss it
+prints the closest sessions and exits 20. `--id` prints just the full id of a
+single match (exit 21 when several match). Resolution rules, JSON shape and
+exit codes: [Session messaging](./session-messaging.md#find-a-session).
+
+```bash
+decknix session find lane-04,PLAT-1342
+decknix session find triage --all --json
+decknix session find lane-04 --live --id
 ```
 
 ### `decknix session list`
@@ -170,10 +192,12 @@ List sessions (newest first), scoped to a workspace by default.
 
 ```
 Options:
-      --agent <AGENT>          claude, auggie, or all [default: all]
-      --workspace <WORKSPACE>  Workspace to list (default: current directory)
+      --agent <AGENT>          claude, auggie, pi, or all [default: all]
+      --workspace <WORKSPACE>  Workspace to list (default: current directory,
+                               or every workspace with --tag or --grep)
       --all                    List across every workspace instead of just one
-      --tag <TAGS>             Only sessions carrying this tag (repeatable; all must match)
+      --tag <TAGS>             Only sessions carrying this tag (repeatable or
+                               comma-separated; all must match; normalised)
       --grep <GREP>            Only sessions whose transcript matches this regex
       --since <SINCE>          Only sessions touched within a window (e.g. 7d, 12h, 30m)
       --limit <LIMIT>          Cap the number of rows
@@ -184,7 +208,7 @@ Options:
 # Sessions in this workspace, all agents
 decknix session list
 
-# Claude sessions tagged #triage touched in the last day, as JSON
+# Claude sessions tagged #triage touched in the last day, in any workspace, as JSON
 decknix session list --agent claude --tag triage --since 1d --json
 
 # Everything across every workspace whose transcript matches a regex
@@ -193,18 +217,18 @@ decknix session list --all --grep "replay.dlq"
 
 ### `decknix session resume`
 
-Resume a session — by id/prefix, by tag (the latest match), or the most recent
-in scope. Execs into the agent by default; `-n`/`--print` prints the resolved
+Resume a session: by id/prefix, by anything `find` resolves to one session,
+by tag (the latest match), or the most recent in scope. Execs into the agent by default; `-n`/`--print` prints the resolved
 command instead of running it.
 
 ```
 Usage: decknix session resume [OPTIONS] [ID]
 
 Arguments:
-  [ID]  Session id or unique prefix
+  [ID]  Session id or unique prefix; else tag(s) or a buffer name only one session carries
 
 Options:
-      --agent <AGENT>          claude, auggie, or all [default: all]
+      --agent <AGENT>          claude, auggie, pi, or all [default: all]
       --tag <TAGS>             Resume the latest session carrying this tag (repeatable)
       --last                   Resume the most recently touched session in scope
       --workspace <WORKSPACE>  Workspace to resolve within (default: current directory)
@@ -235,7 +259,7 @@ Arguments:
   [PROMPT]...  Initial prompt (everything after `--`)
 
 Options:
-      --agent <AGENT>          claude or auggie [default: claude]
+      --agent <AGENT>          claude, auggie or pi [default: claude]
       --tag <TAGS>             Pre-tag the conversation (requires an initial prompt to key it)
       --workspace <WORKSPACE>  Workspace to start in (default: current directory)
       --model <MODEL>          Per-conversation model override
@@ -252,16 +276,18 @@ decknix session new --tag triage --tag incident -- "Investigate INC-123"
 
 ### `decknix session tag` / `decknix session tags`
 
-Add or remove tags on a conversation, or list every known tag with usage counts.
+Add or remove tags on a conversation, or list the tag vocabulary: every tag
+with its session count, live count and sessions (`*` marks live ones), with
+spellings that differ only in case or separators grouped as variants.
 
 ```bash
 # Tag / untag a conversation (by id or unique prefix)
 decknix session tag d8df9eb9 --add triage --add day5
 decknix session tag d8df9eb9 --remove day5
 
-# List all known tags with counts (--json for machine output)
+# The tag vocabulary (--live: only tags on live sessions; --json for machine output)
 decknix session tags
-decknix session tags --json
+decknix session tags --live --json
 ```
 
 > Tags are shared with the Emacs session tooling (`C-c A T`), so a session

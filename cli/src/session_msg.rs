@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::session;
+use crate::session_lookup;
 
 pub const EXIT_PENDING: i32 = 10;
 pub const EXIT_NOT_DELIVERED: i32 = 11;
@@ -138,7 +139,8 @@ pub struct Live {
 }
 
 /// Add what a reader needs on top of the exported file: staleness, tags and
-/// durations relative to NOW. Pure.
+/// durations relative to NOW. Tags Emacs exported win (they are what the
+/// sidebar shows); the store's are the fallback for older exports. Pure.
 pub fn enrich(mut v: Value, hb: Option<&Heartbeat>, fresh: bool, tags: Option<&Value>, now: i64) -> Value {
     let same_emacs = hb.map(|h| v.get("emacs_pid").and_then(Value::as_i64) == Some(h.pid)).unwrap_or(false);
     let stale = !(fresh && same_emacs);
@@ -148,7 +150,10 @@ pub fn enrich(mut v: Value, hb: Option<&Heartbeat>, fresh: bool, tags: Option<&V
     let state_for = since("state_since");
     if let Some(o) = v.as_object_mut() {
         o.insert("stale".into(), json!(stale));
-        o.insert("tags".into(), tags.cloned().unwrap_or_else(|| json!([])));
+        let exported = o.get("tags").and_then(Value::as_array).map(|a| !a.is_empty()).unwrap_or(false);
+        if !exported {
+            o.insert("tags".into(), tags.cloned().unwrap_or_else(|| json!([])));
+        }
         o.insert("quiet_for".into(), json!(quiet));
         o.insert("busy_for".into(), json!(busy_for));
         o.insert("state_for".into(), json!(state_for));
@@ -192,41 +197,6 @@ fn tags_of(v: &Value) -> Vec<String> {
 
 fn usable(v: &Value) -> bool {
     !v.get("stale").and_then(Value::as_bool).unwrap_or(true) && str_of(v, "state") != "dead"
-}
-
-/// Resolve TARGET to one session: full id, unique id prefix (8+), exact
-/// buffer name, or a tag carried by exactly one usable session.
-pub fn resolve_target<'a>(target: &str, sessions: &'a [Value]) -> Result<&'a Value> {
-    let pick = |matches: Vec<&'a Value>, what: &str| -> Result<Option<&'a Value>> {
-        let live: Vec<&Value> = matches.iter().copied().filter(|v| usable(v)).collect();
-        match (matches.len(), live.len()) {
-            (0, _) => Ok(None),
-            (1, _) => Ok(Some(matches[0])),
-            (_, 1) => Ok(Some(live[0])),
-            _ => bail!(
-                "{} {:?} matches {} sessions: {}",
-                what,
-                target,
-                matches.len(),
-                matches.iter().map(|v| format!("{} ({})", short(str_of(v, "id")), str_of(v, "buffer"))).collect::<Vec<_>>().join(", ")
-            ),
-        }
-    };
-    if let Some(v) = sessions.iter().find(|v| str_of(v, "id") == target) {
-        return Ok(v);
-    }
-    if target.len() >= 8 && target.bytes().all(|c| c.is_ascii_hexdigit() || c == b'-') {
-        if let Some(v) = pick(sessions.iter().filter(|v| str_of(v, "id").starts_with(target)).collect(), "id prefix")? {
-            return Ok(v);
-        }
-    }
-    if let Some(v) = pick(sessions.iter().filter(|v| str_of(v, "buffer") == target).collect(), "buffer name")? {
-        return Ok(v);
-    }
-    if let Some(v) = pick(sessions.iter().filter(|v| tags_of(v).iter().any(|t| t == target)).collect(), "tag")? {
-        return Ok(v);
-    }
-    bail!("no live session matches {:?} (try `decknix session list --live`)", target)
 }
 
 fn ago(secs: Option<i64>) -> String {
@@ -310,19 +280,31 @@ pub fn detail(v: &Value) -> String {
 
 pub fn cmd_status(target: &str, json_out: bool) -> Result<i32> {
     let dirs = Dirs::resolve()?;
-    let live = load_live(&dirs, now_secs())?;
-    let v = resolve_target(target, &live.sessions)?;
+    let loaded = session_lookup::load(&dirs)?;
+    let v = match session_lookup::resolve_live(target, &loaded, json_out)? {
+        Ok(v) => v,
+        Err(code) => return Ok(code),
+    };
     if json_out {
-        println!("{}", serde_json::to_string_pretty(v)?);
+        println!("{}", serde_json::to_string_pretty(&v)?);
     } else {
-        println!("{}", detail(v));
+        println!("{}", detail(&v));
     }
     Ok(0)
 }
 
-pub fn cmd_list_live(json_out: bool) -> Result<i32> {
+fn live_keys(v: &Value) -> Vec<String> {
+    let mut k = tags_of(v);
+    k.extend(session_lookup::buffer_core(str_of(v, "buffer")).split('/').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+    k
+}
+
+pub fn cmd_list_live(tags: &[String], json_out: bool) -> Result<i32> {
     let dirs = Dirs::resolve()?;
-    let live = load_live(&dirs, now_secs())?;
+    let mut live = load_live(&dirs, now_secs())?;
+    if !tags.is_empty() {
+        live.sessions.retain(|v| session_lookup::tags_match(tags, &live_keys(v)));
+    }
     if json_out {
         println!("{}", serde_json::to_string_pretty(&json!({
             "emacs": live.heartbeat.as_ref().map(|h| json!({"pid": h.pid, "at": h.at, "fresh": live.fresh, "receiver": h.receiver})),
@@ -552,15 +534,24 @@ pub fn cmd_send(
     }
     let dirs = Dirs::resolve()?;
     let now = now_secs();
-    let live = load_live(&dirs, now)?;
-    let lane = match resolve_target(target, &live.sessions) {
-        Ok(v) => Some(v),
-        Err(e) if strict_uuid(target) => {
-            eprintln!("note: {}; sending to the full id anyway", e);
-            None
+    let loaded = session_lookup::load(&dirs)?;
+    let live = &loaded.live;
+    let unknown_id = strict_uuid(target) && !loaded.cands.iter().any(|c| c.live && c.id == target);
+    let resolved = if unknown_id && queue_for_unknown_id(force, live.fresh) {
+        eprintln!("note: no live session has id {}; queuing for it anyway", target);
+        None
+    } else {
+        match session_lookup::resolve_live(target, &loaded, json_out)? {
+            Ok(v) => Some(v),
+            Err(code) => {
+                if unknown_id && !json_out {
+                    eprintln!("not sent: {} is not open in Emacs, so the message would only expire (pass --force to queue it anyway)", short(target));
+                }
+                return Ok(code);
+            }
         }
-        Err(e) => return Err(e),
     };
+    let lane = resolved.as_ref();
     let session_id = lane.map(|v| str_of(v, "id").to_string()).unwrap_or_else(|| target.to_string());
     let receiver_on = live.fresh && live.heartbeat.as_ref().map(|h| h.receiver).unwrap_or(false);
     match preflight(when, lane, receiver_on, force) {
@@ -618,6 +609,15 @@ pub fn cmd_send(
         Some(secs) => wait_for(&dirs.dispatch, &[id], Until::Delivered, Duration::from_secs(secs), Duration::from_secs(1), json_out),
         None => Ok(0),
     }
+}
+
+/// Queue for a full id no live session has? Only when forced, or when live
+/// state is unknown (no fresh heartbeat; the receiver check then refuses
+/// unless forced). With a fresh heartbeat such an id names a closed or
+/// retired session: lanes messaging a replaced coordinator by its old id
+/// lost six messages to `no-session` receipts nobody read.
+pub fn queue_for_unknown_id(force: bool, fresh: bool) -> bool {
+    force || !fresh
 }
 
 fn report_lane(lane: Option<&Value>, why: &str, json_out: bool) -> Result<()> {
@@ -901,26 +901,18 @@ mod tests {
         assert_eq!(v["receiver"], json!(true));
         let other_emacs = enrich(json!({"id": LANE, "emacs_pid": 7}), Some(&h), true, None, 1000);
         assert_eq!(other_emacs["stale"], json!(true));
+        let exported = enrich(json!({"id": LANE, "tags": ["from-emacs"]}), Some(&h), true, Some(&json!(["from-store"])), 1000);
+        assert_eq!(exported["tags"], json!(["from-emacs"]));
         let dead_emacs = enrich(raw, Some(&h), false, None, 1000);
         assert_eq!(dead_emacs["stale"], json!(true));
         assert_eq!(dead_emacs["receiver"], json!(false));
     }
 
     #[test]
-    fn resolve_by_id_prefix_buffer_and_tag() {
-        let s = vec![
-            lane(LANE, "lane-buffer", "working", &["lane-1", "proj"], false),
-            lane("22222222-2222-4333-8444-555555555555", "other", "idle", &["lane-2", "proj"], false),
-            lane("33333333-2222-4333-8444-555555555555", "old", "dead", &["lane-2"], true),
-        ];
-        assert_eq!(str_of(resolve_target(LANE, &s).unwrap(), "buffer"), "lane-buffer");
-        assert_eq!(str_of(resolve_target("11111111", &s).unwrap(), "buffer"), "lane-buffer");
-        assert_eq!(str_of(resolve_target("other", &s).unwrap(), "buffer"), "other");
-        assert_eq!(str_of(resolve_target("lane-1", &s).unwrap(), "buffer"), "lane-buffer");
-        assert_eq!(str_of(resolve_target("lane-2", &s).unwrap(), "buffer"), "other");
-        let err = resolve_target("proj", &s).unwrap_err().to_string();
-        assert!(err.contains("matches 2 sessions"), "{}", err);
-        assert!(resolve_target("nope", &s).is_err());
+    fn unknown_full_id_is_refused_while_live_state_is_known() {
+        assert!(!queue_for_unknown_id(false, true));
+        assert!(queue_for_unknown_id(true, true));
+        assert!(queue_for_unknown_id(false, false));
     }
 
     #[test]

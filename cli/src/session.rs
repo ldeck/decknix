@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::session_archive;
+use crate::session_lookup;
 use crate::session_msg;
 
 /// conv-key canonicalisation length — matches `decknix--agent-conv-key-canonical-length`.
@@ -50,16 +51,18 @@ pub enum SessionAction {
     /// List sessions in a workspace (default: current directory)
     #[command(alias = "ls")]
     List {
-        /// Which agent(s): claude, auggie, or all
+        /// Which agent(s): claude, auggie, pi, or all
         #[arg(long, default_value = "all")]
         agent: String,
-        /// Workspace to list (default: current directory)
+        /// Workspace to list (default: current directory, or every workspace
+        /// when --tag or --grep is given)
         #[arg(long)]
         workspace: Option<String>,
         /// List across every workspace instead of just one
         #[arg(long)]
         all: bool,
-        /// Only sessions carrying this tag (repeatable; all must match)
+        /// Only sessions carrying this tag (repeatable or comma-separated; all
+        /// must match; case, `#`, separators and leading zeros are ignored)
         #[arg(long = "tag")]
         tags: Vec<String>,
         /// Only sessions whose transcript matches this regex
@@ -85,10 +88,30 @@ pub enum SessionAction {
         #[arg(long)]
         live: bool,
     },
+    /// Find sessions by tag(s), buffer name, id or id prefix, or workspace;
+    /// live first. Lists every match; on a miss, the closest sessions
+    Find {
+        /// Tags (`lane-04,PLAT-1342`, `lane-04/PLAT-1342`, or several words, all
+        /// must match), a buffer name, an id or 6+ char id prefix, or a path
+        #[arg(required = true)]
+        query: Vec<String>,
+        /// Live sessions only (exit 22 when only saved sessions match)
+        #[arg(long, conflicts_with = "all")]
+        live: bool,
+        /// Live and saved sessions together (default: saved only when no live one matches)
+        #[arg(long)]
+        all: bool,
+        /// Print only the full id of the single match (exit 21 when ambiguous)
+        #[arg(long)]
+        id: bool,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Show what a live session is doing: state, busy time, last activity,
     /// current tool, closing text, queue
     Status {
-        /// Session id, unique id prefix, buffer name, or a tag one live session carries
+        /// Session id, id prefix, buffer name, or tag(s) only one live session carries
         target: String,
         /// Emit JSON
         #[arg(long)]
@@ -96,7 +119,7 @@ pub enum SessionAction {
     },
     /// Send a message to a live session (delivered by the Emacs dispatch receiver)
     Send {
-        /// Session id, unique id prefix, buffer name, or a tag one live session carries
+        /// Session id, id prefix, buffer name, or tag(s) only one live session carries
         target: String,
         /// The message text
         #[arg(long, short = 'm')]
@@ -127,7 +150,8 @@ pub enum SessionAction {
         /// Wait up to this many seconds for delivery (or a refusal)
         #[arg(long, value_name = "SECS")]
         wait_receipt: Option<u64>,
-        /// Queue even when the receiver looks off (it refuses requests older than its arming)
+        /// Queue even when the receiver looks off (it refuses requests older than
+        /// its arming) or the full id names no live session
         #[arg(long)]
         force: bool,
         /// Emit JSON
@@ -218,9 +242,9 @@ pub enum SessionAction {
     },
     /// Resume a session (exec into the agent by default)
     Resume {
-        /// Session id or unique prefix
+        /// Session id or unique prefix; else tag(s) or a buffer name only one session carries
         id: Option<String>,
-        /// Which agent(s) to resolve within: claude, auggie, or all
+        /// Which agent(s) to resolve within: claude, auggie, pi, or all
         #[arg(long, default_value = "all")]
         agent: String,
         /// Resume the latest session carrying this tag (repeatable; all must match)
@@ -241,7 +265,7 @@ pub enum SessionAction {
     },
     /// Start a new session (exec into the agent by default)
     New {
-        /// Which agent: claude or auggie
+        /// Which agent: claude, auggie or pi
         #[arg(long, default_value = "claude")]
         agent: String,
         /// Pre-tag the conversation (requires an initial prompt to key it)
@@ -262,9 +286,9 @@ pub enum SessionAction {
     },
     /// Add or remove tags on a session's conversation
     Tag {
-        /// Session id or unique prefix
+        /// Session id or unique prefix; else tag(s) or a buffer name only one session carries
         id: String,
-        /// Which agent(s) to resolve within: claude, auggie, or all
+        /// Which agent(s) to resolve within: claude, auggie, pi, or all
         #[arg(long, default_value = "all")]
         agent: String,
         /// Tag to add (repeatable)
@@ -274,8 +298,12 @@ pub enum SessionAction {
         #[arg(long = "remove")]
         remove: Vec<String>,
     },
-    /// List all known tags with usage counts
+    /// List every tag with its session count, live count and sessions;
+    /// spellings that differ only in case or separators are grouped
     Tags {
+        /// Only tags carried by live sessions
+        #[arg(long)]
+        live: bool,
         /// Emit JSON instead of aligned columns
         #[arg(long)]
         json: bool,
@@ -285,10 +313,11 @@ pub enum SessionAction {
 pub fn run(action: SessionAction) -> Result<()> {
     let paths = Paths::resolve()?;
     match action {
-        SessionAction::List { live: true, json, .. } => exit_with(session_msg::cmd_list_live(json)),
+        SessionAction::List { live: true, json, tags, .. } => exit_with(session_msg::cmd_list_live(&tags, json)),
         SessionAction::List { agent, workspace, all, tags, grep, since, limit, archived, include_archived, json, live: false } => {
             cmd_list(&paths, &agent, workspace, all, tags, grep, since, limit, archived, include_archived, json)
         }
+        SessionAction::Find { query, live, all, id, json } => exit_with(session_lookup::cmd_find(query, live, all, id, json)),
         SessionAction::Status { target, json } => exit_with(session_msg::cmd_status(&target, json)),
         SessionAction::Send { target, message, message_file, stdin, when, ttl, from, reason, notify, wait_receipt, force, json } => {
             exit_with(session_msg::cmd_send(&target, message, message_file, stdin, &when, ttl, from, reason, notify, wait_receipt, force, json))
@@ -308,7 +337,7 @@ pub fn run(action: SessionAction) -> Result<()> {
             cmd_new(&paths, &agent, tags, workspace, model, print, prompt)
         }
         SessionAction::Tag { id, agent, add, remove } => cmd_tag(&paths, &agent, id, add, remove),
-        SessionAction::Tags { json } => cmd_tags(&paths, json),
+        SessionAction::Tags { live, json } => exit_with(session_lookup::cmd_tags(live, json)),
     }
 }
 
@@ -1157,6 +1186,22 @@ struct Row {
     provider: Option<&'static str>,
 }
 
+/// Metas for only the sessions whose tags match, filtering on filenames and
+/// the store before reading any transcript: a full `list --all` parses every
+/// transcript and was timing out agent shells.
+fn tagged_metas(p: &dyn Provider, idx: &Map<String, Value>, tags: &[String], ws: Option<&Path>) -> Vec<SessionMeta> {
+    let want = ws.map(canonical);
+    p.session_files()
+        .into_iter()
+        .filter(|(id, _)| session_lookup::tags_match(tags, &tags_for(idx, id)))
+        .map(|(id, path)| p.meta_for(&id, &path))
+        .filter(|m| match &want {
+            None => true,
+            Some(w) => m.workspace.as_deref().map(canonical).as_ref() == Some(w),
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn cmd_list(
     paths: &Paths,
@@ -1195,9 +1240,16 @@ fn cmd_list(
 
     // -- active --
     if !archived {
-        let ws = if all { None } else { Some(resolve_workspace(&workspace)?) };
+        // A tag or content search names a session, not a directory: scoping
+        // it to the cwd silently missed sessions in worktrees and siblings.
+        let everywhere = all || (workspace.is_none() && (!tags.is_empty() || grep.is_some()));
+        let ws = if everywhere { None } else { Some(resolve_workspace(&workspace)?) };
         for p in &providers {
-            let (r, truncated) = p.list(ws.as_deref());
+            let (r, truncated) = if tags.is_empty() {
+                p.list(ws.as_deref())
+            } else {
+                (tagged_metas(p.as_ref(), &idx, &tags, ws.as_deref()), false)
+            };
             if truncated {
                 eprintln!(
                     "note: {} has more than {} sessions; showing the newest {} (use --workspace to narrow)",
@@ -1244,7 +1296,7 @@ fn cmd_list(
     }
 
     rows.retain(|r| {
-        if !tags.is_empty() && !tags.iter().all(|t| r.tags.iter().any(|x| x == t)) {
+        if !tags.is_empty() && !session_lookup::tags_match(&tags, &r.tags) {
             return false;
         }
         if let Some(re) = &re {
@@ -1362,6 +1414,17 @@ fn locate_id(providers: &[Box<dyn Provider>], id: &str) -> Result<Located> {
     }
 }
 
+/// [`locate_id`], falling back to the shared resolver (tags, buffer name)
+/// when TARGET is not an id or id prefix of any transcript.
+fn locate_or_resolve(providers: &[Box<dyn Provider>], target: &str) -> Result<Located> {
+    match locate_id(providers, target) {
+        Ok(l) => Ok(l),
+        Err(e) if looks_like_uuid(target) => Err(e),
+        Err(e) if target.len() >= 6 && target.bytes().all(|c| c.is_ascii_hexdigit() || c == b'-') => Err(e),
+        Err(_) => locate_id(providers, &session_lookup::resolve_saved_id(target)?),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn cmd_resume(
     paths: &Paths,
@@ -1377,7 +1440,7 @@ fn cmd_resume(
     let providers = select_providers(agent)?;
 
     let (provider, meta) = if let Some(id) = &id {
-        let loc = locate_id(&providers, id)?;
+        let loc = locate_or_resolve(&providers, id)?;
         let p = providers.iter().find(|p| p.id() == loc.provider_id).unwrap();
         (p, p.meta_for(&loc.id, &loc.path))
     } else if !tags.is_empty() || last {
@@ -1389,8 +1452,7 @@ fn cmd_resume(
             let (rows, _) = p.list(ws.as_deref());
             for m in rows {
                 if !tags.is_empty() {
-                    let mtags = tags_for(&idx, &m.id);
-                    if !tags.iter().all(|t| mtags.iter().any(|x| x == t)) {
+                    if !session_lookup::tags_match(&tags, &tags_for(&idx, &m.id)) {
                         continue;
                     }
                 }
@@ -1502,7 +1564,7 @@ fn cmd_tag(paths: &Paths, agent: &str, id: String, add: Vec<String>, remove: Vec
     let mut store = load_store(&paths.store)?;
     let providers = select_providers(agent)?;
 
-    let (full_id, provider_id, path) = match locate_id(&providers, &id) {
+    let (full_id, provider_id, path) = match locate_or_resolve(&providers, &id) {
         Ok(l) => (l.id, Some(l.provider_id), Some(l.path)),
         Err(_) if looks_like_uuid(&id) => (id.clone(), None, None),
         Err(e) => return Err(e),
@@ -1570,28 +1632,6 @@ fn cmd_tag(paths: &Paths, agent: &str, id: String, add: Vec<String>, remove: Vec
     save_store(&paths.store, &store)?;
     let final_tags = conversations(&store).and_then(|c| c.get(&key)).map(entry_tags).unwrap_or_default();
     println!("{}  tags: [{}]", short(&full_id), final_tags.join(","));
-    Ok(())
-}
-
-fn cmd_tags(paths: &Paths, json: bool) -> Result<()> {
-    let store = load_store(&paths.store)?;
-    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
-    if let Some(convs) = conversations(&store) {
-        for e in convs.values() {
-            for t in entry_tags(e) {
-                *counts.entry(t).or_insert(0) += 1;
-            }
-        }
-    }
-    if json {
-        println!("{}", serde_json::to_string_pretty(&counts)?);
-        return Ok(());
-    }
-    let mut pairs: Vec<(String, usize)> = counts.into_iter().collect();
-    pairs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    for (t, n) in pairs {
-        println!("{:>4}  {}", n, t);
-    }
     Ok(())
 }
 
@@ -1803,6 +1843,21 @@ fn arch_enumerate(ap: &ArchProvider, from: Option<&Path>) -> Vec<ActiveFile> {
     out
 }
 
+/// Every on-disk transcript of every agent (claude, auggie and pi), by
+/// filename only: `(session id, agent, mtime, path)`. Cheap enough to run
+/// per lookup, and the one place pi ids are visible outside archive/gc.
+pub(crate) fn transcript_index() -> Vec<(String, &'static str, SystemTime, PathBuf)> {
+    arch_providers()
+        .iter()
+        .flat_map(|ap| arch_enumerate(ap, None).into_iter().map(move |f| (f.id, ap.id, f.mtime, f.path)))
+        .collect()
+}
+
+/// Recorded launch directory of a transcript, per agent.
+pub(crate) fn transcript_workspace(agent: &str, path: &Path) -> Option<String> {
+    arch_workspace(agent, path)
+}
+
 fn arch_first_message(provider: &str, path: &Path) -> Option<String> {
     match provider {
         "claude" => claude_first_message_display(path),
@@ -1978,8 +2033,7 @@ fn cmd_archive(
                 }
             }
             if !tags.is_empty() {
-                let ft = tags_for(&idx, &af.id);
-                if !tags.iter().all(|t| ft.iter().any(|x| x == t)) {
+                if !session_lookup::tags_match(&tags, &tags_for(&idx, &af.id)) {
                     continue;
                 }
             }
