@@ -433,20 +433,75 @@ fn entry_tags(entry: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// `session-id -> tags` from every conversation's `sessions[]` membership.
-pub(crate) fn session_tag_index(store: &Value) -> Map<String, Value> {
-    let mut idx = Map::new();
-    if let Some(convs) = conversations(store) {
-        for entry in convs.values() {
-            let tags = entry.get("tags").cloned().unwrap_or(Value::Null);
-            if let Some(sessions) = entry.get("sessions").and_then(Value::as_array) {
-                for sid in sessions.iter().filter_map(Value::as_str) {
-                    idx.insert(sid.to_string(), tags.clone());
+/// What the store records about one session id, merged over every
+/// conversation entry that lists it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct StoreSession {
+    pub tags: Vec<String>,
+    pub review_prs: Vec<String>,
+    pub workspace: Option<String>,
+    /// Newest `lastAccessed` of the listing entries, RFC 3339.
+    pub last_accessed: Option<String>,
+}
+
+fn push_unique(into: &mut Vec<String>, items: &[String]) {
+    for t in items {
+        if !into.contains(t) {
+            into.push(t.clone());
+        }
+    }
+}
+
+fn str_array(entry: &Value, key: &str) -> Vec<String> {
+    entry
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+/// `session-id -> StoreSession`, the UNION over every entry listing the id.
+///
+/// One session accretes several conversation entries (a resume primer or a
+/// re-hashed first message mints a new key), and the tags often sit on only
+/// one of them. Emacs unions them (`decknix--agent-tags-resolve`); keeping
+/// whichever entry came last made the CLI report such a session untagged, so
+/// `--tag` lookups missed sessions the sidebar showed with that tag.
+pub(crate) fn session_index(store: &Value) -> std::collections::HashMap<String, StoreSession> {
+    let mut idx: std::collections::HashMap<String, StoreSession> = std::collections::HashMap::new();
+    let Some(convs) = conversations(store) else { return idx };
+    for entry in convs.values() {
+        let Some(sessions) = entry.get("sessions").and_then(Value::as_array) else { continue };
+        let tags = entry_tags(entry);
+        let prs = str_array(entry, "reviewPr");
+        let ws = entry.get("workspace").and_then(Value::as_str).filter(|w| !w.is_empty());
+        let at = entry.get("lastAccessed").and_then(Value::as_str);
+        for sid in sessions.iter().filter_map(Value::as_str) {
+            let s = idx.entry(sid.to_string()).or_default();
+            push_unique(&mut s.tags, &tags);
+            push_unique(&mut s.review_prs, &prs);
+            let newer = match (at, s.last_accessed.as_deref()) {
+                (Some(a), Some(b)) => a > b,
+                (Some(_), None) => true,
+                _ => false,
+            };
+            if newer {
+                s.last_accessed = at.map(str::to_string);
+                if ws.is_some() {
+                    s.workspace = ws.map(str::to_string);
                 }
+            }
+            if s.workspace.is_none() {
+                s.workspace = ws.map(str::to_string);
             }
         }
     }
     idx
+}
+
+/// `session-id -> tags` (unioned across sibling entries, see [`session_index`]).
+pub(crate) fn session_tag_index(store: &Value) -> Map<String, Value> {
+    session_index(store).into_iter().map(|(k, s)| (k, json!(s.tags))).collect()
 }
 
 /// Per-conversation model recorded for a session-id, if any.
@@ -2162,6 +2217,27 @@ mod tests {
         }});
         let convs = conversations(&store).unwrap();
         assert_eq!(resolve_merged(convs, "aaaaaaaaaaaaaaaa"), "bbbbbbbbbbbbbbbb");
+    }
+
+    #[test]
+    fn session_index_unions_sibling_entries() {
+        let sid = "091edb0a-0cc7-45b1-b73f-5823e97a77c4";
+        let store = json!({"conversations": {
+            "aaaaaaaaaaaaaaaa": {"sessions": [sid], "tags": null, "lastAccessed": "2026-07-19T00:00:00.000Z", "workspace": "/new"},
+            "bbbbbbbbbbbbbbbb": {"sessions": [sid, "other"], "tags": ["lane-04", "PLAT-1342"], "reviewPr": ["repo#7"],
+                                 "lastAccessed": "2026-07-17T00:00:00.000Z", "workspace": "/old"},
+            "cccccccccccccccc": {"sessions": [sid], "tags": ["PLAT-1342", "us"]},
+        }});
+        let idx = session_index(&store);
+        let s = &idx[sid];
+        assert_eq!(s.tags.len(), 3, "{:?}", s.tags);
+        for t in ["lane-04", "PLAT-1342", "us"] {
+            assert!(s.tags.iter().any(|x| x == t), "missing {} in {:?}", t, s.tags);
+        }
+        assert_eq!(s.review_prs, vec!["repo#7"]);
+        assert_eq!(s.workspace.as_deref(), Some("/new"), "workspace of the newest entry");
+        assert_eq!(s.last_accessed.as_deref(), Some("2026-07-19T00:00:00.000Z"));
+        assert_eq!(session_tag_index(&store)["other"], json!(["lane-04", "PLAT-1342"]));
     }
 
     #[test]
