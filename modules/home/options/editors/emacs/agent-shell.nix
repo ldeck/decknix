@@ -356,6 +356,18 @@ let
     ];
   };
 
+  # The URLs a session is handling: the PRs it is about first, then the
+  # transcript's links, most recent first.  Pure; the commands that
+  # pick, cycle and act on them arrive with the UI file.
+  decknix-session-urls-el = mkEmacsTestedPackage {
+    pname = "decknix-session-urls";
+    src = ./agent-shell/session-urls;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-session-urls-test.el"
+    ];
+  };
+
   decknix-hub-review-priority-el = mkEmacsTestedPackage {
     pname = "decknix-hub-review-priority";
     src = ./agent-shell/review-priority;
@@ -3589,6 +3601,7 @@ in
           decknix-hub-review-status-el
           decknix-hub-review-priority-el
           decknix-review-board-model-el
+          decknix-session-urls-el
           decknix-agent-acp-trace-el
           decknix-record-el
           decknix-layout-groups-el
