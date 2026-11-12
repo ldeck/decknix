@@ -1529,6 +1529,35 @@ workspace sidebar surface which sessions need attention.
 | `C-c C-i` | focus first text input on the page | |
 | `C-y` / `s-v` | paste system clipboard into the focused `<input>` / `<textarea>` / contenteditable. xwidget intercepts native paste so password fields can't otherwise receive clipboard text; both the universal Emacs `C-y` and the macOS GUI `Cmd+V` are bridged to the same JS-inject command (today's `yank` in xwidget is a no-op against the read-only buffer, so nothing useful is displaced). macOS Passwords autofill stays Safari-only — manual "Copy from Passwords → `C-y`" is the workflow. |
 
+#### Same-origin fetch through a signed-in page (`decknix-webkit-fetch`)
+
+Lets a shell tool make an HTTP request with the session a WebKit page
+holds (an SSO sign-in, including in-memory session cookies WKWebView
+never writes to disk), without the session ever leaving the page.
+
+- `M-x decknix-webkit-session-open URL` shows (or reloads) a session
+  buffer on URL's origin for the user to sign in. The new buffer is kept
+  out of `xwidget-webkit-last-session-buffer`, so links opened elsewhere
+  do not reuse it and navigate it away.
+- `decknix-webkit-fetch-request-file FILE` is the `emacsclient -e`
+  entry point. It reads a request JSON file (url, method, headers, body,
+  timeout_ms, result), finds a session already on the URL's origin, starts
+  a JS `fetch` (`credentials: include`, `redirect: manual`) and returns
+  `queued`, `no-session` or `unsupported` at once. The result JSON
+  (status, type, url, headers, body, or an error) is written to the result
+  path later; the caller waits on that file outside Emacs with its own
+  timeout.
+- Nothing waits inside Emacs. WKWebView's `evaluateJavaScript` does not
+  await promises, so the page parks the result in
+  `window.__decknixFetch[id]` and a repeating timer reads it back through
+  an asynchronous `xwidget-webkit-execute-script` callback; a deadline
+  timer writes a timeout result if the page never answers.
+- Only ever same-origin: the fetch runs in a page whose origin equals the
+  target's, so the session cookies are not sent anywhere else. A redirect
+  is not followed; it comes back as `type: "opaqueredirect"`, status 0,
+  which callers usually read as "sign in again".
+- Generic: org overlays add their own host lists and sign-in commands.
+
 ### Key Prefix Map
 
 | Prefix | Purpose |

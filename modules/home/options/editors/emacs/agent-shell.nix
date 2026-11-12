@@ -761,6 +761,22 @@ let
     ];
   };
 
+  # Same-origin fetch() through an xwidget-webkit session, so a shell
+  # tool can ride a page's SSO session (including in-memory session
+  # cookies WKWebView never writes to disk).  Event-driven only: the
+  # `emacsclient -e' entry point schedules the fetch and returns, and
+  # the result is written to a file the caller waits on outside Emacs,
+  # so a slow request can never block the daemon.  Org overlays supply
+  # their own host lists and sign-in commands on top.
+  decknix-webkit-fetch-el = mkEmacsTestedPackage {
+    pname = "decknix-webkit-fetch";
+    src = ./agent-shell/webkit;
+    packageRequires = [ ];
+    testFiles = [
+      "decknix-webkit-fetch-test.el"
+    ];
+  };
+
   decknix-hub-teamcity-el = mkEmacsTestedPackage {
     pname = "decknix-hub-teamcity";
     src = ./agent-shell/hub;
@@ -3671,6 +3687,7 @@ in
         ++ (optional cfg.workspace.enable decknix-sidebar-nav-cmd-el)
         ++ (optional cfg.workspace.enable decknix-sidebar-footer-keys-el)
         ++ (optional cfg.workspace.enable decknix-webkit-page-el)
+        ++ (optional cfg.workspace.enable decknix-webkit-fetch-el)
         ++ (optional cfg.context.enable decknix-agent-shell-context-el)
         ++ (optional cfg.hub.enable decknix-agent-shell-hub-el)
         ++ [ decknix-picker-selections-el ]
@@ -6079,6 +6096,14 @@ upstream acp.el's stale `session/set_model' builder -- see the comment above."
         (declare-function decknix--webkit-page-text    "decknix-webkit-page")
         (declare-function decknix--webkit-find-in-page "decknix-webkit-page" (needle))
         (declare-function decknix--webkit-paste-text   "decknix-webkit-page" (text))
+
+        ;; Same-origin fetch through a signed-in xwidget-webkit page.
+        ;; Autoloaded rather than required: nothing loads until a tool
+        ;; calls `decknix-webkit-fetch-request-file' (`fboundp' is true
+        ;; for an autoload, which is what such tools test first) or the
+        ;; user opens a session.
+        (autoload 'decknix-webkit-fetch-request-file "decknix-webkit-fetch")
+        (autoload 'decknix-webkit-session-open "decknix-webkit-fetch" nil t)
 
         ;; -- xwidget-webkit: enhanced keybindings --
         ;; Two principles:
