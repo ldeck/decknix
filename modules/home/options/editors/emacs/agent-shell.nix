@@ -5,6 +5,19 @@ with lib;
 let
   cfg = config.programs.emacs.decknix.agentShell;
 
+  # `decknix.workspaces' as an Elisp alist for `decknix-workspaces':
+  # (("name" :path "~/Code/acme" :orgs ("acme") :clone-args (...)) ...).
+  # JSON string literals are valid Elisp strings for these values.
+  elispStr = builtins.toJSON;
+  elispList = xs: "(" + concatMapStringsSep " " elispStr xs + ")";
+  workspacesElisp =
+    let ws = config.decknix.workspaces or { }; in
+    if ws == { } then "" else
+    "(" + concatStringsSep " " (mapAttrsToList (name: w:
+      "(${elispStr name} :path ${elispStr w.path} :orgs ${elispList w.githubOrgs}"
+      + optionalString (w.cloneArgs != null) " :clone-args ${elispList w.cloneArgs}"
+      + ")") ws) + ")";
+
   # == Tiered package sourcing ==
   # Priority: stable nixpkgs > unstable nixpkgs > custom derivations
   #
@@ -419,6 +432,20 @@ let
     packageRequires = [ ];
     testFiles = [
       "decknix-agent-review-worktree-test.el"
+    ];
+  };
+
+  # Where a review runs when its repository has no checkout: the GitHub
+  # org -> workspace map (`decknix-workspaces', fed from the
+  # `decknix.workspaces' option below) and the on-demand clone into that
+  # workspace, in a child process, coalesced per repository and capped.
+  decknix-review-clone-el = mkEmacsTestedPackage {
+    pname = "decknix-review-clone";
+    src = ./agent-shell/review-clone;
+    packageRequires = [ ];
+    extraSiteFiles = [ "decknix-workspace-orgs.el" ];
+    testFiles = [
+      "decknix-review-clone-test.el"
     ];
   };
 
@@ -3626,6 +3653,7 @@ in
           decknix-agent-heartbeat-watch-el
           decknix-agent-net-error-el
           decknix-agent-review-worktree-el
+          decknix-review-clone-el
           decknix-agent-broker-reattach-el
           decknix-hub-review-identity-el
           decknix-hub-review-status-el
@@ -5270,6 +5298,13 @@ ${optionalString cfg.tableOverlay.enable ''
                           "decknix-agent-workspace-detect" (dir))
         (defvar decknix-agent-workspace-roots)
 
+        ;; GitHub org -> workspace map and on-demand clone: a PR in a
+        ;; repository never checked out is cloned into its org's workspace
+        ;; instead of being skipped.  Value from `decknix.workspaces'.
+        (require 'decknix-review-clone)
+        ${optionalString (workspacesElisp != "") ''
+        (setq decknix-workspaces '${workspacesElisp})
+        ''}
         ;; Custom auggie command discovery (PR B.46) -- pure
         ;; filesystem scanners + a user-tunable dirs defvar.
         ;; Consumed by the `decknix-agent-command-{run,new,edit}'
