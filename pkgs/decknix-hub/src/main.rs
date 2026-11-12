@@ -229,6 +229,79 @@ struct ReviewRequest {
     approvers: Vec<String>, // distinct human logins whose latest review is APPROVED
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     blockers: Vec<String>, // distinct human logins whose latest review is CHANGES_REQUESTED
+    #[serde(flatten)]
+    since: ReviewProgress,
+}
+
+/// What happened to a PR since it was last reviewed: the head now, the
+/// commit the review was made against, and what moved in between.  Lets the
+/// review board say "updated since your review" from the cached feed, with
+/// no fetch on the render path.  Flattened into `ReviewRequest`, so every
+/// field is additive and absent on older hubs.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+struct ReviewProgress {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    head_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base_ref: Option<String>,
+    /// Commit my latest submitted (non-pending) review was made against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    my_review_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    my_review_at: Option<String>,
+    /// My latest review carried feedback: changes requested, a comment, a
+    /// body, or a thread I opened.  A bare approval does not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    my_review_feedback: Option<bool>,
+    /// The latest review with feedback from another human.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    feedback_review: Option<FeedbackReview>,
+    /// Present only when the head has moved past the reference review (mine,
+    /// else `feedback_review`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    since_review: Option<SinceReview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    my_threads: Option<u32>, // threads I opened
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    my_threads_resolved: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    my_threads_answered: Option<u32>, // someone else spoke last
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+struct FeedbackReview {
+    author: String,
+    state: String,
+    at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sha: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+struct SinceCommit {
+    sha: String,
+    headline: String,
+    #[serde(default)]
+    author: String,
+    /// A merge commit bringing the base branch in, and nothing else.
+    #[serde(default)]
+    merge_from_base: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+struct SinceReview {
+    from: String,
+    to: String,
+    /// GitHub compare status of FROM against TO: `ahead' is a plain push,
+    /// `diverged' or `behind' a force-push (usually a rebase).
+    status: String,
+    commits: Vec<SinceCommit>,
+    /// Files whose change differs between the two heads.
+    files: u32,
+    /// The PR's own diff against its base is identical at both heads: the
+    /// push only merged or rebased onto the base.  Absent when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    diff_unchanged: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -793,6 +866,10 @@ fn human_commit_logins(commits: &[GhCommit]) -> Vec<String> {
 #[serde(rename_all = "camelCase")]
 struct GhCommit {
     committed_date: Option<String>,
+    #[serde(default)]
+    oid: Option<String>,
+    #[serde(default)]
+    message_headline: Option<String>,
     /// Commit authors (from `gh pr view --json commits`).  Used to detect a
     /// human landing commits on a bot-opened PR.  Absent for older payloads
     /// or when the commit list is not requested.
@@ -845,6 +922,256 @@ fn compute_review_stale(
     pushed_after_review || changes_addressed
 }
 
+// ---------------------------------------------------------------------------
+// Progress since review: what moved after the last review with feedback
+// ---------------------------------------------------------------------------
+
+/// Whether a review with STATE and BODY carries feedback.  Changes requested
+/// and comments always do; an approval only when it says something.
+fn review_is_feedback(state: Option<&str>, body: Option<&str>) -> bool {
+    match state {
+        Some("CHANGES_REQUESTED") | Some("COMMENTED") => true,
+        Some("APPROVED") => body.map(|b| !b.trim().is_empty()).unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// My latest submitted review: pending drafts are not submitted, so they
+/// say nothing about what I have seen.
+fn latest_my_review<'a>(reviews: &'a [GhReviewEntry], my_login: &str) -> Option<&'a GhReviewEntry> {
+    reviews.iter()
+        .filter(|r| r.author.as_ref().map(|a| a.login.eq_ignore_ascii_case(my_login)).unwrap_or(false))
+        .filter(|r| r.submitted_at.is_some() && r.state.as_deref() != Some("PENDING"))
+        .max_by(|a, b| a.submitted_at.cmp(&b.submitted_at))
+}
+
+/// The latest review with feedback from another human (not me, not a bot).
+fn latest_feedback_review(reviews: &[GhReviewEntry], my_login: Option<&str>) -> Option<FeedbackReview> {
+    reviews.iter()
+        .filter(|r| {
+            let other = match my_login {
+                Some(me) => classify_author(r.author.as_ref(), me) == Actor::Other,
+                None => r.author.as_ref().map(|a| !login_is_bot(&a.login, a.is_bot)).unwrap_or(false),
+            };
+            other && r.submitted_at.is_some()
+                && review_is_feedback(r.state.as_deref(), r.body.as_deref())
+        })
+        .max_by(|a, b| a.submitted_at.cmp(&b.submitted_at))
+        .map(|r| FeedbackReview {
+            author: r.author.as_ref().map(|a| a.login.clone()).unwrap_or_default(),
+            state: r.state.clone().unwrap_or_default(),
+            at: r.submitted_at.clone().unwrap_or_default(),
+            sha: r.commit.as_ref().and_then(|c| c.oid.clone()),
+        })
+}
+
+/// Whether a commit is a merge of the base branch into the PR, by the
+/// messages git and GitHub write for one.  Deliberately strict: a merge
+/// whose message says anything else ("merge main and fix the review") may
+/// carry real changes, so it does not count as noise.
+fn is_base_merge(headline: &str, parents: u64, base: &str) -> bool {
+    if parents < 2 || base.is_empty() {
+        return false;
+    }
+    let h = headline.trim();
+    let core = match h.rsplit_once(" into ") {
+        Some((head, target)) if !target.is_empty() && !target.contains(' ') => head,
+        _ => h,
+    };
+    let quoted = format!("'{base}'");
+    let one_token = |r: &str| !r.is_empty() && !r.contains(' ');
+    core == format!("Merge branch {quoted}")
+        || core.strip_prefix(&format!("Merge branch {quoted} of ")).is_some_and(one_token)
+        || core.strip_prefix("Merge remote-tracking branch '")
+            .and_then(|r| r.strip_suffix('\''))
+            .and_then(|r| r.split_once('/'))
+            .is_some_and(|(remote, b)| one_token(remote) && b == base)
+        || core == format!("Merge {base}")
+        || core.strip_prefix("Merge ")
+            .and_then(|r| r.split_once('/'))
+            .is_some_and(|(remote, b)| one_token(remote) && b == base)
+}
+
+/// Compare-API commits projected by `fetch_since_review'.
+#[derive(Debug, Deserialize)]
+struct CompareCommit {
+    sha: String,
+    #[serde(default)]
+    headline: String,
+    #[serde(default)]
+    parents: u64,
+    #[serde(default)]
+    author: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompareSummary {
+    status: String,
+    #[serde(default)]
+    files: u32,
+    #[serde(default)]
+    commits: Vec<CompareCommit>,
+}
+
+/// One file of a PR's diff against its base, for comparing two heads.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+struct DiffFile {
+    filename: String,
+    #[serde(default)]
+    patch: Option<String>,
+    #[serde(default)]
+    sha: Option<String>,
+}
+
+/// A patch with its hunk headers dropped, so the same change landing at a
+/// shifted line number (the base moved underneath it) still compares equal.
+fn normalise_patch(patch: &str) -> String {
+    patch.lines().filter(|l| !l.starts_with("@@")).collect::<Vec<_>>().join("\n")
+}
+
+/// Files whose change differs between two versions of a PR's diff.  A file
+/// with no patch (binary, or too large) falls back to its blob sha.
+fn diff_files_changed(before: &[DiffFile], after: &[DiffFile]) -> u32 {
+    let key = |f: &DiffFile| match &f.patch {
+        Some(p) => normalise_patch(p),
+        None => f.sha.clone().unwrap_or_default(),
+    };
+    let mut names: Vec<&str> = before.iter().chain(after.iter()).map(|f| f.filename.as_str()).collect();
+    names.sort();
+    names.dedup();
+    names.into_iter().filter(|n| {
+        let a = before.iter().find(|f| f.filename == *n).map(key);
+        let b = after.iter().find(|f| f.filename == *n).map(key);
+        a != b
+    }).count() as u32
+}
+
+/// Build the `SinceReview' from a FROM...TO comparison and, when fetched,
+/// the PR's own diff against its base at both ends.  Pure.
+///
+/// A plain push lists the compare commits.  A force-push has no linear
+/// history to list, so the PR's commits made after the review stand in
+/// (`pr_commits_after').  The files count prefers the PR-diff comparison,
+/// which excludes whatever a merge or rebase brought in from the base.
+fn build_since_review(
+    from: &str,
+    to: &str,
+    base: &str,
+    compare: &CompareSummary,
+    pr_diffs: Option<(&[DiffFile], &[DiffFile])>,
+    pr_commits_after: &[SinceCommit],
+) -> SinceReview {
+    let commits: Vec<SinceCommit> = if compare.status == "ahead" {
+        compare.commits.iter().map(|c| SinceCommit {
+            sha: c.sha.clone(),
+            headline: c.headline.clone(),
+            author: c.author.clone(),
+            merge_from_base: is_base_merge(&c.headline, c.parents, base),
+        }).collect()
+    } else {
+        pr_commits_after.to_vec()
+    };
+    let (files, diff_unchanged) = match pr_diffs {
+        Some((before, after)) => {
+            let n = diff_files_changed(before, after);
+            (n, Some(n == 0))
+        }
+        None => (compare.files, None),
+    };
+    SinceReview {
+        from: from.to_string(),
+        to: to.to_string(),
+        status: compare.status.clone(),
+        commits,
+        files,
+        diff_unchanged,
+    }
+}
+
+/// Whether the PR-diff comparison is worth its two extra calls: only when
+/// the compare diff could include base changes (a merge, or a force-push).
+fn needs_pr_diff(compare: &CompareSummary, base: &str) -> bool {
+    compare.status != "ahead"
+        || compare.commits.iter().any(|c| c.parents >= 2 && !base.is_empty())
+}
+
+static SINCE_CACHE: OnceLock<RwLock<HashMap<(String, String, String), Option<(CompareSummary, Option<(Vec<DiffFile>, Vec<DiffFile>)>)>>>> = OnceLock::new();
+
+const SINCE_COMPARE_JQ: &str = r#"{status, files: (.files|length), commits: [.commits[] | {sha, headline: (.commit.message|split("\n")[0]), parents: (.parents|length), author: (.author.login // "")}]}"#;
+const SINCE_FILES_JQ: &str = "[.files[] | {filename, patch, sha}]";
+
+async fn gh_compare<T: serde::de::DeserializeOwned>(repo: &str, range: &str, jq: &str) -> Option<T> {
+    let path = format!("repos/{repo}/compare/{range}");
+    let out = gh_json(&["api", &path, "--jq", jq]).await.ok()?;
+    serde_json::from_str(&out).ok()
+}
+
+/// Fetch what moved between FROM and TO on REPO.  Cached for the life of the
+/// daemon per (repo, from, to): two commits never change what lies between
+/// them, so the PR-details TTL refetch costs nothing here.
+async fn fetch_since_review(
+    repo: &str,
+    from: &str,
+    to: &str,
+    base: &str,
+    pr_commits_after: &[SinceCommit],
+) -> Option<SinceReview> {
+    let key = (repo.to_string(), from.to_string(), to.to_string());
+    let cache = SINCE_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    {
+        let c = cache.read().await;
+        if let Some(entry) = c.get(&key) {
+            return entry.as_ref().map(|(cmp, diffs)| build_since_review(
+                from, to, base, cmp,
+                diffs.as_ref().map(|(a, b)| (a.as_slice(), b.as_slice())),
+                pr_commits_after));
+        }
+    }
+    let compare: Option<CompareSummary> =
+        gh_compare(repo, &format!("{from}...{to}"), SINCE_COMPARE_JQ).await;
+    let entry = match compare {
+        None => None,
+        Some(cmp) => {
+            let diffs = if needs_pr_diff(&cmp, base) && !base.is_empty() {
+                let before: Option<Vec<DiffFile>> =
+                    gh_compare(repo, &format!("{base}...{from}"), SINCE_FILES_JQ).await;
+                let after: Option<Vec<DiffFile>> =
+                    gh_compare(repo, &format!("{base}...{to}"), SINCE_FILES_JQ).await;
+                before.zip(after)
+            } else {
+                None
+            };
+            Some((cmp, diffs))
+        }
+    };
+    let result = entry.as_ref().map(|(cmp, diffs)| build_since_review(
+        from, to, base, cmp,
+        diffs.as_ref().map(|(a, b)| (a.as_slice(), b.as_slice())),
+        pr_commits_after));
+    let mut c = cache.write().await;
+    if c.len() > 1000 {
+        c.clear();
+    }
+    // A failed fetch is not cached, so the next poll retries it.
+    if entry.is_some() {
+        c.insert(key, entry);
+    }
+    result
+}
+
+/// The PR's commits made after AT, oldest first, for a force-pushed PR.
+fn commits_after(commits: &[GhCommit], at: &str) -> Vec<SinceCommit> {
+    commits.iter()
+        .filter(|c| c.committed_date.as_deref().is_some_and(|d| d > at))
+        .map(|c| SinceCommit {
+            sha: c.oid.clone().unwrap_or_default(),
+            headline: c.message_headline.clone().unwrap_or_default(),
+            author: c.authors.first().map(|a| a.login.clone()).unwrap_or_default(),
+            merge_from_base: false,
+        })
+        .collect()
+}
+
 /// Per-PR inline review thread stats used by the Tier 1 attention
 /// heuristic.  GraphQL `reviewThreads` carries the `isResolved` flag
 /// that `gh pr view --json` does not surface, so we run a small
@@ -852,6 +1179,7 @@ fn compute_review_stale(
 /// "actionable to me" when it is unresolved AND the last commenter is
 /// not me — if I posted last, the ball is in their court even though
 /// the thread is open.
+#[derive(Clone, Default)]
 struct ReviewThreadStats {
     total: u32,
     /// Unresolved threads regardless of who spoke last.
@@ -873,6 +1201,12 @@ struct ReviewThreadStats {
     human_unresolved: u32,
     /// Of `unresolved_to_me`, those whose last commenter is a bot.
     bot_unresolved: u32,
+    /// Threads I opened, and of those how many are resolved and how many
+    /// somebody else spoke last on.  What a re-review wants to know first:
+    /// did the author deal with my feedback?
+    my_threads: u32,
+    my_threads_resolved: u32,
+    my_threads_answered: u32,
 }
 
 /// Parse a flat array of GraphQL review-thread nodes (as `serde_json::Value`)
@@ -884,20 +1218,35 @@ fn parse_thread_nodes(nodes: &[serde_json::Value], my_login: Option<&str>) -> Re
     let mut unresolved_to_me = 0u32;
     let mut human_unresolved = 0u32;
     let mut bot_unresolved = 0u32;
+    let mut my_threads = 0u32;
+    let mut my_threads_resolved = 0u32;
+    let mut my_threads_answered = 0u32;
+    let login_of = |t: &serde_json::Value, key: &str, last: bool| {
+        t.get(key)
+            .and_then(|c| c.get("nodes"))
+            .and_then(|ns| ns.as_array())
+            .and_then(|arr| if last { arr.last() } else { arr.first() })
+            .and_then(|n| n.get("author"))
+            .and_then(|a| a.get("login"))
+            .and_then(|l| l.as_str())
+            .map(|s| s.to_ascii_lowercase())
+    };
     for t in nodes {
         let unresolved = !t.get("isResolved")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let last_login = login_of(t, "comments", true);
+        if let (Some(opener), Some(m)) = (login_of(t, "opener", false), me.as_deref()) {
+            if opener == m {
+                my_threads += 1;
+                if !unresolved { my_threads_resolved += 1; }
+                if last_login.as_deref().is_some_and(|l| l != m) {
+                    my_threads_answered += 1;
+                }
+            }
+        }
         if !unresolved { continue; }
         unresolved_total += 1;
-        let last_login = t.get("comments")
-            .and_then(|c| c.get("nodes"))
-            .and_then(|ns| ns.as_array())
-            .and_then(|arr| arr.last())
-            .and_then(|n| n.get("author"))
-            .and_then(|a| a.get("login"))
-            .and_then(|l| l.as_str())
-            .map(|s| s.to_ascii_lowercase());
         let actionable = match (last_login.as_deref(), me.as_deref()) {
             (Some(ll), Some(m)) => ll != m,
             // Unknown author or unknown me-login — count as actionable
@@ -922,7 +1271,8 @@ fn parse_thread_nodes(nodes: &[serde_json::Value], my_login: Option<&str>) -> Re
         }
     }
     ReviewThreadStats { total, unresolved_total, unresolved_to_me,
-                        human_unresolved, bot_unresolved }
+                        human_unresolved, bot_unresolved,
+                        my_threads, my_threads_resolved, my_threads_answered }
 }
 
 /// Single-PR fallback: fetch review-thread stats for one PR via `gh api graphql`.
@@ -934,7 +1284,7 @@ async fn fetch_review_threads_single(
 ) -> Option<ReviewThreadStats> {
     let (owner, name) = repo.split_once('/')?;
     let thread_fields =
-        "reviewThreads(first: 100) { nodes { isResolved comments(last: 1) { nodes { author { login } } } } }";
+        "reviewThreads(first: 100) { nodes { isResolved opener: comments(first: 1) { nodes { author { login } } } comments(last: 1) { nodes { author { login } } } } }";
     let query = format!(
         "{{ repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ {thread_fields} }} }} }}"
     );
@@ -969,7 +1319,7 @@ async fn batch_fetch_review_threads(
     }
 
     let thread_fields =
-        "reviewThreads(first: 100) { nodes { isResolved comments(last: 1) { nodes { author { login } } } } }";
+        "reviewThreads(first: 100) { nodes { isResolved opener: comments(first: 1) { nodes { author { login } } } comments(last: 1) { nodes { author { login } } } } }";
 
     // One future per repo — all repos are queried concurrently.
     let futs: Vec<_> = by_repo.iter().map(|(repo, numbers)| {
@@ -1060,6 +1410,7 @@ struct ReviewPrDetails {
     requested_reviewers: Vec<String>,
     approvers: Vec<String>,
     blockers: Vec<String>,
+    since: ReviewProgress,
 }
 
 impl Default for ReviewPrDetails {
@@ -1076,6 +1427,7 @@ impl Default for ReviewPrDetails {
             human_committed: None,
             authors: Vec::new(), requested_reviewers: Vec::new(),
             approvers: Vec::new(), blockers: Vec::new(),
+            since: ReviewProgress::default(),
         }
     }
 }
@@ -1188,7 +1540,7 @@ async fn fetch_pr_ci(
         "pr", "view",
         &number_s,
         "--repo", repo,
-        "--json", "statusCheckRollup,mergeable,mergeStateStatus,latestReviews,comments,reviews,reviewRequests,reviewDecision,commits",
+        "--json", "statusCheckRollup,mergeable,mergeStateStatus,latestReviews,comments,reviews,reviewRequests,reviewDecision,commits,headRefOid,baseRefName",
     ];
     let threads = match prefetched_threads {
         Some(t) => Some(t),
@@ -1219,10 +1571,19 @@ async fn fetch_pr_ci(
         review_requests: Option<Vec<GhReviewRequestEntry>>,
         review_decision: Option<String>,
         commits: Option<Vec<GhCommit>>,
+        #[serde(default)]
+        head_ref_oid: Option<String>,
+        #[serde(default)]
+        base_ref_name: Option<String>,
     }
 
     match serde_json::from_str::<PrView>(&output) {
         Ok(view) => {
+            let since = review_progress(
+                repo, &view.head_ref_oid, &view.base_ref_name,
+                view.reviews.as_deref().unwrap_or(&[]),
+                view.commits.as_deref().unwrap_or(&[]),
+                threads.as_ref(), my_login).await;
             let ci = summarise_ci(&view.status_check_rollup);
             let mergeable = view.mergeable;
             // Find my latest review state
@@ -1452,6 +1813,7 @@ async fn fetch_pr_ci(
                 requested_reviewers,
                 approvers,
                 blockers,
+                since,
             }
         }
         Err(_) => ReviewPrDetails {
@@ -1462,6 +1824,63 @@ async fn fetch_pr_ci(
             bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
             ..ReviewPrDetails::default()
         },
+    }
+}
+
+/// Assemble a PR's `ReviewProgress' from its `gh pr view' payload.
+///
+/// The reference review is mine when I have one, else the latest feedback
+/// review from someone else; `since_review' is fetched only when the head
+/// has moved past it, so an unchanged PR costs no extra call.
+async fn review_progress(
+    repo: &str,
+    head: &Option<String>,
+    base: &Option<String>,
+    reviews: &[GhReviewEntry],
+    commits: &[GhCommit],
+    threads: Option<&ReviewThreadStats>,
+    my_login: Option<&str>,
+) -> ReviewProgress {
+    let mine = my_login.and_then(|me| latest_my_review(reviews, me));
+    let feedback_review = latest_feedback_review(reviews, my_login);
+    let my_threads = threads.map(|t| t.my_threads);
+    let my_review_sha = mine.and_then(|r| r.commit.as_ref()).and_then(|c| c.oid.clone());
+    let my_review_at = mine.and_then(|r| r.submitted_at.clone());
+    let my_review_feedback = mine.map(|r| {
+        review_is_feedback(r.state.as_deref(), r.body.as_deref())
+            || my_threads.unwrap_or(0) > 0
+    });
+    let since_review = match (review_reference(&my_review_sha, &my_review_at, &feedback_review), head) {
+        (Some((from, at)), Some(to)) if &from != to => {
+            let base_s = base.clone().unwrap_or_default();
+            fetch_since_review(repo, &from, to, &base_s, &commits_after(commits, &at)).await
+        }
+        _ => None,
+    };
+    ReviewProgress {
+        head_sha: head.clone(),
+        base_ref: base.clone(),
+        my_review_sha,
+        my_review_at,
+        my_review_feedback,
+        feedback_review,
+        since_review,
+        my_threads,
+        my_threads_resolved: threads.map(|t| t.my_threads_resolved),
+        my_threads_answered: threads.map(|t| t.my_threads_answered),
+    }
+}
+
+/// The (sha, submitted_at) a re-review is measured from: my latest review
+/// when I have one, else the latest feedback review from someone else.
+fn review_reference(
+    my_sha: &Option<String>,
+    my_at: &Option<String>,
+    feedback: &Option<FeedbackReview>,
+) -> Option<(String, String)> {
+    match (my_sha, my_at) {
+        (Some(sha), Some(at)) => Some((sha.clone(), at.clone())),
+        _ => feedback.as_ref().and_then(|f| f.sha.clone().map(|sha| (sha, f.at.clone()))),
     }
 }
 
@@ -1605,11 +2024,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             d
         } else {
             let prefetched = batched_threads.get(&(repo.clone(), pr.number))
-                .map(|s| ReviewThreadStats { total: s.total,
-                                             unresolved_total: s.unresolved_total,
-                                             unresolved_to_me: s.unresolved_to_me,
-                                             human_unresolved: s.human_unresolved,
-                                             bot_unresolved: s.bot_unresolved });
+                .cloned();
             let author_login = pr.author.as_ref().map(|a| a.login.as_str()).unwrap_or("");
             let d = fetch_pr_ci(&repo, pr.number, author_login, my_login.as_deref(), prefetched).await;
             let mut cache = reviews_cache().write().await;
@@ -1679,6 +2094,7 @@ async fn poll_github_reviews(_config: &GitHubConfig) -> Result<ReviewsFile, Stri
             requested_reviewers: details.requested_reviewers,
             approvers: details.approvers,
             blockers: details.blockers,
+            since: details.since,
         });
     }
 
@@ -1765,6 +2181,15 @@ struct GhReviewEntry {
     author: Option<GhAuthor>,
     submitted_at: Option<String>,
     body: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    commit: Option<GhOid>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct GhOid {
+    oid: Option<String>,
 }
 
 /// Fetch branch, CI, mergeable, review decision, and reply status for a PR.
@@ -2067,11 +2492,7 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
             d
         } else {
             let prefetched = batched_threads.get(&(repo.clone(), pr.number))
-                .map(|s| ReviewThreadStats { total: s.total,
-                                             unresolved_total: s.unresolved_total,
-                                             unresolved_to_me: s.unresolved_to_me,
-                                             human_unresolved: s.human_unresolved,
-                                             bot_unresolved: s.bot_unresolved });
+                .cloned();
             let d = fetch_pr_details(&repo, pr.number, my_login.as_deref(), prefetched).await;
             let mut cache = wip_cache().write().await;
             cache.insert(cache_key, (updated_at, Instant::now(), d.clone()));
@@ -2464,7 +2885,7 @@ mod tests {
         GhAuthor { login: login.to_string(), is_bot }
     }
     fn commit(authors: Vec<GhAuthor>) -> GhCommit {
-        GhCommit { committed_date: None, authors }
+        GhCommit { committed_date: None, oid: None, message_headline: None, authors }
     }
 
     #[test]
@@ -2837,5 +3258,218 @@ mod tests {
             .connect_timeout(HTTP_CONNECT_TIMEOUT)
             .build()
             .is_ok());
+    }
+
+    // --- progress since review -------------------------------------------
+
+    fn entry(login: &str, state: &str, at: &str, body: &str, sha: &str) -> GhReviewEntry {
+        GhReviewEntry {
+            author: Some(GhAuthor { login: login.to_string(), is_bot: Some(login.ends_with("[bot]")) }),
+            submitted_at: if at.is_empty() { None } else { Some(at.to_string()) },
+            body: Some(body.to_string()),
+            state: Some(state.to_string()),
+            commit: Some(GhOid { oid: Some(sha.to_string()) }),
+        }
+    }
+
+    #[test]
+    fn feedback_is_changes_comments_or_an_approval_that_says_something() {
+        assert!(review_is_feedback(Some("CHANGES_REQUESTED"), Some("")));
+        assert!(review_is_feedback(Some("COMMENTED"), None));
+        assert!(review_is_feedback(Some("APPROVED"), Some("nit: rename x")));
+        assert!(!review_is_feedback(Some("APPROVED"), Some("  ")));
+        assert!(!review_is_feedback(Some("DISMISSED"), Some("x")));
+        assert!(!review_is_feedback(None, None));
+    }
+
+    #[test]
+    fn my_latest_review_skips_pending_and_others() {
+        let revs = vec![
+            entry("me", "COMMENTED", "2026-11-01T00:00:00Z", "q", "aaa"),
+            entry("me", "APPROVED", "2026-11-02T00:00:00Z", "", "bbb"),
+            entry("me", "PENDING", "2026-11-03T00:00:00Z", "", "ccc"),
+            entry("alice", "APPROVED", "2026-11-04T00:00:00Z", "", "ddd"),
+        ];
+        let r = latest_my_review(&revs, "ME").unwrap();
+        assert_eq!(r.commit.as_ref().unwrap().oid.as_deref(), Some("bbb"));
+    }
+
+    #[test]
+    fn feedback_review_is_the_latest_human_one_with_something_to_say() {
+        let revs = vec![
+            entry("alice", "CHANGES_REQUESTED", "2026-11-01T00:00:00Z", "", "aaa"),
+            entry("bob", "APPROVED", "2026-11-02T00:00:00Z", "", "bbb"),
+            entry("copilot[bot]", "COMMENTED", "2026-11-03T00:00:00Z", "x", "ccc"),
+            entry("me", "COMMENTED", "2026-11-04T00:00:00Z", "x", "ddd"),
+        ];
+        let f = latest_feedback_review(&revs, Some("me")).unwrap();
+        assert_eq!(f, FeedbackReview {
+            author: "alice".into(), state: "CHANGES_REQUESTED".into(),
+            at: "2026-11-01T00:00:00Z".into(), sha: Some("aaa".into()),
+        });
+        assert!(latest_feedback_review(&revs[1..2], Some("me")).is_none());
+    }
+
+    #[test]
+    fn reference_prefers_my_review_then_the_feedback_review() {
+        let fb = Some(FeedbackReview { author: "a".into(), state: "COMMENTED".into(),
+                                       at: "t2".into(), sha: Some("fff".into()) });
+        assert_eq!(review_reference(&Some("mmm".into()), &Some("t1".into()), &fb),
+                   Some(("mmm".into(), "t1".into())));
+        assert_eq!(review_reference(&None, &None, &fb), Some(("fff".into(), "t2".into())));
+        assert_eq!(review_reference(&None, &None, &None), None);
+    }
+
+    #[test]
+    fn base_merge_recognises_the_messages_git_and_github_write() {
+        assert!(is_base_merge("Merge branch 'main' into feature-x", 2, "main"));
+        assert!(is_base_merge("Merge branch 'main'", 2, "main"));
+        assert!(is_base_merge("Merge branch 'main' of github.com:o/r into f", 2, "main"));
+        assert!(is_base_merge("Merge remote-tracking branch 'origin/main' into f", 2, "main"));
+        assert!(is_base_merge("Merge main into feature-x", 2, "main"));
+        assert!(is_base_merge("Merge origin/main into feature-x", 2, "main"));
+    }
+
+    #[test]
+    fn base_merge_refuses_anything_that_might_carry_changes() {
+        // not a merge commit
+        assert!(!is_base_merge("Merge branch 'main' into f", 1, "main"));
+        // a different branch
+        assert!(!is_base_merge("Merge branch 'other' into f", 2, "main"));
+        // prose: a merge that also fixed something
+        assert!(!is_base_merge("Merge main and fix the review findings", 2, "main"));
+        // no base known
+        assert!(!is_base_merge("Merge branch 'main'", 2, ""));
+    }
+
+    fn df(name: &str, patch: Option<&str>, sha: &str) -> DiffFile {
+        DiffFile { filename: name.into(), patch: patch.map(String::from), sha: Some(sha.into()) }
+    }
+
+    #[test]
+    fn pr_diff_ignores_shifted_hunks_but_not_changed_lines() {
+        let before = vec![df("a.rs", Some("@@ -1,2 +1,3 @@\n+x"), "s1")];
+        let shifted = vec![df("a.rs", Some("@@ -9,2 +9,3 @@\n+x"), "s2")];
+        let changed = vec![df("a.rs", Some("@@ -1,2 +1,3 @@\n+y"), "s3")];
+        assert_eq!(diff_files_changed(&before, &shifted), 0);
+        assert_eq!(diff_files_changed(&before, &changed), 1);
+        let added = vec![df("a.rs", Some("@@ -1 +1 @@\n+x"), "s1"), df("b.rs", None, "s9")];
+        assert_eq!(diff_files_changed(&before, &added), 1);
+    }
+
+    fn cc(sha: &str, headline: &str, parents: u64) -> CompareCommit {
+        CompareCommit { sha: sha.into(), headline: headline.into(), parents, author: "dev".into() }
+    }
+
+    #[test]
+    fn since_review_lists_compare_commits_for_a_plain_push() {
+        let cmp = CompareSummary { status: "ahead".into(), files: 3,
+                                   commits: vec![cc("b1", "Address review", 1),
+                                                 cc("b2", "Merge branch 'main' into f", 2)] };
+        let s = build_since_review("a", "b2", "main", &cmp, None, &[]);
+        assert_eq!(s.status, "ahead");
+        assert_eq!(s.commits.len(), 2);
+        assert!(!s.commits[0].merge_from_base);
+        assert!(s.commits[1].merge_from_base);
+        assert_eq!(s.files, 3);
+        assert_eq!(s.diff_unchanged, None);
+    }
+
+    #[test]
+    fn since_review_marks_a_base_only_push_as_diff_unchanged() {
+        let cmp = CompareSummary { status: "ahead".into(), files: 40,
+                                   commits: vec![cc("b1", "Merge branch 'main' into f", 2)] };
+        assert!(needs_pr_diff(&cmp, "main"));
+        let pr = vec![df("a.rs", Some("@@ -1 +1 @@\n+x"), "s1")];
+        let s = build_since_review("a", "b1", "main", &cmp, Some((&pr, &pr)), &[]);
+        assert_eq!(s.files, 0);
+        assert_eq!(s.diff_unchanged, Some(true));
+    }
+
+    #[test]
+    fn since_review_uses_the_prs_own_commits_after_a_force_push() {
+        let cmp = CompareSummary { status: "diverged".into(), files: 99, commits: vec![] };
+        let commits = vec![
+            GhCommit { committed_date: Some("2026-11-01T00:00:00Z".into()), oid: Some("old".into()),
+                       message_headline: Some("before".into()), authors: vec![] },
+            GhCommit { committed_date: Some("2026-11-05T00:00:00Z".into()), oid: Some("new".into()),
+                       message_headline: Some("rebased fix".into()),
+                       authors: vec![author("dev", Some(false))] },
+        ];
+        let after = commits_after(&commits, "2026-11-02T00:00:00Z");
+        let before_diff = vec![df("a.rs", Some("@@ -1 +1 @@\n+x"), "s1")];
+        let after_diff = vec![df("a.rs", Some("@@ -1 +1 @@\n+z"), "s2")];
+        let s = build_since_review("a", "new", "main", &cmp, Some((&before_diff, &after_diff)), &after);
+        assert_eq!(s.commits.len(), 1);
+        assert_eq!(s.commits[0].sha, "new");
+        assert_eq!(s.commits[0].author, "dev");
+        assert_eq!(s.files, 1);
+        assert_eq!(s.diff_unchanged, Some(false));
+    }
+
+    fn thread_by(resolved: bool, opener: &str, last: &str) -> serde_json::Value {
+        serde_json::json!({
+            "isResolved": resolved,
+            "opener": { "nodes": [ { "author": { "login": opener } } ] },
+            "comments": { "nodes": [ { "author": { "login": last } } ] }
+        })
+    }
+
+    #[test]
+    fn thread_stats_count_my_threads_and_what_happened_to_them() {
+        let nodes = vec![
+            thread_by(true, "me", "dev"),     // resolved, answered
+            thread_by(false, "me", "dev"),    // open, answered
+            thread_by(false, "me", "me"),     // open, nobody replied
+            thread_by(false, "alice", "dev"), // not mine
+        ];
+        let st = parse_thread_nodes(&nodes, Some("me"));
+        assert_eq!(st.my_threads, 3);
+        assert_eq!(st.my_threads_resolved, 1);
+        assert_eq!(st.my_threads_answered, 2);
+        assert_eq!(st.unresolved_total, 3);
+    }
+
+    #[test]
+    fn review_request_json_stays_backward_compatible() {
+        // An item written by an older hub: none of the progress fields.
+        let old = r#"{"id":"gh:o/r#1","repo":"o/r","number":1,"title":"t","author":"a",
+                      "url":"u","created":"2026-11-01T00:00:00Z"}"#;
+        let item: ReviewRequest = serde_json::from_str(old).unwrap();
+        assert!(item.since.head_sha.is_none());
+        // With no progress, serialising adds no new keys.
+        let out = serde_json::to_value(&item).unwrap();
+        for k in ["head_sha", "since_review", "my_review_sha", "feedback_review", "my_threads"] {
+            assert!(out.get(k).is_none(), "{k} should be omitted");
+        }
+    }
+
+    #[test]
+    fn review_request_json_carries_progress_flat_with_nested_since() {
+        let old = r#"{"id":"gh:o/r#1","repo":"o/r","number":1,"title":"t","author":"a",
+                      "url":"u","created":"2026-11-01T00:00:00Z"}"#;
+        let mut item: ReviewRequest = serde_json::from_str(old).unwrap();
+        item.since = ReviewProgress {
+            head_sha: Some("bbb".into()),
+            my_review_sha: Some("aaa".into()),
+            my_review_feedback: Some(true),
+            since_review: Some(SinceReview {
+                from: "aaa".into(), to: "bbb".into(), status: "ahead".into(),
+                commits: vec![SinceCommit { sha: "bbb".into(), headline: "fix".into(),
+                                            author: "dev".into(), merge_from_base: false }],
+                files: 2, diff_unchanged: None,
+            }),
+            my_threads: Some(1),
+            ..ReviewProgress::default()
+        };
+        let out = serde_json::to_value(&item).unwrap();
+        assert_eq!(out["head_sha"], "bbb");
+        assert_eq!(out["my_review_sha"], "aaa");
+        assert_eq!(out["my_review_feedback"], true);
+        assert_eq!(out["since_review"]["files"], 2);
+        assert_eq!(out["since_review"]["commits"][0]["headline"], "fix");
+        assert!(out["since_review"].get("diff_unchanged").is_none());
+        let back: ReviewRequest = serde_json::from_value(out).unwrap();
+        assert_eq!(back.since.since_review.unwrap().commits.len(), 1);
     }
 }
