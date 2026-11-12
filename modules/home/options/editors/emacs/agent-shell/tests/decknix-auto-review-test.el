@@ -460,5 +460,111 @@ would silently stop every dispatch."
     (should-not (decknix-auto-review--previously-reviewed-p
                  '((repo . "o/widget") (number . 1))))))
 
+;; -- Repository with no checkout -------------------------------------
+;;
+;; The PR that stayed Idle: eligible, but its repository was never
+;; checked out, so the old dispatcher found no workspace and returned
+;; without a word.  Now an org mapped in `decknix-workspaces' is cloned
+;; first; the clone child is stubbed through the start function.
+
+(cl-defun decknix-auto-review-test--dispatch-missing
+    (&key (workspaces '(("acme" :path "/ws/acme" :orgs ("exampleowner"))))
+          (then #'identity))
+  "Dispatch one human PR for ExampleOwner/widget, which has no checkout.
+Calls THEN, inside the stubbed state, with a plist of what happened; the
+clone is left in flight and its :finish function completes it.  Returns
+THEN's value."
+  (let ((decknix-auto-review--dispatched (make-hash-table :test 'equal))
+        (decknix-workspaces workspaces)
+        (decknix-review-clone--states (make-hash-table :test 'equal))
+        (decknix-review-clone--waiters (make-hash-table :test 'equal))
+        (decknix-review-clone--primaries (make-hash-table :test 'equal))
+        (decknix-review-clone--queue nil)
+        (decknix-review-clone--running 0)
+        (decknix-review-clone-state-change-hook nil)
+        (clones nil) (enqueued nil))
+    (cl-letf (((symbol-function 'decknix--agent-pr-detect-workspace)
+               (lambda (&rest _) nil))
+              ((symbol-function 'decknix-hub-worktree-clones) (lambda () nil))
+              ((symbol-function 'decknix-agent-purpose-resolve)
+               (lambda (&rest _) '(:model "m" :provider "p" :mode "auto")))
+              ((symbol-function 'decknix-agent-spawn-enqueue)
+               (lambda (fn) (push fn enqueued)))
+              ((symbol-function 'make-directory) #'ignore))
+      (let* ((decknix-review-clone-start-function
+              (lambda (key cmd) (push (cons key cmd) clones)))
+             (item '((repo . "ExampleOwner/widget") (number . 7)
+                     (url . "https://github.com/ExampleOwner/widget/pull/7")
+                     (author . "grace")))
+             (action (decknix-auto-review--dispatch-unit
+                      (list 'review "widget" "grace" (list item)))))
+        (funcall
+         then
+         (list :action action :clones clones
+              :enqueued-before (length enqueued)
+              :dispatched (decknix-auto-review-dispatched-p "ExampleOwner/widget#7")
+              :state (decknix-review-clone-state "ExampleOwner" "widget")
+              :finish
+              (lambda (ok output)
+                (decknix-review-clone--finish "exampleowner/widget" ok output)
+                (list :enqueued enqueued
+                      :state (decknix-review-clone-state "ExampleOwner" "widget")))))))))
+
+(ert-deftest decknix-auto-review/missing-repo-in-mapped-org-is-cloned ()
+  "No checkout, org mapped: clone into the org's workspace, nothing spawned yet."
+  (let ((r (decknix-auto-review-test--dispatch-missing)))
+    (should (eq 'review (plist-get r :action)))
+    (should (plist-get r :dispatched))
+    (should (= 0 (plist-get r :enqueued-before)))
+    (should (eq 'cloning (plist-get (plist-get r :state) :state)))
+    (should (equal "/ws/acme/widget" (plist-get (plist-get r :state) :target)))
+    (should (equal "exampleowner/widget" (car (car (plist-get r :clones)))))
+    (should (member "ExampleOwner/widget" (cdr (car (plist-get r :clones)))))))
+
+(ert-deftest decknix-auto-review/clone-success-makes-worktree-then-session ()
+  "A finished clone gets its review worktree, then the session starts in
+the org workspace with the worktree as an additional root."
+  (let ((worktree-primary nil) (started nil))
+    (cl-letf (((symbol-function 'decknix--review-worktree-ensure-then)
+               (lambda (_o _r _n on-ready &optional primary)
+                 (setq worktree-primary primary)
+                 (funcall on-ready "/ws/acme/widget-worktrees/pr-7")))
+              ((symbol-function 'decknix--agent-quickaction-start)
+               (lambda (&rest args) (setq started args))))
+      (decknix-auto-review-test--dispatch-missing
+       :then
+       (lambda (r)
+         (let ((after (funcall (plist-get r :finish) t "")))
+           (should-not (plist-get after :state))
+           (should (= 1 (length (plist-get after :enqueued))))
+           (should (equal "/ws/acme/widget" worktree-primary))
+           (funcall (car (plist-get after :enqueued)))
+           (should (equal "/ws/acme/" (nth 2 started)))
+           (should (equal '("/ws/acme/widget-worktrees/pr-7") (nth 9 started)))
+           (should (equal '("review" "widget" "#7" "auto") (nth 1 started)))))))))
+
+(ert-deftest decknix-auto-review/clone-failure-shows-on-the-row-and-spawns-nothing ()
+  (decknix-auto-review-test--dispatch-missing
+   :then
+   (lambda (r)
+     (let ((after (funcall (plist-get r :finish) nil
+                           "fatal: could not read Username\n")))
+       (should (null (plist-get after :enqueued)))
+       (should (eq 'failed (plist-get (plist-get after :state) :state)))
+       (should (equal "fatal: could not read Username"
+                      (plist-get (plist-get after :state) :error)))
+       ;; Stays dispatched, so the next tick does not retry it in a loop.
+       (should (plist-get r :dispatched))))))
+
+(ert-deftest decknix-auto-review/no-checkout-no-mapping-says-so ()
+  "Neither a checkout nor an org mapping: no launch, no clone, and an
+unmapped state the row can show, not a silent Idle."
+  (let ((r (decknix-auto-review-test--dispatch-missing :workspaces nil)))
+    (should-not (plist-get r :action))
+    (should-not (plist-get r :clones))
+    (should-not (plist-get r :dispatched))
+    (should (eq 'unmapped (plist-get (plist-get r :state) :state)))
+    (should (equal "ExampleOwner" (plist-get (plist-get r :state) :org)))))
+
 (provide 'decknix-auto-review-test)
 ;;; decknix-auto-review-test.el ends here

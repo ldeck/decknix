@@ -1026,7 +1026,9 @@ let
     # encodes no PR number, so there is nothing to derive from it later.
     packageRequires = [ decknix-agent-spawn-queue-el
                         decknix-hub-mention-bot-el
-                        decknix-hub-review-identity-el ];
+                        decknix-hub-review-identity-el
+                        decknix-review-clone-el
+                        decknix-agent-review-worktree-el ];
     testFiles = [
       "decknix-auto-review-test.el"
       "decknix-auto-review-group-test.el"
@@ -7565,6 +7567,9 @@ duration -- the most important number on this branch."
         (require 'decknix-auto-review)
         (advice-add 'decknix--hub-refresh-reviews :after
                     #'decknix-auto-review--maybe-dispatch)
+        ;; A clone starting, finishing or failing changes a row's text.
+        (add-hook 'decknix-review-clone-state-change-hook
+                  #'decknix-review-board-schedule-refresh)
 
         ;; == Session watches (session-watch spec, step 2: notify only) ==
         ;; A session that says "I'll report when the build lands" cannot --

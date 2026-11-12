@@ -63,6 +63,11 @@
 (require 'decknix-agent-spawn-queue)
 ;; Eligibility reads the canonical direct/team/standing-request predicates.
 (require 'decknix-hub-mention-bot)
+;; Where a review runs, and the on-demand clone for a repository with no
+;; checkout whose org maps to a workspace.
+(require 'decknix-review-clone)
+;; The session's cwd and additional roots, given its workspace and worktree.
+(require 'decknix-agent-review-worktree)
 
 (defconst decknix-auto-review-states '(off bot human any)
   "Ordered cycle of auto-review states.
@@ -122,6 +127,9 @@ guard takes over once the buffer exists).")
 (declare-function decknix--agent-quickaction-start "decknix-agent-shell-main-link")
 (declare-function agent-shell-workspace-sidebar-refresh "agent-shell-workspace")
 (declare-function decknix-agent-purpose-resolve "decknix-agent-purposes")
+(declare-function decknix--review-worktree-ensure-then
+                  "decknix-agent-shell-workspace"
+                  (owner repo number on-ready &optional primary))
 (defvar decknix--hub-reviews)
 (defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
 
@@ -422,6 +430,39 @@ A sequencer over the singular command, not a batch approver: each PR is
 still reviewed and approved individually.  See the command definition in
 `decknix-config/commands/review-and-ship-bot-prs.md'.")
 
+(defun decknix-auto-review--resolve (owner repo)
+  "Return where a review of OWNER/REPO runs; see `decknix-workspace-resolve'.
+An existing checkout wins; with none, a repository whose org maps to a
+workspace resolves to `clone' rather than to nothing."
+  (decknix-review-clone-resolve owner repo))
+
+(defun decknix-auto-review--launch (spec workspace &optional worktree)
+  "Enqueue the session described by SPEC in WORKSPACE.
+SPEC is a plist from `decknix-auto-review--dispatch-unit'.  WORKTREE, when
+non-nil, is the PR checkout, passed as an additional root so the session
+still starts in the workspace and sees its commands and skills."
+  (let ((dirs (decknix--review-launch-dirs workspace worktree)))
+    (decknix-agent-spawn-enqueue
+     (lambda ()
+       (decknix--agent-quickaction-start
+        (plist-get spec :name) (plist-get spec :tags) (car dirs)
+        (plist-get spec :command) (plist-get spec :model)
+        (plist-get spec :provider) (plist-get spec :mode) t
+        (plist-get spec :review-prs) (cdr dirs))
+       (message "[auto-review] %s" (plist-get spec :label))))))
+
+(defun decknix-auto-review--launch-after-clone (spec workspace primary)
+  "Launch SPEC in WORKSPACE once PRIMARY, a fresh clone, is on disk.
+A single PR gets its review worktree first, as a hand-started review
+does; a group runs from the workspace with no worktree."
+  (let ((number (plist-get spec :number)))
+    (if (and number (fboundp 'decknix--review-worktree-ensure-then))
+        (decknix--review-worktree-ensure-then
+         (plist-get spec :owner) (plist-get spec :repo) number
+         (lambda (worktree) (decknix-auto-review--launch spec workspace worktree))
+         primary)
+      (decknix-auto-review--launch spec workspace))))
+
 (defun decknix-auto-review--dispatch-unit (unit)
   "Launch one session for UNIT, an (ACTION REPO AUTHOR ITEMS) tuple.
 
@@ -432,7 +473,15 @@ sequence themselves, spot that two touch the same lockfile, or share one
 fix, because none of them knows the others exist.
 
 Marks every member dispatched BEFORE launching, so a second file-notify
-tick arriving during session startup cannot re-dispatch any of them."
+tick arriving during session startup cannot re-dispatch any of them.
+
+A repository with no local checkout is cloned first when its org maps
+to a workspace (`decknix-workspaces'), asynchronously, and the session
+starts from the clone's callback; a failed clone stays marked dispatched
+so the next tick does not retry it in a loop, and shows on the board
+row.  With no mapping either, nothing launches and the unmapped state is
+recorded for the row.  Returns ACTION when a launch (or clone) started,
+nil otherwise."
   (let* ((action (nth 0 unit))
          (repo (nth 1 unit))
          (items (nth 3 unit))
@@ -441,51 +490,72 @@ tick arriving during session startup cannot re-dispatch any of them."
          (owner (car (split-string (or (alist-get 'repo first) "") "/")))
          (urls (delq nil (mapcar (lambda (i) (alist-get 'url i)) items)))
          (numbers (mapcar (lambda (i) (alist-get 'number i)) items))
-         (workspace (decknix--agent-pr-detect-workspace owner repo))
+         (resolution (decknix-auto-review--resolve owner repo))
+         (workspace (plist-get resolution :workspace))
          (purpose (if (eq action 'ship) 'bot-pr-review 'pr-review))
          (cfg (decknix-agent-purpose-resolve purpose))
-         (model (plist-get cfg :model))
-         (provider (plist-get cfg :provider))
-         (mode (plist-get cfg :mode))
          (command-base (if grouped
                            decknix-auto-review-group-ship-command
                          (decknix-auto-review-resolve-command action workspace)))
-         (command (format "%s %s" command-base (string-join urls " ")))
-         (name (if grouped
-                   (format "pr-%s-group" repo)
-                 (format "pr-%s-%s" repo (car numbers))))
-         (tags (if grouped
-                   (list "review" repo "auto" "group")
-                 (list "review" repo (format "#%s" (car numbers)) "auto")))
-         ;; Recorded explicitly: a group's NAME encodes no PR number, so
-         ;; there is nothing for the identity layer to derive from it.
-         ;; Guarded: a missing identity layer must degrade to "no
-         ;; recorded coordinates" -- the tags/name fallbacks still
-         ;; identify the session -- rather than aborting the dispatch and
-         ;; silently leaving the PR unreviewed.
-         (review-prs (when (fboundp 'decknix--hub-review-pr-key)
-                       (delq nil
-                             (mapcar (lambda (i)
-                                       (decknix--hub-review-pr-key
-                                        (alist-get 'repo i) (alist-get 'number i)))
-                                     items)))))
-    (when (and urls workspace)
-      (dolist (i items)
-        (decknix-auto-review-mark-dispatched
-         (decknix-auto-review-dispatch-key
-          (or (alist-get 'repo i) "") (alist-get 'number i))))
-      (decknix-agent-spawn-enqueue
-       (lambda ()
-         (decknix--agent-quickaction-start
-          name tags workspace command model provider mode t review-prs)
-         (message "[auto-review] %s %s/%s %s via %s"
-                  action owner repo
-                  (if grouped
-                      (format "(%d PRs: %s)" (length numbers)
-                              (mapconcat #'number-to-string numbers ", "))
-                    (format "#%s" (car numbers)))
-                  command-base)))
-      action)))
+         (spec
+          (list
+           :owner owner :repo repo
+           :number (unless grouped (car numbers))
+           :name (if grouped
+                     (format "pr-%s-group" repo)
+                   (format "pr-%s-%s" repo (car numbers)))
+           :tags (if grouped
+                     (list "review" repo "auto" "group")
+                   (list "review" repo (format "#%s" (car numbers)) "auto"))
+           :command (format "%s %s" command-base (string-join urls " "))
+           :model (plist-get cfg :model)
+           :provider (plist-get cfg :provider)
+           :mode (plist-get cfg :mode)
+           ;; Recorded explicitly: a group's NAME encodes no PR number, so
+           ;; there is nothing for the identity layer to derive from it.
+           ;; Guarded: a missing identity layer must degrade to "no
+           ;; recorded coordinates" -- the tags/name fallbacks still
+           ;; identify the session -- rather than aborting the dispatch and
+           ;; silently leaving the PR unreviewed.
+           :review-prs (when (fboundp 'decknix--hub-review-pr-key)
+                         (delq nil
+                               (mapcar (lambda (i)
+                                         (decknix--hub-review-pr-key
+                                          (alist-get 'repo i) (alist-get 'number i)))
+                                       items)))
+           :label (format "%s %s/%s %s via %s"
+                          action owner repo
+                          (if grouped
+                              (format "(%d PRs: %s)" (length numbers)
+                                      (mapconcat (lambda (n) (format "%s" n))
+                                                 numbers ", "))
+                            (format "#%s" (car numbers)))
+                          command-base))))
+    (when urls
+      (pcase (plist-get resolution :kind)
+        ('unmapped
+         (when (decknix-review-clone-mark-unmapped owner repo)
+           (message "[auto-review] %s/%s: %s" owner repo
+                    (decknix-workspace-unmapped-message owner)))
+         nil)
+        (kind
+         (dolist (i items)
+           (decknix-auto-review-mark-dispatched
+            (decknix-auto-review-dispatch-key
+             (or (alist-get 'repo i) "") (alist-get 'number i))))
+         (if (eq kind 'checkout)
+             (decknix-auto-review--launch spec workspace)
+           (message "[auto-review] cloning %s/%s into %s before reviewing"
+                    owner repo (plist-get resolution :target))
+           (decknix-review-clone-ensure
+            owner repo (plist-get resolution :target)
+            (lambda (ok value)
+              (if ok
+                  (decknix-auto-review--launch-after-clone spec workspace value)
+                (message "[auto-review] %s/%s not reviewed: clone failed: %s"
+                         owner repo value)))
+            (decknix-workspace-clone-args owner)))
+         action)))))
 
 (defun decknix-auto-review--maybe-dispatch (&rest _)
   "Scan hub reviews and auto-dispatch eligible sessions.

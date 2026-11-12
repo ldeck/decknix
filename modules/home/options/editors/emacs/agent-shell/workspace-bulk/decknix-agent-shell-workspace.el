@@ -188,6 +188,11 @@
                   "decknix-agent-review-worktree" (path))
 (declare-function decknix--review-worktree-checkout-args
                   "decknix-agent-review-worktree" ())
+(declare-function decknix-review-clone-resolve "decknix-review-clone" (owner repo))
+(declare-function decknix-review-clone-ensure "decknix-review-clone"
+                  (owner repo target callback &optional args))
+(declare-function decknix-workspace-clone-args "decknix-workspace-orgs"
+                  (owner &optional workspaces))
 (declare-function decknix--review-launch-dirs
                   "decknix-agent-review-worktree" (workspace worktree))
 ;; Sidebar-toggles symbols (in decknix-sidebar-toggles).
@@ -2859,8 +2864,13 @@ window via the re-review path's `pop-to-buffer'."
      (t
       (decknix--nav-hub-start-review-fresh url background parsed)))))
 
-(defun decknix--review-worktree-ensure-then (owner repo number on-ready)
+(defun decknix--review-worktree-ensure-then (owner repo number on-ready
+                                                    &optional primary)
   "Resolve a review worktree for OWNER/REPO PR NUMBER, then call ON-READY.
+
+PRIMARY, when given, is the checkout to hang the worktree off.  A clone
+made moments ago passes it, because the hub's clone discovery only sees a
+new clone on its next asynchronous scan.
 
 ON-READY receives the worktree path, or nil to mean \"carry on without
 one\".  Nil is passed whenever a worktree cannot be produced -- no local
@@ -2873,8 +2883,9 @@ Fully asynchronous: `git fetch' hits the network, and per the Emacs
 AGENTS.md performance rule no interactive path may block on that.  The
 session is started from the callback once the tree is on disk."
   (let* ((slug (format "%s/%s" owner repo))
-         (primary (and (fboundp 'decknix-hub-worktree-primary)
-                       (ignore-errors (decknix-hub-worktree-primary slug))))
+         (primary (or primary
+                      (and (fboundp 'decknix-hub-worktree-primary)
+                           (ignore-errors (decknix-hub-worktree-primary slug)))))
          (plan (decknix--review-worktree-plan primary number)))
     (pcase (car plan)
       ('no-clone
@@ -2961,7 +2972,13 @@ gone says what changed since the review this way."
              (tags (list "review" repo (format "#%s" number)))
              (detected (when (fboundp 'decknix--agent-pr-detect-workspace)
                          (decknix--agent-pr-detect-workspace owner repo)))
+             ;; No checkout found: a repository whose org maps to a
+             ;; workspace is cloned there first rather than asking.
+             (resolution (and (not detected)
+                              (fboundp 'decknix-review-clone-resolve)
+                              (decknix-review-clone-resolve owner repo)))
              (workspace (or detected
+                            (plist-get resolution :workspace)
                             (read-directory-name
                              (format "Workspace for %s/%s: " owner repo)
                              nil nil t)))
@@ -2983,19 +3000,35 @@ gone says what changed since the review this way."
         ;; session still STARTS in the workspace root, with the worktree
         ;; as an additional root (`decknix--review-launch-dirs'): started
         ;; in the worktree it could not see the workspace's own commands.
-        (decknix--review-worktree-ensure-then
-         owner repo number
-         (lambda (worktree)
-           (let ((dirs (decknix--review-launch-dirs workspace worktree)))
-             (decknix--agent-quickaction-start
-              name tags (car dirs) command model provider mode background
-              nil (cdr dirs)))
-           (message "Starting review%s: %s/%s#%s%s"
-                    (if background " [background]" "") owner repo number
-                    (if worktree
-                        (format " [worktree %s]" (file-name-nondirectory
-                                                  (directory-file-name worktree)))
-                      ""))))))))
+        (let ((start
+               (lambda (&optional primary)
+                 (decknix--review-worktree-ensure-then
+                  owner repo number
+                  (lambda (worktree)
+                    (let ((dirs (decknix--review-launch-dirs workspace worktree)))
+                      (decknix--agent-quickaction-start
+                       name tags (car dirs) command model provider mode background
+                       nil (cdr dirs)))
+                    (message "Starting review%s: %s/%s#%s%s"
+                             (if background " [background]" "") owner repo number
+                             (if worktree
+                                 (format " [worktree %s]"
+                                         (file-name-nondirectory
+                                          (directory-file-name worktree)))
+                               "")))
+                  (or primary (plist-get resolution :primary))))))
+          (if (not (eq (plist-get resolution :kind) 'clone))
+              (funcall start)
+            (message "Cloning %s/%s into %s before reviewing…"
+                     owner repo (plist-get resolution :target))
+            (decknix-review-clone-ensure
+             owner repo (plist-get resolution :target)
+             (lambda (ok value)
+               (if ok
+                   (funcall start value)
+                 (message "Review of %s/%s#%s not started: clone failed: %s"
+                          owner repo number value)))
+             (decknix-workspace-clone-args owner))))))))
 
 ;; PR B.51: `decknix--hub-review-ready-requests' and
 ;; `decknix--hub-review-entries' carved into

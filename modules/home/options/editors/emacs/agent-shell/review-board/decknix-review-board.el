@@ -114,6 +114,17 @@
 (declare-function decknix--review-worktree-refresh-then
                   "decknix-agent-shell-workspace" (owner repo number head on-ready))
 (declare-function decknix-attention-set-flags "decknix-attention" (flags))
+(declare-function decknix-review-clone-state "decknix-review-clone" (owner repo))
+(declare-function decknix-review-clone-clear "decknix-review-clone" (owner repo))
+(declare-function decknix-review-clone-resolve-cached "decknix-review-clone" (owner repo))
+(declare-function decknix-review-clone-row-note "decknix-review-clone"
+                  (state &optional resolution))
+(declare-function decknix-review-clone-ensure "decknix-review-clone"
+                  (owner repo target callback &optional args))
+(declare-function decknix-workspace-for-org "decknix-workspace-orgs"
+                  (owner &optional workspaces))
+(declare-function decknix-workspace-clone-args "decknix-workspace-orgs"
+                  (owner &optional workspaces))
 (defvar decknix--sidebar-previous-sessions)
 (defvar decknix--agent-broker-key)
 (defvar decknix--hub-reviews)
@@ -421,6 +432,28 @@ pick up."
              (title (and item (alist-get 'title item))))
         (format "%-22s %s" (or key "?") (or title ""))))))
 
+(defun decknix-review-board--row-owner-repo (row)
+  "Return (OWNER . REPO) for ROW's first PR, from its feed item, or nil."
+  (let* ((item (or (plist-get row :item)
+                   (car (plist-get row :items))
+                   (decknix-review-board--item-for-key (car (plist-get row :prs)))))
+         (parts (split-string (or (and item (alist-get 'repo item)) "") "/")))
+    (when (= 2 (length parts))
+      (cons (nth 0 parts) (nth 1 parts)))))
+
+(defun decknix-review-board--clone-note (row)
+  "Return why ROW has no session when it is about its checkout, or nil.
+Cloning, a failed clone, an org with no workspace, or a repository not
+cloned yet: each used to read as a bare \"no session\", the same as a PR
+nobody had looked at.  Reads only in-memory state and a memoised
+resolution, so a repaint starts no process."
+  (when-let* (((fboundp 'decknix-review-clone-row-note))
+              (coords (decknix-review-board--row-owner-repo row)))
+    (decknix-review-clone-row-note
+     (decknix-review-clone-state (car coords) (cdr coords))
+     (ignore-errors
+       (decknix-review-clone-resolve-cached (car coords) (cdr coords))))))
+
 (defun decknix-review-board--insert-row (row)
   "Insert one propertised ROW."
   (let* ((status (decknix--hub-review-status-aggregate (plist-get row :statuses)))
@@ -467,7 +500,11 @@ pick up."
                           (concat phase-text
                                   (propertize "  · no session" 'face 'font-lock-comment-face)))
                          ((not has-session)
-                          (propertize "no session" 'face 'font-lock-comment-face))
+                          (let ((note (decknix-review-board--clone-note row)))
+                            (propertize (or note "no session")
+                                        'face (if (and note (string-prefix-p "clone failed" note))
+                                                  'error
+                                                'font-lock-comment-face))))
                          ((and (eq (plist-get row :lane) 'doing)
                                (not (string-empty-p (or activity ""))))
                           (concat activity "  " phase-text))
@@ -527,7 +564,7 @@ pick up."
                      "  y / 1-9 answer the session at point (asks first)\n"
                      "  d dispatch  k quit   D detach  s merge  A auto-review  x auto-dismiss  f filters  g refresh  ? help\n"
                      "  R re-review an updated PR (C-u R: acknowledge)   X cycle re-review: off / notify / auto\n"
-                     "  r review a PR url not listed here\n")
+                     "  r review a PR url not listed here   C clone a repo with no workspace, then dispatch\n")
              'face 'font-lock-comment-face)
             "\n"
             (propertize "  m  ⚑ pri  row                                                  phase\n"
@@ -811,7 +848,8 @@ second way to get it wrong."
   (let* ((part (decknix-review-board-partition-targets
                 'dispatch (decknix-review-board--targets)))
          (rows (car part))
-         (done 0))
+         (done 0)
+         (unplaced nil))
     (unless rows (user-error "Nothing to dispatch"))
     (dolist (row rows)
       (let* ((items (or (plist-get row :items)
@@ -819,14 +857,65 @@ second way to get it wrong."
              (first (car items))
              (repo (car (last (split-string (or (alist-get 'repo first) "") "/"))))
              (author (or (alist-get 'author first) ""))
-             (action (if (decknix-review-board--item-bot-p first) 'ship 'review)))
+             (action (if (decknix-review-board--item-bot-p first) 'ship 'review))
+             (coords (decknix-review-board--row-owner-repo row)))
+        ;; Pressing `d' on a row whose clone failed is the retry.
+        (when (and coords (fboundp 'decknix-review-clone-clear))
+          (decknix-review-clone-clear (car coords) (cdr coords)))
         (when (and items (fboundp 'decknix-auto-review--dispatch-unit))
-          (ignore-errors
-            (decknix-auto-review--dispatch-unit (list action repo author items))
-            (setq done (1+ done))))))
+          (if (ignore-errors
+                (decknix-auto-review--dispatch-unit (list action repo author items)))
+              (setq done (1+ done))
+            (push (or (car coords) repo) unplaced)))))
     (decknix-review-board-unmark-all)
     (decknix-review-board-refresh)
-    (decknix-review-board--report "Dispatched" done (length (cdr part)))))
+    (if unplaced
+        (message "Dispatched %d; not placed: no workspace for %s (add to decknix.workspaces, or C to clone elsewhere)"
+                 done (string-join (delete-dups (nreverse unplaced)) ", "))
+      (decknix-review-board--report "Dispatched" done (length (cdr part))))))
+
+(defun decknix-review-board-clone-elsewhere (parent)
+  "Clone the row at point's repository under PARENT, then dispatch its review.
+
+For a PR whose org maps to no workspace: `d' cannot place it, and
+guessing a directory would scatter clones.  Asks for the parent
+directory (the org's workspace when there is one), clones into
+PARENT/REPO in the background, and dispatches the row once the clone is
+on disk.  Add the org to `decknix.workspaces' to make this automatic."
+  (interactive
+   (let* ((row (decknix-review-board--row-at-point))
+          (coords (and row (decknix-review-board--row-owner-repo row))))
+     (unless coords (user-error "No PR repository on this row"))
+     (list (read-directory-name
+            (format "Clone %s/%s under: " (car coords) (cdr coords))
+            (or (and (fboundp 'decknix-workspace-for-org)
+                     (decknix-workspace-for-org (car coords)))
+                "~/Code/")))))
+  (let* ((row (decknix-review-board--row-at-point))
+         (coords (decknix-review-board--row-owner-repo row))
+         (owner (car coords))
+         (repo (cdr coords))
+         (target (expand-file-name repo (expand-file-name parent))))
+    (unless (fboundp 'decknix-review-clone-ensure)
+      (user-error "On-demand cloning is not loaded"))
+    (decknix-review-clone-clear owner repo)
+    (message "Cloning %s/%s into %s..." owner repo target)
+    (decknix-review-clone-ensure
+     owner repo target
+     (lambda (ok value)
+       (if (not ok)
+           (message "Clone of %s/%s failed: %s" owner repo value)
+         (message "Cloned %s/%s; dispatching its review" owner repo)
+         (let* ((items (or (plist-get row :items)
+                           (when-let* ((i (plist-get row :item))) (list i))))
+                (first (car items)))
+           (when (and items (fboundp 'decknix-auto-review--dispatch-unit))
+             (decknix-auto-review--dispatch-unit
+              (list (if (decknix-review-board--item-bot-p first) 'ship 'review)
+                    repo (or (alist-get 'author first) "") items))))))
+     (and (fboundp 'decknix-workspace-clone-args)
+          (decknix-workspace-clone-args owner)))
+    (decknix-review-board-refresh)))
 
 (defun decknix-review-board--session-buffers (rows)
   "Return the live session buffers for ROWS."
@@ -1004,7 +1093,13 @@ ANSWER  (the row at point only; always asks first)
 
 ACT
   d               dispatch review sessions (a Grouped row launches ONE
-                  session for the whole service, which is the point)
+                  session for the whole service, which is the point).
+                  A repository with no checkout is cloned first into its
+                  org\'s workspace (decknix.workspaces); the row reads
+                  `cloning...\' meanwhile, or the clone error.  `d\' again
+                  retries a failed clone
+  C               clone the row\'s repository into a directory you pick,
+                  then dispatch: for an org with no workspace
   k               quit sessions and TERMINATE their brokers (confirms)
   D               detach: close the buffer, agent keeps working
   s               merge via /merge-train     C-u s  dry run
@@ -1407,6 +1502,7 @@ the board closed."
     (define-key map (kbd "U") #'decknix-review-board-unmark-all)
     (define-key map (kbd "M") #'decknix-review-board-mark-lane)
     (define-key map (kbd "d") #'decknix-review-board-dispatch)
+    (define-key map (kbd "C") #'decknix-review-board-clone-elsewhere)
     (define-key map (kbd "k") #'decknix-review-board-quit-sessions)
     (define-key map (kbd "D") #'decknix-review-board-detach-sessions)
     (define-key map (kbd "s") #'decknix-review-board-merge)
