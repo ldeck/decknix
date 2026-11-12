@@ -34,12 +34,15 @@
 (require 'seq)
 (require 'subr-x)
 
-(defconst decknix-attention-states '("netfail" "waiting" "asking")
+(defconst decknix-attention-states '("netfail" "waiting" "asking" "updated")
   "Session states meaning the session is blocked on the user, most urgent first.
 
 `netfail' first: the turn died and produced nothing, and every minute it
 sits there is lost work.  `waiting' next: a permission prompt halts the
-agent mid-task.  `asking' last: the turn finished, on a question.")
+agent mid-task.  `asking': the turn finished, on a question.  `updated'
+last: a settled session flagged from outside (see `decknix-attention-flag'),
+such as a review whose PR the author pushed to after the review.  Nobody
+is waiting mid-task, so it ranks below a question.")
 
 (defun decknix-attention-state-p (state)
   "Return non-nil when STATE means the session is blocked on the user."
@@ -114,21 +117,78 @@ session that has been waiting longest, not the one observed last."
   "Return BUFFER's last observed state, or nil."
   (car (gethash buffer decknix-attention--seen)))
 
+(defvar decknix-attention--flags (make-hash-table :test 'eq :weakness 'key)
+  "Buffer -> reason, for sessions something outside them says need you.
+
+A session's own state cannot say that the PR it reviewed has since been
+updated: the agent finished, and nothing happened in its buffer.  The
+review board knows, and flags it here, so the sidebar's Needs you, the
+attention jump and the mode-line count all show it the same way.  Weak on
+the key so a killed buffer drops out.")
+
 (defun decknix-attention-count ()
   "Return (NEED . ACTIVE) from the observed states.
 
-NEED counts live buffers in an attention state.  ACTIVE adds those
-`working'.  Reads only the observation table, so it is safe to call from
-a mode line."
+NEED counts live buffers in an attention state, and flagged buffers that
+have settled (see `decknix-attention-flag').  ACTIVE adds those
+`working'.  Reads only the observation and flag tables, so it is safe to
+call from a mode line."
   (let ((need 0) (active 0))
     (maphash (lambda (buf cell)
                (when (buffer-live-p buf)
                  (cond ((decknix-attention-state-p (car cell))
                         (setq need (1+ need) active (1+ active)))
                        ((equal (car cell) "working")
-                        (setq active (1+ active))))))
+                        (setq active (1+ active)))
+                       ((gethash buf decknix-attention--flags)
+                        (setq need (1+ need) active (1+ active))))))
              decknix-attention--seen)
     (cons need active)))
+
+;; --- flags: attention decided outside the session ----------------------
+
+(defconst decknix-attention-flag-state "updated"
+  "The state a flagged, settled session is shown in.")
+
+(defconst decknix-attention-settled-states '("ready" "finished" "idle" "watching")
+  "States a flag may override: the session has stopped and asks nothing.
+A flag never hides a session that is working or asking a question.")
+
+(defun decknix-attention-flag (buffer reason)
+  "Flag BUFFER as needing you, for REASON (a short string)."
+  (when (buffer-live-p buffer)
+    (puthash buffer reason decknix-attention--flags)))
+
+(defun decknix-attention-unflag (buffer)
+  "Clear BUFFER's flag."
+  (remhash buffer decknix-attention--flags))
+
+(defun decknix-attention-set-flags (flags)
+  "Replace every flag with FLAGS, a list of (BUFFER . REASON).
+The flagger recomputes its whole set each time, so a flag whose cause
+went away is cleared rather than left behind."
+  (clrhash decknix-attention--flags)
+  (dolist (cell flags)
+    (decknix-attention-flag (car cell) (cdr cell))))
+
+(defun decknix-attention-flag-reason (buffer)
+  "Return why BUFFER is flagged, or nil."
+  (and buffer (gethash buffer decknix-attention--flags)))
+
+(defun decknix-attention-refine (sessions)
+  "Return SESSIONS with each flagged, settled session's state set to `updated'.
+SESSIONS are snapshot tuples (BUFFER-NAME TAGS PRS STATE ...)."
+  (if (zerop (hash-table-count decknix-attention--flags))
+      sessions
+    (mapcar (lambda (s)
+              (let ((buf (get-buffer (or (nth 0 s) ""))))
+                (if (and buf (gethash buf decknix-attention--flags)
+                         (member (nth 3 s) decknix-attention-settled-states))
+                    (append (list (nth 0 s) (nth 1 s) (nth 2 s)
+                                  decknix-attention-flag-state)
+                            (nthcdr 4 s))
+                  s)))
+            sessions)))
 
 ;; --- ordering ------------------------------------------------------------
 
@@ -197,8 +257,10 @@ answering the first session takes a turn, during which it is often still
                     (and (consp e) (numberp (cdr e)) (cdr e))))))))
 
 (defun decknix-attention-ordered-sessions (sessions)
-  "Return the attention SESSIONS in jump order, using the observed times."
-  (decknix-attention-order sessions #'decknix-attention--session-since))
+  "Return the attention SESSIONS in jump order, using the observed times.
+Flagged sessions (see `decknix-attention-flag') are included."
+  (decknix-attention-order (decknix-attention-refine sessions)
+                           #'decknix-attention--session-since))
 
 (defcustom decknix-attention-respect-focus nil
   "When non-nil, the attention jump visits only sessions in the focus.

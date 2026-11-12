@@ -139,5 +139,45 @@ came to disagree on screen."
     (decknix-attention-observe (get-buffer "a") "ready")
     (should-not (decknix-attention-render-lighter 3 3))))
 
+;; --- flags: needs you, decided outside the session -----------------------
+
+(defmacro decknix-attention-test--with-flags (names &rest body)
+  (declare (indent 1))
+  `(let ((decknix-attention--flags (make-hash-table :test 'eq :weakness 'key)))
+     (decknix-attention-test--with-buffers ,names ,@body)))
+
+(ert-deftest decknix-attention--a-flagged-settled-session-reads-updated ()
+  (decknix-attention-test--with-flags '("rv" "busy")
+    (decknix-attention-set-flags (list (cons (get-buffer "rv") "updated: 2 commits")
+                                       (cons (get-buffer "busy") "updated")))
+    (let ((refined (decknix-attention-refine
+                    '(("rv" nil nil "finished" extra) ("busy" nil nil "working")))))
+      (should (equal '("rv" nil nil "updated" extra) (nth 0 refined)))
+      ;; A flag never hides a session that is working.
+      (should (equal "working" (nth 3 (nth 1 refined)))))
+    (should (equal "updated: 2 commits" (decknix-attention-flag-reason (get-buffer "rv"))))))
+
+(ert-deftest decknix-attention--updated-ranks-after-a-question ()
+  (decknix-attention-test--with-flags '("rv" "q")
+    (decknix-attention-flag (get-buffer "rv") "updated")
+    (should (equal '("q" "rv")
+                   (mapcar #'car (decknix-attention-ordered-sessions
+                                  '(("rv" nil nil "ready") ("q" nil nil "asking"))))))))
+
+(ert-deftest decknix-attention--set-flags-replaces-the-whole-set ()
+  (decknix-attention-test--with-flags '("a" "b")
+    (decknix-attention-set-flags (list (cons (get-buffer "a") "x")))
+    (decknix-attention-set-flags (list (cons (get-buffer "b") "y")))
+    (should-not (decknix-attention-flag-reason (get-buffer "a")))
+    (should (decknix-attention-flag-reason (get-buffer "b")))))
+
+(ert-deftest decknix-attention--a-flagged-settled-session-is-counted ()
+  (decknix-attention-test--with-flags '("rv" "w")
+    (decknix-attention-observe (get-buffer "rv") "finished")
+    (decknix-attention-observe (get-buffer "w") "working")
+    (should (equal '(0 . 1) (decknix-attention-count)))
+    (decknix-attention-flag (get-buffer "rv") "updated")
+    (should (equal '(1 . 2) (decknix-attention-count)))))
+
 (provide 'decknix-attention-test)
 ;;; decknix-attention-test.el ends here

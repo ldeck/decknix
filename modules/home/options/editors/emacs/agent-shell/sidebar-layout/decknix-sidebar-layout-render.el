@@ -608,7 +608,9 @@ Read from what is already cached in memory -- the permission prompt
 upstream recorded, or the closing text the turn-signals capture keeps --
 so it costs no buffer scan and no I/O on the paint path."
   (when (buffer-live-p buf)
-    (or (and (equal state "waiting") (decknix--layout-permission-label buf))
+    (or (and (equal state "updated") (fboundp 'decknix-attention-flag-reason)
+             (decknix-attention-flag-reason buf))
+        (and (equal state "waiting") (decknix--layout-permission-label buf))
         (and (fboundp 'decknix-agent-turn-closing-text)
              (fboundp 'decknix-agent-turn-question-excerpt)
              (decknix-agent-turn-question-excerpt

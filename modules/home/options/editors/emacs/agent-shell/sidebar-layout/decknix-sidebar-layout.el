@@ -1025,6 +1025,7 @@ reader has a decision to make and something to lose by not making it."
     ("netfail"  . decknix-attention-face)
     ("waiting"  . decknix-attention-face)
     ("asking"   . decknix-attention-face)
+    ("updated"  . decknix-attention-face)
     ;; Yellow for in-progress, matching a building PR.
     ("working"  . (:foreground "#d7af5f"))
     ;; Green for complete, matching a passing build.
@@ -1410,7 +1411,7 @@ without paying for it twice."
 
 (defconst decknix-sidebar-layout-state-glyphs
   `(("asking"   . ,decknix-attention-glyph) ("waiting" . ,decknix-attention-glyph)
-    ("netfail"  . ,decknix-attention-glyph)
+    ("netfail"  . ,decknix-attention-glyph) ("updated" . ,decknix-attention-glyph)
     ("working"  . "◐")
     ("finished" . "●") ("ready"   . "●")
     ("closing"  . "◌"))
