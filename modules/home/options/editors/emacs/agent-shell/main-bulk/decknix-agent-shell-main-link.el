@@ -99,10 +99,12 @@
 (declare-function decknix--agent-current-conv-key
                   "decknix-agent-buffer-lookup")
 
-;; Launch model, recorded against the freshly-created conv-key so resume
-;; continues on it.
+;; Launch model and extra working directories, recorded against the
+;; freshly-created conv-key so resume restores both.
 (declare-function decknix--agent-session-save-model-for-conv-key
                   "decknix-agent-session-model" (conv-key model-id &optional launcher))
+(declare-function decknix--agent-session-save-additional-roots-for-conv-key
+                  "decknix-agent-session-workspace" (conv-key roots))
 (declare-function decknix--agent-conversation-key
                   "decknix-agent-conv-resolve" (first-message))
 
@@ -193,7 +195,8 @@ provider selection are handled by `decknix-agent-purpose-alist'
 
 (defun decknix--agent-quickaction-start (name tags workspace command
                                               &optional model provider-id mode
-                                              background review-prs)
+                                              background review-prs
+                                              additional-roots)
   "Start a quick-action session with NAME, TAGS, WORKSPACE, and auto-send COMMAND.
 Creates a new agent session, applies metadata, then subscribes to the
 `prompt-ready' event to send COMMAND as soon as the ACP session is
@@ -219,6 +222,10 @@ Optional REVIEW-PRS is a list of `repo#number' keys this session
 reviews.  Supplied by grouped dispatch, whose session covers several PRs
 and whose NAME therefore encodes none of them; omitted, the single key is
 derived from NAME as before.
+
+Optional ADDITIONAL-ROOTS are directories the session works in beside
+WORKSPACE (a review's PR worktree), recorded so resume passes them again.
+See `decknix--agent-make-config'.
 
 Optional BACKGROUND spawns the session WITHOUT displaying it: no
 window is taken, no placement prompt is opened, and the buffer the
@@ -267,7 +274,8 @@ raises the usual attention indicator when it wants input."
          (augmented-cmd (decknix--agent-broker-wrap-command
                          (decknix--agent-command-build provider workspace model)
                          broker-key))
-         (config (decknix--agent-make-config provider augmented-cmd mode model)))
+         (config (decknix--agent-make-config
+                  provider augmented-cmd mode model additional-roots)))
     ;; Placement prompt: when the caller is not the sidebar AND the
     ;; current frame has 3+ non-sidebar windows, ask which pane the
     ;; new session should land in (or split off).  The carved
@@ -328,8 +336,8 @@ raises the usual attention indicator when it wants input."
     (setq decknix--agent-session-cache-time 0)
     (decknix--agent-session-new-post-create
      before-buffers name tags workspace command provider broker-key)
-    ;; Record MODEL so resume continues on it.  It is stored as the
-    ;; launcher's, not the user's: when the review
+    ;; Record MODEL and ADDITIONAL-ROOTS so resume restores both.  MODEL
+    ;; is stored as the launcher's, not the user's: when the review
     ;; purpose moves on, `decknix-agent-review-superseded-models' lets
     ;; these conversations move with it while an explicit `C-c C-v'
     ;; choice stays.  The conv-key is derived from COMMAND (the first
@@ -337,7 +345,10 @@ raises the usual attention indicator when it wants input."
     (when-let* ((conv-key (and (stringp command) (not (string-empty-p command))
                                (decknix--agent-conversation-key command))))
       (when (and (stringp model) (not (string-empty-p model)))
-        (decknix--agent-session-save-model-for-conv-key conv-key model 'launcher)))
+        (decknix--agent-session-save-model-for-conv-key conv-key model 'launcher))
+      (when additional-roots
+        (decknix--agent-session-save-additional-roots-for-conv-key
+         conv-key additional-roots)))
     ;; Record which PR a review session is on, so "does this PR already
     ;; have a reviewer?" is answered from a fact rather than from the
     ;; buffer name.  Captured HERE because NAME is still the launcher's

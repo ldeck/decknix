@@ -120,7 +120,8 @@
 (declare-function decknix-agent-unlink-pr "ext:decknix-agent-shell-main")
 (declare-function decknix-agent-review "ext:decknix-agent-shell-main")
 (declare-function decknix--agent-quickaction-start "ext:decknix-agent-shell-main"
-                  (name tags workspace command &optional model provider-id))
+                  (name tags workspace command &optional model provider-id mode
+                        background review-prs additional-roots))
 (declare-function decknix--agent-review-get-params
                   "decknix-agent-shell-main-link" (url))
 (declare-function decknix--agent-conversation-set-hidden "ext:decknix-agent-shell-main")
@@ -185,6 +186,8 @@
                   "decknix-agent-review-worktree" (number))
 (declare-function decknix--review-worktree-add-args
                   "decknix-agent-review-worktree" (path))
+(declare-function decknix--review-launch-dirs
+                  "decknix-agent-review-worktree" (workspace worktree))
 ;; Sidebar-toggles symbols (in decknix-sidebar-toggles).
 (declare-function decknix-sidebar-toggle-keys "decknix-sidebar-toggles")
 (declare-function decknix-sidebar-toggle-saved-sessions "decknix-sidebar-toggles")
@@ -2934,16 +2937,19 @@ BACKGROUND is as documented on the caller."
         (unless background
           (when (and main (window-live-p main))
             (select-window main)))
-        ;; #165: run the review in a worktree checked out at the PR head
-        ;; rather than at the workspace root, so there is a real tree to
-        ;; diff against.  Asynchronous (it fetches), and it yields nil
-        ;; rather than failing when no worktree can be made -- in which
-        ;; case we launch exactly as before.
+        ;; #165: check the PR head out in a worktree, so there is a real
+        ;; tree to diff against.  Asynchronous (it fetches), and it yields
+        ;; nil rather than failing when no worktree can be made.  The
+        ;; session still STARTS in the workspace root, with the worktree
+        ;; as an additional root (`decknix--review-launch-dirs'): started
+        ;; in the worktree it could not see the workspace's own commands.
         (decknix--review-worktree-ensure-then
          owner repo number
          (lambda (worktree)
-           (decknix--agent-quickaction-start
-            name tags (or worktree workspace) command model provider mode background)
+           (let ((dirs (decknix--review-launch-dirs workspace worktree)))
+             (decknix--agent-quickaction-start
+              name tags (car dirs) command model provider mode background
+              nil (cdr dirs)))
            (message "Starting review%s: %s/%s#%s%s"
                     (if background " [background]" "") owner repo number
                     (if worktree

@@ -49,7 +49,17 @@ Attributes include:
                              knows it is continuing an existing
                              conversation.  Auggie's native `--resume'
                              reloads the transcript itself, so it leaves
-                             this nil.")
+                             this nil.
+  :additional-roots-meta-key Symbol naming the session `_meta' key the
+                             provider's bridge reads extra working
+                             directories from (claude-agent-acp:
+                             `additionalRoots').  Absent means the
+                             provider cannot be given extra roots, so
+                             they are never sent.
+  :additional-roots-env      List of \"VAR=value\" strings added to the
+                             launch environment whenever extra roots are
+                             sent, e.g. to have the agent also read the
+                             instruction files found in them.")
 
 (defvar decknix-agent-default-provider 'claude-code
   "The default AI agent provider to use for new sessions.
@@ -203,6 +213,27 @@ and an ACP `set_model' on resume can otherwise stall the buffer read-only
 \(see #163)."
   (plist-get (decknix-agent-require-provider id) :model-launch-env))
 
+(defun decknix-agent-provider-additional-roots-meta-key (id)
+  "Return the session `_meta' key provider ID reads extra roots from, or nil."
+  (plist-get (decknix-agent-require-provider id) :additional-roots-meta-key))
+
+(defun decknix-agent-provider-additional-roots-env (id)
+  "Return the env strings provider ID needs when given extra roots."
+  (plist-get (decknix-agent-require-provider id) :additional-roots-env))
+
+(defun decknix--agent-additional-roots-meta (provider-id roots base-meta)
+  "Return BASE-META with ROOTS added for PROVIDER-ID.  Pure.
+ROOTS are extra working directories the session may read and edit beside
+its cwd.  BASE-META is returned unchanged when ROOTS is empty or the
+provider declares no `:additional-roots-meta-key'.  ROOTS go in as a
+vector: the ACP layer serialises with `json-serialize', which reads a
+list as an object."
+  (let ((key (decknix-agent-provider-additional-roots-meta-key provider-id)))
+    (if (and key roots)
+        (cons (cons key (vconcat roots))
+              (assq-delete-all key (copy-alist base-meta)))
+      base-meta)))
+
 (defun decknix-agent-provider-resume-needs-primer (id)
   "Return non-nil when provider ID needs a continuation primer on resume.
 True for providers whose resume does not restore prior conversation
@@ -307,7 +338,8 @@ via `session/resume' (`decknix-agent-resume-native.el')."
                         (list resume-flag session-id))))
     (append base-cmd ws-args model-args resume-args)))
 
-(defun decknix--agent-make-config (provider-id augmented-cmd &optional mode model)
+(defun decknix--agent-make-config (provider-id augmented-cmd &optional mode model
+                                              additional-roots)
   "Return an agent-shell config for PROVIDER-ID with AUGMENTED-CMD.
 The config includes a `:client-maker' closure that encapsulates the
 command, parameters, and environment variables.
@@ -333,7 +365,14 @@ default, is what keeps the two failure modes apart:
     `:session-modes' flag, so we never touch its mode.
 So a stray mode can never break a mode-less provider, and a Claude session
 always opens in the requested mode.  agent-shell applies the baked mode
-after the session reports ready."
+after the session reports ready.
+
+Optional ADDITIONAL-ROOTS are directories the session works in beside its
+cwd, sent through the provider's `:additional-roots-meta-key' (see
+`decknix--agent-additional-roots-meta') on every session request,
+together with its `:additional-roots-env'.  A review session uses this to
+start in the workspace root, where the workspace's own commands and
+skills are discovered, while still working on the PR worktree."
   (let* ((make-fn (decknix-agent-provider-make-config-fn provider-id))
          (base (funcall make-fn))
          ;; Launch-env model pin ("<VAR>=<model>"), or nil unless the provider
@@ -346,7 +385,18 @@ after the session reports ready."
           (let ((var (and (stringp effective-model)
                           (not (string-empty-p effective-model))
                           (decknix-agent-provider-model-launch-env provider-id))))
-            (and (stringp var) (format "%s=%s" var effective-model)))))
+            (and (stringp var) (format "%s=%s" var effective-model))))
+         (roots-meta-key
+          (and additional-roots
+               (decknix-agent-provider-additional-roots-meta-key provider-id)))
+         (extra-env
+          (append (and model-env (list model-env))
+                  (and roots-meta-key
+                       (decknix-agent-provider-additional-roots-env provider-id)))))
+    (when roots-meta-key
+      (setf (alist-get :session-meta base)
+            (decknix--agent-additional-roots-meta
+             provider-id additional-roots (alist-get :session-meta base))))
     (when (and (stringp mode)
                (not (string-empty-p mode))
                (decknix-agent-provider-session-modes-p provider-id))
@@ -364,7 +414,7 @@ after the session reports ready."
                       ;; This matches auggie's :login pattern and handles nil env safely.
                       ;; A launch-env model pin (e.g. ANTHROPIC_MODEL=<model>) is
                       ;; prepended so `getenv' finds it first.
-                      ,(if model-env `(cons ,model-env env) 'env))
+                      ,(if extra-env `(append ',extra-env env) 'env))
                     :context-buffer buffer)) t))
     base))
 

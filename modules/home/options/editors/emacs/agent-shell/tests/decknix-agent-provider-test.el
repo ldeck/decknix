@@ -272,6 +272,70 @@ a stray modeId."
              (mode-fn (alist-get :default-session-mode-id config)))
         (should (equal "default" (funcall mode-fn)))))))
 
+;; -- additional roots: a session working beside its cwd ------------------
+
+(defun test-claude-meta-make-config ()
+  "Fake Claude config carrying a constant `:session-meta', like the real one."
+  (list (cons :buffer-name "TestClaudeMeta")
+        (cons :session-meta '((claudeCode . ((options . ((x . 1)))))))))
+
+(ert-deftest decknix-agent-make-config-sends-additional-roots-in-meta ()
+  "Roots ride the provider's meta key as a vector, beside the existing meta."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-claude
+      '(:make-config-fn test-claude-meta-make-config
+        :additional-roots-meta-key additionalRoots))
+    (cl-letf (((symbol-function 'agent-shell--make-acp-client)
+               (lambda (&rest args) args)))
+      (let* ((config (decknix--agent-make-config
+                      'test-claude '("c") nil nil '("/ws/repo-worktrees/pr-1")))
+             (meta (alist-get :session-meta config)))
+        (should (equal ["/ws/repo-worktrees/pr-1"]
+                       (alist-get 'additionalRoots meta)))
+        (should (equal '((options . ((x . 1)))) (alist-get 'claudeCode meta)))
+        ;; The provider's own constant meta must not be mutated.
+        (should-not (alist-get 'additionalRoots
+                               (alist-get :session-meta
+                                          (test-claude-meta-make-config))))))))
+
+(ert-deftest decknix-agent-make-config-adds-roots-env-only-with-roots ()
+  "The provider's roots env is added when roots are sent, and only then."
+  (let ((decknix-agent-provider-registry nil)
+        (test-auggie-env '("BASE=1")))
+    (decknix-agent-register-provider 'test-claude
+      '(:make-config-fn test-claude-meta-make-config
+        :env-var test-auggie-env
+        :model-launch-env "ANTHROPIC_MODEL"
+        :additional-roots-meta-key additionalRoots
+        :additional-roots-env ("ROOTS_MD=1")))
+    (cl-letf (((symbol-function 'agent-shell--make-acp-client)
+               (lambda (&rest args) args)))
+      (let ((with (funcall (alist-get :client-maker
+                                      (decknix--agent-make-config
+                                       'test-claude '("c") nil "m-1" '("/r")))
+                           'buf))
+            (without (funcall (alist-get :client-maker
+                                         (decknix--agent-make-config
+                                          'test-claude '("c") nil "m-1"))
+                              'buf)))
+        (should (equal '("ANTHROPIC_MODEL=m-1" "ROOTS_MD=1" "BASE=1")
+                       (plist-get with :environment-variables)))
+        (should (equal '("ANTHROPIC_MODEL=m-1" "BASE=1")
+                       (plist-get without :environment-variables)))))))
+
+(ert-deftest decknix-agent-make-config-ignores-roots-without-meta-key ()
+  "A provider that cannot take extra roots gets neither meta nor env."
+  (let ((decknix-agent-provider-registry nil))
+    (decknix-agent-register-provider 'test-pi
+      '(:make-config-fn test-pi-make-config
+        :additional-roots-env ("ROOTS_MD=1")))
+    (cl-letf (((symbol-function 'agent-shell--make-acp-client)
+               (lambda (&rest args) args)))
+      (let ((config (decknix--agent-make-config 'test-pi '("c") nil nil '("/r"))))
+        (should-not (alist-get :session-meta config))
+        (should-not (plist-get (funcall (alist-get :client-maker config) 'buf)
+                               :environment-variables))))))
+
 ;; -- Provider identity + glyph for pickers/filters ----------------
 
 (ert-deftest decknix-agent-provider-glyph-safe-test ()

@@ -2206,15 +2206,33 @@ pub fn live_workspaces() -> std::collections::HashSet<PathBuf> {
     let Some(convs) = json.get("conversations").and_then(|c| c.as_object()) else { return out };
     let dir = broker_dir();
     for conv in convs.values() {
-        let (Some(ws), Some(key)) = (
-            conv.get("workspace").and_then(|v| v.as_str()),
-            conv.get("brokerKey").and_then(|v| v.as_str()),
-        ) else { continue };
+        let Some(key) = conv.get("brokerKey").and_then(|v| v.as_str()) else { continue };
         if broker_alive(&dir.join(format!("{key}.sock.pid"))) {
-            out.insert(PathBuf::from(ws.trim_end_matches('/')));
+            out.extend(conversation_dirs(conv));
         }
     }
     out
+}
+
+/// Every directory a conversation works in: its workspace, plus the
+/// additional roots it was started with.  A review session starts in the
+/// workspace root and works on its PR worktree as an additional root, so
+/// a prune that only checked `workspace` would remove the worktree from
+/// under a live review.
+fn conversation_dirs(conv: &serde_json::Value) -> Vec<PathBuf> {
+    let workspace = conv.get("workspace").and_then(|v| v.as_str());
+    let roots = conv
+        .get("additionalRoots")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str());
+    workspace
+        .into_iter()
+        .chain(roots)
+        .filter(|d| !d.is_empty())
+        .map(|d| PathBuf::from(d.trim_end_matches('/')))
+        .collect()
 }
 
 /// Is the broker recorded in PIDFILE still running?
@@ -2332,6 +2350,17 @@ mod tests {
         assert_eq!(conv_key(&s200), conv_key(&s250));
         let s199: String = std::iter::repeat('a').take(199).collect();
         assert_ne!(conv_key(&s199), conv_key(&s200));
+    }
+
+    #[test]
+    fn conversation_dirs_include_additional_roots() {
+        let conv = json!({"workspace": "/ws/", "additionalRoots": ["/ws/repo-worktrees/pr-7/"]});
+        assert_eq!(
+            conversation_dirs(&conv),
+            vec![PathBuf::from("/ws"), PathBuf::from("/ws/repo-worktrees/pr-7")]
+        );
+        assert_eq!(conversation_dirs(&json!({"workspace": "/ws"})), vec![PathBuf::from("/ws")]);
+        assert!(conversation_dirs(&json!({"tags": []})).is_empty());
     }
 
     #[test]

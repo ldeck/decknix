@@ -43,6 +43,7 @@
 
 (require 'decknix-agent-tags-store)
 (require 'decknix-agent-conv-resolve)
+(require 'seq)
 
 (defun decknix--agent-workspace-for-conv-key (conv-key)
   "Return the workspace directory for conversation CONV-KEY, or nil."
@@ -87,6 +88,40 @@ conversation that had no workspace stored."
       (puthash "workspace" workspace entry)
       (puthash conv-key entry convs)
       (decknix--agent-tags-write store))))
+
+(defun decknix--agent-additional-roots-for-conv-key (conv-key)
+  "Return the extra working directories recorded for CONV-KEY, or nil.
+A review session starts in the workspace root and works on its PR
+worktree as an additional root; resume must pass the same roots back or
+the resumed session loses the worktree."
+  (when conv-key
+    (let* ((store (decknix--agent-tags-read))
+           (convs (decknix--agent-tags-conversations store))
+           (entry (gethash conv-key convs)))
+      (when (hash-table-p entry)
+        (let ((roots (gethash "additionalRoots" entry)))
+          (seq-filter #'stringp (if (vectorp roots) (append roots nil) roots)))))))
+
+(defun decknix--agent-session-save-additional-roots-for-conv-key (conv-key roots)
+  "Persist ROOTS as CONV-KEY's extra working directories."
+  (when (and conv-key roots)
+    (let* ((store (decknix--agent-tags-read))
+           (convs (decknix--agent-tags-conversations store))
+           (entry (or (gethash conv-key convs)
+                      (let ((h (make-hash-table :test 'equal)))
+                        (puthash "tags" nil h)
+                        (puthash "sessions" nil h)
+                        h))))
+      (puthash "additionalRoots" roots entry)
+      (puthash conv-key entry convs)
+      (decknix--agent-tags-write store))))
+
+(defun decknix--agent-existing-additional-roots (roots &optional exists-fn)
+  "Return the members of ROOTS that still exist.  Pure given EXISTS-FN.
+A review worktree is pruned once its PR is done; handing the agent a
+directory that is gone would fail the resume rather than just lose a
+root.  EXISTS-FN defaults to `file-directory-p'."
+  (seq-filter (or exists-fn #'file-directory-p) roots))
 
 (provide 'decknix-agent-session-workspace)
 ;;; decknix-agent-session-workspace.el ends here

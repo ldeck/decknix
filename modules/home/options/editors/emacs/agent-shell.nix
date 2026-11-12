@@ -3769,6 +3769,14 @@ in
             ;; ANTHROPIC_MODEL=<model> into the launch env, and
             ;; `decknix--agent-model-replay-needed-p' then skips the replay.
             :model-launch-env "ANTHROPIC_MODEL"
+            ;; Extra working directories (a review's PR worktree beside a
+            ;; workspace-root cwd) go to claude-agent-acp as
+            ;; `_meta.additionalRoots', which it hands to the SDK as
+            ;; `additionalDirectories'.  Claude Code loads skills and commands
+            ;; from those directories by default, but their CLAUDE.md /
+            ;; AGENTS.md only with this variable set.
+            :additional-roots-meta-key additionalRoots
+            :additional-roots-env ("CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1")
             :sessions-dir "~/.claude/projects"
             :session-file-extension ".jsonl"
             :session-jq-filter "(map(select(.type == \"user\" or .type == \"assistant\")) | {sessionId: (first | .sessionId), created: (first | .timestamp), modified: (last | .timestamp), exchangeCount: (map(select(.type == \"user\")) | length), firstUserMessage: ([ .[] | select(.type == \"user\") | .message.content | if type == \"array\" then (.[] | select(.type == \"text\") | .text) else . end | select(type == \"string\" and length > 0) ] | (first // \"\"))[:200]})"

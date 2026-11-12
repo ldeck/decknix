@@ -191,6 +191,16 @@ model picked with `C-c C-v` is marked as your choice and is never moved.
   (setq decknix-agent-review-superseded-models '("claude-opus-4-8")))
 ```
 
+**Working directory.** A review whose PR could be checked out in a
+worktree starts in the workspace root detected for the repository, with
+the worktree passed as an additional working directory.  Agents look
+for project commands and skills from their working directory upwards
+but stop at a repository root, and a worktree is one, so a review
+started inside it could not see the workspace's own commands.  Claude
+receives the worktree as `additionalRoots`, loads its skills and
+commands, and reads its `CLAUDE.md` / `AGENTS.md`; resume passes it
+again until the worktree is pruned.
+
 **Scope.** The two `*-review` purposes are consulted by the automated
 review launchers; `new-session` seeds interactive `C-c A n`.  `C-c A f`
 (fork) inherits the source conversation's persisted model/mode (falling

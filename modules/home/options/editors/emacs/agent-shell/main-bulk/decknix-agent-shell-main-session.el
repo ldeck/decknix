@@ -207,6 +207,10 @@ history; only the model-facing primer is suppressed)."
 (declare-function decknix--agent-register-session-id
                   "decknix-agent-tags-mutate"
                   (conv-key session-id))
+(declare-function decknix--agent-additional-roots-for-conv-key
+                  "decknix-agent-session-workspace" (conv-key))
+(declare-function decknix--agent-existing-additional-roots
+                  "decknix-agent-session-workspace" (roots &optional exists-fn))
 (declare-function decknix--agent-session-model-for-conv-key
                   "decknix-agent-session-model" (conv-key))
 (declare-function decknix--agent-session-mode-for-conv-key
@@ -1101,7 +1105,12 @@ dedupes against live buffers before calling here."
          ;; ANTHROPIC_MODEL at launch instead of a post-load `set_model' replay
          ;; that can stall the buffer read-only on resume (#163).  Flagless
          ;; providers without a launch-env (Pi) ignore it here and still replay.
-         (config (decknix--agent-make-config provider augmented-cmd mode saved-model))
+         ;; A review's PR worktree, recorded at launch beside the
+         ;; workspace-root cwd; dropped when it has since been pruned.
+         (additional-roots (decknix--agent-existing-additional-roots
+                            (decknix--agent-additional-roots-for-conv-key conv-key)))
+         (config (decknix--agent-make-config
+                  provider augmented-cmd mode saved-model additional-roots))
          (agent-shell-display-action
           (eval `(cons (lambda (buffer alist)
                          (let ((win ,target-win))

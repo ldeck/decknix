@@ -165,5 +165,42 @@
     (decknix--agent-session-save-workspace "sid-1" "/p1")
     (should (equal "/p1" (decknix--agent-workspace-for-conv-key "ck-1")))))
 
+;; -- additional roots ------------------------------------------------
+
+(ert-deftest decknix-agent-session-workspace--additional-roots-round-trip ()
+  "Saved roots read back; other fields of the entry are untouched."
+  (decknix-test-session-workspace-with-store
+    (decknix--agent-session-save-workspace-for-conv-key "ck" "/ws/")
+    (decknix--agent-session-save-additional-roots-for-conv-key
+     "ck" '("/ws/repo-worktrees/pr-7"))
+    (should (equal '("/ws/repo-worktrees/pr-7")
+                   (decknix--agent-additional-roots-for-conv-key "ck")))
+    (should (equal "/ws/" (decknix--agent-workspace-for-conv-key "ck")))))
+
+(ert-deftest decknix-agent-session-workspace--additional-roots-absent-is-nil ()
+  "No entry, no roots field, or nothing to save all read as nil."
+  (decknix-test-session-workspace-with-store
+    (should-not (decknix--agent-additional-roots-for-conv-key "missing"))
+    (should-not (decknix--agent-additional-roots-for-conv-key nil))
+    (decknix--agent-session-save-additional-roots-for-conv-key "ck" nil)
+    (should-not (gethash "ck" (decknix--agent-tags-conversations
+                               (decknix--agent-tags-read))))))
+
+(ert-deftest decknix-agent-session-workspace--additional-roots-reads-json-vector ()
+  "A store parsed with arrays as vectors still yields a list of strings."
+  (decknix-test-session-workspace-with-store
+    (let ((entry (make-hash-table :test 'equal)))
+      (puthash "additionalRoots" ["/a" "/b"] entry)
+      (puthash "ck" entry (decknix--agent-tags-conversations
+                           (decknix--agent-tags-read))))
+    (should (equal '("/a" "/b")
+                   (decknix--agent-additional-roots-for-conv-key "ck")))))
+
+(ert-deftest decknix-agent-session-workspace--existing-roots-drops-pruned ()
+  "A pruned worktree is not handed back to a resumed session."
+  (should (equal '("/kept")
+                 (decknix--agent-existing-additional-roots
+                  '("/kept" "/pruned") (lambda (d) (equal d "/kept"))))))
+
 (provide 'decknix-agent-session-workspace-test)
 ;;; decknix-agent-session-workspace-test.el ends here

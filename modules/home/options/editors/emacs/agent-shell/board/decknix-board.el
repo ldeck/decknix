@@ -65,7 +65,7 @@
                   "decknix-agent-shell-main-session" (bufs))
 (declare-function decknix--agent-quickaction-start "decknix-agent-shell-main-link"
                   (name tags workspace command &optional model provider-id mode
-                        background review-prs))
+                        background review-prs additional-roots))
 (declare-function decknix-agent-provider-select "decknix-agent-provider" ())
 (declare-function decknix-agent-purpose-resolve "decknix-agent-purposes" (purpose))
 (declare-function decknix--agent-tags-all "decknix-agent-tags-read" ())

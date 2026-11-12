@@ -98,7 +98,7 @@
 (declare-function decknix--agent-quickaction-start
                   "decknix-agent-shell-main-link"
                   (name tags workspace command &optional model provider-id mode
-                        background review-prs))
+                        background review-prs additional-roots))
 (defvar decknix--agent-broker-key)
 (defvar decknix--hub-reviews)
 (defvar decknix--agent-conv-key)

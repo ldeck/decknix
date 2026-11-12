@@ -127,6 +127,28 @@ the decision is testable without touching the filesystem; defaults to
      ((funcall exists-fn path) (cons 'reuse path))
      (t (cons 'create path)))))
 
+(defun decknix--review-launch-dirs (workspace worktree)
+  "Return (CWD . ADDITIONAL-ROOTS) for a review session.  Pure.
+
+WORKSPACE is the directory the review would have started in without a
+worktree (the workspace root detected for the repo); WORKTREE is the PR
+checkout, or nil when none could be made.
+
+The session starts in WORKSPACE with WORKTREE as an additional root.
+Starting it IN the worktree, as step 1 of #165 did, lost the workspace's
+own commands and skills: agents discover project configuration from the
+cwd upwards but stop at the repository root, and a worktree is a
+repository root, so the workspace above it was never read.  Every review
+since then had no `/review-...' command to run.
+
+With no worktree, or no distinct workspace, there is nothing to add and
+the one directory available is the cwd."
+  (let ((as-dir (lambda (d) (and d (file-name-as-directory (expand-file-name d))))))
+    (if (and workspace worktree
+             (not (equal (funcall as-dir workspace) (funcall as-dir worktree))))
+        (cons workspace (list (directory-file-name (expand-file-name worktree))))
+      (cons (or workspace worktree) nil))))
+
 (defun decknix--review-worktree-prunable-p (path dirty-p sessions)
   "Return non-nil when the review worktree at PATH is safe to remove.
 

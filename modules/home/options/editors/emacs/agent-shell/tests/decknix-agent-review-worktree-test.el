@@ -146,5 +146,25 @@ to remove a feature worktree the user is working in."
   (should-not (decknix--review-worktree-own-path-p "/somewhere/pr-42"))
   (should-not (decknix--review-worktree-own-path-p nil)))
 
+;; -- launch directories: workspace cwd, worktree as an extra root --------
+
+(ert-deftest decknix--review-launch-dirs--worktree-becomes-additional-root ()
+  "The session starts in the workspace and works on the worktree beside it."
+  (should (equal '("/ws/" "/ws/repo-worktrees/pr-7")
+                 (decknix--review-launch-dirs "/ws/" "/ws/repo-worktrees/pr-7/"))))
+
+(ert-deftest decknix--review-launch-dirs--no-worktree-keeps-workspace ()
+  "No worktree could be made: start in the workspace, as before #165."
+  (should (equal '("/ws/") (decknix--review-launch-dirs "/ws/" nil))))
+
+(ert-deftest decknix--review-launch-dirs--no-workspace-falls-back-to-worktree ()
+  "No workspace known: the worktree is the only directory available."
+  (should (equal '("/ws/repo-worktrees/pr-7")
+                 (decknix--review-launch-dirs nil "/ws/repo-worktrees/pr-7"))))
+
+(ert-deftest decknix--review-launch-dirs--same-directory-adds-nothing ()
+  "A workspace that IS the worktree is not also passed as an extra root."
+  (should (equal '("/ws/w") (decknix--review-launch-dirs "/ws/w" "/ws/w/"))))
+
 (provide 'decknix-agent-review-worktree-test)
 ;;; decknix-agent-review-worktree-test.el ends here
