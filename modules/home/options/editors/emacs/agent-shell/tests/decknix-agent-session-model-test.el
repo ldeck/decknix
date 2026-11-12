@@ -225,5 +225,79 @@ discarding the pre-change state for no gain."
     (should-not (decknix--agent-models-in-store nil))))
 
 
+;; -- review conversations follow their purpose ---------------------------
+;;
+;; The launcher stores each review's purpose model as a pin, so a review
+;; stayed on the model of the day it started.  Explicit choices are marked
+;; now, and an unmarked review pin listed as superseded follows the purpose.
+
+(defun decknix-test-session-model--put (key &rest fields)
+  "Store an entry under KEY built from FIELDS (alternating name, value)."
+  (let ((entry (make-hash-table :test 'equal)))
+    (while fields
+      (puthash (pop fields) (pop fields) entry))
+    (puthash key entry (decknix--agent-tags-conversations
+                        (decknix--agent-tags-read)))))
+
+(defmacro decknix-test-session-model-with-review (&rest body)
+  "Run BODY with a store, purpose model `new-1' and `old-1' superseded."
+  (declare (indent 0))
+  `(decknix-test-session-model-with-store
+     (let ((decknix-agent-review-superseded-models '("old-1"))
+           (decknix-agent-review-model-function (lambda () "new-1")))
+       ,@body)))
+
+(ert-deftest decknix-session-model--superseded-review-pin-follows-purpose ()
+  "A launcher-written pin on a review moves to the current purpose model."
+  (decknix-test-session-model-with-review
+    (decknix-test-session-model--put "ck" "model" "old-1" "tags" '("review" "repo"))
+    (should (equal "new-1" (decknix--agent-session-model-for-conv-key "ck")))))
+
+(ert-deftest decknix-session-model--unpinned-review-keeps-provider-default ()
+  "A review with no pin already follows the provider default; it stays nil."
+  (decknix-test-session-model-with-review
+    (decknix-test-session-model--put "ck" "reviewPr" '("repo#7"))
+    (should-not (decknix--agent-session-model-for-conv-key "ck"))))
+
+(ert-deftest decknix-session-model--launcher-pin-is-not-explicit ()
+  "A launcher-recorded model is unmarked, so a later retirement moves it."
+  (decknix-test-session-model-with-review
+    (decknix-test-session-model--put "ck" "reviewPr" '("repo#7"))
+    (decknix--agent-session-save-model-for-conv-key "ck" "old-1" 'launcher)
+    (should-not (gethash "modelExplicit"
+                         (gethash "ck" (decknix--agent-tags-conversations
+                                        (decknix--agent-tags-read)))))
+    (should (equal "new-1" (decknix--agent-session-model-for-conv-key "ck")))))
+
+(ert-deftest decknix-session-model--explicit-review-pin-is-kept ()
+  "A model chosen with C-c C-v stays, even if it is a superseded id."
+  (decknix-test-session-model-with-review
+    (decknix-test-session-model--put "ck" "tags" '("review"))
+    (decknix--agent-session-save-model-for-conv-key "ck" "old-1")
+    (should (eq t (gethash "modelExplicit"
+                           (gethash "ck" (decknix--agent-tags-conversations
+                                          (decknix--agent-tags-read))))))
+    (should (equal "old-1" (decknix--agent-session-model-for-conv-key "ck")))))
+
+(ert-deftest decknix-session-model--non-review-superseded-pin-is-kept ()
+  "Only a person can pin a non-review conversation, so its pin stays."
+  (decknix-test-session-model-with-review
+    (decknix-test-session-model--put "ck" "model" "old-1" "tags" '("feature"))
+    (should (equal "old-1" (decknix--agent-session-model-for-conv-key "ck")))))
+
+(ert-deftest decknix-session-model--unrelated-review-pin-is-kept ()
+  "A review pin the purpose never used (another provider's id) is not guessed at."
+  (decknix-test-session-model-with-review
+    (decknix-test-session-model--put "ck" "model" "other-model" "tags" '("review"))
+    (should (equal "other-model"
+                   (decknix--agent-session-model-for-conv-key "ck")))))
+
+(ert-deftest decknix-session-model--no-purpose-model-keeps-stored-pin ()
+  "With the purpose unpinned, a superseded pin is kept rather than dropped."
+  (should (equal "old-1" (decknix--agent-effective-model
+                          "old-1" nil t '("old-1") nil)))
+  (should-not (decknix--agent-effective-model nil nil t '("old-1") nil)))
+
+
 (provide 'decknix-agent-session-model-test)
 ;;; decknix-agent-session-model-test.el ends here

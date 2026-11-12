@@ -3326,14 +3326,19 @@ in
           default = "opus[1m]";
           example = "opus";
           description = ''
-            Model id pinned for the PR-review purpose.  For
-            launch-flag providers (auggie) this rides
-            `--model <id>' on the CLI; for flagless providers
-            (Claude, Pi) it is replayed over ACP on resume.  Must
-            appear in `decknix-agent-known-models' for the chosen
+            Model id pinned for the PR-review purpose.  It rides
+            `--model <id>' for auggie and ANTHROPIC_MODEL for Claude,
+            on launch and on resume; Pi gets it replayed over ACP.
+            Must appear in `decknix-agent-known-models' (or match
+            `decknix-agent-known-model-patterns') for the chosen
             provider, otherwise it is dropped to nil at boot with a
             warning and the provider default is used.  Set to null
             to always defer to the provider default.
+
+            When changing it, add the old id to
+            `decknix-agent-review-superseded-models' so existing review
+            conversations move with it on resume; a model chosen with
+            `C-c C-v' is kept either way.
           '';
         };
         mode = modeOption "auto";

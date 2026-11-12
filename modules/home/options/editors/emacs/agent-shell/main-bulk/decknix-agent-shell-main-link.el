@@ -99,13 +99,10 @@
 (declare-function decknix--agent-current-conv-key
                   "decknix-agent-buffer-lookup")
 
-;; Per-conversation model override (`agent/decknix-agent-session-model').
-;; The quickaction primitive persists MODEL against the freshly-created
-;; conv-key so subsequent resumes pass `--model <id>' to auggie via
-;; `decknix--resume-command-build', keeping the session on the pinned
-;; model across restarts.
+;; Launch model, recorded against the freshly-created conv-key so resume
+;; continues on it.
 (declare-function decknix--agent-session-save-model-for-conv-key
-                  "decknix-agent-session-model" (conv-key model-id))
+                  "decknix-agent-session-model" (conv-key model-id &optional launcher))
 (declare-function decknix--agent-conversation-key
                   "decknix-agent-conv-resolve" (first-message))
 
@@ -201,13 +198,11 @@ provider selection are handled by `decknix-agent-purpose-alist'
 Creates a new agent session, applies metadata, then subscribes to the
 `prompt-ready' event to send COMMAND as soon as the ACP session is
 fully established.  Returns immediately.
-Optional MODEL pins a specific auggie model id (e.g. \"prism-a\",
-\"opus4.7\", \"sonnet4.6\") for the new session: injects
-`--model MODEL' into the ACP command line and persists the choice
-against the freshly-derived conversation key so resumes via
-`decknix--resume-command-build' continue on the same model.  When
-nil (default), no `--model' flag is added and auggie falls back to
-the framework default in `~/.augment/settings.json'.
+Optional MODEL is the model the session starts on, normally the review
+purpose's: auggie gets `--model MODEL', Claude ANTHROPIC_MODEL=MODEL.
+It is recorded as the launcher's model so resume continues on it (see
+`decknix--agent-session-model-for-conv-key').  When nil the provider
+default applies.
 Optional PROVIDER-ID specifies the agent provider (defaults to
 `decknix-agent-default-provider').
 Optional MODE seeds the session/permission mode (e.g. Claude \"auto\")
@@ -272,7 +267,7 @@ raises the usual attention indicator when it wants input."
          (augmented-cmd (decknix--agent-broker-wrap-command
                          (decknix--agent-command-build provider workspace model)
                          broker-key))
-         (config (decknix--agent-make-config provider augmented-cmd mode)))
+         (config (decknix--agent-make-config provider augmented-cmd mode model)))
     ;; Placement prompt: when the caller is not the sidebar AND the
     ;; current frame has 3+ non-sidebar windows, ask which pane the
     ;; new session should land in (or split off).  The carved
@@ -333,19 +328,16 @@ raises the usual attention indicator when it wants input."
     (setq decknix--agent-session-cache-time 0)
     (decknix--agent-session-new-post-create
      before-buffers name tags workspace command provider broker-key)
-    ;; Pin the per-conversation model override so subsequent resumes
-    ;; pass `--model MODEL' via `decknix--resume-command-build'.  The
-    ;; conv-key is derived deterministically from COMMAND (the first
-    ;; user message), matching the immediate-flush branch in
-    ;; `decknix--agent-session-new-post-create'.
-    (when (and (stringp model)
-               (not (string-empty-p model))
-               (stringp command)
-               (not (string-empty-p command)))
-      (let ((conv-key (decknix--agent-conversation-key command)))
-        (when conv-key
-          (decknix--agent-session-save-model-for-conv-key
-           conv-key model))))
+    ;; Record MODEL so resume continues on it.  It is stored as the
+    ;; launcher's, not the user's: when the review
+    ;; purpose moves on, `decknix-agent-review-superseded-models' lets
+    ;; these conversations move with it while an explicit `C-c C-v'
+    ;; choice stays.  The conv-key is derived from COMMAND (the first
+    ;; user message), matching `decknix--agent-session-new-post-create'.
+    (when-let* ((conv-key (and (stringp command) (not (string-empty-p command))
+                               (decknix--agent-conversation-key command))))
+      (when (and (stringp model) (not (string-empty-p model)))
+        (decknix--agent-session-save-model-for-conv-key conv-key model 'launcher)))
     ;; Record which PR a review session is on, so "does this PR already
     ;; have a reviewer?" is answered from a fact rather than from the
     ;; buffer name.  Captured HERE because NAME is still the launcher's

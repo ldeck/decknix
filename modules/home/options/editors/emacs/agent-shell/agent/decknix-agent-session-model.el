@@ -81,18 +81,83 @@ report the old model."
       (decknix--agent-session-save-model-for-conv-key conv-key live)
       (message "Model %s recorded for this conversation" live)))))
 
+;; -- which model a conversation runs on --------------------------------
+;;
+;; The review launcher stores its purpose model against the conversation
+;; so resume continues on it, in the same field an explicit `C-c C-v'
+;; choice uses.  Unmarked, that froze every review on the purpose model of
+;; the day it started: after the purpose moved on, each resume brought the
+;; old model back and the header reported it.  Explicit choices are now
+;; marked, and a review conversation whose unmarked pin is a retired
+;; purpose model follows the current one.
+
+(defcustom decknix-agent-review-superseded-models nil
+  "Model ids the review purposes used to pin, and no longer do.
+A review conversation whose stored model is one of these, and which was
+not set explicitly, follows the current review purpose model instead.
+Those pins were written by the launcher rather than chosen, and before
+explicit choices were marked the two cannot be told apart; a pin on a
+non-review conversation is never treated this way, because only a
+person could have set it.  Add the old id here when changing the review
+purpose model so existing reviews move with it."
+  :type '(repeat string)
+  :group 'decknix)
+
+(declare-function decknix-agent-purpose-resolve "decknix-agent-purposes" (purpose))
+
+(defun decknix--agent-review-purpose-model ()
+  "Return the model the `pr-review' purpose currently pins, or nil."
+  (and (fboundp 'decknix-agent-purpose-resolve)
+       (plist-get (decknix-agent-purpose-resolve 'pr-review) :model)))
+
+(defvar decknix-agent-review-model-function #'decknix--agent-review-purpose-model
+  "Function of no arguments returning the model a review conversation follows.")
+
+(defun decknix--agent-review-entry-p (entry)
+  "Return non-nil when store ENTRY is a review conversation."
+  (or (gethash "reviewPr" entry)
+      (member "review" (let ((tags (gethash "tags" entry)))
+                         (if (vectorp tags) (append tags nil) tags)))))
+
+(defun decknix--agent-effective-model (model explicit review-p superseded review-model)
+  "Return the model a conversation should run on, or nil for the default.  Pure.
+
+MODEL is the stored pin and EXPLICIT whether a person chose it.  REVIEW-P
+says the conversation is a PR review, SUPERSEDED lists retired review
+purpose models, and REVIEW-MODEL is what the review purpose pins now.
+
+An explicit pin always wins.  Otherwise only a review conversation
+pinned to a SUPERSEDED model moves, to REVIEW-MODEL.  Any other pin, or
+none, is left as it is: an unpinned conversation already follows the
+provider default, and a pin the purpose never used may belong to another
+provider, so it is kept rather than guessed about."
+  (if (and review-p model (not explicit) (member model superseded))
+      (or review-model model)
+    model))
+
 (defun decknix--agent-session-model-for-conv-key (conv-key)
-  "Return saved auggie model-id for CONV-KEY, or nil."
+  "Return the model CONV-KEY should run on, or nil for the provider default.
+See `decknix--agent-effective-model'."
   (when conv-key
     (let* ((store (decknix--agent-tags-read))
            (convs (decknix--agent-tags-conversations store))
            (entry (gethash conv-key convs)))
       (when (hash-table-p entry)
-        (gethash "model" entry)))))
+        (let* ((model (gethash "model" entry))
+               (explicit (eq t (gethash "modelExplicit" entry)))
+               (review-p (decknix--agent-review-entry-p entry))
+               (moves (and review-p model (not explicit)
+                           (member model decknix-agent-review-superseded-models))))
+          (decknix--agent-effective-model
+           model explicit review-p decknix-agent-review-superseded-models
+           (and moves (funcall decknix-agent-review-model-function))))))))
 
 (defun decknix--agent-session-save-model-for-conv-key
-    (conv-key model-id)
-  "Persist auggie MODEL-ID for CONV-KEY in agent-sessions.json."
+    (conv-key model-id &optional launcher)
+  "Persist MODEL-ID for CONV-KEY in agent-sessions.json.
+Recorded as a person's explicit choice unless LAUNCHER is non-nil, which
+marks a model a launcher picked from a purpose (see
+`decknix--agent-effective-model')."
   (when (and conv-key model-id)
     (let* ((store (decknix--agent-tags-read))
            (convs (decknix--agent-tags-conversations store))
@@ -102,6 +167,9 @@ report the old model."
                         (puthash "sessions" nil h)
                         h))))
       (puthash "model" model-id entry)
+      (if launcher
+          (remhash "modelExplicit" entry)
+        (puthash "modelExplicit" t entry))
       (puthash conv-key entry convs)
       (decknix--agent-tags-write store))))
 

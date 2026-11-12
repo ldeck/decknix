@@ -172,13 +172,24 @@ mode)` triple via Nix, independent of the interactive
   warning.  Set to `null` to keep the provider's own default.
 
 **Resume semantics.** For launch-flag providers (Auggie) the model is
-appended as `--model <id>`; for flagless providers (Claude, Pi) it is
-replayed over ACP once the session reports ready.  The permission
+appended as `--model <id>`; Claude gets it as `ANTHROPIC_MODEL` at
+launch; Pi has it replayed over ACP once the session reports ready.  The permission
 `mode` is baked into the session config and applied by agent-shell once
 the session reports ready.  Either way, once you switch mid-session
 with `C-c C-v` (model) or `C-c C-m` (mode), that per-conversation
 choice persists in `~/.config/decknix/agent-sessions.json` and wins
 over the purpose default on both resume **and** fork.
+
+**Changing a review model.** A review records the model it launched on
+so resume continues there.  When you move `pr-review` to a new model,
+list the old id in `decknix-agent-review-superseded-models` and review
+conversations still recorded on it follow the new one when resumed.  A
+model picked with `C-c C-v` is marked as your choice and is never moved.
+
+```elisp
+(with-eval-after-load 'decknix-agent-session-model
+  (setq decknix-agent-review-superseded-models '("claude-opus-4-8")))
+```
 
 **Scope.** The two `*-review` purposes are consulted by the automated
 review launchers; `new-session` seeds interactive `C-c A n`.  `C-c A f`
