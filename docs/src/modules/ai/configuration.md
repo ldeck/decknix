@@ -13,6 +13,21 @@ consumer (notably Spec Kit). To move them to a newer nixpkgs release, run
 build, then run `decknix switch`. `which claude` confirms the Nix profile
 takes precedence; `claude --version` confirms the selected version.
 
+## Claude Code default model
+
+`decknix.ai.claude.model` writes `.model` in `~/.claude/settings.json` on
+every switch, leaving the rest of the file alone. A plain `claude` launch,
+and tools that read that key back, start on it. Claude also rewrites the key
+when `/model` is used in the CLI, so the next switch puts the declared value
+back. Name a version (`claude-opus-5-5`) rather than an alias (`opus`), which
+moves to a new release by itself. The default, `null`, leaves the key alone.
+
+```nix
+{ ... }: {
+  decknix.ai.claude.model = "claude-opus-5-5";
+}
+```
+
 ## Auggie CLI
 
 ### Enabling

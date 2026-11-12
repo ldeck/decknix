@@ -136,6 +136,26 @@ in {
       '';
     };
 
+    model = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "claude-opus-5-5";
+      description = ''
+        Default model for Claude Code, written to `.model` in
+        `~/.claude/settings.json` on every `decknix switch`.
+
+        That key is what a plain `claude` launch, and any tool that reads it
+        back (a headless review, say), starts on.  Claude also writes it
+        itself when `/model` is used in the CLI, so without this the default
+        is whatever was last picked there, on whichever machine.  Name a
+        specific version rather than an alias such as `opus`, which moves to
+        a new release on its own.
+
+        Null leaves the key alone.  Sessions started from Emacs pin their
+        own model and are unaffected either way.
+      '';
+    };
+
     disableAutoUpdate = mkOption {
       type = types.bool;
       default = true;
@@ -307,6 +327,30 @@ in {
           fi
         fi
       '';
+
+    # Merged by key for the same reason as the permissions block: Claude
+    # rewrites this file at runtime, including `.model' on `/model'.
+    home.activation.claude-model = mkIf (cfg.model != null)
+      (lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+        ${pkgs.coreutils}/bin/mkdir -p "$(${pkgs.coreutils}/bin/dirname "$CLAUDE_SETTINGS")"
+        if [ ! -f "$CLAUDE_SETTINGS" ]; then
+          echo '{}' > "$CLAUDE_SETTINGS"
+        fi
+        TMP="$(${pkgs.coreutils}/bin/mktemp)"
+        if ${pkgs.jq}/bin/jq --arg model ${escapeShellArg cfg.model} \
+             '.model = $model' "$CLAUDE_SETTINGS" > "$TMP"; then
+          if ! ${pkgs.diffutils}/bin/cmp -s "$TMP" "$CLAUDE_SETTINGS"; then
+            $DRY_RUN_CMD ${pkgs.coreutils}/bin/mv "$TMP" "$CLAUDE_SETTINGS"
+            echo "  [claude-model] Default model set to ${cfg.model}"
+          else
+            ${pkgs.coreutils}/bin/rm -f "$TMP"
+          fi
+        else
+          ${pkgs.coreutils}/bin/rm -f "$TMP"
+          echo "  [claude-model] WARNING: failed to update $CLAUDE_SETTINGS (left unchanged)" >&2
+        fi
+      '');
 
     home.activation.claude-disable-autoupdate = mkIf cfg.disableAutoUpdate
       (lib.hm.dag.entryAfter [ "writeBoundary" ] ''
