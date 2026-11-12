@@ -95,6 +95,12 @@ incapable of removing a feature worktree the user is working in."
   "Return `git' args adding a detached worktree at PATH on FETCH_HEAD."
   (list "worktree" "add" "--detach" (expand-file-name path) "FETCH_HEAD"))
 
+(defun decknix--review-worktree-checkout-args ()
+  "Return `git' args moving a review worktree to the PR head just fetched.
+FETCH_HEAD is per worktree, so the fetch and this checkout both run in
+the review worktree itself."
+  (list "checkout" "--detach" "FETCH_HEAD"))
+
 (defun decknix--review-worktree-remove-args (path &optional force)
   "Return `git' args removing the worktree at PATH; FORCE overrides guards."
   (append (list "worktree" "remove")

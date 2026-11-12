@@ -297,6 +297,7 @@ gate, then posts once you answer:
 | `◑` | posting | Acting on your go-ahead, with the verdict being posted |
 | `●` | actioned | Settled after your go-ahead without reporting a review link (a failed submit looks like this); `i` to see |
 | `✓` | posted | The review is on GitHub (the session linked it, or the feed has your review). Filed under Finished |
+| `⚑` | updated | The author pushed after the review. Filed under Re-review, with what changed (see below) |
 | `●` | idle | Settled, nothing in flight |
 
 | Key | Action |
@@ -312,11 +313,44 @@ gate, then posts once you answer:
 | `k` / `D` | Quit (terminating the broker) or detach the marked sessions |
 | `s` | Merge via `/merge-train`, behind a manifest (`C-u s` dry run) |
 | `r` | Review PR url(s) pasted from anywhere |
+| `R` | Re-review a PR updated since the review (`C-u R` acknowledges the push instead) |
+| `X` | Cycle what an update does: off / notify / auto |
 | `A` / `x` / `f` | Cycle auto-review, toggle auto-dismiss, toggle filters |
 | `g` / `?` | Refresh / full help |
 
 From a review session, `C-c C-b` (or `b` in its transcript) comes back to its
 row here.
+
+### Re-review after the author updates the PR
+
+When you reviewed a PR with feedback (changes requested, a comment, a body,
+or a thread you opened) and the author answers by pushing to the same PR,
+the row leaves Finished for the **Re-review** lane, second from the top.
+The same happens when another reviewer's feedback was what your finished
+session was waiting on. The row says what moved: commits since the review,
+files changed, how many of your threads are resolved or replied to, whether
+the push dismissed your approval, and how long ago. `i` lists the commits.
+
+Pushes that change nothing are not updates: a merge of the base branch, or
+a rebase that leaves the PR's own diff identical
+(`decknix-review-board-rereview-ignore-base-merges`,
+`decknix-review-board-rereview-ignore-rebases`). Neither is a push made
+only of your own commits. A bare approval does not count unless
+`decknix-review-board-rereview-bare-approvals` is set; a dismissed one
+always does.
+
+`R` refreshes the PR's review worktree to the new head and asks the review
+session (the live one, else the saved one resumed, else a new review) to
+review only the changes since the reviewed commit, check whether the
+feedback was addressed, and stop at the confirmation gate as before. It
+never posts on its own. Each head is re-reviewed at most once.
+
+`decknix-review-board-auto-rereview` (`X` cycles it) decides what an update
+does without you: `nil` shows it on the board only; `notify` (the default)
+also says so once per head and flags the session under Needs you in the
+sidebar, `C-c A j` and the mode-line count; `auto` also starts the
+re-review, as `R` would. The detail comes from the hub's reviews feed, so
+nothing is fetched while the board paints.
 
 The reply keys act on the row at point only, never the marked set: one key
 answering several gates would post several reviews. The board also

@@ -33,9 +33,12 @@
 ;; Reading what a session's closing turn asks (verdict, expected reply) is
 ;; turn-signals' job; the board only decides what that means for a row.
 (require 'decknix-agent-turn-ask)
+;; Whether a reviewed PR has moved on since, from the cached feed.
+(require 'decknix-review-board-rereview)
 
 (defconst decknix-review-board-lane-help
   '((needs-you . "agent is blocked on you")
+    (rereview  . "author updated the PR since the review: R to re-review")
     (doing     . "assessing, posting your answer, or idle")
     (on-hold   . "PR back in draft — waiting on the author")
     (finished  . "review posted, or PR merged or closed: safe to quit")
@@ -50,6 +53,7 @@ stale sessions to clean up, which is the opposite of what they are.")
 
 (defconst decknix-review-board-lanes
   '((needs-you . "Needs you")
+    (rereview  . "Re-review")
     (doing     . "In progress")
     (on-hold   . "On hold")
     (finished  . "Finished")
@@ -57,8 +61,9 @@ stale sessions to clean up, which is the opposite of what they are.")
     (idle      . "Idle"))
   "Ordered (LANE . HEADING) pairs, rendered top to bottom.
 
-The order tracks a review's lifecycle top to bottom: blocked on you, then
-in flight, then done.  `doing' and `finished' sit high, not buried,
+The order tracks a review's lifecycle top to bottom: blocked on you,
+then updated since your review (it wants you again), then in flight,
+then done.  `doing' and `finished' sit high, not buried,
 because they are the lanes you clear -- a session you have actioned should
 be watchable, and a merged PR's session should be visible to dismiss
 rather than lost at the bottom.")
@@ -85,6 +90,7 @@ is reset.")
     (actioned  . "acting on your answer: posting the review")
     (acted     . "acted on your answer; no review link reported")
     (posted    . "review is on GitHub")
+    (updated   . "the author pushed since the review")
     (idle      . "nothing in flight"))
   "Where a review session is in `/review-service-pr', and what each means.
 
@@ -95,6 +101,11 @@ still reading the diff and one posting your answer looked alike.")
 
 (defconst decknix-review-board-attention-phases '(awaiting asking waiting netfail)
   "Phases in which the session is blocked on you.")
+
+(defconst decknix-review-board-settled-phases '(posted acted idle)
+  "Phases in which a session has stopped: neither working nor blocked on you.
+Only a settled session is re-reviewed; one still working or asking has
+the newer state in hand, or a question to answer first.")
 
 (defun decknix-review-board-phase (state ask posted answered &optional reviewed)
   "Return the review phase of a session.  Pure.
@@ -148,13 +159,15 @@ reply 1-3, rec 1\"), the verdict being posted once you have answered."
       ((or 'actioned 'acted) verdict)
       (_ nil))))
 
-(defun decknix-review-board--lane (has-session attention status bot-p &optional phase)
+(defun decknix-review-board--lane (has-session attention status bot-p &optional phase updated)
   "Return the lane for a row.  Pure.
 
 HAS-SESSION is whether an agent is attached, ATTENTION whether that
 agent is blocked on the user, STATUS the staleness classification
 \(`gone' / `stale' / `answered' / nil), BOT-P whether the author is a
-bot, and PHASE the session's review phase (`decknix-review-board-phase').
+bot, PHASE the session's review phase (`decknix-review-board-phase'), and
+UPDATED non-nil when the PR moved on since the review that matters
+\(`decknix-review-board-rereview-info').
 
 Precedence is deliberate and only partly obvious:
 
@@ -163,6 +176,9 @@ Precedence is deliberate and only partly obvious:
   rather than a call on your time.  Attention still outranks everything
   ELSE -- `stale' and `answered' describe the PR, not whether the agent
   is stuck.
+- `updated' sits just below attention: a PR the author changed after the
+  review wants you again, whether or not a session is still around, but
+  a question already waiting is answered first.
 - `finished' outranks the activity lane.  Once no review is wanted, that
   the session was mid-flight stops being interesting.
 - Any live, unblocked, not-gone session is `doing', regardless of author.
@@ -185,6 +201,9 @@ Precedence is deliberate and only partly obvious:
    ;; yet.  The row returns by itself when the PR is marked ready again.
    ((and has-session (eq status 'draft)) 'on-hold)
    ((and has-session attention) 'needs-you)
+   ;; The author answered the review with a push.  Whatever lane the row
+   ;; would sit in otherwise -- Finished, usually -- it is work again.
+   (updated 'rereview)
    ;; I have already decided this one, so no review is wanted and the row
    ;; belongs with the finished work -- not sitting in `doing' as though
    ;; it were still mid-flight, which is where an approved PR stayed.
@@ -290,7 +309,8 @@ session tagged both `review' and `fix' reads as the more specific `fix'."
   (seq-find (lambda (v) (member v tags))
             decknix-review-board-activity-verbs))
 
-(defun decknix-review-board--session-row (session status-fn priority-fn)
+(defun decknix-review-board--session-row (session status-fn priority-fn
+                                                  &optional rereview-fn)
   "Build a row plist for SESSION.
 
 SESSION is a plist with `:name', `:conv-key', `:prs' (a list of
@@ -298,7 +318,10 @@ SESSION is a plist with `:name', `:conv-key', `:prs' (a list of
 closing turn asks), `:posted' (that turn reported the review on GitHub)
 and `:answered' (the gate its last prompt answered).  STATUS-FN maps a
 PR key to its staleness status; PRIORITY-FN maps a PR key to its
-priority.
+priority; REREVIEW-FN, when given, maps (PR-KEY SETTLED) to the
+`decknix-review-board-rereview-info' plist or nil.  Only a single-PR
+session that has settled is asked: a group is a bot batch, and a session
+still working or asking is not finished with the PR yet.
 
 A row's priority is its STRONGEST member, so one urgent bump lifts its
 whole group rather than being buried inside it."
@@ -316,7 +339,11 @@ whole group rather than being buried inside it."
          (phase (decknix-review-board-phase
                  (plist-get session :state) ask (plist-get session :posted)
                  answered (eq status 'reviewed)))
-         (attention (and (memq phase decknix-review-board-attention-phases) t)))
+         (attention (and (memq phase decknix-review-board-attention-phases) t))
+         (rereview (and rereview-fn (= 1 (length prs))
+                        (memq phase decknix-review-board-settled-phases)
+                        (funcall rereview-fn (car prs) t)))
+         (phase (if rereview 'updated phase)))
     (list :kind (if (> (length prs) 1) 'group 'single)
           :name (plist-get session :name)
           ;; Carried through, not derived.  Every verb that DOES something --
@@ -335,7 +362,10 @@ whole group rather than being buried inside it."
           :verb (plist-get session :verb)
           :progress (plist-get session :progress)
           :phase phase
-          :phase-detail (decknix-review-board-phase-detail phase ask answered)
+          :phase-detail (if rereview
+                            (decknix-review-board-rereview-summary rereview)
+                          (decknix-review-board-phase-detail phase ask answered))
+          :rereview rereview
           :ask ask
           :statuses statuses
           :priority (if priorities (apply #'max priorities) 0)
@@ -346,19 +376,25 @@ whole group rather than being buried inside it."
                  ;; aggregate encodes that unanimity rule.
                  status
                  (plist-get session :bot-p)
-                 phase))))
+                 phase
+                 (and rereview t)))))
 
 (defun decknix-review-board--covered-p (pr-key sessions)
   "Non-nil when PR-KEY appears in any SESSIONS entry's `:prs'."
   (seq-some (lambda (s) (member pr-key (plist-get s :prs))) sessions))
 
-(defun decknix-review-board-build (items sessions key-fn status-fn priority-fn bot-fn)
+(defun decknix-review-board-build (items sessions key-fn status-fn priority-fn bot-fn
+                                         &optional rereview-fn)
   "Return the board model: an alist of (LANE . ROWS).  Pure.
 
 ITEMS is the reviews feed, SESSIONS the live review sessions (see
 `decknix-review-board--session-row').  KEY-FN maps a feed item to its
 `repo#number', STATUS-FN and PRIORITY-FN map a key to its status and
-priority, BOT-FN maps a feed item to whether its author is a bot.
+priority, BOT-FN maps a feed item to whether its author is a bot, and
+REREVIEW-FN (optional) maps (PR-KEY SETTLED) to the re-review info of a
+PR updated since its review (see `decknix-review-board--session-row').
+An updated request with no session gets a row of its own in `rereview',
+never folded into a bot group.
 
 Every session becomes a row.  Every feed item NOT already covered by a
 session becomes an `idle' row.  The asymmetry is the point: a session
@@ -370,13 +406,21 @@ retained, so a lane's position on screen is learnable rather than
 shifting with the contents."
   (let* ((session-rows (mapcar (lambda (s)
                                  (decknix-review-board--session-row
-                                  s status-fn priority-fn))
+                                  s status-fn priority-fn rereview-fn))
                                sessions))
-         (uncovered (seq-filter
-                     (lambda (item)
-                       (let ((key (funcall key-fn item)))
-                         (and key (not (decknix-review-board--covered-p key sessions)))))
-                     items))
+         (uncovered-all (seq-filter
+                         (lambda (item)
+                           (let ((key (funcall key-fn item)))
+                             (and key (not (decknix-review-board--covered-p key sessions)))))
+                         items))
+         (updated (and rereview-fn
+                       (delq nil
+                             (mapcar (lambda (item)
+                                       (when-let* ((info (funcall rereview-fn
+                                                                  (funcall key-fn item) nil)))
+                                         (cons item info)))
+                                     uncovered-all))))
+         (uncovered (seq-remove (lambda (item) (assq item updated)) uncovered-all))
          ;; Human requests stay individual; bot requests fold by repo, so
          ;; a service's un-dispatched bumps occupy one row rather than
          ;; forty.  Same rule the dispatcher groups by, so a row here is
@@ -393,6 +437,19 @@ shifting with the contents."
                        (nreverse acc)))
          (idle-rows
           (append
+           (mapcar
+            (lambda (cell)
+              (let ((key (funcall key-fn (car cell))))
+                (list :kind 'single :name key :conv-key nil :prs (list key)
+                      :state nil :statuses (list (funcall status-fn key))
+                      :priority (or (funcall priority-fn key) 0)
+                      :item (car cell) :session nil
+                      :bot-p (and (funcall bot-fn (car cell)) t)
+                      :phase 'updated
+                      :phase-detail (decknix-review-board-rereview-summary (cdr cell))
+                      :rereview (cdr cell)
+                      :lane (decknix-review-board--lane nil nil nil nil nil t))))
+            updated)
            (mapcar
             (lambda (item)
               (let ((key (funcall key-fn item)))
@@ -440,6 +497,11 @@ the same reason empty lanes render at all."
   "Return the total number of rows in MODEL."
   (apply #'+ (mapcar (lambda (lane) (length (cdr lane))) model)))
 
+(defun decknix-review-board-attention-count (model)
+  "Return how many rows in MODEL want you: Needs you plus Re-review."
+  (+ (length (alist-get 'needs-you model))
+     (length (alist-get 'rereview model))))
+
 
 ;; ── marks and verb targeting ─────────────────────────────────────────
 
@@ -463,6 +525,7 @@ marked is not the thing now on screen."
   "Non-nil when VERB can act on ROW."
   (let ((has-session (and (plist-get row :session) t)))
     (cond
+     ((eq verb 'rereview) (and (plist-get row :rereview) t))
      ((memq verb decknix-review-board-session-verbs) has-session)
      ((memq verb decknix-review-board-unstarted-verbs) (not has-session))
      (t t))))

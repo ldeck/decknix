@@ -191,10 +191,10 @@ would reappear as idle rows and invite a second dispatch."
     (should (= 0 (decknix-review-board-count model)))))
 
 (ert-deftest decknix-rb--lane-order-is-fixed ()
-  "Lifecycle order: blocked on you, then in progress, then waiting on the
-author, then done, then the un-started backlog.  The lanes you clear stay
-high, not buried."
-  (should (equal '(needs-you doing on-hold finished grouped idle)
+  "Lifecycle order: blocked on you, then updated since your review, then
+in progress, then waiting on the author, then done, then the un-started
+backlog.  The lanes you clear stay high, not buried."
+  (should (equal '(needs-you rereview doing on-hold finished grouped idle)
                  (mapcar #'car decknix-review-board-lanes))))
 
 (ert-deftest decknix-rb--rows-sort-by-priority-within-a-lane ()

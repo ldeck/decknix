@@ -186,6 +186,8 @@
                   "decknix-agent-review-worktree" (number))
 (declare-function decknix--review-worktree-add-args
                   "decknix-agent-review-worktree" (path))
+(declare-function decknix--review-worktree-checkout-args
+                  "decknix-agent-review-worktree" ())
 (declare-function decknix--review-launch-dirs
                   "decknix-agent-review-worktree" (workspace worktree))
 ;; Sidebar-toggles symbols (in decknix-sidebar-toggles).
@@ -2907,12 +2909,48 @@ session is started from the callback once the tree is on disk."
                      (error-message-string err))
             (funcall on-ready nil))))))))
 
-(defun decknix--nav-hub-start-review-fresh (url background parsed)
+(defun decknix--review-worktree-refresh-then (owner repo number _head on-ready)
+  "Move the review worktree for OWNER/REPO PR NUMBER to the PR's head.
+Then call ON-READY with its path, or nil when there is none.
+
+For a re-review: the worktree was checked out at the head that was first
+reviewed, and the author has pushed since.  An existing worktree fetches
+`pull/N/head' and detaches onto it, in the worktree itself (FETCH_HEAD is
+per worktree); a missing one is created at the new head.  A failed fetch
+or checkout (offline, a dirty tree) still calls ON-READY with the path:
+the prompt tells the agent to fetch first, so the re-review is not lost.
+HEAD is accepted for the record; the fetched head is the current one."
+  (let* ((slug (format "%s/%s" owner repo))
+         (primary (and (fboundp 'decknix-hub-worktree-primary)
+                       (ignore-errors (decknix-hub-worktree-primary slug))))
+         (plan (decknix--review-worktree-plan primary number)))
+    (if (not (eq (car plan) 'reuse))
+        (decknix--review-worktree-ensure-then owner repo number on-ready)
+      (let ((path (cdr plan)))
+        (condition-case err
+            (decknix--hub-worktree-git-async
+             path (decknix--review-worktree-fetch-args number) slug
+             (lambda (_out)
+               (decknix--hub-worktree-git-async
+                path (decknix--review-worktree-checkout-args) slug
+                (lambda (_o) (funcall on-ready path))
+                (lambda (_o)
+                  (message "Review worktree %s: checkout of the new head failed"
+                           (file-name-nondirectory (directory-file-name path)))
+                  (funcall on-ready path))))
+             (lambda (_out) (funcall on-ready path)))
+          (error
+           (message "Review worktree refresh failed (%s)" (error-message-string err))
+           (funcall on-ready path)))))))
+
+(defun decknix--nav-hub-start-review-fresh (url background parsed &optional context)
   "Spawn a brand-new review session for URL.
 The original body of `decknix--nav-hub-start-review', split out so the
 reuse check above reads as a routing decision rather than a guard
 wrapped around 200 lines.  PARSED is the pre-parsed PR URL alist;
-BACKGROUND is as documented on the caller."
+BACKGROUND is as documented on the caller.  CONTEXT, when non-nil, is
+appended to the review command: a re-review whose earlier session is
+gone says what changed since the review this way."
   (let ((parsed parsed))
     (if (not parsed)
         (message "Not a valid PR URL: %s" url)
@@ -2929,7 +2967,9 @@ BACKGROUND is as documented on the caller."
                              nil nil t)))
              (params (decknix--agent-review-get-params url))
              (model (nth 0 params))
-             (command (format "%s %s" (nth 1 params) url))
+             (command (if context
+                          (format "%s %s\n\n%s" (nth 1 params) url context)
+                        (format "%s %s" (nth 1 params) url)))
              (provider (nth 2 params))
              (mode (nth 3 params))
              ;; Target main window to avoid sidebar splits (foreground only)

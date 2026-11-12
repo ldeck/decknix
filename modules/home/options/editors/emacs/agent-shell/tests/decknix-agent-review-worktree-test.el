@@ -166,5 +166,10 @@ to remove a feature worktree the user is working in."
   "A workspace that IS the worktree is not also passed as an extra root."
   (should (equal '("/ws/w") (decknix--review-launch-dirs "/ws/w" "/ws/w/"))))
 
+(ert-deftest decknix-review-worktree/checkout-args-detach-onto-the-fetched-head ()
+  "A re-review moves an existing worktree onto the head just fetched into it."
+  (should (equal '("checkout" "--detach" "FETCH_HEAD")
+                 (decknix--review-worktree-checkout-args))))
+
 (provide 'decknix-agent-review-worktree-test)
 ;;; decknix-agent-review-worktree-test.el ends here

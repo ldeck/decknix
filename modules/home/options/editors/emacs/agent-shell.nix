@@ -349,10 +349,12 @@ let
                         decknix-attention-el ];
     extraSiteFiles = [
       "decknix-review-board.el"
+      "decknix-review-board-rereview.el"
     ];
     testFiles = [
       "decknix-review-gate-fixtures.el"
       "decknix-review-board-model-test.el"
+      "decknix-review-board-rereview-test.el"
     ];
   };
 
@@ -7645,6 +7647,12 @@ Reads the live reviews feed, the same source the board and auto-review use."
                     (lambda (&rest _)
                       (when (fboundp 'decknix-review-board-refresh)
                         (ignore-errors (decknix-review-board-refresh)))))
+        ;; PRs the author updated after a review with feedback: flag their
+        ;; sessions as needing you, say so once per head, and in `auto'
+        ;; start the re-review.  On the hub refresh, so it runs with the
+        ;; board closed; builds nothing when no PR moved.
+        (advice-add 'decknix--hub-refresh-reviews :after
+                    #'decknix-review-board-rereview-tick)
         ;; And when a session's turn ends or starts, which is when a row's
         ;; state moves.  A review reaching its gate changes no GitHub data,
         ;; so a board fed only by the reviews file kept saying `working'.

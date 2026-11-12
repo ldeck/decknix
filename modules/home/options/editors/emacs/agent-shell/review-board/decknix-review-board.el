@@ -38,6 +38,7 @@
 ;;; Code:
 
 (require 'decknix-review-board-model)
+(require 'decknix-review-board-rereview)
 (require 'decknix-agent-session-lifecycle)
 ;; The one look for "needs you": its glyph and face, shared with the
 ;; sidebar, the picker and the tab bar.
@@ -99,6 +100,21 @@
                   "decknix-agent-shell-main-link"
                   (name tags workspace command &optional model provider-id mode
                         background review-prs additional-roots))
+(declare-function decknix-agent-re-review-send "decknix-agent-re-review"
+                  (target content &optional no-display))
+(declare-function decknix-agent-re-review-needle "decknix-agent-re-review" (repo number))
+(declare-function decknix-agent-re-review-target "decknix-agent-re-review"
+                  (needle number buffers entries))
+(declare-function decknix-agent-re-review--send-when-ready "decknix-agent-re-review"
+                  (needle content &optional tries no-display))
+(declare-function decknix--sidebar-restore-previous-session
+                  "decknix-agent-shell-workspace" (entry &optional focus))
+(declare-function decknix--nav-hub-start-review-fresh
+                  "decknix-agent-shell-workspace" (url background parsed &optional context))
+(declare-function decknix--review-worktree-refresh-then
+                  "decknix-agent-shell-workspace" (owner repo number head on-ready))
+(declare-function decknix-attention-set-flags "decknix-attention" (flags))
+(defvar decknix--sidebar-previous-sessions)
 (defvar decknix--agent-broker-key)
 (defvar decknix--hub-reviews)
 (defvar decknix--agent-conv-key)
@@ -142,6 +158,7 @@ here as in the sidebar, the picker and the tab bar."
     (actioned  "◑" decknix-review-board-actioned "posting")
     (acted     "●" decknix-review-board-actioned "actioned")
     (posted    "✓" decknix-review-board-posted "posted")
+    (updated   ,decknix-attention-glyph decknix-attention-face "updated")
     (idle      "●" font-lock-comment-face "idle"))
   "(PHASE GLYPH FACE LABEL) for each `decknix-review-board-phases' entry.
 
@@ -351,6 +368,29 @@ do exactly that."
                "ALL (sidebar filters ignored)"
              "filtered, as the sidebar")))
 
+(defun decknix-review-board--rereview-for-key (key settled)
+  "Return the re-review info for PR KEY, or nil.  See
+`decknix-review-board-rereview-info'; SETTLED as there."
+  (when-let* ((item (decknix-review-board--item-for-key key)))
+    (decknix-review-board-rereview-info
+     item settled (alist-get 'viewer decknix--hub-reviews)
+     (decknix-review-board-rereview-seen-head key))))
+
+(defun decknix-review-board--board-items ()
+  "Return the requests to offer, plus every PR updated since my review.
+
+An updated PR is offered even when the sidebar filters hide it: the
+reviewed-PR filter is what hides it, and its whole point is that it no
+longer is."
+  (let* ((shown (decknix-review-board--request-items))
+         (updated (seq-filter
+                   (lambda (item)
+                     (and (not (memq item shown))
+                          (decknix-review-board--rereview-for-key
+                           (decknix-review-board--item-key item) nil)))
+                   (alist-get 'items decknix--hub-reviews))))
+    (append shown updated)))
+
 (defun decknix-review-board--build ()
   "Return a freshly built model.
 
@@ -360,12 +400,13 @@ not in the feed at all.  Filters govern only what is offered as work to
 pick up."
   (decknix-review-board--learn-owners (alist-get 'items decknix--hub-reviews))
   (decknix-review-board-build
-   (decknix-review-board--request-items)
+   (decknix-review-board--board-items)
    (decknix-review-board--sessions)
    #'decknix-review-board--item-key
    #'decknix-review-board--status-for-key
    #'decknix-review-board--priority-for-key
-   #'decknix-review-board--item-bot-p))
+   #'decknix-review-board--item-bot-p
+   #'decknix-review-board--rereview-for-key))
 
 ;; ── rendering ────────────────────────────────────────────────────────
 
@@ -422,7 +463,10 @@ pick up."
                   (when (and (eq phase 'idle) state
                              (not (member state '("ready" "finished"))))
                     (propertize (concat "  " state) 'face 'font-lock-comment-face))))
-         (trailing (cond ((not has-session)
+         (trailing (cond ((and (not has-session) (plist-get row :rereview))
+                          (concat phase-text
+                                  (propertize "  · no session" 'face 'font-lock-comment-face)))
+                         ((not has-session)
                           (propertize "no session" 'face 'font-lock-comment-face))
                          ((and (eq (plist-get row :lane) 'doing)
                                (not (string-empty-p (or activity ""))))
@@ -431,7 +475,7 @@ pick up."
          (line (format "%s %-2s %s %5d  %-52s %s"
                        (if marked "*" " ")
                        (if (string-empty-p badge) " " badge)
-                       (if has-session
+                       (if (or has-session (plist-get row :rereview))
                            (propertize (nth 0 look) 'face (nth 1 look))
                          (propertize "\u00b7" 'face 'font-lock-comment-face))
                        (plist-get row :priority)
@@ -453,17 +497,24 @@ pick up."
     (insert (propertize "Review Board" 'face 'decknix-review-board-lane)
             (format "  (%d rows)   " (decknix-review-board-count
                                       decknix-review-board--model))
+            (let ((need (decknix-review-board-attention-count
+                         decknix-review-board--model)))
+              (if (> need 0)
+                  (propertize (format "%s %d need you   " decknix-attention-glyph need)
+                              'face 'decknix-attention-face)
+                ""))
             ;; Auto-review state belongs HERE, not only in the Requests
             ;; transient: this is the screen where you decide what to do
             ;; about reviews, so the policy that spawns them unasked is
             ;; part of the picture rather than a setting elsewhere.
-            (propertize (format "%s   auto-review %s   auto-dismiss [%s]"
+            (propertize (format "%s   auto-review %s   re-review [%s]   auto-dismiss [%s]"
                                 (if decknix-review-board-show-all
                                     "ALL requests" "filtered")
                                 (if (fboundp 'decknix-auto-review-state-label)
                                     (format "[%s]" (decknix-auto-review-state-label
                                                     decknix-auto-review-mode))
                                   "[?]")
+                                (or decknix-review-board-auto-rereview "off")
                                 (if decknix-review-board-auto-dismiss "on" "off"))
                         'face 'font-lock-constant-face)
             "\n"
@@ -475,6 +526,7 @@ pick up."
              (concat "  n/p move   RET open   i inspect   c copy   j jump   m mark   M lane\n"
                      "  y / 1-9 answer the session at point (asks first)\n"
                      "  d dispatch  k quit   D detach  s merge  A auto-review  x auto-dismiss  f filters  g refresh  ? help\n"
+                     "  R re-review an updated PR (C-u R: acknowledge)   X cycle re-review: off / notify / auto\n"
                      "  r review a PR url not listed here\n")
              'face 'font-lock-comment-face)
             "\n"
@@ -483,7 +535,7 @@ pick up."
             "\n")
     (dolist (lane decknix-review-board-lanes)
       (let* ((rows (alist-get (car lane) decknix-review-board--model))
-             (face (if (eq (car lane) 'needs-you)
+             (face (if (memq (car lane) '(needs-you rereview))
                        'decknix-review-board-needs-you
                      'decknix-review-board-lane)))
         ;; Empty lanes are rendered too: a lane's position on screen has
@@ -956,6 +1008,15 @@ ACT
   k               quit sessions and TERMINATE their brokers (confirms)
   D               detach: close the buffer, agent keeps working
   s               merge via /merge-train     C-u s  dry run
+  R               re-review a PR updated since the review: refresh its
+                  worktree to the new head, then ask the review session
+                  (resumed, or a new one) to review only the changes since,
+                  check whether the feedback was addressed, and stop at the
+                  confirmation gate as before.  C-u R acknowledges the push
+                  without re-reviewing.  Once per head either way.
+  X               cycle what an update does: off (board only) / notify
+                  (message + needs you in the sidebar) / auto (start the
+                  re-review); see `decknix-review-board-auto-rereview\'
 
 COLUMNS
   m               `*' when marked
@@ -975,6 +1036,11 @@ PHASES  (where a review is in /review-service-pr: assess, gate, post)
                  `i' to see what happened
   \u2713  posted        the review is on GitHub (the session said so, or
                  the feed has your review); filed under Finished
+  \u2691  updated       the author pushed after the review (yours with
+                 feedback, or another reviewer\'s while your session sat
+                 finished); filed under Re-review with what changed:
+                 commits, files, your threads, a dismissed approval.
+                 Base-branch merges and same-diff rebases do not count.
   \u25cf  idle          nothing in flight
 
 BADGES
@@ -1118,9 +1184,13 @@ answering it from a screen that shows only a row."
     (unless row (user-error "No row here"))
     (let* ((title (or (plist-get row :name) (car (plist-get row :prs)) "?"))
            (url (decknix-review-board-row-url row))
-           (body (if (plist-get row :session)
-                     (decknix-review-board--inspect-session row)
-                   (decknix-review-board--inspect-request row)))
+           (body (concat
+                  (if-let* ((info (plist-get row :rereview)))
+                      (decknix-review-board-rereview-detail info)
+                    "")
+                  (if (plist-get row :session)
+                      (decknix-review-board--inspect-session row)
+                    (decknix-review-board--inspect-request row))))
            (buf (get-buffer-create decknix-review-board-inspect-buffer)))
       (with-current-buffer buf
         (let ((inhibit-read-only t))
@@ -1178,6 +1248,149 @@ a setting kept somewhere else."
   (decknix-auto-review-cycle-mode)
   (decknix-review-board-refresh))
 
+(defun decknix-review-board--rereview-refresh (owner repo number head callback)
+  "Move the review worktree for OWNER/REPO#NUMBER to HEAD, then CALLBACK."
+  (if (fboundp 'decknix--review-worktree-refresh-then)
+      (decknix--review-worktree-refresh-then owner repo number head callback)
+    (funcall callback nil)))
+
+(defun decknix-review-board--rereview-deliver (row url prompt context)
+  "Hand PROMPT to ROW's review session for URL, never taking a window.
+
+The row's own live session first.  Otherwise the re-review routing:
+another live buffer for the PR, else the saved session resumed in the
+background, else a new review whose command carries CONTEXT (the prompt
+without a worktree path, since the new session makes its own).  A busy
+session gets the prompt queued, not interleaved with its turn."
+  (let ((buf (plist-get row :buffer)))
+    (if (and (buffer-live-p buf) (fboundp 'decknix-agent-re-review-send))
+        (decknix-agent-re-review-send buf prompt t)
+      (let* ((parsed (decknix-review-board--parse-pr-url url))
+             (repo (alist-get 'repo parsed))
+             (number (alist-get 'number parsed))
+             (needle (and (fboundp 'decknix-agent-re-review-needle)
+                          (decknix-agent-re-review-needle repo number)))
+             (route (if (fboundp 'decknix-agent-re-review-target)
+                        (decknix-agent-re-review-target
+                         needle number
+                         (and (fboundp 'agent-shell-buffers) (agent-shell-buffers))
+                         (and (boundp 'decknix--sidebar-previous-sessions)
+                              decknix--sidebar-previous-sessions))
+                      (list 'fresh))))
+        (pcase (car route)
+          ('live (decknix-agent-re-review-send (cdr route) prompt t))
+          ('saved
+           (decknix--sidebar-restore-previous-session (cdr route) nil)
+           (decknix-agent-re-review--send-when-ready needle prompt nil t))
+          (_ (decknix--nav-hub-start-review-fresh url t parsed context)))))))
+
+(setq decknix-review-board-rereview-refresh-function
+      #'decknix-review-board--rereview-refresh
+      decknix-review-board-rereview-deliver-function
+      #'decknix-review-board--rereview-deliver)
+
+(defun decknix-review-board--parse-pr-url (url)
+  "Return URL's ((owner . O) (repo . R) (number . N)) alist, or nil.
+The shape `decknix--agent-parse-pr-url' returns, from the board's own
+regexp, so the board does not depend on the main package for it."
+  (when (and (stringp url)
+             (string-match decknix-review-board-pr-url-regexp url))
+    (list (cons 'owner (match-string 1 url))
+          (cons 'repo (match-string 2 url))
+          (cons 'number (match-string 3 url)))))
+
+(defun decknix-review-board--rereview-start-row (row info)
+  "Start the re-review INFO describes for ROW."
+  (let* ((url (decknix-review-board-row-url row))
+         (parsed (decknix-review-board--parse-pr-url url)))
+    (if (not parsed)
+        (message "Review Board: no PR url for %s" (car (plist-get row :prs)))
+      (decknix-review-board-rereview-start
+       row info url (alist-get 'owner parsed) (alist-get 'repo parsed)
+       (alist-get 'number parsed)))))
+
+(defun decknix-review-board-rereview (&optional acknowledge)
+  "Re-review the target rows the author updated since the review.
+
+Refreshes each PR's worktree to its new head and asks the review session
+to review only the changes since, behind the usual confirmation gate.
+With a prefix argument, ACKNOWLEDGE the push instead: the row leaves the
+Re-review lane without a re-review.  Either way, once per head."
+  (interactive "P")
+  (let* ((part (decknix-review-board-partition-targets
+                'rereview (decknix-review-board--targets)))
+         (rows (car part)))
+    (unless rows (user-error "Nothing here was updated since its review"))
+    (dolist (row rows)
+      (let ((info (plist-get row :rereview)))
+        (if acknowledge
+            (decknix-review-board-rereview-mark-seen
+             (car (plist-get row :prs)) (plist-get info :head))
+          (decknix-review-board--rereview-start-row row info))))
+    (decknix-review-board-unmark-all)
+    (decknix-review-board-refresh)
+    (decknix-review-board--report (if acknowledge "Acknowledged" "Re-reviewing")
+                                  (length rows) (length (cdr part)))))
+
+(defun decknix-review-board-cycle-auto-rereview ()
+  "Cycle `decknix-review-board-auto-rereview': off, notify, auto."
+  (interactive)
+  (setq decknix-review-board-auto-rereview
+        (pcase decknix-review-board-auto-rereview
+          ('nil 'notify) ('notify 'auto) (_ nil)))
+  (decknix-review-board-rereview-tick)
+  (decknix-review-board-refresh)
+  (message "Re-review on update: %s"
+           (pcase decknix-review-board-auto-rereview
+             ('nil "off (board only)")
+             ('notify "notify")
+             ('auto "auto (starts the re-review; never posts without you)"))))
+
+(defun decknix-review-board--rereview-candidates-p (items)
+  "Non-nil when any of ITEMS could be an update, settled session or not.
+A cheap pass over the feed so the tick builds nothing on the common
+poll where no PR moved."
+  (let ((viewer (alist-get 'viewer decknix--hub-reviews)))
+    (seq-some (lambda (item)
+                (let ((key (decknix-review-board--item-key item)))
+                  (decknix-review-board-rereview-info
+                   item t viewer (decknix-review-board-rereview-seen-head key))))
+              items)))
+
+(defun decknix-review-board--rereview-rows ()
+  "Return the board rows updated since their review."
+  (when (decknix-review-board--rereview-candidates-p
+         (alist-get 'items decknix--hub-reviews))
+    (alist-get 'rereview (decknix-review-board--build))))
+
+(defun decknix-review-board--rereview-flags (rows)
+  "Return (BUFFER . REASON) for every ROWS entry with a live session."
+  (delq nil (mapcar (lambda (row)
+                      (let ((buf (plist-get row :buffer)))
+                        (when (buffer-live-p buf)
+                          (cons buf (concat "updated: "
+                                            (decknix-review-board-rereview-summary
+                                             (plist-get row :rereview)))))))
+                    rows)))
+
+(defun decknix-review-board-rereview-tick (&rest _)
+  "Act on PRs updated since their review, after each reviews-feed refresh.
+
+Flags their sessions as needing you (sidebar Needs you, `C-c A j', the
+mode-line count), says so once per new head, and in `auto' starts the
+re-review.  Runs from the hub refresh, not the board, so it works with
+the board closed."
+  (condition-case err
+      (let ((rows (and decknix-review-board-auto-rereview
+                       (decknix-review-board--rereview-rows))))
+        (when (fboundp 'decknix-attention-set-flags)
+          (decknix-attention-set-flags (decknix-review-board--rereview-flags rows)))
+        (decknix-review-board-rereview-process
+         rows decknix-review-board-auto-rereview
+         #'decknix-review-board--rereview-start-row))
+    (error (message "Review Board re-review check failed: %s"
+                    (error-message-string err)))))
+
 (defvar decknix-review-board-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "n") #'decknix-review-board-next)
@@ -1204,6 +1417,8 @@ a setting kept somewhere else."
     (define-key map (kbd "f") #'decknix-review-board-toggle-filters)
     (define-key map (kbd "i") #'decknix-review-board-inspect)
     (define-key map (kbd "y") #'decknix-review-board-reply)
+    (define-key map (kbd "R") #'decknix-review-board-rereview)
+    (define-key map (kbd "X") #'decknix-review-board-cycle-auto-rereview)
     (dotimes (i 9)
       (define-key map (kbd (number-to-string (1+ i))) #'decknix-review-board-reply))
     (define-key map (kbd "?") #'decknix-review-board-help)
