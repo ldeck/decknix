@@ -178,5 +178,24 @@
     (should (null (decknix--agent-broker-log-path "")))
     (should (null (decknix--agent-broker-log-path nil)))))
 
+;; --- replay uses the renderer's real keyword ---------------------------
+;;
+;; Upstream declares `(cl-defun agent-shell--on-notification (&key state
+;; acp-notification))'.  The replay passed `:notification', which signals
+;; "Keyword argument :notification not one of ..." on every call; the
+;; per-notification `ignore-errors' swallowed it, so every reattached
+;; session came back with no history at all.  The stub mirrors the real
+;; signature so a wrong keyword fails here instead of silently.
+
+(ert-deftest decknix-brk/replay-calls-renderer-with-acp-notification-keyword ()
+  (let ((seen nil))
+    (cl-letf (((symbol-function 'agent-shell--state) (lambda () 'the-state))
+              ((symbol-function 'agent-shell--on-notification)
+               (cl-function
+                (lambda (&key state acp-notification)
+                  (push (cons state acp-notification) seen)))))
+      (should (= 2 (decknix--agent-broker-replay-notifications '(a b))))
+      (should (equal (nreverse seen) '((the-state . a) (the-state . b)))))))
+
 (provide 'decknix-agent-broker-rehydrate-test)
 ;;; decknix-agent-broker-rehydrate-test.el ends here

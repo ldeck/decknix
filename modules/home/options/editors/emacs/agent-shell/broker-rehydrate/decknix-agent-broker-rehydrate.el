@@ -373,7 +373,7 @@ abort the rest of the replay."
   (let ((state (agent-shell--state)))
     (dolist (n notes)
       (ignore-errors
-        (agent-shell--on-notification :state state :notification n))))
+        (agent-shell--on-notification :state state :acp-notification n))))
   (length notes))
 
 (defun decknix--agent-broker-rehydrate-buffer (&optional buffer turns)
