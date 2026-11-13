@@ -191,6 +191,31 @@ definition exists), the US Pilot board when installed, and `*Messages*`.
 of each run keeps the previous file as `emacs-layout.el.prev`, so quitting
 straight after a restart does not lose the layout worth restoring.
 
+A session's queued prompts and its unsent compose draft are saved with it.
+After a restore the draft is back in the session's compose buffer (shown
+again if its window was saved), and the queue is restored but **not sent**:
+the session may still be mid-turn behind its broker, so `C-c A Q` shows it
+and you release it.
+
+When the restart came from `decknix switch --restart-emacs`, the command
+leaves a one-shot marker (`~/.local/state/decknix/restart-restore`) and the
+first frame restores layout and sessions without asking, whatever
+`decknix-layout-restore-on-start` says. The daemon then writes
+`restart-summary.json` beside it for the command to print. A marker older
+than `decknix-layout-restart-marker-max-age` (15 minutes) is ignored.
+
+### What a reattached session shows
+
+A session whose broker survived the restart is still the same running
+agent. Its buffer now shows its last `decknix-agent-continuity-turns` (3)
+turns as a conversation above the live prompt: the agent's side styled from
+the broker log, each prompt taken from the transcript. Also restored: the
+asking/waiting state from the last turn's closing text, a permission prompt
+the agent is still waiting on (answer it as usual), `M-p` history, and the
+review-session keys. A turn that was streaming during the restart keeps
+streaming below its own beginning. `C-c A H` loads older turns (agent side
+only). Renders run one session at a time and wait while you type.
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `services.emacs.decknix.enable` | `true` | Enable Emacs daemon |

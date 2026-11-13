@@ -142,5 +142,22 @@ row on screen."
   (should-not (decknix--broker-reattach-dead-p nil))
   (should-not (decknix--broker-reattach-dead-p "")))
 
+;; The restart summary reports reattach outcomes by reason, so the CLI can
+;; say which sessions did not come back and why.
+
+(ert-deftest decknix-reattach--all-records-a-report-by-reason ()
+  (let ((decknix--broker-reattach-last-report nil))
+    (cl-letf (((symbol-function 'decknix--broker-reattach-keys)
+               (lambda () '(("k1" . t) ("k2" . t) ("k3" . t))))
+              ((symbol-function 'decknix--broker-reattach-attached-keys) (lambda () nil))
+              ((symbol-function 'decknix--broker-reattach-conv-key-for)
+               (lambda (k) (and (not (equal k "k2")) (concat "c-" k))))
+              ((symbol-function 'decknix--broker-reattach-one)
+               (lambda (k _ck) (equal k "k1")))
+              ((symbol-function 'run-at-time) #'ignore))
+      (should (= 1 (decknix-agent-broker-reattach-all t))))
+    (should (equal decknix--broker-reattach-last-report
+                   '(:done 1 :no-conv 1 :no-sid 1 :dropped 0)))))
+
 (provide 'decknix-agent-broker-reattach-test)
 ;;; decknix-agent-broker-reattach-test.el ends here

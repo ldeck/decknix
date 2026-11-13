@@ -49,6 +49,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'tab-bar)
+(require 'json)
 
 (declare-function tab-bar-tabs "tab-bar" (&optional frame))
 (declare-function tab-bar-new-tab "tab-bar" (&optional arg from-number))
@@ -70,7 +71,17 @@
 (declare-function decknix--agent-session-resume "decknix-agent-shell-main-session"
                   (session-id history-count &optional display-name workspace conv-key search-term))
 
+(declare-function decknix--compose-create-buffer "decknix-agent-shell-main-compose"
+                  (target &optional name))
+(declare-function decknix-agent-buffer-status "decknix-agent-auto-close" (buffer))
+
 (defvar decknix--agent-conv-key)
+(defvar decknix--compose-queued-prompt)
+(defvar decknix--compose-target-buffer)
+(defvar decknix--continuity-rendered)
+(defvar decknix--continuity-permission)
+(defvar decknix--broker-reattach-last-report)
+(defvar decknix-agent-broker-reattach-delay)
 (defvar agent-shell-workspace--isolation-active)
 (defvar decknix--sidebar-tile-auto-suspended)
 (defvar decknix--agent-session-workspace)
@@ -147,6 +158,9 @@ placeholder instead."
 
 (defconst decknix-layout--version 1)
 
+(defvar decknix-layout--last-restore nil
+  "Plist describing the last restore: :summary :resumed :missing :failed.")
+
 (defconst decknix-layout--frame-params '(left top width height fullscreen)
   "Frame parameters worth restoring.  All are numbers, symbols or
 `(+ N)' position forms, so they print readably.")
@@ -187,7 +201,17 @@ restore can hand it straight to the sidebar's resume path."
       (list :kind 'sidebar))
      ((decknix-layout--agent-buffer-p buffer)
       (let ((entry (decknix-layout--agent-entry buffer)))
-        (if entry (list :kind 'agent :session entry) (list :kind 'other))))
+        (if entry
+            (append (list :kind 'agent :session entry)
+                    (decknix-layout--agent-extras buffer))
+          (list :kind 'other))))
+     ((buffer-live-p (decknix-layout--local 'decknix--compose-target-buffer buffer))
+      (let ((entry (decknix-layout--agent-entry decknix--compose-target-buffer)))
+        (if entry
+            (list :kind 'compose :target entry
+                  :text (decknix-layout--draft-text
+                         (buffer-substring-no-properties (point-min) (point-max))))
+          (list :kind 'other))))
      (buffer-file-name
       (list :kind 'file :file (expand-file-name buffer-file-name)))
      ((and (derived-mode-p 'dired-mode) (stringp dired-directory))
@@ -199,6 +223,87 @@ restore can hand it straight to the sidebar's resume path."
       (list :kind 'command
             :fn (decknix-layout--recreate-fn (buffer-name buffer) major-mode)))
      (t (list :kind 'other)))))
+
+;; -- Session extras: the compose draft and the prompt queue -------------------
+;;
+;; Neither survived a restart: the queue is buffer-local on the session and
+;; a compose buffer visits no file, so both were simply gone.  They ride
+;; along with the session's buffer reference and are put back once the
+;; session's buffer exists again.
+
+(defun decknix-layout--local (symbol buffer)
+  "SYMBOL's value in BUFFER, or nil when it has none there."
+  (and (buffer-local-boundp symbol buffer) (buffer-local-value symbol buffer)))
+
+(defun decknix-layout--draft-text (text)
+  "TEXT when it holds anything but whitespace, else nil.  Pure."
+  (and (stringp text) (string-match-p "[^ \t\n]" text) text))
+
+(defun decknix-layout--queue-value (queue)
+  "QUEUE as a list of non-empty prompt strings, or nil.  Pure.
+Older sessions stored a single string."
+  (seq-filter #'decknix-layout--draft-text
+              (cond ((stringp queue) (list queue))
+                    ((listp queue) (seq-filter #'stringp queue)))))
+
+(defun decknix-layout--compose-name (buffer)
+  (format "*Compose: %s*" (buffer-name buffer)))
+
+(defun decknix-layout--agent-extras (buffer)
+  "Plist of BUFFER's queued prompts and compose draft, omitting empty ones."
+  (let ((queue (decknix-layout--queue-value
+                (decknix-layout--local 'decknix--compose-queued-prompt buffer)))
+        (draft (let ((c (get-buffer (decknix-layout--compose-name buffer))))
+                 (and (buffer-live-p c)
+                      (with-current-buffer c
+                        (decknix-layout--draft-text
+                         (buffer-substring-no-properties (point-min) (point-max))))))))
+    (append (and queue (list :queue queue))
+            (and draft (list :draft draft)))))
+
+(defun decknix-layout--compose-for (target &optional name text)
+  "Return TARGET's compose buffer, made (not shown) when absent, holding TEXT.
+NAME is the buffer name to use when making one.  Existing text is never
+overwritten."
+  (let ((buf (or (get-buffer (or name (decknix-layout--compose-name target)))
+                 (and (fboundp 'decknix--compose-create-buffer)
+                      (decknix--compose-create-buffer target name)))))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (when (and text (= (buffer-size) 0))
+          (insert text)
+          (set-buffer-modified-p nil)))
+      buf)))
+
+(defun decknix-layout--apply-extras (buffer extras)
+  "Put EXTRAS (`:queue', `:draft') back on session BUFFER.
+The queue is restored but not started: the session may be mid-turn
+behind a reattached broker, which the busy check cannot see, so sending
+is left to the user (\[decknix-agent-queue-show] shows it).  Returns
+non-nil when anything was restored."
+  (when (buffer-live-p buffer)
+    (let ((queue (decknix-layout--queue-value (plist-get extras :queue)))
+          (draft (decknix-layout--draft-text (plist-get extras :draft)))
+          (restored nil))
+      (when (and queue
+                 (null (decknix-layout--queue-value
+                        (decknix-layout--local 'decknix--compose-queued-prompt buffer))))
+        (with-current-buffer buffer
+          (setq-local decknix--compose-queued-prompt queue))
+        (setq restored t)
+        (message "decknix: %s has %d queued prompt%s from before the restart (not sent)"
+                 (buffer-name buffer) (length queue) (if (cdr queue) "s" "")))
+      (when (and draft (decknix-layout--compose-for buffer nil draft))
+        (setq restored t))
+      restored)))
+
+(defun decknix-layout--retarget-compose (placeholder target)
+  "Point compose buffers aimed at PLACEHOLDER at TARGET, renamed to match."
+  (dolist (buf (buffer-list))
+    (when (eq (decknix-layout--local 'decknix--compose-target-buffer buf) placeholder)
+      (with-current-buffer buf
+        (setq-local decknix--compose-target-buffer target)
+        (rename-buffer (decknix-layout--compose-name target) t)))))
 
 ;; -- Recreatable buffers ---------------------------------------------------
 
@@ -529,6 +634,8 @@ open off-screen; without a position the window system places it."
   "Previous-sessions entry this placeholder resumes.")
 (defvar-local decknix-layout--placeholder-target nil
   "The live session buffer once this placeholder has been resumed.")
+(defvar-local decknix-layout--placeholder-extras nil
+  "Queue and draft (see `decknix-layout--agent-extras') to restore on resume.")
 
 (defvar decknix-layout-placeholder-mode-map
   (let ((map (make-sparse-keymap)))
@@ -598,6 +705,9 @@ Returns the session buffer, or nil if it could not be resumed."
   (let* ((entry (buffer-local-value 'decknix-layout--placeholder-entry placeholder))
          (target (and entry (decknix-layout--resume-entry entry))))
     (when (buffer-live-p target)
+      (decknix-layout--retarget-compose placeholder target)
+      (decknix-layout--apply-extras
+       target (buffer-local-value 'decknix-layout--placeholder-extras placeholder))
       (with-current-buffer placeholder
         (setq decknix-layout--placeholder-target target)
         (rename-buffer (concat " " (buffer-name)) t))
@@ -627,9 +737,22 @@ session that will not resume just yields nil and the window falls back."
                      (save-window-excursion
                        (let ((b (magit-status-setup-buffer d)))
                          (and (bufferp b) b))))))
-      ('agent (let ((entry (plist-get ref :session)))
-                (or (decknix-layout--live-session-buffer entry)
-                    (decknix-layout--placeholder entry))))
+      ('agent (let* ((entry (plist-get ref :session))
+                     (live (decknix-layout--live-session-buffer entry)))
+                (if live
+                    (progn (decknix-layout--apply-extras live ref) live)
+                  (let ((ph (decknix-layout--placeholder entry)))
+                    (with-current-buffer ph
+                      (setq decknix-layout--placeholder-extras
+                            (list :queue (plist-get ref :queue)
+                                  :draft (plist-get ref :draft))))
+                    ph))))
+      ('compose (let* ((entry (plist-get ref :target))
+                       (target (or (decknix-layout--live-session-buffer entry)
+                                   (decknix-layout--placeholder entry))))
+                  (decknix-layout--compose-for
+                   target (and (not (decknix-layout--agent-buffer-p target)) name)
+                   (plist-get ref :text))))
       ('sidebar (get-buffer-create agent-shell-workspace-sidebar-buffer-name))
       ('command (or (get-buffer name)
                     (decknix-layout--recreate name (plist-get ref :fn))))
@@ -720,6 +843,7 @@ selected one first, and makes more as needed."
                      (user-error "Restore needs a GUI frame")))
          (missing 0)
          (resumed 0)
+         (failed nil)
          (selected nil))
     ;; The restored windows are the arrangement the user had.  The sidebar
     ;; tile preference would otherwise re-tile the selected frame on its
@@ -753,11 +877,19 @@ selected one first, and makes more as needed."
           (when (and (buffer-live-p buf)
                      (buffer-local-value 'decknix-layout--placeholder-entry buf)
                      (not (buffer-local-value 'decknix-layout--placeholder-target buf))
-                     (condition-case err
-                         (decknix-layout--resume-placeholder buf)
-                       (error (message "decknix: resume failed: %s"
-                                       (error-message-string err))
-                              nil)))
+                     (let ((name (alist-get 'name (buffer-local-value
+                                                   'decknix-layout--placeholder-entry buf))))
+                       (or (condition-case err
+                               (decknix-layout--resume-placeholder buf)
+                             (error (push (cons name (error-message-string err)) failed)
+                                    (message "decknix: resume failed: %s"
+                                             (error-message-string err))
+                                    nil))
+                           (progn
+                             (unless (assoc name failed)
+                               (push (cons name "no session to resume (RET on its placeholder retries)")
+                                     failed))
+                             nil))))
             (setq resumed (1+ resumed)))))
       ;; A sidebar shown only in a background tab was created as a plain
       ;; buffer; give it its mode and content now, not when that tab is
@@ -774,6 +906,9 @@ selected one first, and makes more as needed."
                (get-buffer agent-shell-workspace-sidebar-buffer-name))
       (add-hook 'tab-bar-tab-post-select-functions #'agent-shell-workspace--on-tab-selected)
       (ignore-errors (agent-shell-workspace--on-tab-selected)))
+    (setq decknix-layout--last-restore
+          (list :summary (decknix-layout--summary layout)
+                :resumed resumed :missing missing :failed (nreverse failed)))
     (message "decknix: restored %s%s%s"
              (decknix-layout--summary layout)
              (if sessions (format "; resumed %d" resumed) "; sessions resume on RET")
@@ -782,24 +917,163 @@ selected one first, and makes more as needed."
                          missing (if (= missing 1) "" "s"))
                ""))))
 
+;; -- Restart initiated by `decknix switch --restart-emacs' -------------------
+;;
+;; The command asks the running daemon to save (`decknix-layout-prepare-
+;; restart', which returns at once and writes a ready file when done), runs
+;; the switch, writes `decknix-layout-restart-marker-file', restarts the
+;; daemon and opens a frame.  The new daemon's first frame sees the marker,
+;; deletes it (one-shot) and restores layout and sessions without asking,
+;; then writes `decknix-layout-restart-summary-file' for the command to
+;; print once the broker reattach has settled.
+
+(defun decknix-layout--state-file (name)
+  (expand-file-name (concat "decknix/" name)
+                    (or (getenv "XDG_STATE_HOME")
+                        (expand-file-name ".local/state" "~"))))
+
+(defcustom decknix-layout-restart-marker-file
+  (decknix-layout--state-file "restart-restore")
+  "Marker written by `decknix switch --restart-emacs' before it restarts Emacs.
+Its presence makes the next first-frame restore automatic, once."
+  :type 'file :group 'decknix-layout-persist)
+
+(defcustom decknix-layout-restart-summary-file
+  (decknix-layout--state-file "restart-summary.json")
+  "Where the restored daemon reports what came back, for the CLI to print."
+  :type 'file :group 'decknix-layout-persist)
+
+(defcustom decknix-layout-restart-marker-max-age 900
+  "Seconds after which a restart marker is ignored (and removed).
+A marker left by a restart that never opened a frame must not turn a
+much later, unrelated start into an unprompted restore."
+  :type 'integer :group 'decknix-layout-persist)
+
+(defun decknix-layout--consume-restart-marker (&optional file now)
+  "Non-nil when FILE (the restart marker) exists and is fresh at NOW.
+Deletes the marker either way, so it acts once."
+  (let* ((file (or file decknix-layout-restart-marker-file))
+         (attrs (file-attributes file)))
+    (when attrs
+      (ignore-errors (delete-file file))
+      (< (- (or now (float-time))
+            (float-time (file-attribute-modification-time attrs)))
+         decknix-layout-restart-marker-max-age))))
+
+;;;###autoload
+(defun decknix-layout-prepare-restart (ready-file)
+  "Save the layout for an imminent restart, then write READY-FILE.
+Returns at once: the save runs from a timer, so the `emacsclient' call
+that asks for it never holds the daemon or the user's frames.  READY-FILE
+gets a one-line JSON summary when the save is done."
+  (run-with-timer 0 nil #'decknix-layout--prepare-restart-now ready-file)
+  t)
+
+(defun decknix-layout--prepare-restart-now (ready-file)
+  (let* ((layout (ignore-errors (decknix-layout--capture t)))
+         (saved (and layout (ignore-errors
+                              (or (decknix-layout--write layout)
+                                  (equal (decknix-layout--print
+                                          (decknix-layout--comparable layout))
+                                         decknix-layout--last-written))))))
+    (ignore-errors
+      (make-directory (file-name-directory ready-file) t)
+      (with-temp-file ready-file
+        (insert (json-encode
+                 `((saved . ,(if saved t :json-false))
+                   (layout . ,(if layout (decknix-layout--summary layout) "no GUI frames"))
+                   (sessions . ,(if layout
+                                    (length (decknix-layout--session-entries layout))
+                                  0))))
+                "\n")))))
+
+(defun decknix-layout--restart-summary-data (restore sessions reattach)
+  "JSON-ready alist from RESTORE, SESSIONS and REATTACH.  Pure.
+RESTORE is `decknix-layout--last-restore' (or nil when nothing was
+restored), SESSIONS a list of plists (:name :status :history :permission)
+for every agent buffer, REATTACH the broker reattach report plist."
+  `((layout . ,(or (plist-get restore :summary) :json-null))
+    (resumed . ,(or (plist-get restore :resumed) 0))
+    (missingBuffers . ,(or (plist-get restore :missing) 0))
+    (failed . ,(vconcat (mapcar (lambda (f) `((name . ,(or (car f) "?"))
+                                              (reason . ,(cdr f))))
+                                (plist-get restore :failed))))
+    (sessions . ,(vconcat
+                  (mapcar (lambda (s)
+                            `((name . ,(plist-get s :name))
+                              (status . ,(or (plist-get s :status) "unknown"))
+                              (historyTurns . ,(or (plist-get s :history) :json-null))
+                              (permission . ,(if (plist-get s :permission) t :json-false))))
+                          sessions)))
+    (reattach . ((done . ,(or (plist-get reattach :done) 0))
+                 (noConversation . ,(or (plist-get reattach :no-conv) 0))
+                 (noSessionId . ,(or (plist-get reattach :no-sid) 0))
+                 (dropped . ,(or (plist-get reattach :dropped) 0))))))
+
+(defun decknix-layout--live-sessions-report ()
+  (let (out)
+    (dolist (buf (buffer-list))
+      (when (decknix-layout--agent-buffer-p buf)
+        (push (list :name (substring-no-properties (buffer-name buf))
+                    :status (and (fboundp 'decknix-agent-buffer-status)
+                                 (ignore-errors (decknix-agent-buffer-status buf)))
+                    :history (decknix-layout--local 'decknix--continuity-rendered buf)
+                    :permission (decknix-layout--local 'decknix--continuity-permission buf))
+              out)))
+    (nreverse out)))
+
+(defun decknix-layout-write-restart-summary ()
+  "Write what the restart brought back to `decknix-layout-restart-summary-file'."
+  (ignore-errors
+    (make-directory (file-name-directory decknix-layout-restart-summary-file) t)
+    (let ((tmp (make-temp-file (concat decknix-layout-restart-summary-file ".tmp-"))))
+      (with-temp-file tmp
+        (insert (json-encode
+                 (decknix-layout--restart-summary-data
+                  decknix-layout--last-restore
+                  (decknix-layout--live-sessions-report)
+                  (bound-and-true-p decknix--broker-reattach-last-report)))
+                "\n"))
+      (rename-file tmp decknix-layout-restart-summary-file t))))
+
+(defun decknix-layout--summary-delay (uptime)
+  "Seconds to wait before summarising, given daemon UPTIME.  Pure-ish.
+After the broker reattach (its delay plus its dead-agent sweep), so the
+report names what actually stayed."
+  (max 3 (- (+ (if (boundp 'decknix-agent-broker-reattach-delay)
+                   decknix-agent-broker-reattach-delay
+                 12)
+               10)
+            uptime)))
+
+(defun decknix-layout--schedule-restart-summary ()
+  (run-with-timer (decknix-layout--summary-delay
+                   (float-time (time-subtract nil before-init-time)))
+                  nil #'decknix-layout-write-restart-summary))
+
 ;; -- Startup offer ------------------------------------------------------------
 
 (defvar decknix-layout--offered nil
   "Non-nil once this daemon has offered the saved layout.")
 
-(defun decknix-layout--offer (frame)
-  "Offer the saved layout in FRAME, per `decknix-layout-restore-on-start'."
+(defun decknix-layout--offer (frame &optional restart)
+  "Offer the saved layout in FRAME, per `decknix-layout-restore-on-start'.
+RESTART non-nil means `decknix switch --restart-emacs' asked for this
+restart: restore layout and sessions without asking, then report."
   (when (frame-live-p frame)
     (with-selected-frame frame
       (let ((layout (decknix-layout--read-file))
             (now (float-time)))
+        (when restart
+          (setq decknix-layout--last-restore nil)
+          (decknix-layout--schedule-restart-summary))
         (when (and layout (decknix-layout--recent-p layout now))
           (let ((desc (format "%s, saved %s" (decknix-layout--summary layout)
                               (decknix-layout--age-string layout now)))
                 (key (substitute-command-keys "\\[decknix-layout-restore]")))
-            (pcase decknix-layout-restore-on-start
+            (pcase (if restart t decknix-layout-restore-on-start)
               ('notify (message "decknix: saved layout (%s); %s restores it" desc key))
-              ('t (decknix-layout-restore nil decknix-layout-restore-sessions))
+              ('t (decknix-layout-restore nil (or restart decknix-layout-restore-sessions)))
               ('ask
                (pcase (condition-case nil
                           (read-char-choice
@@ -811,10 +1085,10 @@ selected one first, and makes more as needed."
                  (?l (decknix-layout-restore nil nil))
                  (_ (message "decknix: not restored; %s restores it later" key)))))))))))
 
-(defun decknix-layout--offer-safely (frame)
+(defun decknix-layout--offer-safely (frame &optional restart)
   "`decknix-layout--offer' from a timer: report errors instead of raising them."
   (condition-case err
-      (decknix-layout--offer frame)
+      (decknix-layout--offer frame restart)
     (error (message "decknix: layout restore failed: %s" (error-message-string err)))))
 
 (defun decknix-layout--maybe-offer ()
@@ -825,10 +1099,11 @@ asked for the frame."
   (let ((frame (selected-frame)))
     (when (and (not decknix-layout--offered)
                (not noninteractive)
-               decknix-layout-restore-on-start
                (display-graphic-p frame))
-      (setq decknix-layout--offered t)
-      (run-with-idle-timer 0.5 nil #'decknix-layout--offer-safely frame))))
+      (let ((restart (decknix-layout--consume-restart-marker)))
+        (when (or restart decknix-layout-restore-on-start)
+          (setq decknix-layout--offered t)
+          (run-with-idle-timer 0.5 nil #'decknix-layout--offer-safely frame restart))))))
 
 ;; -- Hooks --------------------------------------------------------------------
 

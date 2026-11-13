@@ -536,6 +536,7 @@ let
     testFiles = [
       "decknix-layout-persist-fixture.el"
       "decknix-layout-persist-test.el"
+      "decknix-layout-restart-test.el"
     ];
   };
 

@@ -312,6 +312,10 @@ conversation's model."
            name ws conv-key))
         t))))
 
+(defvar decknix--broker-reattach-last-report nil
+  "Plist from the last reattach run: :done :no-conv :no-sid :dropped.
+Read by the restart summary that `decknix switch --restart-emacs' prints.")
+
 ;;;###autoload
 (defun decknix-agent-broker-reattach-all (&optional quiet)
   "Reattach every orphaned live broker to its conversation.
@@ -340,12 +344,16 @@ With QUIET, does not message."
     ;; only shows as `killed' a moment later.  Sweep once, off the
     ;; startup path, rather than leaving the row in Live (see
     ;; `decknix--broker-reattach-sweep-dead').
+    (setq decknix--broker-reattach-last-report
+          (list :done done :no-conv no-conv :no-sid no-sid :dropped 0))
     (when (> done 0)
       (let ((keys (mapcar #'car plan)))
         (run-at-time
          6 nil
          (lambda ()
            (let ((n (decknix--broker-reattach-sweep-dead keys)))
+             (setq decknix--broker-reattach-last-report
+                   (plist-put decknix--broker-reattach-last-report :dropped n))
              (when (and (> n 0) (not quiet))
                (message "decknix: dropped %d reattached session%s with no agent"
                         n (if (= n 1) "" "s"))))))))

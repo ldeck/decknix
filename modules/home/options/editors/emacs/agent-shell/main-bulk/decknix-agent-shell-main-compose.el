@@ -965,6 +965,30 @@ after pressing C-c."
 ;; interactive `decknix-agent-compose' / `-submit' entry points,
 ;; the minor mode and its keymap stay here per AGENTS.md Rule 2.
 
+(defun decknix--compose-create-buffer (target &optional name)
+  "Create the compose buffer for TARGET without displaying it.
+NAME defaults to the `*Compose: TARGET*' convention.  Also used by the
+layout restore to bring a draft back after a restart."
+  (let ((compose-buf (generate-new-buffer
+                      (or name (format "*Compose: %s*" (buffer-name target))))))
+    (with-current-buffer compose-buf
+      (text-mode)
+      (decknix-agent-compose-mode 1)
+      ;; Enable yasnippet with agent-shell-mode snippets.
+      ;; The buffer is text-mode, so yas only sees text-mode
+      ;; snippets by default.  yas-activate-extra-mode adds
+      ;; agent-shell-mode's snippet table as well.
+      (when (fboundp 'yas-minor-mode)
+        (yas-minor-mode 1)
+        (yas-activate-extra-mode 'agent-shell-mode))
+      (setq-local decknix--compose-target-buffer target)
+      (setq-local decknix--compose-sticky decknix-agent-compose-sticky)
+      ;; Enable slash command (/) and file (@) completion
+      (decknix--compose-setup-completion)
+      (decknix--compose-update-header-line)
+      (set-buffer-modified-p nil))
+    compose-buf))
+
 (defun decknix--compose-get-or-create (target)
   "Get the existing compose buffer for TARGET, or create a new one.
 If a compose buffer already exists and is visible, just select it."
@@ -978,27 +1002,10 @@ If a compose buffer already exists and is visible, just select it."
                            (decknix--compose-display-action)))
           (select-window (get-buffer-window existing))
           existing)
-      ;; Create new compose buffer
-      (let ((compose-buf (generate-new-buffer compose-name)))
+      (let ((compose-buf (decknix--compose-create-buffer target)))
         (display-buffer compose-buf
                         (decknix--compose-display-action))
         (select-window (get-buffer-window compose-buf))
-        (with-current-buffer compose-buf
-          (text-mode)
-          (decknix-agent-compose-mode 1)
-          ;; Enable yasnippet with agent-shell-mode snippets.
-          ;; The buffer is text-mode, so yas only sees text-mode
-          ;; snippets by default.  yas-activate-extra-mode adds
-          ;; agent-shell-mode's snippet table as well.
-          (when (fboundp 'yas-minor-mode)
-            (yas-minor-mode 1)
-            (yas-activate-extra-mode 'agent-shell-mode))
-          (setq-local decknix--compose-target-buffer target)
-          (setq-local decknix--compose-sticky decknix-agent-compose-sticky)
-          ;; Enable slash command (/) and file (@) completion
-          (decknix--compose-setup-completion)
-          (decknix--compose-update-header-line)
-          (set-buffer-modified-p nil))
         compose-buf))))
 
 (defun decknix-agent-compose ()
