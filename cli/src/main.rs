@@ -14,6 +14,7 @@ mod session_lookup;
 mod session_archive;
 mod repo_sync;
 mod wt_finished;
+mod emacs_cycle;
 
 // 1. Static Core Commands
 #[derive(Parser)]
@@ -54,6 +55,13 @@ enum Commands {
         /// resolves against the published flake inputs.
         #[arg(long)]
         no_overrides: bool,
+
+        /// Also restart the Emacs daemon and bring every window and agent session
+        /// back: saves the layout first, switches, restarts the daemon (only if the
+        /// switch succeeded and Emacs is behind the profile), opens a frame, restores
+        /// without prompting and prints what came back.
+        #[arg(long, conflicts_with = "dry_run")]
+        restart_emacs: bool,
     },
     /// Manage git worktrees
     Wt {
@@ -1023,15 +1031,38 @@ fn emacs_switch_status(old_binary: &str, new_binary: &str, loaded: &str, current
     }
 }
 
-/// Report daemon status after activation (or a no-op switch). This is diagnostic
-/// only: never kill a daemon holding active agent sessions just to load Elisp.
-fn report_emacs_switch_status() {
-    let Some(home) = dirs::home_dir() else { return };
+/// What the running Emacs daemon has loaded, relative to the profile.
+enum EmacsStatus {
+    /// Could not tell; the message says why.
+    Unknown(&'static str),
+    /// Running the profile's binary and config.
+    Current(&'static str),
+    /// Behind the profile; a restart loads the change.
+    Stale(&'static str),
+}
+
+impl EmacsStatus {
+    /// Whether a restart is needed, or None when unknown.
+    fn stale(&self) -> Option<bool> {
+        match self {
+            EmacsStatus::Unknown(_) => None,
+            EmacsStatus::Current(_) => Some(false),
+            EmacsStatus::Stale(_) => Some(true),
+        }
+    }
+}
+
+fn emacs_status() -> EmacsStatus {
+    let Some(home) = dirs::home_dir() else { return EmacsStatus::Unknown("no home directory") };
     let profile = home.join(".nix-profile/bin/emacs");
-    let Ok(profile) = fs::canonicalize(profile) else { return };
-    let Some(new_wrapper) = profile.parent().map(|p| p.join(".emacs-wrapped")) else { return };
+    let Ok(profile) = fs::canonicalize(profile) else { return EmacsStatus::Unknown("no Emacs in the profile") };
+    let Some(new_wrapper) = profile.parent().map(|p| p.join(".emacs-wrapped")) else {
+        return EmacsStatus::Unknown("no Emacs wrapper in the profile");
+    };
     let Some((new_binary, current)) = fs::read_to_string(new_wrapper)
-        .ok().and_then(|s| emacs_wrapper_paths(&s)) else { return };
+        .ok().and_then(|s| emacs_wrapper_paths(&s)) else {
+        return EmacsStatus::Unknown("could not read the profile's Emacs wrapper");
+    };
 
     // A bounded query: the daemon can be busy restoring sessions. Do not hang
     // `decknix switch` waiting for it. invocation-directory points to the
@@ -1040,33 +1071,40 @@ fn report_emacs_switch_status() {
         "(format \"%s|%s|%s\" invocation-directory (if (boundp 'deckmacs--loaded-store-path) (or deckmacs--loaded-store-path \"\") \"\") (if (fboundp 'deckmacs-reload) \"yes\" \"no\"))"])
         .output();
     let Ok(output) = output else {
-        eprintln!("⚠️  Could not check Emacs daemon status; check it before restarting.");
-        return;
+        return EmacsStatus::Unknown("Could not check Emacs daemon status; check it before restarting.");
     };
     if !output.status.success() {
-        eprintln!("⚠️  Emacs daemon did not respond within 5s; cannot tell whether a restart is needed.");
-        return;
+        return EmacsStatus::Unknown("Emacs daemon did not respond within 5s; cannot tell whether a restart is needed.");
     }
     let reply = String::from_utf8_lossy(&output.stdout);
     let reply = reply.trim().trim_matches('"');
     let mut fields = reply.split('|');
     let (Some(directory), Some(loaded), Some(reload)) = (fields.next(), fields.next(), fields.next()) else {
-        eprintln!("⚠️  Could not read Emacs daemon status; no restart attempted.");
-        return;
+        return EmacsStatus::Unknown("Could not read Emacs daemon status; no restart attempted.");
     };
     let Some((old_binary, _)) = fs::read_to_string(Path::new(directory).join(".emacs-wrapped"))
         .ok().and_then(|s| emacs_wrapper_paths(&s)) else {
-        eprintln!("⚠️  Could not identify running Emacs binary; no restart attempted.");
-        return;
+        return EmacsStatus::Unknown("Could not identify running Emacs binary; no restart attempted.");
     };
     let status = emacs_switch_status(&old_binary, &new_binary, loaded, &current, reload == "yes");
     if old_binary != new_binary || loaded != current {
-        eprintln!("\x1b[1;33m⚠️  EMACS RESTART NEEDED: {status}\x1b[0m");
+        EmacsStatus::Stale(status)
     } else {
-        eprintln!("ℹ️  {status}");
+        EmacsStatus::Current(status)
     }
-    if old_binary != new_binary || loaded != current {
-        eprintln!("   To restart: launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server");
+}
+
+/// Report daemon status after activation (or a no-op switch). This is diagnostic
+/// only: never kill a daemon holding active agent sessions just to load Elisp.
+fn report_emacs_switch_status() {
+    match emacs_status() {
+        EmacsStatus::Unknown(msg) => eprintln!("⚠️  {msg}"),
+        EmacsStatus::Current(msg) => eprintln!("ℹ️  {msg}"),
+        EmacsStatus::Stale(msg) => {
+            eprintln!("\x1b[1;33m⚠️  EMACS RESTART NEEDED: {msg}\x1b[0m");
+            eprintln!("   To restart and restore every session: decknix switch --restart-emacs");
+            eprintln!("   (or by hand: launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server)");
+        }
     }
 }
 
@@ -1109,6 +1147,7 @@ fn kill_emacs_daemon() {
 fn restart_changed_agents(
     before: &HashMap<String, u64>,
     after: &HashMap<String, u64>,
+    skip_emacs: bool,
 ) {
     let uid = unsafe { libc::getuid() };
 
@@ -1135,6 +1174,10 @@ fn restart_changed_agents(
     // Restart changed services
     for label in &changed {
         let target = format!("gui/{}/{}", uid, label);
+        if skip_emacs && label.contains("emacs") {
+            eprintln!("⏭️  {} changed; restarting it after the switch (--restart-emacs).", label);
+            continue;
+        }
         eprintln!("🔄 Restarting {}...", label);
 
         // For emacs-server: kill any orphaned daemon processes first.
@@ -1413,6 +1456,209 @@ fn clean_one_worktree(
     }
 }
 
+/// A switch that failed, carrying the exit code to propagate.
+#[derive(Debug)]
+struct SwitchFailed(i32);
+
+impl std::fmt::Display for SwitchFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "switch failed (exit {})", self.0)
+    }
+}
+
+impl std::error::Error for SwitchFailed {}
+
+/// Build and activate the system.  With CYCLING, the Emacs daemon is left
+/// to `--restart-emacs` (not restarted here even if its plist changed) and
+/// its status is not reported, since the cycle checks and restarts it.
+fn run_switch(
+    dry_run: bool,
+    force: bool,
+    r#override: Vec<String>,
+    no_overrides: bool,
+    cycling: bool,
+) -> anyhow::Result<emacs_cycle::SwitchOutcome> {
+    // darwin-rebuild switch --dry-run still activates; use 'build' for true dry run
+    let action = if dry_run { "build" } else { "switch" };
+
+    // Always run from the decknix config directory so --flake .#default resolves correctly
+    let config_dir = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".config/decknix");
+    if !config_dir.is_dir() {
+        anyhow::bail!(
+            "Config directory '{}' not found. Run bootstrap first.",
+            config_dir.display()
+        );
+    }
+
+    // Load persistent overrides from settings.toml (silently empty if absent).
+    let settings_path = config_dir.join("settings.toml");
+    let config_overrides = load_switch_overrides_from_settings(&settings_path)?;
+
+    // Collect raw CLI overrides as (name, raw_path) pairs before resolving,
+    // so merge_override_sources can decide which layer wins per-input.
+    let cli_raw: Vec<(String, String)> = r#override.iter()
+        .map(|s| s.split_once('=')
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .ok_or_else(|| anyhow::anyhow!(
+                "--override '{}': expected INPUT=PATH format (e.g. my-org=~/Code/my-org/my-org-config)",
+                s
+            )))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    // Merge, then resolve each raw path. Resolution errors are attributed
+    // to their source so users know which layer produced a bad path.
+    let merged = merge_override_sources(&config_overrides, &cli_raw, no_overrides);
+    let mut overrides: Vec<(String, PathBuf)> = Vec::with_capacity(merged.len());
+    let mut sources: Vec<OverrideSource> = Vec::with_capacity(merged.len());
+    for (name, raw_path, src) in &merged {
+        let context = match src {
+            OverrideSource::Cli => format!("--override {}", name),
+            OverrideSource::Config => format!("settings.toml [switch.overrides].{}", name),
+        };
+        let path = resolve_path(raw_path, &context)?;
+        overrides.push((name.clone(), path));
+        sources.push(*src);
+    }
+
+    // Preflight: evaluate the derivation's output path and compare with
+    // /run/current-system. Evaluation (not a full build) is enough to tell
+    // whether the system will change, so this stays fast even for a large
+    // config. When identical (and not forced or dry-run), skip sudo
+    // activation entirely and just verify LaunchAgents are still running.
+    // When it differs, darwin-rebuild performs the actual build during
+    // activation (and reuses this evaluation).
+    if !dry_run && !force {
+        println!("🔍 Preflight: evaluating system derivation...");
+        match eval_system_path(&config_dir, &overrides) {
+            Ok(new_path) => {
+                if let Some(current_path) = current_system_path() {
+                    if new_path == current_path {
+                        println!("✅ Already up to date");
+                        println!("   {}", new_path.display());
+                        verify_launch_agents();
+                        if !cycling {
+                            report_emacs_switch_status();
+                        }
+                        return Ok(emacs_cycle::SwitchOutcome::UpToDate);
+                    }
+                    eprintln!("📦 System will change:");
+                    eprintln!("   old: {}", current_path.display());
+                    eprintln!("   new: {}", new_path.display());
+                }
+            }
+            Err(e) => {
+                eprintln!("❌ Preflight build failed:");
+                eprintln!("{}", e);
+                return Err(SwitchFailed(1).into());
+            }
+        }
+    }
+
+    // Snapshot LaunchAgents before switch (for restart detection)
+    let agents_before = if !dry_run { snapshot_launch_agents() } else { HashMap::new() };
+
+    let mut cmd = Command::new("sudo");
+    cmd.current_dir(&config_dir)
+        .arg("darwin-rebuild").arg(action)
+        .arg("--flake").arg(".#default")
+        .arg("--impure");
+
+    // Apply all overrides
+    for (input_name, path) in &overrides {
+        cmd.arg("--override-input").arg(input_name)
+            .arg(format!("path:{}", path.display()));
+    }
+
+    // Status message — annotate each override with its source so users
+    // can see at a glance whether an override came from settings.toml or
+    // the CLI (helpful when debugging an unexpected switch target).
+    if overrides.is_empty() {
+        println!("{}", if dry_run { "🔍 Dry run..." } else { "🔄 Switching..." });
+    } else {
+        let labels: Vec<String> = overrides.iter()
+            .zip(sources.iter())
+            .map(|((name, path), src)| {
+                let tag = match src {
+                    OverrideSource::Config => " [config]",
+                    OverrideSource::Cli => "",
+                };
+                format!("{}={}{}", name, path.display(), tag)
+            })
+            .collect();
+        let icon = if dry_run { "🔍 Dry run" } else { "🔄 Switching" };
+        println!("{} ({})...", icon, labels.join(", "));
+    }
+
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(SwitchFailed(status.code().unwrap_or(1)).into());
+    }
+
+    // After successful switch, restart any changed user LaunchAgents
+    if !dry_run {
+        let agents_after = snapshot_launch_agents();
+        restart_changed_agents(&agents_before, &agents_after, cycling);
+        if !cycling {
+            report_emacs_switch_status();
+        }
+    }
+    Ok(emacs_cycle::SwitchOutcome::Switched)
+}
+
+/// `decknix switch --restart-emacs`: see `emacs_cycle`.  Exits non-zero
+/// when the switch or the restart failed.
+fn run_switch_restart_emacs(force: bool, r#override: Vec<String>, no_overrides: bool) {
+    let mut env = emacs_cycle::RealEnv::new();
+    let paths = emacs_cycle::CyclePaths::in_dir(&emacs_cycle::state_dir());
+    let timeouts = emacs_cycle::CycleTimeouts::default();
+    let result = emacs_cycle::run_cycle(
+        &mut env,
+        &paths,
+        &timeouts,
+        |_| run_switch(false, force, r#override, no_overrides, true),
+        |_| emacs_status().stale(),
+    );
+    match result {
+        Ok(emacs_cycle::CycleOutcome::NothingToRestart) => {
+            eprintln!("✅ Emacs already runs the current config; nothing to restart.");
+        }
+        Ok(emacs_cycle::CycleOutcome::Restarted(report)) => {
+            eprintln!(
+                "✅ Emacs restarted (pid {} -> {}).",
+                report.old_pid.map(|p| p.to_string()).unwrap_or_else(|| "none".into()),
+                report.new_pid
+            );
+            if !report.frame_opened {
+                eprintln!("⚠️  Could not open a frame; run `nix-open emacs` to restore.");
+            }
+            match &report.summary {
+                Some(v) => {
+                    for line in emacs_cycle::format_summary(v) {
+                        eprintln!("   {line}");
+                    }
+                }
+                None => eprintln!(
+                    "⚠️  No restore report within {}s; the restore may still be running (see *Messages*, or {}).",
+                    timeouts.summary.as_secs(),
+                    paths.summary.display()
+                ),
+            }
+        }
+        Err(e) => match e.downcast_ref::<SwitchFailed>() {
+            Some(SwitchFailed(code)) => {
+                eprintln!("❌ Switch failed; the Emacs daemon was not restarted.");
+                std::process::exit(*code)
+            }
+            None => {
+                eprintln!("❌ {e}");
+                std::process::exit(1)
+            }
+        },
+    }
+}
+
 fn main() -> anyhow::Result<()> {
 
     let extensions = load_merged_extensions();
@@ -1421,128 +1667,16 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Switch { dry_run, force, r#override, no_overrides }) => {
-            // darwin-rebuild switch --dry-run still activates; use 'build' for true dry run
-            let action = if dry_run { "build" } else { "switch" };
-
-            // Always run from the decknix config directory so --flake .#default resolves correctly
-            let config_dir = dirs::home_dir()
-                .unwrap_or_default()
-                .join(".config/decknix");
-            if !config_dir.is_dir() {
-                anyhow::bail!(
-                    "Config directory '{}' not found. Run bootstrap first.",
-                    config_dir.display()
-                );
-            }
-
-            // Load persistent overrides from settings.toml (silently empty if absent).
-            let settings_path = config_dir.join("settings.toml");
-            let config_overrides = load_switch_overrides_from_settings(&settings_path)?;
-
-            // Collect raw CLI overrides as (name, raw_path) pairs before resolving,
-            // so merge_override_sources can decide which layer wins per-input.
-            let cli_raw: Vec<(String, String)> = r#override.iter()
-                .map(|s| s.split_once('=')
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .ok_or_else(|| anyhow::anyhow!(
-                        "--override '{}': expected INPUT=PATH format (e.g. my-org=~/Code/my-org/my-org-config)",
-                        s
-                    )))
-                .collect::<anyhow::Result<Vec<_>>>()?;
-
-            // Merge, then resolve each raw path. Resolution errors are attributed
-            // to their source so users know which layer produced a bad path.
-            let merged = merge_override_sources(&config_overrides, &cli_raw, no_overrides);
-            let mut overrides: Vec<(String, PathBuf)> = Vec::with_capacity(merged.len());
-            let mut sources: Vec<OverrideSource> = Vec::with_capacity(merged.len());
-            for (name, raw_path, src) in &merged {
-                let context = match src {
-                    OverrideSource::Cli => format!("--override {}", name),
-                    OverrideSource::Config => format!("settings.toml [switch.overrides].{}", name),
-                };
-                let path = resolve_path(raw_path, &context)?;
-                overrides.push((name.clone(), path));
-                sources.push(*src);
-            }
-
-            // Preflight: evaluate the derivation's output path and compare with
-            // /run/current-system. Evaluation (not a full build) is enough to tell
-            // whether the system will change, so this stays fast even for a large
-            // config. When identical (and not forced or dry-run), skip sudo
-            // activation entirely and just verify LaunchAgents are still running.
-            // When it differs, darwin-rebuild performs the actual build during
-            // activation (and reuses this evaluation).
-            if !dry_run && !force {
-                println!("🔍 Preflight: evaluating system derivation...");
-                match eval_system_path(&config_dir, &overrides) {
-                    Ok(new_path) => {
-                        if let Some(current_path) = current_system_path() {
-                            if new_path == current_path {
-                                println!("✅ Already up to date");
-                                println!("   {}", new_path.display());
-                                verify_launch_agents();
-                                report_emacs_switch_status();
-                                return Ok(());
-                            }
-                            eprintln!("📦 System will change:");
-                            eprintln!("   old: {}", current_path.display());
-                            eprintln!("   new: {}", new_path.display());
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("❌ Preflight build failed:");
-                        eprintln!("{}", e);
-                        std::process::exit(1);
+        Some(Commands::Switch { dry_run, force, r#override, no_overrides, restart_emacs }) => {
+            if !restart_emacs {
+                if let Err(e) = run_switch(dry_run, force, r#override, no_overrides, false) {
+                    match e.downcast_ref::<SwitchFailed>() {
+                        Some(SwitchFailed(code)) => std::process::exit(*code),
+                        None => return Err(e),
                     }
                 }
-            }
-
-            // Snapshot LaunchAgents before switch (for restart detection)
-            let agents_before = if !dry_run { snapshot_launch_agents() } else { HashMap::new() };
-
-            let mut cmd = Command::new("sudo");
-            cmd.current_dir(&config_dir)
-                .arg("darwin-rebuild").arg(action)
-                .arg("--flake").arg(".#default")
-                .arg("--impure");
-
-            // Apply all overrides
-            for (input_name, path) in &overrides {
-                cmd.arg("--override-input").arg(input_name)
-                    .arg(format!("path:{}", path.display()));
-            }
-
-            // Status message — annotate each override with its source so users
-            // can see at a glance whether an override came from settings.toml or
-            // the CLI (helpful when debugging an unexpected switch target).
-            if overrides.is_empty() {
-                println!("{}", if dry_run { "🔍 Dry run..." } else { "🔄 Switching..." });
             } else {
-                let labels: Vec<String> = overrides.iter()
-                    .zip(sources.iter())
-                    .map(|((name, path), src)| {
-                        let tag = match src {
-                            OverrideSource::Config => " [config]",
-                            OverrideSource::Cli => "",
-                        };
-                        format!("{}={}{}", name, path.display(), tag)
-                    })
-                    .collect();
-                let icon = if dry_run { "🔍 Dry run" } else { "🔄 Switching" };
-                println!("{} ({})...", icon, labels.join(", "));
-            }
-
-            let status = cmd.status()?;
-            if !status.success() {
-                std::process::exit(status.code().unwrap_or(1));
-            }
-
-            // After successful switch, restart any changed user LaunchAgents
-            if !dry_run {
-                let agents_after = snapshot_launch_agents();
-                restart_changed_agents(&agents_before, &agents_after);
-                report_emacs_switch_status();
+                run_switch_restart_emacs(force, r#override, no_overrides);
             }
         }
         Some(Commands::Update { input }) => {

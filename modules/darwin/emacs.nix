@@ -155,7 +155,8 @@ in
         '"current"') echo "emacs: configuration already loaded; no restart needed" ;;
         '"changed"')
           printf '\033[1;33m⚠️  EMACS CHANGE NOT LOADED: restart the server to apply it.\033[0m\n'
-          echo '   launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server'
+          echo '   decknix switch --restart-emacs  (restores every window and session)'
+          echo '   or: launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server'
           ;;
         *) printf '\033[1;33m⚠️  EMACS STATUS UNKNOWN: daemon did not answer within 5s; check before restarting.\033[0m\n' ;;
       esac

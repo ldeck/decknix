@@ -62,6 +62,9 @@ Options:
       --no-overrides
           Ignore the [switch.overrides] table in ~/.config/decknix/settings.toml. Only overrides supplied on the CLI (if any) will be applied, so the switch resolves against the published flake inputs
 
+      --restart-emacs
+          Also restart the Emacs daemon and bring every window and agent session back: saves the layout first, switches, restarts the daemon (only if the switch succeeded and Emacs is behind the profile), opens a frame, restores without prompting and prints what came back
+
   -h, --help
           Print help
 ```

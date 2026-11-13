@@ -80,6 +80,9 @@ Its intended steps are:
    step-3 strip can't catch.
 
 After a switch changes the Emacs binary **or** Elisp, run
+`decknix switch --restart-emacs` (saves the layout, switches, restarts the
+daemon only if needed, reopens a frame and restores every window and
+session unprompted; see `docs/src/cli/core-commands.md`), or by hand
 `launchctl kickstart -k gui/$(id -u)/org.nixos.emacs-server` when it is
 safe to interrupt your active sessions. No restart is needed if the
 running daemon already loaded the profile's config and binary.

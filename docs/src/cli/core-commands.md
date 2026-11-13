@@ -12,6 +12,7 @@ Options:
     --force                      Bypass the preflight equality check and always activate
     --override <INPUT=PATH>      Override a flake input with a local path (repeatable)
     --no-overrides               Ignore [switch.overrides] in settings.toml
+    --restart-emacs              Also restart the Emacs daemon and restore every window and session
 ```
 
 ### Examples
@@ -57,10 +58,50 @@ decknix switch --override decknix=~/path/to/decknix --override my-org=~/Code/my-
    check never restarts the daemon or interrupts agent sessions. A dry run
    does not perform this check.
 
-If a restart is actually required, the output prints the launchctl command.
+If a restart is actually required, the output says so and names
+`decknix switch --restart-emacs` (below).
 After installing a new version of the `decknix` CLI, the *next* invocation
 will display this status because the invocation that installed it is still
 running the old CLI binary.
+
+### Switch and restart Emacs in one go (`--restart-emacs`)
+
+```bash
+decknix switch --restart-emacs
+```
+
+Replaces the four-step ritual (switch, `launchctl kickstart -k`, `nix-open
+emacs`, resume each session):
+
+1. Asks the running daemon to save its layout. The `emacsclient` call
+   returns at once; the save runs from a timer inside Emacs and writes
+   `~/.local/state/decknix/switch-prepare.json`, which the command waits for
+   (15s; the daemon saves again as it exits anyway).
+2. Runs the switch. **If it fails, Emacs is not touched.** A changed Emacs
+   LaunchAgent is not restarted mid-switch either; step 3 does it.
+3. Unless nothing was switched and the daemon already runs the profile's
+   binary and config (a rerun), writes the one-shot marker
+   `~/.local/state/decknix/restart-restore` and runs
+   `launchctl kickstart -k gui/$UID/org.nixos.emacs-server`.
+4. Waits (up to 3 minutes) for a daemon with a new pid to answer.
+5. Opens a frame with `nix-open emacs`. That first frame finds the marker,
+   deletes it and restores every frame, tab and window and resumes every
+   agent session without prompting. Sessions whose broker survived are the
+   same running agents; each shows its recent turns, its asking/waiting
+   state and any permission prompt it is still waiting on (see the Emacs
+   module's "What a reattached session shows").
+6. Prints the daemon's report (`restart-summary.json`), written once the
+   startup broker reattach has settled: the restored layout, each session
+   with its status and history turns, sessions that did not come back and
+   why, and brokers not reattached by reason.
+
+Each step is safe to rerun. If the daemon is slow to come back, the marker
+stays valid for 15 minutes, so a later `nix-open emacs` still restores.
+
+**First time:** the flag ships in the CLI it describes, so install it with
+a plain `decknix switch`, then run `decknix switch --restart-emacs`. If the
+running daemon predates this release it still saves through the older
+command, and the new daemon does the unattended restore.
 
 ### Why the preflight
 
