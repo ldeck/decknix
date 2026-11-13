@@ -1017,6 +1017,9 @@ when CONV-KEY is nil, or the id is absent/blank at ready time."
                              (decknix--agent-rename-current-buffer-from-tags)))))))))))
       token)))
 
+(declare-function decknix-agent-continuity-arm "decknix-agent-continuity"
+                  (buffer provider))
+
 (defun decknix--agent-session-resume--new (session-id history-count
                                            &optional display-name
                                            workspace conv-key
@@ -1141,6 +1144,13 @@ dedupes against live buffers before calling here."
                (not (decknix-agent-provider-resume-cli-flag provider)))
       (with-current-buffer shell-buf
         (setq-local decknix--agent-resume-target-sid session-id)))
+    ;; A live broker is a running session: show its recent turns with
+    ;; their prompts, its asking state and any permission prompt it is
+    ;; still waiting on.  Armed now so live output arriving before the
+    ;; handshake finishes is held and lands below the history.
+    (when (and broker-live (buffer-live-p shell-buf)
+               (fboundp 'decknix-agent-continuity-arm))
+      (decknix-agent-continuity-arm shell-buf provider))
     ;; Restore the `asking' flag from the transcript.  Without this a
     ;; session that was blocked on an unanswered question comes back
     ;; reading `ready' and so looks idle, which is the exact opposite of
@@ -1296,7 +1306,10 @@ dedupes against live buffers before calling here."
                    ;; `decknix-agent-broker-replay-more'.  No-op unless the
                    ;; broker is still alive, in which case prepopulation
                    ;; above has already covered the history.
-                   (when (fboundp 'decknix--agent-broker-rehydrate-buffer)
+                   ;; Superseded by the continuity render when armed.
+                   (when (and (fboundp 'decknix--agent-broker-rehydrate-buffer)
+                              (not (bound-and-true-p decknix--continuity-armed))
+                              (not (bound-and-true-p decknix--continuity-rendered)))
                      (decknix--agent-broker-rehydrate-buffer shell-buf))
                    ;; Seed the worktree association from the store, so the
                    ;; sidebar nests this session's work straight away rather

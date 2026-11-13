@@ -1638,6 +1638,21 @@ let
     ];
   };
 
+  # Restart continuity: a session reattached to a live broker comes back
+  # showing its last turns as a conversation (agent side from the broker
+  # log, prompts from the transcript tail anchored by closing text), with
+  # its asking/waiting state, a pending permission prompt, the input ring
+  # and the review-session mode restored.  Renders are queued and
+  # staggered.  Pure parsing, pairing and the queue are ERT-tested.
+  decknix-agent-continuity-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-continuity";
+    src = ./agent-shell/continuity;
+    packageRequires = [ decknix-agent-broker-rehydrate-el ];
+    testFiles = [
+      "decknix-agent-continuity-test.el"
+    ];
+  };
+
   # PR B.49: clipboard URL DWIM helper carved out of
   # `decknix-agent-shell-main' (main-bulk).  Co-resident with the
   # rest of the agent/ cluster.  Owns the tiny kill-ring +
@@ -3596,6 +3611,7 @@ in
           decknix-agent-session-mode-el
           decknix-agent-session-broker-el
           decknix-agent-broker-rehydrate-el
+          decknix-agent-continuity-el
           decknix-agent-session-workspace-el
           decknix-agent-conv-recency-el
           decknix-agent-tags-read-el
@@ -4244,6 +4260,11 @@ in
         (add-hook 'decknix-agent-turn-settled-hook #'decknix-review-session-maybe-enable)
         (require 'decknix-agent-broker-rehydrate)
         (require 'decknix-agent-broker-reattach)
+        ;; Restart continuity: render a reattached session's recent turns
+        ;; with their prompts.  The transcript resolver lives in main-bulk.
+        (require 'decknix-agent-continuity)
+        (setq decknix-agent-continuity-transcript-path-function
+              #'decknix--agent-source-data-path)
         ;; #151: reattach to brokers that survived the restart.  Armed on a
         ;; timer LATER than the orphan reaper's 8s sweep so it sees the
         ;; settled set of survivors.  Off via
