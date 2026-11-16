@@ -9,11 +9,13 @@
 ;;
 ;; ERT tests for the PURE layer of the ACP turn/status trace: summarizing an
 ;; ACP notification alist, per-kind detail strings, session shortening, and
-;; line formatting.  No advice, no ring, no file I/O.
+;; line formatting, plus the advice callbacks driven through stand-ins that
+;; carry upstream's real `&key' signatures.
 
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'decknix-agent-acp-trace)
 
 ;; -- summarize ----------------------------------------------------------
@@ -79,6 +81,77 @@
                '(:time 0 :label "TURN-END" :detail "*agent*"))))
     (should (string-match-p "TURN-END" line))
     (should-not (string-match-p "sid=" line))))
+
+;; -- advice callbacks read upstream's real keywords ----------------------
+;;
+;; Upstream declares `(cl-defun agent-shell--on-notification (&key state
+;; acp-notification))' and `(cl-defun agent-shell--on-request (&key state
+;; acp-request))'.  The callbacks once read `:notification' and `:request',
+;; got nil, and recorded nothing while the trace was switched on.  These
+;; stand-ins carry the real signatures, so keyword drift fails here.
+
+(defmacro decknix-agent-acp-trace-test--recording (&rest body)
+  "Run BODY with tracing on, an empty ring, and no log file writes."
+  `(let ((decknix-agent-acp-trace-enable t)
+         (decknix--agent-acp-trace-ring nil)
+         (decknix-agent-acp-trace-log-file null-device))
+     ,@body))
+
+(cl-defun decknix-agent-acp-trace-test--on-notification (&key state acp-notification)
+  (list state acp-notification))
+
+(cl-defun decknix-agent-acp-trace-test--on-request (&key state acp-request)
+  (list state acp-request))
+
+(ert-deftest decknix-agent-acp-trace/advice-records-real-notification ()
+  (decknix-agent-acp-trace-test--recording
+   (advice-add 'decknix-agent-acp-trace-test--on-notification :before
+               #'decknix--agent-acp-trace-on-notification)
+   (unwind-protect
+       (decknix-agent-acp-trace-test--on-notification
+        :state nil
+        :acp-notification
+        '((jsonrpc . "2.0")
+          (method . "session/update")
+          (params . ((sessionId . "d8df9eb9-aaaa")
+                     (update . ((sessionUpdate . "tool_call")
+                                (title . "Read")
+                                (status . "pending")))))))
+     (advice-remove 'decknix-agent-acp-trace-test--on-notification
+                    #'decknix--agent-acp-trace-on-notification))
+   (let ((event (car decknix--agent-acp-trace-ring)))
+     (should (= 1 (length decknix--agent-acp-trace-ring)))
+     (should (equal "tool_call" (plist-get event :label)))
+     (should (equal "d8df9eb9-aaaa" (plist-get event :session)))
+     (should (equal "tool Read pending" (plist-get event :detail))))))
+
+(ert-deftest decknix-agent-acp-trace/advice-records-real-permission-request ()
+  (decknix-agent-acp-trace-test--recording
+   (advice-add 'decknix-agent-acp-trace-test--on-request :before
+               #'decknix--agent-acp-trace-on-request)
+   (unwind-protect
+       (decknix-agent-acp-trace-test--on-request
+        :state nil
+        :acp-request
+        '((jsonrpc . "2.0")
+          (id . 7)
+          (method . "session/request_permission")
+          (params . ((sessionId . "d8df9eb9-aaaa")))))
+     (advice-remove 'decknix-agent-acp-trace-test--on-request
+                    #'decknix--agent-acp-trace-on-request))
+   (let ((event (car decknix--agent-acp-trace-ring)))
+     (should (= 1 (length decknix--agent-acp-trace-ring)))
+     (should (equal "REQ session/request_permission" (plist-get event :label)))
+     (should (equal "d8df9eb9-aaaa" (plist-get event :session)))
+     (should (equal "AWAITING PERMISSION" (plist-get event :detail))))))
+
+(ert-deftest decknix-agent-acp-trace/advice-is-silent-while-disabled ()
+  (decknix-agent-acp-trace-test--recording
+   (let ((decknix-agent-acp-trace-enable nil))
+     (should-not (decknix--agent-acp-trace-on-notification
+                  :state nil
+                  :acp-notification '((method . "session/update")))))
+   (should-not decknix--agent-acp-trace-ring)))
 
 (provide 'decknix-agent-acp-trace-test)
 ;;; decknix-agent-acp-trace-test.el ends here

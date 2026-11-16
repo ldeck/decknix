@@ -176,7 +176,7 @@ ARGS is the `&key' plist; a no-op while disabled.  Returns nil (advice value
 ignored) so it never affects the notification handler's control flow."
   (when decknix-agent-acp-trace-enable
     (ignore-errors
-      (let ((s (decknix--agent-acp-trace-summarize (plist-get args :notification))))
+      (let ((s (decknix--agent-acp-trace-summarize (plist-get args :acp-notification))))
         (when s
           (decknix--agent-acp-trace-record
            (plist-get s :label) (plist-get s :session) (plist-get s :detail))))))
@@ -190,7 +190,7 @@ never reach `agent-shell--on-notification'.  Capturing them here is what makes a
 `working'-but-actually-waiting session visible in the timeline."
   (when decknix-agent-acp-trace-enable
     (ignore-errors
-      (let* ((request (plist-get args :request))
+      (let* ((request (plist-get args :acp-request))
              (method (alist-get 'method request))
              (params (alist-get 'params request))
              (session (alist-get 'sessionId params)))
