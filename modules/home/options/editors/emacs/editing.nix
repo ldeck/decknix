@@ -28,6 +28,11 @@ in
 
         ;; == Smartparens: Structured pair editing ==
         (require 'smartparens-config)
+        ;; Not in agent transcripts: the post-command handler rebuilds its
+        ;; pair regexp on every keystroke and the show-pair idle timer
+        ;; scans for a match, both in buffers of up to a megabyte that are
+        ;; read-only above the prompt anyway.  Compose buffers keep it.
+        (add-to-list 'sp-ignore-modes-list 'agent-shell-mode)
         (smartparens-global-mode 1)
         (show-smartparens-global-mode 1)
 

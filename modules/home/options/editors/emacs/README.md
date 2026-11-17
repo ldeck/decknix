@@ -31,7 +31,8 @@ batteries-included Emacs experience out of the box.
 - Line numbers, column numbers, current line highlighting
 - Matching parentheses, recent files, save-place
 - Better scrolling, spaces instead of tabs
-- Auto-refresh buffers, organized backups
+- Auto-refresh buffers (file notifications, no 5 s poll for file buffers), organized backups
+- `so-long-mode` for files with very long lines; redisplay skips fontification while input is pending
 - Winner mode, improved performance settings
 
 ### Agent Shell (`agent-shell.nix`)
@@ -169,7 +170,7 @@ Improved undo/redo replacing undo-tree:
 
 ### Editing (`editing.nix`)
 
-- **Smartparens**: Structured pair editing with navigation
+- **Smartparens**: Structured pair editing with navigation (off in agent-shell transcripts, on in compose buffers)
 - **Editorconfig**: Respect `.editorconfig` files
 - **Crux**: Useful commands (`C-a` smart home, `C-c d` duplicate line)
 - **Move-text**: Move lines/regions (`M-up` / `M-down`)

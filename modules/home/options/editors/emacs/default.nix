@@ -298,8 +298,33 @@ stops finding any is visible rather than assumed fixed."
                       tab-width 2)
 
         ;; == Auto-revert ==
+        ;; File buffers revert on a kqueue notification rather than the
+        ;; 5 s poll: `auto-revert-buffers' stat'ed every reverting buffer
+        ;; on each tick, on the main thread, and showed up as a recurring
+        ;; hitch (up to 5 s) with endpoint security slowing each stat.
+        ;; Buffers without a notifier (dired and other non-file buffers)
+        ;; are still polled.
+        (setq auto-revert-avoid-polling t)
         (global-auto-revert-mode 1)
         (setq global-auto-revert-non-file-buffers t)
+
+        ;; == Redisplay on input ==
+        ;; Skip fontifying text a pending keystroke will scroll past, keep
+        ;; the bracket-pair bidi pass (the costliest part of laying out a
+        ;; long line) off everywhere, as agent-shell buffers already do,
+        ;; and stop GC compacting font caches, which with many glyphs in
+        ;; play lengthens every collection.
+        (setq redisplay-skip-fontification-on-input t
+              fast-but-imprecise-scrolling t
+              bidi-inhibit-bpa t
+              inhibit-compacting-font-caches t)
+        (setq-default bidi-paragraph-direction 'left-to-right)
+
+        ;; Files with very long lines (minified JSON, logs) open in
+        ;; `so-long-mode' instead of laying out a megabyte line on every
+        ;; redisplay.  Only file-visiting buffers are checked, so agent
+        ;; transcripts and other process buffers are unaffected.
+        (global-so-long-mode 1)
 
         ;; == Backups and autosave ==
         (let ((backup-dir (expand-file-name "backups" user-emacs-directory))
