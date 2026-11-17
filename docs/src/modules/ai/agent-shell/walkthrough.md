@@ -89,7 +89,7 @@ A provider picker appears (Vertico). Choose the agent to launch.
  {ac}>{/} {g}C{/}  Claude Code        {dm}(default · claude-code){/}
    {y}A{/}  Auggie             {dm}(Augment Code){/}
    {c}P{/}  Pi                 {dm}(Contextual AI){/}
-   {dm}?{/}  Gemini             {dm}(Google){/}</pre>
+   {dm}^{/}  Antigravity        {dm}(Google){/}</pre>
 <p class="sb-cap">Pick <code>C</code> and a fresh Claude session buffer opens; the Live section gains a <span class="dm">○</span>→<span class="y">◐</span> row.</p>
 
 ## Watch its sub-agents

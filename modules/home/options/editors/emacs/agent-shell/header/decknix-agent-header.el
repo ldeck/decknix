@@ -175,6 +175,7 @@ the session-id-based lookup if conv-key is not set yet."
 
 (defvar decknix--header-agent-glyph-alist
   '(("Auggie"    . "A")
+    ("Antigravity" . "^")
     ("Claude"    . "C")
     ("Codex"     . "X")
     ("Gemini"    . "G")
@@ -186,7 +187,8 @@ Used by `decknix--header-agent-glyph' to build the abbreviated
 essentials block.  Unknown agents fall back to the uppercase first
 character of the name; no agent at all defaults to \"A\" (Auggie).
 Goose needs an explicit entry: its name would otherwise fall back to
-\"G\" and collide with Gemini.")
+\"G\" and collide with Gemini; Antigravity likewise needs one, or it
+would fall back to \"A\" and collide with Auggie.")
 
 (defun decknix--header-agent-glyph ()
   "Return a single-character glyph for the current buffer's agent.

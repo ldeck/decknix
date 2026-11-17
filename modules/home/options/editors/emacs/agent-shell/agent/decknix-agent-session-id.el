@@ -366,7 +366,7 @@ Cards carry the same `decknix-idx' property as the list, so mark / copy
                        (mark (if (plist-get e :marked) "*" " "))
                        (prov (pcase (plist-get e :provider)
                                ('claude-code "C") ('auggie "A") ('pi "P")
-                               ('gemini "G") (_ "?")))
+                               ('gemini "G") ('antigravity "^") (_ "?")))
                        (start (point)))
                   (insert (decknix--live-sessions--pad
                            (format "%s%s %s" mark prov (or (plist-get e :name) "?"))

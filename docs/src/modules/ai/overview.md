@@ -8,7 +8,8 @@ Decknix provides a declarative, Nix-managed AI development environment — from 
 |-----------|--------|---------|-------------|
 | **Claude Code** | `decknix.ai.claude.enable` | off | Claude Code CLI, settings, MCP servers, permissions |
 | **Pi** | `decknix.ai.pi.enable` | off | Pi coding agent |
-| **Gemini** | `decknix.ai.gemini.enable` | off | Gemini CLI |
+| **Antigravity** | `decknix.ai.antigravity.enable` | off | Antigravity CLI (`agy`), Google's successor to the Gemini CLI; speaks ACP via `agy acp`. Sign in once with `agy` |
+| **Gemini** | `decknix.ai.gemini.enable` | off | Gemini CLI (deprecated: warns and points to Antigravity) |
 | **Codex** | `decknix.ai.codex.enable` | off | Codex CLI and its ACP bridge |
 | **OpenCode** | `decknix.ai.opencode.enable` | off | OpenCode |
 | **Goose** | `decknix.ai.goose.enable` | off | Goose |

@@ -408,7 +408,7 @@ calling it from the render path cannot queue an audit per paint."
 (defun decknix--layout-short-name (buffer-name)
   "Return BUFFER-NAME without the agent wrapper."
   (replace-regexp-in-string
-   "\\`\\*\\(Claude\\|Pi\\|Auggie\\|Codex\\|Gemini\\)?:? ?\\|\\*\\'" ""
+   "\\`\\*\\(Claude\\|Pi\\|Auggie\\|Codex\\|Gemini\\|Antigravity\\)?:? ?\\|\\*\\'" ""
    (or buffer-name "")))
 
 (defun decknix--layout-session-buffer (session)

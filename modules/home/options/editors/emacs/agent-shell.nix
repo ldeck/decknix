@@ -3959,6 +3959,83 @@ in
             :glyph "G"
             :supports-workspace-root nil))
 
+        ;; Antigravity CLI via `agy acp', Google's replacement for the
+        ;; Gemini CLI (enable `decknix.ai.antigravity.enable').  Upstream
+        ;; agent-shell has no Antigravity module yet, so the base config is
+        ;; built here; the client itself comes from
+        ;; `decknix--agent-make-config' like every other provider.
+        ;;
+        ;; `agy acp' (1.5.11) advertises the authMethods oauth-personal,
+        ;; oauth-business, gemini-api-key and agent-platform.  The default
+        ;; :none sends no authenticate request and relies on the credentials
+        ;; cached by an interactive `agy' sign-in or `agy acp --login'.  It
+        ;; also advertises session load/resume/list, so resume goes native
+        ;; and the primer stays only as the fallback.  Conversations live
+        ;; under ~/.gemini/antigravity-cli in Antigravity's own format, so
+        ;; the saved-session picker is best-effort.
+        (defvar decknix-agent-antigravity-acp-command '("agy" "acp")
+          "Command and parameters that start the Antigravity ACP server.")
+
+        (defvar decknix-agent-antigravity-authentication '((:none . t))
+          "Antigravity auth: an alist holding one of `:none', `:login',
+        `:business', `:api-key' or `:agent-platform'.  `:none' relies on
+        credentials cached by `agy' itself.")
+
+        (defvar decknix-agent-antigravity-environment nil
+          "Extra \"VAR=value\" strings for the Antigravity ACP server.")
+
+        (defconst decknix--agent-antigravity-auth-methods
+          '((:login . "oauth-personal")
+            (:business . "oauth-business")
+            (:api-key . "gemini-api-key")
+            (:agent-platform . "agent-platform"))
+          "Antigravity auth keys mapped to the ACP authMethod ids `agy acp' offers.")
+
+        (defun decknix--agent-antigravity-auth-method-id ()
+          "The ACP authMethod id for `decknix-agent-antigravity-authentication'."
+          (seq-some (lambda (pair)
+                      (and (map-elt decknix-agent-antigravity-authentication
+                                    (car pair))
+                           (cdr pair)))
+                    decknix--agent-antigravity-auth-methods))
+
+        (defun decknix-agent-antigravity-make-config ()
+          "Create an Antigravity CLI agent configuration."
+          (agent-shell-make-agent-config
+           :identifier 'antigravity
+           :mode-line-name "Antigravity"
+           :buffer-name "Antigravity"
+           :shell-prompt "Antigravity> "
+           :shell-prompt-regexp "Antigravity> "
+           :welcome-function #'decknix--agent-welcome-message
+           :needs-authentication
+           (and (decknix--agent-antigravity-auth-method-id) t)
+           :authenticate-request-maker
+           (lambda ()
+             (when-let* ((id (decknix--agent-antigravity-auth-method-id)))
+               (acp-make-authenticate-request :method-id id)))
+           :client-maker
+           (lambda (buffer)
+             (agent-shell--make-acp-client
+              :command (car decknix-agent-antigravity-acp-command)
+              :command-params (cdr decknix-agent-antigravity-acp-command)
+              :environment-variables decknix-agent-antigravity-environment
+              :context-buffer buffer))
+           :install-instructions
+           "Enable decknix.ai.antigravity, or see https://antigravity.google/docs/cli/acp/"))
+
+        (decknix-agent-register-provider 'antigravity
+          '(:make-config-fn decknix-agent-antigravity-make-config
+            :acp-command-var decknix-agent-antigravity-acp-command
+            :auth-var decknix-agent-antigravity-authentication
+            :env-var decknix-agent-antigravity-environment
+            :sessions-dir "~/.gemini/antigravity-cli/conversations"
+            :session-file-extension ".pb"
+            :label "Antigravity"
+            :glyph "^"
+            :supports-workspace-root nil
+            :resume-needs-primer t))
+
         ;; OpenAI Codex via the separate `codex-acp' bridge (upstream
         ;; agent-shell-openai.el; enable `decknix.ai.codex.enable' to
         ;; install pkgs.unstable.codex + codex-acp).  Auth defaults to

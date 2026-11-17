@@ -78,7 +78,7 @@ decknix/
 │       ├── default.nix              # Imports + default packages
 │       ├── options.nix              # Core options (role, username, hostname, defaultEditor)
 │       └── options/                 # All auto-imported
-│           ├── ai/                  # claude, codex, gemini, goose, gortex, opencode, pi, qwen
+│           ├── ai/                  # antigravity, claude, codex, gemini, goose, gortex, opencode, pi, qwen
 │           ├── apps/                # Ungoogled Chromium
 │           ├── cli/                 # agent-sync, auggie, board, extensions, nix-github-auth, repo-jdk
 │           ├── editors/             # emacs/ (17 modules), vim/, profiles.nix

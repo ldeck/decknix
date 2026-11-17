@@ -413,6 +413,19 @@ fn gemini_account(sessions_dir: &Path) -> Option<Account> {
     })
 }
 
+/// The Antigravity row, present once `agy` has created its data directory.
+///
+/// Antigravity CLI exposes no usage endpoint and its credentials are its own,
+/// so the row says only that, rather than leaving the account unlisted.
+fn antigravity_account(data_dir: &Path) -> Option<Account> {
+    data_dir.is_dir().then(|| Account {
+        provider: "google".into(),
+        label: "antigravity".into(),
+        note: Some("no usage API".into()),
+        ..Default::default()
+    })
+}
+
 fn walk_jsonl(dir: &Path) -> Vec<PathBuf> {
     let mut out = vec![];
     let Ok(entries) = std::fs::read_dir(dir) else { return out };
@@ -452,6 +465,9 @@ pub async fn poll_quotas(config: &QuotaConfig) -> Result<QuotasFile, String> {
     let sessions = or_default(&config.pi_sessions_dir, ".pi/agent/sessions");
     if let Some(g) = gemini_account(&sessions) {
         accounts.push(g);
+    }
+    if let Some(a) = antigravity_account(&home().join(".gemini/antigravity-cli")) {
+        accounts.push(a);
     }
     Ok(QuotasFile { updated: Utc::now(), accounts })
 }
@@ -610,5 +626,17 @@ mod tests {
         })
         .to_string();
         assert!(gemini_last_refusal(&line).is_none());
+    }
+
+    #[test]
+    fn antigravity_row_appears_only_once_agy_has_a_data_dir() {
+        let dir = std::env::temp_dir().join(format!("hub-agy-{}", std::process::id()));
+        assert!(antigravity_account(&dir).is_none());
+        std::fs::create_dir_all(&dir).unwrap();
+        let acct = antigravity_account(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(acct.label, "antigravity");
+        assert_eq!(acct.note.as_deref(), Some("no usage API"));
+        assert!(acct.windows.is_empty() && !acct.limit_reached);
     }
 }

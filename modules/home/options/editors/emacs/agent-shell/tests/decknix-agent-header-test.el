@@ -182,6 +182,13 @@ grey = initializing/unknown."
     (let ((agent-shell--state '(:agent-config (:buffer-name "Gemini"))))
       (should (equal (decknix--header-agent-glyph) "G")))))
 
+(ert-deftest decknix-header-agent-glyph--antigravity ()
+  "Antigravity maps to \"^\" (explicit, to avoid an \"A\" clash with Auggie)."
+  (cl-letf (((symbol-function 'map-nested-elt)
+             (lambda (_state _keys) "Antigravity")))
+    (let ((agent-shell--state '(:agent-config (:buffer-name "Antigravity"))))
+      (should (equal (decknix--header-agent-glyph) "^")))))
+
 (ert-deftest decknix-header-agent-glyph--opencode ()
   "OpenCode maps to \"O\"."
   (cl-letf (((symbol-function 'map-nested-elt)

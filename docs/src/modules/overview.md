@@ -13,7 +13,7 @@ Decknix is organised into modular components, each responsible for a specific ar
 | **Shell & Terminal** | Zsh, Starship prompt, completions | [Shell →](./shell.md) |
 | **Git** | Delta diffs, global config, LFS | [Git →](./git.md) |
 | **Window Management** | AeroSpace, Hammerspoon, OmniWM, Spaces (all opt-in) | [WM →](./window-management.md) |
-| **AI Tooling** | Opt-in agent CLIs (Claude Code, Pi, Gemini, Codex, OpenCode, Goose, Qwen, Auggie), Gortex, agent-sync, Agent Shell | [AI →](./ai/overview.md) |
+| **AI Tooling** | Opt-in agent CLIs (Claude Code, Pi, Antigravity, Codex, OpenCode, Goose, Qwen, Auggie), Gortex, agent-sync, Agent Shell | [AI →](./ai/overview.md) |
 | **Apps** | Ungoogled Chromium from nix-casks (on by default on macOS) | |
 | **CLI helpers** | `repo-jdk`, `board`, GitHub token for Nix (`nix-github-auth`) | [CLI →](../cli/extensions.md) |
 

@@ -20,7 +20,7 @@ Decknix provides a modern, batteries-included Emacs experience with 17 modules, 
 | **LSP** | Eglot, kotlin-ls, jdt-ls, dape (debugging) | full |
 | **Org-mode** | Modern styling, presentations (Olivetti) | full |
 | **HTTP** | REST client, jq integration, org-babel | full |
-| **Agent Shell** | AI agent sessions over ACP (Claude Code, Auggie, Pi, Codex, Gemini, Qwen and others), sidebar, boards, hub | full |
+| **Agent Shell** | AI agent sessions over ACP (Claude Code, Auggie, Pi, Codex, Antigravity, Qwen and others), sidebar, boards, hub | full |
 | **Deckmacs** | Framework management: status, diagnostics, reload (`C-c D`) | all |
 | **Recording** | keycast and gif-screencast demo recording, plus asciinema and agg | all |
 

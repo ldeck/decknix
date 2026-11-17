@@ -645,7 +645,8 @@ registry (`decknix-agent-provider.el`).
 | Auggie | `auggie` | `A` | ✅ Fully working | built into `auggie` CLI |
 | Claude Code | `claude-code` | `C` | ⚠️ Needs ACP bridge | `claude-agent-acp` (see below) |
 | Pi | `pi` | `P` | ⚠️ Needs ACP bridge | `pi-acp` (see below) |
-| Gemini CLI | `gemini` | `G` | ✅ Working (new sessions) | built into `gemini --acp` |
+| Antigravity CLI | `antigravity` | `^` | ✅ Working (new sessions) | built into `agy acp` |
+| Gemini CLI (deprecated) | `gemini` | `G` | ✅ Working (new sessions) | built into `gemini --acp` |
 | Codex | `codex` | `X` | ⚠️ Needs ACP bridge (new sessions) | `codex-acp` (see below) |
 | OpenCode | `opencode` | `O` | ✅ Working (new sessions) | built into `opencode acp` |
 | Goose | `goose` | `🪿` | ✅ Working (new sessions) | built into `goose acp` |
@@ -726,12 +727,40 @@ registry (verified against the pinned nixpkgs, nixos-25.11 rev `d030887`,
 - **kiro** → `kiro` (not `kiro-cli` in the pin); no upstream agent-shell module yet.
 
 Built-in-ACP (no separate bridge): opencode (`opencode acp`), goose
-(`goose acp`), qwen (`qwen --experimental-acp`), gemini (`gemini
---acp`). Separate-bridge: claude (`claude-agent-acp`), pi
+(`goose acp`), qwen (`qwen --experimental-acp`), antigravity (`agy
+acp`), gemini (`gemini --acp`). Separate-bridge: claude (`claude-agent-acp`), pi
 (`pi-acp`), codex (`codex-acp`), cursor (`cursor-agent-acp`), droid
 (`droid-acp`), mistral (`vibe-acp`).
 
-#### Gemini CLI — Setup
+#### Antigravity CLI setup
+
+Google replaced the Gemini CLI with the Antigravity CLI for unpaid, Google AI
+Pro and Ultra users. `decknix.ai.antigravity.enable = true` installs
+`pkgs.unstable.antigravity-cli` (binary `agy`, unfree and allowed by the
+module), pinned in `pkgs/antigravity-cli` past nixpkgs because `agy acp`
+first shipped in the 1.5 line. The CLI is its own ACP server, so there is no
+separate bridge. Upstream agent-shell has no Antigravity module, so the base
+config (`decknix-agent-antigravity-make-config`, buffer name "Antigravity")
+lives in `agent-shell.nix`.
+
+Sign in once with an interactive `agy` session or `agy acp --login`; the ACP
+server reuses those cached credentials. `decknix-agent-antigravity-authentication`
+defaults to `((:none . t))` (no ACP authenticate request); set it to
+`:login`, `:business`, `:api-key` or `:agent-platform` to send the matching
+authMethod (`oauth-personal`, `oauth-business`, `gemini-api-key`,
+`agent-platform`). Settings sync to `~/.gemini/antigravity-cli/settings.json`
+via `decknix.ai.antigravity.settings`.
+
+`agy acp` advertises ACP session load/resume/list, so resume goes native with
+the primer as fallback. Its conversation store under `~/.gemini/antigravity-cli`
+is in Antigravity's own format, so the saved-session picker is best-effort.
+
+#### Gemini CLI setup (deprecated)
+
+`decknix.ai.gemini` now emits a deprecation warning pointing at
+`decknix.ai.antigravity`; keep it only for a paid Gemini API key or an
+enterprise licence.
+
 
 The `decknix.ai.gemini` module (`decknix.ai.gemini.enable = true`) installs
 `pkgs.unstable.gemini-cli` (the upstream release bundle, see
@@ -791,9 +820,9 @@ work is the ACP bridge and/or packaging the CLI.
 Goose/OpenCode pointed at `http://localhost:11434` (see the Setup note above).
 
 Glyphs to assign when these land (avoid collisions): Cursor `⼕`,
-Kiro `👻` (Claude=`C`, Gemini/Goose=`G`/`🪿`, Codex=`X`, Kimi=`K` already taken).
+Kiro `👻` (Claude=`C`, Gemini/Goose=`G`/`🪿`, Antigravity=`^`, Codex=`X`, Kimi=`K` already taken).
 
-(**Auggie, Claude, Pi, Gemini, Codex, OpenCode, Goose, Qwen Code** are registered —
+(**Auggie, Claude, Pi, Antigravity, Gemini, Codex, OpenCode, Goose, Qwen Code** are registered —
 see *Supported Providers* above.)
 
 To register a new provider, add an entry in `agent-shell.nix` matching the

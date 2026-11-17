@@ -30,7 +30,7 @@ on very different substrates.
 | Capability | Agent Shell | cmux | supacode | Cursor | Codex | Intent | Claude Code |
 |---|---|---|---|---|---|---|---|
 | Runs **inside your existing editor** | ✅ Emacs | ✗ terminal | ✗ app | ◐ its own IDE | ◐ IDE/CLI | ✗ desktop app | ◐ CLI/IDE ext |
-| **Multi-vendor** agents (not one model) | ✅ ACP: Claude Code · Auggie · Pi · Gemini | ✅ any TTY agent | ✅ any CLI agent | ◐ Cursor-managed | ✗ OpenAI only | ✅ BYOA | ✗ Anthropic |
+| **Multi-vendor** agents (not one model) | ✅ ACP: Claude Code · Auggie · Pi · Antigravity | ✅ any TTY agent | ✅ any CLI agent | ◐ Cursor-managed | ✗ OpenAI only | ✅ BYOA | ✗ Anthropic |
 | Run **many agents in parallel** | ◐ many sessions + sub-agents | ✅ panes | ✅ 50+ | ✅ up to 8 | ✅ cloud queue | ✅ roles | ✅ background agents |
 | **Sub-agents made visible** | ◐ shown (status: roadmap) | ✅ as panes | ✗ independent, not nested | ✅ Agents Window | ✅ collected results | ✅ coord/impl/verify | ✅ agent view / teams |
 | Auto **worktree-per-agent** isolation | ◐ worktree-*aware* | ◐ scripted | ✅ native | ✅ | ✅ | ✅ | ✅ `--worktree` |
@@ -89,7 +89,7 @@ these are real strengths today, not aspirations:
    org config. No other tool here ships its coordination setup as version-controlled,
    composable configuration. (See [Integration](./integration.md).)
 3. **Vendor-neutral by protocol.** ACP lets one interface drive Claude Code,
-   Auggie, Pi, or Gemini — and pin a different model/mode *per purpose* (e.g.
+   Auggie, Pi, or Antigravity — and pin a different model/mode *per purpose* (e.g.
    Opus for reviews, a cheaper tier elsewhere). You are not married to one model
    or one company's roadmap.
 4. **Structured cross-service provenance.** Others can *act on* external services

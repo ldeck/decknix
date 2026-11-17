@@ -31,7 +31,7 @@ decknix switch         # every later change
 | **Git** | Delta diffs, Magit, Forge (GitHub PRs) |
 | **Dev Tools** | ripgrep, jq, curl, gh CLI, language servers |
 | **Window Manager** | AeroSpace, Hammerspoon or OmniWM (all opt-in) |
-| **AI Tooling** | Opt-in agent CLIs (Claude Code, Pi, Gemini, Codex, OpenCode, Goose, Qwen, Auggie), Gortex code graph, agent-sync for skills and commands |
+| **AI Tooling** | Opt-in agent CLIs (Claude Code, Pi, Antigravity, Codex, OpenCode, Goose, Qwen, Auggie), Gortex code graph, agent-sync for skills and commands |
 | **CLI** | `decknix switch`, `update`, `wt`, `session`, `repos`, extensible subcommands |
 
 ## How It Works

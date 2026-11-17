@@ -190,7 +190,7 @@ board whose purpose is to show what is there."
 (defun decknix-session-board-short-name (buffer-name)
   "Return BUFFER-NAME without the agent wrapper."
   (replace-regexp-in-string
-   "\\`\\*\\(Claude\\|Pi\\|Auggie\\|Codex\\|Gemini\\)?:? ?\\|\\*\\'" ""
+   "\\`\\*\\(Claude\\|Pi\\|Auggie\\|Codex\\|Gemini\\|Antigravity\\)?:? ?\\|\\*\\'" ""
    (or buffer-name "")))
 
 (defun decknix-session-board-row-label (row marked-p width)
