@@ -103,6 +103,21 @@ neutral (returns the base face unchanged).  Pure."
 ;; Live layer — per-tab buffer resolution + throttled status probe.
 ;; ---------------------------------------------------------------------------
 
+(defvar decknix--tab-ws-names-memo (make-hash-table :test 'eq :weakness 'key)
+  "Window-state object -> its window buffer names.
+A background tab's window-state is a fixed object until the tab is
+visited again, yet the face function walked the whole tree, history
+lists included, for every tab on every redisplay.")
+
+(defun decknix--tab-ws-buffer-names-memo (ws)
+  "`decknix--tab-ws-buffer-names' of WS, computed once per WS object."
+  (if (not (consp ws))
+      (decknix--tab-ws-buffer-names ws)
+    (let ((hit (gethash ws decknix--tab-ws-names-memo 'none)))
+      (if (eq hit 'none)
+          (puthash ws (decknix--tab-ws-buffer-names ws) decknix--tab-ws-names-memo)
+        hit))))
+
 (defun decknix--tab-agent-buffer (tab)
   "Return the agent-shell buffer of TAB when it is a single-window agent tab.
 For the current tab this reads the frame's live windows; for a background tab
@@ -112,7 +127,7 @@ window and that window shows an `agent-shell-mode' buffer."
          (if (eq (car tab) 'current-tab)
              (let ((wins (window-list (selected-frame) 'no-minibuf)))
                (when (= 1 (length wins)) (window-buffer (car wins))))
-           (let ((names (decknix--tab-ws-buffer-names (alist-get 'ws tab))))
+           (let ((names (decknix--tab-ws-buffer-names-memo (alist-get 'ws tab))))
              (when (= 1 (length names)) (get-buffer (car names)))))))
     (when (and (buffer-live-p buf)
                (with-current-buffer buf (derived-mode-p 'agent-shell-mode)))

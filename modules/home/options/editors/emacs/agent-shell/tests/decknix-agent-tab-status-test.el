@@ -14,6 +14,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'decknix-agent-tab-status)
 
 ;; -- window-state buffer extraction -------------------------------------
@@ -109,6 +110,20 @@ as \"nothing to see here\" — the exact wrong signal for `asking'."
   (let ((f (decknix--tab-status-face nil "#123010")))
     (should (eq 'tab-bar-tab-inactive (plist-get f :inherit)))
     (should (equal "#123010" (plist-get f :background)))))
+
+(ert-deftest decknix-tab-status/ws-names-are-walked-once-per-window-state ()
+  "A background tab's window-state is walked once, not on every redisplay."
+  (let* ((decknix--tab-ws-names-memo (make-hash-table :test 'eq :weakness 'key))
+         (ws decknix-tab-status-test--ws-split)
+         (expected (decknix--tab-ws-buffer-names ws))
+         (walks 0)
+         (walk (symbol-function 'decknix--tab-ws-buffer-names)))
+    (cl-letf (((symbol-function 'decknix--tab-ws-buffer-names)
+               (lambda (node) (when (eq node ws) (setq walks (1+ walks)))
+                 (funcall walk node))))
+      (dotimes (_ 3)
+        (should (equal expected (decknix--tab-ws-buffer-names-memo ws))))
+      (should (= 1 walks)))))
 
 (provide 'decknix-agent-tab-status-test)
 ;;; decknix-agent-tab-status-test.el ends here
