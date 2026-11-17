@@ -38,6 +38,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'decknix-state-io)
 (require 'json)
 (require 'subr-x)
 (require 'transient)
@@ -6055,9 +6056,10 @@ per-toggle eager path goes through `decknix--sidebar-state-write'."
     (make-directory (file-name-directory decknix--sidebar-state-file) t)
     (with-temp-file decknix--sidebar-state-file
       (insert ";; Auto-generated — do not edit\n")
-      (prin1 state (current-buffer))
+      (decknix-state-io-prin1 state (current-buffer))
       (insert "\n"))
-    (setq decknix--sidebar-state-write-signature (prin1-to-string state))))
+    (setq decknix--sidebar-state-write-signature
+          (decknix-state-io-to-string state))))
 
 (defun decknix--sidebar-state-write ()
   "Eagerly persist toggle state after a change, debounced ~1.5s.
@@ -6076,7 +6078,8 @@ so it is safe to call from the hot refresh path."
 (defun decknix--sidebar-state-write--flush ()
   "Debounce worker: write eager toggle state only when it changed."
   (setq decknix--sidebar-state-write-timer nil)
-  (let ((sig (ignore-errors (prin1-to-string (decknix--sidebar-state-alist)))))
+  (let ((sig (ignore-errors
+               (decknix-state-io-to-string (decknix--sidebar-state-alist)))))
     (when (and sig (not (equal sig decknix--sidebar-state-write-signature)))
       (ignore-errors (decknix--sidebar-state-save)))))
 

@@ -23,6 +23,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'decknix-state-io)
 (require 'subr-x)
 
 (declare-function decknix-agent-buffer-status "decknix-agent-auto-close" (buffer))
@@ -54,17 +55,14 @@ WINDOW-STATE is a `window-state-get' snapshot (serializable).")
     (let ((dir (file-name-directory decknix-layout-groups-file)))
       (unless (file-directory-p dir) (make-directory dir t)))
     (with-temp-file decknix-layout-groups-file
-      (let ((print-level nil) (print-length nil))
-        (prin1 decknix-layout-groups (current-buffer))))))
+      (decknix-state-io-prin1 decknix-layout-groups (current-buffer)))))
 
 ;;;###autoload
 (defun decknix-layout-groups-restore ()
   "Load saved layout groups from disk into `decknix-layout-groups'."
   (when (file-readable-p decknix-layout-groups-file)
-    (ignore-errors
-      (with-temp-buffer
-        (insert-file-contents decknix-layout-groups-file)
-        (setq decknix-layout-groups (read (current-buffer)))))))
+    (setq decknix-layout-groups
+          (decknix-state-io-read-list decknix-layout-groups-file))))
 
 ;; -- Attention model ----------------------------------------------------
 

@@ -18,6 +18,7 @@
 ;;; Code:
 
 (require 'decknix-sidebar-layout)
+(require 'decknix-state-io)
 (require 'decknix-attention)
 (require 'decknix-hub-icons)
 (require 'cl-lib)
@@ -65,15 +66,14 @@ shown, so the section never shrinks silently.")
     (let ((repos nil))
       (maphash (lambda (k v) (when v (push k repos))) decknix--layout-expanded)
       (with-temp-file decknix--layout-state-file
-        (prin1 (sort repos #'string<) (current-buffer))))))
+        (decknix-state-io-prin1 (sort repos #'string<) (current-buffer))))))
 
 (defun decknix--layout-load-state ()
   "Restore expansion state, if any was saved."
   (ignore-errors
     (when (file-readable-p decknix--layout-state-file)
-      (let ((repos (with-temp-buffer
-                     (insert-file-contents decknix--layout-state-file)
-                     (read (current-buffer)))))
+      (let ((repos (decknix-state-io-read-list decknix--layout-state-file
+                                               #'stringp)))
         (clrhash decknix--layout-expanded)
         (dolist (r repos) (puthash r t decknix--layout-expanded))))))
 

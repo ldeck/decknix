@@ -38,6 +38,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'decknix-state-io)
 (require 'json)
 (require 'subr-x)
 (require 'filenotify)
@@ -1885,7 +1886,7 @@ and `decknix-hub-worktree-clones-cache-invalidate' for the bust verb.")
                            decknix--hub-worktree-clone-map-file) t)
           (with-temp-file decknix--hub-worktree-clone-map-file
             (insert ";; Auto-generated worktree clone map — do not edit\n")
-            (prin1 entries (current-buffer))
+            (decknix-state-io-prin1 entries (current-buffer))
             (insert "\n")))
       (error
        (message "hub-worktree-clone-map: save failed: %s"

@@ -46,6 +46,7 @@
 (require 'map)
 (require 'subr-x)
 (require 'json)
+(require 'decknix-state-io)
 
 (defcustom decknix-session-assoc-window 20
   "How many turns back a session's worktree association reaches.
@@ -511,6 +512,10 @@ update for that id carries a PR URL, the PR is added."
    "decknix/session-prs.eld"
    (or (getenv "XDG_STATE_HOME") (expand-file-name ".local/state" "~"))))
 
+(defun decknix--session-assoc-entry-p (entry)
+  "Non-nil when ENTRY is a (BROKER-KEY . DATA) cell of either store."
+  (and (consp entry) (stringp (car entry))))
+
 (defvar decknix--agent-created-store 'unloaded
   "Alist of (BROKER-KEY . PR-KEYS), or `unloaded\'.")
 
@@ -518,11 +523,8 @@ update for that id carries a PR URL, the PR is added."
   "Return the created-PR store, loading it on first use."
   (when (eq decknix--agent-created-store 'unloaded)
     (setq decknix--agent-created-store
-          (or (ignore-errors
-                (let ((f (decknix-session-assoc-created-file)))
-                  (when (file-readable-p f)
-                    (with-temp-buffer (insert-file-contents f) (read (current-buffer))))))
-              nil)))
+          (decknix-state-io-read-list (decknix-session-assoc-created-file)
+                                      #'decknix--session-assoc-entry-p)))
   decknix--agent-created-store)
 
 (defun decknix-session-assoc-created (key)
@@ -543,7 +545,7 @@ update for that id carries a PR URL, the PR is added."
     (ignore-errors
       (let ((f (decknix-session-assoc-created-file)))
         (make-directory (file-name-directory f) t)
-        (with-temp-file f (prin1 decknix--agent-created-store (current-buffer)))))))
+        (with-temp-file f (decknix-state-io-prin1 decknix--agent-created-store (current-buffer)))))))
 
 ;; Logs run past 100 MB and a creation can be anywhere in one, so the scan
 ;; is a grep.  A plain grep for "create or PR URL" is not selective enough:
@@ -638,20 +640,15 @@ source tree, which nix copies on every `decknix switch\='."
 (defun decknix-session-assoc-load ()
   "Load the association store, returning it."
   (setq decknix--agent-assoc-store
-        (or (ignore-errors
-              (let ((f (decknix-session-assoc-state-file)))
-                (when (file-readable-p f)
-                  (with-temp-buffer
-                    (insert-file-contents f)
-                    (read (current-buffer))))))
-            nil)))
+        (decknix-state-io-read-list (decknix-session-assoc-state-file)
+                                    #'decknix--session-assoc-entry-p)))
 
 (defun decknix-session-assoc-save ()
   "Write the association store to disk."
   (ignore-errors
     (let ((f (decknix-session-assoc-state-file)))
       (make-directory (file-name-directory f) t)
-      (with-temp-file f (prin1 decknix--agent-assoc-store (current-buffer))))))
+      (with-temp-file f (decknix-state-io-prin1 decknix--agent-assoc-store (current-buffer))))))
 
 (defun decknix-session-assoc-remember (key turn assoc)
   "Record KEY\='s TURN and ASSOC in the store and persist it."
@@ -783,13 +780,14 @@ The child loads this same library, so the answer is exactly what
                  (setq native-comp-jit-compilation nil)
                  (require 'decknix-session-assoc)
                  (let ((decknix-session-assoc-backfill-steps
-                        ',decknix-session-assoc-backfill-steps)
-                       (print-length nil) (print-level nil))
-                   (prin1 (decknix-session-assoc-backfill ,log-path ',roots))))))
+                        ',decknix-session-assoc-backfill-steps))
+                   (decknix-state-io-prin1
+                    (decknix-session-assoc-backfill ,log-path ',roots))))))
     (list (expand-file-name invocation-name invocation-directory)
           "-Q" "--batch"
           "-L" (file-name-directory (locate-library "decknix-session-assoc"))
-          "--eval" (prin1-to-string form))))
+          "-L" (file-name-directory (locate-library "decknix-state-io"))
+          "--eval" (decknix-state-io-to-string form))))
 
 (defun decknix-session-assoc-backfill-async (log-path roots callback)
   "Compute LOG-PATH\='s backfill over ROOTS in a child Emacs; return it.

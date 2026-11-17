@@ -33,6 +33,7 @@
 ;;; Code:
 
 (require 'map)
+(require 'decknix-state-io)
 (require 'parse-time)
 (require 'seq)
 (require 'subr-x)
@@ -318,9 +319,8 @@ Nil disables persistence.")
     (when (and decknix-review-board-rereview-state-file
                (file-readable-p decknix-review-board-rereview-state-file))
       (ignore-errors
-        (dolist (cell (with-temp-buffer
-                        (insert-file-contents decknix-review-board-rereview-state-file)
-                        (read (current-buffer))))
+        (dolist (cell (decknix-state-io-read-list
+                       decknix-review-board-rereview-state-file))
           (puthash (car cell) (cdr cell) decknix-review-board-rereview--seen))))))
 
 (defun decknix-review-board-rereview--save ()
@@ -332,8 +332,7 @@ Nil disables persistence.")
         (maphash (lambda (k v) (push (cons k v) cells))
                  decknix-review-board-rereview--seen)
         (with-temp-file decknix-review-board-rereview-state-file
-          (let ((print-length nil) (print-level nil))
-            (prin1 cells (current-buffer))))))))
+          (decknix-state-io-prin1 cells (current-buffer)))))))
 
 (defun decknix-review-board-rereview-seen-head (pr-key)
   "Return the head a re-review was already started for on PR-KEY, or nil."

@@ -15,6 +15,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'decknix-state-io)
 (require 'easymenu)
 (require 'json)
 (require 'tabulated-list)
@@ -611,7 +612,7 @@ Column widths:
         (make-directory (file-name-directory decknix-worktree-picker--state-file) t)
         (with-temp-file decknix-worktree-picker--state-file
           (insert ";; Auto-generated worktree picker state — do not edit\n")
-          (prin1 alist (current-buffer))
+          (decknix-state-io-prin1 alist (current-buffer))
           (insert "\n")))
     (error (message "worktree picker: state save failed: %s"
                     (error-message-string err)))))

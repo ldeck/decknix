@@ -46,6 +46,8 @@
 
 ;;; Code:
 
+(require 'decknix-state-io)
+
 (defvar decknix-agent-review-author nil
   "Name used to author annotations in the review buffer.
 When nil, defaults to `user-login-name'.")
@@ -68,11 +70,10 @@ Populated on demand; persisted to
   (let ((f decknix-agent-review-collaborators-file))
     (when (file-exists-p f)
       (condition-case nil
-          (let ((data (with-temp-buffer
-                        (insert-file-contents f)
-                        (read (current-buffer)))))
+          (let ((data (decknix-state-io-read-file f)))
             (when (listp data)
-              (setq decknix-agent-review-collaborators data)))
+              (setq decknix-agent-review-collaborators
+                    (decknix-state-io-clean-list data #'stringp))))
         (error nil)))))
 
 (defun decknix--agent-review-save-collaborators ()
@@ -80,7 +81,7 @@ Populated on demand; persisted to
   (let ((f decknix-agent-review-collaborators-file))
     (make-directory (file-name-directory f) t)
     (with-temp-file f
-      (prin1 decknix-agent-review-collaborators (current-buffer)))))
+      (decknix-state-io-prin1 decknix-agent-review-collaborators (current-buffer)))))
 
 (provide 'decknix-agent-review-collaborators)
 ;;; decknix-agent-review-collaborators.el ends here

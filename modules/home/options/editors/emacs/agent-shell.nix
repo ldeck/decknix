@@ -141,11 +141,18 @@ let
   # files; a red test exits the byte-compile build non-zero, which
   # fails the system derivation.  No commit without a green build.
   testsDir = ./agent-shell/tests;
+  # Every tested package gets `decknix-state-io' on its load path.  Any
+  # package that persists state prints and reads through it, and because
+  # trivialBuild byte-compiles every sibling in a shared `src' directory,
+  # one store writer in `agent-shell/agent/' would otherwise force the
+  # dependency onto all 26 packages there by hand.
   mkEmacsTestedPackage = { pname, src, packageRequires ? [ ]
                          , testFiles, testInputs ? [ ]
                          , extraSiteFiles ? [ ] }:
     (pkgs.emacsPackages.trivialBuild {
-      inherit pname src packageRequires;
+      inherit pname src;
+      packageRequires = packageRequires
+        ++ lib.optional (pname != "decknix-state-io") decknix-state-io-el;
       version = "0.1";
     }).overrideAttrs (old: {
       # Tests sometimes shell out (jq, rg, ...) -- expose those
@@ -214,6 +221,16 @@ let
         rm -rf "$decknix_tests_dir"
       '';
     });
+
+  # Prints state files with every printer limit off and reads them back
+  # dropping malformed entries.  A caller with `print-length' bound to 200
+  # once left two stores ending in a literal `...', which then broke every
+  # reader.  Implicitly required by every `mkEmacsTestedPackage'.
+  decknix-state-io-el = mkEmacsTestedPackage {
+    pname = "decknix-state-io";
+    src = ./agent-shell/state-io;
+    testFiles = [ "decknix-state-io-test.el" ];
+  };
 
   # Multi-file package: ships three .el files under one Nix
   # derivation (data layer + UI + sidebar integration).  The UI
@@ -3588,6 +3605,7 @@ in
         # URL parsing is foundational (linked PRs, quick actions, repo
         # linking, hub) so it ships whenever agent-shell is enabled at all.
         ++ [
+          decknix-state-io-el
           decknix-agent-provider-el
           decknix-agent-purposes-el
           decknix-agent-url-parse-el
@@ -3761,6 +3779,7 @@ in
         ;; regions ship as one module since they're both always-
         ;; loaded with no feature gate.  Side-effects (define-keys,
         ;; with-eval-after-load wiring, transient setup) stay here.
+        (require 'decknix-state-io)
         (require 'decknix-agent-shell-main)
         ;;; Agent Shell Configuration (auggie AI integration)
 
@@ -5900,11 +5919,9 @@ process and `acp-client-stderr(CMD)-N' for its stderr pipe."
             (unless (file-directory-p dir)
               (make-directory dir t)))
           (let ((coding-system-for-write 'utf-8)
-                (print-escape-newlines t)
-                (print-length nil)
-                (print-level nil))
+                (print-escape-newlines t))
             (write-region
-             (concat (prin1-to-string record) "\n")
+             (concat (decknix-state-io-to-string record) "\n")
              nil decknix--agent-death-log-file 'append 'silent)))
 
         (defun decknix--agent-record-death (proc event)

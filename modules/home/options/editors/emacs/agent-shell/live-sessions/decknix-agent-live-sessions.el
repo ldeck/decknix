@@ -87,6 +87,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'decknix-state-io)
 
 (defcustom decknix--live-sessions-file
   (expand-file-name "~/.config/decknix/agent-live-sessions.el")
@@ -184,13 +185,8 @@ DISMISSED is the list returned by `decknix--live-sessions-dismissed-read'."
 
 (defun decknix--live-sessions--read-file (path)
   "Read a single s-expression from PATH; return nil when missing/unreadable."
-  (when (file-exists-p path)
-    (condition-case nil
-        (with-temp-buffer
-          (insert-file-contents path)
-          (goto-char (point-min))
-          (read (current-buffer)))
-      (error nil))))
+  (decknix-state-io-read-list
+   path (lambda (x) (or (consp x) (stringp x)))))
 
 (defun decknix--live-sessions--write-file (path value header)
   "Atomically write VALUE (printed via `prin1') to PATH with HEADER.
@@ -203,7 +199,7 @@ No-ops when `decknix--live-sessions-suppress-write' is non-nil."
     (let ((write-region-inhibit-fsync nil))
       (with-temp-file path
         (insert header)
-        (prin1 value (current-buffer))
+        (decknix-state-io-prin1 value (current-buffer))
         (insert "\n")))))
 
 (defun decknix--live-sessions-read ()

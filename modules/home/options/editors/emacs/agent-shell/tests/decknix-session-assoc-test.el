@@ -517,6 +517,48 @@ to whatever directory happened to be current."
           (should-not (decknix-session-assoc-created-known-p "s-2")))
       (delete-directory dir t))))
 
+(ert-deftest dk-assoc--stores-ignore-a-bound-print-length ()
+  "Some package bound `print-length' to 200 around a save, and both
+stores were written as 200 entries and a literal `...'."
+  (let* ((dir (make-temp-file "dk-trunc-" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" dir) process-environment))
+         (decknix--agent-created-store 'unloaded)
+         (decknix--agent-assoc-store nil))
+    (unwind-protect
+        (let ((print-length 2) (print-level 2))
+          (dolist (k '("s-1" "s-2" "s-3"))
+            (decknix-session-assoc-remember-created k '("o/r#1"))
+            (decknix-session-assoc-remember k 1 '(("/w/a" . 1))))
+          (setq decknix--agent-created-store 'unloaded)
+          (decknix-session-assoc-load)
+          (should (= 3 (length (decknix--session-assoc-created-store))))
+          (should (= 3 (length decknix--agent-assoc-store)))
+          (should (equal '(1 ("/w/a" . 1)) (decknix-session-assoc-recall "s-1"))))
+      (delete-directory dir t))))
+
+(ert-deftest dk-assoc--truncated-stores-keep-their-good-entries ()
+  "A store saved truncated reads back without the `...', instead of
+failing every later `car' on it."
+  (let* ((dir (make-temp-file "dk-trunc-read-" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" dir) process-environment))
+         (decknix--agent-created-store 'unloaded)
+         (decknix--agent-assoc-store nil))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "decknix" dir) t)
+          (with-temp-file (decknix-session-assoc-created-file)
+            (insert "((\"s-1\" \"o/r#1\") ...)"))
+          (with-temp-file (decknix-session-assoc-state-file)
+            (insert "((\"s-1\" 1 (\"/w/a\" . 1)) ...)"))
+          (should (equal '("o/r#1") (decknix-session-assoc-created "s-1")))
+          (decknix-session-assoc-remember-created "s-2" '("o/r#2"))
+          (should (equal '("o/r#1") (decknix-session-assoc-created "s-1")))
+          (decknix-session-assoc-load)
+          (should (equal '(1 ("/w/a" . 1)) (decknix-session-assoc-recall "s-1")))
+          (decknix-session-assoc-remember "s-2" 2 nil)
+          (should (= 2 (length decknix--agent-assoc-store))))
+      (delete-directory dir t))))
+
 ;; --- created-PR scan out of process -----------------------------------
 
 (defun dk-assoc-test--log-line (update)

@@ -49,6 +49,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'decknix-state-io)
 (require 'seq)
 (require 'decknix-agent-provider)
 
@@ -431,18 +432,16 @@ Silently no-ops when the cache file does not yet exist (first ever run)."
         (unless (file-exists-p dir)
           (make-directory dir t))
         (with-temp-buffer
-          (let ((entries nil)
-                ;; `prin1' rather than `pp': this is a machine-read cache
-                ;; (loaded via `read'), never edited by hand, and can hold
-                ;; ~1024 entries.  `pp' is a known hot spot -- its
-                ;; `pp--object'/`pp-fill' passes cost meaningful CPU on the
-                ;; sidebar-refresh path -- while `prin1' round-trips
-                ;; identically for `read' at a fraction of the cost.
-                (print-length nil)
-                (print-level nil))
+          (let ((entries nil))
             (maphash (lambda (k v) (push (cons k v) entries))
                      decknix--session-meta-cache)
-            (prin1 entries (current-buffer)))
+            ;; `prin1' rather than `pp': this is a machine-read cache
+            ;; (loaded via `read'), never edited by hand, and can hold
+            ;; ~1024 entries.  `pp' is a known hot spot -- its
+            ;; `pp--object'/`pp-fill' passes cost meaningful CPU on the
+            ;; sidebar-refresh path -- while `prin1' round-trips
+            ;; identically for `read' at a fraction of the cost.
+            (decknix-state-io-prin1 entries (current-buffer)))
           (write-region (point-min) (point-max)
                         decknix--session-meta-cache-file nil 'quiet)))
     (error (message "decknix-session-meta: save failed: %s" err))))

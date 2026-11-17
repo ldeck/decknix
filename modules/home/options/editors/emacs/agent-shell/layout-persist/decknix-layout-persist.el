@@ -46,6 +46,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'decknix-state-io)
 (require 'seq)
 (require 'subr-x)
 (require 'tab-bar)
@@ -499,9 +500,8 @@ ACCURATE is passed to `decknix-layout--tab-state'."
 A `#<' in the output means a buffer, marker or window slipped into the
 model; writing that would make the file unreadable and lose the layout."
   (let ((text (with-output-to-string
-                (let ((print-length nil) (print-level nil)
-                      (print-circle nil) (print-escape-newlines t))
-                  (prin1 layout)))))
+                (let ((print-escape-newlines t))
+                  (decknix-state-io-prin1 layout)))))
     (unless (string-search "#<" text) text)))
 
 (defun decknix-layout--parse (text)

@@ -54,6 +54,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'decknix-state-io)
 (require 'seq)
 (require 'subr-x)
 (require 'decknix-board-backend)
@@ -163,8 +164,7 @@ The sidebar's focus caches the definition and drops it here.")
       (insert ";; -*- mode: lisp-data -*-\n"
               ";; decknix board.  Edit freely; `g' on the board re-reads it.\n"
               ";; No secrets here: this is plain, shareable data.\n")
-      (let ((print-length nil) (print-level nil))
-        (pp board (current-buffer))))
+      (decknix-state-io-pp board (current-buffer)))
     (run-hook-with-args 'decknix-board-reread-functions (plist-get board :name))
     file))
 

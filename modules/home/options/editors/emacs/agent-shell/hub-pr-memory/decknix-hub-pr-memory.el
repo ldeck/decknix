@@ -54,6 +54,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'decknix-state-io)
 (require 'json)
 
 (declare-function decknix-hub-worktree-clones "decknix-agent-shell-hub" ())
@@ -166,7 +167,7 @@ reused branch replaces the old association on the next poll."
           (make-directory (file-name-directory decknix--hub-pr-memory-file) t)
           (with-temp-file decknix--hub-pr-memory-file
             (insert ";; Auto-generated hub PR memory — do not edit\n")
-            (prin1 entries (current-buffer))
+            (decknix-state-io-prin1 entries (current-buffer))
             (insert "\n")))
       (error
        (message "hub-pr-memory: save failed: %s" (error-message-string err))))))

@@ -155,6 +155,7 @@ Current in-tree packages:
 | `agent-shell/review-board/decknix-review-board-rereview.el` | Re-review after the author updates a PR | Pure: from the hub feed's `head_sha` / `my_review_sha` / `feedback_review` / `since_review` / `my_threads*` (written by `review_progress` in `pkgs/decknix-hub`), decides "updated since your review" (mine with feedback, or another reviewer's while the session sits settled), filtering base merges and same-diff rebases (the hub compares the PR's own diff against its base at both heads); row summary, inspect detail and the re-review prompt. `decknix-review-board-rereview-tick` (hub-refresh advice in the heredoc) flags sessions via `decknix-attention-set-flags` (state `updated`, ranked after `asking`), notifies once per head, and in `auto` starts the re-review: worktree refreshed by `decknix--review-worktree-refresh-then`, prompt delivered through the re-review routing (live, saved, or a fresh review with the context in its command). Seen heads persist in `~/.local/state/decknix/review-rereview.eld`, so each head is re-reviewed at most once |
 | `agent-shell/review-clone/decknix-{workspace-orgs,review-clone}.el` | Review a PR whose repo was never checked out | `decknix-workspaces` (from the `decknix.workspaces` Nix option) maps GitHub orgs to workspaces, case-insensitively; `decknix-workspace-resolve` is pure: detected checkout, then a known primary clone (run from the org workspace), then an existing `<ws>/<repo>`, then `clone`, else `unmapped`. Auto-review and the board's `d` clone on demand (`gh repo clone -- --filter=blob:none` in a child process, coalesced per repo, capped by `decknix-review-clone-max-concurrent`), then make the PR worktree and start the session in the org workspace. Row text from in-memory state plus a memoised resolution (no process on render): `cloning...`, `clone failed: ...` (`d` retries), `no workspace for ORG` (`C` clones into a chosen dir) |
 | `agent-shell/session-urls/decknix-session-urls*.el` | URLs a session is handling | Pure collector (identity PRs first, then transcript URLs most recent first, bare ticket keys via `decknix-session-urls-jira-base-url` or an inferred base; tail-bounded, cached on `buffer-chars-modified-tick`); `C-c s O`/`U`/`<`/`>` in every agent-shell buffer; `decknix-review-session-mode` auto-enabled in review sessions (`C-c C-j/f/k/b/y/q` chords plus transcript-only letters that self-insert at the prompt) |
+| `agent-shell/state-io/decknix-state-io.el` | Print and read state files whole | `decknix-state-io-prin1` / `-to-string` / `-pp` print with `print-length`, `print-level` and `print-circle` off whatever the caller bound; `decknix-state-io-read-list` reads a store and drops elements failing a predicate (default `consp`), such as the `...` a truncated print leaves. On every `mkEmacsTestedPackage`'s load path implicitly |
 
 Org-only packages (an on-support dashboard, board and workflow, say) do not
 live here: they ship from the org's own repositories and plug into the
@@ -413,6 +414,17 @@ renames a temporary sibling into place when it did change.  Anything
 Emacs itself writes into a watched directory (the hub directory gets
 `linked-prs.json` and the cache flushes) must not trigger the watcher's
 repaint, or each paint schedules the next through its own write.
+
+### State files: print whole, read tolerantly
+
+Print every state file through `decknix-state-io-prin1` (or
+`-to-string`, `-pp`, or `decknix-state-io-with-full-print` around several
+prints), never bare `prin1`. Other packages let-bind `print-length` (200
+was seen) around code that can reach our saves, and a bare `prin1` then
+writes the first 200 entries and a literal `...`. Read stores with
+`decknix-state-io-read-list` and a predicate for a well-formed entry, so
+a file damaged that way loses only the marker instead of breaking every
+reader that takes the `car` of each element.
 
 ### Don't stack completion UIs
 

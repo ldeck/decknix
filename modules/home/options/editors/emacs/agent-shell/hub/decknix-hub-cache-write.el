@@ -25,14 +25,14 @@
 
 ;;; Code:
 
+(require 'decknix-state-io)
+
 (defvar decknix--hub-cache-write-digests (make-hash-table :test 'equal)
   "Absolute cache FILE -> SHA-1 of the text last written there.")
 
 (defun decknix--hub-cache-write-text (header data)
   "Return the file text for HEADER (a string, may be nil) and DATA.  Pure."
-  (let ((print-length nil)
-        (print-level nil))
-    (concat (or header "") (prin1-to-string data) "\n")))
+  (concat (or header "") (decknix-state-io-to-string data) "\n"))
 
 (defun decknix-hub-cache-write-string (file text &optional force)
   "Write TEXT to FILE, but only when it differs from the last write there.
