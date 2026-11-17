@@ -10,6 +10,7 @@
 ;;; Code:
 
 (require 'ert)
+(defvar corfu-auto nil)
 (require 'cl-lib)
 (require 'decknix-agent-compose-internals)
 
@@ -118,6 +119,14 @@
                   completion-at-point-functions))
     (should (memq #'decknix--compose-trigger-completion
                   post-self-insert-hook))))
+
+(ert-deftest decknix-compose-setup-completion--no-auto-popup ()
+  "Completion opens on the trigger characters, never on a timer."
+  (with-temp-buffer
+    (setq-local corfu-auto t)
+    (decknix--compose-setup-completion)
+    (should (local-variable-p 'corfu-auto))
+    (should-not corfu-auto)))
 
 (provide 'decknix-agent-compose-internals-test)
 

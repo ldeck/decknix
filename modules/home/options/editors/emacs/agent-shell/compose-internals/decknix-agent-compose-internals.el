@@ -32,6 +32,8 @@
 
 ;;; Code:
 
+(defvar corfu-auto)
+
 ;; Forward declarations -- defined in main-bulk and upstream
 ;; agent-shell respectively.  These keep the byte-compiler quiet
 ;; without creating a hard load-order coupling.
@@ -146,6 +148,11 @@ runs here.  Order matches `decknix--compose-trigger-completion's `cond'."
   (setq-local completion-at-point-functions
               (list #'decknix--compose-command-completion-at-point
                     #'decknix--compose-file-completion-at-point))
+  ;; The trigger below opens completion after `/' or `@'; `corfu-auto'
+  ;; would also run the file capf 0.2 s after every second character of
+  ;; prose, which is what kept `corfu--auto-complete-deferred' in the
+  ;; hitch log (up to 958 ms) after the transcript buffers turned it off.
+  (setq-local corfu-auto nil)
   (add-hook 'post-self-insert-hook
             #'decknix--compose-trigger-completion nil t))
 
