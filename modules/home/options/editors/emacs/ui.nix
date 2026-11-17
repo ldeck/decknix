@@ -206,14 +206,31 @@ in
                                             (nth ,i (reverse (frame-list))))))))))
             menu))
 
+        ;; `menu-bar-update-hook' runs on every menu-bar redisplay, which
+        ;; on macOS is most redisplays.  Rebuilding (an `eval' per frame
+        ;; plus a `define-key' into `global-map') each time was 8.5% of the
+        ;; daemon's main thread in an external `sample', so the menu is
+        ;; rebuilt only when the frames or their names change.  The radio
+        ;; button reads `selected-frame' when the menu opens, so focus
+        ;; changes need no rebuild.
+        (defvar decknix--window-menu-key nil
+          "Frames and names the Window menu was last built from.")
+
+        (defun decknix--window-menu-key ()
+          (mapcar (lambda (f) (cons f (frame-parameter f 'name))) (frame-list)))
+
         (defun decknix--update-window-menu ()
-          "Rebuild the Window menu entry in the global menu bar."
-          (let ((entry (cons "Window" (decknix--build-window-menu))))
-            (if (lookup-key global-map [menu-bar window])
-                ;; Already placed: update in place (preserves position).
-                (define-key global-map [menu-bar window] entry)
-              ;; First call: insert after Buffers to match macOS menu order.
-              (define-key-after global-map [menu-bar window] entry 'buffers))))
+          "Rebuild the Window menu entry in the global menu bar when frames changed."
+          (let ((key (decknix--window-menu-key)))
+            (unless (and (equal key decknix--window-menu-key)
+                         (lookup-key global-map [menu-bar window]))
+              (setq decknix--window-menu-key key)
+              (let ((entry (cons "Window" (decknix--build-window-menu))))
+                (if (lookup-key global-map [menu-bar window])
+                    ;; Already placed: update in place (preserves position).
+                    (define-key global-map [menu-bar window] entry)
+                  ;; First call: insert after Buffers to match macOS menu order.
+                  (define-key-after global-map [menu-bar window] entry 'buffers))))))
 
         (when (eq system-type 'darwin)
           (add-hook 'menu-bar-update-hook #'decknix--update-window-menu)
