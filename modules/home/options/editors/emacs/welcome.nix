@@ -286,6 +286,7 @@ in
                      ("C-x 2" . "split-window-below - Split horizontal")
                      ("C-x 3" . "split-window-right - Split vertical")
                      ("C-x o" . "other-window - Switch window")
+                     ("C-x +" . "Balance main windows evenly (sidebar keeps its width)")
                      ("C-c <left>" . "Previous layout of this tab")
                      ("C-c <right>" . "Next layout of this tab")
                      ("C-c S-<left>" . "Previous layout, across all tabs")

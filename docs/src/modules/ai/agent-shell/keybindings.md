@@ -181,6 +181,14 @@ overlap, so both sets work there. The older bindings stay:
 `C-c s l` / `C-c s L` / `C-c s C-l` outside an agent buffer, and
 `C-c A l` / `C-c A L` from anywhere, switch and save groups.
 
+## Balancing windows (`C-x +`)
+
+`C-x +` balances only the main window area: the agent sidebar (a left
+side window) keeps its width. Every row and column gets an equal share
+even when splits are nested in the same direction, so a 3x2 grid comes
+out as six equal windows rather than rows of 1/2, 1/4 and 1/4.
+`C-u C-x +` runs plain `balance-windows` on the whole frame.
+
 ## Sidebar Actions (`C-c W`)
 
 Trigger sidebar transients without switching focus away from the

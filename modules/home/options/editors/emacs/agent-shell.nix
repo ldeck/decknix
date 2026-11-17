@@ -2410,6 +2410,14 @@ let
     testFiles = [ "decknix-winner-safe-test.el" ];
   };
 
+  # `C-x +' that balances only the main window area (the sidebar is a
+  # side window) and evens rows and columns across nested splits.
+  decknix-window-balance-el = mkEmacsTestedPackage {
+    pname = "decknix-window-balance";
+    src = ./agent-shell/window-balance;
+    testFiles = [ "decknix-window-balance-test.el" ];
+  };
+
   decknix-agent-subagent-state-el = mkEmacsTestedPackage {
     pname = "decknix-agent-subagent-state";
     src = ./agent-shell/subagent-state;
@@ -3706,6 +3714,7 @@ in
           decknix-capture-el
           decknix-board-el
           decknix-winner-safe-el
+          decknix-window-balance-el
           decknix-agent-subagent-state-el
           decknix-agent-resourcing-el
           decknix-agent-rg-search-command-el
@@ -5245,6 +5254,8 @@ ${optionalString cfg.tableOverlay.enable ''
         (require 'decknix-agent-subagent-state)
         (require 'decknix-winner-safe)
         (decknix-winner-safe-enable)
+        (require 'decknix-window-balance)
+        (global-set-key (kbd "C-x +") #'decknix-balance-main-windows)
         (declare-function decknix--agent-subagent-state
                           "decknix-agent-subagent-state"
                           (subagent now &optional parent-live-p))
