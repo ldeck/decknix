@@ -1139,10 +1139,10 @@ mod tests {
         let mut c = fixture();
         c[3].tags = vec!["plat-1342".into()];
         let rows = tag_rows(&c, false);
-        let hx = rows.iter().find(|r| loose(&r.tag) == "hx1342").unwrap();
-        assert_eq!(hx.sessions.len(), 2);
-        assert_eq!(hx.live, 1);
-        assert_eq!(hx.variants.len(), 1);
+        let plat = rows.iter().find(|r| loose(&r.tag) == "plat1342").unwrap();
+        assert_eq!(plat.sessions.len(), 2);
+        assert_eq!(plat.live, 1);
+        assert_eq!(plat.variants.len(), 1);
         let us = rows.iter().find(|r| r.tag == "us").unwrap();
         assert_eq!((us.sessions.len(), us.live), (2, 2));
         assert!(tag_rows(&c, true).iter().all(|r| r.live == r.sessions.len()));
