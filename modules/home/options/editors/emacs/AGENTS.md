@@ -356,7 +356,10 @@ process, tiny callback) for case 1, and `decknix-session-assoc-created-scan`
 (a `grep | awk` child narrows a 100 MB broker log to the few lines Emacs
 parses; the synchronous `call-process` grep it replaced froze Emacs for
 minutes, and an abort with `C-g` left it pending, so the next idle period
-ran it again);
+ran it again), and `decknix-session-assoc-backfill-async` (a pure function
+too heavy for the main thread runs in a `emacs -Q --batch` child that loads
+the same library and prints its result, so the answer cannot drift from the
+in-process one);
 `decknix--agent-session-refresh-run-when-idle` in
 `agent-shell/agent/decknix-agent-session-cache.el` for the case-2
 idle-defer + re-defer guard.

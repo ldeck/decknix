@@ -28,6 +28,7 @@
 (defvar decknix--hub-wt-facts nil)
 (defvar decknix--agent-assoc-store nil)
 (defvar decknix--agent-broker-key nil)
+(declare-function agent-shell-buffers "agent-shell" ())
 
 (defconst dk-assoc-test--roots
   '("/w/platform-cli"
@@ -575,7 +576,8 @@ to whatever directory happened to be current."
       (should-not (string-match-p "pull/7\\|pull/8" out)))))
 
 (defun dk-assoc-test--await (pred)
-  (let ((deadline (+ (float-time) 10)))
+  "Wait up to a minute for PRED: a child Emacs can take seconds to start."
+  (let ((deadline (+ (float-time) 60)))
     (while (and (not (funcall pred)) (< (float-time) deadline))
       (accept-process-output nil 0.05))))
 
@@ -604,6 +606,7 @@ to whatever directory happened to be current."
           (decknix--agent-assoc-store nil)
           (decknix--session-assoc-created-attempted nil)
           (decknix--session-assoc-created-scan nil)
+          (decknix--session-assoc-backfill-proc nil)
           (spec ,spec)
           (bufs (mapcar (lambda (s)
                           (with-current-buffer (generate-new-buffer "dk-agent")
@@ -616,7 +619,8 @@ to whatever directory happened to be current."
                    ((symbol-function 'decknix--agent-broker-log-path)
                     (lambda (key) (cdr (assoc key spec)))))
            ,@body)
-       (let ((p decknix--session-assoc-created-scan))
+       (dolist (p (list decknix--session-assoc-created-scan
+                        decknix--session-assoc-backfill-proc))
          (when (processp p)
            (set-process-sentinel p #'ignore)
            (delete-process p)))
@@ -655,6 +659,40 @@ to whatever directory happened to be current."
     (decknix-session-assoc-remember-created "s-1" '("o/r#1"))
     (decknix-session-assoc-created-merge "s-1" '("o/r#9" "o/r#1"))
     (should (equal '("o/r#1" "o/r#9") (decknix-session-assoc-created "s-1")))))
+
+(defconst dk-assoc-test--assoc-log-lines
+  (list
+   "{\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"tool_call\",\"locations\":[{\"path\":\"/w/a/x.go\"}]}}}"
+   "{\"id\":1,\"result\":{\"stopReason\":\"end_turn\"}}"
+   "{\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"tool_call\",\"locations\":[{\"path\":\"/w/b/y.go\"}]}}}"))
+
+(ert-deftest dk-assoc--the-association-backfill-runs-in-a-child-emacs ()
+  "Same answer as the in-process backfill, computed by another process."
+  (dk-assoc-test--with-log log dk-assoc-test--assoc-log-lines
+    (let ((got 'none))
+      (should (processp (decknix-session-assoc-backfill-async
+                         log '("/w/a" "/w/b") (lambda (res) (setq got res)))))
+      (dk-assoc-test--await (lambda () (not (eq got 'none))))
+      (should (equal (decknix-session-assoc-backfill log '("/w/a" "/w/b")) got))
+      (should (cdr got)))))
+
+(ert-deftest dk-assoc--the-idle-tick-backfills-the-association-in-a-child ()
+  (dk-assoc-test--with-log log dk-assoc-test--assoc-log-lines
+    (dk-assoc-test--with-sessions (list (cons "s-1" log))
+      (let ((buf (car (agent-shell-buffers))))
+        (with-current-buffer buf (setq-local decknix--agent-assoc-backfilled nil))
+        (cl-letf (((symbol-function 'decknix-session-assoc-roots)
+                   (lambda () '("/w/a" "/w/b")))
+                  ((symbol-function 'decknix-session-assoc-save) #'ignore))
+          (decknix-session-assoc-backfill-tick)
+          (should (process-live-p decknix--session-assoc-backfill-proc))
+          (decknix-session-assoc-backfill-tick)
+          (should-not decknix--session-assoc-created-scan)
+          (dk-assoc-test--await (lambda () (null decknix--session-assoc-backfill-proc)))
+          (should (equal '("/w/b" "/w/a")
+                         (with-current-buffer buf
+                           (decknix-session-assoc-active
+                            decknix--agent-assoc decknix--agent-assoc-turn 20)))))))))
 
 (provide 'decknix-session-assoc-test)
 ;;; decknix-session-assoc-test.el ends here

@@ -772,6 +772,70 @@ Returns non-nil when something was recorded."
         (decknix-session-assoc-remember key (car res) (cdr res))
         t))))
 
+(defvar decknix--session-assoc-backfill-proc nil
+  "The child Emacs backfilling one session\='s association, or nil.")
+
+(defun decknix-session-assoc-backfill-command (log-path roots)
+  "Return the argv of a batch Emacs printing LOG-PATH\='s backfill over ROOTS.
+The child loads this same library, so the answer is exactly what
+`decknix-session-assoc-backfill' gives in the daemon."
+  (let ((form `(progn
+                 (setq native-comp-jit-compilation nil)
+                 (require 'decknix-session-assoc)
+                 (let ((decknix-session-assoc-backfill-steps
+                        ',decknix-session-assoc-backfill-steps)
+                       (print-length nil) (print-level nil))
+                   (prin1 (decknix-session-assoc-backfill ,log-path ',roots))))))
+    (list (expand-file-name invocation-name invocation-directory)
+          "-Q" "--batch"
+          "-L" (file-name-directory (locate-library "decknix-session-assoc"))
+          "--eval" (prin1-to-string form))))
+
+(defun decknix-session-assoc-backfill-async (log-path roots callback)
+  "Compute LOG-PATH\='s backfill over ROOTS in a child Emacs; return it.
+CALLBACK receives (TURN . ASSOC), nil when nothing resolved, or the
+symbol `error'.  Reading and parsing a 4 to 16 MB log tail took one to
+two seconds of the daemon\='s main thread per session, once for every
+session after each restart."
+  (let ((buf (generate-new-buffer " *decknix-assoc-backfill*" t)))
+    (make-process
+     :name "decknix-assoc-backfill" :buffer buf
+     :command (decknix-session-assoc-backfill-command log-path roots)
+     :connection-type 'pipe :noquery t :coding 'utf-8-unix
+     :stderr (get-buffer-create " *decknix-assoc-backfill-stderr*")
+     :sentinel
+     (lambda (proc _event)
+       (unless (process-live-p proc)
+         (let ((res (if (and (eq (process-status proc) 'exit)
+                             (eq 0 (process-exit-status proc))
+                             (buffer-live-p buf))
+                        (condition-case nil
+                            (car (read-from-string
+                                  (with-current-buffer buf (buffer-string))))
+                          (error 'error))
+                      'error)))
+           (when (buffer-live-p buf) (kill-buffer buf))
+           (funcall callback res)))))))
+
+(defun decknix-session-assoc-backfill-start (buffer)
+  "Backfill BUFFER\='s association in a child Emacs; return the process."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when-let* (((local-variable-p 'decknix--agent-broker-key))
+                  (key decknix--agent-broker-key)
+                  ((fboundp 'decknix--agent-broker-log-path))
+                  (log (decknix--agent-broker-log-path key))
+                  (_ (setq decknix--agent-assoc-backfilled t))
+                  ((file-readable-p log)))
+        (setq decknix--session-assoc-backfill-proc
+              (decknix-session-assoc-backfill-async
+               log (decknix-session-assoc-roots)
+               (lambda (res)
+                 (setq decknix--session-assoc-backfill-proc nil)
+                 (when (and (consp res) (cdr res))
+                   (decknix-session-assoc-apply buffer (car res) (cdr res))
+                   (decknix-session-assoc-remember key (car res) (cdr res))))))))))
+
 (defun decknix-session-assoc-backfill-pending ()
   "Return the live agent buffers still awaiting a backfill.
 
@@ -849,15 +913,16 @@ Returns the scan process, or nil when there was no log to scan."
                    (decknix-session-assoc-created-merge key prs)))))))))
 
 (defun decknix-session-assoc-backfill-tick ()
-  "Backfill ONE pending session, then stop until the next idle period.
+  "Start backfilling ONE pending session, then stop until the next idle period.
 
-One per tick so a fleet of sessions cannot chain into a multi-second
-freeze: 13 of them at ~1.7 s each is ~22 s.  The association comes first;
-once none is pending, one session\'s created PRs are scanned for, in a
-child process, and never more than one scan at a time."
-  (if-let* ((buf (car (decknix-session-assoc-backfill-pending))))
-      (ignore-errors (decknix-session-assoc-backfill-one buf))
-    (unless (process-live-p decknix--session-assoc-created-scan)
+Both kinds of backfill read a broker log, so each runs in a child
+process and this tick only starts one, when none is running: the
+association first, then once none is pending, one session\='s created
+PRs.  The daemon touches only the small finished result."
+  (unless (or (process-live-p decknix--session-assoc-backfill-proc)
+              (process-live-p decknix--session-assoc-created-scan))
+    (if-let* ((buf (car (decknix-session-assoc-backfill-pending))))
+        (ignore-errors (decknix-session-assoc-backfill-start buf))
       (when-let* ((buf (decknix-session-assoc-created-pending
                         decknix--session-assoc-created-attempted)))
         (ignore-errors (decknix-session-assoc-created-backfill-start buf))))))
