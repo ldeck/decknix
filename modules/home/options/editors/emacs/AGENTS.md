@@ -352,7 +352,11 @@ in the gap *between* two keystrokes and still lands on the user:
   case 1 and hand the main thread only the finished result.
 
 Reference implementations: `decknix-board--fetch` (heavy work in a child
-process, tiny callback) for case 1;
+process, tiny callback) for case 1, and `decknix-session-assoc-created-scan`
+(a `grep | awk` child narrows a 100 MB broker log to the few lines Emacs
+parses; the synchronous `call-process` grep it replaced froze Emacs for
+minutes, and an abort with `C-g` left it pending, so the next idle period
+ran it again);
 `decknix--agent-session-refresh-run-when-idle` in
 `agent-shell/agent/decknix-agent-session-cache.el` for the case-2
 idle-defer + re-defer guard.
