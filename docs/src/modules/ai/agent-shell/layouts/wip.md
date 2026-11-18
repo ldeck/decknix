@@ -43,8 +43,9 @@ and every `decknix-session-assoc-created-interval` seconds (60), one bounded
 chunk at a time in a child Emacs. Results go to `session-prs.eld`, and each
 newly found PR is also linked to the conversation in `agent-sessions.json`
 (`"added": "auto"`), which survives the session being re-brokered. An existing
-link, manual or not, is never replaced. Deleting the offsets file makes every
-live session's log be read again from the start.
+link, manual or not, is never replaced. `decknix session link-pr` writes the
+same link from outside Emacs. Deleting the offsets file makes every live
+session's log be read again from the start.
 
 ## Proposed columnar layout (draft)
 

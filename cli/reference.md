@@ -323,6 +323,7 @@ Commands:
   resume   Resume a session (exec into the agent by default)
   new      Start a new session (exec into the agent by default)
   tag      Add or remove tags on a session's conversation
+  link-pr  Link a GitHub PR to a session's conversation, as the sidebar's "linked PRs" (idempotent: an existing link of that PR is kept)
   tags     List every tag with its session count, live count and sessions; spellings that differ only in case or separators are grouped
 
 Options:
@@ -715,6 +716,35 @@ Options:
 
       --remove <REMOVE>
           Tag to remove (repeatable)
+
+  -h, --help
+          Print help
+```
+
+## `decknix session link-pr`
+
+```text
+Link a GitHub PR to a session's conversation, as the sidebar's "linked PRs" (idempotent: an existing link of that PR is kept)
+
+Usage: decknix session link-pr [OPTIONS] <SESSION> <URL>
+
+Arguments:
+  <SESSION>
+          Session id or unique prefix; else tag(s) or a buffer name only one session carries
+
+  <URL>
+          The PR URL (https://github.com/OWNER/REPO/pull/N)
+
+Options:
+      --agent <AGENT>
+          Which agent(s) to resolve within: claude, auggie, pi, or all
+
+          [default: all]
+
+      --added <ADDED>
+          Provenance recorded on the link: auto, hook or manual
+
+          [default: auto]
 
   -h, --help
           Print help

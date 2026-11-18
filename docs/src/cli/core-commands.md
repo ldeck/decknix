@@ -335,6 +335,20 @@ decknix session tags --live --json
 > tagged here appears under that tag in the sidebar and pickers, and agents
 > spawned from a board on a ticket can be found and resumed later by tag.
 
+### `decknix session link-pr`
+
+Link a GitHub PR to a session's conversation, the same `linked_prs` record the
+Emacs `link-pr` command writes, so the sidebar nests the PR under that session.
+The session is resolved like the other subcommands (id, unique prefix, buffer
+name or tags only one session carries). Idempotent: if the PR is already
+linked in any form, manual included, nothing changes. `--added` records where
+the link came from (`auto` by default, `hook` from an agent hook, `manual`).
+
+```bash
+decknix session link-pr d8df9eb9 https://github.com/my-org/my-repo/pull/42
+decknix session link-pr "$CLAUDE_SESSION_ID" "$url" --added hook
+```
+
 ## `decknix wt`
 
 Manage git worktrees across all your repos from one place. decknix keeps a

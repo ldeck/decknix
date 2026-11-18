@@ -298,6 +298,20 @@ pub enum SessionAction {
         #[arg(long = "remove")]
         remove: Vec<String>,
     },
+    /// Link a GitHub PR to a session's conversation, as the sidebar's
+    /// "linked PRs" (idempotent: an existing link of that PR is kept)
+    LinkPr {
+        /// Session id or unique prefix; else tag(s) or a buffer name only one session carries
+        session: String,
+        /// The PR URL (https://github.com/OWNER/REPO/pull/N)
+        url: String,
+        /// Which agent(s) to resolve within: claude, auggie, pi, or all
+        #[arg(long, default_value = "all")]
+        agent: String,
+        /// Provenance recorded on the link: auto, hook or manual
+        #[arg(long, default_value = "auto")]
+        added: String,
+    },
     /// List every tag with its session count, live count and sessions;
     /// spellings that differ only in case or separators are grouped
     Tags {
@@ -337,6 +351,7 @@ pub fn run(action: SessionAction) -> Result<()> {
             cmd_new(&paths, &agent, tags, workspace, model, print, prompt)
         }
         SessionAction::Tag { id, agent, add, remove } => cmd_tag(&paths, &agent, id, add, remove),
+        SessionAction::LinkPr { session, url, agent, added } => cmd_link_pr(&paths, &agent, &session, &url, &added),
         SessionAction::Tags { live, json } => exit_with(session_lookup::cmd_tags(live, json)),
     }
 }
@@ -1583,23 +1598,7 @@ fn cmd_tag(paths: &Paths, agent: &str, id: String, add: Vec<String>, remove: Vec
 
     let key = match owning_key {
         Some(k) => k,
-        None => {
-            if !conv_key_writes_ok(&store) {
-                bail!("store _canonicalKeyVersion differs from this decknix; cannot mint a new conversation entry (update decknix)");
-            }
-            let path = path.ok_or_else(|| {
-                anyhow!("session '{}' has no transcript to derive a conversation key from", full_id)
-            })?;
-            let provider = providers.iter().find(|p| Some(p.id()) == provider_id).ok_or_else(|| {
-                anyhow!("could not determine the agent that owns '{}'", full_id)
-            })?;
-            let first = provider
-                .conv_key_message(&path)
-                .ok_or_else(|| anyhow!("cannot read a first user message for '{}'", full_id))?;
-            let key = conv_key(&first).ok_or_else(|| anyhow!("empty first message; cannot key conversation"))?;
-            let convs = conversations(&store).cloned().unwrap_or_default();
-            resolve_merged(&convs, &key)
-        }
+        None => mint_conv_key(&store, &providers, provider_id, path, &full_id)?,
     };
 
     {
@@ -1632,6 +1631,151 @@ fn cmd_tag(paths: &Paths, agent: &str, id: String, add: Vec<String>, remove: Vec
     save_store(&paths.store, &store)?;
     let final_tags = conversations(&store).and_then(|c| c.get(&key)).map(entry_tags).unwrap_or_default();
     println!("{}  tags: [{}]", short(&full_id), final_tags.join(","));
+    Ok(())
+}
+
+/// The conversation key a session with no entry yet would be filed under,
+/// derived from its transcript's first user message as Emacs derives it.
+fn mint_conv_key(
+    store: &Value,
+    providers: &[Box<dyn Provider>],
+    provider_id: Option<&str>,
+    path: Option<PathBuf>,
+    full_id: &str,
+) -> Result<String> {
+    if !conv_key_writes_ok(store) {
+        bail!("store _canonicalKeyVersion differs from this decknix; cannot mint a new conversation entry (update decknix)");
+    }
+    let path = path.ok_or_else(|| anyhow!("session '{}' has no transcript to derive a conversation key from", full_id))?;
+    let provider = providers
+        .iter()
+        .find(|p| Some(p.id()) == provider_id)
+        .ok_or_else(|| anyhow!("could not determine the agent that owns '{}'", full_id))?;
+    let first = provider
+        .conv_key_message(&path)
+        .ok_or_else(|| anyhow!("cannot read a first user message for '{}'", full_id))?;
+    let key = conv_key(&first).ok_or_else(|| anyhow!("empty first message; cannot key conversation"))?;
+    let convs = conversations(store).cloned().unwrap_or_default();
+    Ok(resolve_merged(&convs, &key))
+}
+
+// ---------------------------------------------------------------------------
+// link-pr
+// ---------------------------------------------------------------------------
+
+/// `(owner, repo, number)` of a GitHub PR URL; any trailing path (`/files`)
+/// or query is ignored.
+fn parse_pr_url(url: &str) -> Option<(String, String, u64)> {
+    let re = Regex::new(r"^https?://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([0-9]+)(?:[/?#].*)?$").ok()?;
+    let c = re.captures(url.trim())?;
+    Some((c[1].to_string(), c[2].to_string(), c[3].parse().ok()?))
+}
+
+/// The conversation entry Emacs files SESSION-ID under, mirroring
+/// `decknix--agent-conv-key-scan-for-session-id`: of the entries listing
+/// it, one carrying metadata (broker key, tags, model, mode), most recently
+/// accessed first; else the first by key. A session accretes several
+/// entries (a resume primer mints a new key), and a link on the entry the
+/// sidebar does not read is invisible.
+fn owning_conv_key(store: &Value, session_id: &str) -> Option<String> {
+    let convs = conversations(store)?;
+    let mut listing: Vec<(&String, &Value)> = convs
+        .iter()
+        .filter(|(_, e)| {
+            e.get("sessions")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().any(|s| s.as_str() == Some(session_id)))
+                .unwrap_or(false)
+        })
+        .collect();
+    listing.sort_by(|a, b| a.0.cmp(b.0));
+    let has_meta = |e: &Value| {
+        ["brokerKey", "tags", "model", "mode"].iter().any(|k| match e.get(*k) {
+            None | Some(Value::Null) => false,
+            Some(Value::Array(a)) => !a.is_empty(),
+            Some(Value::String(s)) => !s.is_empty(),
+            Some(_) => true,
+        })
+    };
+    let last = |e: &Value| e.get("lastAccessed").and_then(Value::as_str).unwrap_or("").to_string();
+    listing
+        .iter()
+        .filter(|(_, e)| has_meta(e))
+        .max_by(|a, b| last(a.1).cmp(&last(b.1)).then_with(|| b.0.cmp(a.0)))
+        .or_else(|| listing.first())
+        .map(|(k, _)| (*k).clone())
+}
+
+/// Add a PR link to conversation KEY (listing SESSION-ID), the same record
+/// `decknix--agent-link-pr` writes. False, and nothing changed, when the PR
+/// is already linked there in any form, so a manual link is never replaced.
+fn link_pr_in_store(store: &mut Value, key: &str, session_id: &str, url: &str, added: &str, linked_at: &str) -> bool {
+    let Some((owner, repo, number)) = parse_pr_url(url) else { return false };
+    let same_pr = |rec: &Value| {
+        rec.get("type").and_then(Value::as_str) != Some("repo")
+            && rec
+                .get("url")
+                .and_then(Value::as_str)
+                .and_then(parse_pr_url)
+                .map(|(o, r, n)| o.eq_ignore_ascii_case(&owner) && r.eq_ignore_ascii_case(&repo) && n == number)
+                .unwrap_or(false)
+    };
+    let convs = conversations_mut(store);
+    let entry = convs.entry(key.to_string()).or_insert_with(|| json!({}));
+    let Some(entry) = entry.as_object_mut() else { return false };
+    let links = entry.entry("linked_prs").or_insert_with(|| json!([]));
+    if !links.is_array() {
+        *links = json!([]);
+    }
+    let links = links.as_array_mut().unwrap();
+    if links.iter().any(same_pr) {
+        return false;
+    }
+    links.push(json!({
+        "url": format!("https://github.com/{}/{}/pull/{}", owner, repo, number),
+        "type": "authored",
+        "added": added,
+        "linked_at": linked_at,
+    }));
+    let sessions = entry.entry("sessions").or_insert_with(|| json!([]));
+    if let Some(a) = sessions.as_array_mut() {
+        if !a.iter().any(|s| s.as_str() == Some(session_id)) {
+            a.push(json!(session_id));
+        }
+    }
+    true
+}
+
+fn cmd_link_pr(paths: &Paths, agent: &str, session: &str, url: &str, added: &str) -> Result<()> {
+    if !matches!(added, "auto" | "hook" | "manual") {
+        bail!("--added must be auto, hook or manual (got '{}')", added);
+    }
+    if parse_pr_url(url).is_none() {
+        bail!("not a GitHub PR URL: {}", url);
+    }
+    let mut store = load_store(&paths.store)?;
+    let providers = select_providers(agent)?;
+    // A session the store knows is linkable without its transcript: the
+    // hook passes a full id, and a tag resolves to one through the store.
+    let (full_id, provider_id, path) = match locate_or_resolve(&providers, session) {
+        Ok(l) => (l.id, Some(l.provider_id), Some(l.path)),
+        Err(_) if looks_like_uuid(session) => (session.to_string(), None, None),
+        Err(e) => match session_lookup::resolve_saved_id(session) {
+            Ok(id) if looks_like_uuid(&id) => (id, None, None),
+            _ => return Err(e),
+        },
+    };
+    let key = match owning_conv_key(&store, &full_id) {
+        Some(k) => k,
+        None => mint_conv_key(&store, &providers, provider_id, path, &full_id)?,
+    };
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    if link_pr_in_store(&mut store, &key, &full_id, url, added, &now) {
+        save_store(&paths.store, &store)?;
+        println!("{}  linked {}", short(&full_id), url);
+    } else {
+        println!("{}  already linked {}", short(&full_id), url);
+    }
     Ok(())
 }
 
@@ -2331,6 +2475,78 @@ mod tests {
         assert_eq!(slug("/Users/ldeck/Code/examplecloud"), "-Users-ldeck-Code-examplecloud");
         assert_eq!(slug("/Users/ldeck/Code/examplecloud/"), "-Users-ldeck-Code-examplecloud");
         assert_eq!(slug("/a/.b_c"), "-a--b-c");
+    }
+
+    #[test]
+    fn parse_pr_url_takes_owner_repo_number_and_ignores_a_tail() {
+        assert_eq!(parse_pr_url("https://github.com/o/r/pull/12"), Some(("o".into(), "r".into(), 12)));
+        assert_eq!(parse_pr_url("https://github.com/o/r.x/pull/12/files"), Some(("o".into(), "r.x".into(), 12)));
+        assert_eq!(parse_pr_url("https://github.com/o/r/pull/new/branch"), None);
+        assert_eq!(parse_pr_url("https://github.com/o/r"), None);
+    }
+
+    fn store_with(entries: Value) -> Value {
+        json!({ "conversations": entries })
+    }
+
+    fn links(store: &Value, key: &str) -> Vec<Value> {
+        store["conversations"][key]["linked_prs"].as_array().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn link_pr_adds_the_record_emacs_writes() {
+        let mut store = store_with(json!({ "k": { "sessions": ["s"], "tags": ["lane"] } }));
+        assert!(link_pr_in_store(&mut store, "k", "s", "https://github.com/o/r/pull/9", "hook", "2026-11-18T00:00:00Z"));
+        assert_eq!(
+            links(&store, "k"),
+            vec![json!({ "url": "https://github.com/o/r/pull/9", "type": "authored", "added": "hook", "linked_at": "2026-11-18T00:00:00Z" })]
+        );
+        assert_eq!(store["conversations"]["k"]["tags"], json!(["lane"]));
+    }
+
+    #[test]
+    fn link_pr_is_idempotent() {
+        let mut store = store_with(json!({ "k": { "sessions": ["s"] } }));
+        assert!(link_pr_in_store(&mut store, "k", "s", "https://github.com/o/r/pull/9", "auto", "t1"));
+        assert!(!link_pr_in_store(&mut store, "k", "s", "https://github.com/o/r/pull/9", "auto", "t2"));
+        assert_eq!(links(&store, "k").len(), 1);
+    }
+
+    #[test]
+    fn link_pr_leaves_a_manual_link_of_the_same_pr_alone() {
+        let manual = json!({ "url": "https://github.com/O/R/pull/9/files", "type": "authored", "added": "manual" });
+        let mut store = store_with(json!({ "k": { "sessions": ["s"], "linked_prs": [manual.clone()] } }));
+        assert!(!link_pr_in_store(&mut store, "k", "s", "https://github.com/o/r/pull/9", "hook", "t"));
+        assert_eq!(links(&store, "k"), vec![manual]);
+    }
+
+    #[test]
+    fn link_pr_is_not_blocked_by_a_repo_link() {
+        let repo = json!({ "url": "https://github.com/o/r", "type": "repo", "branch": "main" });
+        let mut store = store_with(json!({ "k": { "sessions": ["s"], "linked_prs": [repo] } }));
+        assert!(link_pr_in_store(&mut store, "k", "s", "https://github.com/o/r/pull/9", "auto", "t"));
+        assert_eq!(links(&store, "k").len(), 2);
+    }
+
+    #[test]
+    fn link_pr_into_a_new_entry_lists_the_session() {
+        let mut store = json!({});
+        assert!(link_pr_in_store(&mut store, "k", "s", "https://github.com/o/r/pull/9", "auto", "t"));
+        assert_eq!(store["conversations"]["k"]["sessions"], json!(["s"]));
+    }
+
+    #[test]
+    fn owning_conv_key_prefers_the_recent_entry_with_metadata() {
+        let store = store_with(json!({
+            "a-bare": { "sessions": ["s"] },
+            "b-old": { "sessions": ["s"], "tags": ["x"], "lastAccessed": "2026-11-01T00:00:00Z" },
+            "c-new": { "sessions": ["s"], "brokerKey": "s-1", "lastAccessed": "2026-11-17T00:00:00Z" },
+            "d-other": { "sessions": ["t"], "tags": ["y"], "lastAccessed": "2026-11-18T00:00:00Z" }
+        }));
+        assert_eq!(owning_conv_key(&store, "s").as_deref(), Some("c-new"));
+        let bare = store_with(json!({ "b": { "sessions": ["s"] }, "a": { "sessions": ["s"], "tags": [] } }));
+        assert_eq!(owning_conv_key(&bare, "s").as_deref(), Some("a"));
+        assert_eq!(owning_conv_key(&bare, "nope"), None);
     }
 
     #[test]
