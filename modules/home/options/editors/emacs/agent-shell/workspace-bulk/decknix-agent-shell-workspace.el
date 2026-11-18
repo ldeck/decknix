@@ -1041,6 +1041,20 @@ keys.  Press `C-g' to abort."
   (interactive)
   (call-interactively #'decknix-layout-toggle-attention-only))
 
+(transient-define-suffix decknix-sidebar-transient--wip-reviews ()
+  :key "0"
+  :description
+  (lambda ()
+    (format "wip reviews   %s"
+            (propertize
+             (if (bound-and-true-p decknix-sidebar-layout-wip-show-reviews)
+                 "[shown]" "[hidden]")
+             'face (if (bound-and-true-p decknix-sidebar-layout-wip-show-reviews)
+                       'font-lock-constant-face 'font-lock-comment-face))))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-layout-toggle-wip-reviews))
+
 (transient-define-suffix decknix-sidebar-transient--wip-items ()
   :key "3"
   :description
@@ -1193,6 +1207,7 @@ pipeline) moved to Shared rather than disappearing with them."
     (decknix-sidebar-transient--layout-enable)    ;; layout (1)
     (decknix-sidebar-transient--reviews-attention);; reviews (2)
     (decknix-sidebar-transient--wip-items)        ;; wip items (3)
+    (decknix-sidebar-transient--wip-reviews)      ;; wip reviews (0)
     (decknix-sidebar-transient--dormant-limit)    ;; dormant (4)
     (decknix-sidebar-transient--repos-behind)     ;; repos behind (5)
     (decknix-sidebar-transient--wt-hide-stale)    ;; stale wt (6)
