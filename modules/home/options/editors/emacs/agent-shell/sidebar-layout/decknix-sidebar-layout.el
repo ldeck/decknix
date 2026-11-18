@@ -37,6 +37,7 @@
 (require 'decknix-session-assoc)
 (require 'decknix-hub-icons)
 (require 'decknix-attention)
+(require 'decknix-ship)
 (defvar decknix--agent-assoc-backfilled)
 (require 'subr-x)
 
@@ -768,6 +769,45 @@ and some without, which is the normalisation bug that once hid
         (wp (decknix--layout-wt-path wt)))
     (and ws wp (string= ws wp))))
 
+(defvar decknix--layout-ship-memo (make-hash-table :test 'eq :weakness 'key)
+  "PR alist -> its ship status, valid while `decknix--layout-ship-inputs' hold.")
+
+(defvar decknix--layout-ship-inputs nil
+  "The deploy feeds the statuses in `decknix--layout-ship-memo' were built from.")
+
+(defun decknix--layout-ship-sources ()
+  "Return the deploy data a ship status depends on, compared by identity."
+  (list (funcall decknix-ship-teamcity-deploys-function)
+        (funcall decknix-ship-kargo-function)
+        decknix-ship-progress-generation))
+
+(defun decknix--layout-pr-ship (repo pr)
+  "Return the ship status of REPO's merged PR, or nil when PR is not merged.
+Memoised per PR object until a deploy feed changes, so the paint path pays
+for each status once per hub refresh rather than once per render."
+  (when (decknix-ship-merged-p pr)
+    (let ((sources (decknix--layout-ship-sources)))
+      (unless (and (eq (nth 0 sources) (nth 0 decknix--layout-ship-inputs))
+                   (eq (nth 1 sources) (nth 1 decknix--layout-ship-inputs))
+                   (eql (nth 2 sources) (nth 2 decknix--layout-ship-inputs)))
+        (clrhash decknix--layout-ship-memo)
+        (setq decknix--layout-ship-inputs sources))
+      (or (gethash pr decknix--layout-ship-memo)
+          (puthash pr (decknix-ship-status repo pr) decknix--layout-ship-memo)))))
+
+(defun decknix--layout-ship-signature (wip-repos now)
+  "Return a hash of every merged PR's visibility in WIP-REPOS at NOW.
+Visibility moves with the clock as well as the data -- a shipped PR drops
+once its retention passes -- so the WIP memo must see it change."
+  (let ((h 0))
+    (dolist (r wip-repos)
+      (dolist (p (alist-get 'prs r))
+        (let ((ship (decknix--layout-pr-ship (alist-get 'repo r) p)))
+          (when ship
+            (setq h (logxor (* 31 h)
+                            (sxhash-eq (decknix-ship-visibility ship now))))))))
+    h))
+
 (defvar decknix--layout-wip-memo nil
   "Cons of (SIGNATURE . TREE) from the last `decknix--layout-wip-tree\='.
 
@@ -826,13 +866,38 @@ until a test caught it."
 
 (defun decknix--layout-wip-tree (sessions wip-repos worktrees)
   "Return the WIP tree, reusing the last one when nothing moved."
-  (let ((sig (decknix--layout-wip-signature sessions wip-repos worktrees)))
+  (let ((sig (list (decknix--layout-wip-signature sessions wip-repos worktrees)
+                   (decknix--layout-ship-signature wip-repos (float-time))
+                   decknix-sidebar-shipped-retention
+                   (decknix--layout-ship-sources))))
     (if (and decknix--layout-wip-memo
              (equal sig (car decknix--layout-wip-memo)))
         (cdr decknix--layout-wip-memo)
       (let ((tree (decknix--layout-wip-tree-1 sessions wip-repos worktrees)))
         (setq decknix--layout-wip-memo (cons sig tree))
         tree))))
+
+(defun decknix--layout-wip-prs (wip-repos now)
+  "Return WIP-REPOS' PRs as plists, dropping merged ones past their retention.
+
+Each merged PR carries :ship, its stage status, and :visibility,
+`shipping' until its last stage is verified and `shipped' for
+`decknix-sidebar-shipped-retention' after; past that it is not listed."
+  (let (out)
+    (dolist (repo wip-repos)
+      (dolist (pr (alist-get 'prs repo))
+        (let* ((name (alist-get 'repo repo))
+               (ship (decknix--layout-pr-ship name pr))
+               (visibility (and ship (decknix-ship-visibility ship now))))
+          (when (or (null ship) visibility)
+            (push (list :repo name
+                        :number (alist-get 'number pr)
+                        :branch (alist-get 'branch pr)
+                        :pr pr
+                        :ship ship
+                        :visibility visibility)
+                  out)))))
+    (nreverse out)))
 
 (defun decknix--layout-wip-tree-1 (sessions wip-repos worktrees)
   "Return (:sessions LIST :dormant PLIST) nesting work under its owning session.
@@ -851,16 +916,7 @@ them because a bare number is ambiguous across repos.
 A worktree or PR can legitimately appear under more than one session -- two
 agents may share a workspace -- and that is preferred over picking a winner,
 which would hide the sharing."
-  (let* ((all-prs
-          (apply #'append
-                 (mapcar (lambda (repo)
-                           (mapcar (lambda (pr)
-                                     (list :repo (alist-get 'repo repo)
-                                           :number (alist-get 'number pr)
-                                           :branch (alist-get 'branch pr)
-                                           :pr pr))
-                                   (alist-get 'prs repo)))
-                         wip-repos)))
+  (let* ((all-prs (decknix--layout-wip-prs wip-repos (float-time)))
          (claimed-wts nil)
          (claimed-prs nil)
          (rows
@@ -1007,7 +1063,9 @@ Anything not a draft: a PR nobody has a session on and that is open is
 either waiting on a reviewer or blocked, and both want attention.  A
 draft is the author saying not yet."
   (let ((item (plist-get pr :pr)))
-    (and item (not (eq (alist-get 'draft item) t)) t)))
+    (and item (not (eq (alist-get 'draft item) t))
+         (not (eq (plist-get pr :visibility) 'shipped))
+         t)))
 
 (defun decknix--layout-dormant-split (dormant)
   "Return a plist describing unattended DORMANT work.
@@ -1273,7 +1331,17 @@ row indicator, so the two cannot disagree about what a colour means.")
   "Return the severity rank of WIP PR, low being worse.
 
 Order of precedence is the order a human triages in: something blocking the
-merge, then something waiting on me, then work in flight, then green."
+merge, then something waiting on me, then work in flight, then green.  A
+merged PR ranks by its deploy: failed is blocking, shipping is in flight,
+shipped is muted."
+  (if (plist-get pr :ship)
+      (if (eq (plist-get pr :visibility) 'shipped)
+          4
+        (decknix-ship-severity (plist-get pr :ship)))
+    (decknix--layout-open-pr-severity pr)))
+
+(defun decknix--layout-open-pr-severity (pr)
+  "Return the severity rank of open WIP PR; see `decknix--layout-pr-severity'."
   (let* ((p (plist-get pr :pr))
          (draft (eq (alist-get 'draft p) t))
          (conflict (equal (alist-get 'mergeable p) "CONFLICTING"))

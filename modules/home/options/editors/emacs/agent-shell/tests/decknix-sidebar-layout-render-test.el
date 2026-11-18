@@ -22,6 +22,7 @@
 ;; a bare `(defvar decknix--hub-reviews)' is only a compiler hint, so the
 ;; lexical `let' fixtures would never reach the renderer's dynamic read.
 (defvar decknix--hub-reviews nil)
+(defvar decknix--hub-wip nil)
 ;; Upstream agent-shell-attention's pending table, special for the same reason.
 (defvar agent-shell-attention--pending nil)
 
@@ -984,6 +985,37 @@ hides one silently; Reviews and WIP list only the board's sessions."
       (decknix--layout-active-schedule)
       (decknix--layout-active-schedule 'frame)
       (should (= 1 calls)))))
+
+;; --- merged PR rows ----------------------------------------------------
+
+(ert-deftest decknix-layout-render--a-merged-pr-row-shows-its-stage ()
+  (let ((row (decknix--layout-pr-row
+              (list :repo "o/x" :number 9 :pr '((state . "MERGED") (title . "t"))
+                    :ship '(:state deploying :next "stable" :kind teamcity)
+                    :visibility 'shipping)
+              48)))
+    (should (string-match-p "→stg #9 t" row))))
+
+(ert-deftest decknix-layout-render--a-shipped-pr-row-is-dimmed ()
+  (let ((row (decknix--layout-pr-row
+              (list :repo "o/x" :number 9 :pr '((state . "MERGED") (title . "t"))
+                    :ship '(:state done :current "production" :kind teamcity)
+                    :visibility 'shipped)
+              48)))
+    (should (string-match-p "shipped #9" row))
+    (should (eq 'font-lock-comment-face (get-text-property 0 'face row)))))
+
+(ert-deftest decknix-layout-render--feed-errors-are-named-once ()
+  (let ((decknix--hub-wip '((errors . ("author merged: boom" "assignee open: bang")))))
+    (with-temp-buffer
+      (should (= 1 (decknix--layout-render-feed-errors 0 60)))
+      (should (string-match-p "WIP feed partial: author merged: boom" (buffer-string)))
+      (should-not (string-match-p "bang" (buffer-substring-no-properties
+                                          (point-min) (point-max))))))
+  (let ((decknix--hub-wip nil))
+    (with-temp-buffer
+      (should (= 0 (decknix--layout-render-feed-errors 0 60)))
+      (should (= 0 (buffer-size))))))
 
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here

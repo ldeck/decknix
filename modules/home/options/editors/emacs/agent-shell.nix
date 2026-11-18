@@ -2103,6 +2103,15 @@ let
     testFiles = [ "decknix-forge-board-test.el" ];
   };
 
+  # Pure stage model for merged PRs: where each is on its way to
+  # production (TeamCity, Kargo, CI-only or nothing to deploy), how long a
+  # shipped one stays listed, and the compact label and next-step lines.
+  decknix-ship-el = mkEmacsTestedPackage {
+    pname = "decknix-ship";
+    src = ./agent-shell/ship;
+    testFiles = [ "decknix-ship-test.el" ];
+  };
+
   decknix-sidebar-layout-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-layout";
     src = ./agent-shell/sidebar-layout;
@@ -2117,7 +2126,9 @@ let
     packageRequires = [ decknix-hub-icons-el decknix-session-assoc-el
                         # The attention states, so the sidebar and the
                         # jump share one definition.
-                        decknix-attention-el ];
+                        decknix-attention-el
+                        # Deploy stage of merged PRs: kept until shipped.
+                        decknix-ship-el ];
     testFiles = [ "decknix-sidebar-layout-test.el" ];
   };
 
@@ -2131,7 +2142,8 @@ let
     # vocabulary the old sidebar read at a glance.  Pure formatting, so
     # the dependency carries no side effects.
     packageRequires = [ decknix-sidebar-layout-el decknix-hub-icons-el
-                        decknix-session-assoc-el decknix-attention-el ];
+                        decknix-session-assoc-el decknix-attention-el
+                        decknix-ship-el ];
     testFiles = [ "decknix-sidebar-layout-render-test.el" ];
   };
 
@@ -3676,6 +3688,7 @@ in
           decknix-forge-board-model-el
           decknix-forge-board-el
           decknix-session-assoc-el
+          decknix-ship-el
           decknix-sidebar-layout-el
           decknix-sidebar-layout-render-el
           decknix-browse-el
@@ -4860,6 +4873,14 @@ ${optionalString cfg.tableOverlay.enable ''
         (require 'decknix-sidebar-layout-render)
         (decknix--layout-load-state)
         (decknix-sidebar-active-highlight-mode 1)
+        ;; A new shipped-retention repaints at once and is persisted with
+        ;; the other sidebar toggles.
+        (defun decknix--ship-retention-changed ()
+          (when (fboundp 'decknix--sidebar-state-write)
+            (decknix--sidebar-state-write))
+          (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+            (agent-shell-workspace-sidebar-refresh)))
+        (add-hook 'decknix-ship-retention-changed-hook #'decknix--ship-retention-changed)
 
         (require 'decknix-repo-sync)
         (require 'decknix-repo-sync-actions)

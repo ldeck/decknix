@@ -38,6 +38,39 @@ their PRs and worktrees nested under each, grouped like this:
 - `TAB` collapses a coordinator's lanes or a group; a collapsed group still
   shows its sessions that are blocked on you.
 
+## Merged PRs: kept until shipped
+
+A merged PR stays under the session that raised it until its last deploy
+stage is verified, then shows dimmed as `shipped` for the shipped-retention
+window, then drops. In place of its age the row shows the stage:
+
+```
+    ■ →stg  #812 HX-1610 add the thing     promoting to stg (amber)
+    ■ ·prd  #812 ...                       waiting to be promoted (amber)
+    ■ ✗test #812 ...                       failed at test (red)
+    ■ merged #90 docs tweak                nothing to deploy (green)
+    ■ shipped #77 ...                      shipped, dimmed until retention ends
+```
+
+How a repo ships decides what "last stage" means:
+
+- **gitops**: ordered deploy stages from the hub's `kargo-stages.json`;
+- **teamcity**: environments from `teamcity-deploys.json`, done once every
+  production environment the repo deploys to holds the merge;
+- **ci**: a dependency bump in a repo with no deploy data, done when its
+  build is green;
+- **none**: anything else, done at merge.
+
+`decknix-ship-repo-kinds` forces a kind per repo. A `/ship` progress record,
+when present, wins over the deploy feeds. The retention is the `Y` toggle
+(`T` → Shared → shipped): 0, 10m, 20m, 30m, 1h, 2h, 1d or a typed duration,
+persisted with the other toggles (default 1d). A merged PR no session claims
+is listed under `no session` while it ships and counted as quiet once
+shipped.
+
+If a hub WIP query fails (merged or assigned PRs), a `⚠ WIP feed partial`
+line under the heading names the first failure; hover for all of them.
+
 The rest of this page describes the PR-centric WIP of the previous layout.
 
 Two things are **orthogonal** here:

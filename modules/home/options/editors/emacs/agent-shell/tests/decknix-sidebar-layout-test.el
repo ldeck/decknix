@@ -1694,5 +1694,74 @@ repos holding eight bot PRs awaiting review looked like nothing at all."
                 '(("l" "gone" . observed)) (lambda (_s) "c"))))
     (should (equal (list (list :session lane)) (plist-get (car plan) :individuals)))))
 
+;; --- merged PRs and their deploy stage ---------------------------------
+
+(defun decknix-layout-test--merged-repos (merged-at)
+  "One repo with an open PR and a PR merged at MERGED-AT into a no-deploy repo."
+  `(((repo . "o/docs")
+     (prs . (((number . 1) (state . "OPEN") (title . "open one"))
+             ((number . 2) (state . "MERGED") (title . "merged one")
+              (merged_at . ,merged-at)))))))
+
+(defmacro decknix-layout-test--no-deploy-feeds (&rest body)
+  "Run BODY with every deploy feed empty and the status memo clear."
+  (declare (indent 0))
+  `(let ((decknix-ship-teamcity-deploys-function #'ignore)
+         (decknix-ship-kargo-function #'ignore)
+         (decknix-ship-progress-function #'ignore))
+     (clrhash decknix--layout-ship-memo)
+     ,@body))
+
+(ert-deftest decknix-layout--a-merged-pr-is-shipped-then-dropped ()
+  "Kept dimmed for the retention window after its last stage, then gone."
+  (decknix-layout-test--no-deploy-feeds
+    (let* ((merged (format-time-string "%FT%TZ" (- (float-time) 120) t))
+           (repos (decknix-layout-test--merged-repos merged)))
+      (let* ((decknix-sidebar-shipped-retention 3600)
+             (prs (decknix--layout-wip-prs repos (float-time))))
+        (should (= 2 (length prs)))
+        (should (eq 'shipped (plist-get (nth 1 prs) :visibility)))
+        (should-not (plist-get (nth 0 prs) :ship)))
+      (let* ((decknix-sidebar-shipped-retention 60)
+             (prs (decknix--layout-wip-prs repos (float-time))))
+        (should (equal '(1) (mapcar (lambda (p) (plist-get p :number)) prs)))))))
+
+(defconst decknix-layout-test--old-prod-deploy
+  (let* ((env '((env . "production") (status . "SUCCESS")
+                (finished . "2020-01-01T00:00:00Z")))
+         (branch (list (cons 'branch "__default__") (cons 'environments (list env))))
+         (repo (list (cons 'repo "o/docs") (cons 'branches (list branch)))))
+    (list (cons 'repos (list repo))))
+  "TeamCity data whose only production deploy predates every merge.")
+
+(ert-deftest decknix-layout--a-shipping-pr-stays-and-ranks-in-flight ()
+  (decknix-layout-test--no-deploy-feeds
+    (let* ((decknix-ship-teamcity-deploys-function
+            (lambda () decknix-layout-test--old-prod-deploy))
+           (prs (decknix--layout-wip-prs
+                 (decknix-layout-test--merged-repos "2026-11-19T00:00:00Z")
+                 (float-time)))
+           (merged (nth 1 prs)))
+      (should (eq 'shipping (plist-get merged :visibility)))
+      (should (= 2 (decknix--layout-pr-severity merged)))
+      (should (decknix--layout-dormant-pr-actionable-p merged)))))
+
+(ert-deftest decknix-layout--a-shipped-pr-is-muted-and-not-unattended-work ()
+  (let ((pr (list :pr '((state . "MERGED")) :ship '(:state done) :visibility 'shipped)))
+    (should (= 4 (decknix--layout-pr-severity pr)))
+    (should-not (decknix--layout-dormant-pr-actionable-p pr))))
+
+(ert-deftest decknix-layout--the-wip-memo-sees-a-retention-change ()
+  (decknix-layout-test--no-deploy-feeds
+    (decknix-layout-invalidate-wip)
+    (let* ((merged (format-time-string "%FT%TZ" (- (float-time) 120) t))
+           (repos (decknix-layout-test--merged-repos merged))
+           (count (lambda ()
+                    (length (plist-get (plist-get (decknix--layout-wip-tree nil repos nil)
+                                                  :dormant)
+                                       :prs)))))
+      (should (= 2 (let ((decknix-sidebar-shipped-retention 3600)) (funcall count))))
+      (should (= 1 (let ((decknix-sidebar-shipped-retention 60)) (funcall count)))))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here

@@ -1135,6 +1135,20 @@ MULTI non-nil means several workspaces, so this one gets a header."
                 (setq line-num (decknix--layout-render-wip-session line-num width row))))))))
     line-num))
 
+(defun decknix--layout-render-feed-errors (line-num width)
+  "Insert one line naming the hub WIP feed's failed queries, if any.
+Returns LINE-NUM.  A partial feed that looks complete is how merged PRs went
+missing unnoticed: the merged query failed on every poll for months."
+  (let ((errs (alist-get 'errors (and (boundp 'decknix--hub-wip) decknix--hub-wip))))
+    (if (null errs)
+        line-num
+      (insert (propertize (truncate-string-to-width
+                           (format "  ⚠ WIP feed partial: %s" (car errs)) width nil nil "…")
+                          'face 'warning
+                          'help-echo (string-join errs "\n"))
+              "\n")
+      (1+ line-num))))
+
 (defun decknix--layout-render-wip (line-num width)
   "Render WIP: my live sessions with their own work nested beneath each.
 
@@ -1179,6 +1193,7 @@ lists its blocked sessions."
                    ")")))
        'wip-sessions)
       (setq line-num (1+ line-num))
+      (setq line-num (decknix--layout-render-feed-errors line-num width))
       (let* ((rows (plist-get tree :sessions))
              (plan (decknix--layout-wip-plan
                     rows
@@ -1246,15 +1261,24 @@ window, since the glyphs are the part worth keeping when space runs out."
                         (decknix--hub-reply-icon raw)
                         (decknix--hub-discussion-icon raw)
                         (decknix--hub-activity-icons raw)))
-         (age (decknix--hub-format-age (alist-get 'updated raw)))
+         (ship (plist-get pr :ship))
+         (shipped (eq (plist-get pr :visibility) 'shipped))
+         ;; A merged PR's age says nothing; where it is in the pipeline is
+         ;; the one thing left to know about it.
+         (age (cond (shipped "shipped")
+                    (ship (decknix-ship-label ship))
+                    (t (decknix--hub-format-age (alist-get 'updated raw)))))
          (num (format "#%s" (plist-get pr :number)))
          (lead (format "    %s %-3s %s " icons age num))
          (room (max 1 (- width (string-width lead))))
          (title (decknix--layout-item-title pr))
          (title (if (> (string-width title) room)
                     (concat (truncate-string-to-width title (max 1 (1- room))) "…")
-                  title)))
-    (concat lead (propertize title 'face 'shadow))))
+                  title))
+         (row (concat lead (propertize title 'face 'shadow))))
+    (if shipped
+        (propertize (substring-no-properties row) 'face 'font-lock-comment-face)
+      row)))
 
 (defun decknix--layout-render-claim (line-num width claim session
                                              &optional provenance)

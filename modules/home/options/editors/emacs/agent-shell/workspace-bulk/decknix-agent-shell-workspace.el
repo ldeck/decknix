@@ -50,6 +50,9 @@
 ;; agent-shell-workspace upstream, in helper modules, or in the
 ;; per-feature bulk modules (main, hub, context).
 (declare-function decknix-support-dashboard "decknix-support-dashboard")
+(declare-function decknix-ship-retention-label "decknix-ship" (seconds))
+(declare-function decknix-ship-set-retention "decknix-ship" (seconds))
+(defvar decknix-sidebar-shipped-retention)
 (declare-function decknix-support-workflow "decknix-support-workflow")
 (declare-function agent-shell-workspace-sidebar-refresh "ext:agent-shell-workspace")
 (declare-function agent-shell-workspace-sidebar-mode-map "ext:agent-shell-workspace")
@@ -1055,6 +1058,21 @@ keys.  Press `C-g' to abort."
   (interactive)
   (call-interactively #'decknix-layout-toggle-wip-reviews))
 
+(transient-define-suffix decknix-sidebar-transient--shipped-retention ()
+  :key "Y"
+  :description
+  (lambda ()
+    (format "shipped       %s"
+            (propertize
+             (format "[%s]" (if (fboundp 'decknix-ship-retention-label)
+                                (decknix-ship-retention-label
+                                 (bound-and-true-p decknix-sidebar-shipped-retention))
+                              "?"))
+             'face 'font-lock-constant-face)))
+  :transient t
+  (interactive)
+  (call-interactively #'decknix-ship-set-retention))
+
 (transient-define-suffix decknix-sidebar-transient--wip-items ()
   :key "3"
   :description
@@ -1208,6 +1226,7 @@ pipeline) moved to Shared rather than disappearing with them."
     (decknix-sidebar-transient--reviews-attention);; reviews (2)
     (decknix-sidebar-transient--wip-items)        ;; wip items (3)
     (decknix-sidebar-transient--wip-reviews)      ;; wip reviews (0)
+    (decknix-sidebar-transient--shipped-retention) ;; shipped (Y)
     (decknix-sidebar-transient--dormant-limit)    ;; dormant (4)
     (decknix-sidebar-transient--repos-behind)     ;; repos behind (5)
     (decknix-sidebar-transient--wt-hide-stale)    ;; stale wt (6)
@@ -5912,6 +5931,8 @@ fresh-daemon idle save cannot clobber the Previous Sessions snapshot."
            (cons 'show-finished-subagents
                  (bound-and-true-p decknix-sidebar-show-finished-subagents))
            (cons 'board-focus (bound-and-true-p decknix-board-focus-name))
+           (cons 'shipped-retention
+                 (bound-and-true-p decknix-sidebar-shipped-retention))
            (cons 'quick-switch
                  (and (boundp 'agent-shell-workspace-sidebar--quick-switch)
                       agent-shell-workspace-sidebar--quick-switch))
@@ -6106,6 +6127,7 @@ so it is safe to call from the hot refresh path."
     decknix--sidebar-show-keys
     decknix-sidebar-show-finished-subagents
     decknix-board-focus-name
+    decknix-sidebar-shipped-retention
     decknix--sidebar-show-toggles
     decknix--sidebar-live-view-mode
     decknix--sidebar-show-hidden
@@ -6275,6 +6297,10 @@ the sidebar.  Prompts for confirmation first."
             (unless (eq lvm 'missing)
               (when (and lvm (boundp 'decknix--sidebar-live-view-mode))
                 (setq decknix--sidebar-live-view-mode lvm))))
+          (let ((sr (alist-get 'shipped-retention state)))
+            (when (and (integerp sr) (>= sr 0)
+                       (boundp 'decknix-sidebar-shipped-retention))
+              (setq decknix-sidebar-shipped-retention sr)))
           (let ((hdm (alist-get 'hub-display-mode state 'missing)))
             (unless (eq hdm 'missing)
               (when (and hdm (boundp 'decknix--hub-display-mode))
