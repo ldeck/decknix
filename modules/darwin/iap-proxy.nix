@@ -20,6 +20,18 @@ let
         description = "Port this proxy instance listens on.";
       };
 
+      bindAddress = mkOption {
+        type = types.str;
+        default = "127.0.0.1";
+        example = "0.0.0.0";
+        description = ''
+          Address this proxy instance binds to (passed as HOST). Defaults to
+          loopback: the proxy adds your IAP identity to every request and has
+          no authentication of its own, so binding a non-loopback address lets
+          anyone who can reach it act as you against the target service.
+        '';
+      };
+
       targetUrl = mkOption {
         type = types.str;
         description = "Base URL of the IAP-protected service this instance proxies.";
@@ -189,6 +201,7 @@ in
 
           EnvironmentVariables = {
             TARGET_URL = inst.targetUrl;
+            HOST = inst.bindAddress;
             PORT = toString inst.port;
             LOG_LEVEL = inst.logLevel;
             OAUTH_CLIENT_ID = inst.oauthClientId;

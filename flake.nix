@@ -106,6 +106,10 @@
           inherit (inputs) self;
         };
 
+        # The iap-proxy package never builds a proxy that binds all
+        # interfaces (tests/iap-proxy.nix).
+        checks.iap-proxy-bind = import ./tests/iap-proxy.nix { inherit pkgs; };
+
         # Devshell for working on decknix itself
         devShells.default = pkgs.mkShell {
           packages = [
