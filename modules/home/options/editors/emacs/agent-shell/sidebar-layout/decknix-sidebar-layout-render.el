@@ -242,6 +242,7 @@ PR those filters exist to hide."
       items)))
 
 (defvar decknix--hub-wip)
+(defvar decknix--hub-kargo-stages)
 (defvar decknix--hub-token-quotas)
 (defvar decknix--agent-provider-id)
 
@@ -1139,7 +1140,11 @@ MULTI non-nil means several workspaces, so this one gets a header."
   "Insert one line naming the hub WIP feed's failed queries, if any.
 Returns LINE-NUM.  A partial feed that looks complete is how merged PRs went
 missing unnoticed: the merged query failed on every poll for months."
-  (let ((errs (alist-get 'errors (and (boundp 'decknix--hub-wip) decknix--hub-wip))))
+  (let ((errs (append
+               (alist-get 'errors (and (boundp 'decknix--hub-wip) decknix--hub-wip))
+               (mapcar (lambda (e) (concat "kargo: " e))
+                       (alist-get 'errors (and (boundp 'decknix--hub-kargo-stages)
+                                               decknix--hub-kargo-stages))))))
     (if (null errs)
         line-num
       (insert (propertize (truncate-string-to-width

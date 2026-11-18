@@ -5,6 +5,7 @@
 // Emacs, CLI, and other consumers read those files (file-notify for live updates).
 
 mod jira;
+mod kargo;
 mod quota;
 mod teamcity;
 
@@ -93,6 +94,7 @@ struct HubConfig {
     github: GitHubConfig,
     jira: jira::JiraConfig,
     teamcity: teamcity::TeamCityConfig,
+    kargo: kargo::KargoConfig,
     quotas: quota::QuotaConfig,
 }
 
@@ -118,6 +120,7 @@ impl Default for HubConfig {
             github: GitHubConfig::default(),
             jira: jira::JiraConfig::default(),
             teamcity: teamcity::TeamCityConfig::default(),
+            kargo: kargo::KargoConfig::default(),
             quotas: quota::QuotaConfig::default(),
         }
     }
@@ -383,6 +386,8 @@ struct WipPr {
     human_said_something: Option<bool>, // a human wrote a non-empty body after my last activity
     #[serde(skip_serializing_if = "Option::is_none")]
     merged_at: Option<DateTime<Utc>>, // when the PR was merged (None for open PRs)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    merge_commit: Option<String>, // the merge commit sha, for deploy-stage ancestry checks
     // People involved in the PR (see ReviewRequest for semantics).  Additive:
     // empty vecs are omitted.  For WIP the PR author is the viewer (--author=@me).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2145,6 +2150,7 @@ struct PrDetails {
     bot_unresolved: Option<u32>,
     human_said_something: Option<bool>,
     merged_at: Option<String>,
+    merge_commit: Option<String>,
     /// People involved, carried through to the emitted `WipPr`.
     authors: Vec<String>,
     requested_reviewers: Vec<String>,
@@ -2160,7 +2166,7 @@ impl Default for PrDetails {
             bot_replies_to_me: None, i_replied_last: None,
             total_threads: None, unresolved_threads: None, review_stale: None,
             unresolved_total: None, human_unresolved: None, bot_unresolved: None, human_said_something: None,
-            merged_at: None,
+            merged_at: None, merge_commit: None,
             authors: Vec::new(), requested_reviewers: Vec::new(),
             approvers: Vec::new(), blockers: Vec::new(),
         }
@@ -2213,7 +2219,7 @@ async fn fetch_pr_details(
         "pr", "view",
         &number_s,
         "--repo", repo,
-        "--json", "headRefName,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision,comments,reviews,mergedAt,latestReviews,reviewRequests,commits",
+        "--json", "headRefName,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision,comments,reviews,mergedAt,mergeCommit,latestReviews,reviewRequests,commits",
     ];
     let threads = match prefetched_threads {
         Some(t) => Some(t),
@@ -2243,6 +2249,7 @@ async fn fetch_pr_details(
         comments: Option<Vec<GhComment>>,
         reviews: Option<Vec<GhReviewEntry>>,
         merged_at: Option<String>,
+        merge_commit: Option<GhOid>,
         latest_reviews: Option<Vec<GhReview>>,
         review_requests: Option<Vec<GhReviewRequestEntry>>,
         commits: Option<Vec<GhCommit>>,
@@ -2357,6 +2364,7 @@ async fn fetch_pr_details(
             human_unresolved: threads.as_ref().map(|t| t.human_unresolved),
             bot_unresolved: threads.as_ref().map(|t| t.bot_unresolved),
                 merged_at: d.merged_at,
+                merge_commit: d.merge_commit.and_then(|c| c.oid),
                 authors,
                 requested_reviewers,
                 approvers,
@@ -2537,6 +2545,7 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
             total_threads: details.total_threads,
             unresolved_threads: details.unresolved_threads,
             merged_at: merged_ts,
+            merge_commit: details.merge_commit,
             authors: details.authors,
             requested_reviewers: details.requested_reviewers,
             approvers: details.approvers,
@@ -2794,6 +2803,17 @@ async fn main() {
         eprintln!("hub: teamcity proxy: {}", config.teamcity.proxy_url);
         handles.push(tokio::spawn(teamcity::run_teamcity_adapter(
             config.teamcity,
+            dir.clone(),
+            meta.clone(),
+            cli.once,
+        )));
+    }
+
+    if config.kargo.enabled {
+        eprintln!("hub: kargo-stages adapter: every {}s, {} repos",
+                  config.kargo.interval_secs, config.kargo.repos.len());
+        handles.push(tokio::spawn(kargo::run_kargo_adapter(
+            config.kargo,
             dir.clone(),
             meta.clone(),
             cli.once,

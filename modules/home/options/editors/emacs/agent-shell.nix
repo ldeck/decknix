@@ -2112,6 +2112,15 @@ let
     testFiles = [ "decknix-ship-test.el" ];
   };
 
+  # Watches the per-PR records /ship writes and feeds them to decknix-ship,
+  # where they win over the deploy feeds.
+  decknix-ship-progress-el = mkEmacsTestedPackage {
+    pname = "decknix-ship-progress";
+    src = ./agent-shell/ship;
+    packageRequires = [ decknix-ship-el ];
+    testFiles = [ "decknix-ship-progress-test.el" ];
+  };
+
   decknix-sidebar-layout-el = mkEmacsTestedPackage {
     pname = "decknix-sidebar-layout";
     src = ./agent-shell/sidebar-layout;
@@ -3689,6 +3698,7 @@ in
           decknix-forge-board-el
           decknix-session-assoc-el
           decknix-ship-el
+          decknix-ship-progress-el
           decknix-sidebar-layout-el
           decknix-sidebar-layout-render-el
           decknix-browse-el
@@ -4881,6 +4891,10 @@ ${optionalString cfg.tableOverlay.enable ''
           (when (fboundp 'agent-shell-workspace-sidebar-refresh)
             (agent-shell-workspace-sidebar-refresh)))
         (add-hook 'decknix-ship-retention-changed-hook #'decknix--ship-retention-changed)
+        ;; /ship progress records: read and watched once Emacs is idle, so
+        ;; startup never waits on the directory.
+        (require 'decknix-ship-progress)
+        (run-with-idle-timer 3 nil #'decknix-ship-progress-start)
 
         (require 'decknix-repo-sync)
         (require 'decknix-repo-sync-actions)

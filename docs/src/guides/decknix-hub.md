@@ -80,6 +80,40 @@ cat ~/.config/decknix/hub/meta.json
 | `decknix.services.hub.github.mergedRetentionDays` | `7` | Days a merged PR stays in the WIP feed (the 50 most recent merges); the sidebar drops it sooner once shipped |
 | `decknix.services.hub.github.reviewRepos` | `[]` | Repos to check (empty = all) |
 
+#### Kargo
+
+Which deploy stages hold each of your merged PRs, for repos that ship through
+[Kargo](https://kargo.io). The adapter reads each stage's current freight with
+`kargo get stages --project P NAME... -o json`, takes the git revision the
+freight was built from (the OCI `org.opencontainers.image.revision`
+annotation, else a sha suffix on the image tag or chart version), and asks
+GitHub's compare API whether that revision contains the PR's merge commit.
+Freight is built from the newest green build, so the merge is usually an
+ancestor rather than the freight revision itself. Answers are cached for the
+life of the daemon.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `decknix.services.hub.kargo.enable` | `false` | Enable the Kargo adapter |
+| `decknix.services.hub.kargo.interval` | `300` | Seconds between polls |
+| `decknix.services.hub.kargo.repos` | `[]` | `{ repo; project; warehouse; stages; stagePattern ? null; }` per repo |
+
+```nix
+decknix.services.hub.kargo = {
+  enable = true;
+  repos = [{
+    repo = "my-org/widget-api";
+    project = "my-org";
+    warehouse = "widget-api";
+    stages = [ "us-dev" "us-stg" "us-prd" ];   # Kargo stage widget-api-us-dev-deploy, ...
+  }];
+};
+```
+
+The `kargo` CLI must be logged in for the user the daemon runs as
+(`kargo login`); otherwise `kargo-stages.json` carries the error and the
+sidebar shows those PRs as pending with a `WIP feed partial: kargo: ...` line.
+
 #### Jira
 
 | Option | Default | Description |
@@ -242,6 +276,7 @@ All state is stored in `~/.config/decknix/hub/`:
 | `github-wip.json` | Your open PRs, and merged ones within `mergedRetentionDays`, with CI status and branches. `state` is upper case (`OPEN`, `MERGED`). `errors` lists queries that failed this poll without failing it |
 | `jira-tasks.json` | Jira tasks assigned to you |
 | `teamcity-builds.json` | TeamCity build status for WIP branches |
+| `kargo-stages.json` | Per merged PR in a Kargo repo: `stages`, `reached` (holding the merge, verified), `promoting`, `failed`, and `verified_at` once the last stage verified it; `errors` when kargo failed |
 | `meta.json` | Adapter health: last poll time, errors |
 
 Each adapter writes independently — a slow Jira poll won't block GitHub

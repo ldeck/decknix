@@ -25,6 +25,14 @@ let
       statuses = cfg.jira.statuses;
       max_results = cfg.jira.maxResults;
     };
+    kargo = {
+      enabled = cfg.kargo.enable;
+      interval_secs = cfg.kargo.interval;
+      repos = map (r: {
+        inherit (r) repo project warehouse stages;
+        stage_pattern = r.stagePattern;
+      }) cfg.kargo.repos;
+    };
     teamcity = {
       enabled = cfg.teamcity.enable;
       interval_secs = cfg.teamcity.interval;
@@ -156,6 +164,60 @@ in
         type = types.int;
         default = 50;
         description = "Maximum number of Jira tasks to fetch per poll.";
+      };
+    };
+
+    kargo = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Enable the Kargo adapter: which deploy stages hold each of my merged
+          PRs, written to kargo-stages.json for the sidebar.  Needs a logged-in
+          `kargo` CLI on the daemon's PATH; without one the file carries an
+          error and those PRs show as pending.
+        '';
+      };
+
+      interval = mkOption {
+        type = types.int;
+        default = 300;
+        description = "Seconds between Kargo polls (minimum 30).";
+      };
+
+      repos = mkOption {
+        type = types.listOf (types.submodule {
+          options = {
+            repo = mkOption {
+              type = types.str;
+              description = "GitHub repository, `owner/name`.";
+            };
+            project = mkOption {
+              type = types.str;
+              description = "Kargo project.";
+            };
+            warehouse = mkOption {
+              type = types.str;
+              description = "Kargo warehouse the repo's freight comes from.";
+            };
+            stages = mkOption {
+              type = types.listOf types.str;
+              example = [ "us-dev" "us-stg" "us-prd" ];
+              description = "Stage display names in promotion order; the last is production.";
+            };
+            stagePattern = mkOption {
+              type = types.nullOr types.str;
+              default = null;
+              example = "{warehouse}-{stage}-deploy";
+              description = ''
+                Kargo stage name for a display name, with `{warehouse}` and
+                `{stage}` substituted.  Null means `{warehouse}-{stage}-deploy`.
+              '';
+            };
+          };
+        });
+        default = [];
+        description = "Repositories that ship through Kargo, with their stages.";
       };
     };
 

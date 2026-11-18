@@ -1,0 +1,395 @@
+{
+ "kind": "List",
+ "apiVersion": "v1",
+ "metadata": {},
+ "items": [
+  {
+   "kind": "Stage",
+   "apiVersion": "kargo.akuity.io/v1alpha1",
+   "metadata": {
+    "name": "widget-api-us-dev-deploy",
+    "namespace": "example"
+   },
+   "spec": {
+    "requestedFreight": [
+     {
+      "origin": {
+       "kind": "Warehouse",
+       "name": "widget-api"
+      },
+      "sources": {
+       "direct": true,
+       "autoPromotionOptions": {}
+      }
+     }
+    ]
+   },
+   "status": {
+    "autoPromotionEnabled": true,
+    "freightSummary": "44289c6ccaba38bca484d93c40745581cc2a6f9b",
+    "health": {
+     "status": "Healthy"
+    },
+    "currentPromotion": {
+     "name": "",
+     "freight": {
+      "origin": {
+       "kind": "",
+       "name": ""
+      }
+     },
+     "status": {
+      "freight": {
+       "origin": {
+        "kind": "",
+        "name": ""
+       }
+      },
+      "freightCollection": {
+       "id": ""
+      }
+     }
+    },
+    "lastPromotion": {
+     "name": "widget-api-us-dev-deploy.01m7p702m6b2jr12z47mdrhyvj.44289c6",
+     "finishedAt": "2026-11-18T02:15:48Z",
+     "freight": {
+      "name": "44289c6ccaba38bca484d93c40745581cc2a6f9b",
+      "origin": {
+       "kind": "Warehouse",
+       "name": "widget-api"
+      },
+      "images": [
+       {
+        "repoURL": "registry.example.com/example-ci/image-artifacts/widget-api",
+        "tag": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f",
+        "digest": "sha256:c4e5afb29e378cfb4d77404d923b3b876f7bc7f8b2b2f6431a55cb44b33678bd",
+        "annotations": {
+         "org.opencontainers.image.created": "2026-11-18T02:13:21.000Z",
+         "org.opencontainers.image.revision": "44b00c4e7c22cf1b22e72534b94a393603e5120f",
+         "org.opencontainers.image.source": "https://github.com/example-org/widget-api",
+         "org.opencontainers.image.version": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f"
+        }
+       }
+      ],
+      "charts": [
+       {
+        "repoURL": "oci://registry.example.com/example-ci/helm-charts/widget-api",
+        "version": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f"
+       }
+      ]
+     },
+     "status": {
+      "phase": "Succeeded"
+     }
+    },
+    "freightHistory": [
+     {
+      "id": "f86bd3eee98c23388b21cf2955d367da91bfa868",
+      "items": {
+       "Warehouse/widget-api": {
+        "name": "44289c6ccaba38bca484d93c40745581cc2a6f9b",
+        "origin": {
+         "kind": "Warehouse",
+         "name": "widget-api"
+        },
+        "images": [
+         {
+          "repoURL": "registry.example.com/example-ci/image-artifacts/widget-api",
+          "tag": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f",
+          "digest": "sha256:c4e5afb29e378cfb4d77404d923b3b876f7bc7f8b2b2f6431a55cb44b33678bd",
+          "annotations": {
+           "org.opencontainers.image.created": "2026-11-18T02:13:21.000Z",
+           "org.opencontainers.image.revision": "44b00c4e7c22cf1b22e72534b94a393603e5120f",
+           "org.opencontainers.image.source": "https://github.com/example-org/widget-api",
+           "org.opencontainers.image.version": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f"
+          }
+         }
+        ],
+        "charts": [
+         {
+          "repoURL": "oci://registry.example.com/example-ci/helm-charts/widget-api",
+          "version": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f"
+         }
+        ]
+       }
+      },
+      "verificationHistory": [
+       {
+        "id": "60551266-b53b-4fef-8860-9d7c9fd1cf12",
+        "startTime": "2026-11-18T02:15:48Z",
+        "phase": "Successful",
+        "analysisRun": {
+         "namespace": "example",
+         "name": "widget-api-us-dev-deploy.01m7p70pkj3knd72rvtercj2vv.f86bd3e",
+         "phase": "Successful"
+        },
+        "finishTime": "2026-11-18T02:21:45Z"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "kind": "Stage",
+   "apiVersion": "kargo.akuity.io/v1alpha1",
+   "metadata": {
+    "name": "widget-api-us-prd-deploy",
+    "namespace": "example"
+   },
+   "spec": {
+    "requestedFreight": [
+     {
+      "origin": {
+       "kind": "Warehouse",
+       "name": "widget-api"
+      },
+      "sources": {
+       "stages": [
+        "widget-api-us-stg-deploy"
+       ],
+       "autoPromotionOptions": {}
+      }
+     }
+    ]
+   },
+   "status": {
+    "autoPromotionEnabled": true,
+    "freightSummary": "44289c6ccaba38bca484d93c40745581cc2a6f9b",
+    "health": {
+     "status": "Healthy"
+    },
+    "currentPromotion": {
+     "name": "",
+     "freight": {
+      "origin": {
+       "kind": "",
+       "name": ""
+      }
+     },
+     "status": {
+      "freight": {
+       "origin": {
+        "kind": "",
+        "name": ""
+       }
+      },
+      "freightCollection": {
+       "id": ""
+      }
+     }
+    },
+    "lastPromotion": {
+     "name": "widget-api-us-prd-deploy.01m7p7pt27rvb97d4h931vp3rk.44289c6",
+     "finishedAt": "2026-11-18T02:28:10Z",
+     "freight": {
+      "name": "44289c6ccaba38bca484d93c40745581cc2a6f9b",
+      "origin": {
+       "kind": "Warehouse",
+       "name": "widget-api"
+      },
+      "images": [
+       {
+        "repoURL": "registry.example.com/example-ci/image-artifacts/widget-api",
+        "tag": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f",
+        "digest": "sha256:c4e5afb29e378cfb4d77404d923b3b876f7bc7f8b2b2f6431a55cb44b33678bd",
+        "annotations": {
+         "org.opencontainers.image.created": "2026-11-18T02:13:21.000Z",
+         "org.opencontainers.image.revision": "44b00c4e7c22cf1b22e72534b94a393603e5120f",
+         "org.opencontainers.image.source": "https://github.com/example-org/widget-api",
+         "org.opencontainers.image.version": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f"
+        }
+       }
+      ],
+      "charts": [
+       {
+        "repoURL": "oci://registry.example.com/example-ci/helm-charts/widget-api",
+        "version": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f"
+       }
+      ]
+     },
+     "status": {
+      "phase": "Succeeded"
+     }
+    },
+    "freightHistory": [
+     {
+      "id": "f86bd3eee98c23388b21cf2955d367da91bfa868",
+      "items": {
+       "Warehouse/widget-api": {
+        "name": "44289c6ccaba38bca484d93c40745581cc2a6f9b",
+        "origin": {
+         "kind": "Warehouse",
+         "name": "widget-api"
+        },
+        "images": [
+         {
+          "repoURL": "registry.example.com/example-ci/image-artifacts/widget-api",
+          "tag": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f",
+          "digest": "sha256:c4e5afb29e378cfb4d77404d923b3b876f7bc7f8b2b2f6431a55cb44b33678bd",
+          "annotations": {
+           "org.opencontainers.image.created": "2026-11-18T02:13:21.000Z",
+           "org.opencontainers.image.revision": "44b00c4e7c22cf1b22e72534b94a393603e5120f",
+           "org.opencontainers.image.source": "https://github.com/example-org/widget-api",
+           "org.opencontainers.image.version": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f"
+          }
+         }
+        ],
+        "charts": [
+         {
+          "repoURL": "oci://registry.example.com/example-ci/helm-charts/widget-api",
+          "version": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f"
+         }
+        ]
+       }
+      },
+      "verificationHistory": [
+       {
+        "id": "96cba244-b996-4316-b8ed-f2dcdd42ac6c",
+        "startTime": "2026-11-18T02:28:10Z",
+        "phase": "Successful",
+        "analysisRun": {
+         "namespace": "example",
+         "name": "widget-api-us-prd-deploy.01m7p7qbseq6sb9frc9akhte00.f86bd3e",
+         "phase": "Successful"
+        },
+        "finishTime": "2026-11-18T02:34:08Z"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "kind": "Stage",
+   "apiVersion": "kargo.akuity.io/v1alpha1",
+   "metadata": {
+    "name": "widget-api-us-stg-deploy",
+    "namespace": "example"
+   },
+   "spec": {
+    "requestedFreight": [
+     {
+      "origin": {
+       "kind": "Warehouse",
+       "name": "widget-api"
+      },
+      "sources": {
+       "stages": [
+        "widget-api-us-dev-deploy"
+       ],
+       "autoPromotionOptions": {}
+      }
+     }
+    ]
+   },
+   "status": {
+    "autoPromotionEnabled": true,
+    "freightSummary": "44289c6ccaba38bca484d93c40745581cc2a6f9b",
+    "health": {
+     "status": "Healthy"
+    },
+    "currentPromotion": {
+     "name": "",
+     "freight": {
+      "origin": {
+       "kind": "",
+       "name": ""
+      }
+     },
+     "status": {
+      "freight": {
+       "origin": {
+        "kind": "",
+        "name": ""
+       }
+      },
+      "freightCollection": {
+       "id": ""
+      }
+     }
+    },
+    "lastPromotion": {
+     "name": "widget-api-us-stg-deploy.01m7p7bkka89rw9b6ebhg2fx3c.44289c6",
+     "finishedAt": "2026-11-18T02:22:03Z",
+     "freight": {
+      "name": "44289c6ccaba38bca484d93c40745581cc2a6f9b",
+      "origin": {
+       "kind": "Warehouse",
+       "name": "widget-api"
+      },
+      "images": [
+       {
+        "repoURL": "registry.example.com/example-ci/image-artifacts/widget-api",
+        "tag": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f",
+        "digest": "sha256:c4e5afb29e378cfb4d77404d923b3b876f7bc7f8b2b2f6431a55cb44b33678bd",
+        "annotations": {
+         "org.opencontainers.image.created": "2026-11-18T02:13:21.000Z",
+         "org.opencontainers.image.revision": "44b00c4e7c22cf1b22e72534b94a393603e5120f",
+         "org.opencontainers.image.source": "https://github.com/example-org/widget-api",
+         "org.opencontainers.image.version": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f"
+        }
+       }
+      ],
+      "charts": [
+       {
+        "repoURL": "oci://registry.example.com/example-ci/helm-charts/widget-api",
+        "version": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f"
+       }
+      ]
+     },
+     "status": {
+      "phase": "Succeeded"
+     }
+    },
+    "freightHistory": [
+     {
+      "id": "f86bd3eee98c23388b21cf2955d367da91bfa868",
+      "items": {
+       "Warehouse/widget-api": {
+        "name": "44289c6ccaba38bca484d93c40745581cc2a6f9b",
+        "origin": {
+         "kind": "Warehouse",
+         "name": "widget-api"
+        },
+        "images": [
+         {
+          "repoURL": "registry.example.com/example-ci/image-artifacts/widget-api",
+          "tag": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f",
+          "digest": "sha256:c4e5afb29e378cfb4d77404d923b3b876f7bc7f8b2b2f6431a55cb44b33678bd",
+          "annotations": {
+           "org.opencontainers.image.created": "2026-11-18T02:13:21.000Z",
+           "org.opencontainers.image.revision": "44b00c4e7c22cf1b22e72534b94a393603e5120f",
+           "org.opencontainers.image.source": "https://github.com/example-org/widget-api",
+           "org.opencontainers.image.version": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f"
+          }
+         }
+        ],
+        "charts": [
+         {
+          "repoURL": "oci://registry.example.com/example-ci/helm-charts/widget-api",
+          "version": "2749.0.0-44b00c4e7c22cf1b22e72534b94a393603e5120f"
+         }
+        ]
+       }
+      },
+      "verificationHistory": [
+       {
+        "id": "82f9be5c-5b54-46c8-87ad-333875523882",
+        "startTime": "2026-11-18T02:22:03Z",
+        "phase": "Successful",
+        "analysisRun": {
+         "namespace": "example",
+         "name": "widget-api-us-stg-deploy.01m7p7c5eg47gm6wjk5be183kv.f86bd3e",
+         "phase": "Successful"
+        },
+        "finishTime": "2026-11-18T02:27:52Z"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -230,6 +230,8 @@
   "Parsed teamcity-builds.json data (alist).")
 (defvar decknix--hub-deploys nil
   "Parsed teamcity-deploys.json data (alist).")
+(defvar decknix--hub-kargo-stages nil
+  "Parsed kargo-stages.json data (alist): deploy stages holding my merged PRs.")
 (defvar decknix--hub-show-deploys t
   "When non-nil, show deployment pipeline indicators (DTSP) in WIP section.")
 (defvar decknix--hub-watcher nil
@@ -283,6 +285,11 @@ Returns nil on any error (file missing, parse failure, etc.)."
   (setq decknix--hub-deploys
         (decknix--hub-read-json "teamcity-deploys.json")))
 
+(defun decknix--hub-refresh-kargo ()
+  "Re-read kargo-stages.json."
+  (setq decknix--hub-kargo-stages
+        (decknix--hub-read-json "kargo-stages.json")))
+
 (defvar decknix--hub-token-quotas nil
   "Parsed token-quotas.json data (alist): remaining model quota per account.")
 
@@ -299,6 +306,7 @@ Returns nil on any error (file missing, parse failure, etc.)."
   (decknix--hub-refresh-jira)
   (decknix--hub-refresh-teamcity)
   (decknix--hub-refresh-deploys)
+  (decknix--hub-refresh-kargo)
   (decknix--hub-refresh-token-quotas))
 
 (defun decknix--hub-on-file-change (event)
@@ -323,6 +331,7 @@ backend surfaces first."
                  ("jira-tasks.json"      (decknix--hub-refresh-jira) t)
                  ("teamcity-builds.json" (decknix--hub-refresh-teamcity) t)
                  ("teamcity-deploys.json" (decknix--hub-refresh-deploys) t)
+                 ("kargo-stages.json"    (decknix--hub-refresh-kargo) t)
                  ("token-quotas.json"    (decknix--hub-refresh-token-quotas) t)
                  (_ nil)))
       ;; Refresh the sidebar (COALESCED) if it exists.  The hub daemon

@@ -23,6 +23,7 @@
 ;; lexical `let' fixtures would never reach the renderer's dynamic read.
 (defvar decknix--hub-reviews nil)
 (defvar decknix--hub-wip nil)
+(defvar decknix--hub-kargo-stages nil)
 ;; Upstream agent-shell-attention's pending table, special for the same reason.
 (defvar agent-shell-attention--pending nil)
 
@@ -1004,6 +1005,13 @@ hides one silently; Reviews and WIP list only the board's sessions."
               48)))
     (should (string-match-p "shipped #9" row))
     (should (eq 'font-lock-comment-face (get-text-property 0 'face row)))))
+
+(ert-deftest decknix-layout-render--kargo-errors-join-the-feed-line ()
+  (let ((decknix--hub-wip nil)
+        (decknix--hub-kargo-stages '((errors . ("kargo not runnable")))))
+    (with-temp-buffer
+      (should (= 1 (decknix--layout-render-feed-errors 0 60)))
+      (should (string-match-p "partial: kargo: kargo not runnable" (buffer-string))))))
 
 (ert-deftest decknix-layout-render--feed-errors-are-named-once ()
   (let ((decknix--hub-wip '((errors . ("author merged: boom" "assignee open: bang")))))

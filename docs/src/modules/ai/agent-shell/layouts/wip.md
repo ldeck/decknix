@@ -61,8 +61,17 @@ How a repo ships decides what "last stage" means:
   build is green;
 - **none**: anything else, done at merge.
 
-`decknix-ship-repo-kinds` forces a kind per repo. A `/ship` progress record,
-when present, wins over the deploy feeds. The retention is the `Y` toggle
+`decknix-ship-repo-kinds` forces a kind per repo. A ship progress record,
+when present, wins over the deploy feeds: a ship workflow writes
+`~/.local/state/decknix/ship/<owner>-<repo>-<number>.json` as
+
+```json
+{"repo": "owner/repo", "number": 12, "stage": "us-stg",
+ "status": "verified", "verified_at": "2026-11-19T01:02:03Z"}
+```
+
+with `status` one of `promoting`, `verified`, `failed` or `done`. The
+directory is watched, so a new record repaints the row at once. The retention is the `Y` toggle
 (`T` → Shared → shipped): 0, 10m, 20m, 30m, 1h, 2h, 1d or a typed duration,
 persisted with the other toggles (default 1d). A merged PR no session claims
 is listed under `no session` while it ships and counted as quiet once
