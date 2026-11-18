@@ -28,6 +28,7 @@
 (defvar decknix--hub-wt-facts nil)
 (defvar decknix--agent-assoc-store nil)
 (defvar decknix--agent-broker-key nil)
+(defvar decknix--agent-conv-key nil)
 (declare-function agent-shell-buffers "agent-shell" ())
 
 (defconst dk-assoc-test--roots
@@ -492,32 +493,141 @@ line and resolved to a junk root."
 
 (defconst dk-assoc-test--create-cmd (concat "cd /w/r && gh pr " "create --draft --title x"))
 
+(defconst dk-assoc-test--bash '(_meta . ((claudeCode . ((toolName . "Bash"))))))
+
+(defun dk-assoc-test--bash (&rest fields)
+  "An update of a Bash call carrying FIELDS."
+  (cons dk-assoc-test--bash fields))
+
 (ert-deftest dk-assoc--a-creating-call-is-paired-with-its-result ()
   (let ((pending (make-hash-table :test 'equal)) (created nil))
     (setq created (decknix-session-assoc-note-created
-                   `((toolCallId . "t1") (rawInput . ((command . ,dk-assoc-test--create-cmd)))) pending created))
+                   (dk-assoc-test--bash '(toolCallId . "t1")
+                                        `(rawInput . ((command . ,dk-assoc-test--create-cmd))))
+                   pending created))
     (should-not created)
     (setq created (decknix-session-assoc-note-created
-                   '((toolCallId . "t1") (rawOutput . "https://github.com/ExampleOwner/web-integration/pull/89")) pending created))
+                   (dk-assoc-test--bash '(toolCallId . "t1")
+                                        '(rawOutput . "https://github.com/ExampleOwner/web-integration/pull/89"))
+                   pending created))
     (should (equal '("ExampleOwner/web-integration#89") created))))
 
 (ert-deftest dk-assoc--a-pr-url-from-another-command-is-not-a-creation ()
   "gh pr view, a comment, or a body mentioning a PR all print URLs."
   (let ((pending (make-hash-table :test 'equal)))
     (should-not (decknix-session-assoc-note-created
-                 '((toolCallId . "t2") (rawInput . ((command . "gh pr view 89"))) ) pending nil))
+                 (dk-assoc-test--bash '(toolCallId . "t2") '(rawInput . ((command . "gh pr view 89"))))
+                 pending nil))
     (should-not (decknix-session-assoc-note-created
-                 '((toolCallId . "t2") (rawOutput . "https://github.com/o/r/pull/89")) pending nil))))
+                 (dk-assoc-test--bash '(toolCallId . "t2") '(rawOutput . "https://github.com/o/r/pull/89"))
+                 pending nil))))
+
+(ert-deftest dk-assoc--a-terminal-call-of-another-agent-counts-by-its-kind ()
+  "Agents other than Claude Code name no tool, only the ACP kind."
+  (let ((pending (make-hash-table :test 'equal)))
+    (decknix-session-assoc-note-created
+     `((toolCallId . "k") (kind . "execute") (rawInput . ((command . ,dk-assoc-test--create-cmd))))
+     pending nil)
+    (should (equal '("o/r#3")
+                   (decknix-session-assoc-note-created
+                    '((toolCallId . "k") (rawOutput . "https://github.com/o/r/pull/3"))
+                    pending nil)))))
 
 (ert-deftest dk-assoc--created-prs-are-read-from-log-lines ()
-  (let* ((call `((sessionUpdate . "tool_call_update") (toolCallId . "a")
-                 (rawInput . ((command . ,dk-assoc-test--create-cmd)))))
-         (result '((sessionUpdate . "tool_call_update") (toolCallId . "a")
-                   (rawOutput . "https://github.com/acme-dev/platform-cli/pull/61")))
+  (let* ((call (dk-assoc-test--bash '(sessionUpdate . "tool_call_update") '(toolCallId . "a")
+                                    `(rawInput . ((command . ,dk-assoc-test--create-cmd)))))
+         (result (dk-assoc-test--bash '(sessionUpdate . "tool_call_update") '(toolCallId . "a")
+                                      '(rawOutput . "https://github.com/acme-dev/platform-cli/pull/61")))
          (lines (list (json-encode `((params . ((update . ,call)))))
                       (json-encode `((params . ((update . ,result))))))))
     (should (equal '("acme-dev/platform-cli#61")
                    (decknix-session-assoc-created-from-lines lines)))))
+
+(defun dk-assoc-test--log-line (update)
+  (json-encode `((jsonrpc . "2.0") (method . "session/update")
+                 (params . ((sessionId . "sid") (update . ,update))))))
+
+(defun dk-assoc-test--published (url action)
+  (concat "!Unexpected case: "
+          (json-encode `((type . "system") (subtype . "code_change_published")
+                         (provider . "github") (url . ,url) (action . ,action)
+                         (session_id . "sid")))))
+
+(ert-deftest dk-assoc--every-pr-a-creating-call-prints-is-recorded ()
+  "A loop raising three PRs in one call printed three URLs, and only the
+first was kept."
+  (should (equal '("o/a#1" "o/b#2" "o/c#3")
+                 (decknix-session-assoc-created-from-lines
+                  (list
+                   (dk-assoc-test--log-line
+                    (dk-assoc-test--bash '(sessionUpdate . "tool_call_update") '(toolCallId . "loop")
+                                         `(rawInput . ((command . ,(concat "for r in a b c; do " dk-assoc-test--create-cmd " -R o/$r; done"))))))
+                   (dk-assoc-test--log-line
+                    (dk-assoc-test--bash '(sessionUpdate . "tool_call_update") '(toolCallId . "loop")
+                                         '(status . "completed")
+                                         '(rawOutput . "https://github.com/o/a/pull/1\nhttps://github.com/o/b/pull/2\nhttps://github.com/o/c/pull/3\n"))))))))
+
+(ert-deftest dk-assoc--a-sub-agents-creation-is-its-parents ()
+  "A sub-agent's Bash call streams through the parent's log."
+  (should (equal '("o/r#5")
+                 (decknix-session-assoc-created-from-lines
+                  (list
+                   (dk-assoc-test--log-line
+                    `((_meta . ((claudeCode . ((toolName . "Bash") (parentToolUseId . "toolu_agent")))))
+                      (sessionUpdate . "tool_call") (toolCallId . "sub")
+                      (rawInput . ((command . ,dk-assoc-test--create-cmd)))))
+                   (dk-assoc-test--log-line
+                    `((_meta . ((claudeCode . ((toolName . "Bash") (parentToolUseId . "toolu_agent")))))
+                      (sessionUpdate . "tool_call_update") (toolCallId . "sub") (status . "completed")
+                      (rawOutput . "https://github.com/o/r/pull/5"))))))))
+
+(ert-deftest dk-assoc--an-agent-call-mentioning-gh-pr-create-is-not-a-creation ()
+  "The parent's Agent call names `gh pr create' in its prompt, and the
+sub-agent's summary quotes another PR: that PR is not the session's."
+  (should-not (decknix-session-assoc-created-from-lines
+               (list
+                (dk-assoc-test--log-line
+                 `((_meta . ((claudeCode . ((toolName . "Agent")))))
+                   (sessionUpdate . "tool_call") (toolCallId . "toolu_agent") (kind . "think")
+                   (rawInput . ((prompt . ,(concat "Open the PR with " dk-assoc-test--create-cmd))
+                                (command . ,dk-assoc-test--create-cmd)))))
+                (dk-assoc-test--log-line
+                 '((_meta . ((claudeCode . ((toolName . "Agent")))))
+                   (sessionUpdate . "tool_call_update") (toolCallId . "toolu_agent") (status . "completed")
+                   (rawOutput . "Done; it builds on https://github.com/o/r/pull/77")))))))
+
+(ert-deftest dk-assoc--a-published-creation-event-is-a-source ()
+  (should (equal '("o/r#9")
+                 (decknix-session-assoc-created-from-lines
+                  (list (dk-assoc-test--published "https://github.com/o/r/pull/8" "commented")
+                        (dk-assoc-test--published "https://github.com/o/r/pull/9" "created")
+                        (dk-assoc-test--published "https://github.com/o/r/pull/9" "edited"))))))
+
+(ert-deftest dk-assoc--a-pr-seen-by-both-sources-is-recorded-once ()
+  (should (equal '("o/r#9")
+                 (decknix-session-assoc-created-from-lines
+                  (list
+                   (dk-assoc-test--log-line
+                    (dk-assoc-test--bash '(toolCallId . "m") `(rawInput . ((command . ,dk-assoc-test--create-cmd)))))
+                   (dk-assoc-test--published "https://github.com/o/r/pull/9" "created")
+                   (dk-assoc-test--log-line
+                    (dk-assoc-test--bash '(toolCallId . "m") '(status . "completed")
+                                         '(rawOutput . "https://github.com/o/r/pull/9"))))))))
+
+(ert-deftest dk-assoc--a-pr-body-in-the-command-is-not-output ()
+  "Earlier updates may echo the command in `content'; its body names PRs."
+  (should (equal '("o/r#9")
+                 (decknix-session-assoc-created-from-lines
+                  (list
+                   (dk-assoc-test--log-line
+                    (dk-assoc-test--bash '(toolCallId . "m")
+                                         `(rawInput . ((command . ,dk-assoc-test--create-cmd)))
+                                         '(content . [((type . "content") (content . ((text . "like https://github.com/o/r/pull/4"))))])))
+                   (dk-assoc-test--log-line
+                    (dk-assoc-test--bash '(toolCallId . "m") '(status . "completed")
+                                         '(rawOutput . "https://github.com/o/r/pull/9"))))))))
+
+;; --- stores ------------------------------------------------------------
 
 (ert-deftest dk-assoc--created-prs-persist-and-reload ()
   (let* ((dir (make-temp-file "dk-created-" t))
@@ -528,8 +638,8 @@ line and resolved to a junk root."
           (decknix-session-assoc-remember-created "s-1" '("o/r#1"))
           (setq decknix--agent-created-store 'unloaded)
           (should (equal '("o/r#1") (decknix-session-assoc-created "s-1")))
-          (should (decknix-session-assoc-created-known-p "s-1"))
-          (should-not (decknix-session-assoc-created-known-p "s-2")))
+          (should-not (decknix-session-assoc-created "s-2"))
+          (should-not (directory-files (expand-file-name "decknix" dir) nil "\\.tmp-")))
       (delete-directory dir t))))
 
 (ert-deftest dk-assoc--stores-ignore-a-bound-print-length ()
@@ -574,30 +684,58 @@ failing every later `car' on it."
           (should (= 2 (length decknix--agent-assoc-store))))
       (delete-directory dir t))))
 
-;; --- created-PR scan out of process -----------------------------------
+(defmacro dk-assoc-test--with-state (&rest body)
+  "Run BODY with every created-PR store in a fresh state dir."
+  (declare (indent 0))
+  `(let* ((dir (make-temp-file "dk-created-state-" t))
+          (process-environment (cons (concat "XDG_STATE_HOME=" dir) process-environment))
+          (decknix--agent-created-store 'unloaded)
+          (decknix--agent-created-offsets 'unloaded)
+          (decknix--session-assoc-created-seen (make-hash-table :test 'equal))
+          (decknix--session-assoc-created-dirty nil))
+     (unwind-protect (progn ,@body)
+       (delete-directory dir t))))
 
-(defun dk-assoc-test--log-line (update)
-  (json-encode `((method . "session/update") (params . ((update . ,update))))))
+(ert-deftest dk-assoc--offsets-persist-and-reload ()
+  (dk-assoc-test--with-state
+    (decknix-session-assoc-created-set-offset "s-1" 120 '("t1"))
+    (decknix-session-assoc-created-set-offset "s-2" 7 nil)
+    (setq decknix--agent-created-offsets 'unloaded)
+    (should (equal '(120 "t1") (decknix-session-assoc-created-offset "s-1")))
+    (should (equal '(7) (decknix-session-assoc-created-offset "s-2")))
+    (should-not (decknix-session-assoc-created-offset "s-3"))))
+
+(ert-deftest dk-assoc--a-damaged-offsets-file-is-read-from-zero ()
+  (dk-assoc-test--with-state
+    (make-directory (expand-file-name "decknix" dir) t)
+    (with-temp-file (decknix-session-assoc-created-offsets-file)
+      (insert "((\"s-1\" 40 \"t\") (\"s-2\" . junk) (\"s-3\" -1) ...)"))
+    (should (equal '(40 "t") (decknix-session-assoc-created-offset "s-1")))
+    (should-not (decknix-session-assoc-created-offset "s-2"))
+    (should-not (decknix-session-assoc-created-offset "s-3"))))
+
+;; --- incremental scan ---------------------------------------------------
 
 (defun dk-assoc-test--created-log-lines ()
   "A broker log: one creation, PR URLs printed by other calls, a big line."
   (list
    (dk-assoc-test--log-line
-    `((sessionUpdate . "tool_call") (toolCallId . "view")
-      (rawInput . ((command . "gh pr view 7")))))
+    (dk-assoc-test--bash '(sessionUpdate . "tool_call") '(toolCallId . "view")
+                         '(rawInput . ((command . "gh pr view 7")))))
    (dk-assoc-test--log-line
-    '((sessionUpdate . "tool_call_update") (toolCallId . "view")
-      (rawOutput . "https://github.com/o/r/pull/7")))
+    (dk-assoc-test--bash '(sessionUpdate . "tool_call_update") '(toolCallId . "view")
+                         '(rawOutput . "https://github.com/o/r/pull/7")))
    (dk-assoc-test--log-line
-    `((sessionUpdate . "tool_call") (toolCallId . "make")
-      (rawInput . ((command . ,dk-assoc-test--create-cmd)))))
+    (dk-assoc-test--bash '(sessionUpdate . "tool_call") '(toolCallId . "make")
+                         `(rawInput . ((command . ,dk-assoc-test--create-cmd)))))
    (dk-assoc-test--log-line
-    `((sessionUpdate . "tool_call_update") (toolCallId . "list")
-      (rawOutput . ,(concat (make-string 200000 ?x)
-                            " https://github.com/o/r/pull/8"))))
+    (dk-assoc-test--bash '(sessionUpdate . "tool_call_update") '(toolCallId . "list")
+                         `(rawOutput . ,(concat (make-string 200000 ?x)
+                                                " https://github.com/o/r/pull/8"))))
    (dk-assoc-test--log-line
-    '((sessionUpdate . "tool_call_update") (toolCallId . "make")
-      (rawOutput . "https://github.com/o/r/pull/9")))))
+    (dk-assoc-test--bash '(sessionUpdate . "tool_call_update") '(toolCallId . "make")
+                         '(status . "completed")
+                         '(rawOutput . "https://github.com/o/r/pull/9 ✓")))))
 
 (defmacro dk-assoc-test--with-log (var lines &rest body)
   (declare (indent 2))
@@ -609,28 +747,147 @@ failing every later `car' on it."
            ,@body)
        (delete-file ,var))))
 
-(defun dk-assoc-test--filter-output (log)
-  (with-temp-buffer
-    (let ((cmd (decknix-session-assoc-created-filter-command log)))
-      (should (eq 0 (apply #'call-process (car cmd) nil t nil (cdr cmd))))
-      (buffer-string))))
+(defun dk-assoc-test--append (log text)
+  (write-region text nil log t 'silent))
 
-(ert-deftest dk-assoc--created-filter-agrees-with-reading-every-line ()
-  "The pipeline may drop lines, never change the answer."
+(defun dk-assoc-test--size (log)
+  (file-attribute-size (file-attributes log)))
+
+(ert-deftest dk-assoc--a-chunk-scan-agrees-with-reading-every-line ()
   (let ((lines (dk-assoc-test--created-log-lines)))
     (dk-assoc-test--with-log log lines
-      (should (equal (decknix-session-assoc-created-from-lines lines)
-                     (decknix-session-assoc-created-from-output
-                      (dk-assoc-test--filter-output log))))
-      (should (equal '("o/r#9")
-                     (decknix-session-assoc-created-from-log log))))))
+      (let ((res (decknix-session-assoc-created-scan-chunk log 0 nil)))
+        (should (equal (decknix-session-assoc-created-from-lines lines)
+                       (plist-get res :prs)))
+        (should (equal '("o/r#9") (plist-get res :prs)))
+        (should (= (dk-assoc-test--size log) (plist-get res :offset)))
+        (should (plist-get res :complete))
+        (should-not (plist-get res :pending))))))
 
-(ert-deftest dk-assoc--created-filter-drops-other-calls-pr-urls ()
-  "PR URLs printed by calls that created nothing never reach Emacs."
+(ert-deftest dk-assoc--a-scan-resumes-where-the-last-stopped ()
+  "The creating call is read in one scan, its output in the next."
+  (dk-assoc-test--with-log log (list (dk-assoc-test--log-line
+                                      (dk-assoc-test--bash '(toolCallId . "make")
+                                                           `(rawInput . ((command . ,dk-assoc-test--create-cmd))))))
+    (let ((first (decknix-session-assoc-created-scan-chunk log 0 nil)))
+      (should-not (plist-get first :prs))
+      (should (equal '("make") (plist-get first :pending)))
+      (dk-assoc-test--append log (concat (dk-assoc-test--log-line
+                                          (dk-assoc-test--bash '(toolCallId . "make") '(status . "completed")
+                                                               '(rawOutput . "https://github.com/o/r/pull/9")))
+                                         "\n"))
+      (let ((second (decknix-session-assoc-created-scan-chunk
+                     log (plist-get first :offset) (plist-get first :pending))))
+        (should (equal '("o/r#9") (plist-get second :prs)))
+        (should-not (plist-get second :pending))
+        (should (= (dk-assoc-test--size log) (plist-get second :offset)))))))
+
+(ert-deftest dk-assoc--a-line-still-being-written-is-read-whole-later ()
+  (dk-assoc-test--with-log log nil
+    (let* ((line (dk-assoc-test--published "https://github.com/o/r/pull/9" "created"))
+           (half (/ (length line) 2)))
+      (dk-assoc-test--append log (substring line 0 half))
+      (let ((first (decknix-session-assoc-created-scan-chunk log 0 nil)))
+        (should (= 0 (plist-get first :offset)))
+        (should-not (plist-get first :prs))
+        (dk-assoc-test--append log (concat (substring line half) "\n"))
+        (should (equal '("o/r#9")
+                       (plist-get (decknix-session-assoc-created-scan-chunk
+                                   log (plist-get first :offset) nil)
+                                  :prs)))))))
+
+(ert-deftest dk-assoc--a-log-that-shrank-is-read-from-the-start ()
+  (dk-assoc-test--with-log log (list (dk-assoc-test--published "https://github.com/o/r/pull/9" "created"))
+    (let ((res (decknix-session-assoc-created-scan-chunk log 1000000 nil)))
+      (should (plist-get res :reset))
+      (should (equal '("o/r#9") (plist-get res :prs)))
+      (should (= (dk-assoc-test--size log) (plist-get res :offset))))))
+
+(ert-deftest dk-assoc--a-capped-scan-reads-the-log-in-chunks ()
+  "Every chunk ends on a line boundary, and the chunks add up to the whole."
+  (let ((lines (dk-assoc-test--created-log-lines)))
+    (dk-assoc-test--with-log log lines
+      (let ((offset 0) (pending nil) (prs nil) (scans 0) res)
+        (while (progn
+                 (setq res (decknix-session-assoc-created-scan-chunk log offset pending 300)
+                       offset (plist-get res :offset)
+                       pending (plist-get res :pending)
+                       prs (append prs (plist-get res :prs))
+                       scans (1+ scans))
+                 (not (plist-get res :complete))))
+        (should (> scans 2))
+        (should (= (dk-assoc-test--size log) offset))
+        (should (equal '("o/r#9") prs))))))
+
+(ert-deftest dk-assoc--a-scan-reads-a-line-longer-than-its-cap ()
   (dk-assoc-test--with-log log (dk-assoc-test--created-log-lines)
-    (let ((out (dk-assoc-test--filter-output log)))
-      (should (= 2 (length (split-string out "\n" t))))
-      (should-not (string-match-p "pull/7\\|pull/8" out)))))
+    (let ((res (decknix-session-assoc-created-scan-chunk log 0 nil 10)))
+      (should (> (plist-get res :offset) 0)))))
+
+(ert-deftest dk-assoc--an-empty-or-missing-log-is-nothing ()
+  (should (equal 0 (plist-get (decknix-session-assoc-created-scan-chunk "/nonexistent/x.log" 0 nil)
+                              :offset)))
+  (dk-assoc-test--with-log log nil
+    (should (plist-get (decknix-session-assoc-created-scan-chunk log 0 nil) :complete))))
+
+;; --- mirroring into the conversation -----------------------------------
+
+(defmacro dk-assoc-test--with-links (links &rest body)
+  "Run BODY with conversation \"ck\" holding LINKS (a variable) for broker key s-1."
+  (declare (indent 1))
+  `(let ((buf (generate-new-buffer "dk-agent")))
+     (unwind-protect
+         (cl-letf (((symbol-function 'agent-shell-buffers) (lambda () (list buf)))
+                   ((symbol-function 'decknix--agent-linked-prs) (lambda (_ck) ,links))
+                   ((symbol-function 'decknix--agent-pr-url-accessor)
+                    (lambda (rec field) (alist-get (intern field) rec)))
+                   ((symbol-function 'decknix--agent-link-pr)
+                    (lambda (ck url type added)
+                      (should (equal "ck" ck))
+                      (setq ,links (append ,links (list `((url . ,url) (type . ,type) (added . ,added)))))
+                      t)))
+           (with-current-buffer buf
+             (setq-local decknix--agent-broker-key "s-1")
+             (setq-local decknix--agent-conv-key "ck"))
+           ,@body)
+       (kill-buffer buf))))
+
+(ert-deftest dk-assoc--a-new-created-pr-is-linked-to-the-conversation ()
+  (dk-assoc-test--with-state
+    (let ((links nil))
+      (dk-assoc-test--with-links links
+        (should (equal '("o/r#9") (decknix-session-assoc-created-record "s-1" '("o/r#9"))))
+        (should (equal '(((url . "https://github.com/o/r/pull/9") (type . "authored") (added . "auto")))
+                       links))
+        (should (equal '("o/r#9") (decknix-session-assoc-created "s-1")))))))
+
+(ert-deftest dk-assoc--a-pr-recorded-before-is-neither-new-nor-relinked ()
+  (dk-assoc-test--with-state
+    (let ((links nil))
+      (dk-assoc-test--with-links links
+        (decknix-session-assoc-remember-created "s-1" '("O/R#9"))
+        (should-not (decknix-session-assoc-created-record "s-1" '("o/r#9")))
+        (should-not links)))))
+
+(ert-deftest dk-assoc--a-manual-link-is-left-alone ()
+  (dk-assoc-test--with-state
+    (let ((links (list '((url . "https://github.com/O/R/pull/9/files") (type . "authored") (added . "manual")))))
+      (dk-assoc-test--with-links links
+        (decknix-session-assoc-created-record "s-1" '("o/r#9"))
+        (should (= 1 (length links)))
+        (should (equal "manual" (alist-get 'added (car links))))))))
+
+(ert-deftest dk-assoc--a-detached-session-links-through-its-stored-broker-key ()
+  (let ((convs (make-hash-table :test 'equal)) (entry (make-hash-table :test 'equal)))
+    (puthash "brokerKey" "s-9" entry)
+    (puthash "ck9" entry convs)
+    (cl-letf (((symbol-function 'agent-shell-buffers) (lambda () nil))
+              ((symbol-function 'decknix--agent-tags-read) (lambda () 'store))
+              ((symbol-function 'decknix--agent-tags-conversations) (lambda (_s) convs)))
+      (should (equal "ck9" (decknix-session-assoc-conv-key-for "s-9")))
+      (should-not (decknix-session-assoc-conv-key-for "s-0")))))
+
+;; --- scan out of process, scheduled -------------------------------------
 
 (defun dk-assoc-test--await (pred)
   "Wait up to a minute for PRED: a child Emacs can take seconds to start."
@@ -639,18 +896,20 @@ failing every later `car' on it."
       (accept-process-output nil 0.05))))
 
 (ert-deftest dk-assoc--created-scan-runs-in-a-child-process ()
+  "Same answer as the in-process scan, computed by another process."
   (dk-assoc-test--with-log log (dk-assoc-test--created-log-lines)
     (let* ((got 'none)
            (proc (decknix-session-assoc-created-scan
-                  log (lambda (prs) (setq got prs)))))
+                  log 0 nil (lambda (res) (setq got res)))))
       (should (processp proc))
       (dk-assoc-test--await (lambda () (not (eq got 'none))))
-      (should (equal '("o/r#9") got)))))
+      (should (equal (decknix-session-assoc-created-scan-chunk log 0 nil) got)))))
 
 (ert-deftest dk-assoc--created-scan-reports-a-failed-scan ()
   (let* ((got 'none)
-         (decknix-session-assoc-created-filter-script "exit 3"))
-    (decknix-session-assoc-created-scan "/nonexistent" (lambda (prs) (setq got prs)))
+         (invocation-directory "/usr/bin/")
+         (invocation-name "false"))
+    (decknix-session-assoc-created-scan "/nonexistent" 0 nil (lambda (res) (setq got res)))
     (dk-assoc-test--await (lambda () (not (eq got 'none))))
     (should (eq 'error got))))
 
@@ -660,8 +919,10 @@ failing every later `car' on it."
   `(let* ((dir (make-temp-file "dk-created-tick-" t))
           (process-environment (cons (concat "XDG_STATE_HOME=" dir) process-environment))
           (decknix--agent-created-store 'unloaded)
+          (decknix--agent-created-offsets 'unloaded)
+          (decknix--session-assoc-created-seen (make-hash-table :test 'equal))
+          (decknix--session-assoc-created-dirty nil)
           (decknix--agent-assoc-store nil)
-          (decknix--session-assoc-created-attempted nil)
           (decknix--session-assoc-created-scan nil)
           (decknix--session-assoc-backfill-proc nil)
           (spec ,spec)
@@ -673,6 +934,7 @@ failing every later `car' on it."
                         spec)))
      (unwind-protect
          (cl-letf (((symbol-function 'agent-shell-buffers) (lambda () bufs))
+                   ((symbol-function 'decknix-session-assoc-created-soon) #'ignore)
                    ((symbol-function 'decknix--agent-broker-log-path)
                     (lambda (key) (cdr (assoc key spec)))))
            ,@body)
@@ -684,38 +946,83 @@ failing every later `car' on it."
        (mapc #'kill-buffer bufs)
        (delete-directory dir t))))
 
-(ert-deftest dk-assoc--the-idle-tick-scans-without-blocking-and-records ()
+(ert-deftest dk-assoc--the-tick-scans-without-blocking-and-records ()
   (dk-assoc-test--with-log log (dk-assoc-test--created-log-lines)
     (dk-assoc-test--with-sessions (list (cons "s-1" log))
-      (decknix-session-assoc-backfill-tick)
+      (decknix-session-assoc-created-tick)
       (should (process-live-p decknix--session-assoc-created-scan))
-      (should-not (decknix-session-assoc-created-known-p "s-1"))
-      (dk-assoc-test--await (lambda () (decknix-session-assoc-created-known-p "s-1")))
-      (should (equal '("o/r#9") (decknix-session-assoc-created "s-1"))))))
+      (should-not (decknix-session-assoc-created "s-1"))
+      (dk-assoc-test--await (lambda () (null decknix--session-assoc-created-scan)))
+      (should (equal '("o/r#9") (decknix-session-assoc-created "s-1")))
+      (should (equal (list (dk-assoc-test--size log))
+                     (decknix-session-assoc-created-offset "s-1")))
+      (should-not (decknix-session-assoc-created-due-p "s-1" log)))))
 
-(ert-deftest dk-assoc--the-idle-tick-runs-one-scan-at-a-time ()
+(ert-deftest dk-assoc--a-pr-raised-after-the-first-scan-is-recovered ()
+  "The scan used to run once per session ever; anything later was lost."
+  (dk-assoc-test--with-log log (dk-assoc-test--created-log-lines)
+    (dk-assoc-test--with-sessions (list (cons "s-1" log))
+      (decknix-session-assoc-created-tick)
+      (dk-assoc-test--await (lambda () (null decknix--session-assoc-created-scan)))
+      (dk-assoc-test--append log (concat (dk-assoc-test--published "https://github.com/o/r/pull/10" "created") "\n"))
+      (should (decknix-session-assoc-created-due-p "s-1" log))
+      (decknix-session-assoc-created-tick)
+      (dk-assoc-test--await (lambda () (null decknix--session-assoc-created-scan)))
+      (should (equal '("o/r#9" "o/r#10") (decknix-session-assoc-created "s-1"))))))
+
+(ert-deftest dk-assoc--the-tick-runs-one-scan-at-a-time ()
   (dk-assoc-test--with-log log (dk-assoc-test--created-log-lines)
     (dk-assoc-test--with-sessions (list (cons "s-1" log) (cons "s-2" log))
-      (decknix-session-assoc-backfill-tick)
-      (let ((first decknix--session-assoc-created-scan))
-        (decknix-session-assoc-backfill-tick)
-        (should (eq first decknix--session-assoc-created-scan))
-        (should (equal '("s-1") decknix--session-assoc-created-attempted))))))
+      (let ((first (decknix-session-assoc-created-tick)))
+        (should (processp first))
+        (should-not (decknix-session-assoc-created-tick))
+        (should (eq first decknix--session-assoc-created-scan))))))
 
-(ert-deftest dk-assoc--a-failed-scan-is-not-retried-every-idle-period ()
-  (let ((decknix-session-assoc-created-filter-script "exit 3"))
-    (dk-assoc-test--with-sessions (list (cons "s-1" "/dev/null") (cons "s-2" "/dev/null"))
-      (decknix-session-assoc-backfill-tick)
-      (dk-assoc-test--await (lambda () (null decknix--session-assoc-created-scan)))
-      (should-not (decknix-session-assoc-created-known-p "s-1"))
-      (decknix-session-assoc-backfill-tick)
-      (should (equal '("s-2" "s-1") decknix--session-assoc-created-attempted)))))
+(ert-deftest dk-assoc--a-session-whose-turn-ended-is-scanned-first ()
+  (dk-assoc-test--with-log log (dk-assoc-test--created-log-lines)
+    (dk-assoc-test--with-sessions (list (cons "s-1" log) (cons "s-2" log))
+      (decknix-session-assoc-created-turn-ended "s-2")
+      (decknix-session-assoc-created-turn-ended "s-2")
+      (should (equal '("s-2") decknix--session-assoc-created-dirty))
+      (should (equal "s-2" (car (decknix-session-assoc-created-next))))
+      (should-not decknix--session-assoc-created-dirty))))
 
-(ert-deftest dk-assoc--a-pr-captured-live-during-a-scan-is-kept ()
+(ert-deftest dk-assoc--a-failed-scan-is-not-retried-until-the-log-grows ()
+  (let ((invocation-directory "/usr/bin/")
+        (invocation-name "false"))
+    (dk-assoc-test--with-log log (dk-assoc-test--created-log-lines)
+      (dk-assoc-test--with-sessions (list (cons "s-1" log))
+        (decknix-session-assoc-created-tick)
+        (dk-assoc-test--await (lambda () (null decknix--session-assoc-created-scan)))
+        (should-not (decknix-session-assoc-created "s-1"))
+        (should-not (decknix-session-assoc-created-due-p "s-1" log))
+        (dk-assoc-test--append log "{}\n")
+        (should (decknix-session-assoc-created-due-p "s-1" log))))))
+
+(ert-deftest dk-assoc--a-pr-captured-live-is-kept-by-a-later-scan ()
   (dk-assoc-test--with-sessions (list (cons "s-1" "/dev/null"))
-    (decknix-session-assoc-remember-created "s-1" '("o/r#1"))
-    (decknix-session-assoc-created-merge "s-1" '("o/r#9" "o/r#1"))
+    (decknix-session-assoc-created-record "s-1" '("o/r#1"))
+    (decknix-session-assoc-created-record "s-1" '("o/r#9" "o/r#1"))
     (should (equal '("o/r#1" "o/r#9") (decknix-session-assoc-created "s-1")))))
+
+(ert-deftest dk-assoc--live-capture-records-every-pr-of-a-call ()
+  (dk-assoc-test--with-sessions (list (cons "s-1" "/dev/null"))
+    (with-current-buffer (car (agent-shell-buffers))
+      (should-not (decknix-session-assoc-observe-created
+                   (dk-assoc-test--bash '(toolCallId . "c")
+                                        `(rawInput . ((command . ,dk-assoc-test--create-cmd))))))
+      (should (equal "o/r#2"
+                     (decknix-session-assoc-observe-created
+                      (dk-assoc-test--bash '(toolCallId . "c") '(status . "completed")
+                                           '(rawOutput . "https://github.com/o/r/pull/1 https://github.com/o/r/pull/2")))))
+      (should (equal '("o/r#1" "o/r#2") (decknix-session-assoc-created "s-1"))))))
+
+(ert-deftest dk-assoc--a-turn-end-asks-for-a-scan ()
+  (dk-assoc-test--with-sessions (list (cons "s-1" "/dev/null"))
+    (with-current-buffer (car (agent-shell-buffers))
+      (cl-letf (((symbol-function 'decknix-session-assoc-save) #'ignore))
+        (decknix-session-assoc-end-turn))
+      (should (equal '("s-1") decknix--session-assoc-created-dirty)))))
 
 (defconst dk-assoc-test--assoc-log-lines
   (list

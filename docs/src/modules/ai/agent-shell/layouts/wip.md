@@ -23,6 +23,29 @@ The **last row** in "Repo-only" is a **worktree placeholder** — a `(repo, bran
 worktree registry with no matching open PR yet (`⎇ … wip`), so freshly-created worktrees
 appear before `gh pr create` indexes (`hub.el:2722`).
 
+## Which session a PR belongs to
+
+A PR nests under the session that **created** it for as long as it is open,
+however long ago that was. Creations are read from the session's broker log
+(`~/.local/state/decknix/agent-sockets/<key>.log`), so a PR raised while the
+buffer was detached, or by one of the session's sub-agents, still counts:
+
+- a Bash call running `gh pr create` credits every PR URL in its output (a
+  loop raising three PRs credits all three);
+- Claude Code's own `code_change_published` event with action `created` is a
+  second source;
+- an Agent call that merely mentions `gh pr create` in its prompt credits
+  nothing.
+
+The log is read incrementally: a byte offset per session is kept in
+`~/.local/state/decknix/session-prs-offsets.eld` and advanced at each turn end
+and every `decknix-session-assoc-created-interval` seconds (60), one bounded
+chunk at a time in a child Emacs. Results go to `session-prs.eld`, and each
+newly found PR is also linked to the conversation in `agent-sessions.json`
+(`"added": "auto"`), which survives the session being re-brokered. An existing
+link, manual or not, is never replaced. Deleting the offsets file makes every
+live session's log be read again from the start.
+
 ## Proposed columnar layout (draft)
 
 > **Status: proposal for review.** Not implemented. Borrows the Requests layout

@@ -355,9 +355,10 @@ in the gap *between* two keystrokes and still lands on the user:
 
 Reference implementations: `decknix-board--fetch` (heavy work in a child
 process, tiny callback) for case 1, and `decknix-session-assoc-created-scan`
-(a `grep | awk` child narrows a 100 MB broker log to the few lines Emacs
-parses; the synchronous `call-process` grep it replaced froze Emacs for
-minutes, and an abort with `C-g` left it pending, so the next idle period
+(a `emacs -Q --batch` child reads one bounded chunk of a broker log from the
+session's stored byte offset and prints the PRs it found and the new offset;
+the synchronous `call-process` grep of the whole log it replaced froze Emacs
+for minutes, and an abort with `C-g` left it pending, so the next idle period
 ran it again), and `decknix-session-assoc-backfill-async` (a pure function
 too heavy for the main thread runs in a `emacs -Q --batch` child that loads
 the same library and prints its result, so the answer cannot drift from the

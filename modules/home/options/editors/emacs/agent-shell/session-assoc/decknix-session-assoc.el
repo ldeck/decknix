@@ -399,7 +399,11 @@ notification path."
     (ignore-errors
       (decknix-session-assoc-remember
        decknix--agent-broker-key decknix--agent-assoc-turn
-       decknix--agent-assoc))))
+       decknix--agent-assoc))
+    ;; And read what this turn added to the broker log, which is what
+    ;; recovers a PR live capture missed.
+    (ignore-errors
+      (decknix-session-assoc-created-turn-ended decknix--agent-broker-key))))
 
 (defcustom decknix-session-assoc-backfill-steps '(4 16)
   "Tail sizes in MB to try when backfilling from a broker log.
@@ -455,72 +459,161 @@ resolves to a known root."
 ;; then spent its later turns on a benchmark, and showed no PRs at all.  A
 ;; PR a session raised is its work for as long as the PR is open, so the
 ;; PRs it created are recorded separately and never age out.
+;;
+;; Two sources feed the record.  Live capture sees the ACP notifications
+;; while the buffer is attached.  The broker log sees everything, attached
+;; or not, and is read INCREMENTALLY: a byte offset per session, advanced
+;; at each turn end and on a timer.  It used to be read once per session,
+;; ever, so a PR raised while the buffer was detached, or while the store
+;; was unreadable, was never recovered: seven PRs across three lanes showed
+;; as unattended in the sidebar although their sessions had created them.
 
 (defconst decknix-session-assoc-pr-url-re
   "https://github\\.com/\\([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\)/pull/\\([0-9]+\\)"
   "Matches a GitHub PR URL, capturing owner/repo and number.")
 
-(defun decknix-session-assoc-creating-call-p (update)
-  "Return non-nil when UPDATE is a tool call that runs `gh pr create\='."
-  (let ((cmd (alist-get 'command (alist-get 'rawInput update))))
-    (and (stringp cmd) (string-match-p "\\bgh[ \t]+pr[ \t]+create\\b" cmd))))
+(defun decknix-session-assoc-bash-call-p (update)
+  "Return non-nil when UPDATE belongs to a Bash tool call.
+Claude Code names the tool in `_meta.claudeCode.toolName\='; other agents
+only give the ACP kind, where `execute\=' is a terminal command.  Matching
+on input text alone also caught an Agent call whose prompt told the
+sub-agent to run `gh pr create\=', and the first PR URL in its summary,
+any PR at all, was credited to the session."
+  (let ((tool (map-nested-elt update '(_meta claudeCode toolName))))
+    (if tool
+        (equal tool "Bash")
+      (equal (alist-get 'kind update) "execute"))))
 
-(defun decknix-session-assoc-output-pr (update)
-  "Return `owner/repo#N\=' for the first PR URL in UPDATE\='s output, or nil.
-`gh pr create\=' prints the new PR\'s URL as its result."
-  (let ((text (format "%s" (or (alist-get 'rawOutput update) (alist-get 'content update) ""))))
-    (when (string-match decknix-session-assoc-pr-url-re text)
-      (format "%s#%s" (match-string 1 text) (match-string 2 text)))))
+(defun decknix-session-assoc-creating-call-p (update)
+  "Return non-nil when UPDATE is a Bash call that runs `gh pr create\='."
+  (and (decknix-session-assoc-bash-call-p update)
+       (let ((cmd (alist-get 'command (alist-get 'rawInput update))))
+         (and (stringp cmd)
+              (string-match-p "\\bgh[ \t]+pr[ \t]+create\\b" cmd)))))
+
+(defun decknix-session-assoc-output-text (update)
+  "Return the output UPDATE carries, as one string.
+`content\=' is read only from the completed update and only without a
+`rawOutput\=': on earlier updates it can echo the command, whose PR body
+names other PRs."
+  (let ((raw (alist-get 'rawOutput update))
+        (stdout (map-nested-elt update '(_meta claudeCode toolResponse stdout)))
+        (content (and (null (alist-get 'rawOutput update))
+                      (equal (alist-get 'status update) "completed")
+                      (alist-get 'content update))))
+    (mapconcat (lambda (v) (cond ((null v) "") ((stringp v) v) (t (format "%S" v))))
+               (list raw stdout content) "\n")))
+
+(defun decknix-session-assoc-output-prs (update)
+  "Return every `owner/repo#N\=' in UPDATE\='s output, first seen first.
+All of them: a loop raising three PRs in one call prints three URLs, and
+keeping only the first recorded one."
+  (let ((text (decknix-session-assoc-output-text update)) (start 0) out)
+    (while (string-match decknix-session-assoc-pr-url-re text start)
+      (push (format "%s#%s" (match-string 1 text) (match-string 2 text)) out)
+      (setq start (match-end 0)))
+    (seq-uniq (nreverse out))))
 
 (defun decknix-session-assoc-note-created (update pending created)
   "Fold UPDATE into PENDING (a hash of tool-call ids) and CREATED (a list).
-Returns the new CREATED.  A creating call\'s id is remembered; when an
-update for that id carries a PR URL, the PR is added."
+Returns the new CREATED.  A creating call\='s id is remembered until the
+call completes, and every PR URL in its output on the way is added."
   (let ((id (alist-get 'toolCallId update)))
     (when (and id (decknix-session-assoc-creating-call-p update))
       (puthash id t pending))
-    (let ((pr (and id (gethash id pending) (decknix-session-assoc-output-pr update))))
-      (if (and pr (not (member pr created)))
-          (progn (remhash id pending) (append created (list pr)))
-        created))))
+    (if (not (and id (gethash id pending)))
+        created
+      (let ((prs (seq-remove (lambda (pr) (member pr created))
+                             (decknix-session-assoc-output-prs update))))
+        (when (member (alist-get 'status update) '("completed" "failed"))
+          (remhash id pending))
+        (append created prs)))))
 
-(defun decknix-session-assoc-created-from-lines (lines)
-  "Return the PRs created in broker-log LINES, as `owner/repo#N\=' strings."
-  (let ((pending (make-hash-table :test 'equal)) (created nil))
+(defun decknix-session-assoc-published-created (obj)
+  "Return `owner/repo#N\=' when OBJ is Claude Code\='s record of a new PR.
+The broker logs it as a `code_change_published\=' system event with
+action `created\=', whichever call or sub-agent ran the command, so it
+does not depend on reading the command or its output at all."
+  (when (and (equal (alist-get 'subtype obj) "code_change_published")
+             (equal (alist-get 'action obj) "created"))
+    (let ((url (alist-get 'url obj)))
+      (when (and (stringp url)
+                 (string-match decknix-session-assoc-pr-url-re url))
+        (format "%s#%s" (match-string 1 url) (match-string 2 url))))))
+
+(defun decknix--assoc-parse-event (line)
+  "Parse the JSON object in broker-log LINE, or nil.
+System events are logged after a prefix (`!Unexpected case: {...}\='), so
+parsing starts at the first brace rather than requiring one first."
+  (when (stringp line)
+    (when-let* ((i (string-search "{" line)))
+      (ignore-errors
+        (json-parse-string (if (eq i 0) line (substring line i))
+                           :object-type 'alist
+                           :null-object nil :false-object nil)))))
+
+(defun decknix-session-assoc-created-fold-line (line pending created)
+  "Fold broker-log LINE into PENDING and CREATED; return the new CREATED.
+A sub-agent\='s tool calls stream through its parent\='s log (carrying
+`_meta.claudeCode.parentToolUseId\='), so what a sub-agent creates is
+credited to the session that owns the log."
+  (let ((obj (decknix--assoc-parse-event line)))
+    (if-let* ((pr (and obj (decknix-session-assoc-published-created obj))))
+        (if (member pr created) created (append created (list pr)))
+      (let ((update (and obj (map-nested-elt obj '(params update)))))
+        (if update
+            (decknix-session-assoc-note-created update pending created)
+          created)))))
+
+(defun decknix-session-assoc-created-from-lines (lines &optional pending)
+  "Return the PRs created in broker-log LINES, as `owner/repo#N\=' strings.
+PENDING, a hash of tool-call ids, carries creating calls across reads."
+  (let ((pending (or pending (make-hash-table :test 'equal))) (created nil))
     (dolist (line lines)
-      (let ((update (map-nested-elt (decknix--assoc-parse-line line) '(params update))))
-        (when update
-          (setq created (decknix-session-assoc-note-created update pending created)))))
+      (setq created (decknix-session-assoc-created-fold-line line pending created)))
     created))
 
 (defvar-local decknix--agent-assoc-creating nil
-  "Tool-call ids of this session\'s in-flight `gh pr create\' calls.")
+  "Tool-call ids of this session\='s in-flight `gh pr create\=' calls.")
 
 (defun decknix-session-assoc-observe-created (update)
   "Record a PR this session just created, from live UPDATE.  Returns it or nil."
   (unless decknix--agent-assoc-creating
     (setq decknix--agent-assoc-creating (make-hash-table :test 'equal)))
-  (let* ((key (and (local-variable-p 'decknix--agent-broker-key)
-                   (bound-and-true-p decknix--agent-broker-key)))
-         (before (and key (decknix-session-assoc-created key)))
-         (after (decknix-session-assoc-note-created
-                 update decknix--agent-assoc-creating before)))
-    (when (and key (not (equal before after)))
-      (decknix-session-assoc-remember-created key after)
-      (car (last after)))))
+  (when-let* ((key (and (local-variable-p 'decknix--agent-broker-key)
+                        (bound-and-true-p decknix--agent-broker-key)))
+              (found (decknix-session-assoc-note-created
+                      update decknix--agent-assoc-creating nil)))
+    (car (last (decknix-session-assoc-created-record key found)))))
+
+(defun decknix-session-assoc-state-dir ()
+  "Return the decknix state directory."
+  (expand-file-name
+   "decknix" (or (getenv "XDG_STATE_HOME") (expand-file-name ".local/state" "~"))))
 
 (defun decknix-session-assoc-created-file ()
   "Return the file recording which PRs each session created."
-  (expand-file-name
-   "decknix/session-prs.eld"
-   (or (getenv "XDG_STATE_HOME") (expand-file-name ".local/state" "~"))))
+  (expand-file-name "session-prs.eld" (decknix-session-assoc-state-dir)))
+
+(defun decknix--session-assoc-write-atomic (file data)
+  "Print DATA to FILE through a temporary file renamed into place.
+A reader, or a crash mid-write, sees the old file or the new one, never
+the torn one that once left session-prs.eld unreadable."
+  (make-directory (file-name-directory file) t)
+  (let ((tmp (make-temp-file (concat file ".tmp-"))))
+    (condition-case err
+        (progn
+          (with-temp-file tmp (decknix-state-io-prin1 data (current-buffer)))
+          (rename-file tmp file t))
+      (error (ignore-errors (delete-file tmp))
+             (signal (car err) (cdr err))))))
 
 (defun decknix--session-assoc-entry-p (entry)
   "Non-nil when ENTRY is a (BROKER-KEY . DATA) cell of either store."
   (and (consp entry) (stringp (car entry))))
 
 (defvar decknix--agent-created-store 'unloaded
-  "Alist of (BROKER-KEY . PR-KEYS), or `unloaded\'.")
+  "Alist of (BROKER-KEY . PR-KEYS), or `unloaded\='.")
 
 (defun decknix--session-assoc-created-store ()
   "Return the created-PR store, loading it on first use."
@@ -534,10 +627,6 @@ update for that id carries a PR URL, the PR is added."
   "Return the PRs session KEY created, as `owner/repo#N\=' strings."
   (cdr (assoc key (decknix--session-assoc-created-store))))
 
-(defun decknix-session-assoc-created-known-p (key)
-  "Return non-nil when session KEY\'s created PRs have been recorded at all."
-  (and (assoc key (decknix--session-assoc-created-store)) t))
-
 (defun decknix-session-assoc-remember-created (key prs)
   "Record that session KEY created PRS, and persist."
   (when (stringp key)
@@ -546,81 +635,255 @@ update for that id carries a PR URL, the PR is added."
                 (seq-remove (lambda (c) (equal (car c) key))
                             (decknix--session-assoc-created-store))))
     (ignore-errors
-      (let ((f (decknix-session-assoc-created-file)))
-        (make-directory (file-name-directory f) t)
-        (with-temp-file f (decknix-state-io-prin1 decknix--agent-created-store (current-buffer)))))))
+      (decknix--session-assoc-write-atomic
+       (decknix-session-assoc-created-file) decknix--agent-created-store))))
 
-;; Logs run past 100 MB and a creation can be anywhere in one, so the scan
-;; is a grep.  A plain grep for "create or PR URL" is not selective enough:
-;; every tool result that lists PRs matches, and on a 41 MB log it returned
-;; 10.7 MB of multi-megabyte JSON lines that Emacs then had to read and
-;; parse.  The awk stage keeps only lines whose tool-call id belongs to a
-;; call that mentioned `gh pr create' (21 KB on the same log), a superset
-;; of what `decknix-session-assoc-note-created' can act on, so the result
-;; is unchanged.
+(defun decknix-session-assoc-created-record (key prs)
+  "Add PRS to the PRs session KEY created; mirror and return the new ones.
+New means not recorded for KEY before, compared without case."
+  (let* ((before (decknix-session-assoc-created key))
+         (new nil))
+    (dolist (pr prs)
+      (unless (seq-some (lambda (b) (string-equal-ignore-case b pr))
+                        (append before new))
+        (setq new (append new (list pr)))))
+    (when new
+      (decknix-session-assoc-remember-created key (append before new))
+      (decknix-session-assoc-link-created key new))
+    new))
 
-(defconst decknix-session-assoc-created-grep-re
-  "gh pr create|github\\.com/[^/]+/[^/]+/pull/[0-9]+"
-  "ERE for broker log lines that may record a PR creation.")
+;; --- mirroring into the conversation's links --------------------------
+;;
+;; The store above is keyed by BROKER key, which a re-broker replaces, and
+;; then the session's PRs are gone from the sidebar.  The conversation's
+;; `linked_prs' in agent-sessions.json is keyed by the conversation, which
+;; survives that, and the sidebar already reads it.  So each newly
+;; recorded PR is also linked there, marked `auto'.  Only NEW ones: linking
+;; a session's whole history would list dozens of merged PRs under it.
 
-(defconst decknix-session-assoc-created-filter-script
-  "LC_ALL=C grep -a -E \"$1\" \"$2\" 2>/dev/null | LC_ALL=C awk -v needle=\"$3\" '
-function scan(s, mark,   v) {
-  while (match(s, /\"toolCallId\": *\"[^\"]*\"/)) {
-    v = substr(s, RSTART, RLENGTH); sub(/^\"toolCallId\": *\"/, \"\", v)
-    if (mark) ids[v] = 1; else if (v in ids) return 1
-    s = substr(s, RSTART + RLENGTH)
-  }
-  return 0
-}
-{ if (index($0, needle)) scan($0, 1); if (scan($0, 0)) print }'"
-  "Shell pipeline printing the broker log lines a PR creation can come from.
-Arguments: the grep ERE, the log path, and the creating command text.")
+(declare-function decknix--agent-link-pr "decknix-agent-link-store"
+                  (conv-key url &optional pr-type added))
+(declare-function decknix--agent-linked-prs "decknix-agent-link-store" (conv-key))
+(declare-function decknix--agent-pr-url-accessor "decknix-agent-url-parse" (pr field))
+(declare-function decknix--agent-tags-read "decknix-agent-tags-store" ())
+(declare-function decknix--agent-tags-conversations "decknix-agent-tags-store" (store))
+(defvar decknix--agent-conv-key)
 
-(defun decknix-session-assoc-created-filter-command (log-path)
-  "Return the argv that prints LOG-PATH\\='s PR-creation candidate lines."
-  (list "sh" "-c" decknix-session-assoc-created-filter-script "sh"
-        decknix-session-assoc-created-grep-re
-        (expand-file-name log-path)
-        "gh pr create"))
+(defun decknix-session-assoc-pr-url (pr)
+  "Return the GitHub URL of PR, an `owner/repo#N\=' string, or nil."
+  (when (and (stringp pr) (string-match "\\`\\([^#]+\\)#\\([0-9]+\\)\\'" pr))
+    (format "https://github.com/%s/pull/%s" (match-string 1 pr) (match-string 2 pr))))
 
-(defun decknix-session-assoc-created-from-output (text)
-  "Return the PRs created according to filter output TEXT."
-  (decknix-session-assoc-created-from-lines (split-string text "\n" t)))
+(defun decknix-session-assoc-buffer-for (key)
+  "Return the live agent buffer whose broker key is KEY, or nil."
+  (when (fboundp 'agent-shell-buffers)
+    (seq-find (lambda (b)
+                (and (buffer-live-p b)
+                     (local-variable-p 'decknix--agent-broker-key b)
+                     (equal (buffer-local-value 'decknix--agent-broker-key b) key)))
+              (ignore-errors (agent-shell-buffers)))))
 
-(defun decknix-session-assoc-created-from-log (log-path)
-  "Return the PRs created in broker log LOG-PATH, synchronously.
-Only for an explicit command; the idle backfill uses
-`decknix-session-assoc-created-scan', which never blocks Emacs."
-  (when (and log-path (file-readable-p log-path))
+(defun decknix-session-assoc-conv-key-for (key)
+  "Return the conversation key of the session with broker key KEY, or nil.
+The live buffer\='s own key first, since that is the one the sidebar reads;
+else the stored conversation recording KEY as its `brokerKey\='."
+  (or (when-let* ((buf (decknix-session-assoc-buffer-for key)))
+        (and (local-variable-p 'decknix--agent-conv-key buf)
+             (buffer-local-value 'decknix--agent-conv-key buf)))
+      (when (and (fboundp 'decknix--agent-tags-read)
+                 (fboundp 'decknix--agent-tags-conversations))
+        (let ((convs (decknix--agent-tags-conversations (decknix--agent-tags-read)))
+              (found nil))
+          (when (hash-table-p convs)
+            (maphash (lambda (ck e)
+                       (when (and (not found) (hash-table-p e)
+                                  (equal (gethash "brokerKey" e) key))
+                         (setq found ck)))
+                     convs))
+          found))))
+
+(defun decknix-session-assoc-linked-p (conv-key pr)
+  "Return non-nil when PR is already linked to CONV-KEY, however added.
+Compared as `owner/repo#N\=' without case, so a manual link written with
+different case or a trailing path is neither duplicated nor replaced."
+  (seq-some (lambda (rec)
+              (let ((url (decknix--agent-pr-url-accessor rec "url")))
+                (and (stringp url)
+                     (string-match decknix-session-assoc-pr-url-re url)
+                     (string-equal-ignore-case
+                      (format "%s#%s" (match-string 1 url) (match-string 2 url))
+                      pr))))
+            (decknix--agent-linked-prs conv-key)))
+
+(defun decknix-session-assoc-link-created (key prs)
+  "Link PRS, which session KEY created, to its conversation as `auto\='."
+  (when (and prs (fboundp 'decknix--agent-link-pr)
+             (fboundp 'decknix--agent-linked-prs)
+             (fboundp 'decknix--agent-pr-url-accessor))
+    (ignore-errors
+      (when-let* ((ck (decknix-session-assoc-conv-key-for key)))
+        (dolist (pr prs)
+          (unless (decknix-session-assoc-linked-p ck pr)
+            (decknix--agent-link-pr ck (decknix-session-assoc-pr-url pr)
+                                    "authored" "auto")))))))
+
+;; --- incremental broker-log scan --------------------------------------
+
+(defcustom decknix-session-assoc-created-chunk (* 32 1024 1024)
+  "Most bytes of a broker log one scan reads.
+Logs pass 100 MB and the first scan of each starts at byte 0, so the
+catch-up is split into chunks, each in its own short-lived child."
+  :type 'integer
+  :group 'decknix)
+
+(defun decknix--assoc-created-candidate-p (bol eol pending)
+  "Non-nil when the line from BOL to EOL can change what was created.
+Most lines cannot, and the cheap search keeps a 32 MB chunk from being
+parsed as JSON line by line."
+  (save-excursion
+    (or (progn (goto-char bol) (search-forward "gh pr create" eol t))
+        (progn (goto-char bol) (search-forward "code_change_published" eol t))
+        (catch 'hit
+          (maphash (lambda (id _)
+                     (goto-char bol)
+                     (when (search-forward id eol t) (throw 'hit t)))
+                   pending)
+          nil))))
+
+(defun decknix-session-assoc-created-scan-chunk (log-path offset pending &optional cap)
+  "Scan LOG-PATH from byte OFFSET for created PRs; return a plist.
+PENDING lists the ids of creating calls whose output may still be to come.
+Reads at most CAP bytes (default `decknix-session-assoc-created-chunk'),
+more only when one line is longer than that.
+
+Returns (:offset END :pending IDS :prs PRS :size SIZE :complete BOOL
+:reset BOOL).  END is just past the last COMPLETE line read, so a line
+being written is read whole next time rather than half now.  A log
+smaller than OFFSET was truncated or replaced, and is read from 0 with
+:reset t.  :complete means the read reached SIZE, the end of the file.
+
+Pure apart from reading the file, so the daemon and a child Emacs give
+the same answer."
+  (let* ((size (or (file-attribute-size (file-attributes log-path)) 0))
+         (reset (> offset size))
+         (offset (if reset 0 offset))
+         (cap (max 1 (or cap decknix-session-assoc-created-chunk)))
+         (table (make-hash-table :test 'equal))
+         (created nil) (end offset) (complete nil))
+    (dolist (id pending) (puthash id t table))
     (with-temp-buffer
-      (let ((cmd (decknix-session-assoc-created-filter-command log-path)))
-        (when (eq 0 (apply #'call-process (car cmd) nil t nil (cdr cmd)))
-          (decknix-session-assoc-created-from-output (buffer-string)))))))
+      (set-buffer-multibyte nil)
+      (let ((want cap) (done nil))
+        (while (not done)
+          (erase-buffer)
+          (let ((stop (min size (+ offset want))))
+            (when (> stop offset)
+              (insert-file-contents-literally log-path nil offset stop))
+            (setq complete (>= stop size))
+            (goto-char (point-max))
+            (cond ((search-backward "\n" nil t)
+                   (setq end (+ offset (point)) done t))
+                  (complete (setq done t))
+                  (t (setq want (* 2 want)))))))
+      (let ((limit (1+ (- end offset))))
+        (goto-char (point-min))
+        (while (< (point) limit)
+          (let ((bol (point)) (eol (line-end-position)))
+            (when (decknix--assoc-created-candidate-p bol eol table)
+              (setq created (decknix-session-assoc-created-fold-line
+                             (decode-coding-string
+                              (buffer-substring-no-properties bol eol) 'utf-8)
+                             table created)))
+            (goto-char (1+ eol))))))
+    (list :offset end :pending (hash-table-keys table) :prs created
+          :size size :complete complete :reset reset)))
 
-(defun decknix-session-assoc-created-scan (log-path callback)
-  "Scan LOG-PATH for created PRs in a child process; return the process.
-CALLBACK receives the PR list, or the symbol `error' when the scan
-failed.  The grep runs for tens of seconds on a large log while
-endpoint security inspects every read; run synchronously it froze Emacs
-for minutes, and a \\[keyboard-quit] to get out of it meant nothing was
-recorded, so the next idle period started the same scan again."
-  (let ((buf (generate-new-buffer " *decknix-created-scan*" t))
-        (cmd (decknix-session-assoc-created-filter-command log-path)))
+(defun decknix-session-assoc-created-scan-command (log-path offset pending cap)
+  "Return the argv of a batch Emacs printing one chunk scan of LOG-PATH.
+The child loads this same library, so the answer is exactly what
+`decknix-session-assoc-created-scan-chunk' gives in the daemon."
+  (let ((form `(progn
+                 (setq native-comp-jit-compilation nil)
+                 (require 'decknix-session-assoc)
+                 (decknix-state-io-prin1
+                  (decknix-session-assoc-created-scan-chunk
+                   ,log-path ,offset ',pending ,cap)))))
+    (list (expand-file-name invocation-name invocation-directory)
+          "-Q" "--batch"
+          "-L" (file-name-directory (locate-library "decknix-session-assoc"))
+          "-L" (file-name-directory (locate-library "decknix-state-io"))
+          "--eval" (decknix-state-io-to-string form))))
+
+(defun decknix-session-assoc-created-scan (log-path offset pending callback &optional cap)
+  "Scan LOG-PATH from OFFSET in a child Emacs; return the process.
+CALLBACK receives the plist of `decknix-session-assoc-created-scan-chunk',
+or the symbol `error\='.  Out of process because a read of a large log
+froze Emacs for minutes while endpoint security inspected it, and a
+\\[keyboard-quit] out of it left the same scan to start again."
+  (let ((buf (generate-new-buffer " *decknix-created-scan*" t)))
     (make-process
-     :name "decknix-created-scan" :buffer buf :command cmd
+     :name "decknix-created-scan" :buffer buf
+     :command (decknix-session-assoc-created-scan-command
+               (expand-file-name log-path) offset pending
+               (or cap decknix-session-assoc-created-chunk))
      :connection-type 'pipe :noquery t :coding 'utf-8-unix
+     :stderr (get-buffer-create " *decknix-created-scan-stderr*")
      :sentinel
      (lambda (proc _event)
        (unless (process-live-p proc)
-         (let ((ok (and (eq (process-status proc) 'exit)
-                        (eq 0 (process-exit-status proc))))
-               (text (if (buffer-live-p buf)
-                         (with-current-buffer buf (buffer-string))
-                       "")))
+         (let ((res (if (and (eq (process-status proc) 'exit)
+                             (eq 0 (process-exit-status proc))
+                             (buffer-live-p buf))
+                        (condition-case nil
+                            (car (read-from-string
+                                  (with-current-buffer buf (buffer-string))))
+                          (error 'error))
+                      'error)))
            (when (buffer-live-p buf) (kill-buffer buf))
-           (funcall callback
-                    (if ok (decknix-session-assoc-created-from-output text) 'error))))))))
+           (funcall callback (if (and (consp res) (plist-member res :offset))
+                                 res
+                               'error))))))))
+
+;; Offsets live in their own file: the created store is read by the
+;; sidebar on every paint, and these change on every scan.
+
+(defun decknix-session-assoc-created-offsets-file ()
+  "Return the file recording how far each session\='s broker log was read."
+  (expand-file-name "session-prs-offsets.eld" (decknix-session-assoc-state-dir)))
+
+(defvar decknix--agent-created-offsets 'unloaded
+  "Alist of (BROKER-KEY OFFSET . PENDING-IDS), or `unloaded\='.")
+
+(defun decknix--session-assoc-created-offsets ()
+  "Return the offsets store, loading it on first use."
+  (when (eq decknix--agent-created-offsets 'unloaded)
+    (setq decknix--agent-created-offsets
+          (seq-filter (lambda (e) (natnump (cadr e)))
+                      (decknix-state-io-read-list
+                       (decknix-session-assoc-created-offsets-file)
+                       (lambda (e) (and (decknix--session-assoc-entry-p e)
+                                        (consp (cdr e))))))))
+  decknix--agent-created-offsets)
+
+(defun decknix-session-assoc-created-offset (key)
+  "Return (OFFSET . PENDING-IDS) for session KEY, or nil when never read."
+  (cdr (assoc key (decknix--session-assoc-created-offsets))))
+
+(defun decknix-session-assoc-created-set-offset (key offset pending)
+  "Record that session KEY\='s log was read to OFFSET with PENDING ids open."
+  (setq decknix--agent-created-offsets
+        (cons (cons key (cons offset pending))
+              (seq-remove (lambda (c) (equal (car c) key))
+                          (decknix--session-assoc-created-offsets))))
+  (ignore-errors
+    (decknix--session-assoc-write-atomic
+     (decknix-session-assoc-created-offsets-file) decknix--agent-created-offsets)))
+
+(defun decknix-session-assoc-created-apply-scan (key result)
+  "Fold scan RESULT into session KEY\='s stores; return the PRs new to KEY."
+  (decknix-session-assoc-created-set-offset
+   key (plist-get result :offset) (plist-get result :pending))
+  (decknix-session-assoc-created-record key (plist-get result :prs)))
 
 ;; --- persistence ------------------------------------------------------
 
@@ -858,90 +1121,166 @@ roots, which is the whole feature doing nothing."
                                decknix--agent-broker-key)))))))
      (ignore-errors (agent-shell-buffers)))))
 
-(defun decknix-session-assoc-created-pending (&optional skip)
-  "Return a live agent buffer whose created PRs were never recorded, or nil.
-Buffers whose broker key is in SKIP are passed over."
-  (when (fboundp 'agent-shell-buffers)
-    (seq-find
-     (lambda (b)
-       (and (buffer-live-p b)
-            (with-current-buffer b
-              (and (local-variable-p 'decknix--agent-broker-key)
-                   decknix--agent-broker-key
-                   (not (member decknix--agent-broker-key skip))
-                   (not (decknix-session-assoc-created-known-p decknix--agent-broker-key))))))
-     (ignore-errors (agent-shell-buffers)))))
+;; --- scheduling the created-PR scan -----------------------------------
 
-(defun decknix-session-assoc-created-backfill-one (buffer)
-  "Record which PRs BUFFER\'s session created, from its broker log."
-  (with-current-buffer buffer
-    (let* ((key decknix--agent-broker-key)
-           (log (and (fboundp 'decknix--agent-broker-log-path)
-                     (decknix--agent-broker-log-path key))))
-      (decknix-session-assoc-remember-created
-       key (or (and log (decknix-session-assoc-created-from-log log)) nil)))))
+(defcustom decknix-session-assoc-created-interval 60
+  "Seconds between checks for broker logs that grew.
+A plain timer, not an idle one: an idle timer fires once per idle period,
+so lanes raising PRs while the user is away would wait until they came
+back.  A check is a `stat\=' per live session; the read runs in a child."
+  :type 'integer
+  :group 'decknix)
+
+(defcustom decknix-session-assoc-created-soon-idle 2
+  "Idle seconds before a scan asked for at a turn end starts."
+  :type 'number
+  :group 'decknix)
 
 (defvar decknix--session-assoc-created-scan nil
   "The child process scanning a broker log for created PRs, or nil.")
 
-(defvar decknix--session-assoc-created-attempted nil
-  "Broker keys the idle backfill has started a created-PR scan for.
-A scan that fails is not retried by the idle tick, so one unreadable log
-cannot be rescanned every idle period; `decknix-session-assoc-backfill-now'
-still retries it.")
+(defvar decknix--session-assoc-created-seen (make-hash-table :test 'equal)
+  "Broker key -> log size when its last scan reached the end of the log.
+A log whose size has not moved since is not read again, which also stops
+a failing scan, or a last line never finished, being retried every tick.")
 
-(defun decknix-session-assoc-created-merge (key prs)
-  "Record PRS for KEY, keeping any PR live capture recorded meanwhile."
-  (decknix-session-assoc-remember-created
-   key (seq-uniq (append (decknix-session-assoc-created key) prs))))
+(defvar decknix--session-assoc-created-dirty nil
+  "Broker keys whose turn ended since their last scan, oldest first.")
 
-(defun decknix-session-assoc-created-backfill-start (buffer)
-  "Start recording which PRs BUFFER\='s session created, in a child process.
-Returns the scan process, or nil when there was no log to scan."
-  (with-current-buffer buffer
-    (let* ((key decknix--agent-broker-key)
-           (log (and (fboundp 'decknix--agent-broker-log-path)
-                     (decknix--agent-broker-log-path key))))
-      (push key decknix--session-assoc-created-attempted)
-      (if (not (and log (file-readable-p log)))
-          (progn (decknix-session-assoc-remember-created key nil) nil)
-        (setq decknix--session-assoc-created-scan
-              (decknix-session-assoc-created-scan
-               log
-               (lambda (prs)
-                 (setq decknix--session-assoc-created-scan nil)
-                 (unless (eq prs 'error)
-                   (decknix-session-assoc-created-merge key prs)))))))))
+(defvar decknix--session-assoc-created-timer nil
+  "The periodic timer checking for grown broker logs.")
+
+(defvar decknix--session-assoc-created-soon nil
+  "The pending one-shot idle timer for a scan, or nil.")
+
+(defun decknix-session-assoc-created-live-logs ()
+  "Return (KEY . LOG) for every live agent buffer with a broker log."
+  (when (and (fboundp 'agent-shell-buffers)
+             (fboundp 'decknix--agent-broker-log-path))
+    (delq nil
+          (mapcar (lambda (b)
+                    (when (and (buffer-live-p b)
+                               (local-variable-p 'decknix--agent-broker-key b))
+                      (when-let* ((key (buffer-local-value 'decknix--agent-broker-key b))
+                                  (log (ignore-errors (decknix--agent-broker-log-path key))))
+                        (cons key log))))
+                  (ignore-errors (agent-shell-buffers))))))
+
+(defun decknix-session-assoc-created-due-p (key log)
+  "Return non-nil when session KEY\='s LOG has lines not yet scanned."
+  (when-let* ((size (and log (file-attribute-size (file-attributes log)))))
+    (let ((offset (or (car (decknix-session-assoc-created-offset key)) 0)))
+      (or (< size offset)
+          (and (> size offset)
+               (not (eql size (gethash key decknix--session-assoc-created-seen))))))))
+
+(defun decknix-session-assoc-created-next ()
+  "Return the (KEY . LOG) to scan next, or nil.
+A session whose turn just ended goes first; then any whose log grew."
+  (let ((logs (decknix-session-assoc-created-live-logs)) (next nil))
+    (while (and (null next) decknix--session-assoc-created-dirty)
+      (let* ((key (pop decknix--session-assoc-created-dirty))
+             (cell (assoc key logs)))
+        (when (and cell (decknix-session-assoc-created-due-p key (cdr cell)))
+          (setq next cell))))
+    (or next
+        (seq-find (lambda (cell) (decknix-session-assoc-created-due-p (car cell) (cdr cell)))
+                  logs))))
+
+(defun decknix-session-assoc-created-start (key log)
+  "Scan session KEY\='s LOG from where the last scan stopped; return the process."
+  (let ((state (decknix-session-assoc-created-offset key)))
+    (setq decknix--session-assoc-created-scan
+          (decknix-session-assoc-created-scan
+           log (or (car state) 0) (cdr state)
+           (lambda (res)
+             (setq decknix--session-assoc-created-scan nil)
+             (if (not (consp res))
+                 (puthash key (file-attribute-size (file-attributes log))
+                          decknix--session-assoc-created-seen)
+               (if (plist-get res :complete)
+                   (puthash key (plist-get res :size) decknix--session-assoc-created-seen)
+                 (remhash key decknix--session-assoc-created-seen))
+               (when (decknix-session-assoc-created-apply-scan key res)
+                 (decknix-session-assoc-refresh-sidebar))
+               ;; More to read (a catch-up chunk, or lines that arrived
+               ;; meanwhile): go on at the next quiet moment.
+               (decknix-session-assoc-created-soon)))))))
+
+(defun decknix-session-assoc-created-tick ()
+  "Start scanning ONE session\='s new broker-log lines; return the process.
+Nil when a scan or a backfill child is already running, or nothing is due."
+  (unless (or (process-live-p decknix--session-assoc-created-scan)
+              (process-live-p decknix--session-assoc-backfill-proc))
+    (when-let* ((next (decknix-session-assoc-created-next)))
+      (decknix-session-assoc-created-start (car next) (cdr next)))))
+
+(defun decknix--session-assoc-created-quiet-tick ()
+  "Run the scan tick unless the user is typing or in the minibuffer."
+  (if (or (input-pending-p) (active-minibuffer-window))
+      (decknix-session-assoc-created-soon)
+    (ignore-errors (decknix-session-assoc-created-tick))))
+
+(defun decknix-session-assoc-created-soon ()
+  "Run the scan tick at the next quiet moment.  Bursts collapse to one."
+  (unless (timerp decknix--session-assoc-created-soon)
+    (setq decknix--session-assoc-created-soon
+          (run-with-idle-timer
+           decknix-session-assoc-created-soon-idle nil
+           (lambda ()
+             (setq decknix--session-assoc-created-soon nil)
+             (decknix--session-assoc-created-quiet-tick))))))
+
+(defun decknix-session-assoc-created-turn-ended (key)
+  "Ask for session KEY\='s broker log to be scanned soon."
+  (when (stringp key)
+    (unless (member key decknix--session-assoc-created-dirty)
+      (setq decknix--session-assoc-created-dirty
+            (append decknix--session-assoc-created-dirty (list key))))
+    (decknix-session-assoc-created-soon)))
+
+(defvar agent-shell-workspace-sidebar-buffer-name "*Agent Sidebar*")
+
+(defun decknix-session-assoc-refresh-sidebar ()
+  "Repaint the agent sidebar when it exists."
+  (when (and (fboundp 'agent-shell-workspace-sidebar-refresh)
+             (get-buffer (or (bound-and-true-p agent-shell-workspace-sidebar-buffer-name)
+                             "*Agent Sidebar*")))
+    (ignore-errors (agent-shell-workspace-sidebar-refresh))))
 
 (defun decknix-session-assoc-backfill-tick ()
-  "Start backfilling ONE pending session, then stop until the next idle period.
+  "Start ONE child reading a broker log, then stop until the next tick.
 
 Both kinds of backfill read a broker log, so each runs in a child
 process and this tick only starts one, when none is running: the
-association first, then once none is pending, one session\='s created
-PRs.  The daemon touches only the small finished result."
+association first, then once none is pending, the created-PR scan.  The
+daemon touches only the small finished result."
   (unless (or (process-live-p decknix--session-assoc-backfill-proc)
               (process-live-p decknix--session-assoc-created-scan))
     (if-let* ((buf (car (decknix-session-assoc-backfill-pending))))
         (ignore-errors (decknix-session-assoc-backfill-start buf))
-      (when-let* ((buf (decknix-session-assoc-created-pending
-                        decknix--session-assoc-created-attempted)))
-        (ignore-errors (decknix-session-assoc-created-backfill-start buf))))))
+      (ignore-errors (decknix-session-assoc-created-tick)))))
 
 (defun decknix-session-assoc-start-backfill ()
-  "Begin backfilling associations on idle.  Idempotent."
+  "Begin backfilling associations on idle and scanning for PRs.  Idempotent."
   (decknix-session-assoc-load)
   (unless decknix--agent-assoc-backfill-timer
     (setq decknix--agent-assoc-backfill-timer
           (run-with-idle-timer decknix-session-assoc-backfill-idle t
-                               #'decknix-session-assoc-backfill-tick))))
+                               #'decknix-session-assoc-backfill-tick)))
+  (unless (timerp decknix--session-assoc-created-timer)
+    (setq decknix--session-assoc-created-timer
+          (run-with-timer decknix-session-assoc-created-interval
+                          decknix-session-assoc-created-interval
+                          #'decknix--session-assoc-created-quiet-tick))))
 
 ;;;###autoload
 (defun decknix-session-assoc-backfill-now ()
-  "Backfill every pending session\='s association and created PRs now.
+  "Backfill every pending session\='s association now, and rescan for PRs.
 
 The deferred path does this on idle; this is for when you want it done
-before the next idle period."
+before the next idle period.  The PR scan still runs in a child, one
+session after another, so it returns at once."
   (interactive)
   (decknix-session-assoc-load)
   (let ((pending (decknix-session-assoc-backfill-pending)) (done 0))
@@ -953,21 +1292,14 @@ before the next idle period."
           (setq done (1+ done))))
       (message "Session associations: %d of %d backfilled"
                done (length pending)))
-    ;; And the PRs each session created.  The idle path does one session
-    ;; per 30 idle seconds, so after a switch a dozen sessions took a dozen
-    ;; pauses before their PRs appeared.
-    (let ((n 0) (tried nil) buf)
-      ;; `tried' stops a session whose recording fails -- and so stays
-      ;; pending -- from being retried forever.
-      (while (and (setq buf (decknix-session-assoc-created-pending))
-                  (not (memq buf tried)))
-        (push buf tried)
-        (message "Reading PRs %s created..." (buffer-name buf))
-        (ignore-errors (decknix-session-assoc-created-backfill-one buf))
-        (setq n (1+ n)))
-      (when (> n 0) (message "Recorded the PRs %d session(s) created" n)))
-    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
-      (ignore-errors (agent-shell-workspace-sidebar-refresh)))))
+    ;; Forget which logs were read to the end, so every live session is
+    ;; checked again; the offsets stay, so only new lines are read.
+    (clrhash decknix--session-assoc-created-seen)
+    (dolist (cell (decknix-session-assoc-created-live-logs))
+      (decknix-session-assoc-created-turn-ended (car cell)))
+    (decknix-session-assoc-created-tick)
+    (decknix-session-assoc-refresh-sidebar)))
+
 
 (declare-function agent-shell-buffers "agent-shell" ())
 (declare-function agent-shell-workspace-sidebar-refresh
