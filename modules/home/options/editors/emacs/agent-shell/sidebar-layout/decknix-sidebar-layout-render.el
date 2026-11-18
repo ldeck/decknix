@@ -1445,5 +1445,110 @@ costs no network; an absent file renders nothing rather than a guess."
             (setq line-num (1+ line-num)))))))
   line-num)
 
+;; --- the session you are looking at ------------------------------------
+
+(defface decknix-sidebar-active-session
+  '((t :inherit hl-line :extend t))
+  "Face for the sidebar row of the session shown in the selected window.
+A background only, by inheriting `hl-line', so the row keeps the
+foreground that says its state."
+  :group 'decknix)
+
+(defcustom decknix-sidebar-highlight-active-session t
+  "When non-nil, highlight the sidebar row of the session you are viewing."
+  :type 'boolean
+  :group 'decknix)
+
+(defvar decknix--layout-active-buffer nil
+  "The buffer last shown in a selected window other than the sidebar.")
+
+(defvar decknix--layout-active-overlay nil
+  "The overlay marking that buffer's sidebar row.")
+
+(defvar decknix--layout-active-timer nil
+  "Pending highlight update, so a burst of window changes runs it once.")
+
+(defun decknix--layout-active-target ()
+  "Return the buffer whose sidebar row should be highlighted.
+The selected window's buffer, unless that is the sidebar or a minibuffer,
+in which case the one before: moving into the sidebar to act on a row
+must not lose the mark of where you came from."
+  (let ((buf (window-buffer (selected-window))))
+    (unless (or (minibufferp buf)
+                (equal (buffer-name buf) agent-shell-workspace-sidebar-buffer-name))
+      (setq decknix--layout-active-buffer buf))
+    decknix--layout-active-buffer))
+
+(defun decknix--layout-own-row (buffer)
+  "Return the start of BUFFER's own session row here, or nil.
+A session row, not the question line under it nor a PR row covering it;
+the scan reads text properties only."
+  (save-excursion
+    (goto-char (point-min))
+    (catch 'found
+      (while (not (eobp))
+        (let ((bol (point)))
+          (when (and (not (get-text-property bol 'decknix-layout-ask))
+                     (eq buffer (decknix-layout-buffer-at bol)))
+            (throw 'found bol)))
+        (forward-line 1))
+      nil)))
+
+(defun decknix-layout-highlight-active (&optional force)
+  "Mark the sidebar row of the session in the selected window.
+Cheap: one scan of the sidebar's text properties, skipped unless FORCE
+when neither the target nor the overlay has moved.  Nothing is rendered."
+  (let ((sidebar (get-buffer agent-shell-workspace-sidebar-buffer-name))
+        (target (decknix--layout-active-target))
+        (ov decknix--layout-active-overlay))
+    (when (buffer-live-p sidebar)
+      (with-current-buffer sidebar
+        (unless (and (not force) ov (eq (overlay-buffer ov) sidebar)
+                     (< (overlay-start ov) (overlay-end ov))
+                     (eq (overlay-get ov 'decknix-target) target))
+          (let ((row (and decknix-sidebar-highlight-active-session
+                          (buffer-live-p target)
+                          (decknix--layout-own-row target))))
+            (if (null row)
+                (when ov (delete-overlay ov))
+              (unless (and ov (eq (overlay-buffer ov) sidebar))
+                (setq ov (make-overlay row row)
+                      decknix--layout-active-overlay ov)
+                (overlay-put ov 'face 'decknix-sidebar-active-session)
+                (overlay-put ov 'priority -50))
+              (move-overlay ov row (save-excursion (goto-char row)
+                                                   (min (point-max) (1+ (line-end-position)))))
+              (overlay-put ov 'decknix-target target))))))))
+
+(defun decknix--layout-active-schedule (&rest _)
+  "Update the highlight shortly, once however many changes arrive."
+  (unless (timerp decknix--layout-active-timer)
+    (setq decknix--layout-active-timer
+          (run-with-timer 0.05 nil
+                          (lambda ()
+                            (setq decknix--layout-active-timer nil)
+                            (decknix-layout-highlight-active))))))
+
+(defun decknix--layout-active-after-render (&rest _)
+  "Re-mark the active row after a paint, which erases the sidebar."
+  (decknix-layout-highlight-active t))
+
+(define-minor-mode decknix-sidebar-active-highlight-mode
+  "Highlight the sidebar row of the session shown in the selected window."
+  :global t
+  :group 'decknix
+  (if decknix-sidebar-active-highlight-mode
+      (progn
+        (add-hook 'window-selection-change-functions #'decknix--layout-active-schedule)
+        (add-hook 'window-buffer-change-functions #'decknix--layout-active-schedule)
+        (advice-add 'agent-shell-workspace-sidebar--render :after
+                    #'decknix--layout-active-after-render))
+    (remove-hook 'window-selection-change-functions #'decknix--layout-active-schedule)
+    (remove-hook 'window-buffer-change-functions #'decknix--layout-active-schedule)
+    (advice-remove 'agent-shell-workspace-sidebar--render
+                   #'decknix--layout-active-after-render)
+    (when decknix--layout-active-overlay
+      (delete-overlay decknix--layout-active-overlay))))
+
 (provide 'decknix-sidebar-layout-render)
 ;;; decknix-sidebar-layout-render.el ends here

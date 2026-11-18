@@ -4859,6 +4859,7 @@ ${optionalString cfg.tableOverlay.enable ''
         (require 'decknix-sidebar-layout)
         (require 'decknix-sidebar-layout-render)
         (decknix--layout-load-state)
+        (decknix-sidebar-active-highlight-mode 1)
 
         (require 'decknix-repo-sync)
         (require 'decknix-repo-sync-actions)

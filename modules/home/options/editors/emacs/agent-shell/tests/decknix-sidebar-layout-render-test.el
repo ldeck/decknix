@@ -898,5 +898,92 @@ hides one silently; Reviews and WIP list only the board's sessions."
           (should (eq (decknix-layout--next-attention-target)
                       (get-buffer "*Claude: in*"))))))))
 
+;; --- the session you are looking at ------------------------------------
+
+(defmacro decknix-lr-test--with-sidebar (text &rest body)
+  "Run BODY with a sidebar buffer holding TEXT, and the highlight reset."
+  (declare (indent 1))
+  `(let ((sidebar (get-buffer-create agent-shell-workspace-sidebar-buffer-name))
+         (decknix--layout-active-buffer nil)
+         (decknix--layout-active-overlay nil))
+     (unwind-protect
+         (progn (with-current-buffer sidebar (erase-buffer) (insert ,text))
+                ,@body)
+       (kill-buffer sidebar))))
+
+(defun decknix-lr-test--highlighted-text ()
+  "Return the text under the active-row overlay, or nil."
+  (let ((ov decknix--layout-active-overlay))
+    (and ov (overlay-buffer ov)
+         (with-current-buffer (overlay-buffer ov)
+           (buffer-substring-no-properties (overlay-start ov) (overlay-end ov))))))
+
+(defun decknix-lr-test--active-rows ()
+  "Sidebar text with an ask line above the session row it belongs to."
+  (concat " WIP (2)\n"
+          (propertize "      ↳ ask a" 'decknix-layout-ask '("*Claude: a*")) "\n"
+          (propertize " ●  a" 'decknix-layout-buffer "*Claude: a*") "\n"
+          (propertize " ●  b" 'decknix-layout-buffer "*Claude: b*") "\n"))
+
+(ert-deftest decknix-layout-render--the-viewed-session-row-is-highlighted ()
+  (decknix-lr-test--with-buffers '("*Claude: a*" "*Claude: b*")
+    (decknix-lr-test--with-sidebar (decknix-lr-test--active-rows)
+      (cl-letf (((symbol-function 'selected-window) (lambda () 'w))
+                ((symbol-function 'window-buffer) (lambda (_w) (get-buffer "*Claude: a*"))))
+        (decknix-layout-highlight-active)
+        ;; Its own row, not the question line.
+        (should (equal " ●  a\n" (decknix-lr-test--highlighted-text)))
+        (should (eq 'decknix-sidebar-active-session
+                    (overlay-get decknix--layout-active-overlay 'face)))))))
+
+(ert-deftest decknix-layout-render--the-highlight-follows-the-selection ()
+  (decknix-lr-test--with-buffers '("*Claude: a*" "*Claude: b*" "notes.txt")
+    (decknix-lr-test--with-sidebar (decknix-lr-test--active-rows)
+      (let ((shown "*Claude: a*"))
+        (cl-letf (((symbol-function 'selected-window) (lambda () 'w))
+                  ((symbol-function 'window-buffer) (lambda (_w) (get-buffer shown))))
+          (decknix-layout-highlight-active)
+          (setq shown "*Claude: b*")
+          (decknix-layout-highlight-active)
+          (should (equal " ●  b\n" (decknix-lr-test--highlighted-text)))
+          ;; Into the sidebar: the mark stays where you came from.
+          (setq shown agent-shell-workspace-sidebar-buffer-name)
+          (decknix-layout-highlight-active)
+          (should (equal " ●  b\n" (decknix-lr-test--highlighted-text)))
+          ;; A buffer with no row: nothing is marked.
+          (setq shown "notes.txt")
+          (decknix-layout-highlight-active)
+          (should-not (decknix-lr-test--highlighted-text)))))))
+
+(ert-deftest decknix-layout-render--a-repaint-keeps-the-highlight ()
+  (decknix-lr-test--with-buffers '("*Claude: a*" "*Claude: b*")
+    (decknix-lr-test--with-sidebar (decknix-lr-test--active-rows)
+      (cl-letf (((symbol-function 'selected-window) (lambda () 'w))
+                ((symbol-function 'window-buffer) (lambda (_w) (get-buffer "*Claude: b*"))))
+        (decknix-layout-highlight-active)
+        (with-current-buffer agent-shell-workspace-sidebar-buffer-name
+          (erase-buffer)
+          (insert (propertize " ●  b" 'decknix-layout-buffer "*Claude: b*") "\n"
+                  (propertize " ●  a" 'decknix-layout-buffer "*Claude: a*") "\n"))
+        (decknix--layout-active-after-render)
+        (should (equal " ●  b\n" (decknix-lr-test--highlighted-text)))))))
+
+(ert-deftest decknix-layout-render--the-highlight-can-be-turned-off ()
+  (decknix-lr-test--with-buffers '("*Claude: a*")
+    (decknix-lr-test--with-sidebar (decknix-lr-test--active-rows)
+      (cl-letf (((symbol-function 'selected-window) (lambda () 'w))
+                ((symbol-function 'window-buffer) (lambda (_w) (get-buffer "*Claude: a*"))))
+        (let ((decknix-sidebar-highlight-active-session nil))
+          (decknix-layout-highlight-active t)
+          (should-not (decknix-lr-test--highlighted-text)))))))
+
+(ert-deftest decknix-layout-render--window-changes-coalesce-into-one-update ()
+  (let ((decknix--layout-active-timer nil) (calls 0))
+    (cl-letf (((symbol-function 'run-with-timer)
+               (lambda (&rest _) (setq calls (1+ calls)) (timer-create))))
+      (decknix--layout-active-schedule)
+      (decknix--layout-active-schedule 'frame)
+      (should (= 1 calls)))))
+
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here
