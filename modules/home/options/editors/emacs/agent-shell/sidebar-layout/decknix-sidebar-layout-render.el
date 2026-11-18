@@ -87,7 +87,11 @@ shown, so the section never shrinks silently.")
   (let ((repo (or (get-text-property (line-beginning-position)
                                      'decknix-layout-repo)
                   (get-text-property (line-beginning-position)
-                                     'decknix-layout-expand-key))))
+                                     'decknix-layout-expand-key)
+                  ;; Only TAB reads this: it sits on a coordinator's row,
+                  ;; where RET must still go to the session.
+                  (get-text-property (line-beginning-position)
+                                     'decknix-layout-collapse-key))))
     (unless repo (user-error "Nothing to expand on this row"))
     (if (decknix--layout-expanded-p repo)
         (remhash repo decknix--layout-expanded)
@@ -938,8 +942,206 @@ you must never be hidden by a judgement about its PR."
         (setq line-num (1+ line-num)))))
   line-num)
 
+(declare-function decknix-agent-dispatch-last-delivered "decknix-agent-dispatch" (sid))
+(defvar decknix-workspaces)
+
+(defvar decknix-sidebar-layout-wip-show-reviews nil
+  "When non-nil, WIP lists review sessions too, last in each workspace.
+Off by default: Reviews already lists them, and a session shown in both
+sections is the duplication the sidebar was reworked to remove.")
+
+(defun decknix-layout-toggle-wip-reviews ()
+  "Toggle whether WIP lists review sessions as well as Reviews."
+  (interactive)
+  (setq decknix-sidebar-layout-wip-show-reviews
+        (not decknix-sidebar-layout-wip-show-reviews))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "WIP review sessions: %s"
+           (if decknix-sidebar-layout-wip-show-reviews "shown" "hidden")))
+
+(defun decknix--layout-session-id (session)
+  "Return SESSION's agent session id, or nil.  Buffer-local reads only."
+  (let ((buf (decknix--layout-session-buffer session)))
+    (and buf (fboundp 'decknix--agent-buffer-session-id)
+         (ignore-errors (decknix--agent-buffer-session-id buf)))))
+
+(defun decknix--layout-dispatch-senders (sessions)
+  "Return a function mapping a session name to who last messaged it.
+
+From the dispatcher's in-memory record of each session's last delivered
+message, the same record `decknix session status' exports as
+`last_delivered'.  Memory only: no file is read on the paint path."
+  (if (not (fboundp 'decknix-agent-dispatch-last-delivered))
+      #'ignore
+    (let* ((ids (delq nil (mapcar (lambda (s)
+                                    (let ((sid (decknix--layout-session-id s)))
+                                      (and sid (cons (nth 0 s) sid))))
+                                  sessions)))
+           (senders (delq nil
+                          (mapcar (lambda (cell)
+                                    (let* ((from (plist-get (ignore-errors
+                                                              (decknix-agent-dispatch-last-delivered
+                                                               (cdr cell)))
+                                                            :from))
+                                           (sender (and from (car (rassoc from ids)))))
+                                      (and sender (cons (car cell) sender))))
+                                  ids))))
+      (lambda (name) (cdr (assoc name senders))))))
+
+(defun decknix--layout-session-workspace-label (session)
+  "Return SESSION's workspace label: see `decknix--layout-workspace-label'."
+  (decknix--layout-workspace-label (nth 4 session)
+                                   (and (boundp 'decknix-workspaces) decknix-workspaces)))
+
+(defun decknix--layout-collapsed-p (key)
+  "Return non-nil when WIP group KEY is collapsed.
+WIP groups start open, so the stored flag means collapsed."
+  (decknix--layout-expanded-p (concat "wip-collapsed:" key)))
+
+(defun decknix--layout-indent-lines (start end prefix &optional first)
+  "Prefix every line from START to END with PREFIX, keeping its properties.
+FIRST, when given, prefixes the first line instead.  The row actions read
+properties at the start of a line, so the prefix takes the properties of
+the character it is inserted before."
+  (save-excursion
+    (goto-char start)
+    (let ((end (copy-marker end))
+          (lead (or first prefix)))
+      (while (< (point) end)
+        (insert (apply #'propertize lead (text-properties-at (point))))
+        (setq lead prefix)
+        (forward-line 1))
+      (set-marker end nil))))
+
+(defun decknix--layout-render-wip-session (line-num width row &optional right)
+  "Render WIP session ROW with its question, agents and work.
+Returns LINE-NUM.  RIGHT replaces the state word on the right."
+  (let* ((session (plist-get row :session))
+         (state (nth 3 session))
+         (name (decknix--layout-short-name (nth 0 session)))
+         (left (format " %s  %s" (decknix--layout-state-glyph state) name))
+         (right (or right state ""))
+         (pad (max 1 (- width (string-width left) (string-width right)))))
+    ;; Coloured by state, not just bolded on attention.  At 48 columns
+    ;; the trailing status word is off-screen, so colour and the
+    ;; left-hand glyph are the only state the user can actually read.
+    (insert (propertize (concat left (make-string pad ?\s) right)
+                        'face (decknix--layout-state-face state)
+                        'decknix-layout-session session
+                        'decknix-layout-buffer (nth 0 session)
+                        ;; The property upstream's goto, kill and
+                        ;; rename read.  Without it RET on a WIP row
+                        ;; said "No live agent buffer at point".
+                        'agent-shell-workspace-buffer
+                        (decknix--layout-session-buffer session))
+            "\n")
+    (setq line-num (1+ line-num))
+    (when (decknix--layout-attention-p state)
+      (setq line-num (decknix--layout-render-ask line-num width session)))
+    (setq line-num (decknix--layout-render-subagents line-num (nth 0 session) width))
+    (dolist (claim (plist-get row :repos))
+      (setq line-num (decknix--layout-render-claim
+                      line-num width claim session (plist-get row :provenance))))
+    line-num))
+
+(defun decknix--layout-render-wip-blocked (line-num width rows raw-keys indent)
+  "Render only the blocked sessions of ROWS, for a collapsed group."
+  (dolist (row rows)
+    (let ((session (plist-get row :session)))
+      (when (decknix--layout-attention-p (nth 3 session))
+        (setq line-num (decknix--layout-render-attention-session
+                        line-num width session raw-keys indent)))))
+  line-num)
+
+(defun decknix--layout-wip-group-header (label n key indent &optional face)
+  "Return a collapsible group header LABEL counting N, toggled by KEY."
+  (propertize (format "%s%s %s (%d)" indent
+                      (if (decknix--layout-collapsed-p key) "▸" "▾") label n)
+              'face (or face 'font-lock-type-face)
+              'decknix-layout-expand-key (concat "wip-collapsed:" key)
+              'help-echo "RET or TAB to collapse or expand"))
+
+(defun decknix--layout-render-team (line-num width team raw-keys)
+  "Render a coordinator TEAM: its row, then its lanes nested.  Returns LINE-NUM.
+
+TAB on the coordinator row collapses its lanes; RET still goes to it.  A
+collapsed team still lists any lane blocked on the user."
+  (let* ((row (plist-get team :row))
+         (lanes (plist-get team :lanes))
+         (session (plist-get row :session))
+         (key (concat "team:" (nth 0 session)))
+         (collapsed (decknix--layout-collapsed-p key))
+         (start (point)))
+    (setq line-num (decknix--layout-render-wip-session
+                    line-num width row
+                    (and lanes (format "%d lane%s %s" (length lanes)
+                                       (if (= 1 (length lanes)) "" "s")
+                                       (or (nth 3 session) "")))))
+    (put-text-property start (point) 'decknix-layout-collapse-key
+                       (concat "wip-collapsed:" key))
+    (if collapsed
+        (progn
+          (setq line-num (decknix--layout-render-wip-blocked
+                          line-num width (mapcar #'car lanes) raw-keys "   "))
+          (insert (propertize (format "     ⋯ %d lane%s, TAB to show"
+                                      (length lanes) (if (= 1 (length lanes)) "" "s"))
+                              'face 'font-lock-comment-face
+                              'decknix-layout-expand-key (concat "wip-collapsed:" key))
+                  "\n")
+          (setq line-num (1+ line-num)))
+      (dolist (lane lanes)
+        (let ((lstart (point)))
+          (setq line-num (decknix--layout-render-wip-session
+                          line-num (- width 2) (car lane)))
+          ;; Nested by indenting the lane's whole block, so its PRs and
+          ;; worktrees stay beneath it.  A `~' marks a lane placed by its
+          ;; tags rather than by a message its coordinator sent.
+          (decknix--layout-indent-lines lstart (point) "  "
+                                        (if (eq (cdr lane) 'inferred) " ~" "  ")))))
+    line-num))
+
+(defun decknix--layout-render-wip-workspace (line-num width ws raw-keys multi)
+  "Render workspace WS of the WIP plan.  Returns LINE-NUM.
+MULTI non-nil means several workspaces, so this one gets a header."
+  (let* ((label (or (plist-get ws :label) "no workspace"))
+         (teams (plist-get ws :teams))
+         (individuals (plist-get ws :individuals))
+         (reviews (plist-get ws :reviews))
+         (all (decknix--layout-plan-rows (list ws)))
+         (ws-key (concat "ws:" label)))
+    (when multi
+      (insert (decknix--layout-wip-group-header label (length all) ws-key " ") "\n")
+      (setq line-num (1+ line-num)))
+    (if (and multi (decknix--layout-collapsed-p ws-key))
+        (decknix--layout-render-wip-blocked line-num width all raw-keys "   ")
+      (dolist (team teams)
+        (setq line-num (decknix--layout-render-team line-num width team raw-keys)))
+      (dolist (sub `((,(concat "alone:" label) "individual" ,individuals)
+                     (,(concat "reviews:" label) "reviews" ,reviews)))
+        (let ((key (nth 0 sub)) (rows (nth 2 sub)))
+          (when rows
+            ;; A sub-header only where it separates something: alone in a
+            ;; workspace, individual sessions need no heading.
+            (when (or teams (and reviews individuals) (equal (nth 1 sub) "reviews"))
+              (insert (decknix--layout-wip-group-header
+                       (nth 1 sub) (length rows) key " " 'font-lock-comment-face)
+                      "\n")
+              (setq line-num (1+ line-num)))
+            (if (decknix--layout-collapsed-p key)
+                (setq line-num (decknix--layout-render-wip-blocked
+                                line-num width rows raw-keys "   "))
+              (dolist (row rows)
+                (setq line-num (decknix--layout-render-wip-session line-num width row))))))))
+    line-num))
+
 (defun decknix--layout-render-wip (line-num width)
   "Render WIP: my live sessions with their own work nested beneath each.
+
+Grouped by workspace (a header each when there are several), then each
+coordinator with the lanes it drives nested under it, then sessions on
+their own, then -- only with `decknix-sidebar-layout-wip-show-reviews' --
+review sessions.  See `decknix--layout-wip-plan'.
 
 Nesting rather than a separate PR-centric section: the old layout listed my
 PRs and worktrees under a second heading also called \"WIP\", with nothing
@@ -947,14 +1149,18 @@ stating which session was on which.  An item may appear under two sessions
 when both share a workspace, which is preferred over picking a winner and
 hiding the sharing.
 
-Review sessions are not listed: Reviews owns them, blocked ones included,
-so no session is shown in both sections.  A blocked session here carries
-its question line, as it does there."
+Review sessions are not listed by default: Reviews owns them, blocked ones
+included, so no session is shown in both sections.  A blocked session here
+carries its question line, as it does there, and a collapsed group still
+lists its blocked sessions."
   (let* ((sessions (decknix-attention-refine (decknix--layout-sessions)))
          (wip (decknix--layout-wip-sessions sessions))
-         (tree (decknix--layout-wip-tree wip (decknix--layout-wip-repos)
+         (shown (if decknix-sidebar-layout-wip-show-reviews
+                    (decknix--layout-sort-sessions sessions)
+                  wip))
+         (tree (decknix--layout-wip-tree shown (decknix--layout-wip-repos)
                                          (decknix--layout-worktrees))))
-    (when (or wip (decknix--layout-unattended-p (plist-get tree :dormant)))
+    (when (or shown (decknix--layout-unattended-p (plist-get tree :dormant)))
       (insert "\n")
       (setq line-num (1+ line-num))
       (decknix--sidebar-render-section-header
@@ -973,35 +1179,36 @@ its question line, as it does there."
                    ")")))
        'wip-sessions)
       (setq line-num (1+ line-num))
-      (dolist (row (decknix--layout-dedup-claims (plist-get tree :sessions)))
-        (let* ((session (plist-get row :session))
-               (state (nth 3 session))
-               (name (decknix--layout-short-name (nth 0 session)))
-               (left (format " %s  %s" (decknix--layout-state-glyph state) name))
-               (right (or state ""))
-               (pad (max 1 (- width (string-width left) (string-width right)))))
-          ;; Coloured by state, not just bolded on attention.  At 48 columns
-          ;; the trailing status word is off-screen, so colour and the
-          ;; left-hand glyph are the only state the user can actually read.
-          (insert (propertize (concat left (make-string pad ?\s) right)
-                              'face (decknix--layout-state-face state)
-                              'decknix-layout-session session
-                              'decknix-layout-buffer (nth 0 session)
-                              ;; The property upstream's goto, kill and
-                              ;; rename read.  Without it RET on a WIP row
-                              ;; said "No live agent buffer at point".
-                              'agent-shell-workspace-buffer
-                              (decknix--layout-session-buffer session))
-                  "\n")
-          (setq line-num (1+ line-num))
-          (when (decknix--layout-attention-p state)
-            (setq line-num (decknix--layout-render-ask line-num width session)))
-          (setq line-num (decknix--layout-render-subagents
-                          line-num (nth 0 session) width))
-          (dolist (claim (plist-get row :repos))
-            (setq line-num (decknix--layout-render-claim
-                            line-num width claim session
-                            (plist-get row :provenance))))))
+      (let* ((rows (plist-get tree :sessions))
+             (plan (decknix--layout-wip-plan
+                    rows
+                    (decknix--layout-controllers
+                     (mapcar (lambda (r) (plist-get r :session)) rows)
+                     (decknix--layout-dispatch-senders shown))
+                    #'decknix--layout-session-workspace-label))
+             (ordered (decknix--layout-plan-rows plan))
+             ;; Claims are de-duplicated in the order rows are drawn, so
+             ;; `shared ↑' always points at a row above it.
+             (dedup (make-hash-table :test 'eq))
+             (raw-keys (decknix--layout-raw-feed-keys)))
+        (cl-mapc (lambda (o d) (puthash o d dedup))
+                 ordered (decknix--layout-dedup-claims ordered))
+        (cl-flet ((swap (r) (gethash r dedup r)))
+          (setq plan
+                (mapcar (lambda (w)
+                          (list :label (plist-get w :label)
+                                :teams (mapcar (lambda (team)
+                                                 (list :row (swap (plist-get team :row))
+                                                       :lanes (mapcar (lambda (l)
+                                                                        (cons (swap (car l)) (cdr l)))
+                                                                      (plist-get team :lanes))))
+                                               (plist-get w :teams))
+                                :individuals (mapcar #'swap (plist-get w :individuals))
+                                :reviews (mapcar #'swap (plist-get w :reviews))))
+                        plan)))
+        (dolist (ws plan)
+          (setq line-num (decknix--layout-render-wip-workspace
+                          line-num width ws raw-keys (cdr plan)))))
       (setq line-num (decknix--layout-render-dormant
                       line-num width (plist-get tree :dormant)))))
   line-num)

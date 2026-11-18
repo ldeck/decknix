@@ -638,6 +638,103 @@ left the feed, and their repo folded into \"N more in flight\"."
         (should (string-match-p (concat "^ " decknix-attention-glyph "  a ") out))
         (should (string-match-p "↳ new commits" out))))))
 
+;; --- WIP groups ---------------------------------------------------------
+
+(defconst decknix-lr-test--team
+  '(("*Claude: coordinator/hx/us*" ("coordinator" "hx" "us") nil "ready" "/c/org/" nil)
+    ("*Claude: us/lane-01*" ("us" "lane-01") nil "asking" "/c/org/" nil)
+    ("*Claude: lane-03/us*" ("lane-03" "us") nil "working" "/c/org/" nil)
+    ("*Claude: solo*" ("solo") nil "ready" "/c/org/" nil)
+    ("*Claude: pr-widget-1*" ("review") ("widget#1") "ready" "/c/org/" nil))
+  "A coordinator with two lanes, one blocked; a solo session; a review.")
+
+(defmacro decknix-lr-test--with-team (&rest body)
+  "Run BODY with the team's buffers live and every WIP group open."
+  (declare (indent 0))
+  `(decknix-lr-test--with-buffers (mapcar #'car decknix-lr-test--team)
+     (let ((decknix--layout-expanded (make-hash-table :test 'equal))
+           (decknix-attention--seen (make-hash-table :test 'eq :weakness 'key))
+           (decknix-sidebar-layout-wip-show-reviews nil))
+       ,@body)))
+
+(defun decknix-lr-test--lines (text)
+  "Return TEXT's lines."
+  (split-string text "\n" t))
+
+(ert-deftest decknix-layout-render--lanes-nest-under-their-coordinator ()
+  (decknix-lr-test--with-team
+    (let* ((out (decknix-lr-test--render-wip decknix-lr-test--team))
+           (lines (decknix-lr-test--lines out))
+           (at (lambda (re) (seq-position lines re (lambda (l re) (string-match-p re l))))))
+      ;; Coordinator, its lanes (indented, `~' as placed by tags), then the
+      ;; individual sessions under their own heading.
+      (should (< (funcall at "coordinator/hx/us") (funcall at "us/lane-01")
+                 (funcall at "lane-03/us") (funcall at "individual (1)")
+                 (funcall at "solo")))
+      (should (string-match-p "^ ~ ⚑  us/lane-01" (nth (funcall at "us/lane-01") lines)))
+      (should (string-match-p "2 lanes" (nth (funcall at "coordinator/hx/us") lines)))
+      ;; One workspace: no workspace heading.
+      (should-not (string-match-p "▾ org" out))
+      ;; Review sessions stay in Reviews.
+      (should-not (string-match-p "pr-widget-1" out)))))
+
+(ert-deftest decknix-layout-render--an-indented-lane-row-still-acts-on-its-session ()
+  (decknix-lr-test--with-team
+    (let ((out (decknix-lr-test--render-wip decknix-lr-test--team)))
+      (with-temp-buffer
+        (insert out)
+        (goto-char (point-min))
+        (re-search-forward "^ ~ ⚑  us/lane-01")
+        (should (eq (get-buffer "*Claude: us/lane-01*")
+                    (decknix-layout-buffer-at (line-beginning-position))))
+        (should (decknix-layout-actionable-p (line-beginning-position)))))))
+
+(ert-deftest decknix-layout-render--a-collapsed-team-still-shows-a-blocked-lane ()
+  (decknix-lr-test--with-team
+    (puthash "wip-collapsed:team:*Claude: coordinator/hx/us*" t decknix--layout-expanded)
+    (let ((out (decknix-lr-test--render-wip decknix-lr-test--team)))
+      (should (string-match-p "us/lane-01" out))
+      (should-not (string-match-p "lane-03/us" out))
+      (should (string-match-p "⋯ 2 lanes, TAB to show" out)))))
+
+(ert-deftest decknix-layout-render--tab-on-a-coordinator-collapses-its-lanes ()
+  "TAB toggles the team; RET is left to go to the session."
+  (decknix-lr-test--with-team
+    (let ((out (decknix-lr-test--render-wip decknix-lr-test--team)))
+      (with-temp-buffer
+        (insert out)
+        (goto-char (point-min))
+        (re-search-forward "coordinator/hx/us")
+        (should-not (get-text-property (line-beginning-position) 'decknix-layout-expand-key))
+        (cl-letf (((symbol-function 'decknix--layout-save-state) #'ignore))
+          (decknix-layout-toggle-expand))
+        (should (decknix--layout-collapsed-p "team:*Claude: coordinator/hx/us*"))))))
+
+(ert-deftest decknix-layout-render--several-workspaces-get-a-heading-each ()
+  (decknix-lr-test--with-buffers '("*Claude: a*" "*Claude: b*")
+    (let* ((decknix--layout-expanded (make-hash-table :test 'equal))
+           (out (decknix-lr-test--render-wip
+                 '(("*Claude: a*" nil nil "ready" "/c/org/" nil)
+                   ("*Claude: b*" nil nil "asking" "/t/tools/" nil)))))
+      (should (< (string-match "▾ org (1)" out) (string-match "  a " out)
+                 (string-match "▾ tools (1)" out) (string-match "  b " out)))
+      ;; Collapsed, a workspace still lists who is blocked in it.
+      (puthash "wip-collapsed:ws:tools" t decknix--layout-expanded)
+      (let ((out (decknix-lr-test--render-wip
+                  '(("*Claude: a*" nil nil "ready" "/c/org/" nil)
+                    ("*Claude: b*" nil nil "asking" "/t/tools/" nil)))))
+        (should (string-match-p "▸ tools (1)" out))
+        (should (string-match-p "b +asking" out))))))
+
+(ert-deftest decknix-layout-render--the-review-toggle-lists-review-sessions-last ()
+  (decknix-lr-test--with-team
+    (let* ((decknix-sidebar-layout-wip-show-reviews t)
+           (out (decknix-lr-test--render-wip decknix-lr-test--team)))
+      (should (< (string-match "solo" out) (string-match "reviews (1)" out)
+                 (string-match "pr-widget-1" out)))
+      ;; The heading still counts my own sessions.
+      (should (string-match-p "WIP (4" out)))))
+
 ;; --- what each session is asking --------------------------------------
 
 (ert-deftest decknix-layout-render--a-blocked-session-shows-what-it-asks ()

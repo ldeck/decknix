@@ -1041,6 +1041,183 @@ reader has a decision to make and something to lose by not making it."
   "Return the SESSIONS whose review PRs include KEY."
   (seq-filter (lambda (s) (member key (decknix--layout-session-prs s))) sessions))
 
+;; --- WIP grouping: workspaces, coordinators and their lanes -----------
+;;
+;; WIP was one flat list.  With a coordinator driving six lanes beside a
+;; handful of unrelated sessions, nothing said which lane belonged to
+;; which coordinator, or which sessions were part of a team at all.
+
+(defvar decknix-sidebar-layout-coordinator-tags '("coordinator")
+  "Session tags marking a coordinator, a session that drives lane sessions.
+The same tag the dispatcher's interrupt policy trusts by default
+\(`decknix-agent-dispatch-coordinator-tags').")
+
+(defvar decknix-sidebar-layout-lane-tag-regexp "\\`lane-[0-9]+\\'"
+  "Regexp matching the session tag that marks a lane, e.g. `lane-03'.")
+
+(defun decknix--layout-coordinator-p (session)
+  "Return non-nil when SESSION carries a coordinator tag."
+  (and (seq-intersection (nth 1 session) decknix-sidebar-layout-coordinator-tags) t))
+
+(defun decknix--layout-lane-tag-p (tag)
+  "Return non-nil when TAG marks a lane."
+  (and (stringp tag) (string-match-p decknix-sidebar-layout-lane-tag-regexp tag)))
+
+(defun decknix--layout-lane-p (session)
+  "Return non-nil when SESSION carries a lane tag."
+  (and (seq-some #'decknix--layout-lane-tag-p (nth 1 session)) t))
+
+(defun decknix--layout-scope-tags (session)
+  "Return SESSION's tags other than its coordinator and lane tags."
+  (seq-remove (lambda (tag) (or (decknix--layout-lane-tag-p tag)
+                                (member tag decknix-sidebar-layout-coordinator-tags)))
+              (nth 1 session)))
+
+(defun decknix--layout-guess-coordinator (lane sessions)
+  "Return the name of the coordinator in SESSIONS that LANE most likely
+answers to, or nil.
+
+Only for a lane with no delivery on record.  The candidates are the
+coordinators in LANE's workspace sharing a scope tag with it (`us' in
+`coordinator/hx/us' and `us/lane-01'); the one sharing most wins, and a
+tie names nobody, since a guess between equals is a coin toss."
+  (when (decknix--layout-lane-p lane)
+    (let* ((scope (decknix--layout-scope-tags lane))
+           (scored
+            (delq nil
+                  (mapcar (lambda (c)
+                            (let ((n (length (seq-intersection
+                                              scope (decknix--layout-scope-tags c)))))
+                              (and (> n 0) (cons (nth 0 c) n))))
+                          (seq-filter
+                           (lambda (c) (and (decknix--layout-coordinator-p c)
+                                            (not (eq c lane))
+                                            (equal (decknix--layout-session-workspace c)
+                                                   (decknix--layout-session-workspace lane))))
+                           sessions))))
+           (best (apply #'max 0 (mapcar #'cdr scored)))
+           (top (seq-filter (lambda (c) (= (cdr c) best)) scored)))
+      (and (= 1 (length top)) (car (car top))))))
+
+(defun decknix--layout-controllers (sessions sender-of)
+  "Return ((CHILD PARENT . PROVENANCE) ...) for SESSIONS, by buffer name.
+
+A session is under a coordinator's control when that coordinator sent it
+the last message the dispatcher delivered to it: SENDER-OF maps a
+session name to the name of that sender, or nil.  That is `observed'.
+Failing a delivery -- the record is per Emacs run -- a lane is placed by
+`decknix--layout-guess-coordinator', which is `inferred'.
+
+A coordinator is never a child, and a lane never a parent, so a lane
+replying to its coordinator cannot invert the tree.  Chains collapse to
+their root, so nesting is one level deep; a cycle places nobody."
+  (let* ((by-name (make-hash-table :test 'equal))
+         (raw nil))
+    (dolist (s sessions) (puthash (nth 0 s) s by-name))
+    (dolist (s sessions)
+      (unless (decknix--layout-coordinator-p s)
+        (let* ((name (nth 0 s))
+               (sender (funcall sender-of name))
+               (parent (and sender (not (equal sender name)) (gethash sender by-name))))
+          (cond
+           ((and parent (not (decknix--layout-lane-p parent)))
+            (push (cons name (cons sender 'observed)) raw))
+           ((let ((guess (decknix--layout-guess-coordinator s sessions)))
+              (and guess (push (cons name (cons guess 'inferred)) raw))))))))
+    (delq nil
+          (mapcar (lambda (link)
+                    (let ((root (cadr link)) (seen (list (car link))) (cycle nil))
+                      (while (and (not cycle) (assoc root raw))
+                        (if (member root seen)
+                            (setq cycle t)
+                          (push root seen)
+                          (setq root (cadr (assoc root raw)))))
+                      (and (not cycle) (not (equal root (car link)))
+                           (cons (car link) (cons root (cddr link))))))
+                  (reverse raw)))))
+
+(defun decknix--layout-workspace-label (dir workspaces)
+  "Return the label of workspace directory DIR, or nil when DIR is nil.
+
+The name of the `decknix-workspaces' entry (the `decknix.workspaces'
+option) whose path holds DIR, the longest such path winning; otherwise
+DIR's basename.  WORKSPACES is that alist, (NAME :path PATH ...)."
+  (when (and (stringp dir) (not (string-empty-p dir)))
+    (let* ((d (file-name-as-directory (expand-file-name dir)))
+           (best nil) (best-len -1))
+      (dolist (w workspaces)
+        (let ((path (plist-get (cdr w) :path)))
+          (when (stringp path)
+            (let ((p (file-name-as-directory (expand-file-name path))))
+              (when (and (string-prefix-p p d) (> (length p) best-len))
+                (setq best (car w) best-len (length p)))))))
+      (or best
+          (let ((base (file-name-nondirectory (directory-file-name d))))
+            (if (string-empty-p base) d base))))))
+
+(defun decknix--layout-wip-plan (rows controllers label-of)
+  "Return WIP ROWS grouped by workspace, then team, then alone, then review.
+
+ROWS are WIP tree rows (:session S ...) in display order.  CONTROLLERS is
+from `decknix--layout-controllers'.  LABEL-OF maps a session to its
+workspace label, or nil.
+
+Each workspace is (:label L :teams TEAMS :individuals ROWS :reviews ROWS),
+labels sorted with nil last.  A team is (:row ROW :lanes ((ROW . PROV) ...))
+for each coordinator, and each session with lanes under it.  A lane
+sits in its coordinator's workspace, wherever it runs.  Every group keeps
+the order ROWS came in."
+  (let* ((by-name (make-hash-table :test 'equal))
+         (parents (delete-dups (mapcar #'cadr controllers)))
+         (workspaces nil))
+    (dolist (r rows) (puthash (nth 0 (plist-get r :session)) r by-name))
+    (cl-flet ((ws (label)
+                (or (assoc label workspaces)
+                    (car (push (list label nil nil nil) workspaces)))))
+      (dolist (r rows)
+        (let* ((s (plist-get r :session))
+               (name (nth 0 s))
+               (link (assoc name controllers)))
+          (unless (and link (gethash (cadr link) by-name))
+            (let ((cell (ws (funcall label-of s))))
+              (cond
+               ((or (decknix--layout-coordinator-p s) (member name parents))
+                (setf (nth 1 cell)
+                      (append (nth 1 cell)
+                              (list (list :row r
+                                          :lanes (delq nil
+                                                       (mapcar (lambda (lr)
+                                                                 (let ((l (assoc (nth 0 (plist-get lr :session))
+                                                                                 controllers)))
+                                                                   (and l (equal (cadr l) name)
+                                                                        (cons lr (cddr l)))))
+                                                               rows)))))))
+               ((decknix--layout-review-session-p s)
+                (setf (nth 3 cell) (append (nth 3 cell) (list r))))
+               (t (setf (nth 2 cell) (append (nth 2 cell) (list r))))))))))
+    (mapcar (lambda (cell)
+              (list :label (nth 0 cell) :teams (nth 1 cell)
+                    :individuals (nth 2 cell) :reviews (nth 3 cell)))
+            (sort (nreverse workspaces)
+                  (lambda (a b)
+                    (cond ((null (car a)) nil)
+                          ((null (car b)) t)
+                          (t (string< (car a) (car b)))))))))
+
+(defun decknix--layout-plan-rows (plan)
+  "Return every row of PLAN in render order."
+  (apply #'append
+         (mapcar (lambda (w)
+                   (append
+                    (apply #'append
+                           (mapcar (lambda (team)
+                                     (cons (plist-get team :row)
+                                           (mapcar #'car (plist-get team :lanes))))
+                                   (plist-get w :teams)))
+                    (plist-get w :individuals)
+                    (plist-get w :reviews)))
+                 plan)))
+
 ;; --- state indicators -------------------------------------------------
 ;;
 ;; The refactor lost these.  Session rows rendered in `default' and nested

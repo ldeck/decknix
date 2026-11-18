@@ -1591,5 +1591,108 @@ repos holding eight bot PRs awaiting review looked like nothing at all."
     (should (equal (decknix--layout-place-attention groups (list a b c))
                    (list (list "widget" a) (list "other" b))))))
 
+;; --- WIP grouping ------------------------------------------------------
+
+(defconst decknix-layout-test--team
+  '(("*C: coordinator/hx/us*" ("coordinator" "hx" "us") nil "asking" "/c/org/")
+    ("*C: us/lane-01*" ("us" "lane-01") nil "working" "/c/org/")
+    ("*C: lane-03/us*" ("lane-03" "us") nil "ready" "/c/org/")
+    ("*C: decknix/org*" ("decknix" "org") nil "ready" "/c/org/")
+    ("*C: pr-widget-1*" ("auto" "#1" "widget" "review") ("widget#1") "ready" "/c/org/"))
+  "A coordinator, two lanes, an individual session and a review session.")
+
+(defun decknix-layout-test--senders (alist)
+  "Return a sender function answering from ALIST of (NAME . SENDER)."
+  (lambda (name) (cdr (assoc name alist))))
+
+(ert-deftest decknix-layout--the-last-sender-controls-a-lane ()
+  (should (equal (decknix--layout-controllers
+                  decknix-layout-test--team
+                  (decknix-layout-test--senders
+                   '(("*C: us/lane-01*" . "*C: coordinator/hx/us*")
+                     ("*C: lane-03/us*" . "*C: coordinator/hx/us*"))))
+                 '(("*C: us/lane-01*" "*C: coordinator/hx/us*" . observed)
+                   ("*C: lane-03/us*" "*C: coordinator/hx/us*" . observed)))))
+
+(ert-deftest decknix-layout--with-no-delivery-a-lane-is-placed-by-its-tags ()
+  (should (equal (decknix--layout-controllers decknix-layout-test--team #'ignore)
+                 '(("*C: us/lane-01*" "*C: coordinator/hx/us*" . inferred)
+                   ("*C: lane-03/us*" "*C: coordinator/hx/us*" . inferred)))))
+
+(ert-deftest decknix-layout--a-tie-between-coordinators-places-nobody ()
+  (let ((sessions '(("a" ("coordinator" "us") nil "ready" "/c/")
+                    ("b" ("coordinator" "us") nil "ready" "/c/")
+                    ("l" ("us" "lane-01") nil "ready" "/c/"))))
+    (should-not (decknix--layout-controllers sessions #'ignore))))
+
+(ert-deftest decknix-layout--a-guess-stays-inside-the-workspace ()
+  (let ((sessions '(("a" ("coordinator" "us") nil "ready" "/c/one/")
+                    ("l" ("us" "lane-01") nil "ready" "/c/two/"))))
+    (should-not (decknix--layout-controllers sessions #'ignore))))
+
+(ert-deftest decknix-layout--a-coordinator-is-never-a-child-nor-a-lane-a-parent ()
+  "A lane replying to its coordinator must not invert the tree."
+  (should (equal (decknix--layout-controllers
+                  decknix-layout-test--team
+                  (decknix-layout-test--senders
+                   '(("*C: coordinator/hx/us*" . "*C: us/lane-01*")
+                     ("*C: decknix/org*" . "*C: lane-03/us*"))))
+                 '(("*C: us/lane-01*" "*C: coordinator/hx/us*" . inferred)
+                   ("*C: lane-03/us*" "*C: coordinator/hx/us*" . inferred)))))
+
+(ert-deftest decknix-layout--chains-collapse-to-their-root-and-cycles-place-nobody ()
+  (let ((sessions '(("a" nil nil "ready") ("b" nil nil "ready") ("c" nil nil "ready"))))
+    (should (equal (decknix--layout-controllers
+                    sessions (decknix-layout-test--senders '(("b" . "a") ("c" . "b"))))
+                   '(("b" "a" . observed) ("c" "a" . observed))))
+    (should-not (decknix--layout-controllers
+                 sessions (decknix-layout-test--senders '(("a" . "b") ("b" . "a")))))))
+
+(ert-deftest decknix-layout--a-workspace-is-named-by-the-workspaces-map ()
+  (let ((ws '(("acme" :path "/c/acme") ("acme-infra" :path "/c/acme/infra"))))
+    (should (equal "acme" (decknix--layout-workspace-label "/c/acme/" ws)))
+    (should (equal "acme-infra" (decknix--layout-workspace-label "/c/acme/infra/x" ws)))
+    (should (equal "decknix" (decknix--layout-workspace-label "/t/decknix/" ws)))
+    (should-not (decknix--layout-workspace-label nil ws))))
+
+(defun decknix-layout-test--rows (sessions)
+  "Return WIP tree rows for SESSIONS, carrying nothing but the session."
+  (mapcar (lambda (s) (list :session s)) sessions))
+
+(ert-deftest decknix-layout--wip-plan-is-teams-then-individuals-then-reviews ()
+  (let* ((rows (decknix-layout-test--rows decknix-layout-test--team))
+         (plan (decknix--layout-wip-plan
+                rows (decknix--layout-controllers decknix-layout-test--team #'ignore)
+                (lambda (_s) "org")))
+         (ws (car plan))
+         (name (lambda (r) (nth 0 (plist-get r :session)))))
+    (should (= 1 (length plan)))
+    (should (equal "org" (plist-get ws :label)))
+    (let ((team (car (plist-get ws :teams))))
+      (should (equal "*C: coordinator/hx/us*" (funcall name (plist-get team :row))))
+      (should (equal '("*C: us/lane-01*" "*C: lane-03/us*")
+                     (mapcar (lambda (l) (funcall name (car l))) (plist-get team :lanes))))
+      (should (equal '(inferred inferred) (mapcar #'cdr (plist-get team :lanes)))))
+    (should (equal '("*C: decknix/org*") (mapcar name (plist-get ws :individuals))))
+    (should (equal '("*C: pr-widget-1*") (mapcar name (plist-get ws :reviews))))
+    (should (equal (mapcar name (decknix--layout-plan-rows plan))
+                   '("*C: coordinator/hx/us*" "*C: us/lane-01*" "*C: lane-03/us*"
+                     "*C: decknix/org*" "*C: pr-widget-1*")))))
+
+(ert-deftest decknix-layout--wip-plan-sorts-workspaces-with-none-last ()
+  (let* ((sessions '(("x" nil nil "ready" nil) ("t" nil nil "ready" "/t/tools/")
+                     ("o" nil nil "ready" "/c/org/")))
+         (plan (decknix--layout-wip-plan
+                (decknix-layout-test--rows sessions) nil
+                (lambda (s) (decknix--layout-workspace-label (nth 4 s) nil)))))
+    (should (equal '("org" "tools" nil) (mapcar (lambda (w) (plist-get w :label)) plan)))))
+
+(ert-deftest decknix-layout--a-lane-whose-coordinator-is-not-shown-stands-alone ()
+  (let* ((lane '("l" ("us" "lane-01") nil "ready" "/c/"))
+         (plan (decknix--layout-wip-plan
+                (decknix-layout-test--rows (list lane))
+                '(("l" "gone" . observed)) (lambda (_s) "c"))))
+    (should (equal (list (list :session lane)) (plist-get (car plan) :individuals)))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here
