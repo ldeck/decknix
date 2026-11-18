@@ -433,7 +433,10 @@ decknix session gc --dry-run
 
 Keeps the primary checkout of every clone in your workspaces fresh: fetches
 and fast-forwards each repo's default branch, never touching dirty trees or a
-checked-out feature branch. Workspaces come from `--workspace [ORG=]PATH`,
+checked-out feature branch. Only tracked changes make a tree dirty: untracked
+files do not block the fast-forward, and when an incoming commit would
+overwrite one, git refuses and sync reports the repo as skipped, naming the
+file. Workspaces come from `--workspace [ORG=]PATH`,
 then `[repos].workspaces` in `settings.toml`, then the Nix option
 `decknix.cli.repos.workspaces` (an org config can declare its workspace
 there), and failing all three, `~/Code`. The `decknix-repo-sync` launchd

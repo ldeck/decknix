@@ -18,7 +18,7 @@ nix-darwin prefixes its launchd labels with `org.nixos.`, so `launchctl print gu
 
 ## Repo sync
 
-Keeps the primary checkout of every clone in your workspaces fresh by running `decknix repos sync` (see [Core Commands](../cli/core-commands.md#decknix-repos)). It fetches and fast-forwards each repo's default branch and never touches a dirty tree or a checked-out feature branch.
+Keeps the primary checkout of every clone in your workspaces fresh by running `decknix repos sync` (see [Core Commands](../cli/core-commands.md#decknix-repos)). It fetches and fast-forwards each repo's default branch and never touches a dirty tree (tracked changes; untracked files do not block it) or a checked-out feature branch. If an incoming commit would overwrite an untracked file, the repo is skipped and the file named rather than overwritten.
 
 ```nix
 services.decknix.repoSync = {

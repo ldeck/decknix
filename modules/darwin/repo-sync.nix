@@ -8,9 +8,11 @@ let
   # Runs `decknix repos sync`: for every primary clone under the configured
   # workspace roots ([repos].workspaces in settings.toml, one per GitHub org),
   # fetch origin and fast-forward the default branch — WITHOUT ever touching a
-  # dirty tree or the checked-out feature branch. Keeping origin/main + local
-  # main fresh across all of an org's repos materially helps AI agents (grep,
-  # rebase targets, up-to-date context).
+  # dirty tree or the checked-out feature branch. Dirty means tracked changes:
+  # untracked files do not block the fast-forward, and if an incoming commit
+  # would overwrite one, git refuses and the repo is reported as skipped.
+  # Keeping origin/main + local main fresh across all of an org's repos
+  # materially helps AI agents (grep, rebase targets, up-to-date context).
   #
   # git + ssh must be on PATH; the CLI itself forces GIT_TERMINAL_PROMPT=0 and a
   # batch-mode GIT_SSH_COMMAND per invocation, so the job never blocks on a

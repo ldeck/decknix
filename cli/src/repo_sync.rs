@@ -15,6 +15,13 @@
 //!   * Dirty / ahead / diverged / detached      -> fetch only. Never force,
 //!     never checkout, never touch a dirty tree.
 //!
+//! "Dirty" means tracked changes only (staged or unstaged edits, deletions).
+//! Untracked files do not block a fast-forward: scratch files and notes left
+//! in a primary checkout kept repos tens of commits behind for no benefit.
+//! When an incoming commit adds a path that exists locally as an untracked
+//! file, `git merge --ff-only` refuses rather than overwrite it, and that
+//! refusal is reported as a skip naming the path, never forced.
+//!
 //! This is what the `decknix-repo-sync` launchd agent runs on a timer.
 
 use anyhow::{anyhow, Result};
@@ -334,7 +341,7 @@ enum Plan {
     FfRef(u32),
     /// Refs refreshed; nothing to fast-forward (up to date, ahead, or no local default).
     FetchedOnly,
-    /// Would fast-forward but the checkout is dirty.
+    /// Would fast-forward but the checkout has tracked changes.
     SkipDirty,
     /// Local default has commits origin lacks and is behind -> diverged, can't ff.
     SkipDiverged,
@@ -343,7 +350,8 @@ enum Plan {
 /// Decide what to do given the post-fetch state.
 ///   * `has_local_default` — a local `refs/heads/<def>` exists.
 ///   * `on_default` — the checked-out branch IS the default branch.
-///   * `dirty` — working tree has uncommitted changes.
+///   * `dirty` — tracked files have uncommitted changes (untracked files
+///     do not count; see `has_tracked_changes`).
 ///   * `ahead` — commits local default has that origin default lacks.
 ///   * `behind` — commits origin default has that local default lacks.
 fn decide(has_local_default: bool, on_default: bool, dirty: bool, ahead: u32, behind: u32) -> Plan {
@@ -363,6 +371,67 @@ fn decide(has_local_default: bool, on_default: bool, dirty: bool, ahead: u32, be
     } else {
         Plan::FfRef(behind)
     }
+}
+
+/// Does `git status --porcelain` output report a change to a TRACKED file?
+/// Pure.
+///
+/// Untracked (`??`) and ignored (`!!`) entries are skipped even though the
+/// caller already asks git to omit them, so a `status.showUntrackedFiles`
+/// setting or a future caller passing plain `--porcelain` cannot quietly make
+/// untracked files block the fast-forward again.
+fn has_tracked_changes(porcelain: &str) -> bool {
+    porcelain
+        .lines()
+        .any(|l| !l.trim().is_empty() && !l.starts_with("??") && !l.starts_with("!!"))
+}
+
+/// Tracked-only dirtiness of REPO. An unreadable status counts as dirty, so a
+/// probe failure refuses the fast-forward rather than guessing.
+fn tracked_dirty(repo: &Path) -> bool {
+    git(repo, &["status", "--porcelain", "--untracked-files=no"])
+        .map(|s| has_tracked_changes(&s))
+        .unwrap_or(true)
+}
+
+/// Paths `git merge` refused to overwrite because they exist locally as
+/// untracked files, or None when MESSAGE is some other failure. Pure.
+///
+/// git lists them tab-indented between its "would be overwritten by merge:"
+/// header and "Please move or remove them". Matched on the message because
+/// git reports it as a generic exit 1.
+fn untracked_overwrite_paths(message: &str) -> Option<Vec<String>> {
+    let (_, rest) =
+        message.split_once("untracked working tree files would be overwritten")?;
+    Some(
+        rest.lines()
+            .skip(1)
+            .map(str::trim)
+            .take_while(|l| !l.is_empty() && !l.starts_with("Please move") && !l.starts_with("Aborting"))
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// How many blocking paths the skip detail names before summarising the rest.
+const UNTRACKED_PATHS_SHOWN: usize = 3;
+
+/// The sidebar-facing phrase for a fast-forward blocked by untracked files.
+/// Pure. Keeps the `behind +N` the sidebar parses for its backlog count.
+fn untracked_skip_detail(def: &str, behind: u32, paths: &[String]) -> String {
+    let mut named = paths
+        .iter()
+        .take(UNTRACKED_PATHS_SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if paths.len() > UNTRACKED_PATHS_SHOWN {
+        named.push_str(&format!(" (+{} more)", paths.len() - UNTRACKED_PATHS_SHOWN));
+    }
+    if named.is_empty() {
+        named = "?".into();
+    }
+    format!("fetched; {def} behind +{behind} but an untracked file would be overwritten: {named}")
 }
 
 #[derive(Debug, Clone)]
@@ -453,9 +522,7 @@ fn sync_one(repo: &Repo, dry_run: bool) -> SyncResult {
 
     let current = git(&repo.path, &["symbolic-ref", "-q", "--short", "HEAD"]).ok();
     let on_default = current.as_deref() == Some(def.as_str());
-    let dirty = git(&repo.path, &["status", "--porcelain"])
-        .map(|s| !s.is_empty())
-        .unwrap_or(true);
+    let dirty = tracked_dirty(&repo.path);
 
     let (ahead, behind) = if has_local {
         git(
@@ -488,6 +555,11 @@ fn sync_one(repo: &Repo, dry_run: bool) -> SyncResult {
                 // "3 errors" and nothing distinguished "needs a click" from
                 // "needs a human".
                 let msg = e.to_string();
+                if let Some(paths) = untracked_overwrite_paths(&msg) {
+                    r.outcome = "skipped".into();
+                    r.detail = untracked_skip_detail(&def, n, &paths);
+                    return r;
+                }
                 if index_lock_failure(&msg) {
                     r.outcome = "error-lock".into();
                     r.detail = format!(
@@ -864,8 +936,8 @@ pub fn run(action: RepoAction) -> Result<()> {
                 for r in &repos {
                     let branch = git(&r.path, &["symbolic-ref", "-q", "--short", "HEAD"])
                         .unwrap_or_else(|_| "(detached)".into());
-                    let dirty = git(&r.path, &["status", "--porcelain"])
-                        .map(|s| !s.is_empty())
+                    let dirty = git(&r.path, &["status", "--porcelain", "--untracked-files=no"])
+                        .map(|s| has_tracked_changes(&s))
                         .unwrap_or(false);
                     println!(
                         "  {:<26} {}{}  [{}]",
@@ -975,6 +1047,130 @@ mod tests {
         assert_eq!(decide(true, false, false, 1, 5), Plan::SkipDiverged);
         // Local ahead only (behind 0) -> nothing to pull.
         assert_eq!(decide(true, true, false, 4, 0), Plan::FetchedOnly);
+    }
+
+    #[test]
+    fn untracked_only_status_is_not_dirty() {
+        assert!(!has_tracked_changes(""));
+        assert!(!has_tracked_changes("?? notes.md\n?? scratch/\n"));
+        assert!(!has_tracked_changes("!! target/\n"));
+    }
+
+    #[test]
+    fn tracked_changes_are_dirty_even_beside_untracked_files() {
+        assert!(has_tracked_changes(" M src/lib.rs"));
+        assert!(has_tracked_changes("M  staged.rs"));
+        assert!(has_tracked_changes(" D gone.rs"));
+        assert!(has_tracked_changes("?? notes.md\n M src/lib.rs"));
+    }
+
+    #[test]
+    fn decide_fast_forwards_an_untracked_only_tree() {
+        let dirty = has_tracked_changes("?? notes.md");
+        assert_eq!(decide(true, true, dirty, 0, 7), Plan::FfCheckout(7));
+        let dirty = has_tracked_changes(" M src/lib.rs\n?? notes.md");
+        assert_eq!(decide(true, true, dirty, 0, 7), Plan::SkipDirty);
+    }
+
+    #[test]
+    fn untracked_overwrite_paths_reads_gits_refusal() {
+        let msg = "git merge --ff-only refs/remotes/origin/main: error: The following \
+untracked working tree files would be overwritten by merge:\n\tsub/new.txt\n\ttop.txt\n\
+Please move or remove them before you merge.\nAborting";
+        assert_eq!(
+            untracked_overwrite_paths(msg),
+            Some(vec!["sub/new.txt".to_string(), "top.txt".to_string()])
+        );
+    }
+
+    #[test]
+    fn untracked_overwrite_paths_ignores_other_merge_failures() {
+        assert_eq!(untracked_overwrite_paths("error: Your local changes would be overwritten"), None);
+        assert_eq!(
+            untracked_overwrite_paths("error: Unable to create '/w/x/.git/index.lock': File exists."),
+            None
+        );
+    }
+
+    #[test]
+    fn untracked_skip_detail_keeps_the_behind_count_and_names_paths() {
+        let d = untracked_skip_detail("main", 4, &["a.txt".to_string()]);
+        assert_eq!(d, "fetched; main behind +4 but an untracked file would be overwritten: a.txt");
+        let many: Vec<String> = (1..=5).map(|i| format!("f{i}")).collect();
+        let d = untracked_skip_detail("main", 4, &many);
+        assert!(d.ends_with(": f1, f2, f3 (+2 more)"), "{d}");
+    }
+
+    fn git_ok(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.email=test@example.com", "-c", "user.name=Test"])
+            .args(["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"])
+            .args(args)
+            .output()
+            .expect("spawn git");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// An origin, a clone checked out on main, and a second clone that has
+    /// pushed one commit adding `incoming.txt`, so the first is behind +1.
+    fn behind_by_one() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        git_ok(root, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
+        git_ok(root, &["clone", "-q", "origin.git", "local"]);
+        let local = root.join("local");
+        git_ok(&local, &["checkout", "-q", "-b", "main"]);
+        std::fs::write(local.join("tracked.txt"), "v1\n").unwrap();
+        git_ok(&local, &["add", "tracked.txt"]);
+        git_ok(&local, &["commit", "-q", "-m", "init"]);
+        git_ok(&local, &["push", "-q", "-u", "origin", "main"]);
+        git_ok(root, &["clone", "-q", "origin.git", "other"]);
+        let other = root.join("other");
+        std::fs::write(other.join("incoming.txt"), "upstream\n").unwrap();
+        git_ok(&other, &["add", "incoming.txt"]);
+        git_ok(&other, &["commit", "-q", "-m", "add incoming"]);
+        git_ok(&other, &["push", "-q", "origin", "main"]);
+        (tmp, local)
+    }
+
+    fn sync(path: &Path) -> SyncResult {
+        sync_one(&Repo { org: "acme".into(), path: path.to_path_buf() }, false)
+    }
+
+    #[test]
+    fn sync_fast_forwards_past_unrelated_untracked_files() {
+        let (_tmp, local) = behind_by_one();
+        std::fs::write(local.join("notes.md"), "mine\n").unwrap();
+        let r = sync(&local);
+        assert_eq!(r.outcome, "updated", "{}", r.detail);
+        assert!(local.join("incoming.txt").exists());
+        assert_eq!(std::fs::read_to_string(local.join("notes.md")).unwrap(), "mine\n");
+    }
+
+    #[test]
+    fn sync_skips_rather_than_overwrite_a_colliding_untracked_file() {
+        let (_tmp, local) = behind_by_one();
+        std::fs::write(local.join("incoming.txt"), "mine\n").unwrap();
+        let r = sync(&local);
+        assert_eq!(r.outcome, "skipped", "{}", r.detail);
+        assert!(!r.error);
+        assert_eq!(
+            r.detail,
+            "fetched; main behind +1 but an untracked file would be overwritten: incoming.txt"
+        );
+        assert_eq!(std::fs::read_to_string(local.join("incoming.txt")).unwrap(), "mine\n");
+    }
+
+    #[test]
+    fn sync_still_skips_tracked_modifications() {
+        let (_tmp, local) = behind_by_one();
+        std::fs::write(local.join("tracked.txt"), "edited\n").unwrap();
+        let r = sync(&local);
+        assert_eq!(r.outcome, "skipped");
+        assert_eq!(r.detail, "fetched; main behind +1 but working tree dirty");
+        assert!(!local.join("incoming.txt").exists());
     }
 
     #[test]
