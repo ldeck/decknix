@@ -457,6 +457,21 @@ to whatever directory happened to be current."
   (should-not (decknix-session-assoc-input-paths
                '((command . "gh pr view https://github.com/o/r/pull/1051")))))
 
+(ert-deftest dk-assoc--a-path-ends-at-a-newline-whatever-the-syntax-table ()
+  "`[:space:]' follows the current syntax table, where a newline can be a
+comment ender rather than whitespace; the path then ran on to the next
+line and resolved to a junk root."
+  (with-syntax-table emacs-lisp-mode-syntax-table
+    (should (equal '("/Users/me/w/a" "/Users/me/w/b")
+                   (decknix-session-assoc-input-paths
+                    '((command . "cd /Users/me/w/a\n/Users/me/w/b")))))))
+
+(ert-deftest dk-assoc--every-whitespace-character-ends-a-path ()
+  (with-syntax-table emacs-lisp-mode-syntax-table
+    (should (equal '("/Users/me/w/a" "/Users/me/w/b" "/Users/me/w/c" "/Users/me/w/d")
+                   (decknix-session-assoc-input-paths
+                    '((command . "ls /Users/me/w/a\t/Users/me/w/b\r\n/Users/me/w/c\v/Users/me/w/d")))))))
+
 (ert-deftest dk-assoc--locations-and-input-are-combined-once ()
   (should (equal '("/Users/me/w/a.kt")
                  (decknix-session-assoc-paths-of

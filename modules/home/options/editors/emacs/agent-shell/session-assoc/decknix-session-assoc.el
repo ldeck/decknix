@@ -106,8 +106,11 @@ gone.  Accepted only when the repo IS a known root."
         dir))))
 
 (defconst decknix-session-assoc-path-re
-  "\\(?:^\\|[^[:alnum:]_.~/-]\\)\\(/\\(?:Users\\|home\\|private\\|tmp\\|var\\|opt\\)/[^][:space:]\"'`;|&<>(){}*?$,]+\\)"
-  "Matches an absolute path inside a tool call's input text.")
+  "\\(?:^\\|[^[:alnum:]_.~/-]\\)\\(/\\(?:Users\\|home\\|private\\|tmp\\|var\\|opt\\)/[^] \t\n\r\f\v\"'`;|&<>(){}*?$,]+\\)"
+  "Matches an absolute path inside a tool call's input text.
+Whitespace is spelled out rather than written `[:space:]', which follows
+the current buffer's syntax table: where a newline is a comment ender,
+not whitespace, a path ran on across lines into a junk root.")
 
 (defun decknix-session-assoc-input-paths (input)
   "Return absolute paths named anywhere in a tool call's INPUT.
