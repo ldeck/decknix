@@ -2424,10 +2424,29 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
     let merged_prs: Vec<GhMyPr> = serde_json::from_str(&merged_output)
         .unwrap_or_default();
 
+    // 3. PRs assigned to me that someone else authored: a bot's PR I am
+    // driving (a library bump, a lock sync, Dependabot) has no author I can
+    // match, so assigning myself is how it reaches WIP.  Open, and merged
+    // within the same retention window so it stays until it ships.  A
+    // failure degrades to the authored PRs alone.
+    let mut assigned_prs: Vec<GhMyPr> = Vec::new();
+    for state_args in [
+        vec!["--state=open".to_string()],
+        vec!["--state=merged".to_string(), format!("--merged=>{cutoff}")],
+    ] {
+        let mut args = vec!["search", "prs", "--assignee=@me", "--archived=false"];
+        args.extend(state_args.iter().map(String::as_str));
+        args.extend(["--json", json_fields, "--limit", "30"]);
+        match gh_json(&args).await {
+            Ok(out) => assigned_prs.extend(serde_json::from_str::<Vec<GhMyPr>>(&out).unwrap_or_default()),
+            Err(e) => eprintln!("decknix-hub: assignee query failed, WIP may miss assigned PRs: {e}"),
+        }
+    }
+
     // Combine, deduplicating by (repo, number)
     let mut seen = std::collections::HashSet::new();
     let mut all_prs: Vec<GhMyPr> = Vec::new();
-    for pr in open_prs.into_iter().chain(merged_prs.into_iter()) {
+    for pr in open_prs.into_iter().chain(merged_prs).chain(assigned_prs) {
         let key = (
             pr.repository.as_ref().map(|r| r.name_with_owner.clone()).unwrap_or_default(),
             pr.number,
