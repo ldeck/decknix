@@ -81,3 +81,28 @@ ASCII fallback (`β`/`β`/`i`/`i`). The Live section count badges (📥 📤) ar
 always emoji and are not affected by the toggle. The shape-family glyphs and
 the columnar `⟳ ✓ ✗` always stay ASCII — Emacs faces cannot tint colour-emoji,
 so the colour contract above depends on them being plain glyphs.
+
+## Sections from other packages
+
+An org layer or personal config can put its own section above everything
+else, including the board-focus banner and Needs you, by adding a function to
+`decknix-sidebar-top-section-functions`. Each function is called with the
+current line number and the usable sidebar width, inserts its lines at point,
+and returns the new line number:
+
+```elisp
+(defun my-top-section (line-num width)
+  (if (null my-pending-items)
+      line-num
+    (insert (propertize (format " Waiting on you (%d)" (length my-pending-items))
+                        'face 'bold)
+            "\n\n")
+    (+ 2 line-num)))
+(add-hook 'decknix-sidebar-top-section-functions #'my-top-section)
+```
+
+The hook runs on every paint, so render from data already in memory and fetch
+it elsewhere, asynchronously. A function that signals, or returns something
+other than a line number, is skipped for that paint: its partial output is
+removed and the error is logged once, so a broken section never breaks the
+sidebar.

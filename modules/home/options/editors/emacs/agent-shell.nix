@@ -6839,6 +6839,7 @@ duration -- the most important number on this branch."
         (declare-function decknix--sidebar-abbreviate-workspace "decknix-sidebar-format")
         (declare-function decknix--sidebar-session-age-visible-p "decknix-sidebar-format")
         (declare-function decknix--sidebar-render-section-header "decknix-sidebar-format")
+        (declare-function decknix--sidebar-render-top-sections "decknix-sidebar-format")
         (declare-function decknix--sidebar-render-key-group "decknix-sidebar-format")
         (declare-function decknix--sidebar-render-key-group-inline "decknix-sidebar-format")
         (declare-function decknix--sidebar-render-key-groups-side-by-side "decknix-sidebar-format")
@@ -6938,6 +6939,18 @@ duration -- the most important number on this branch."
               (unless (eq buffer-undo-list t)
                 (buffer-disable-undo))
               (erase-buffer)
+
+              ;; ── Sections other packages put above everything ──
+              ;; Width from the buffer's own window for the reason given at
+              ;; `decknix--layout-sidebar-width', which may not be loaded.
+              (setq line-num
+                    (decknix--sidebar-render-top-sections
+                     line-num
+                     (max 24 (1- (let ((win (get-buffer-window (current-buffer))))
+                                   (if (window-live-p win)
+                                       (window-width win)
+                                     (window-width)))))
+                     #'decknix--sidebar-render-checkpoint))
 
               ;; ── Reviews (collapsed by repo) then WIP (my sessions) ──
               ;; Requests folds into Reviews: a PR with no session is a row

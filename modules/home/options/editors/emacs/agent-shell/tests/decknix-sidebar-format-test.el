@@ -216,5 +216,70 @@ the same height."
     (should (eq 'font-lock-keyword-face
                 (get-text-property (string-match "?" out) 'face out)))))
 
+;; -- top sections --------------------------------------------------
+
+(defmacro decknix-sidebar-format-test--with-top-sections (fns &rest body)
+  "Run BODY in a temp buffer with FNS as the only top-section functions."
+  (declare (indent 1))
+  `(let ((decknix-sidebar-top-section-functions ,fns)
+         (decknix--sidebar-top-section-logged nil))
+     (with-temp-buffer ,@body)))
+
+(ert-deftest decknix-sidebar-top-sections--none-leaves-buffer-and-line-num ()
+  (decknix-sidebar-format-test--with-top-sections nil
+    (should (= 4 (decknix--sidebar-render-top-sections 4 40)))
+    (should (equal "" (buffer-string)))))
+
+(ert-deftest decknix-sidebar-top-sections--threads-line-num-in-order-with-width ()
+  (let (widths)
+    (decknix-sidebar-format-test--with-top-sections
+        (list (lambda (n w) (push w widths) (insert "a\n") (1+ n))
+              (lambda (n w) (push w widths) (insert "b\nc\n") (+ 2 n)))
+      (should (= 3 (decknix--sidebar-render-top-sections 0 33)))
+      (should (equal "a\nb\nc\n" (buffer-string)))
+      (should (equal '(33 33) widths)))))
+
+(ert-deftest decknix-sidebar-top-sections--checkpoint-after-each-section ()
+  (let ((calls 0))
+    (decknix-sidebar-format-test--with-top-sections
+        (list (lambda (n _w) n) (lambda (n _w) n))
+      (decknix--sidebar-render-top-sections 0 40 (lambda () (cl-incf calls)))
+      (should (= 2 calls)))))
+
+(ert-deftest decknix-sidebar-top-sections--error-drops-partial-output-and-continues ()
+  "A broken section must never break the sidebar render."
+  (let ((inhibit-message t))
+    (decknix-sidebar-format-test--with-top-sections
+        (list (lambda (_n _w) (insert "half\n") (error "Boom"))
+              (lambda (n _w) (insert "ok\n") (1+ n)))
+      (insert "before\n")
+      (should (= 2 (decknix--sidebar-render-top-sections 1 40)))
+      (should (equal "before\nok\n" (buffer-string))))))
+
+(ert-deftest decknix-sidebar-top-sections--non-integer-return-is-an-error ()
+  (let ((inhibit-message t))
+    (decknix-sidebar-format-test--with-top-sections
+        (list (lambda (_n _w) (insert "x\n") nil))
+      (should (= 5 (decknix--sidebar-render-top-sections 5 40)))
+      (should (equal "" (buffer-string))))))
+
+(ert-deftest decknix-sidebar-top-sections--logs-a-repeated-error-once ()
+  (let ((logged 0)
+        (broken (lambda (_n _w) (error "Same"))))
+    (cl-letf (((symbol-function 'message)
+               (lambda (&rest _) (cl-incf logged))))
+      (decknix-sidebar-format-test--with-top-sections (list broken)
+        (decknix--sidebar-render-top-sections 0 40)
+        (decknix--sidebar-render-top-sections 0 40)
+        (should (= 1 logged))))))
+
+(ert-deftest decknix-sidebar-top-sections--abort-throw-is-not-swallowed ()
+  "The paint scheduler abandons a render by throwing; that must pass through."
+  (decknix-sidebar-format-test--with-top-sections
+      (list (lambda (_n _w) (throw 'test-abort 'thrown)))
+    (should (eq 'thrown (catch 'test-abort
+                          (decknix--sidebar-render-top-sections 0 40)
+                          'not-thrown)))))
+
 (provide 'decknix-sidebar-format-test)
 ;;; decknix-sidebar-format-test.el ends here

@@ -45,6 +45,11 @@
 ;;      wide.  Pads the shorter group with empty rows so both
 ;;      headers line up at the top.)
 ;;
+;;   `decknix--sidebar-render-top-sections'
+;;     (LINE-NUM WIDTH [CHECKPOINT] -> run the
+;;      `decknix-sidebar-top-section-functions' hook at the top of the
+;;      render, isolating each function's errors from the rest.)
+;;
 ;; The age-visible predicate references the
 ;; `decknix--sidebar-sessions-age-filter' global via dynamic
 ;; resolution (the heredoc owns the binding).
@@ -200,6 +205,53 @@ so RIGHT group starts at column COL-WIDTH."
               (pad (max 1 (- col-width l-visible))))
          (insert l (make-string pad ?\s) r "\n")))
      left-lines right-lines)))
+
+;; -- Sidebar render: top sections supplied by other packages --
+
+(defvar decknix-sidebar-top-section-functions nil
+  "Functions that render sections at the very top of the sidebar.
+Each is called as (FN LINE-NUM WIDTH) with point where its section
+belongs, inserts its lines, and returns the new LINE-NUM.  They run
+before every other section, in hook order, so a package can put
+something waiting on the user above everything else without the
+framework knowing what it is.  Render from memory only: this runs on
+every paint.  A function that signals, or returns a non-integer, is
+skipped for that paint: its partial output is removed and the error
+is logged once.")
+
+(defvar decknix--sidebar-top-section-logged nil
+  "Alist of (FN . MESSAGE): the last error logged for each top section.
+So a section that keeps failing logs once rather than on every paint.")
+
+(defun decknix--sidebar-run-top-section (fn line-num width)
+  "Call top section FN with LINE-NUM and WIDTH; return the next LINE-NUM.
+On error, delete what FN inserted, log it once, and return LINE-NUM."
+  (let ((start (point)))
+    (condition-case err
+        (let ((next (funcall fn line-num width)))
+          (unless (integerp next)
+            (error "Returned %S, not a line number" next))
+          next)
+      (error
+       ;; The render only appends, so everything from START on is FN's.
+       (delete-region start (point-max))
+       (let ((msg (error-message-string err)))
+         (unless (equal msg (alist-get fn decknix--sidebar-top-section-logged))
+           (setf (alist-get fn decknix--sidebar-top-section-logged) msg)
+           (message "Sidebar top section %S failed: %s" fn msg)))
+       line-num))))
+
+(defun decknix--sidebar-render-top-sections (line-num width &optional checkpoint)
+  "Run `decknix-sidebar-top-section-functions' at point; return LINE-NUM.
+WIDTH is the usable sidebar width.  CHECKPOINT, when non-nil, is called
+after each section so the paint can still be abandoned between them."
+  (run-hook-wrapped 'decknix-sidebar-top-section-functions
+                    (lambda (fn)
+                      (setq line-num (decknix--sidebar-run-top-section
+                                      fn line-num width))
+                      (when checkpoint (funcall checkpoint))
+                      nil))
+  line-num)
 
 (provide 'decknix-sidebar-format)
 ;;; decknix-sidebar-format.el ends here
