@@ -180,11 +180,11 @@ hackathon. In the sidebar press `F` and pick a board (`F` again clears it;
 `C-u F` switches board, or picks `none`). While focused:
 
 - the header shows `Focus: <title>` with the keys to clear or switch;
-- **Needs you**, **Reviews**, **WIP** and **Repos** list only the board's
+- **Reviews**, **WIP** and **Repos** list only the board's
   sessions and its repositories' PRs, worktrees and sync problems, by the same
   membership rule the board uses;
-- a dim `+N need you elsewhere` row counts sessions outside the focus that are
-  blocked on you, so nothing urgent is hidden silently;
+- a dim `+N need you elsewhere` row under the banner counts sessions outside
+  the focus that are blocked on you, so nothing urgent is hidden silently;
 - sub-agents and Tokens are unchanged;
 - `j` / `J` in the sidebar move between the focused sessions only.
 

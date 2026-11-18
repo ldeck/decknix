@@ -88,7 +88,7 @@ Uses `agent-shell-rename-buffer` from the core package.
 ### Attention Tracker (`C-c j`)
 
 `agent-shell-attention` places a mode-line indicator; decknix supplies its
-counts from the same states the sidebar's **Needs you** block uses:
+counts from the same states that mark a sidebar row `⚑`:
 
 ```
 AS:2/5    ← 2 sessions need you (netfail / waiting / asking), 5 need you or are working

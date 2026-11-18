@@ -85,7 +85,7 @@ so the colour contract above depends on them being plain glyphs.
 ## Sections from other packages
 
 An org layer or personal config can put its own section above everything
-else, including the board-focus banner and Needs you, by adding a function to
+else, including the board-focus banner, by adding a function to
 `decknix-sidebar-top-section-functions`. Each function is called with the
 current line number and the usable sidebar width, inserts its lines at point,
 and returns the new line number:

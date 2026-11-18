@@ -204,16 +204,35 @@ Navigate / Quick / Actions plus `T` for the toggles sub-transient.
 
 ## Sidebar Keys
 
-Every session blocked on you (`netfail`, `waiting`, `asking`) is listed
-first, under **Needs you**, in the order `j` visits them and with how long
-each has waited, whichever section it would otherwise sit in. A review
-session whose PR has since merged or closed is still listed, dimmed and
-marked `PR gone`: it is still waiting on a prompt, though the answer is
-usually to close it. Under each, one dimmed line says what it is asking: the
-permission it wants, or the question its last turn ended on, followed by the
-reply it expects (`reply 1-3, rec 1`, `reply yes/edit/cancel`, `reply
-yes/no`) when `y` or a digit can send it. The header line opens with the
-same count.
+Every session blocked on you (`netfail`, `waiting`, `asking`, or flagged)
+has exactly one row, marked `⚑`, in the section that owns it: a review
+session under its repo in **Reviews** (collapsed or not), any other session
+in **WIP**. A review session whose PR has since merged or closed is still
+listed, its repo kept visible, dimmed and marked `PR gone`: it is still
+waiting on a prompt, though the answer is usually to close it. Under each,
+one dimmed line says what it is asking: the permission it wants, or the
+question its last turn ended on, followed by the reply it expects (`reply
+1-3, rec 1`, `reply yes/edit/cancel`, `reply yes/no`) when `y` or a digit
+can send it. The header line opens with the count (`⚑2 need you`), and `j`
+visits them in order: `netfail`, `waiting`, `asking`, then the longest
+wait.
+
+**WIP** is grouped. When sessions run from more than one workspace, each
+workspace gets a collapsible heading. Within a workspace come coordinators,
+each with the lane sessions it drives nested beneath it, then individual
+sessions, then (only with the `0` toggle) review sessions. A lane belongs to
+the coordinator that sent it the last message delivered through `decknix
+session send`; with no delivery since Emacs started, a session tagged
+`lane-NN` goes under the one coordinator in its workspace that shares most
+of its other tags, and is marked `~` as a guess. `TAB` on a coordinator
+collapses its lanes (`RET` still goes to it); `TAB` or `RET` on a heading
+collapses that group. A collapsed group still lists any session in it that
+is blocked on you.
+
+The row of the session shown in the selected window is highlighted
+(`decknix-sidebar-active-session`, inheriting `hl-line`). Selecting the
+sidebar keeps the mark on the session you came from. Turn it off with
+`decknix-sidebar-highlight-active-session`.
 
 Pressed inside the Agents sidebar itself. The header line names the few
 keys that do most of the work, dropping hints from the right as the sidebar
@@ -230,7 +249,7 @@ narrows; `?` is always the last to go, and opens the full reference.
 | `o` | Restore a previous session (was `p`) |
 | `RET` | Session rows: go to the session. Reviews PR rows: go to the session covering the PR, ask which when several do, or open the PR's action menu when none does |
 | `M-RET` | Primary action: open the row's PR in the browser |
-| `TAB` | Expand or collapse the Reviews group, or held items, at point |
+| `TAB` | Expand or collapse the Reviews group, WIP group or coordinator's lanes, or held items, at point |
 | `A` | Reviews: only what wants you, or everything |
 | `K` | Sub-agents: only running and active ones (default), or finished ones too. Hidden, a session whose sub-agents have all finished takes no row |
 | `F` | Focus the sidebar on one [board](./boards.md#sidebar-focus) (a pilot, a hackathon): only its sessions, PRs, worktrees and repos. `F` again clears it, `C-u F` switches board. A dim `+N need you elsewhere` row counts what the focus hides. Survives restarts |
@@ -355,8 +374,7 @@ never posts on its own. Each head is re-reviewed at most once.
 
 `decknix-review-board-auto-rereview` (`X` cycles it) decides what an update
 does without you: `nil` shows it on the board only; `notify` (the default)
-also says so once per head and flags the session under Needs you in the
-sidebar, `C-c A j` and the mode-line count; `auto` also starts the
+also says so once per head and flags the session in the sidebar, `C-c A j` and the mode-line count; `auto` also starts the
 re-review, as `R` would. The detail comes from the hub's reviews feed, so
 nothing is fetched while the board paints.
 

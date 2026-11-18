@@ -4,6 +4,42 @@ My own open PRs, grouped by repo. See the
 [colour legend](./index.md#colour-legend-source-of-truth) and
 [shape-family](./index.md#shape-family-glyphs).
 
+## Session-first WIP: workspaces, teams, individuals
+
+With the session-first layout (the default), WIP lists my live sessions with
+their PRs and worktrees nested under each, grouped like this:
+
+```
+ WIP (6 — 1 need you)
+ ▾ my-org (5)                         ← only when there are 2+ workspaces
+ ●  coordinator/team/us   3 lanes ready
+ ~ ⚑  us/lane-01                 asking   ← lane, placed by tags (~)
+        ↳ Ship it? (yes / no)  · reply yes/no
+   ◐  us/lane-02                working   ← lane, placed by a delivery
+   ●  lane-03/us                  ready
+ ▾ individual (1)
+ ●  docs/refresh                  ready
+ ▾ tools (1)
+ ●  dotfiles                      ready
+ ◌  no session              4 unattended
+```
+
+- **Workspace** is the session's workspace directory, named by the matching
+  `decknix.workspaces` entry, or by its basename.
+- **Under control**: a lane sits under the coordinator (a session tagged
+  `coordinator`) that sent it the last message the dispatcher delivered. The
+  record is kept in memory, so after an Emacs restart a session tagged
+  `lane-NN` is placed by sharing most tags with one coordinator in its
+  workspace, and marked `~` until a message confirms it. A tie places it
+  nowhere.
+- **Review sessions** are listed in Reviews, not here. The `0` toggle
+  (`T` → Shared → wip reviews) adds them as a last `reviews` group per
+  workspace.
+- `TAB` collapses a coordinator's lanes or a group; a collapsed group still
+  shows its sessions that are blocked on you.
+
+The rest of this page describes the PR-centric WIP of the previous layout.
+
 Two things are **orthogonal** here:
 
 - **Grouping** (how rows nest) — shipped today, three modes.
