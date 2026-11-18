@@ -25,23 +25,23 @@ py3.buildPythonApplication rec {
 
   # Upstream hardcodes `host="0.0.0.0"` in run(), which exposes the proxy
   # (and the IAP identity it injects, with no auth of its own) on every
-  # network interface. Bind from $HOST instead, defaulting to loopback.
+  # network interface. Bind from $IAP_PROXY_HOST instead, defaulting to loopback.
   #
   # This guard must fail the build rather than degrade silently: if upstream
   # reshapes run() so the literal is gone, an unpatched build could quietly
   # go back to listening on all interfaces. A source that already reads
-  # HOST with a loopback default (the upstream fix) is accepted as is; any
+  # IAP_PROXY_HOST with a loopback default (the upstream fix) is accepted as is; any
   # other shape, or any remaining 0.0.0.0, stops the build.
   postPatch = ''
     main=src/iap_proxy/main.py
-    loopbackDefault='getenv("HOST", "127.0.0.1")'
+    loopbackDefault='getenv("IAP_PROXY_HOST", "127.0.0.1")'
     if grep -qF 'host="0.0.0.0"' "$main"; then
       substituteInPlace "$main" \
         --replace-fail 'host="0.0.0.0"' "host=os.$loopbackDefault" \
         --replace-fail 'import asyncio' $'import asyncio\nimport os'
     elif ! grep -rqF "$loopbackDefault" src/iap_proxy; then
       echo "iap-proxy: bind-address patch target not found in $main and the" >&2
-      echo "source does not read HOST with a 127.0.0.1 default; refusing to" >&2
+      echo "source does not read IAP_PROXY_HOST with a 127.0.0.1 default; refusing to" >&2
       echo "build a proxy that may listen on all interfaces." >&2
       exit 1
     fi
