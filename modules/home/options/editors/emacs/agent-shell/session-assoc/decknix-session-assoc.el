@@ -752,7 +752,9 @@ parsed as JSON line by line."
 
 (defun decknix-session-assoc-created-scan-chunk (log-path offset pending &optional cap)
   "Scan LOG-PATH from byte OFFSET for created PRs; return a plist.
-PENDING lists the ids of creating calls whose output may still be to come.
+PENDING lists the ids of creating calls whose output may still be to come;
+at most 32 are carried on, so calls that never report completing cannot
+grow the list without bound.
 Reads at most CAP bytes (default `decknix-session-assoc-created-chunk'),
 more only when one line is longer than that.
 
@@ -795,7 +797,7 @@ the same answer."
                               (buffer-substring-no-properties bol eol) 'utf-8)
                              table created)))
             (goto-char (1+ eol))))))
-    (list :offset end :pending (hash-table-keys table) :prs created
+    (list :offset end :pending (seq-take (hash-table-keys table) 32) :prs created
           :size size :complete complete :reset reset)))
 
 (defun decknix-session-assoc-created-scan-command (log-path offset pending cap)
