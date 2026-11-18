@@ -8,7 +8,8 @@
 ;;; Commentary:
 ;;
 ;; Pure model for the session-first sidebar: Reviews, then WIP, then
-;; Unattached.
+;; Unattached.  A session blocked on the user is listed in whichever of
+;; Reviews or WIP owns it; there is no separate section for those.
 ;;
 ;; Measured on a live workspace: 47 live sessions, of which 40 were review
 ;; sessions and 7 the user's own, 33 of them blocked on the user.  Listing
@@ -498,19 +499,52 @@ many were held back rather than dropping them silently."
       ;; response used to make invisible.
       (> (or (plist-get group :updated) 0) 0)))
 
-(defun decknix--layout-filter-groups (groups attention-only)
+(defun decknix--layout-filter-groups (groups attention-only &optional keep-repos)
   "Return (VISIBLE . HIDDEN-COUNT) for GROUPS.
 
 With ATTENTION-ONLY nil every group is visible and HIDDEN-COUNT is 0, so
 the toggle genuinely restores the previous behaviour.
+
+KEEP-REPOS names groups that stay visible whatever they want: those
+holding a session blocked on the user.  Such a session on a merged PR
+does not count towards `:asking', so without this its group folded into
+\"N more in flight\" and the session vanished.
 
 HIDDEN-COUNT is returned rather than discarded because a section that
 quietly shrinks is indistinguishable from one with nothing in it -- the
 same failure that let a repo-sync error hide for 61 runs."
   (if (not attention-only)
       (cons groups 0)
-    (let ((visible (seq-filter #'decknix--layout-group-wants-me-p groups)))
+    (let ((visible (seq-filter (lambda (g)
+                                 (or (decknix--layout-group-wants-me-p g)
+                                     (member (plist-get g :repo) keep-repos)))
+                               groups)))
       (cons visible (- (length groups) (length visible))))))
+
+(defun decknix--layout-session-repos (session)
+  "Return the short repos of SESSION's review PRs, in order, once each."
+  (delete-dups
+   (delq nil (mapcar (lambda (k) (car (decknix--layout-parse-pr-key k)))
+                     (decknix--layout-session-prs session)))))
+
+(defun decknix--layout-place-attention (groups sessions)
+  "Return ((REPO . SESSIONS) ...) placing each of SESSIONS under one of GROUPS.
+
+Each session goes under the first group, in GROUPS order, that covers
+one of its repos, so a session reviewing two repos is listed once.
+SESSIONS keep their relative order.  A session no group covers is left
+out; the groups are built from the same sessions, so there is none."
+  (let ((placed nil))
+    (dolist (s sessions)
+      (let* ((repos (decknix--layout-session-repos s))
+             (group (seq-find (lambda (g) (member (plist-get g :repo) repos)) groups)))
+        (when group
+          (let* ((repo (plist-get group :repo))
+                 (cell (assoc repo placed)))
+            (if cell
+                (setcdr cell (append (cdr cell) (list s)))
+              (push (list repo s) placed))))))
+    (nreverse placed)))
 
 ;; --- duplicate coverage ----------------------------------------------
 

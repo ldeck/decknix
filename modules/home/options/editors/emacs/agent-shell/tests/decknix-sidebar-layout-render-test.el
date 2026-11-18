@@ -510,36 +510,86 @@ answered \"No live agent buffer at point\"."
           (decknix-layout-goto-next-attention)
           (should (looking-at "    #9")))))))
 
-;; --- Needs you ----------------------------------------------------------
+;; --- blocked sessions live in Reviews or WIP ---------------------------
+;;
+;; There is no Needs-you section.  It listed every blocked session first,
+;; and each one again in Reviews or WIP.  These pin that nothing it showed
+;; is lost: every blocked session has exactly one row, with its question.
 
-(defun decknix-lr-test--render-needs-you (sessions &optional feed)
-  "Return the rendered Needs-you block for SESSIONS with review FEED items."
+(defun decknix-lr-test--render-reviews (sessions &optional feed)
+  "Return the rendered Reviews section for SESSIONS with review FEED items."
   (let ((decknix--hub-reviews (and feed (list (cons 'items feed))))
-        (decknix-attention--seen (make-hash-table :test 'eq :weakness 'key)))
+        (decknix-attention--seen (make-hash-table :test 'eq :weakness 'key))
+        (decknix--layout-expanded (make-hash-table :test 'equal)))
     (cl-letf (((symbol-function 'decknix--layout-sessions) (lambda () sessions))
+              ((symbol-function 'decknix--layout-subagents-of) (lambda (_b) nil))
               ((symbol-function 'decknix--sidebar-render-section-header)
                (lambda (title &optional _id) (insert " " title "\n"))))
+      (decknix-layout-invalidate-groups)
       (with-temp-buffer
-        (decknix--layout-render-needs-you 0 48)
+        (decknix--layout-render-reviews 0 48)
         (buffer-string)))))
 
-(ert-deftest decknix-layout-render--needs-you-lists-every-blocked-session-first-ranked ()
-  (decknix-lr-test--with-buffers '("*Claude: mine*" "*Claude: pr-widget-1*" "*Claude: idle*")
-    (let ((out (decknix-lr-test--render-needs-you
-                '(("*Claude: mine*" nil nil "asking")
-                  ("*Claude: pr-widget-1*" nil ("widget#1") "waiting")
-                  ("*Claude: idle*" nil nil "ready")))))
-      (should (string-match-p "Needs you (2)" out))
-      (should (< (string-match "pr-widget-1" out) (string-match "mine" out)))
-      (should-not (string-match-p "idle" out)))))
+(defun decknix-lr-test--row-buffers (text)
+  "Return the names of the session rows in rendered TEXT, in order."
+  (let (names)
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((b (get-text-property (point) 'decknix-layout-buffer)))
+          (when (and b (not (get-text-property (point) 'decknix-layout-ask)))
+            (push b names)))
+        (forward-line 1)))
+    (nreverse names)))
+
+(defconst decknix-lr-test--mixed
+  '(("*Claude: mine*" nil nil "asking" nil nil)
+    ("*Claude: pr-widget-1*" nil ("widget#1") "waiting" nil nil)
+    ("*Claude: pr-widget-2*" nil ("widget#2") "ready" nil nil)
+    ("*Claude: pr-gone-7*" nil ("gone#7") "asking" nil nil)
+    ("*Claude: idle*" nil nil "ready" nil nil))
+  "Own and review sessions, blocked and not, one on a merged PR.")
+
+(defconst decknix-lr-test--mixed-feed
+  '(((repo . "ExampleOwner/widget") (number . 1))
+    ((repo . "ExampleOwner/widget") (number . 2)))
+  "The review feed for `decknix-lr-test--mixed': gone#7 has merged.")
+
+(ert-deftest decknix-layout-render--every-blocked-session-has-exactly-one-row ()
+  (decknix-lr-test--with-buffers (mapcar #'car decknix-lr-test--mixed)
+    (let* ((reviews (decknix-lr-test--row-buffers
+                     (decknix-lr-test--render-reviews decknix-lr-test--mixed
+                                                      decknix-lr-test--mixed-feed)))
+           (wip (decknix-lr-test--row-buffers
+                 (let ((decknix--hub-reviews (list (cons 'items decknix-lr-test--mixed-feed))))
+                   (decknix-lr-test--render-wip decknix-lr-test--mixed))))
+           (both (append reviews wip)))
+      (dolist (name '("*Claude: mine*" "*Claude: pr-widget-1*" "*Claude: pr-gone-7*"))
+        (should (= 1 (seq-count (lambda (n) (equal n name)) both))))
+      (should-not (seq-intersection reviews wip)))))
+
+(ert-deftest decknix-layout-render--a-blocked-review-has-a-row-in-a-collapsed-group ()
+  (decknix-lr-test--with-buffers '("*Claude: pr-widget-1*")
+    (let* ((out (decknix-lr-test--render-reviews
+                 '(("*Claude: pr-widget-1*" nil ("widget#1") "waiting"))
+                 '(((repo . "ExampleOwner/widget") (number . 1)))))
+           (pos (string-match "pr-widget-1" out)))
+      (should (string-match-p "Reviews (1) — 1 need you" out))
+      (should pos)
+      (should (string-match-p (concat "^    " decknix-attention-glyph "  pr-widget-1") out))
+      (should (eq (get-buffer "*Claude: pr-widget-1*")
+                  (get-text-property pos 'agent-shell-workspace-buffer out)))
+      ;; Collapsed: no PR rows.
+      (should-not (string-match-p "#1 " out)))))
 
 (ert-deftest decknix-layout-render--a-blocked-review-on-a-merged-pr-is-not-hidden ()
   "The bug: pr-widget-21531 and friends asked for a decision, their PRs had
-left the feed, and nothing anywhere showed them."
+left the feed, and their repo folded into \"N more in flight\"."
   (decknix-lr-test--with-buffers '("*Claude: pr-widget-21531*")
-    (let* ((out (decknix-lr-test--render-needs-you
+    (let* ((out (decknix-lr-test--render-reviews
                  '(("*Claude: pr-widget-21531*" nil ("widget#21531") "asking"))
-                 '(((repo . "ExampleOwner/widget") (number . 21556)))))
+                 '(((repo . "ExampleOwner/other") (number . 5)))))
            (pos (string-match "pr-widget-21531" out)))
       (should pos)
       (should (string-match-p "PR gone" out))
@@ -548,23 +598,29 @@ left the feed, and nothing anywhere showed them."
 
 (ert-deftest decknix-layout-render--no-feed-does-not-call-a-pr-gone ()
   (decknix-lr-test--with-buffers '("*Claude: pr-widget-1*")
-    (should-not (string-match-p
-                 "PR gone"
-                 (decknix-lr-test--render-needs-you
-                  '(("*Claude: pr-widget-1*" nil ("widget#1") "asking")))))))
+    (let ((out (decknix-lr-test--render-reviews
+                '(("*Claude: pr-widget-1*" nil ("widget#1") "asking")))))
+      (should (string-match-p "pr-widget-1" out))
+      (should-not (string-match-p "PR gone" out)))))
 
-(ert-deftest decknix-layout-render--needs-you-is-absent-when-nothing-is-blocked ()
-  (decknix-lr-test--with-buffers '("*Claude: a*")
-    (should (equal "" (decknix-lr-test--render-needs-you
-                       '(("*Claude: a*" nil nil "working")))))))
+(ert-deftest decknix-layout-render--reviews-blocked-rows-are-ranked ()
+  (decknix-lr-test--with-buffers '("*Claude: pr-widget-1*" "*Claude: pr-widget-2*")
+    (let ((out (decknix-lr-test--render-reviews
+                '(("*Claude: pr-widget-1*" nil ("widget#1") "asking")
+                  ("*Claude: pr-widget-2*" nil ("widget#2") "netfail"))
+                '(((repo . "ExampleOwner/widget") (number . 1))
+                  ((repo . "ExampleOwner/widget") (number . 2))))))
+      (should (< (string-match "pr-widget-2" out) (string-match "pr-widget-1" out))))))
 
-(ert-deftest decknix-layout-render--needs-you-rows-fit-the-width ()
+(ert-deftest decknix-layout-render--attention-rows-fit-the-width ()
   (decknix-lr-test--with-buffers '("*Claude: a-very-long-session-name/with/many/tags/indeed*")
-    (dolist (l (split-string (decknix-lr-test--render-needs-you
-                              '(("*Claude: a-very-long-session-name/with/many/tags/indeed*"
-                                 nil nil "netfail")))
-                             "\n" t))
-      (should (<= (string-width l) 48)))))
+    (dolist (indent '(nil "    "))
+      (should (<= (string-width
+                   (decknix--layout-attention-row
+                    '("*Claude: a-very-long-session-name/with/many/tags/indeed*"
+                      nil nil "netfail")
+                    48 nil indent))
+                  48)))))
 
 (ert-deftest decknix-layout-render--wip-heading-counts-who-needs-you ()
   (decknix-lr-test--with-buffers '("*Claude: a*" "*Claude: b*")
@@ -573,15 +629,24 @@ left the feed, and nothing anywhere showed them."
                   ("*Claude: b*" nil nil "working" nil nil)))))
       (should (string-match-p "WIP (2 — 1 need you" out)))))
 
+(ert-deftest decknix-layout-render--a-flagged-session-is-flagged-in-wip ()
+  "Flagged sessions were listed under Needs you; WIP now has to say so."
+  (decknix-lr-test--with-buffers '("*Claude: a*")
+    (let ((decknix-attention--flags (make-hash-table :test 'eq)))
+      (decknix-attention-flag (get-buffer "*Claude: a*") "new commits")
+      (let ((out (decknix-lr-test--render-wip '(("*Claude: a*" nil nil "ready" nil nil)))))
+        (should (string-match-p (concat "^ " decknix-attention-glyph "  a ") out))
+        (should (string-match-p "↳ new commits" out))))))
+
 ;; --- what each session is asking --------------------------------------
 
-(ert-deftest decknix-layout-render--needs-you-shows-what-it-asks ()
+(ert-deftest decknix-layout-render--a-blocked-session-shows-what-it-asks ()
   (decknix-lr-test--with-buffers '("*Claude: q*")
     (cl-letf (((symbol-function 'decknix-agent-turn-closing-text)
                (lambda (&optional _b) "Rebased.\nForce-push or open a fresh PR?"))
               ((symbol-function 'decknix-agent-turn-question-excerpt)
                (lambda (text) (car (last (split-string text "\n" t))))))
-      (let* ((out (decknix-lr-test--render-needs-you '(("*Claude: q*" nil nil "asking"))))
+      (let* ((out (decknix-lr-test--render-wip '(("*Claude: q*" nil nil "asking" nil nil))))
              (pos (string-match "↳ Force-push" out)))
         (should pos)
         (should (eq 'font-lock-comment-face (get-text-property pos 'face out)))
@@ -610,7 +675,7 @@ left the feed, and nothing anywhere showed them."
     (cl-letf (((symbol-function 'decknix-agent-turn-closing-text) (lambda (&optional _b) nil))
               ((symbol-function 'decknix-agent-turn-question-excerpt) (lambda (_t) nil)))
       (should-not (string-match-p
-                   "↳" (decknix-lr-test--render-needs-you '(("*Claude: q*" nil nil "asking"))))))))
+                   "↳" (decknix-lr-test--render-wip '(("*Claude: q*" nil nil "asking" nil nil))))))))
 
 (ert-deftest decknix-layout-render--inspect-shows-the-question-and-the-tail ()
   (decknix-lr-test--with-buffers '("*Claude: q*")
@@ -689,23 +754,41 @@ left the feed, and nothing anywhere showed them."
                               (buffer-string))))))
 
 (ert-deftest decknix-layout-render--focus-counts-who-needs-you-elsewhere ()
-  "Focused Needs-you lists only the board's sessions, and says how many
-outside it are blocked, so a focus never hides one silently."
+  "The banner says how many outside the focus are blocked, so a focus never
+hides one silently; Reviews and WIP list only the board's sessions."
   (decknix-lr-test--with-buffers '("*Claude: in*" "*Claude: out*" "*Claude: out2*")
     (let ((all '(("*Claude: in*" nil nil "asking")
                  ("*Claude: out*" nil nil "waiting")
                  ("*Claude: out2*" nil nil "asking"))))
       (cl-letf (((symbol-function 'decknix--hub-review-session-snapshot) (lambda () all)))
         (decknix-lr-test--focused nil '("*Claude: in*")
-          (let ((out (decknix-lr-test--render-needs-you
+          (with-temp-buffer
+            (should (= 3 (decknix--layout-render-focus 0 48)))
+            (should (string-match-p "^ \\+2 need you elsewhere$" (buffer-string))))
+          (let ((out (decknix-lr-test--render-wip
                       (decknix-board-focus-sessions all))))
-            (should (string-match-p "Needs you (1)" out))
-            (should-not (string-match-p "Claude: out\\|  out" out))
-            (should (string-match-p "^ \\+2 need you elsewhere$" out)))
-          ;; Nothing blocked inside the focus: the count still shows.
-          (let ((out (decknix-lr-test--render-needs-you nil)))
-            (should-not (string-match-p "Needs you" out))
-            (should (string-match-p "\\+2 need you elsewhere" out))))))))
+            (should (string-match-p "  in " out))
+            (should-not (string-match-p "out" out))))))))
+
+(ert-deftest decknix-layout-render--a-blocked-review-names-the-reply-it-wants ()
+  (decknix-lr-test--with-buffers '("*Claude: pr-widget-1*")
+    (cl-letf (((symbol-function 'decknix-agent-turn-closing-text)
+               (lambda (&optional _b) "CHOOSE ONE\n1. approve\n2. comment"))
+              ((symbol-function 'decknix-agent-turn-question-excerpt)
+               (lambda (_text) "Which one?"))
+              ((symbol-function 'decknix-layout-session-reply-hint)
+               (lambda (_b) "1-2, rec 1")))
+      (let* ((out (decknix-lr-test--render-reviews
+                   '(("*Claude: pr-widget-1*" nil ("widget#1") "asking"))
+                   '(((repo . "ExampleOwner/widget") (number . 1)))))
+             (pos (string-match "↳ Which one?" out)))
+        (should pos)
+        (should (string-match-p "reply 1-2, rec 1" out))
+        (with-temp-buffer
+          (insert out)
+          ;; `y' and the digits act on the session the question line is under.
+          (should (equal (list (get-buffer "*Claude: pr-widget-1*"))
+                         (decknix-layout-row-buffers (1+ pos)))))))))
 
 (ert-deftest decknix-layout-render--j-stays-inside-the-focus ()
   (decknix-lr-test--with-buffers '("*Claude: in*" "*Claude: out*")

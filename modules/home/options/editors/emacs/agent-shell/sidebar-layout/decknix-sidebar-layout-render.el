@@ -238,6 +238,7 @@ PR those filters exist to hide."
       items)))
 
 (defvar decknix--hub-wip)
+(defvar decknix--hub-token-quotas)
 (defvar decknix--agent-provider-id)
 
 (declare-function decknix--sidebar-render-subagents
@@ -424,7 +425,7 @@ only knew the first, so its goto refused every WIP row."
   (let ((b (or (get-text-property pos 'agent-shell-workspace-buffer)
                (get-text-property pos 'decknix-layout-buffer)
                (nth 0 (get-text-property pos 'decknix-layout-session))
-               ;; The question line under a Needs-you row: RET and `i' act
+               ;; The question line under a blocked session: RET and `i' act
                ;; on its session, though `n'/`p' pass over it.
                (nth 0 (get-text-property pos 'decknix-layout-ask)))))
     (when (stringp b) (setq b (get-buffer b)))
@@ -639,18 +640,18 @@ for a free-text question, which no quick key answers."
                 'decknix-layout-ask session
                 'help-echo "i for the full question")))
 
-(defun decknix--layout-needs-you-row (session width raw-keys)
-  "Return the Needs-you row for SESSION, fitted to WIDTH.
+(defun decknix--layout-attention-row (session width raw-keys &optional indent)
+  "Return the row for SESSION, blocked on the user, fitted to WIDTH.
 
-A review session whose PR has left the feed is still listed -- it IS
-blocked on a prompt -- but dimmed and marked, since the answer is most
-likely to close it."
+INDENT prefixes the glyph; a single space by default.  A review session
+whose PR has left RAW-KEYS is still listed -- it IS blocked on a prompt --
+but dimmed and marked, since the answer is most likely to close it."
   (let* ((state (nth 3 session))
          (buf (decknix--layout-session-buffer session))
          (gone (decknix--layout-session-pr-gone-p session raw-keys))
          (age (decknix-attention-age-label (and buf (decknix-attention-since buf))))
          (right (string-trim (concat state " " age (if gone " · PR gone" ""))))
-         (left (format " %s  " (decknix--layout-state-glyph state)))
+         (left (format "%s%s  " (or indent " ") (decknix--layout-state-glyph state)))
          (room (max 1 (- width (string-width left) (string-width right) 1)))
          (name (decknix--layout-short-name (nth 0 session)))
          (name (if (> (string-width name) room)
@@ -663,49 +664,37 @@ likely to close it."
                         (decknix--layout-state-face state))
                 'decknix-layout-session session
                 'decknix-layout-buffer (nth 0 session)
-                'decknix-layout-needs-you t
                 'agent-shell-workspace-buffer buf
                 'help-echo "RET go to it · j next · i what it asks · y/1-9 answer")))
 
-(defun decknix--layout-render-needs-you (line-num width)
-  "Render every session blocked on the user, first.  Returns LINE-NUM.
+(defun decknix--layout-render-ask (line-num width session)
+  "Insert what SESSION is asking, with the reply it wants.  Returns LINE-NUM.
 
-Listed whatever section the session would otherwise sit in, because each
-of those sections can hide one.  Three review sessions asking for a
-decision were invisible: their PRs had merged, so they did not count as
-`asking' for their repo, the repo then had nothing else waiting, and the
-whole group folded into \"N more in flight, nothing waiting\".  A session
-blocked on you must never be hidden by a judgement about its PR."
-  (let* ((sessions (decknix-attention-ordered-sessions (decknix--layout-sessions)))
-         (live (seq-filter #'decknix--layout-session-buffer sessions))
-         (elsewhere (decknix--layout-elsewhere-count)))
-    (when (and (null live) (> elsewhere 0))
-      (insert (decknix--layout-elsewhere-row elsewhere) "\n\n")
-      (setq line-num (+ 2 line-num)))
-    (when live
-      (let ((raw-keys (decknix--layout-raw-feed-keys)))
-        (decknix--sidebar-render-section-header
-         (format "Needs you (%d)" (length live)) 'needs-you)
-        (setq line-num (1+ line-num))
-        (dolist (session live)
-          (insert (decknix--layout-needs-you-row session width raw-keys) "\n")
-          (setq line-num (1+ line-num))
-          ;; What it asks, so most can be triaged without opening them,
-          ;; and the reply it wants, which `y' or a digit can send.
-          (let* ((buf (decknix--layout-session-buffer session))
-                 (ask (decknix-layout-session-ask buf (nth 3 session)))
-                 (hint (decknix-layout-session-reply-hint buf)))
-            (when (and ask (not (string-empty-p ask)))
-              (insert (decknix--layout-ask-row
-                       session (if hint (concat ask "  · reply " hint) ask) width)
-                      "\n")
-              (setq line-num (1+ line-num)))))
-        (when (> elsewhere 0)
-          (insert (decknix--layout-elsewhere-row elsewhere) "\n")
-          (setq line-num (1+ line-num)))
-        (insert "\n")
-        (setq line-num (1+ line-num)))))
-  line-num)
+Nothing when it is asking nothing that can be read from memory.  So most
+questions can be triaged without opening the session, and `y' or a digit
+can send the reply named."
+  (let* ((buf (decknix--layout-session-buffer session))
+         (ask (decknix-layout-session-ask buf (nth 3 session)))
+         (hint (decknix-layout-session-reply-hint buf)))
+    (if (or (null ask) (string-empty-p ask))
+        line-num
+      (insert (decknix--layout-ask-row
+               session (if hint (concat ask "  · reply " hint) ask) width)
+              "\n")
+      (1+ line-num))))
+
+(defun decknix--layout-render-attention-session (line-num width session raw-keys
+                                                         &optional indent)
+  "Insert SESSION's attention row and its question.  Returns LINE-NUM."
+  (insert (decknix--layout-attention-row session width raw-keys indent) "\n")
+  (decknix--layout-render-ask (1+ line-num) width session))
+
+(defun decknix--layout-attention-reviews (sessions)
+  "Return the live review SESSIONS blocked on the user, in jump order.
+Flagged sessions count, as they do for the jump and the header count."
+  (seq-filter (lambda (s) (and (decknix--layout-session-buffer s)
+                               (decknix--layout-review-session-p s)))
+              (decknix-attention-ordered-sessions sessions)))
 
 (defun decknix--layout-elsewhere-count ()
   "Return how many sessions outside the board focus need you; 0 unfocused."
@@ -723,16 +712,25 @@ Shown so a focus never hides something blocked on you; `F' clears it."
               'help-echo "Outside the board focus: F clears it, C-c A j goes there"))
 
 (defun decknix--layout-render-focus (line-num width)
-  "Render the board-focus banner, when focused.  Returns LINE-NUM."
+  "Render the board-focus banner, when focused.  Returns LINE-NUM.
+
+With it, how many sessions outside the focus are blocked on the user, so
+a focus never hides one silently."
   (if (not (decknix--layout-focus-p))
       line-num
     (let* ((left (format " Focus: %s" (decknix-board-focus-title)))
            (right "F clear · C-u F switch")
-           (pad (max 1 (- width (string-width left) (string-width right)))))
+           (pad (max 1 (- width (string-width left) (string-width right))))
+           (elsewhere (decknix--layout-elsewhere-count)))
       (insert (propertize left 'face 'bold)
               (propertize (concat (make-string pad ?\s) right) 'face 'font-lock-comment-face)
-              "\n\n")
-      (+ 2 line-num))))
+              "\n")
+      (setq line-num (1+ line-num))
+      (when (> elsewhere 0)
+        (insert (decknix--layout-elsewhere-row elsewhere) "\n")
+        (setq line-num (1+ line-num)))
+      (insert "\n")
+      (1+ line-num))))
 
 (defconst decknix-layout-inspect-buffer "*Sidebar Inspect*"
   "Buffer showing what the session at point is asking.")
@@ -833,17 +831,28 @@ summary is the risk this avoids.  RET in the window goes to the session."
           (display-buffer out))))))
 
 (defun decknix--layout-render-reviews (line-num width)
-  "Render the Reviews section.  Returns the updated LINE-NUM."
+  "Render the Reviews section.  Returns the updated LINE-NUM.
+
+Every review session blocked on the user has a row of its own under its
+repo, collapsed or not, with what it is asking beneath.  These rows were
+a separate Needs-you section listing WIP's blocked sessions too, so each
+appeared twice; here each appears once.  A blocked session's repo is
+always shown, even when its PR has merged, since a session blocked on
+you must never be hidden by a judgement about its PR."
   (let* ((sessions (decknix--layout-sessions))
          (items (decknix--layout-feed-items))
          ;; The unfiltered feed, so a PR the filters hide is not mistaken
          ;; for one that has left the review queue entirely.
          (all-items (decknix--layout-raw-feed-items))
          (all-groups (decknix--layout-review-groups sessions items all-items))
+         (attention (decknix--layout-attention-reviews sessions))
+         (placed (decknix--layout-place-attention all-groups attention))
          (split (decknix--layout-filter-groups
-                 all-groups decknix-sidebar-layout-reviews-attention-only))
+                 all-groups decknix-sidebar-layout-reviews-attention-only
+                 (mapcar #'car placed)))
          (groups (car split))
          (held (cdr split))
+         (raw-keys (decknix--layout-raw-feed-keys))
          (dups (decknix--layout-duplicate-prs sessions))
          ;; PRs, not sessions.  The heading counted live review SESSIONS,
          ;; so it read "Reviews (0)" above five repos holding eight PRs
@@ -851,8 +860,7 @@ summary is the risk this avoids.  RET in the window goes to the session."
          ;; while the rows said otherwise.
          (total (apply #'+ (mapcar (lambda (g) (length (plist-get g :prs)))
                                    all-groups)))
-         (asking (apply #'+ (mapcar (lambda (g) (or (plist-get g :asking) 0))
-                                    all-groups))))
+         (asking (length attention)))
     (when (or groups (> held 0))
       (decknix--sidebar-render-section-header
        (if (> asking 0)
@@ -868,6 +876,9 @@ summary is the risk this avoids.  RET in the window goes to the session."
                               'decknix-layout-group group)
                   "\n")
           (setq line-num (1+ line-num))
+          (dolist (session (cdr (assoc repo placed)))
+            (setq line-num (decknix--layout-render-attention-session
+                            line-num width session raw-keys "    ")))
           (when (decknix--layout-expanded-p repo)
             (dolist (pr (plist-get group :prs))
               (insert (propertize (decknix--layout-pr-label pr width)
@@ -934,8 +945,12 @@ Nesting rather than a separate PR-centric section: the old layout listed my
 PRs and worktrees under a second heading also called \"WIP\", with nothing
 stating which session was on which.  An item may appear under two sessions
 when both share a workspace, which is preferred over picking a winner and
-hiding the sharing."
-  (let* ((sessions (decknix--layout-sessions))
+hiding the sharing.
+
+Review sessions are not listed: Reviews owns them, blocked ones included,
+so no session is shown in both sections.  A blocked session here carries
+its question line, as it does there."
+  (let* ((sessions (decknix-attention-refine (decknix--layout-sessions)))
          (wip (decknix--layout-wip-sessions sessions))
          (tree (decknix--layout-wip-tree wip (decknix--layout-wip-repos)
                                          (decknix--layout-worktrees))))
@@ -979,6 +994,8 @@ hiding the sharing."
                               (decknix--layout-session-buffer session))
                   "\n")
           (setq line-num (1+ line-num))
+          (when (decknix--layout-attention-p state)
+            (setq line-num (decknix--layout-render-ask line-num width session)))
           (setq line-num (decknix--layout-render-subagents
                           line-num (nth 0 session) width))
           (dolist (claim (plist-get row :repos))

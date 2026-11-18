@@ -1570,5 +1570,26 @@ repos holding eight bot PRs awaiting review looked like nothing at all."
                          (:uncovered 1) (:sessions 1)))))
     (should (equal faces (delete-dups (copy-sequence faces))))))
 
+;; --- blocked review sessions -----------------------------------------
+
+(ert-deftest decknix-layout--a-blocked-session-keeps-its-group-visible ()
+  (let* ((quiet (list :repo "gone" :asking 0 :uncovered 0 :updated 0))
+         (busy (list :repo "widget" :asking 1)))
+    (should (equal '(1 . 1) (cons (length (car (decknix--layout-filter-groups
+                                                (list quiet busy) t)))
+                                  (cdr (decknix--layout-filter-groups
+                                        (list quiet busy) t)))))
+    (let ((split (decknix--layout-filter-groups (list quiet busy) t '("gone"))))
+      (should (equal (car split) (list quiet busy)))
+      (should (= 0 (cdr split))))))
+
+(ert-deftest decknix-layout--blocked-sessions-are-placed-once-under-the-first-group ()
+  (let* ((groups (list (list :repo "widget") (list :repo "other")))
+         (a '("a" nil ("other#1" "widget#2") "asking"))
+         (b '("b" nil ("other#3") "waiting"))
+         (c '("c" nil ("nowhere#3") "asking")))
+    (should (equal (decknix--layout-place-attention groups (list a b c))
+                   (list (list "widget" a) (list "other" b))))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here

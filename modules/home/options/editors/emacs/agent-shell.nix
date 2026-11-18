@@ -6969,10 +6969,8 @@ duration -- the most important number on this branch."
                     ;; everything it narrows.
                     (when (fboundp 'decknix--layout-render-focus)
                       (setq line-num (decknix--layout-render-focus line-num w)))
-                    ;; Every session blocked on you, before anything else:
-                    ;; Reviews and WIP each have ways to hide one.
-                    (when (fboundp 'decknix--layout-render-needs-you)
-                      (setq line-num (decknix--layout-render-needs-you line-num w)))
+                    ;; No Needs-you section: a session blocked on you is a
+                    ;; row in Reviews or WIP, with its question beneath.
                     (decknix--sidebar-render-checkpoint)
                     (setq line-num (decknix--layout-render-reviews line-num w))
                     (decknix--sidebar-render-checkpoint)
