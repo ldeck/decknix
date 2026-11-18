@@ -90,15 +90,16 @@ in
 
       mergedRetentionDays = mkOption {
         type = types.int;
-        default = 30;
+        default = 7;
         description = ''
           How many days a merged PR is kept in the WIP feed after merge.
 
-          The sidebar keeps merged PR rows (and their worktrees) visible
-          until the code reaches production (deploy-gated cleanup), then
-          hides them.  This window must comfortably exceed a typical
-          merge-to-production time; a deploy slower than this drops the row
-          before it ships.  Only the safety cap for a never-deployed merge.
+          The sidebar keeps a merged PR under its session until its last
+          deploy stage is verified, then shows it dimmed as shipped for the
+          sidebar's shipped-retention toggle, then drops it.  This window
+          only caps a merge that never deploys; it must exceed a typical
+          merge-to-production time.  The merged query keeps the 50 most
+          recent merges, so a much longer window adds nothing.
         '';
       };
     };

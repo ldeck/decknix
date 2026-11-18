@@ -77,7 +77,7 @@ cat ~/.config/decknix/hub/meta.json
 | `decknix.services.hub.github.enable` | `true` | Enable GitHub adapter |
 | `decknix.services.hub.github.reviewsInterval` | `60` | Seconds between review polls |
 | `decknix.services.hub.github.wipInterval` | `60` | Seconds between WIP polls |
-| `decknix.services.hub.github.mergedRetentionDays` | `30` | Days a merged PR stays in the WIP feed |
+| `decknix.services.hub.github.mergedRetentionDays` | `7` | Days a merged PR stays in the WIP feed (the 50 most recent merges); the sidebar drops it sooner once shipped |
 | `decknix.services.hub.github.reviewRepos` | `[]` | Repos to check (empty = all) |
 
 #### Jira
@@ -239,7 +239,7 @@ All state is stored in `~/.config/decknix/hub/`:
 | File | Content |
 |------|---------|
 | `github-reviews.json` | PR reviews needing your attention (per-PR attention signals — `my_review`, `others_reviewed`, `re_requested`, `comment_mentioned`, `review_stale`, `review_decision` — drive the sidebar's [reviewed filter](../modules/ai/agent-shell/layouts/requests.md#the-reviewed-filter-r)) |
-| `github-wip.json` | Your open PRs with CI status and branches |
+| `github-wip.json` | Your open PRs, and merged ones within `mergedRetentionDays`, with CI status and branches. `state` is upper case (`OPEN`, `MERGED`). `errors` lists queries that failed this poll without failing it |
 | `jira-tasks.json` | Jira tasks assigned to you |
 | `teamcity-builds.json` | TeamCity build status for WIP branches |
 | `meta.json` | Adapter health: last poll time, errors |

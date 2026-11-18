@@ -132,10 +132,12 @@ impl Default for GitHubConfig {
             reviews_interval_secs: 60,
             wip_interval_secs: 60,
             review_repos: vec![],
-            // Generous default: most pipelines reach production within days,
-            // and the sidebar hides a merged row the moment it ships anyway,
-            // so this is only the safety cap for a never-deployed merge.
-            wip_merged_retention_days: 30,
+            // The sidebar keeps a merged row until its last stage is
+            // verified, then for a short "shipped" window, so this is only
+            // the cap for a merge that never deploys.  A week keeps the
+            // merged query (50 rows, most recent first) inside the window:
+            // at 30 days one author already had 94 merges.
+            wip_merged_retention_days: 7,
         }
     }
 }
@@ -403,6 +405,10 @@ struct WipRepo {
 struct WipFile {
     updated: DateTime<Utc>,
     repos: Vec<WipRepo>,
+    /// Queries that failed this poll without failing it (merged, assigned).
+    /// Shown by the sidebar so a partial feed is never mistaken for a full one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2391,62 +2397,46 @@ struct GhMyPr {
 /// this window is only the safety cap for a merge that never deploys.
 async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
     let json_fields = "number,title,url,state,isDraft,updatedAt,repository";
+    let cutoff = merged_cutoff(Utc::now(), config.wip_merged_retention_days);
+    let mut errors: Vec<String> = Vec::new();
 
-    // 1. Open PRs.  `--archived=false` for the same reason as Requests: an
-    // archived repo is read-only, so a PR there can never be landed.
-    let open_output = gh_json(&[
-        "search", "prs",
-        "--author=@me",
-        "--state=open",
-        "--archived=false",
-        "--json", json_fields,
-        "--limit", "50",
-    ]).await?;
-
+    // 1. Open PRs.  The one query whose failure fails the poll: without it
+    // there is no WIP feed worth writing.
+    let open_args = wip_search_args("--author=@me", None, json_fields, 50);
+    let open_output = gh_json(&open_args.iter().map(String::as_str).collect::<Vec<_>>()).await?;
     let open_prs: Vec<GhMyPr> = serde_json::from_str(&open_output)
         .map_err(|e| format!("parse open: {e}"))?;
 
-    // 2. Recently merged PRs, within the configured retention window.
-    let retention_days = config.wip_merged_retention_days.max(1) as i64;
-    let cutoff = (Utc::now() - chrono::Duration::days(retention_days))
-        .format("%Y-%m-%d")
-        .to_string();
-    let merged_output = gh_json(&[
-        "search", "prs",
-        "--author=@me",
-        "--state=merged",
-        &format!("--merged=>{cutoff}"),
-        "--archived=false",
-        "--json", json_fields,
-        "--limit", "30",
-    ]).await.unwrap_or_else(|_| "[]".to_string());
-
-    let merged_prs: Vec<GhMyPr> = serde_json::from_str(&merged_output)
-        .unwrap_or_default();
-
-    // 3. PRs assigned to me that someone else authored: a bot's PR I am
-    // driving (a library bump, a lock sync, Dependabot) has no author I can
-    // match, so assigning myself is how it reaches WIP.  Open, and merged
-    // within the same retention window so it stays until it ships.  A
-    // failure degrades to the authored PRs alone.
-    let mut assigned_prs: Vec<GhMyPr> = Vec::new();
-    for state_args in [
-        vec!["--state=open".to_string()],
-        vec!["--state=merged".to_string(), format!("--merged=>{cutoff}")],
+    // 2. Recently merged PRs, then 3. PRs assigned to me that someone else
+    // authored (a bot's PR I am driving), open and merged.  Each degrades
+    // to an entry in `errors' rather than failing the poll, but is never
+    // swallowed: `--state=merged' was rejected by gh for months (only
+    // open|closed are valid) and an `unwrap_or' turned that into an empty
+    // list, so no merged PR ever reached the sidebar.
+    let mut extra: Vec<GhMyPr> = Vec::new();
+    for (role, merged, limit) in [
+        ("--author=@me", true, 50),
+        ("--assignee=@me", false, 30),
+        ("--assignee=@me", true, 30),
     ] {
-        let mut args = vec!["search", "prs", "--assignee=@me", "--archived=false"];
-        args.extend(state_args.iter().map(String::as_str));
-        args.extend(["--json", json_fields, "--limit", "30"]);
-        match gh_json(&args).await {
-            Ok(out) => assigned_prs.extend(serde_json::from_str::<Vec<GhMyPr>>(&out).unwrap_or_default()),
-            Err(e) => eprintln!("decknix-hub: assignee query failed, WIP may miss assigned PRs: {e}"),
+        let args = wip_search_args(role, merged.then_some(cutoff.as_str()), json_fields, limit);
+        let label = format!("{} {}", role.trim_start_matches("--"), if merged { "merged" } else { "open" });
+        match gh_json(&args.iter().map(String::as_str).collect::<Vec<_>>()).await {
+            Ok(out) => match serde_json::from_str::<Vec<GhMyPr>>(&out) {
+                Ok(prs) => extra.extend(prs),
+                Err(e) => errors.push(format!("{label}: parse: {e}")),
+            },
+            Err(e) => errors.push(format!("{label}: {e}")),
         }
+    }
+    for e in &errors {
+        eprintln!("hub: github-wip: {e}");
     }
 
     // Combine, deduplicating by (repo, number)
     let mut seen = std::collections::HashSet::new();
     let mut all_prs: Vec<GhMyPr> = Vec::new();
-    for pr in open_prs.into_iter().chain(merged_prs).chain(assigned_prs) {
+    for pr in open_prs.into_iter().chain(extra) {
         let key = (
             pr.repository.as_ref().map(|r| r.name_with_owner.clone()).unwrap_or_default(),
             pr.number,
@@ -2471,9 +2461,10 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
             .filter_map(|pr| {
                 let repo = pr.repository.as_ref()?.name_with_owner.clone();
                 let updated_at = pr.updated_at.clone().unwrap_or_default();
+                let ttl = wip_cache_ttl(&pr.state);
                 let hit = cache.get(&(repo.clone(), pr.number))
                     .map(|(ts, inserted, _)| {
-                        cache_entry_fresh(ts, &updated_at, *inserted, now, PR_CACHE_TTL)
+                        cache_entry_fresh(ts, &updated_at, *inserted, now, ttl)
                     })
                     .unwrap_or(false);
                 if hit { None } else { Some((repo, pr.number)) }
@@ -2499,7 +2490,7 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
         let cached_details = {
             let cache = wip_cache().read().await;
             cache.get(&cache_key).and_then(|(ts, inserted, details)| {
-                if cache_entry_fresh(ts, &updated_at, *inserted, now, PR_CACHE_TTL) {
+                if cache_entry_fresh(ts, &updated_at, *inserted, now, wip_cache_ttl(&pr.state)) {
                     Some(details.clone())
                 } else {
                     None
@@ -2525,7 +2516,7 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
         entry.push(WipPr {
             number: pr.number,
             title: pr.title.clone(),
-            state: pr.state.clone(),
+            state: normalise_state(&pr.state),
             url: pr.url.clone(),
             draft: pr.is_draft,
             ci: details.ci,
@@ -2558,7 +2549,59 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
     Ok(WipFile {
         updated: Utc::now(),
         repos,
+        errors,
     })
+}
+
+/// The `gh search prs` arguments for one WIP query.
+///
+/// MERGED_SINCE selects merged PRs with `--merged --merged-at=>DATE`;
+/// `--state` takes only `open|closed`, so `--state=merged` is an error.
+/// Sorted by update so the limit keeps the most recent merges rather than
+/// the best text matches.  `--archived=false` because an archived repo is
+/// read-only: a PR there can never be landed.
+fn wip_search_args(role: &str, merged_since: Option<&str>, fields: &str, limit: u32) -> Vec<String> {
+    let mut args: Vec<String> = vec!["search".into(), "prs".into(), role.into()];
+    match merged_since {
+        Some(date) => {
+            args.push("--merged".into());
+            args.push(format!("--merged-at=>{date}"));
+        }
+        None => args.push("--state=open".into()),
+    }
+    args.extend([
+        "--archived=false".into(),
+        "--sort=updated".into(),
+        "--order=desc".into(),
+        "--json".into(), fields.into(),
+        "--limit".into(), limit.to_string(),
+    ]);
+    args
+}
+
+/// The earliest merge date (`YYYY-MM-DD`) the WIP feed keeps.
+fn merged_cutoff(now: DateTime<Utc>, retention_days: u64) -> String {
+    (now - chrono::Duration::days(retention_days.max(1) as i64))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+/// PR state in GitHub's API spelling.  `gh search prs` reports it lower
+/// case while `gh pr view` and every consumer compare `OPEN`/`MERGED`, so
+/// a merged row from search never matched `MERGED` anywhere.
+fn normalise_state(state: &str) -> String {
+    state.to_ascii_uppercase()
+}
+
+/// How long a cached PR-details entry may be reused.  A merged PR can no
+/// longer conflict, so `updatedAt` alone decides; without this every merged
+/// PR in the retention window was refetched every five minutes.
+fn wip_cache_ttl(state: &str) -> Duration {
+    if state.eq_ignore_ascii_case("merged") || state.eq_ignore_ascii_case("closed") {
+        Duration::MAX
+    } else {
+        PR_CACHE_TTL
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2785,6 +2828,59 @@ async fn main() {
             Ok(()) => eprintln!("hub: shutting down"),
             Err(e) => eprintln!("hub: signal error: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod wip_query_tests {
+    use super::*;
+
+    #[test]
+    fn merged_query_uses_merged_flag_not_state() {
+        let args = wip_search_args("--author=@me", Some("2026-11-12"), "number", 50);
+        assert!(args.contains(&"--merged".to_string()), "{args:?}");
+        assert!(args.contains(&"--merged-at=>2026-11-12".to_string()), "{args:?}");
+        assert!(!args.iter().any(|a| a.starts_with("--state")), "{args:?}");
+    }
+
+    #[test]
+    fn open_query_uses_state_open_and_recent_first() {
+        let args = wip_search_args("--assignee=@me", None, "number", 30);
+        assert!(args.contains(&"--state=open".to_string()), "{args:?}");
+        assert!(args.contains(&"--assignee=@me".to_string()), "{args:?}");
+        assert!(args.contains(&"--sort=updated".to_string()), "{args:?}");
+        assert_eq!(args.last().map(String::as_str), Some("30"));
+    }
+
+    #[test]
+    fn merged_cutoff_is_a_date_retention_days_back() {
+        let now: DateTime<Utc> = "2026-11-19T10:00:00Z".parse().unwrap();
+        assert_eq!(merged_cutoff(now, 7), "2026-11-12");
+        assert_eq!(merged_cutoff(now, 0), "2026-11-18", "zero is clamped to a day");
+    }
+
+    #[test]
+    fn state_is_upper_case_like_the_pr_view_api() {
+        assert_eq!(normalise_state("merged"), "MERGED");
+        assert_eq!(normalise_state("open"), "OPEN");
+        assert_eq!(normalise_state("MERGED"), "MERGED");
+    }
+
+    #[test]
+    fn merged_details_never_expire_but_open_ones_do() {
+        assert_eq!(wip_cache_ttl("merged"), Duration::MAX);
+        assert_eq!(wip_cache_ttl("MERGED"), Duration::MAX);
+        assert_eq!(wip_cache_ttl("open"), PR_CACHE_TTL);
+        let now = Instant::now();
+        assert!(cache_entry_fresh("a", "a", now, now + Duration::from_secs(86_400), wip_cache_ttl("merged")));
+    }
+
+    #[test]
+    fn wip_file_omits_errors_when_empty_and_carries_them_otherwise() {
+        let ok = WipFile { updated: Utc::now(), repos: vec![], errors: vec![] };
+        assert!(!serde_json::to_string(&ok).unwrap().contains("errors"));
+        let bad = WipFile { updated: Utc::now(), repos: vec![], errors: vec!["author merged: boom".into()] };
+        assert!(serde_json::to_string(&bad).unwrap().contains("author merged: boom"));
     }
 }
 
