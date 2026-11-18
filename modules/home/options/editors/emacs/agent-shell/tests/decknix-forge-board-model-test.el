@@ -21,9 +21,23 @@
 ;; --- lane placement ---------------------------------------------------
 
 (ert-deftest decknix-fb--lanes-render-mechanically-fixable-first ()
-  "`lock' and `failed' lead because a bulk verb can finish them; the other
-two need the user to go and look."
-  (should (equal '(lock failed diverged dirty) decknix-forge-board-lanes)))
+  "`lock' and `failed' lead because a bulk verb can finish them; the others
+need the user to go and look."
+  (should (equal '(lock failed diverged untracked dirty) decknix-forge-board-lanes)))
+
+(ert-deftest decknix-fb--untracked-is-retryable-but-never-stashed-or-reset ()
+  "A hard reset's `clean -fd' would delete the blocking untracked file, and
+there is no uncommitted tracked work to stash."
+  (let ((row (decknix-fb-test--p 'untracked "a")))
+    (should (decknix-forge-board-retryable-p row))
+    (should-not (decknix-forge-board-stashable-p row))
+    (should-not (decknix-forge-board-resettable-p row))
+    (should-not (decknix-forge-board-clearable-p row))))
+
+(ert-deftest decknix-fb--untracked-rows-get-their-own-lane ()
+  (should (equal '(untracked)
+                 (mapcar #'car (decknix-forge-board-group
+                                (list (decknix-fb-test--p 'untracked "u")))))))
 
 (ert-deftest decknix-fb--groups-in-lane-order-not-input-order ()
   (let ((groups (decknix-forge-board-group

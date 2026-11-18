@@ -426,6 +426,7 @@ confirms nothing exists solely in this checkout."
 (defconst decknix--repo-sync-action-prompts
   '((lock . "%s: [c]lear stale lock  [r]etry sync  [v]isit repo  [x] remove checkout  [q]uit ")
     (dirty . "%s: [s]tash  [H]ard-reset (DESTROYS work)  [v]isit  [r]etry  [q]uit ")
+    (untracked . "%s: [v]isit repo (move the untracked file)  [r]etry sync  [q]uit ")
     (diverged . "%s: [v]isit repo (push or rebase)  [r]etry sync  [x] remove checkout  [q]uit ")
     (failed . "%s: [v]isit repo  [r]etry sync  [x] remove checkout  [q]uit "))
   "Per-kind action prompt.
@@ -433,7 +434,8 @@ confirms nothing exists solely in this checkout."
 Only `lock' offers clearing, because it is the only kind with a mechanical
 remedy.  Offering it on a dirty or diverged repo would suggest deleting a
 lock fixes uncommitted work, and on a `failed' row there is usually no lock
-at all.")
+at all.  `untracked' offers neither stash nor hard reset: the reset's
+`clean -fd' would delete the file the user has to move.")
 
 (defun decknix-repo-sync-row-action ()
   "Offer the remedies for the repo-sync problem on this row."
@@ -451,6 +453,7 @@ at all.")
                       ;; Not offered on dirty: the check would refuse it,
                       ;; and stash or reset is the remedy there.
                       ('dirty '(?s ?H ?r ?v ?q))
+                      ('untracked '(?r ?v ?q))
                       (_ '(?r ?v ?x ?q))))
            (refresh (lambda ()
                       (when (fboundp 'agent-shell-workspace-sidebar-refresh)

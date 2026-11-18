@@ -21,6 +21,7 @@
 ;;   lock      an abandoned index.lock -- the one kind with a mechanical remedy
 ;;   failed    the sync errored; a retry may well be all it needs
 ;;   diverged  local and origin have both moved; only a human can choose
+;;   untracked an incoming commit would overwrite an untracked file; move it
 ;;   dirty     uncommitted work; stashable from here, recoverably
 ;;
 ;; `lock' and `failed' lead because a bulk verb can finish them.  `diverged'
@@ -34,13 +35,14 @@
 (require 'seq)
 (require 'subr-x)
 
-(defconst decknix-forge-board-lanes '(lock failed diverged dirty)
+(defconst decknix-forge-board-lanes '(lock failed diverged untracked dirty)
   "Lanes in render order, mechanically-fixable first.")
 
 (defconst decknix-forge-board-lane-titles
   '((lock     . "Stale Locks")
     (failed   . "Sync Failed")
     (diverged . "Diverged")
+    (untracked . "Untracked")
     (dirty    . "Dirty"))
   "Human-readable lane titles.")
 
@@ -48,6 +50,7 @@
   '((lock     . "abandoned index.lock -- clearable from here")
     (failed   . "sync errored -- a retry may be enough")
     (diverged . "local and origin both moved -- your call")
+    (untracked . "an untracked file would be overwritten -- move it, retry")
     (dirty    . "uncommitted work -- [s]tash clears it, recoverably"))
   "One-line explanation per lane, shown beside the count.
 
@@ -73,7 +76,7 @@ Only `lock'.  Clearing is the remedy for an abandoned lock and nothing
 else: offering it on a dirty repo would imply deleting a lock recovers
 uncommitted work, and on a failed row there is usually no lock at all.")
 
-(defconst decknix-forge-board-retryable-lanes '(lock failed diverged dirty)
+(defconst decknix-forge-board-retryable-lanes '(lock failed diverged untracked dirty)
   "Lanes whose rows `retry sync' may act on.
 
 Every lane: a re-sync is read-only with respect to local work -- the

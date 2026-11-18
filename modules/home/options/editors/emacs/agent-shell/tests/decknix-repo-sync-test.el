@@ -69,6 +69,22 @@ a mechanical remedy, and conflating it is why it went unnoticed for 61 runs."
     (should (eq 'dirty (plist-get p :kind)))
     (should (equal 102 (plist-get p :behind)))))
 
+;; Untracked files no longer make a tree dirty, so an untracked-only repo
+;; fast-forwards and reports `updated'.  The one untracked case the sweep
+;; still skips is git refusing to overwrite a file an incoming commit adds.
+(ert-deftest decknix-repo-sync--untracked-collision-is-not-dirty ()
+  "Offering stash or hard-reset here would imply uncommitted work; the
+remedy is moving one named file."
+  (let ((p (decknix--repo-sync-problem
+            '((path . "/w/svc") (outcome . "skipped")
+              (detail . "fetched; main behind +3 but an untracked file would be overwritten: notes.md")))))
+    (should (eq 'untracked (plist-get p :kind)))
+    (should (equal 3 (plist-get p :behind)))))
+
+(ert-deftest decknix-repo-sync--a-fast-forwarded-untracked-tree-is-healthy ()
+  (should-not (decknix--repo-sync-classify
+               '((outcome . "updated") (detail . "fast-forwarded main +3")))))
+
 (ert-deftest decknix-repo-sync--diverged-needs-no-behind-count ()
   "`main diverged (+126/-6)' carries NO `behind +N', so requiring one dropped
 every diverged repo silently -- exactly the class of bug being fixed."
@@ -139,7 +155,10 @@ sidebar renders week-old problems as current."
                            '(:kind dirty :name "svc-public-api" :behind 102))))
   (should (string-match-p "diverged from origin"
                           (decknix--repo-sync-row-label
-                           '(:kind diverged :name "decknix-config")))))
+                           '(:kind diverged :name "decknix-config"))))
+  (should (string-match-p "untracked file blocks, 3 behind"
+                          (decknix--repo-sync-row-label
+                           '(:kind untracked :name "svc" :behind 3)))))
 
 (ert-deftest decknix-repo-sync--summary-counts-every-kind-present ()
   (let ((s (decknix--repo-sync-summary (decknix-repo-sync-test--problems))))

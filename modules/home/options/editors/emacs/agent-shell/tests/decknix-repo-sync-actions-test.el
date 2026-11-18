@@ -23,10 +23,18 @@
   "`[c]lear' is for the one kind with a mechanical remedy."
   (should (string-match-p "\\[c\\]lear"
                           (alist-get 'lock decknix--repo-sync-action-prompts)))
-  (dolist (kind '(dirty diverged failed))
+  (dolist (kind '(dirty untracked diverged failed))
     (should-not (string-match-p
                  "\\[c\\]lear"
                  (alist-get kind decknix--repo-sync-action-prompts)))))
+
+(ert-deftest decknix-repo-sync-actions--untracked-offers-no-destructive-remedy ()
+  "The blocker is one untracked file, not uncommitted work: hard-reset plus
+clean would delete it, so neither stash nor reset is offered."
+  (let ((p (alist-get 'untracked decknix--repo-sync-action-prompts)))
+    (should-not (string-match-p "\\[H\\]ard" p))
+    (should-not (string-match-p "\\[s\\]tash" p))
+    (should (string-match-p "\\[r\\]etry" p))))
 
 (ert-deftest decknix-repo-sync-actions--every-kind-has-a-prompt ()
   "A kind with no prompt falls back to a generic one; better to notice here."
@@ -48,6 +56,7 @@ quitting must always be possible from a `read-char-choice'."
   (should (eq 'decknix-repo-sync-lock-face (decknix--repo-sync-face 'lock)))
   (should (eq 'decknix-repo-sync-failed-face (decknix--repo-sync-face 'failed)))
   (should (eq 'font-lock-comment-face (decknix--repo-sync-face 'dirty)))
+  (should (eq 'font-lock-comment-face (decknix--repo-sync-face 'untracked)))
   (should (eq 'font-lock-comment-face (decknix--repo-sync-face 'diverged))))
 
 ;; --- cache ------------------------------------------------------------

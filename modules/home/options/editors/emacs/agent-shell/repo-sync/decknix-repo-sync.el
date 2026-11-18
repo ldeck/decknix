@@ -24,7 +24,8 @@
 ;; which is the only distinction a sidebar row needs to make:
 ;;
 ;;   lock      an abandoned index.lock -> one keypress fixes it
-;;   dirty     uncommitted work blocks the fast-forward -> go look
+;;   dirty     uncommitted tracked changes block the fast-forward -> go look
+;;   untracked an incoming commit would overwrite an untracked file -> move it
 ;;   diverged  local default has commits origin lacks -> go look
 ;;   failed    anything else (ssh config, network, ...) -> needs a human
 ;;   ok        nothing to do; never rendered
@@ -54,7 +55,7 @@ correctly refused to merge over uncommitted work, and nothing said so."
   :type 'boolean
   :group 'decknix)
 
-(defconst decknix-repo-sync-kinds '(lock dirty diverged failed)
+(defconst decknix-repo-sync-kinds '(lock dirty untracked diverged failed)
   "Problem kinds, most actionable first.
 Ordering is the render order: a row you can fix with one keypress should not
 sit below one that needs a decision.")
@@ -78,8 +79,12 @@ backlog."
 
 ROW is one entry of the report's `repos' array as an alist.  Classification
 keys off `outcome' rather than the human `detail' string, except for
-distinguishing dirty from diverged -- the CLI collapses both into `skipped'
-and only the phrase tells them apart."
+distinguishing dirty, untracked and diverged -- the CLI collapses all three
+into `skipped' and only the phrase tells them apart.
+
+Untracked files alone never make a repo dirty: the CLI fast-forwards past
+them.  `untracked' is only the case where git refused because an incoming
+commit adds a path that exists locally as an untracked file."
   (let ((outcome (alist-get 'outcome row))
         (detail (or (alist-get 'detail row) "")))
     (cond
@@ -93,6 +98,10 @@ and only the phrase tells them apart."
       ;; repo silently -- which is the failure mode this module exists to stop.
       (cond
        ((string-match-p "diverged" detail) 'diverged)
+       ;; Before the behind check: this detail carries "behind +N" too, and
+       ;; reading it as dirty would offer stash or a hard reset, whose
+       ;; `clean -fd' deletes the very file the user needs to move.
+       ((string-match-p "untracked file would be overwritten" detail) 'untracked)
        ((decknix--repo-sync-behind detail) 'dirty)
        ;; A skip that is neither is up to date; rendering it would bury the
        ;; rows that need something.
@@ -177,7 +186,7 @@ and would be orphaned."
       (memq (plist-get problem :kind) '(lock failed))))
 
 (defconst decknix-repo-sync-glyphs
-  '((lock . "🔒") (dirty . "✎") (diverged . "⑃") (failed . "⚠"))
+  '((lock . "🔒") (dirty . "✎") (untracked . "◌") (diverged . "⑃") (failed . "⚠"))
   "Glyph per problem kind.
 `lock' gets the one that reads as \"mechanically fixable\"; `failed' the one
 that reads as \"a human has to look\".")
@@ -191,6 +200,8 @@ that reads as \"a human has to look\".")
             (pcase kind
               ('lock " · stale lock")
               ('dirty (format " · dirty, %s behind" (or behind "?")))
+              ('untracked (format " · untracked file blocks, %s behind"
+                                  (or behind "?")))
               ('diverged (if behind
                              (format " · diverged, %s behind" behind)
                            " · diverged from origin"))
@@ -215,7 +226,8 @@ nil and the failed count exceeds THRESHOLD: below it the rows are worth
 reading individually, and a count of one is not a summary.
 
 Only `failed\=' folds.  Every other kind names a distinct remedy -- a stale
-lock, a dirty tree, a diverged branch -- so collapsing those would hide
+lock, a dirty tree, a blocking untracked file, a diverged branch -- so
+collapsing those would hide
 the actionable rows behind a number."
   (let* ((failed (seq-filter (lambda (p) (eq 'failed (plist-get p :kind)))
                              problems)))
